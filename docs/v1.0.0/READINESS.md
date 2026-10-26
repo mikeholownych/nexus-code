@@ -1,5 +1,16 @@
 # v1.0.0 release readiness checkpoint
 
+## Current release checkpoint (observed 2026-10-26 15:15 UTC)
+
+**Authoritative source gates:** `origin/main` is `ff349383537b10ec6198ceb0961e833bd519c2b4`. Exact-main post-merge CI [40340228722](https://github.com/mikeholownych/nexus-code/actions/runs/40340228722) completed SUCCESS on that commit across Node 22, Node 24, and Linux packaging, including the reproducibility build. Post-merge CodeQL [40340228417](https://github.com/mikeholownych/nexus-code/actions/runs/40340228417) passed. Requirements enforcement and `sync-version --check` passed on exact `ff349383`; 123 requirement rows remain with 12 explicitly deferred to exact-RC qualification. Components remain `1.0.0-rc.8`.
+
+**PR #256 local-provider candidate:** Public PR [#256](https://github.com/mikeholownych/nexus-code/pull/256) still points to stale head `c3bb2235286a154280f8578458a4dc8570ae542a` on base `b73b6ecaf753ff3eba8d5e1930ede7a471359421`. The refreshed local candidate is `987c73a8178390b0ed710474648ca1a71eaf060e`, based on current main `ff349383` through normal merge commit `9d898eb9bb77a87490d6fcf47b11260193b1e315`; it is not yet pushed and has no hosted exact-head checks. Independent source review ACCEPTed the full candidate diff (SHA-256 `7dc76f1d5d9ee3dd6ebd982eaefc250cd9862043de1f901bf73f58a26d43e376`) and confirmed prior findings are addressed. The implementer reports focused provider-connect tests 33/33, TUI Rust tests 6/6, TypeScript build, and `git diff --check` pass; no local full suite was run. Run exact PR checks after updating the public branch before integration.
+
+**Acceptance blockers:** Issue [#1](https://github.com/mikeholownych/nexus-code/issues/1) remains OPEN; its latest metadata-only custody request at 12:18 UTC has no custodian response. Independent private custody, evaluator-compatible corpus sealing, and held-out acceptance remain unestablished; no held-out payload was accessed or run. Current-candidate provider/standalone, T2/T3/T4, cross-runner and independent exact-RC acceptance remain incomplete. The human terminal matrix remains **0/15**. RC8 is a prior prerelease, not a qualified candidate for this source; stable v1.0.0 is unpublished. Acceptance remains `IN_PROGRESS`; publication authority remains granted but gated.
+
+The 15:02 checkpoint immediately below is retained as historical evidence; this update supersedes its main CI and PR #256 review status.
+
+
 ## Current release checkpoint (observed 2026-10-26 15:02 UTC)
 
 **Authoritative source and source gates:** `origin/main` is `ff349383537b10ec6198ceb0961e833bd519c2b4`. Post-merge CI run [40340228722](https://github.com/mikeholownych/nexus-code/actions/runs/40340228722) is bound to that exact commit: Node 22 and Node 24 jobs passed; `linux-x86_64` remains in progress at `npm --prefix cli test`. Post-merge CodeQL run [40340228417](https://github.com/mikeholownych/nexus-code/actions/runs/40340228417) passed. The requirements-enforcement and version synchronization checks previously passed on exact `ff349383`; the version remains `1.0.0-rc.8`. Do not call source CI complete until the Linux job terminates successfully.
