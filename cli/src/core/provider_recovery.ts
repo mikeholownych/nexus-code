@@ -113,6 +113,9 @@ export function classifyHttpFailure(status: number, hints: ProviderHints = {}, b
     return { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" };
   }
   if (status >= 400 && status < 500) return { condition: "REQUEST_REJECTED", execution: "NOT_EXECUTED" };
+  if (hints.errorType === "invalid_request_error") {
+    return { condition: "REQUEST_REJECTED", execution: code && NOT_EXECUTED_CODES.has(code) ? "NOT_EXECUTED" : "UNKNOWN" };
+  }
   if (status === 500 || status === 502 || status === 504) {
     return { condition: "TEMPORARILY_UNAVAILABLE", execution: code && NOT_EXECUTED_CODES.has(code) ? "NOT_EXECUTED" : "UNKNOWN" };
   }

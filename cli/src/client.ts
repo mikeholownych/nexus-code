@@ -270,7 +270,14 @@ const METADATA_TIMEOUT_MS = 15_000;
 /** Provider or endpoint error text as shown and stored: secrets redacted, at most MAX_PROVIDER_ERROR_CHARS (REQ-PRV-103). */
 export function boundedProviderText(text: string): string {
   const clean = redactSecrets(text);
-  return clean.length > MAX_PROVIDER_ERROR_CHARS ? `${clean.slice(0, MAX_PROVIDER_ERROR_CHARS)}… [${clean.length - MAX_PROVIDER_ERROR_CHARS} more characters]` : clean;
+  if (clean.length <= MAX_PROVIDER_ERROR_CHARS) return clean;
+  let omitted = clean.length - MAX_PROVIDER_ERROR_CHARS;
+  while (true) {
+    const suffix = `… [${omitted} more characters]`;
+    const prefixLength = MAX_PROVIDER_ERROR_CHARS - suffix.length;
+    if (omitted === clean.length - prefixLength) return `${clean.slice(0, prefixLength)}${suffix}`;
+    omitted = clean.length - prefixLength;
+  }
 }
 
 const metadataSignal = (signal?: AbortSignal): AbortSignal =>
@@ -1621,11 +1628,11 @@ export class LocalLlmClient {
               partialText: fullContent,
               hints,
               condition: "TEMPORARILY_UNAVAILABLE",
-              execution: fullContent ? "UNKNOWN" : "NOT_EXECUTED",
+              execution: fullContent || reasoningContent || toolCallsMap.size > 0 ? "UNKNOWN" : "NOT_EXECUTED",
             });
           }
           const classifiedCode = hints.errorCode && CLASSIFIED_STREAM_ERRORS.has(hints.errorCode);
-          throw this.fromStreamError(new ProviderStreamError(em, classifiedCode ? hints.errorCode : hints.errorType ?? hints.errorCode, fullContent), requestId);
+          throw this.fromStreamError(new ProviderStreamError(em, classifiedCode ? hints.errorCode : hints.errorType ?? hints.errorCode, fullContent), requestId, hints);
         }
         if (this.pending && chunk && typeof chunk === "object") {
           if (chunk.usage) this.pending.usage = chatUsage(chunk.usage);
@@ -1780,12 +1787,12 @@ export class LocalLlmClient {
     return { messages: this.sanitizeHistory(m.sanitizedPayload || messages), tools: outTools };
   }
 
-  /** A provider-reported stream error, typed by what it says about the provider. Partial output is never used. */
-  private fromStreamError(e: ProviderStreamError, requestId: string): InferenceError {
+  /** A provider-reported stream error, typed by what it says about the provider. Partial output is not a completed response. */
+  private fromStreamError(e: ProviderStreamError, requestId: string, hints: ProviderHints = {}): InferenceError {
     if (e.malformed) return new InferenceError("malformed_event", "provider", e.message, { requestId, partialText: e.partialText, failoverEligible: false });
     const t = e.errorType ?? "";
     const classification: ProviderClassification =
-      t === "context_length_exceeded" ? { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" }
+      t === "context_length_exceeded" ? { condition: "CAPACITY_REJECTED", execution: e.partialText ? "UNKNOWN" : "NOT_EXECUTED" }
       : t === "overloaded_error" ? { condition: "OVERLOADED", execution: "UNKNOWN" }
       : t === "rate_limit_error" || t === "rate_limit_exceeded" ? { condition: "RATE_LIMITED", execution: "UNKNOWN" }
       : t === "invalid_request_error" ? { condition: "REQUEST_REJECTED", execution: "UNKNOWN" }
@@ -1795,7 +1802,7 @@ export class LocalLlmClient {
     return new InferenceError("provider_error_frame", "provider", boundedProviderText(e.message), {
       requestId,
       partialText: e.partialText,
-      hints: t ? { errorType: t } : {},
+      hints: { ...(t ? { errorType: t } : {}), ...hints },
       ...classification,
     });
   }
