@@ -113,6 +113,22 @@ test("a streaming HTTP error falls back to invalid-request type for an unrecogni
   } finally { await srv.close(); }
 });
 
+test("recognized pre-generation codes take precedence over invalid-request type in HTTP errors", async () => {
+  for (const status of [500, 502, 504]) {
+    const srv = await server((_req, _b, res) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "pre_generation", type: "invalid_request_error", message: "gateway failed" } }));
+    });
+    try {
+      await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+        assert.equal(e.condition, "TEMPORARILY_UNAVAILABLE");
+        assert.equal(e.execution, "NOT_EXECUTED");
+        return true;
+      });
+    } finally { await srv.close(); }
+  }
+});
+
 test("non-streaming HTTP errors use invalid-request type without changing status execution semantics", async () => {
   for (const [status, execution] of [[500, "UNKNOWN"], [400, "NOT_EXECUTED"]] as const) {
     const srv = await server((_req, _b, res) => {
@@ -226,6 +242,30 @@ test("a context error after partial text has unknown execution", async () => {
     });
   } finally { await srv.close(); }
 });
+
+for (const [kind, delta] of [
+  ["reasoning", { reasoning_content: "analysis" }],
+  ["tool-call", { tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "read_file", arguments: "{}" } }] }],
+] as const) {
+  test(`${kind} deltas before a context error have unknown execution`, async () => {
+    const srv = await server((_req, _b, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        sse({ choices: [{ index: 0, delta }] }) +
+        sse({ error: { type: "invalid_request_error", code: "context_length_exceeded", message: "context exceeded" } }),
+      );
+    });
+    try {
+      await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+        assert.equal(e.condition, "CAPACITY_REJECTED");
+        assert.equal(e.execution, "UNKNOWN");
+        assert.equal(e.failoverEligible, false);
+        assert.equal(e.partialText, "");
+        return true;
+      });
+    } finally { await srv.close(); }
+  });
+}
 
 test("an OpenAI error frame is bounded and redacted", async () => {
   const srv = await server((_req, _b, res) => {

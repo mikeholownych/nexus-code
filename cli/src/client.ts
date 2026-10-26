@@ -1588,6 +1588,7 @@ export class LocalLlmClient {
       this.lastAdmission = parseAdmissionHeaders((name) => res.headers.get(name));
       let fullContent = "";
       let reasoningContent = "";
+      let hasOutput = false;
       let finishReason: string | undefined;
       let sawDone = false;
       this.pending = { endpoint: currentEp, executions: this.pending?.executions };
@@ -1628,11 +1629,11 @@ export class LocalLlmClient {
               partialText: fullContent,
               hints,
               condition: "TEMPORARILY_UNAVAILABLE",
-              execution: fullContent || reasoningContent || toolCallsMap.size > 0 ? "UNKNOWN" : "NOT_EXECUTED",
+              execution: hasOutput ? "UNKNOWN" : "NOT_EXECUTED",
             });
           }
           const classifiedCode = hints.errorCode && CLASSIFIED_STREAM_ERRORS.has(hints.errorCode);
-          throw this.fromStreamError(new ProviderStreamError(em, classifiedCode ? hints.errorCode : hints.errorType ?? hints.errorCode, fullContent), requestId, hints);
+          throw this.fromStreamError(new ProviderStreamError(em, classifiedCode ? hints.errorCode : hints.errorType ?? hints.errorCode, fullContent), requestId, hints, hasOutput);
         }
         if (this.pending && chunk && typeof chunk === "object") {
           if (chunk.usage) this.pending.usage = chatUsage(chunk.usage);
@@ -1645,6 +1646,7 @@ export class LocalLlmClient {
 
         // 1. Text token chunk
         if (delta.content) {
+          hasOutput = true;
           fullContent += delta.content;
           if (onToken) {
             onToken(delta.content);
@@ -1652,11 +1654,13 @@ export class LocalLlmClient {
         }
         const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
         if (typeof reasoningDelta === "string") {
+          if (reasoningDelta) hasOutput = true;
           reasoningContent += reasoningDelta;
         }
 
         // 2. Tool call chunks
         if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+          if (delta.tool_calls.length > 0) hasOutput = true;
           for (const tc of delta.tool_calls) {
             // Spec streams give every fragment an index. Some servers (and re-streamed non-streaming
             // responses) omit it; then a fragment that carries an id or a name starts a NEW call, and
@@ -1788,11 +1792,11 @@ export class LocalLlmClient {
   }
 
   /** A provider-reported stream error, typed by what it says about the provider. Partial output is not a completed response. */
-  private fromStreamError(e: ProviderStreamError, requestId: string, hints: ProviderHints = {}): InferenceError {
+  private fromStreamError(e: ProviderStreamError, requestId: string, hints: ProviderHints = {}, hasOutput = Boolean(e.partialText)): InferenceError {
     if (e.malformed) return new InferenceError("malformed_event", "provider", e.message, { requestId, partialText: e.partialText, failoverEligible: false });
     const t = e.errorType ?? "";
     const classification: ProviderClassification =
-      t === "context_length_exceeded" ? { condition: "CAPACITY_REJECTED", execution: e.partialText ? "UNKNOWN" : "NOT_EXECUTED" }
+      t === "context_length_exceeded" ? { condition: "CAPACITY_REJECTED", execution: hasOutput ? "UNKNOWN" : "NOT_EXECUTED" }
       : t === "overloaded_error" ? { condition: "OVERLOADED", execution: "UNKNOWN" }
       : t === "rate_limit_error" || t === "rate_limit_exceeded" ? { condition: "RATE_LIMITED", execution: "UNKNOWN" }
       : t === "invalid_request_error" ? { condition: "REQUEST_REJECTED", execution: "UNKNOWN" }
