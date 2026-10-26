@@ -543,6 +543,35 @@ describe("connecting from the picker", () => {
     }
   });
 
+  test("a malformed shell binding cannot be bypassed by repeating the same key in project .env", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shell-same-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shell-same-project-"));
+    try {
+      fs.writeFileSync(path.join(project, ".env"), "LOCAL_LLM_API_KEY=legacy-origin-key\n");
+      const result = spawnSync(process.execPath, ["--import", path.resolve(process.cwd(), "node_modules/tsx/dist/esm/index.mjs"), "--input-type=module", "--eval", `
+        import { loadEnvironment, buildConfig } from "${path.resolve(process.cwd(), "src/config.ts")}";
+        loadEnvironment();
+        console.log(JSON.stringify({ apiKey: buildConfig({ endpoint: "http://project-endpoint.invalid/v1" }).apiKey }));
+      `], {
+        cwd: project,
+        env: {
+          HOME: home,
+          XDG_CONFIG_HOME: path.join(home, ".config"),
+          PATH: process.env.PATH,
+          LOCAL_LLM_API_KEY: "legacy-origin-key",
+          LOCAL_LLM_CREDENTIAL_ORIGIN: "not a valid origin",
+          LOCAL_LLM_ENDPOINT: "http://operator-endpoint.invalid/v1",
+        },
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { apiKey: "local" });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   test("settings permission failure leaves the prior config.env untouched", () => {
     const configFile = write(".config/nexus/config.env", 'LOCAL_LLM_ENDPOINT="http://127.0.0.1:1234/v1"\nLOCAL_LLM_MODEL="prior-model"\n');
     const before = fs.readFileSync(configFile, "utf8");
