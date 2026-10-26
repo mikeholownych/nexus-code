@@ -330,11 +330,22 @@ export class CheckpointManager {
     }
   }
 
-  private assertGitSnapshotTargetsReplaceable(relativePaths: string[]): void {
-    for (const relativePath of relativePaths) {
-      const targetPath = path.join(this.workspace, relativePath);
-      const stat = fs.lstatSync(targetPath, { throwIfNoEntry: false });
-      if (!stat?.isDirectory()) continue;
+  private assertGitSnapshotTargetsReplaceable(relativePaths: string[], gitRef: string): void {
+    const directoryTargets = relativePaths.filter((relativePath) =>
+      fs.lstatSync(path.join(this.workspace, relativePath), { throwIfNoEntry: false })?.isDirectory(),
+    );
+    if (directoryTargets.length === 0) return;
+
+    const changedPaths = execFileSync("git", ["diff", "--name-only", "-z", gitRef, "--"], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    }).toString("utf8").split("\0").filter(Boolean);
+    if (changedPaths.some((relativePath) => path.basename(relativePath) === ".gitignore")) {
+      throw new Error("Checkpoint Git ignore rules differ from the current worktree");
+    }
+
+    for (const relativePath of directoryTargets) {
       const preview = execFileSync("git", ["clean", "-nd", "--", relativePath], {
         cwd: this.workspace,
         encoding: "utf8",
@@ -682,7 +693,7 @@ export class CheckpointManager {
             return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an unsafe untracked snapshot or destination; workspace was not changed` };
           }
         }
-        if (cp.untrackedFiles !== undefined) this.assertGitSnapshotTargetsReplaceable(cp.untrackedFiles);
+        if (cp.untrackedFiles !== undefined) this.assertGitSnapshotTargetsReplaceable(cp.untrackedFiles, cp.gitRef);
         if (cp.untrackedFiles === undefined) this.assertLegacyUntrackedRestoreSafe(cp.gitRef);
         execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
         execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f", "-a"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
