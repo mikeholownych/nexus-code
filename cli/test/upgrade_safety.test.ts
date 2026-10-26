@@ -148,6 +148,55 @@ describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", 
       fs.rmSync(testDir, { recursive: true, force: true });
     }
   });
+
+  it("follows the allowlisted signed GitHub release-asset redirect without forwarding credentials", async () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-dl-release-asset-"));
+    const originalFetch = globalThis.fetch;
+    const originalToken = process.env.GITHUB_TOKEN;
+    const requests: Array<{ url: string; authorization: string | null; redirect: string | undefined }> = [];
+    const downloadUrl = "https://github.com/mikeholownych/nexus-code/releases/download/v1.0.0-rc.8/nexus.tar.gz";
+    const signedAssetUrl = "https://release-assets.githubusercontent.com/github-production-release-asset/1416386345/11111111-2222-4333-8444-555555555555?token=synthetic-signature";
+
+    try {
+      process.env.GITHUB_TOKEN = "synthetic-github-token";
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({
+          url,
+          authorization: new Headers(init?.headers).get("authorization"),
+          redirect: init?.redirect,
+        });
+        if (url === downloadUrl) {
+          return new Response(null, { status: 302, headers: { location: signedAssetUrl } });
+        }
+        if (url === signedAssetUrl) {
+          return new Response(new Uint8Array([0x4e, 0x58, 0x53]), { status: 200 });
+        }
+        throw new Error(`Unexpected mocked download URL: ${new URL(url).origin}`);
+      }) as typeof globalThis.fetch;
+
+      const destination = path.join(testDir, "release.tar.gz");
+      await downloadFile(
+        downloadUrl,
+        destination,
+      );
+
+      assert.deepEqual(requests, [
+        {
+          url: downloadUrl,
+          authorization: "Bearer synthetic-github-token",
+          redirect: "manual",
+        },
+        { url: signedAssetUrl, authorization: null, redirect: "manual" },
+      ]);
+      assert.deepEqual(fs.readFileSync(destination), Buffer.from([0x4e, 0x58, 0x53]));
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = originalToken;
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Tar Archive Structural Safety Engine (REQ-REL-116, ACC-UPG-08)", () => {
