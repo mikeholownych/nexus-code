@@ -5,7 +5,7 @@
  */
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -126,6 +126,41 @@ describe("credentials: precedence and other clients' sign-ins", () => {
       assert.equal(settingsCommitted, false, `${label}: settings callback must not run`);
       assert.equal(fs.readFileSync(credentialsPath(), "utf8"), original, `${label}: original bytes must remain exact`);
       assert.equal(fs.statSync(credentialsPath()).mode & 0o777, mode, `${label}: original mode must remain exact`);
+    }
+  });
+
+  test("concurrent provider saves preserve every credential", async () => {
+    const release = path.join(home, "release");
+    const script = `
+      import fs from "node:fs";
+      import { saveCredential } from "${path.resolve(process.cwd(), "src/credentials.ts")}";
+      while (!fs.existsSync(process.env.RELEASE_FILE)) {}
+      for (let index = 0; index < 100; index++) {
+        saveCredential(process.env.PROVIDER_PREFIX + index, { type: "api", key: "synthetic-key", savedAt: "now" });
+      }
+    `;
+    const save = (providerPrefix: string) => spawn(process.execPath, ["--import", path.resolve(process.cwd(), "node_modules/tsx/dist/esm/index.mjs"), "--input-type=module", "--eval", script], {
+      env: { HOME: home, PATH: process.env.PATH, PROVIDER_PREFIX: providerPrefix, RELEASE_FILE: release },
+      timeout: 30_000,
+    });
+    try {
+      const writers = ["a", "b", "c", "d"].map(save);
+      fs.writeFileSync(release, "release");
+      const results = await Promise.all(writers.map((writer) => new Promise<{ status: number | null; stderr: string }>((resolve, reject) => {
+        let stderr = "";
+        writer.stderr.setEncoding("utf8");
+        writer.stderr.on("data", (chunk) => { stderr += chunk; });
+        writer.on("error", reject);
+        writer.on("close", (status) => resolve({ status, stderr }));
+      })));
+      for (const writer of results) assert.equal(writer.status, 0, writer.stderr);
+      const store = JSON.parse(fs.readFileSync(credentialsPath(), "utf8"));
+      assert.equal(Object.keys(store.providers).length, 400, "every concurrent save remains durable");
+      for (const prefix of ["a", "b", "c", "d"]) {
+        for (let index = 0; index < 100; index++) assert.equal(store.providers[`${prefix}${index}`].key, "synthetic-key");
+      }
+    } finally {
+      fs.rmSync(release, { force: true });
     }
   });
 

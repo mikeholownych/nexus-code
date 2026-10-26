@@ -14,6 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { credentialStorageHome } from "./client.js";
+import { acquireFileGuard, releaseFileGuard } from "./core/file_guard.js";
 
 export type StoredCredential =
   | { type: "api"; key: string; label?: string; savedAt: string }
@@ -67,50 +68,53 @@ export function saveLocalEndpointCredential(endpoint: string, key: string): bool
 }
 
 /** Save a verified endpoint key and its selected model as one failure-atomic setup operation. */
-export function commitLocalEndpointSetup(endpoint: string, key: string, commitSettings: () => void): boolean {
+export function commitLocalEndpointSetup(endpoint: string, key: string, commitSettings: () => unknown): boolean {
   const id = localEndpointCredentialId(endpoint);
   const value = key.trim();
   if (!id || !value || /[\r\n]/.test(value)) return false;
 
-  const file = credentialsPath();
-  let previous: StoredCredential | undefined;
-  try {
-    const stat = fs.lstatSync(file);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("The Nexus credential store is not a regular file.");
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !parsed.providers || typeof parsed.providers !== "object" || Array.isArray(parsed.providers)) {
-      throw new Error("The Nexus credential store has an unsupported format.");
-    }
-    if (Object.hasOwn(parsed.providers, id)) {
-      const entry = parsed.providers[id];
-      if (!entry || typeof entry !== "object" || entry.type !== "api" || typeof entry.key !== "string" || !entry.key || typeof entry.savedAt !== "string") {
-        throw new Error("The local endpoint credential has an unsupported format.");
-      }
-      previous = entry;
-    }
-  } catch (error: any) {
-    if (error?.code !== "ENOENT") throw new Error("Nexus could not safely update its credential store.");
-  }
-  const hadStore = fs.existsSync(file);
-  try {
-    saveCredential(id, { type: "api", key: value, savedAt: now() });
-    commitSettings();
-    return true;
-  } catch (error) {
+  return withCredentialStoreGuard(() => {
+    const file = credentialsPath();
+    let previous: StoredCredential | undefined;
     try {
-      if (previous) {
-        saveCredential(id, previous);
-      } else {
-        removeCredential(id);
-        if (!hadStore && Object.keys(readStore().providers).length === 0) {
-          try { fs.unlinkSync(file); } catch (unlinkError: any) { if (unlinkError?.code !== "ENOENT") throw unlinkError; }
-        }
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("The Nexus credential store is not a regular file.");
+      const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !parsed.providers || typeof parsed.providers !== "object" || Array.isArray(parsed.providers)) {
+        throw new Error("The Nexus credential store has an unsupported format.");
       }
-    } catch (rollbackError) {
-      throw new AggregateError([error, rollbackError], "Local endpoint setup failed and its saved credential could not be restored.");
+      if (Object.hasOwn(parsed.providers, id)) {
+        const entry = parsed.providers[id];
+        if (!entry || typeof entry !== "object" || entry.type !== "api" || typeof entry.key !== "string" || !entry.key || typeof entry.savedAt !== "string") {
+          throw new Error("The local endpoint credential has an unsupported format.");
+        }
+        previous = entry;
+      }
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw new Error("Nexus could not safely update its credential store.");
     }
-    throw error;
-  }
+    const hadStore = fs.existsSync(file);
+    try {
+      saveCredentialUnlocked(id, { type: "api", key: value, savedAt: now() });
+      const settingsResult = commitSettings();
+      if (settingsResult && typeof (settingsResult as any).then === "function") throw new Error("Local endpoint settings persistence must be synchronous.");
+      return true;
+    } catch (error) {
+      try {
+        if (previous) {
+          saveCredentialUnlocked(id, previous);
+        } else {
+          removeCredentialUnlocked(id);
+          if (!hadStore && Object.keys(readStore().providers).length === 0) {
+            try { fs.unlinkSync(file); } catch (unlinkError: any) { if (unlinkError?.code !== "ENOENT") throw unlinkError; }
+          }
+        }
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], "Local endpoint setup failed and its saved credential could not be restored.");
+      }
+      throw error;
+    }
+  });
 }
 
 export function localEndpointCredential(endpoint: string): { origin: string; key: string } | undefined {
@@ -165,19 +169,41 @@ function writeStore(store: StoreFile): void {
   fs.chmodSync(file, 0o600);
 }
 
-export function saveCredential(providerId: string, credential: StoredCredential): void {
+function withCredentialStoreGuard<T>(callback: () => T): T {
+  const file = credentialsPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const guard = acquireFileGuard(`${file}.lock`, { label: "Credential store guard", waitMs: 5000 });
+  if (!guard) throw new Error("The Nexus credential store is busy; retry after the current update finishes.");
+  try {
+    const result = callback();
+    if (result && typeof (result as any).then === "function") throw new Error("Credential store transactions must be synchronous.");
+    return result;
+  } finally {
+    releaseFileGuard(guard);
+  }
+}
+
+function saveCredentialUnlocked(providerId: string, credential: StoredCredential): void {
   const store = readStore();
   store.providers[providerId] = credential;
   writeStore(store);
 }
 
-/** Removes Nexus's own credential; connections owned by other clients or the environment are untouched. */
-export function removeCredential(providerId: string): boolean {
+function removeCredentialUnlocked(providerId: string): boolean {
   const store = readStore();
   if (!(providerId in store.providers)) return false;
   delete store.providers[providerId];
   writeStore(store);
   return true;
+}
+
+export function saveCredential(providerId: string, credential: StoredCredential): void {
+  withCredentialStoreGuard(() => saveCredentialUnlocked(providerId, credential));
+}
+
+/** Removes Nexus's own credential; connections owned by other clients or the environment are untouched. */
+export function removeCredential(providerId: string): boolean {
+  return withCredentialStoreGuard(() => removeCredentialUnlocked(providerId));
 }
 
 /** Expiry (epoch ms) from a JWT's `exp` claim, without verifying it (advisory only). */
