@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { createServer } from "node:http";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Command } from "commander";
 import { credentialStorageHome, operatorSetting, setCredentialAuthority } from "../src/client.js";
@@ -111,6 +113,37 @@ test("nexus connect local discovers and persists an endpoint without storing an 
     setCredentialAuthority({}, previousCredentialHome);
     server.closeAllConnections();
     server.close();
+  }
+});
+
+test("local connect prompt does not echo a sensitive existing endpoint", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-provider-cli-prompt-"));
+  try {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", `
+      import { Command } from "commander";
+      import { loadEnvironment } from "./src/config.ts";
+      import { registerProviderCommands } from "./src/provider_cli.ts";
+      loadEnvironment();
+      const program = new Command();
+      program.exitOverride();
+      registerProviderCommands(program, { text: async (prompt) => { console.log(prompt); return ""; }, secret: async () => "" });
+      await program.parseAsync(["node", "nexus", "connect", "local"]);
+    `], {
+      cwd: process.cwd(),
+      env: {
+        HOME: home,
+        XDG_CONFIG_HOME: path.join(home, ".config"),
+        PATH: process.env.PATH,
+        LOCAL_LLM_ENDPOINT: "https://user:sk-test-secret@inference.example/v1/private?token=query-secret",
+      },
+      encoding: "utf8",
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    assert.equal(result.status, 1, output);
+    assert.match(output, /OpenAI-compatible endpoint URL \[https:\/\/inference\.example\]/);
+    assert.doesNotMatch(output, /sk-test-secret|query-secret|user:|\bprivate\b/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
