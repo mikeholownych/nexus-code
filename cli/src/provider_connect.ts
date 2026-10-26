@@ -5,7 +5,7 @@
  */
 import { InferenceError, LocalLlmClient } from "./client.js";
 import { commitLocalEndpointSetup, removeCredential, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
-import { APPLIANCE, applianceConfig, connectionOf, providerConfig, recordRecent, type ModelRef } from "./model_catalog.js";
+import { APPLIANCE, applianceConfig, chatModel, connectionOf, providerConfig, recordRecent, type ModelRef } from "./model_catalog.js";
 import { openBrowser, startAuthFlow, type AuthPrompt } from "./oauth.js";
 import { disclosureClass, originOf, providerDefinition } from "./providers.js";
 import { activateApplianceEndpoint, applianceEndpointSelection, pendingApplianceEndpointKey, resetApplianceEndpointOverride, saveLocalEndpointSettings } from "./config.js";
@@ -120,7 +120,7 @@ export async function prepareLocalEndpoint(base: HarnessConfig, endpointInput: s
   try {
     const models = await new LocalLlmClient(localEndpointConfig(base, parsed.endpoint, parsed.origin, key), { allowCredentialReload: false }).listModels();
     if (request.cancelled) return { ok: false, cancelled: true, message: "Local endpoint setup was cancelled." };
-    const available = models.filter((model) => /^[A-Za-z0-9._:/@+-]{1,160}$/.test(model));
+    const available = models.filter((model) => chatModel(APPLIANCE, model) && /^[A-Za-z0-9._:/@+-]{1,160}$/.test(model));
     if (available.length === 0) return { ok: false, message: "That endpoint returned no usable chat models." };
     activateApplianceEndpoint(parsed.endpoint, undefined, true, key || undefined);
     provisionalLocalEndpointRequestId = requestId;
@@ -162,7 +162,7 @@ export async function connectLocalEndpoint(
   } catch {
     return { ok: false, message: "Could not list models from that endpoint. Check the URL and API key, then try again.", models: [] };
   }
-  const available = models.filter((model) => /^[A-Za-z0-9._:/@+-]{1,160}$/.test(model));
+  const available = models.filter((model) => chatModel(APPLIANCE, model) && /^[A-Za-z0-9._:/@+-]{1,160}$/.test(model));
   if (!modelInput?.trim()) {
     return { ok: available.length > 0, message: available.length > 0 ? "Model discovery succeeded." : "That endpoint returned no usable chat models.", models: available };
   }

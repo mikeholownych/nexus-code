@@ -360,6 +360,21 @@ describe("connecting from the picker", () => {
     }
   });
 
+  test("local discovery excludes non-chat model entries in both setup paths", async () => {
+    const local = await mock((_s, res) => json(res, 200, { data: [{ id: "safe-model" }, { id: "text-embedding-3-large" }, { id: "whisper-1" }] }));
+    try {
+      const discovered = await connectLocalEndpoint(cfg(), `${local.url}/v1`);
+      assert.deepEqual(discovered.models, ["safe-model"]);
+
+      const prepared = await prepareLocalEndpoint(cfg(), `${local.url}/v1`);
+      assert.equal(prepared.ok, true, prepared.message);
+      assert.match(prepared.message, /1 models found/);
+    } finally {
+      await local.close();
+      resetApplianceEndpointOverride();
+    }
+  });
+
   test("local setup result does not echo a credential-bearing endpoint path or API key", async () => {
     const key = "endpoint-path-key";
     const local = await mock((s, res) => json(res, s.headers.authorization === `Bearer ${key}` ? 200 : 401, { data: [{ id: "safe-model" }] }));
