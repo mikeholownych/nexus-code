@@ -187,7 +187,12 @@ export function environmentCredential(operatorEndpoint: string): { apiKey: strin
   if (configuredCredentialOrigin && !originOf(configuredCredentialOrigin) && (operatorKey === apiKey || isStoredCredential(apiKey))) {
     return undefined;
   }
-  if (operatorKey === apiKey) return { apiKey, origin: originOf(authoritySetting("LOCAL_LLM_ENDPOINT") ?? operatorEndpoint) };
+  if (operatorKey === apiKey) {
+    return {
+      apiKey,
+      origin: originOf(configuredCredentialOrigin ?? authoritySetting("LOCAL_LLM_ENDPOINT") ?? operatorEndpoint),
+    };
+  }
   if (isStoredCredential(apiKey)) return undefined;
   return { apiKey, origin: originOf(process.env.LOCAL_LLM_ENDPOINT ?? operatorEndpoint) };
 }

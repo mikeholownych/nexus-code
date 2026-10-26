@@ -428,23 +428,35 @@ describe("connecting from the picker", () => {
     }
   });
 
-  test("changing the local endpoint does not rebind a config.env key to the new origin", () => {
+  test("changing the local endpoint does not rebind a config.env key to the new origin", async () => {
     const oldEndpoint = "http://127.0.0.1:4321/v1";
-    const newEndpoint = "http://127.0.0.1:5432/v1";
+    const oldOrigin = "http://127.0.0.1:4321";
+    const replacement = await mock((_s, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ data: [] })); });
+    const newEndpoint = `${replacement.url}/v1`;
     const configFile = write(".config/nexus/config.env", `LOCAL_LLM_ENDPOINT=${JSON.stringify(oldEndpoint)}\nLOCAL_LLM_API_KEY=legacy-old-origin-key\n`);
     setCredentialAuthority({ LOCAL_LLM_ENDPOINT: oldEndpoint, LOCAL_LLM_API_KEY: "legacy-old-origin-key" }, home);
     assert.equal(storedCredentialFor(oldEndpoint), "legacy-old-origin-key");
 
-    saveLocalEndpointSettings(newEndpoint, "new-model");
-    setCredentialAuthority({
-      LOCAL_LLM_ENDPOINT: newEndpoint,
-      LOCAL_LLM_API_KEY: "legacy-old-origin-key",
-      LOCAL_LLM_CREDENTIAL_ORIGIN: "http://127.0.0.1:4321",
-    }, home);
+    try {
+      saveLocalEndpointSettings(newEndpoint, "new-model");
+      operator({
+        LOCAL_LLM_ENDPOINT: newEndpoint,
+        LOCAL_LLM_API_KEY: "legacy-old-origin-key",
+        LOCAL_LLM_CREDENTIAL_ORIGIN: oldOrigin,
+      });
 
-    assert.equal(storedCredentialFor(newEndpoint), null, "the legacy key must not follow the changed endpoint");
-    assert.equal(storedCredentialFor(oldEndpoint), "legacy-old-origin-key", "the legacy key remains usable only at its original origin");
-    assert.match(fs.readFileSync(configFile, "utf8"), /LOCAL_LLM_CREDENTIAL_ORIGIN="http:\/\/127\.0\.0\.1:4321"/);
+      assert.equal(storedCredentialFor(newEndpoint), null, "the legacy key must not follow the changed endpoint");
+      assert.equal(storedCredentialFor(oldEndpoint), "legacy-old-origin-key", "the legacy key remains usable only at its original origin");
+      assert.deepEqual(environmentCredential(newEndpoint), { apiKey: "legacy-old-origin-key", origin: oldOrigin });
+
+      const config = buildConfig({ endpoint: newEndpoint });
+      assert.equal(config.credentialOrigin, oldOrigin, "buildConfig keeps the key bound to the recorded origin");
+      await new LocalLlmClient(config).listModels();
+      assert.deepEqual(replacement.seen.map((request) => request.headers.authorization), ["Bearer not-needed"], "the replacement endpoint never receives the old key");
+      assert.match(fs.readFileSync(configFile, "utf8"), /LOCAL_LLM_CREDENTIAL_ORIGIN="http:\/\/127\.0\.0\.1:4321"/);
+    } finally {
+      await replacement.close();
+    }
   });
 
   test("a malformed credential origin cannot fall back to and bind a legacy key to the selected endpoint", () => {
