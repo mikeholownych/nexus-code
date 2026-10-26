@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { tryStateStoreGuard } from "./state_store_guard.js";
 import { ensurePrivateDir, writePrivateFile, fsyncDirectoryDurably } from "./durable_file.js";
 
@@ -1109,7 +1109,7 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
 
       if (item.gitRef && item.workspace) {
         try {
-          execSync(`git update-ref -d refs/nexus/checkpoints/${item.id}`, {
+          execFileSync("git", ["update-ref", "-d", `refs/nexus/checkpoints/${item.id}`], {
             cwd: item.workspace,
             stdio: "ignore",
           });
