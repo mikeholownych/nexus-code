@@ -62,7 +62,17 @@ function makeWorktreeTask(): Fixture {
   first.checkpointDurableState("worktree recovery");
   const created = first.getWorktreeManager().createWorktree(taskId);
   const stateManager = first.getStateManager();
+  const archiveCompactionId = "recovery-archive-marker";
+  stateManager.appendArchive(taskId, archiveCompactionId, [
+    { role: "user", content: "archived recovery marker" },
+  ]);
   const state = stateManager.loadTaskState(taskId);
+  state.history = {
+    complete: false,
+    compactions: 1,
+    archivedMessages: 1,
+    committedCompactions: [archiveCompactionId],
+  } as typeof state.history;
   state.objective = {
     version: 1,
     objective: "preserve recovered objective marker",
@@ -119,6 +129,11 @@ test("recovering a worktree-bound task keeps the restored conversation", async (
     assert.equal(resumed.getObjective()?.objective, "preserve recovered objective marker");
     assert.deepEqual(resumed.getFindings(), ["Findings recorded from inspected output [F1; model-written, not independent proof]\nrecovered finding marker"]);
     assert.equal(resumed.hasUnverifiedChanges(), true);
+    const readArchive = resumed.getSpine().getHandler("read_archive");
+    assert.ok(readArchive, "read_archive handler was not registered");
+    const archived = await readArchive({ query: "archived recovery marker" }, {});
+    assert.equal(archived.success, true);
+    assert.match(archived.output, /archived recovery marker/);
     resumed.shutdown();
   } finally {
     fixture.restore();
