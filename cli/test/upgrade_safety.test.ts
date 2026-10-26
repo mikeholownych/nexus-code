@@ -1017,4 +1017,29 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
       process.env.PATH = oldPath;
     }
   });
+
+  it("retries an idempotent download once after a connection reset", async () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-download-reset-"));
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests++;
+      if (requests === 1) {
+        req.socket.destroy();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain", "Content-Length": 2 });
+      res.end("ok");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address !== "string");
+      await downloadFile(`http://127.0.0.1:${address.port}/archive`, path.join(testDir, "archive"));
+      assert.equal(requests, 2);
+      assert.equal(fs.readFileSync(path.join(testDir, "archive"), "utf8"), "ok");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
 });

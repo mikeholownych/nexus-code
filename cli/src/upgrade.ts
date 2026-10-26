@@ -684,6 +684,13 @@ function safeDownloadOrigin(urlString: string): string {
   }
 }
 
+function isDownloadConnectionReset(error: any): boolean {
+  for (let current = error; current; current = current.cause) {
+    if (current.code === "ECONNRESET" || current.code === "UND_ERR_SOCKET") return true;
+  }
+  return false;
+}
+
 export async function downloadFile(
   url: string,
   destPath: string,
@@ -693,6 +700,7 @@ export async function downloadFile(
 ): Promise<void> {
   let currentUrl = url;
   let hops = 0;
+  let connectionResets = 0;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error(`Download timed out after ${timeoutMs}ms`)), timeoutMs);
@@ -712,11 +720,20 @@ export async function downloadFile(
         headers.Authorization = `Bearer ${token}`;
       }
 
-      const res = await fetch(currentUrl, {
-        headers,
-        signal: controller.signal,
-        redirect: "manual",
-      });
+      let res: Response;
+      try {
+        res = await fetch(currentUrl, {
+          headers,
+          signal: controller.signal,
+          redirect: "manual",
+        });
+      } catch (error) {
+        if (connectionResets < 1 && isDownloadConnectionReset(error)) {
+          connectionResets++;
+          continue;
+        }
+        throw error;
+      }
 
       // Handle redirect
       if (res.status === 301 || res.status === 302 || res.status === 307 || res.status === 308) {
