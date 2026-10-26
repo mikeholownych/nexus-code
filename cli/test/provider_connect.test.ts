@@ -571,6 +571,54 @@ describe("connecting from the picker", () => {
     }
   });
 
+  test("sidecar: malformed credential store is preserved when local selection cannot persist", async () => {
+    const local = await mock((s, res) => json(res, s.headers.authorization === "Bearer pending-secret" ? 200 : 401, { data: [{ id: "pending-model" }] }));
+    const repo = makeRepo();
+    const configDir = path.join(home, ".config/nexus");
+    fs.mkdirSync(configDir, { recursive: true });
+    const configTarget = path.join(home, "previous-config.env");
+    const previousConfig = 'LOCAL_LLM_ENDPOINT="http://127.0.0.1:9/v1"\nLOCAL_LLM_MODEL="previous-model"\n';
+    fs.writeFileSync(configTarget, previousConfig, { mode: 0o600 });
+    const configFile = path.join(configDir, "config.env");
+    fs.symlinkSync(configTarget, configFile);
+    const malformedStore = '{"version":1,"providers": [malformed';
+    fs.writeFileSync(credentialsPath(), malformedStore, { mode: 0o640 });
+    fs.chmodSync(credentialsPath(), 0o640);
+    const credentialMode = fs.statSync(credentialsPath()).mode & 0o777;
+    const app = new ApplicationCore({ endpoint: "http://127.0.0.1:9/v1", model: "previous-model", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash" } as any);
+    const lines: string[] = [];
+    const server = new SidecarServer({ app, mode: "auto", write: (line) => lines.push(line) });
+    server.start();
+    const events = () => lines.map((line) => JSON.parse(line));
+    const send = (message: Record<string, unknown>) => server.handleLine(JSON.stringify({ v: 1, ...message }));
+    const waitFor = async (predicate: (event: any) => boolean) => {
+      for (let i = 0; i < 200; i++) {
+        const found = events().find(predicate);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.fail("event not seen");
+    };
+    try {
+      await send({ type: "provider.connect", id: "malformed-connect", provider: "appliance", method: "local-endpoint", endpoint: `${local.url}/v1`, key: "pending-secret" });
+      assert.equal((await waitFor((event) => event.type === "provider.result" && event.id === "malformed-connect")).success, true);
+      await send({ type: "models.list", id: "malformed-models" });
+      const catalog = await waitFor((event) => event.type === "models.catalog" && event.id === "malformed-models");
+      assert.ok(catalog.models.some((entry: any) => entry.provider === "appliance" && entry.id === "pending-model"));
+      await send({ type: "model.select", id: "malformed-select", provider: "appliance", model: "pending-model" });
+      const selected = await waitFor((event) => event.type === "model.result" && event.id === "malformed-select");
+      assert.equal(selected.success, false, "the credential store must fail closed before either file is changed");
+      assert.equal(fs.readFileSync(credentialsPath(), "utf8"), malformedStore);
+      assert.equal(fs.statSync(credentialsPath()).mode & 0o777, credentialMode);
+      assert.equal(fs.readlinkSync(configFile), configTarget);
+      assert.equal(fs.readFileSync(configTarget, "utf8"), previousConfig);
+      assert.equal(localEndpointCredential(`${local.url}/v1`), undefined);
+    } finally {
+      await server.shutdown();
+      await local.close();
+    }
+  });
+
   test("sidecar: cancelling provisional local setup preserves prior selection and does not store its key", async () => {
     const oldEndpoint = await mock((_s, res) => json(res, 200, { data: [{ id: "old-model" }] }));
     const local = await mock((s, res) => json(res, s.headers.authorization === "Bearer pending-secret" ? 200 : 401, { data: [{ id: "pending-model" }] }));

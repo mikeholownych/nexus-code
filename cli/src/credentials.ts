@@ -73,8 +73,19 @@ export function commitLocalEndpointSetup(endpoint: string, key: string, commitSe
   if (!id || !value || /[\r\n]/.test(value)) return false;
 
   const file = credentialsPath();
+  let previous: StoredCredential | undefined;
+  try {
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("The Nexus credential store is not a regular file.");
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!parsed || typeof parsed !== "object" || !parsed.providers || typeof parsed.providers !== "object" || Array.isArray(parsed.providers)) {
+      throw new Error("The Nexus credential store has an unsupported format.");
+    }
+    previous = parsed.providers[id];
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw new Error("Nexus could not safely update its credential store.");
+  }
   const hadStore = fs.existsSync(file);
-  const previous = readStore().providers[id];
   try {
     saveCredential(id, { type: "api", key: value, savedAt: now() });
     commitSettings();
