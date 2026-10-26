@@ -59,7 +59,7 @@ import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } 
 import { judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
-/** Tools that edit files directly: the first one of an unverified change triggers the pre-change verifier run. */
+/** File-edit tools that can change the workspace before the verifier baseline is captured. */
 const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
 import { credentialOriginOf, InferenceError, type TruncatedCall, TokenCountError } from "./client.js";
 import {
@@ -1905,9 +1905,10 @@ export class AutonomousAgent {
   }
 
   /**
-   * Before the first file edit of an unverified change, capture the verifier definition, operator-declared scope and
-   * test files. A discovered verifier also runs before the edit so independence can be judged fail-before/pass-after;
-   * a configured verifier is an operator check and needs the immutable binding snapshot, but not a pre-change run.
+   * Before the first tool that may mutate an unverified change, capture the verifier definition, operator-declared
+   * scope and test files. A discovered verifier also runs before the tool so independence can be judged
+   * fail-before/pass-after. A configured verifier is an operator check and needs its immutable binding snapshot, but
+   * does not run before a change.
    */
   private async captureChangeBaseline(confirmHandler?: ConfirmHandler): Promise<void> {
     // A new conversation does not make candidate writes from an interrupted or
@@ -4750,11 +4751,16 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       }
     }
 
-    // Baseline capture is process-local evidence as well as durable evidence.
+    // Capture before every workspace-mutating operation, not just direct file
+    // tools. A successful run_command can change the candidate and set the
+    // unverified-change latch before a later file edit; waiting for that edit
+    // would then make captureChangeBaseline fail closed without a baseline.
     // Subagents are intentionally non-durable, but their edits still need a
     // pre-change verifier snapshot so the parent cannot mistake an unbound
     // passing test run for independent verification.
-    if (FILE_EDIT_TOOLS.has(toolName)) await this.captureChangeBaseline(onConfirm);
+    if (FILE_EDIT_TOOLS.has(toolName) || this.mayWrite(toolName)) {
+      await this.captureChangeBaseline(onConfirm);
+    }
     // A tool of a group not offered yet still runs (the model may know it from earlier); offer its group from now on.
     const calledGroup = toolGroupOf(toolName);
     if (calledGroup) this.enabledToolGroups.add(calledGroup);
