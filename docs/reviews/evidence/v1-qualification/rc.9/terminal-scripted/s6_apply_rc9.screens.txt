@@ -1,0 +1,96 @@
+
+===== timeout-turn-complete @ 32.90s (100x30) =====
+ NEXUS   ws  ⎇ master ●3 changed  model m  mode: auto · sandbox: off · workspace: trusted
+› write two files
+
+↳ also mention cats
+  steering · applied
+
+  ✓ Created a.txt  +1 −0
+    ▎   1 + a
+
+  ✓ Created b.txt  +1 −0
+    ▎   1 + b
+
+Done.
+
+! Done · not verified  Files changed, and no test command was found for this workspace.
+  → next: check the changes yourself (/diff), or run /test <command> · v receipt
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== after-steer-turn @ 32.90s (100x30) =====
+ NEXUS   ws  ⎇ master ●3 changed  model m  mode: auto · sandbox: off · workspace: trusted
+› write two files
+
+↳ also mention cats
+  steering · applied
+
+  ✓ Created a.txt  +1 −0
+    ▎   1 + a
+
+  ✓ Created b.txt  +1 −0
+    ▎   1 + b
+
+Done.
+
+! Done · not verified  Files changed, and no test command was found for this workspace.
+  → next: check the changes yourself (/diff), or run /test <command> · v receipt
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== after-steer-turn @ 7.92s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: auto · sandbox: off · workspace: trusted
+› write two files
+
+↳ also mention cats
+  steering · applied
+
+  ✓ Created a.txt  +1 −0
+    ▎   1 + a
+
+  ✓ Created b.txt  +1 −0
+    ▎   1 + b
+
+Done.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠼ thinking · 0:06 · step 3 · esc cancels ──────────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it

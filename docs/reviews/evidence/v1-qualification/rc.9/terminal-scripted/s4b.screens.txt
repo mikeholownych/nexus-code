@@ -1,0 +1,352 @@
+
+===== timeout-tool-running @ 11.21s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: untrusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Run sleep 23.7; echo finished                                                                     │
+│Proposed: run a shell command in the workspace                                                    │
+│                                                                                                  │
+│$ sleep 23.7; echo finished                                                                       │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+›
+
+===== tool-running @ 12.72s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: untrusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Run sleep 23.7; echo finished                                                                     │
+│Proposed: run a shell command in the workspace                                                    │
+│                                                                                                  │
+│$ sleep 23.7; echo finished                                                                       │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+›
+
+===== after-esc-tool @ 13.87s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: untrusted
+› run it
+  × denied Run sleep 23.7; echo finished
+  × Run sleep 23.7; echo finished — Error: Execution was rejected by the user. Ask the user for
+    clarification or proceed with an alternative approach. · 11.0s
+
+Done.
+
+✓ Done  No files changed, so there was nothing to verify.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== timeout-tool-running @ 10.80s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Run sleep 23.7; echo finished                                                                     │
+│Proposed: run a shell command in the workspace                                                    │
+│                                                                                                  │
+│$ sleep 23.7; echo finished                                                                       │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+›
+
+===== tool-running @ 12.31s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Run sleep 23.7; echo finished                                                                     │
+│Proposed: run a shell command in the workspace                                                    │
+│                                                                                                  │
+│$ sleep 23.7; echo finished                                                                       │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+›
+
+===== after-esc-tool @ 13.02s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› run it
+  × denied Run sleep 23.7; echo finished
+  × Run sleep 23.7; echo finished — Error: Execution was rejected by the user. Ask the user for
+    clarification or proceed with an alternative approach. · 11.0s
+
+Done.
+
+✓ Done  No files changed, so there was nothing to verify.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== timeout-tool-running @ 11.31s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  • Run sleep 23.7; echo finished · 0:09
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠹ Run sleep 23.7; echo finished 0:09 · 0:10 · step 1 · esc cancels ────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== tool-running @ 12.82s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  • Run sleep 23.7; echo finished · 0:11
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠧ Run sleep 23.7; echo finished 0:11 · 0:11 · step 1 · esc cancels ────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== after-esc-tool @ 13.83s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  ✓ Run sleep 23.7; echo finished · no exit code · no output · 11.1s
+
+◌ Cancelled  You stopped the turn during tool settling.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== tool-running @ 3.64s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  • Run sleep 23.7; echo finished
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠼ Run sleep 23.7; echo finished · 0:02 · step 1 · esc cancels ─────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== after-esc-tool @ 4.57s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  ✓ Run sleep 23.7; echo finished · no exit code · no output · 1.2s
+
+◌ Cancelled  You stopped the turn during tool settling.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

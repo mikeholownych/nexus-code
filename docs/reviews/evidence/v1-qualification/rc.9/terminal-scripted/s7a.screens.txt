@@ -1,0 +1,108 @@
+
+===== unicode-40x20 @ 1.42s (40x20) =====
+ NEXUS   ws  model m  mode: review
+› remember the word 宽字符 please
+
+宽字符测试 全角ＡＢＣ emoji 👩 🎉
+combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was
+  nothing to verify.
+
+
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== unicode-100x30 @ 2.43s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: untrusted
+› remember the word 宽字符 please
+
+宽字符测试 全角ＡＢＣ emoji 👩 🎉 combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was nothing to verify.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== unicode-40x20 @ 1.61s (40x20) =====
+ NEXUS   ws  model m  mode: review
+› remember the word 宽 字 符  please
+
+宽 字 符 测 试  全 角 Ａ Ｂ Ｃ  emoji 👩  🎉
+combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was
+  nothing to verify.
+
+
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== unicode-100x30 @ 2.62s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› remember the word 宽 字 符  please
+
+宽 字 符 测 试  全 角 Ａ Ｂ Ｃ  emoji 👩  🎉  combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was nothing to verify.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

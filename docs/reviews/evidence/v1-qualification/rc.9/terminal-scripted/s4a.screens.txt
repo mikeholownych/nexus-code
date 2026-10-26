@@ -1,0 +1,440 @@
+
+===== idle-40x20-nocolor @ 1.02s (40x20) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== streaming @ 4.22s (40x20) =====
+ NEXUS   ws  model m  mode: review
+› talk slowly
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+
+
+
+
+
+ ⠙ thinking · 0:03 · step 1 · esc c…────
+› type to steer the running turn · esc …
+
+===== after-steer @ 6.63s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+
+↳ also mention cats
+  steering · queued for the next step
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+ ⠴ thinking · 0:05 · step 1 · esc c…────
+› type to steer the running turn · esc …
+
+===== after-ctrl-c @ 9.83s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+
+↳ also mention cats
+  steering · not applied — Not applied:
+the turn was cancelled before it could
+be applied. Your message is back in the
+composer.
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+ enter send · shift+enter newline ·…────
+› also mention cats
+
+===== after-esc @ 15.24s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+
+› also mention catsagain
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== idle-40x20-nocolor @ 0.61s (40x20) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== streaming @ 3.81s (40x20) =====
+ NEXUS   ws  model m  mode: review
+› talk slowly
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+
+
+
+
+
+ ⠙ thinking · 0:03 · step 1 · esc c…────
+› type to steer the running turn · esc …
+
+===== after-steer @ 6.21s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+↳ also mention cats
+  steering · queued for the next step
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+ ⠴ thinking · 0:05 · step 1 · esc c…────
+› type to steer the running turn · esc …
+
+===== after-ctrl-c @ 9.42s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it.
+
+↳ also mention cats
+  steering · not applied — Not applied:
+the turn was cancelled before it could
+be applied. Your message is back in the
+composer.
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+ enter send · shift+enter newline ·…────
+› also mention cats
+
+===== after-esc @ 15.14s (40x20) =====
+ NEXUS   ws  model m  mode: review
+
+◌ Cancelled  You stopped the turn during
+  inference.
+
+› also mention catsagain
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== idle-40x20-nocolor @ 1.11s (40x20) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== streaming @ 4.31s (40x20) =====
+ NEXUS   ws  model m  mode: review
+› talk slowly
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+
+
+
+
+ ⠙ thinking · 0:03 · step 1 · esc c…────
+› type to steer the running turn · esc …
+
+===== after-steer @ 6.72s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+↳ also mention cats
+  steering · queued for the next step
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+ ⠴ thinking · 0:05 · step 1 · esc c…────
+› type to steer the running turn · esc …
+
+===== after-ctrl-c @ 9.92s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+Thinking about it.
+
+↳ also mention cats
+  steering · not applied — Not applied:
+the turn was cancelled before it could
+be applied. Your message is back in the
+composer.
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+ enter send · shift+enter newline ·…────
+› also mention cats
+
+===== after-esc @ 15.33s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+
+› also mention catsagain
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== idle-40x20-nocolor @ 1.31s (40x20) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== streaming @ 6.38s (40x20) =====
+ NEXUS   ws  model m  mode: review
+› talk slowly
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+
+
+
+
+ ⠙ thinking · 0:03 · step 1 · esc c…────
+› type to steer the running turn · esc …
+
+===== after-steer @ 9.03s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+↳ also mention cats
+  steering · queued for the next step
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+ ⠦ thinking · 0:07 · step 1 · esc c…────
+› type to steer the running turn · esc …
+
+===== after-ctrl-c @ 12.23s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+Thinking about it.
+
+↳ also mention cats
+  steering · not applied — Not applied:
+the turn was cancelled before it could
+be applied. Your message is back in the
+composer.
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+ enter send · shift+enter newline ·…────
+› also mention cats
+
+===== after-esc @ 17.64s (40x20) =====
+ NEXUS   ws  model m  mode: review
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+
+› also mention catsagain
+
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it. Thinking about it.
+Thinking about it.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
