@@ -51,6 +51,10 @@ impl Depth {
     }
 }
 
+pub fn apply_backend_policy(depth: Depth) {
+    crossterm::style::force_color_output(depth != Depth::Mono);
+}
+
 /// Maps the colours of every cell to what `depth` can show. A no-op for 24-bit terminals.
 pub fn downsample(buffer: &mut Buffer, depth: Depth) {
     if depth == Depth::TrueColor {
@@ -208,6 +212,29 @@ mod tests {
         assert_eq!((mono.content[0].fg, mono.content[0].bg), (Color::Reset, Color::Reset));
         assert!(mono.content[0].modifier.contains(Modifier::REVERSED));
         assert!(!mono.content[1].modifier.contains(Modifier::REVERSED), "cells without a background stay plain");
+    }
+
+    #[test]
+    fn mono_frames_emit_no_colour_sgr_through_the_real_backend() {
+        use ratatui::{Terminal, backend::CrosstermBackend, style::Style, widgets::Paragraph};
+
+        apply_backend_policy(Depth::Mono);
+        let mut output = Vec::new();
+        {
+            let backend = CrosstermBackend::new(&mut output);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|frame| {
+                frame.render_widget(
+                    Paragraph::new("status").style(Style::default().fg(Color::Rgb(1, 2, 3)).bg(Color::Rgb(4, 5, 6))),
+                    frame.area(),
+                );
+                downsample(frame.buffer_mut(), Depth::Mono);
+            }).unwrap();
+        }
+        let output = String::from_utf8(output).unwrap();
+        for reset in ["\x1b[39m", "\x1b[49m", "\x1b[59m"] {
+            assert!(!output.contains(reset), "monochrome output emitted {reset:?}: {output:?}");
+        }
     }
 
     #[test]

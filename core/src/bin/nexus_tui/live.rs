@@ -329,6 +329,8 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     let mut guard = TerminalGuard {
         keyboard_protocol: false,
     };
+    let depth = crate::theme::Depth::from_env();
+    crate::theme::apply_backend_policy(depth);
     let mut terminal = ratatui::try_init()?;
     execute!(io::stdout(), EnableBracketedPaste)?;
     // Lets Shift+Enter arrive as its own key on terminals that speak the kitty keyboard protocol.
@@ -340,7 +342,7 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
         guard.keyboard_protocol = true;
     }
     let mut app = LiveApp::start(spec);
-    app.state.depth = crate::theme::Depth::from_env();
+    app.state.depth = depth;
     let result = event_loop(&mut terminal, &mut app);
     app.handle(Action::Quit);
     result
