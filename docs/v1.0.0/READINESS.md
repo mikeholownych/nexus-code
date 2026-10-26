@@ -1,5 +1,10 @@
 # v1.0.0 release readiness checkpoint
 
+## Current release checkpoint (observed 2026-10-26 15:16 UTC)
+
+**PR #256 exact-head update:** Following independent source-review acceptance of candidate `987c73a8178390b0ed710474648ca1a71eaf060e`, the reviewed branch was pushed as a normal fast-forward from `c3bb2235286a154280f8578458a4dc8570ae542a`. PR [#256](https://github.com/mikeholownych/nexus-code/pull/256) now targets exact `origin/main` `ff349383537b10ec6198ceb0961e833bd519c2b4`; its hosted CI run [40347686120](https://github.com/mikeholownych/nexus-code/actions/runs/40347686120) and CodeQL [40347686125](https://github.com/mikeholownych/nexus-code/actions/runs/40347686125) are in progress. Do not merge until every required exact-head check completes successfully and branch protection/review requirements are satisfied. The 15:15 checkpoint immediately below remains accurate as a pre-push snapshot and is superseded for PR head and CI status by this update.
+
+
 ## Current release checkpoint (observed 2026-10-26 15:15 UTC)
 
 **Authoritative source gates:** `origin/main` is `ff349383537b10ec6198ceb0961e833bd519c2b4`. Exact-main post-merge CI [40340228722](https://github.com/mikeholownych/nexus-code/actions/runs/40340228722) completed SUCCESS on that commit across Node 22, Node 24, and Linux packaging, including the reproducibility build. Post-merge CodeQL [40340228417](https://github.com/mikeholownych/nexus-code/actions/runs/40340228417) passed. Requirements enforcement and `sync-version --check` passed on exact `ff349383`; 123 requirement rows remain with 12 explicitly deferred to exact-RC qualification. Components remain `1.0.0-rc.8`.
