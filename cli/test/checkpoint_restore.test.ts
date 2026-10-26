@@ -721,3 +721,56 @@ test("non-Git restore refuses a file target containing a FIFO before cleanup", (
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test("Git manifest restore refuses an ignored file-target obstruction before Git mutation", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), "ignored\n");
+    git("add", ".gitignore");
+    git("commit", "-qm", "ignore retained obstruction");
+    fs.writeFileSync(path.join(repo, "a"), "captured file\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("Git ignored file target");
+    fs.rmSync(path.join(repo, "a"));
+    fs.mkdirSync(path.join(repo, "a"));
+    fs.writeFileSync(path.join(repo, "a", "ignored"), "ignored canary\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "tracked canary\n");
+    fs.writeFileSync(path.join(repo, "untracked.txt"), "untracked canary\n");
+    assert.equal(git("check-ignore", "a/ignored"), "a/ignored");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(repo, "a", "ignored"), "utf8"), "ignored canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "tracked canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Git manifest restore refuses a nested-repository file-target obstruction before Git mutation", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "a"), "captured file\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("Git nested repository file target");
+    fs.rmSync(path.join(repo, "a"));
+    fs.mkdirSync(path.join(repo, "a"));
+    execFileSync("git", ["-C", path.join(repo, "a"), "init", "-q"]);
+    fs.writeFileSync(path.join(repo, "a", "nested.txt"), "nested canary\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "tracked canary\n");
+    fs.writeFileSync(path.join(repo, "untracked.txt"), "untracked canary\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(repo, "a", "nested.txt"), "utf8"), "nested canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "tracked canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
