@@ -479,11 +479,12 @@ impl Connect {
                 }
                 self.step = Step::LocalKey { endpoint, input, error };
             }
-            Step::Waiting { request, provider, auth, .. } => {
+            Step::Waiting { request, provider, method, auth } => {
                 if key.code == KeyCode::Esc {
                     self.back_to_providers(&provider);
-                    // A key being verified finishes on its own; a sign-in is stopped.
-                    return auth.is_some().then_some(ConnectIntent::Cancel { request });
+                    // Key checks finish on their own; local discovery must be canceled so a late result
+                    // cannot activate a setup the operator just discarded.
+                    return (auth.is_some() || method == "local-endpoint").then_some(ConnectIntent::Cancel { request });
                 }
             }
         }
@@ -672,6 +673,21 @@ mod tests {
         assert_eq!(c.step, Step::Key { provider: "anthropic".into(), input: String::new(), error: Some("key rejected".into()) });
         c.step = Step::Waiting { request: "p2".into(), provider: "anthropic".into(), method: "api-key".into(), auth: None };
         assert!(c.on_result("p2", true, "connected".into()));
+    }
+
+    #[test]
+    fn escaping_local_endpoint_discovery_cancels_its_request() {
+        let (mut c, _) = Connect::new(catalog().providers, Some("appliance"));
+        c.step = Step::Waiting {
+            request: "local-discovery".into(),
+            provider: "appliance".into(),
+            method: "local-endpoint".into(),
+            auth: None,
+        };
+        assert_eq!(
+            c.on_key(key(KeyCode::Esc)),
+            Some(ConnectIntent::Cancel { request: "local-discovery".into() }),
+        );
     }
 
     #[test]

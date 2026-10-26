@@ -164,15 +164,16 @@ export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: nu
   const providers: CatalogProvider[] = [];
   const models: CatalogModel[] = [];
 
-  const load = async (entry: CatalogProvider, list: () => Promise<string[]>) => {
+  const load = async (entry: CatalogProvider, create: () => { endpoint: string; list: () => Promise<string[]> }) => {
+    let endpoint: string | undefined;
     try {
-      const ids = (await withTimeout(list(), timeoutMs)).filter((id) => chatModel(entry.id, id));
-      const endpoint = entry.id === APPLIANCE ? appliance.endpoint : providerConfig(config, entry.id).endpoint;
+      const source = create();
+      endpoint = source.endpoint;
+      const ids = (await withTimeout(source.list(), timeoutMs)).filter((id) => chatModel(entry.id, id));
       cache(cacheId(entry.id, endpoint), ids);
       models.push(...ids.map((id) => ({ provider: entry.id, id })));
     } catch (err: any) {
-      const endpoint = entry.id === APPLIANCE ? appliance.endpoint : providerConfig(config, entry.id).endpoint;
-      const old = cached(cacheId(entry.id, endpoint));
+      const old = endpoint ? cached(cacheId(entry.id, endpoint)) : undefined;
       entry.status = old ? "cached" : "error";
       entry.error = String(err?.message ?? err).slice(0, 200);
       if (old) models.push(...old.map((id) => ({ provider: entry.id, id })));
@@ -188,7 +189,7 @@ export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: nu
     status: "ok",
   };
   providers.push(applianceEntry);
-  const jobs: Promise<void>[] = [load(applianceEntry, () => applianceClient.listModels())];
+  const jobs: Promise<void>[] = [load(applianceEntry, () => ({ endpoint: appliance.endpoint, list: () => applianceClient.listModels() }))];
 
   for (const def of Object.values(PROVIDERS)) {
     const c = connectionOf(def.id);
@@ -204,7 +205,10 @@ export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: nu
       status: c.connected ? "ok" : "disconnected",
     };
     providers.push(entry);
-    if (c.connected) jobs.push(load(entry, () => new LocalLlmClient(providerConfig(config, def.id)).listModels()));
+    if (c.connected) jobs.push(load(entry, () => {
+      const provider = providerConfig(config, def.id);
+      return { endpoint: provider.endpoint, list: () => new LocalLlmClient(provider).listModels() };
+    }));
   }
   await Promise.all(jobs);
 

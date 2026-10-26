@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import { InferenceError, LocalLlmClient, mayBindCredential, setCredentialAuthority, storedCredentialFor } from "../src/client.js";
+import { environmentCredential, InferenceError, LocalLlmClient, mayBindCredential, setCredentialAuthority, storedCredentialFor } from "../src/client.js";
 import { commitLocalEndpointSetup, credentialsPath, localEndpointCredential, removeCredential, resolveCredential, saveCredential, saveLocalEndpointCredential } from "../src/credentials.js";
 import { setOAuthEndpoints, startAuthFlow } from "../src/oauth.js";
 import { connectLocalEndpoint, connectWithKey, disconnect, prepareLocalEndpoint } from "../src/provider_connect.js";
@@ -53,7 +53,7 @@ const responsesDone = (text: string) => [
 ];
 const chatDone = (text: string) => [{ choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }] }, "[DONE]"];
 
-const ENV = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NEXUS_PROVIDER", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_MODEL", "LOCAL_LLM_API_KEY", "LOCAL_LLM_CREDENTIAL_ORIGIN", "NEXUS_NO_BROWSER"];
+const ENV = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "NEXUS_OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "NEXUS_PROVIDER", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_MODEL", "LOCAL_LLM_API_KEY", "LOCAL_LLM_CREDENTIAL_ORIGIN", "NEXUS_NO_BROWSER"];
 let home: string;
 let saved: Record<string, string | undefined>;
 beforeEach(() => {
@@ -447,6 +447,21 @@ describe("connecting from the picker", () => {
     assert.match(fs.readFileSync(configFile, "utf8"), /LOCAL_LLM_CREDENTIAL_ORIGIN="http:\/\/127\.0\.0\.1:4321"/);
   });
 
+  test("a malformed credential origin cannot fall back to and bind a legacy key to the selected endpoint", () => {
+    const endpoint = "http://127.0.0.1:5432/v1";
+    operator({ LOCAL_LLM_ENDPOINT: endpoint, LOCAL_LLM_API_KEY: "legacy-origin-key", LOCAL_LLM_CREDENTIAL_ORIGIN: "not a valid origin" });
+    assert.equal(storedCredentialFor(endpoint), null);
+    assert.equal(environmentCredential(endpoint), undefined, "an invalid explicit binding must not become the key's new origin");
+
+    const configFile = write(".config/nexus/config.env", `LOCAL_LLM_ENDPOINT=${JSON.stringify(endpoint)}\nLOCAL_LLM_API_KEY=legacy-origin-key\nLOCAL_LLM_CREDENTIAL_ORIGIN="not a valid origin"\n`);
+    setCredentialAuthority({}, home);
+    assert.equal(storedCredentialFor(endpoint), null, "a malformed file binding cannot fall back to the file endpoint");
+    assert.equal(environmentCredential(endpoint), undefined, "the key from config.env also remains unbound");
+    const before = fs.readFileSync(configFile, "utf8");
+    assert.throws(() => saveLocalEndpointSettings("http://127.0.0.1:6543/v1", "new-model"), /existing local credential origin is invalid/);
+    assert.equal(fs.readFileSync(configFile, "utf8"), before, "an invalid binding must be repaired before endpoint mutation");
+  });
+
   test("settings permission failure leaves the prior config.env untouched", () => {
     const configFile = write(".config/nexus/config.env", 'LOCAL_LLM_ENDPOINT="http://127.0.0.1:1234/v1"\nLOCAL_LLM_MODEL="prior-model"\n');
     const before = fs.readFileSync(configFile, "utf8");
@@ -518,6 +533,24 @@ describe("connecting from the picker", () => {
       assert.equal(orEntry.status, "cached");
       assert.ok(second.models.some((m) => m.id === "anthropic/claude-x"), "offline: last good list");
     } finally { await appliance.close(); await or.close(); }
+  });
+
+  test("an invalid connected provider base URL marks only that provider unavailable", async () => {
+    const appliance = await mock((_s, res) => json(res, 200, { data: [{ id: "local-model-a" }] }));
+    try {
+      operator({
+        LOCAL_LLM_ENDPOINT: `${appliance.url}/v1`,
+        OPENAI_API_KEY: "synthetic-openai-key",
+        NEXUS_OPENAI_BASE_URL: "not a URL",
+      });
+      const catalog = await buildCatalog(cfg({ endpoint: `${appliance.url}/v1`, model: "local-model-a" }), { timeoutMs: 500 });
+      const openai = catalog.providers.find((provider) => provider.id === "openai");
+      assert.equal(openai?.status, "error");
+      assert.ok(catalog.models.some((model) => model.provider === "appliance" && model.id === "local-model-a"));
+      assert.doesNotMatch(JSON.stringify(catalog), /synthetic-openai-key/);
+    } finally {
+      await appliance.close();
+    }
   });
 
   test("the appliance model cache is isolated by endpoint origin", async () => {

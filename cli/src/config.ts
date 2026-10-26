@@ -176,6 +176,9 @@ export function saveLocalEndpointSettings(endpoint: string, model?: string): voi
   const existingSettings = parseDotenv(existing);
   const previousEndpoint = existingSettings.LOCAL_LLM_ENDPOINT ?? operatorSetting("LOCAL_LLM_ENDPOINT");
   const existingCredentialOrigin = existingSettings.LOCAL_LLM_CREDENTIAL_ORIGIN ?? operatorSetting("LOCAL_LLM_CREDENTIAL_ORIGIN");
+  if (existingCredentialOrigin && !originOf(existingCredentialOrigin)) {
+    throw new Error("The existing local credential origin is invalid; repair it before changing the endpoint.");
+  }
   const previousOrigin = originOf(previousEndpoint);
   const nextOrigin = originOf(endpoint);
   // Keep legacy LOCAL_LLM_API_KEY and gateway-token credentials bound to the endpoint they belonged to before

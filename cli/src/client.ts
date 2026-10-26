@@ -115,10 +115,13 @@ function storedCredentialHomes(): { gateway?: string; listed: Set<string>; envKe
   // When a legacy config.env key was present before the endpoint changed, the setup writer records its original
   // origin explicitly. Apply that binding to the merged operator key too: loadEnvironment() intentionally combines
   // shell and config.env values, so deriving the key origin from the new endpoint would silently rebind the old key.
-  const envKeyOrigin = originOf(authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGIN"))
+  const configuredCredentialOrigin = authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGIN") ?? file.LOCAL_LLM_CREDENTIAL_ORIGIN;
+  const invalidCredentialOrigin = Boolean(configuredCredentialOrigin && !originOf(configuredCredentialOrigin));
+  // A malformed explicit binding is not equivalent to an absent binding. Do not fall back to the currently
+  // selected endpoint, which could silently attach a legacy key to a different gateway.
+  const envKeyOrigin = invalidCredentialOrigin ? undefined : originOf(configuredCredentialOrigin)
     ?? originOf(authoritySetting("LOCAL_LLM_ENDPOINT"));
-  const gateway = originOf(authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGIN"))
-    ?? originOf(file.LOCAL_LLM_CREDENTIAL_ORIGIN)
+  const gateway = invalidCredentialOrigin ? undefined : originOf(configuredCredentialOrigin)
     ?? originOf(file.LOCAL_LLM_ENDPOINT)
     ?? envKeyOrigin;
   const listed = new Set(
@@ -180,6 +183,10 @@ export function environmentCredential(operatorEndpoint: string): { apiKey: strin
   const apiKey = process.env.LOCAL_LLM_API_KEY?.trim();
   if (!apiKey) return undefined;
   const operatorKey = authoritySetting("LOCAL_LLM_API_KEY");
+  const configuredCredentialOrigin = authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGIN") ?? readConfigEnv().LOCAL_LLM_CREDENTIAL_ORIGIN;
+  if (configuredCredentialOrigin && !originOf(configuredCredentialOrigin) && (operatorKey === apiKey || isStoredCredential(apiKey))) {
+    return undefined;
+  }
   if (operatorKey === apiKey) return { apiKey, origin: originOf(authoritySetting("LOCAL_LLM_ENDPOINT") ?? operatorEndpoint) };
   if (isStoredCredential(apiKey)) return undefined;
   return { apiKey, origin: originOf(process.env.LOCAL_LLM_ENDPOINT ?? operatorEndpoint) };

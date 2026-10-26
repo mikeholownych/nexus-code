@@ -1677,7 +1677,8 @@ impl LiveState {
 
     fn on_ctrl_c(&mut self) -> Option<Action> {
         match &self.overlay {
-            Some(Overlay::Connect(Connect { step: Step::Waiting { request, auth: Some(_), .. }, .. })) => {
+            Some(Overlay::Connect(Connect { step: Step::Waiting { request, method, auth, .. }, .. }))
+                if auth.is_some() || method == "local-endpoint" => {
                 let id = request.clone();
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderCancel { id }));
@@ -4071,6 +4072,24 @@ mod tests {
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"Local endpoint ready (127.0.0.1; 2 models found). Choose a model to finish setup."}}"#)));
         assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("appliance")));
         assert!(matches!(state.take_outbox().as_slice(), [Action::Send(Command::ModelsList { .. })]));
+    }
+
+    #[test]
+    fn escaping_pending_local_endpoint_discovery_sends_matching_cancel_and_ignores_late_success() {
+        let mut state = ready();
+        type_text(&mut state, "/connect");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        state.on_key(key(KeyCode::Enter));
+        state.on_paste("http://127.0.0.1:1234/v1");
+        state.on_key(key(KeyCode::Enter));
+        state.on_paste("pending-secret");
+        let Some(Action::Send(Command::ProviderConnect { id: request, .. })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: request.clone() })));
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"late success"}}"#)));
+        assert!(matches!(state.overlay, Some(Overlay::Connect(_))), "late success must not open the model picker after Escape");
+        assert!(!matches!(state.overlay, Some(Overlay::Models(_))));
     }
 
     #[test]

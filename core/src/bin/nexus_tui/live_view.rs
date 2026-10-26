@@ -3359,7 +3359,7 @@ fn render_connect(frame: &mut Frame, area: Rect, flow: &Connect) {
             focus = lines.len() - 1;
             if let Some(error) = error { lines.push(Line::from(Span::styled(error.clone(), Style::default().fg(Color::Red)))); }
             lines.push(Line::default());
-            lines.push(Line::from(Span::styled("Nexus checks the endpoint, stores the key in its owner-only credential store, and sends it only to this origin.", muted)));
+            lines.push(Line::from(Span::styled("Nexus checks the endpoint using this key in memory. It is stored only after you choose a model, and sent only to this origin.", muted)));
             &[("enter", "discover models"), ("ctrl+u", "clear"), ("esc", "edit endpoint")]
         }
         Step::Waiting { provider, method, auth, .. } => {
