@@ -1,6 +1,15 @@
 # v1.0.0 release readiness checkpoint
 
-## Current release checkpoint (observed 2026-10-26 02:27 UTC at `62e541c9e170a51d02420753f0807c14d65d7074`)
+## Current release checkpoint (observed 2026-10-26 06:24 UTC at `bbafae868939084ccd49f21621695dff6b05f752`)
+
+**Authoritative source and source gates:** `origin/main` is `bbafae868939084ccd49f21621695dff6b05f752`, incorporating PR #249 (`8e562b0f3406e94003806746cb69a5258f72a59f`) and PR #250. PR #249 merged at 05:57 UTC and PR #250 merged at 06:20 UTC. On this exact source, `node scripts/check_requirements.mjs --enforce` passed with 123 rows (108 tested, 6 partial, 2 implemented, 7 open; 12 requirements explicitly deferred to exact-RC qualification), and `node scripts/sync-version.mjs --check` confirms all components are `1.0.0-rc.8`. CodeQL run [40279197561](https://github.com/mikeholownych/nexus-code/actions/runs/40279197561) passed. Exact-main CI [40279197785](https://github.com/mikeholownych/nexus-code/actions/runs/40279197785) is still running; its Node 22 and Node 24 jobs passed Rust tests and release builds and were running the CLI test suite at 06:24 UTC. The current checkpoint does not claim full CI success.
+
+**RC and publication state:** The latest public prerelease remains `v1.0.0-rc.7`; `v1.0.0-rc.8` is not yet tagged or published. No stable `v1.0.0` release exists. The `rc.8` source version is not itself evidence of an accepted or installed RC. No release artifact should be published until every required acceptance gate passes.
+
+**Acceptance blockers:** Issue [#1](https://github.com/mikeholownych/nexus-code/issues/1), for held-out T2/T3 corpus custody, remains OPEN (last observed update 02:33:48 UTC); the required custodian sealing and independent private-custody acceptance are not established. Held-out qualification has not started. Provider/standalone coverage, T3/T4 qualification, installed exact-RC qualification, independent RC acceptance, and the human terminal matrix (0/15 at last evidence) remain incomplete. Treat the older entries below as historical snapshots; they do not supersede these current observations.
+
+
+## Historical checkpoint (observed 2026-10-26 02:27 UTC at `62e541c9e170a51d02420753f0807c14d65d7074`)
 
 **Authoritative source and CI:** `origin/main` remains `62e541c9e170a51d02420753f0807c14d65d7074`. CI run [40255529634](https://github.com/mikeholownych/nexus-code/actions/runs/40255529634) and CodeQL run [40255529667](https://github.com/mikeholownych/nexus-code/actions/runs/40255529667) both completed successfully on that exact commit. CI passed the Node 22/24 and Linux test matrices, requirements enforcement, security gates, package build and reproducibility, SBOM checks, and package/install smoke checks.
 
