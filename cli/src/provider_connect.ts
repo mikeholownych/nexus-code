@@ -56,17 +56,28 @@ export interface LocalEndpointPreparation {
 }
 
 const localEndpointSetupRequests = new Map<string, { cancelled: boolean }>();
+let provisionalLocalEndpointRequestId: string | undefined;
 
-/** Cancel an in-flight request, or clear provisional setup after the operator closes its model picker. */
-export function cancelLocalEndpointSetup(requestId?: string): void {
-  if (requestId) {
-    const request = localEndpointSetupRequests.get(requestId);
-    if (request) {
-      request.cancelled = true;
-      localEndpointSetupRequests.delete(requestId);
-    }
+/** Cancel only the matching in-flight or already-completed local endpoint request. */
+export function cancelLocalEndpointSetup(requestId: string): void {
+  const request = localEndpointSetupRequests.get(requestId);
+  if (request) {
+    request.cancelled = true;
+    localEndpointSetupRequests.delete(requestId);
   }
+  clearLocalEndpointSetup(requestId);
+}
+
+/** Explicitly clear the matching completed setup when its model picker closes. */
+export function clearLocalEndpointSetup(requestId: string): void {
+  if (!requestId || provisionalLocalEndpointRequestId !== requestId) return;
+  provisionalLocalEndpointRequestId = undefined;
   resetApplianceEndpointOverride();
+}
+
+/** Clear provisional state after the operator's explicit local model selection could not be committed. */
+export function clearLocalEndpointSetupAfterSelectionFailure(): void {
+  if (provisionalLocalEndpointRequestId) clearLocalEndpointSetup(provisionalLocalEndpointRequestId);
 }
 
 function validatedEndpoint(input: string): { endpoint: string; origin: string } | undefined {
@@ -112,6 +123,7 @@ export async function prepareLocalEndpoint(base: HarnessConfig, endpointInput: s
     const available = models.filter((model) => /^[A-Za-z0-9._:/@+-]{1,160}$/.test(model));
     if (available.length === 0) return { ok: false, message: "That endpoint returned no usable chat models." };
     activateApplianceEndpoint(parsed.endpoint, undefined, true, key || undefined);
+    provisionalLocalEndpointRequestId = requestId;
     return { ok: true, message: `Local endpoint verified (${parsed.origin}; ${available.length} models found). Choose a model to save setup.` };
   } catch {
     if (request.cancelled) return { ok: false, cancelled: true, message: "Local endpoint setup was cancelled." };
@@ -162,6 +174,7 @@ export async function connectLocalEndpoint(
     return { ok: false, message: "The endpoint and model were saved, but Nexus could not securely save the API key.", models: available };
   }
   activateApplianceEndpoint(endpoint, model, false);
+  provisionalLocalEndpointRequestId = undefined;
   return {
     ok: true,
     message: `Local endpoint configured (${origin}; ${available.length} models available).${key ? " API key saved for this origin only." : " No API key was saved."}`,
@@ -231,6 +244,7 @@ export function selectModel(agent: AutonomousAgent, config: HarnessConfig, ref: 
           saveLocalEndpointSettings(a.endpoint, model);
         }
         activateApplianceEndpoint(a.endpoint, model, false);
+        provisionalLocalEndpointRequestId = undefined;
       } catch {
         return { ok: false, message: "The model is available for this session, but Nexus could not securely save the selection." };
       }

@@ -60,7 +60,7 @@ import {
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
 import { buildCatalog } from "./model_catalog.js";
-import { cancelLocalEndpointSetup, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
+import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -217,6 +217,9 @@ export class SidecarServer {
         this.signIns.delete(command.id);
         cancelLocalEndpointSetup(command.id);
         return;
+      case "provider.local-cancel":
+        clearLocalEndpointSetup(command.id);
+        return;
       case "provider.disconnect": {
         if (this.app.getAgent().getApprovalMode() === "read-only") {
           this.emit({ type: "provider.result", id: command.id, provider: command.provider, success: false, message: "Provider changes are disabled while the session is in read-only mode." });
@@ -248,7 +251,7 @@ export class SidecarServer {
   private modelSelect(id: string, provider: string, model: string): void {
     if (this.rejectBusy(id)) return;
     const r = selectModel(this.app.getAgent(), this.app.getConfig(), { provider, model });
-    if (!r.ok && provider === "appliance") cancelLocalEndpointSetup();
+    if (!r.ok && provider === "appliance") clearLocalEndpointSetupAfterSelectionFailure();
     this.emit({ type: "model.result", id, success: r.ok, message: r.message });
     if (r.ok) this.emitSessionState();
   }

@@ -175,6 +175,8 @@ export type SidecarCommand =
   /** `key` only for method "api-key"; it is never echoed back or logged. */
   | { type: "provider.connect"; id: string; provider: string; method: string; key?: string; endpoint?: string }
   | { type: "provider.cancel"; id: string }
+  /** Clear a completed local endpoint setup associated with this exact provider.connect request. */
+  | { type: "provider.local-cancel"; id: string }
   | { type: "provider.disconnect"; id: string; provider: string }
   | { type: "shutdown" };
 
@@ -273,6 +275,8 @@ export function parseCommand(line: string): SidecarCommand {
     }
     case "provider.cancel":
       return { type: "provider.cancel", id: requireId("provider.cancel") };
+    case "provider.local-cancel":
+      return { type: "provider.local-cancel", id: requireId("provider.local-cancel") };
     case "provider.disconnect": {
       const requestId = requireId("provider.disconnect");
       if (typeof msg.provider !== "string" || !msg.provider) throw new ProtocolError("provider.disconnect requires provider", requestId);

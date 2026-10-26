@@ -44,8 +44,8 @@ pub struct Picker {
     pub pick: usize,
     /// Show only this provider's models (after connecting it).
     pub only: Option<String>,
-    /// Cancel a verified but uncommitted local endpoint setup if the operator closes this picker.
-    pub cancel_local_endpoint_on_close: bool,
+    /// Provider-connect request whose provisional local setup this picker can explicitly clear.
+    pub local_endpoint_setup_id: Option<String>,
     /// Open the connect panel as soon as the catalog arrives (`/connect`).
     pub connect_on_load: bool,
 }
@@ -92,7 +92,7 @@ impl Picker {
             query: String::new(),
             pick: 0,
             only: None,
-            cancel_local_endpoint_on_close: false,
+            local_endpoint_setup_id: None,
             connect_on_load: false,
         }
     }

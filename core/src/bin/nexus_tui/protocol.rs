@@ -414,6 +414,8 @@ pub enum Command {
     },
     #[serde(rename = "provider.cancel")]
     ProviderCancel { id: String },
+    #[serde(rename = "provider.local-cancel")]
+    ProviderLocalCancel { id: String },
     #[serde(rename = "provider.disconnect")]
     ProviderDisconnect { id: String, provider: String },
     #[serde(rename = "shutdown")]

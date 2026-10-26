@@ -39,6 +39,7 @@ describe("protocol: parseCommand", () => {
     assert.deepEqual(parseCommand('{"v":1,"type":"shutdown"}'), { type: "shutdown" });
     assert.deepEqual(parseCommand('{"v":1,"type":"tool.detail","id":"d1","evidence":"e3"}'), { type: "tool.detail", id: "d1", evidence: "e3" });
     assert.deepEqual(parseCommand('{"v":1,"type":"receipt","id":"r1"}'), { type: "receipt", id: "r1" });
+    assert.deepEqual(parseCommand('{"v":1,"type":"provider.local-cancel","id":"connect-1"}'), { type: "provider.local-cancel", id: "connect-1" });
   });
 
   test("tool.detail needs an evidence id and receipt needs a request id", () => {

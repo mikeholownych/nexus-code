@@ -567,10 +567,9 @@ impl LiveState {
     }
 
     fn on_models_key(&mut self, key: KeyEvent) -> Option<Action> {
-        let cancel_local_setup = matches!(&self.overlay, Some(Overlay::Models(picker)) if picker.cancel_local_endpoint_on_close);
-        let cancel_id = match &self.overlay {
-            Some(Overlay::Models(picker)) => picker.request.clone(),
-            _ => String::new(),
+        let local_setup_id = match &self.overlay {
+            Some(Overlay::Models(picker)) => picker.local_endpoint_setup_id.clone(),
+            _ => None,
         };
         let Some(Overlay::Models(picker)) = &mut self.overlay else {
             return None;
@@ -582,7 +581,7 @@ impl LiveState {
         match picker.on_key(key)? {
             PickerIntent::Close => {
                 self.overlay = None;
-                cancel_local_setup.then_some(Action::Send(Command::ProviderCancel { id: cancel_id }))
+                local_setup_id.map(|id| Action::Send(Command::ProviderLocalCancel { id }))
             }
             PickerIntent::Select { provider, model } => {
                 self.overlay = None;
@@ -687,7 +686,7 @@ impl LiveState {
                         self.outbox.push(action);
                         if local_setup && success {
                             if let Some(Overlay::Models(picker)) = &mut self.overlay {
-                                picker.cancel_local_endpoint_on_close = true;
+                                picker.local_endpoint_setup_id = Some(id.clone());
                             }
                         }
                     }
@@ -1683,10 +1682,10 @@ impl LiveState {
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderCancel { id }));
             }
-            Some(Overlay::Models(Picker { cancel_local_endpoint_on_close: true, request, .. })) => {
-                let id = request.clone();
+            Some(Overlay::Models(Picker { local_endpoint_setup_id: Some(id), .. })) => {
+                let id = id.clone();
                 self.overlay = None;
-                return Some(Action::Send(Command::ProviderCancel { id }));
+                return Some(Action::Send(Command::ProviderLocalCancel { id }));
             }
             Some(
                 Overlay::Help { .. }
@@ -4090,8 +4089,8 @@ mod tests {
         let [Action::Send(Command::ModelsList { id: catalog_request })] = outbox.as_slice() else { panic!("expected model discovery after verification") };
         let catalog_request = catalog_request.clone();
         state.apply(catalog(&catalog_request));
-        assert!(matches!(&state.overlay, Some(Overlay::Models(picker)) if picker.cancel_local_endpoint_on_close));
-        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: catalog_request })));
+        assert!(matches!(&state.overlay, Some(Overlay::Models(picker)) if picker.local_endpoint_setup_id.as_deref() == Some(request.as_str())));
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderLocalCancel { id: request })));
     }
 
 }

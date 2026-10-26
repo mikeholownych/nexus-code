@@ -53,7 +53,7 @@ const responsesDone = (text: string) => [
 ];
 const chatDone = (text: string) => [{ choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }] }, "[DONE]"];
 
-const ENV = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NEXUS_PROVIDER", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_API_KEY", "NEXUS_NO_BROWSER"];
+const ENV = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NEXUS_PROVIDER", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_MODEL", "LOCAL_LLM_API_KEY", "NEXUS_NO_BROWSER"];
 let home: string;
 let saved: Record<string, string | undefined>;
 beforeEach(() => {
@@ -597,6 +597,51 @@ describe("connecting from the picker", () => {
     }
   });
 
+  test("sidecar: unrelated provider cancellation preserves setup and explicit local-picker clear removes it", async () => {
+    const previous = await mock((_s, res) => json(res, 200, { data: [{ id: "previous-model" }] }));
+    const pending = await mock((s, res) => json(res, s.headers.authorization === "Bearer provisional-key" ? 200 : 401, { data: [{ id: "provisional-model" }] }));
+    const repo = makeRepo();
+    operator({ LOCAL_LLM_ENDPOINT: `${previous.url}/v1`, LOCAL_LLM_MODEL: "previous-model" });
+    const app = new ApplicationCore({ endpoint: `${previous.url}/v1`, model: "previous-model", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash" } as any);
+    const lines: string[] = [];
+    const server = new SidecarServer({ app, mode: "auto", write: (line) => lines.push(line) });
+    server.start();
+    const events = () => lines.map((line) => JSON.parse(line));
+    const send = (message: Record<string, unknown>) => server.handleLine(JSON.stringify({ v: 1, ...message }));
+    const waitFor = async (predicate: (event: any) => boolean) => {
+      for (let i = 0; i < 200; i++) {
+        const found = events().find(predicate);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.fail("event not seen");
+    };
+    const listApplianceModels = async (id: string) => {
+      await send({ type: "models.list", id });
+      const catalog = await waitFor((event) => event.type === "models.catalog" && event.id === id);
+      return catalog.models.filter((entry: any) => entry.provider === "appliance").map((entry: any) => entry.id);
+    };
+    try {
+      await send({ type: "provider.connect", id: "local-setup-owner", provider: "appliance", method: "local-endpoint", endpoint: `${pending.url}/v1`, key: "provisional-key" });
+      assert.equal((await waitFor((event) => event.type === "provider.result" && event.id === "local-setup-owner")).success, true);
+
+      await send({ type: "provider.cancel", id: "unrelated-request" });
+      assert.deepEqual(await listApplianceModels("after-unrelated-cancel"), ["provisional-model"], "an unrelated cancel cannot clear the active setup");
+      await send({ type: "provider.local-cancel", id: "wrong-setup-owner" });
+      assert.deepEqual(await listApplianceModels("after-wrong-local-clear"), ["provisional-model"], "the explicit clear is also owner-correlated");
+
+      await send({ type: "provider.local-cancel", id: "local-setup-owner" });
+      assert.deepEqual(await listApplianceModels("after-local-picker-close"), ["previous-model"], "closing the owning picker restores prior routing");
+      assert.ok(previous.seen.length > 0);
+      assert.ok(pending.seen.every((request) => request.headers.authorization === "Bearer provisional-key"));
+      assert.equal(fs.existsSync(credentialsPath()), false);
+    } finally {
+      await server.shutdown();
+      await previous.close();
+      await pending.close();
+    }
+  });
+
   test("sidecar: cancelling local endpoint discovery prevents a late response from activating setup", async () => {
     const previous = await mock((_s, res) => json(res, 200, { data: [{ id: "previous-model" }] }));
     const delayed = await mock((_s, res) => { setTimeout(() => json(res, 200, { data: [{ id: "late-model" }] }), 120); });
@@ -718,7 +763,7 @@ describe("connecting from the picker", () => {
       assert.equal(fs.readFileSync(configFile, "utf8"), previous);
       assert.equal(fs.existsSync(credentialsPath()), false);
 
-      await send({ type: "provider.cancel", id: "pending-models" });
+      await send({ type: "provider.local-cancel", id: "pending-connect" });
       await send({ type: "models.list", id: "after-cancel" });
       const restored = await waitFor((event) => event.type === "models.catalog" && event.id === "after-cancel");
       assert.deepEqual(restored.models.filter((model: any) => model.provider === "appliance").map((model: any) => model.id), ["old-model"]);
