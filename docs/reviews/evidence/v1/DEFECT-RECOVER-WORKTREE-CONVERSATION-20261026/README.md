@@ -52,7 +52,7 @@ keeps using the current workspace identity exactly as before.
   checkout and the worktree directory is gone.
 - Focused: `recover_worktree_conversation.test.ts` (3) + `state.test.ts` (11) + `system_journey.test.ts` (2) +
   `checkpoint_index_lock.test.ts` (4) + `retention.test.ts` (12) = **32/32 pass**.
-- Revalidated the amended regression at snapshot `012b57ec3700f0fb0e000f7a668da6d4a98ef829`: `npm run build --prefix cli`
+- Revalidated the amended regression at rebased snapshot `e964e4b54bf8a5e1d9191749340dae9edfeb22c8`: `npm run build --prefix cli`
   passed, then `node scripts/run_tests.mjs test/recover_worktree_conversation.test.ts` from `cli/` passed **3/3**.
   The runner provided isolated `HOME` and XDG directories. A separate full-suite attempt was interrupted after
   identifying missing build metadata and an unavailable local inference endpoint; it is not a passing suite result.
