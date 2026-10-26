@@ -1,6 +1,16 @@
 # v1.0.0 release readiness checkpoint
 
-## Current release checkpoint (observed 2026-10-26 08:05 UTC)
+## Current release checkpoint (observed 2026-10-26 13:45 UTC)
+
+**Authoritative source and source gates:** `origin/main` is `b73b6ecaf753ff3eba8d5e1930ede7a471359421`, integrating PR #252 (`7f52ed1b76e2fa69dee1416d1b13f1e1263ff52d`) and PR #254 (`b73b6ecaf753ff3eba8d5e1930ede7a471359421`). Exact-main CI run [40327501470](https://github.com/mikeholownych/nexus-code/actions/runs/40327501470) and CodeQL runs [40327501389](https://github.com/mikeholownych/nexus-code/actions/runs/40327501389) and [40331254134](https://github.com/mikeholownych/nexus-code/actions/runs/40331254134) passed on this source. The release requirements enforcement (123 rows; 12 explicitly deferred to exact-RC qualification) and version synchronization checks passed; synchronized components remain `1.0.0-rc.8`.
+
+**Candidate and publication state:** Public prerelease [v1.0.0-rc.8](https://github.com/mikeholownych/nexus-code/releases/tag/v1.0.0-rc.8) remains the latest release, but its tag resolves to `bbafae868939084ccd49f21621695dff6b05f752`, before PR #252 and PR #254. Its Linux archive digest remains `sha256:bbded963a9bcaa9c0764b86d900f752c46ed364bfe30cc67e5bbf23b5fb5f48e`. RC8 reproducibility and isolated-prefix provenance checks apply only to that earlier artifact. It is not an accepted RC for current `main`; a candidate from the current source must be rebuilt and qualified. No stable `v1.0.0` release exists. The RC8 signing identity remains reported by GitHub as unverified (`bad_email`); stable signing must use a GitHub-verified identity.
+
+**Acceptance blockers:** Issue [#1](https://github.com/mikeholownych/nexus-code/issues/1) remains open. The latest public metadata-only custody request (12:18 UTC) has no custodian response; do not access held-out payloads or begin the held-out run before independent custody acceptance. The last recorded human terminal matrix is 0/15, with real-terminal operator evidence still required. Exact-current-RC installed qualification, standalone/provider acceptance, T2/T3/T4 qualification and independent exact-RC acceptance are not established. Acceptance remains `IN_PROGRESS`; publication authorization remains granted but gated on all required acceptance and stable-artifact checks.
+
+The 08:05 checkpoint immediately below is retained as historical evidence; this update supersedes its source, CI, candidate and current blocker status.
+
+## Historical checkpoint (observed 2026-10-26 08:05 UTC)
 
 **Authoritative source and source gates:** `origin/main` is `bbafae868939084ccd49f21621695dff6b05f752`. Exact-main CI run [40279197785](https://github.com/mikeholownych/nexus-code/actions/runs/40279197785) completed successfully on this commit; all three required jobs (`test-matrix (22)`, `test-matrix (24)`, and `linux-x86_64`) passed. CodeQL run [40279197561](https://github.com/mikeholownych/nexus-code/actions/runs/40279197561) passed. The requirements enforcement and version synchronization checks passed on the same source: 123 requirements (108 tested, 6 partial, 2 implemented, 7 open; 12 remain explicitly deferred to exact-RC qualification), with package components at `1.0.0-rc.8`.
 
