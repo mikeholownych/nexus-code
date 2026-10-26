@@ -63,6 +63,19 @@ function makeWorktreeTask(): Fixture {
   const created = first.getWorktreeManager().createWorktree(taskId);
   const stateManager = first.getStateManager();
   const state = stateManager.loadTaskState(taskId);
+  state.objective = {
+    version: 1,
+    objective: "preserve recovered objective marker",
+    objectiveSha256: "objective-marker-hash",
+    startedAt: new Date().toISOString(),
+    requirements: [],
+    scopeChanges: [],
+    steering: [],
+    verification: [],
+    continuation: { segments: 0, totalSteps: 0, lastProgressStep: 0 },
+    amendments: [],
+  };
+  state.findings = ["Findings recorded from inspected output [F1; model-written, not independent proof]\nrecovered finding marker"];
   state.worktreeBinding = {
     taskId,
     worktreePath: created.worktreePath,
@@ -103,6 +116,8 @@ test("recovering a worktree-bound task keeps the restored conversation", async (
     assert.equal(restored[2]?.content, "original answer marker");
     assert.equal(resumed.getHistoryCount(), 3);
     assert.equal(resumed.getActivePlan().length, 1);
+    assert.equal(resumed.getObjective()?.objective, "preserve recovered objective marker");
+    assert.deepEqual(resumed.getFindings(), ["Findings recorded from inspected output [F1; model-written, not independent proof]\nrecovered finding marker"]);
     assert.equal(resumed.hasUnverifiedChanges(), true);
     resumed.shutdown();
   } finally {

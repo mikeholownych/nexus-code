@@ -66,9 +66,11 @@ keeps using the current workspace identity exactly as before.
   At HEAD, resuming such a record from the repository root still fails with `WorkspaceIdentityMismatchError`, while
   resuming it from inside the internal checkout succeeds but binds the `WorktreeManager` to that checkout, so
   `/discard` cannot remove the real worktree. The defect-2 symptom therefore persists for in-flight pre-fix records
-  until a checkpoint is written at HEAD. v1.0.0 has not shipped, so no released-state migration is included here; a
-  one-time identity normalisation (record whose `workspacePath` equals its own managed worktree path → repository
-  root) would be the follow-up if pre-release records must survive.
+  unless their workspace identity is explicitly normalized before recovery; writing a checkpoint at HEAD cannot
+  help because recovery fails before it can reach that checkpoint. v1.0.0 has not shipped, so no released-state
+  migration is included here. Supporting these records requires a separate, validated normalization change in the
+  durable-state loader (for example, mapping a recorded managed worktree path back to its verified primary
+  repository), which is outside this slice's claimed files.
 - The internal checkout is not a supported resume entry point: its runner records `workspacePath` as that checkout,
   and `repl /resume` of a session saved inside the worktree re-enters it with no `activeWorktree`.
 - The worktree binding's `createdAt` is synthesised on recovery; it was already not persisted by `activeWorktree`.
