@@ -1109,7 +1109,7 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
 
       if (item.gitRef && item.workspace) {
         try {
-          execFileSync("git", ["update-ref", "-d", `refs/nexus/checkpoints/${item.id}`], {
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", `refs/nexus/checkpoints/${item.id}`], {
             cwd: item.workspace,
             stdio: "ignore",
           });
