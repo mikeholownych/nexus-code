@@ -103,7 +103,9 @@ test("checkpoint rechecks the index lock after stash creation before publishing 
     fs.mkdirSync(wrapperDir);
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
     const wrapperPath = path.join(wrapperDir, "git");
-    fs.writeFileSync(wrapperPath, `#!/usr/bin/env node\nimport { spawnSync } from "node:child_process";\nconst result = spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), { stdio: "inherit" });\nif (process.argv[2] === "stash" && process.argv[3] === "create" && result.status === 0) {\n  await import("node:fs").then(({ writeFileSync }) => writeFileSync(process.env.NEXUS_TEST_INDEX_LOCK, ""));\n}\nprocess.exit(result.status ?? 1);\n`);
+    fs.writeFileSync(wrapperPath, `#!/usr/bin/env node\nimport { spawnSync } from "node:child_process";\nconst result = spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), { stdio: "inherit" });\nconst args = process.argv.slice(2);
+const stashIndex = args.indexOf("stash");
+if (stashIndex >= 0 && args[stashIndex + 1] === "create" && result.status === 0) {\n  await import("node:fs").then(({ writeFileSync }) => writeFileSync(process.env.NEXUS_TEST_INDEX_LOCK, ""));\n}\nprocess.exit(result.status ?? 1);\n`);
     fs.chmodSync(wrapperPath, 0o755);
 
     const previousPath = process.env.PATH;

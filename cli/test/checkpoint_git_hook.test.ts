@@ -20,8 +20,11 @@ function setup(): { root: string; workspace: string; marker: string; hook: strin
   execFileSync("git", ["commit", "-qm", "base"], { cwd: workspace });
   const marker = path.join(root, "hook-ran");
   const hook = path.join(workspace, ".git", "hooks", "reference-transaction");
+  const postIndexHook = path.join(workspace, ".git", "hooks", "post-index-change");
   fs.writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
   fs.chmodSync(hook, 0o755);
+  fs.writeFileSync(postIndexHook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+  fs.chmodSync(postIndexHook, 0o755);
   const previousHome = process.env.HOME;
   process.env.HOME = home;
   return {
@@ -36,9 +39,33 @@ function setup(): { root: string; workspace: string; marker: string; hook: strin
 test("checkpoint creation does not execute a workspace git hook", () => {
   const env = setup();
   try {
+    fs.writeFileSync(path.join(env.workspace, "file.txt"), "dirty\n");
     const manager = new CheckpointManager(env.workspace);
     manager.createCheckpoint("hook test");
     assert.equal(fs.existsSync(env.marker), false, "checkpoint creation executed a workspace hook");
+    const refs = execFileSync("git", ["for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"], {
+      cwd: env.workspace,
+      encoding: "utf8",
+    });
+    assert.match(refs, /refs\/nexus\/checkpoints\//, "the checkpoint ref was not created");
+  } finally {
+    env.restore();
+  }
+});
+
+test("checkpoint restore does not execute a workspace git hook", () => {
+  const env = setup();
+  try {
+    fs.rmSync(env.hook, { force: true });
+    fs.rmSync(path.join(env.workspace, ".git", "hooks", "post-index-change"), { force: true });
+    const manager = new CheckpointManager(env.workspace);
+    const cp = manager.createCheckpoint("hook restore");
+    fs.writeFileSync(env.hook, `#!/bin/sh\ntouch '${env.marker}'\n`, { mode: 0o755 });
+    fs.chmodSync(env.hook, 0o755);
+    fs.writeFileSync(path.join(env.workspace, ".git", "hooks", "post-index-change"), `#!/bin/sh\ntouch '${env.marker}'\n`, { mode: 0o755 });
+    fs.chmodSync(path.join(env.workspace, ".git", "hooks", "post-index-change"), 0o755);
+    manager.restore(cp.id);
+    assert.equal(fs.existsSync(env.marker), false, "checkpoint restore executed a workspace hook");
   } finally {
     env.restore();
   }

@@ -104,7 +104,7 @@ export class CheckpointManager {
   }
 
   private assertGitChangesSafe(allowSensitive: boolean): void {
-    const changedPaths = execSync("git diff --name-only -z HEAD", {
+    const changedPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "-z", "HEAD"], {
       cwd: this.workspace,
       encoding: "buffer",
     }).toString("utf8").split("\0").filter(Boolean);
@@ -181,7 +181,7 @@ export class CheckpointManager {
         this.assertGitIndexUnlocked();
         this.assertGitChangesSafe(allowSensitive);
         // Create an untracked + tracked git stash commit without modifying working tree
-        const stashCommit = execSync("git stash create", { cwd: this.workspace, encoding: "utf-8" }).trim();
+        const stashCommit = execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "stash", "create"], { cwd: this.workspace, encoding: "utf-8" }).trim();
         if (stashCommit) {
           // Catch a Git operation that began during validation or stash creation.
           // This is a point-in-time guard; Git exposes no atomic lock spanning
@@ -403,7 +403,7 @@ export class CheckpointManager {
     try {
       if (this.isGit && cp.gitRef) {
         // Reset working tree to checkpoint commit/stash
-        execFileSync("git", ["reset", "--hard", cp.gitRef], { cwd: this.workspace, stdio: "ignore" });
+        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "reset", "--hard", cp.gitRef], { cwd: this.workspace, stdio: "ignore" });
         execFileSync("git", ["clean", "-fd"], { cwd: this.workspace, stdio: "ignore" });
         return { success: true, message: `Restored workspace to checkpoint '${cp.name}' (${cp.id})` };
       }
