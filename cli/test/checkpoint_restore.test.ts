@@ -774,3 +774,33 @@ test("Git manifest restore refuses a nested-repository file-target obstruction b
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("Git manifest restore refuses changed checkpoint ignore rules before Git mutation", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), "a/ignored\n");
+    git("add", ".gitignore");
+    git("commit", "-qm", "ignore checkpoint obstruction");
+    fs.writeFileSync(path.join(repo, "a"), "captured file\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("Git reversed ignore rule");
+    fs.rmSync(path.join(repo, "a"));
+    fs.mkdirSync(path.join(repo, "a"));
+    fs.writeFileSync(path.join(repo, "a", "ignored"), "ignored canary\n");
+    fs.writeFileSync(path.join(repo, ".gitignore"), "# checkpoint rule removed\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "tracked canary\n");
+    fs.writeFileSync(path.join(repo, "untracked.txt"), "untracked canary\n");
+    assert.equal(git("clean", "-nd", "--", "a"), "Would remove a/");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /ignore|destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(repo, ".gitignore"), "utf8"), "# checkpoint rule removed\n");
+    assert.equal(fs.readFileSync(path.join(repo, "a", "ignored"), "utf8"), "ignored canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "tracked canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
