@@ -8,7 +8,7 @@ import { removeCredential, resolveCredential, saveCredential, saveLocalEndpointC
 import { APPLIANCE, applianceConfig, connectionOf, providerConfig, recordRecent, type ModelRef } from "./model_catalog.js";
 import { openBrowser, startAuthFlow, type AuthPrompt } from "./oauth.js";
 import { originOf, providerDefinition } from "./providers.js";
-import { activateApplianceEndpoint, applianceEndpointSelection, saveLocalEndpointSettings } from "./config.js";
+import { activateApplianceEndpoint, applianceEndpointSelection, pendingApplianceEndpointKey, resetApplianceEndpointOverride, saveLocalEndpointSettings } from "./config.js";
 import type { HarnessConfig } from "./types.js";
 import type { AutonomousAgent } from "./agent.js";
 import { redactSecrets } from "./ui.js";
@@ -54,6 +54,11 @@ export interface LocalEndpointPreparation {
   message: string;
 }
 
+/** Cancel an uncommitted local setup after the operator closes its model picker. */
+export function cancelLocalEndpointSetup(): void {
+  resetApplianceEndpointOverride();
+}
+
 function validatedEndpoint(input: string): { endpoint: string; origin: string } | undefined {
   const endpoint = input.trim().replace(/\/+$/, "");
   try {
@@ -83,7 +88,7 @@ function validatedKey(input: string): string | undefined {
   return /[\r\n\0]/.test(key) || (key && /\s/.test(key)) ? undefined : key;
 }
 
-/** Verify a local endpoint, persist its endpoint and optional key, and make it available to the live model picker. */
+/** Verify a local endpoint and keep its endpoint and optional key provisional for the live model picker. */
 export async function prepareLocalEndpoint(base: HarnessConfig, endpointInput: string, keyInput = ""): Promise<LocalEndpointPreparation> {
   const parsed = validatedEndpoint(endpointInput);
   if (!parsed) return { ok: false, message: "Use an http:// or https:// endpoint without embedded credentials, query, or fragment." };
@@ -93,12 +98,8 @@ export async function prepareLocalEndpoint(base: HarnessConfig, endpointInput: s
     const models = await new LocalLlmClient(localEndpointConfig(base, parsed.endpoint, parsed.origin, key)).listModels();
     const available = models.filter((model) => /^[A-Za-z0-9._:/@+-]{1,160}$/.test(model));
     if (available.length === 0) return { ok: false, message: "That endpoint returned no usable chat models." };
-    saveLocalEndpointSettings(parsed.endpoint);
-    if (key && !saveLocalEndpointCredential(parsed.origin, key)) {
-      return { ok: false, message: "The endpoint was verified, but Nexus could not securely save the API key." };
-    }
-    activateApplianceEndpoint(parsed.endpoint, undefined, true);
-    return { ok: true, message: `Local endpoint ready (${parsed.origin}; ${available.length} models found). Choose a model to finish setup.` };
+    activateApplianceEndpoint(parsed.endpoint, undefined, true, key || undefined);
+    return { ok: true, message: `Local endpoint verified (${parsed.origin}; ${available.length} models found). Choose a model to save setup.` };
   } catch {
     return { ok: false, message: "Could not list models from that endpoint. Check the URL and API key, then try again." };
   }
@@ -206,6 +207,10 @@ export function selectModel(agent: AutonomousAgent, config: HarnessConfig, ref: 
     const pendingSelection = applianceEndpointSelection();
     if (pendingSelection?.persistModelOnSelection && originOf(a.endpoint) === originOf(pendingSelection.endpoint)) {
       try {
+        const pendingKey = pendingApplianceEndpointKey(a.endpoint);
+        if (pendingKey && !saveLocalEndpointCredential(a.endpoint, pendingKey)) {
+          return { ok: false, message: "The endpoint was verified, but Nexus could not securely save the API key." };
+        }
         saveLocalEndpointSettings(a.endpoint, model);
         activateApplianceEndpoint(a.endpoint, model, false);
       } catch {

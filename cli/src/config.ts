@@ -14,15 +14,26 @@ let credentialAuthorityRecorded = false;
 let shellEnvironment: Record<string, string | undefined> = {};
 let userConfigFile: Record<string, string> = {};
 const SHELL_PRECEDENCE_KEYS = ["NEXUS_VERIFY_ATTESTATION"] as const;
-let applianceEndpointOverride: { endpoint: string; model?: string; persistModelOnSelection: boolean } | undefined;
+let applianceEndpointOverride: { endpoint: string; model?: string; apiKey?: string; persistModelOnSelection: boolean } | undefined;
 
 /** Session-scoped endpoint override established by the explicit local connect flow. */
-export function activateApplianceEndpoint(endpoint: string, model?: string, persistModelOnSelection = false): void {
-  applianceEndpointOverride = { endpoint, ...(model ? { model } : {}), persistModelOnSelection };
+export function activateApplianceEndpoint(endpoint: string, model?: string, persistModelOnSelection = false, apiKey?: string): void {
+  applianceEndpointOverride = { endpoint, ...(model ? { model } : {}), ...(apiKey ? { apiKey } : {}), persistModelOnSelection };
 }
 
 export function applianceEndpointSelection(): { endpoint: string; model?: string; persistModelOnSelection: boolean } | undefined {
-  return applianceEndpointOverride ? { ...applianceEndpointOverride } : undefined;
+  if (!applianceEndpointOverride) return undefined;
+  return {
+    endpoint: applianceEndpointOverride.endpoint,
+    ...(applianceEndpointOverride.model ? { model: applianceEndpointOverride.model } : {}),
+    persistModelOnSelection: applianceEndpointOverride.persistModelOnSelection,
+  };
+}
+
+/** Return the provisional key only for the exact endpoint origin during the setup session. */
+export function pendingApplianceEndpointKey(endpoint: string): string | undefined {
+  if (!applianceEndpointOverride?.apiKey) return undefined;
+  return originOf(applianceEndpointOverride.endpoint) === originOf(endpoint) ? applianceEndpointOverride.apiKey : undefined;
 }
 
 /** Test isolation for session-scoped endpoint changes. */
@@ -289,11 +300,12 @@ export function buildConfig(options: any): HarnessConfig {
   // A cloud model is named explicitly; the appliance's LOCAL_LLM_MODEL never selects a billable cloud model.
   const model = provider ? options.model || operatorSetting("NEXUS_MODEL") || "" : options.model || (options.appliance ? applianceEndpointOverride?.model : undefined) || effectiveSetting("LOCAL_LLM_MODEL") || "local-model";
   // Stored gateway credentials are not baked in here: the client attaches them only to the gateway they belong to.
+  const provisionalKey = options.appliance ? pendingApplianceEndpointKey(endpoint) : undefined;
   const operatorKey = operatorSetting("LOCAL_LLM_API_KEY");
   const projectApiKey = effectiveSetting("LOCAL_LLM_API_KEY");
   const envCredential = options.apiKey || provider ? undefined : environmentCredential(options.endpoint || DEFAULT_ENDPOINT);
-  const apiKey = options.apiKey || (provider ? providerKey(provider) : operatorKey || projectApiKey || envCredential?.apiKey) || "local";
-  const credentialOrigin = apiKey === "local" ? undefined : options.apiKey || provider ? credentialOriginOf(endpoint) : (operatorKey ? envCredential?.origin : (projectApiKey ? credentialOriginOf(endpoint) : envCredential?.origin));
+  const apiKey = options.apiKey || (provider ? providerKey(provider) : provisionalKey || operatorKey || projectApiKey || envCredential?.apiKey) || "local";
+  const credentialOrigin = apiKey === "local" ? undefined : options.apiKey || provider || provisionalKey ? credentialOriginOf(endpoint) : (operatorKey ? envCredential?.origin : (projectApiKey ? credentialOriginOf(endpoint) : envCredential?.origin));
   const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
   const continuation = continuationBudget(options);

@@ -44,6 +44,8 @@ pub struct Picker {
     pub pick: usize,
     /// Show only this provider's models (after connecting it).
     pub only: Option<String>,
+    /// Cancel a verified but uncommitted local endpoint setup if the operator closes this picker.
+    pub cancel_local_endpoint_on_close: bool,
     /// Open the connect panel as soon as the catalog arrives (`/connect`).
     pub connect_on_load: bool,
 }
@@ -90,6 +92,7 @@ impl Picker {
             query: String::new(),
             pick: 0,
             only: None,
+            cancel_local_endpoint_on_close: false,
             connect_on_load: false,
         }
     }
@@ -657,7 +660,7 @@ mod tests {
         assert_eq!(intent, Some(ConnectIntent::Connect { provider: "openrouter".into(), method: "openrouter-oauth".into(), key: None }));
         c.step = Step::Waiting { request: "p3".into(), provider: "openrouter".into(), method: "openrouter-oauth".into(), auth: Some(AuthInfo { url: "u".into(), user_code: None, instructions: "i".into() }) };
         assert_eq!(c.on_key(key(KeyCode::Esc)), Some(ConnectIntent::Cancel { request: "p3".into() }));
-        assert!(matches!(c.step, Step::Providers { pick: 0 }));
+        assert_eq!(c.step, Step::Providers { pick: 1 }, "cancel returns to the selected cloud provider after the new appliance option");
     }
 
     #[test]

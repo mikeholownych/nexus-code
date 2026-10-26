@@ -12,11 +12,11 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { InferenceError, LocalLlmClient, mayBindCredential, setCredentialAuthority, storedCredentialFor } from "../src/client.js";
-import { credentialsPath, localEndpointCredential, removeCredential, resolveCredential, saveCredential } from "../src/credentials.js";
+import { credentialsPath, localEndpointCredential, removeCredential, resolveCredential, saveCredential, saveLocalEndpointCredential } from "../src/credentials.js";
 import { setOAuthEndpoints, startAuthFlow } from "../src/oauth.js";
-import { connectLocalEndpoint, connectWithKey, disconnect } from "../src/provider_connect.js";
+import { connectLocalEndpoint, connectWithKey, disconnect, prepareLocalEndpoint } from "../src/provider_connect.js";
 import { buildCatalog } from "../src/model_catalog.js";
-import { resetApplianceEndpointOverride } from "../src/config.js";
+import { buildConfig, resetApplianceEndpointOverride } from "../src/config.js";
 import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
 import { UsageLedger } from "../src/usage.js";
@@ -333,6 +333,47 @@ describe("connecting from the picker", () => {
     }
   });
 
+  test("local endpoint credentials are never forwarded through redirects", async () => {
+    const target = await mock((_s, res) => json(res, 200, { data: [{ id: "redirect-target-model" }] }));
+    const source = await mock((_s, res) => {
+      res.writeHead(302, { location: `${target.url}/v1/models` });
+      res.end();
+    });
+    try {
+      const endpoint = `${source.url}/v1`;
+      operator({ LOCAL_LLM_ENDPOINT: endpoint });
+      assert.equal(saveLocalEndpointCredential(endpoint, "redirect-secret"), true);
+      const client = new LocalLlmClient(cfg({ endpoint, apiKey: undefined }));
+      await assert.rejects(client.listModels());
+      assert.equal(source.seen.length, 1);
+      assert.equal(source.seen[0].headers.authorization, "Bearer redirect-secret");
+      assert.equal(target.seen.length, 0, "the redirect destination must never receive the saved key");
+    } finally {
+      await source.close();
+      await target.close();
+    }
+  });
+
+  test("provisional local endpoint discovery authenticates in memory without persisting selection or key", async () => {
+    const local = await mock((s, res) => json(res, s.headers.authorization === "Bearer provisional-secret" ? 200 : 401, { data: [{ id: "candidate-model" }] }));
+    const previous = 'LOCAL_LLM_ENDPOINT="http://127.0.0.1:9/v1"\nLOCAL_LLM_MODEL="previous-model"\n';
+    try {
+      fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
+      fs.writeFileSync(path.join(home, ".config/nexus/config.env"), previous, { mode: 0o600 });
+      const result = await prepareLocalEndpoint(cfg(), `${local.url}/v1`, "provisional-secret");
+      assert.equal(result.ok, true, result.message);
+      const pendingClient = new LocalLlmClient(buildConfig({ appliance: true }));
+      assert.deepEqual(await pendingClient.listModels(), ["candidate-model"]);
+      assert.equal(local.seen.length, 2, "verification and picker discovery both authenticate to the selected endpoint");
+      assert.ok(local.seen.every((request) => request.headers.authorization === "Bearer provisional-secret"));
+      assert.equal(fs.readFileSync(path.join(home, ".config/nexus/config.env"), "utf8"), previous);
+      assert.equal(fs.existsSync(credentialsPath()), false, "the pending key is not written before model selection");
+    } finally {
+      resetApplianceEndpointOverride();
+      await local.close();
+    }
+  });
+
   test("a key is verified before it is saved; a rejected key is not saved and never echoed", async () => {
     const m = await mock((s, res) => json(res, s.headers["x-api-key"] === "sk-ant-GOOD" ? 200 : 401, { data: [{ id: "claude-a" }, { id: "claude-b" }] }));
     try {
@@ -467,6 +508,54 @@ describe("connecting from the picker", () => {
       await server.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
       await server.shutdown();
       await appliance.close();
+      await local.close();
+    }
+  });
+
+  test("sidecar: cancelling provisional local setup preserves prior selection and does not store its key", async () => {
+    const oldEndpoint = await mock((_s, res) => json(res, 200, { data: [{ id: "old-model" }] }));
+    const local = await mock((s, res) => json(res, s.headers.authorization === "Bearer pending-secret" ? 200 : 401, { data: [{ id: "pending-model" }] }));
+    const repo = makeRepo();
+    operator({ LOCAL_LLM_ENDPOINT: `${oldEndpoint.url}/v1` });
+    const configFile = path.join(home, ".config/nexus/config.env");
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    const previous = `LOCAL_LLM_ENDPOINT=${JSON.stringify(`${oldEndpoint.url}/v1`)}\nLOCAL_LLM_MODEL="old-model"\n`;
+    fs.writeFileSync(configFile, previous, { mode: 0o600 });
+    const app = new ApplicationCore({ endpoint: `${oldEndpoint.url}/v1`, model: "old-model", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash" } as any);
+    const lines: string[] = [];
+    const server = new SidecarServer({ app, mode: "auto", write: (line) => lines.push(line) });
+    server.start();
+    const events = () => lines.map((line) => JSON.parse(line));
+    const send = (message: Record<string, unknown>) => server.handleLine(JSON.stringify({ v: 1, ...message }));
+    const waitFor = async (predicate: (event: any) => boolean) => {
+      for (let i = 0; i < 200; i++) {
+        const found = events().find(predicate);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.fail("event not seen");
+    };
+    try {
+      await send({ type: "provider.connect", id: "pending-connect", provider: "appliance", method: "local-endpoint", endpoint: `${local.url}/v1`, key: "pending-secret" });
+      assert.equal((await waitFor((event) => event.type === "provider.result" && event.id === "pending-connect")).success, true);
+      await send({ type: "models.list", id: "pending-models" });
+      const catalog = await waitFor((event) => event.type === "models.catalog" && event.id === "pending-models");
+      assert.deepEqual(catalog.models.filter((model: any) => model.provider === "appliance").map((model: any) => model.id), ["pending-model"]);
+      assert.ok(local.seen.every((request) => request.headers.authorization === "Bearer pending-secret"));
+      assert.equal(fs.readFileSync(configFile, "utf8"), previous);
+      assert.equal(fs.existsSync(credentialsPath()), false);
+
+      await send({ type: "provider.cancel", id: "pending-models" });
+      await send({ type: "models.list", id: "after-cancel" });
+      const restored = await waitFor((event) => event.type === "models.catalog" && event.id === "after-cancel");
+      assert.deepEqual(restored.models.filter((model: any) => model.provider === "appliance").map((model: any) => model.id), ["old-model"]);
+      assert.ok(oldEndpoint.seen.length >= 1);
+      assert.equal(oldEndpoint.seen.at(-1)?.headers.authorization, "Bearer not-needed");
+      assert.equal(fs.readFileSync(configFile, "utf8"), previous);
+      assert.equal(fs.existsSync(credentialsPath()), false);
+    } finally {
+      await server.shutdown();
+      await oldEndpoint.close();
       await local.close();
     }
   });

@@ -567,6 +567,11 @@ impl LiveState {
     }
 
     fn on_models_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let cancel_local_setup = matches!(&self.overlay, Some(Overlay::Models(picker)) if picker.cancel_local_endpoint_on_close);
+        let cancel_id = match &self.overlay {
+            Some(Overlay::Models(picker)) => picker.request.clone(),
+            _ => String::new(),
+        };
         let Some(Overlay::Models(picker)) = &mut self.overlay else {
             return None;
         };
@@ -577,7 +582,7 @@ impl LiveState {
         match picker.on_key(key)? {
             PickerIntent::Close => {
                 self.overlay = None;
-                None
+                cancel_local_setup.then_some(Action::Send(Command::ProviderCancel { id: cancel_id }))
             }
             PickerIntent::Select { provider, model } => {
                 self.overlay = None;
@@ -673,12 +678,18 @@ impl LiveState {
     fn on_provider_result(&mut self, id: String, provider: String, success: bool, message: String) {
         if let Some(Overlay::Connect(flow)) = &mut self.overlay {
             let waiting = matches!(&flow.step, Step::Waiting { request, .. } if *request == id);
+            let local_setup = matches!(&flow.step, Step::Waiting { request, method, .. } if *request == id && method == "local-endpoint");
             if waiting {
                 if flow.on_result(&id, success, message.clone()) {
                     self.transcript.push(Entry::Info(message));
                     // Connected: show that provider's models.
                     if let Some(action) = self.open_models(false, Some(provider)) {
                         self.outbox.push(action);
+                        if local_setup && success {
+                            if let Some(Overlay::Models(picker)) = &mut self.overlay {
+                                picker.cancel_local_endpoint_on_close = true;
+                            }
+                        }
                     }
                 }
                 return;
@@ -1668,6 +1679,11 @@ impl LiveState {
     fn on_ctrl_c(&mut self) -> Option<Action> {
         match &self.overlay {
             Some(Overlay::Connect(Connect { step: Step::Waiting { request, auth: Some(_), .. }, .. })) => {
+                let id = request.clone();
+                self.overlay = None;
+                return Some(Action::Send(Command::ProviderCancel { id }));
+            }
+            Some(Overlay::Models(Picker { cancel_local_endpoint_on_close: true, request, .. })) => {
                 let id = request.clone();
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderCancel { id }));
@@ -4056,6 +4072,26 @@ mod tests {
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"Local endpoint ready (127.0.0.1; 2 models found). Choose a model to finish setup."}}"#)));
         assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("appliance")));
         assert!(matches!(state.take_outbox().as_slice(), [Action::Send(Command::ModelsList { .. })]));
+    }
+
+    #[test]
+    fn closing_local_endpoint_model_picker_cancels_uncommitted_setup() {
+        let mut state = ready();
+        type_text(&mut state, "/connect");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        state.on_key(key(KeyCode::Enter)); // local appliance option
+        state.on_paste("http://127.0.0.1:1234/v1");
+        state.on_key(key(KeyCode::Enter));
+        state.on_paste("pending-secret");
+        let Some(Action::Send(Command::ProviderConnect { id: request, .. })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"verified"}}"#)));
+        let outbox = state.take_outbox();
+        let [Action::Send(Command::ModelsList { id: catalog_request })] = outbox.as_slice() else { panic!("expected model discovery after verification") };
+        let catalog_request = catalog_request.clone();
+        state.apply(catalog(&catalog_request));
+        assert!(matches!(&state.overlay, Some(Overlay::Models(picker)) if picker.cancel_local_endpoint_on_close));
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: catalog_request })));
     }
 
 }

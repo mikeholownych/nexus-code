@@ -984,9 +984,9 @@ export class LocalLlmClient {
     return { ...this.conn.staticHeaders, ...auth };
   }
 
-  /** Provider connections refuse redirects: a credential-bearing request never follows a server to another origin. */
+  /** Requests stay on the explicitly configured destination; fetch must never forward credentials across redirects. */
   private fetchPolicy(): { redirect?: "error" } {
-    return this.conn.providerId ? { redirect: "error" } : {};
+    return { redirect: "error" };
   }
 
   /** After a 401 from `url`: re-read that gateway's stored credential (rotation). Never borrows another provider's. */
