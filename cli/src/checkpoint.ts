@@ -330,6 +330,22 @@ export class CheckpointManager {
     }
   }
 
+  private assertGitSnapshotTargetsReplaceable(relativePaths: string[]): void {
+    for (const relativePath of relativePaths) {
+      const targetPath = path.join(this.workspace, relativePath);
+      const stat = fs.lstatSync(targetPath, { throwIfNoEntry: false });
+      if (!stat?.isDirectory()) continue;
+      const preview = execFileSync("git", ["clean", "-nd", "--", relativePath], {
+        cwd: this.workspace,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (preview.trim() !== `Would remove ${relativePath}/`) {
+        throw new Error("Checkpoint snapshot target directory contains entries preserved by Git clean");
+      }
+    }
+  }
+
   private removeNonSnapshotEntries(snapshotFiles: string[]): void {
     const retained = new Set(snapshotFiles);
     const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
@@ -666,6 +682,7 @@ export class CheckpointManager {
             return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an unsafe untracked snapshot or destination; workspace was not changed` };
           }
         }
+        if (cp.untrackedFiles !== undefined) this.assertGitSnapshotTargetsReplaceable(cp.untrackedFiles);
         if (cp.untrackedFiles === undefined) this.assertLegacyUntrackedRestoreSafe(cp.gitRef);
         execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
         execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f", "-a"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
