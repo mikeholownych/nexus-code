@@ -27,7 +27,7 @@ This slice captures the discovered verifier's definition, test set, and declared
 - `cargo build --manifest-path <snapshot>/core/Cargo.toml`: PASS.
 - `<snapshot>/core/target/debug/harness-core --version`: PASS, reported `harness-core 1.0.0-rc.8`.
 - `npm --prefix <snapshot>/cli run build`: PASS.
-- `node scripts/run_tests.mjs test/independent_verification.test.ts test/agent_discovered_verifier_premutation.test.ts`: PASS, 35 tests, 0 failures, 0 skipped. Full output is in `focused-run.log`.
+- `node scripts/run_tests.mjs test/independent_verification.test.ts test/agent_discovered_verifier_premutation.test.ts`: PASS on Node 24, 35 tests, 0 failures, 0 skipped. Full output is in `focused-run.log` and result on Node 22.22.2 is retained in `node22-focused-run.md` (35/35, 0 skipped).
 - `git diff --check`: PASS; added test file has no trailing whitespace.
 
 The first isolated attempt was incomplete because the Rust core had not yet been built. The final passing run above includes the built core and was executed under the shared `SUITE` claim. Earlier fixture iterations were corrected: the fixture now declares `./math.js` as its package entry, clears inherited `NODE_TEST_CONTEXT` for its nested Node test command, and explicitly declares `math.js` as the deliverable.
