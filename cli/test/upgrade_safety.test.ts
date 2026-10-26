@@ -67,6 +67,19 @@ describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", 
       validateDownloadUrl("https://objects.githubusercontent.com/github-production-release-asset-2e65be/12345/nexus.tar.gz"),
       true
     );
+    // Newer GitHub releases redirect to a signed, release-specific asset host.
+    assert.equal(
+      validateDownloadUrl("https://release-assets.githubusercontent.com/github-production-release-asset/12345/a1111111-1111-4111-8111-111111111111"),
+      true
+    );
+    assert.equal(
+      validateDownloadUrl("https://release-assets.githubusercontent.com/other-content/payload.tar.gz"),
+      false
+    );
+    assert.equal(
+      validateDownloadUrl("http://release-assets.githubusercontent.com/github-production-release-asset/12345/asset"),
+      false
+    );
     // Localhost allowed for mock test servers
     assert.equal(validateDownloadUrl("http://127.0.0.1:4567/download/v1.0.0/nexus.tar.gz"), true);
     assert.equal(validateDownloadUrl("http://localhost:4567/download/v1.0.0/nexus.tar.gz"), true);
@@ -91,6 +104,9 @@ describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", 
           if (req.url === "/redirect-evil") {
             res.writeHead(302, { Location: "https://evil-untrusted-site.com/payload.tar.gz" });
             res.end();
+          } else if (req.url === "/redirect-evil-signed") {
+            res.writeHead(302, { Location: "https://evil-untrusted-site.com/payload.tar.gz?token=must-not-appear" });
+            res.end();
           } else if (req.url?.startsWith("/loop-")) {
             const count = parseInt(req.url.replace("/loop-", ""), 10);
             res.writeHead(302, { Location: `http://127.0.0.1:${evilPort}/loop-${count + 1}` });
@@ -112,6 +128,13 @@ describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", 
         /Disallowed download origin or invalid URL/
       );
 
+      const secretUrl = `http://127.0.0.1:${evilPort}/redirect-evil-signed`;
+      await assert.rejects(downloadFile(secretUrl, path.join(testDir, "signed.tar.gz"), undefined, 5000), (error: Error) => {
+        assert.match(error.message, /Disallowed download origin or invalid URL \(https:\/\/evil-untrusted-site\.com\)/);
+        assert.doesNotMatch(error.message, /must-not-appear/);
+        return true;
+      });
+
       // 2. Too many redirects
       const dest2 = path.join(testDir, "test2.tar.gz");
       await assert.rejects(
@@ -122,6 +145,55 @@ describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", 
       if (server) {
         await new Promise<void>((resolve) => server!.close(() => resolve()));
       }
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("follows the allowlisted signed GitHub release-asset redirect without forwarding credentials", async () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-dl-release-asset-"));
+    const originalFetch = globalThis.fetch;
+    const originalToken = process.env.GITHUB_TOKEN;
+    const requests: Array<{ url: string; authorization: string | null; redirect: string | undefined }> = [];
+    const downloadUrl = "https://github.com/mikeholownych/nexus-code/releases/download/v1.0.0-rc.8/nexus.tar.gz";
+    const signedAssetUrl = "https://release-assets.githubusercontent.com/github-production-release-asset/1416386345/11111111-2222-4333-8444-555555555555?token=synthetic-signature";
+
+    try {
+      process.env.GITHUB_TOKEN = "synthetic-github-token";
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({
+          url,
+          authorization: new Headers(init?.headers).get("authorization"),
+          redirect: init?.redirect,
+        });
+        if (url === downloadUrl) {
+          return new Response(null, { status: 302, headers: { location: signedAssetUrl } });
+        }
+        if (url === signedAssetUrl) {
+          return new Response(new Uint8Array([0x4e, 0x58, 0x53]), { status: 200 });
+        }
+        throw new Error(`Unexpected mocked download URL: ${new URL(url).origin}`);
+      }) as typeof globalThis.fetch;
+
+      const destination = path.join(testDir, "release.tar.gz");
+      await downloadFile(
+        downloadUrl,
+        destination,
+      );
+
+      assert.deepEqual(requests, [
+        {
+          url: downloadUrl,
+          authorization: "Bearer synthetic-github-token",
+          redirect: "manual",
+        },
+        { url: signedAssetUrl, authorization: null, redirect: "manual" },
+      ]);
+      assert.deepEqual(fs.readFileSync(destination), Buffer.from([0x4e, 0x58, 0x53]));
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = originalToken;
       fs.rmSync(testDir, { recursive: true, force: true });
     }
   });

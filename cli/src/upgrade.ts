@@ -666,7 +666,22 @@ export function validateDownloadUrl(urlString: string): boolean {
     return true;
   }
 
+  // GitHub now redirects release downloads to its signed release-assets host.
+  // Restrict the path to release objects; never allow this host as a generic CDN.
+  if (hostname === "release-assets.githubusercontent.com") {
+    return parsed.pathname.startsWith("/github-production-release-asset/");
+  }
+
   return false;
+}
+
+/** Release redirects can contain short-lived signed query parameters; diagnostics expose only the origin. */
+function safeDownloadOrigin(urlString: string): string {
+  try {
+    return new URL(urlString).origin;
+  } catch {
+    return "invalid URL";
+  }
 }
 
 export async function downloadFile(
@@ -688,7 +703,7 @@ export async function downloadFile(
   try {
     while (hops <= maxHops) {
       if (!validateDownloadUrl(currentUrl)) {
-        throw new Error(`Disallowed download origin or invalid URL: ${currentUrl}`);
+        throw new Error(`Disallowed download origin or invalid URL (${safeDownloadOrigin(currentUrl)})`);
       }
 
       const headers: Record<string, string> = { "User-Agent": "nexus-upgrade" };
@@ -707,7 +722,7 @@ export async function downloadFile(
       if (res.status === 301 || res.status === 302 || res.status === 307 || res.status === 308) {
         const location = res.headers.get("location");
         if (!location) {
-          throw new Error(`HTTP ${res.status} redirect without Location header from ${currentUrl}`);
+          throw new Error(`HTTP ${res.status} redirect without Location header from ${safeDownloadOrigin(currentUrl)}`);
         }
         currentUrl = new URL(location, currentUrl).toString();
         hops++;
@@ -715,7 +730,7 @@ export async function downloadFile(
       }
 
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status} downloading ${currentUrl}`);
+        throw new Error(`HTTP ${res.status} downloading from ${safeDownloadOrigin(currentUrl)}`);
       }
 
       const contentLengthHeader = res.headers.get("content-length");
@@ -728,7 +743,7 @@ export async function downloadFile(
 
       const fileStream = fs.createWriteStream(destPath);
       if (!res.body) {
-        throw new Error(`Empty body downloading ${currentUrl}`);
+        throw new Error(`Empty body downloading from ${safeDownloadOrigin(currentUrl)}`);
       }
 
       let bytesDownloaded = 0;
@@ -1018,7 +1033,12 @@ export async function performUpgrade(
     const pending = readJournal(prefix);
     if (fs.existsSync(getJournalPath(prefix)) && (!pending || !["idle", "complete", "rolled_back"].includes(pending.state))) throw new Error("Pending or invalid upgrade journal; run nexus upgrade --recover before starting another transaction.");
     options?.onProgress?.("pre_migration_backup", "Creating pre-migration configuration and state backup...");
-    const backupResult = createPreMigrationBackup();
+    const backupResult = createPreMigrationBackup(process.env.HOME || "", ({ filesCopied, bytesCopied }) => {
+      options?.onProgress?.(
+        "pre_migration_backup",
+        `Backup progress: ${filesCopied} files, ${bytesCopied} bytes copied.`,
+      );
+    });
     fs.mkdirSync(tmpDir, { mode:0o700 });
     journalEntry = {
       formatVersion:1, id:transactionId, state:"preparing",
