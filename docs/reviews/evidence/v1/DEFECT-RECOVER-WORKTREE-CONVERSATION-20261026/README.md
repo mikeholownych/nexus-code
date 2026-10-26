@@ -52,6 +52,10 @@ keeps using the current workspace identity exactly as before.
   checkout and the worktree directory is gone.
 - Focused: `recover_worktree_conversation.test.ts` (3) + `state.test.ts` (11) + `system_journey.test.ts` (2) +
   `checkpoint_index_lock.test.ts` (4) + `retention.test.ts` (12) = **32/32 pass**.
+- Revalidated the amended regression at snapshot `012b57ec3700f0fb0e000f7a668da6d4a98ef829`: `npm run build --prefix cli`
+  passed, then `node scripts/run_tests.mjs test/recover_worktree_conversation.test.ts` from `cli/` passed **3/3**.
+  The runner provided isolated `HOME` and XDG directories. A separate full-suite attempt was interrupted after
+  identifying missing build metadata and an unavailable local inference endpoint; it is not a passing suite result.
 - `tsc --noEmit`, `git diff --check`: clean; isolated `HOME`/`XDG_CONFIG_HOME` under the SUITE claim.
 - Pre-existing failures in `durable_continuity.test.ts` / `context_convergence.test.ts` / `convergence_invariants.test.ts`
   are identical on base (A/B verified for `convergence_invariants`: 20 pass / 10 fail both sides) and are unrelated:
