@@ -159,6 +159,19 @@ function readStore(): StoreFile {
     : { version: 1, providers: {} };
 }
 
+function readStoreForWrite(): StoreFile {
+  try {
+    const raw = JSON.parse(fs.readFileSync(credentialsPath(), "utf8"));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.version !== 1 || !raw.providers || typeof raw.providers !== "object" || Array.isArray(raw.providers)) {
+      throw new Error("Unsupported credential store");
+    }
+    return { version: 1, providers: raw.providers };
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return { version: 1, providers: {} };
+    throw new Error("The Nexus credential store is unreadable or has an unsupported format.");
+  }
+}
+
 /** Atomic, owner-only write: a credential file is never briefly world-readable or half-written. */
 function writeStore(store: StoreFile): void {
   const file = credentialsPath();
@@ -184,13 +197,13 @@ function withCredentialStoreGuard<T>(callback: () => T): T {
 }
 
 function saveCredentialUnlocked(providerId: string, credential: StoredCredential): void {
-  const store = readStore();
+  const store = readStoreForWrite();
   store.providers[providerId] = credential;
   writeStore(store);
 }
 
 function removeCredentialUnlocked(providerId: string): boolean {
-  const store = readStore();
+  const store = readStoreForWrite();
   if (!(providerId in store.providers)) return false;
   delete store.providers[providerId];
   writeStore(store);

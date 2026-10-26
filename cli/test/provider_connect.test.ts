@@ -129,6 +129,19 @@ describe("credentials: precedence and other clients' sign-ins", () => {
     }
   });
 
+  test("ordinary credential mutations preserve a malformed store", () => {
+    const original = '{"version":1,"providers": {malformed\n';
+    write(".config/nexus/credentials.json", original);
+    const mode = fs.statSync(credentialsPath()).mode & 0o777;
+    assert.throws(
+      () => saveCredential("openrouter", { type: "api", key: "synthetic-key", savedAt: "now" }),
+      /unreadable or has an unsupported format/,
+    );
+    assert.throws(() => removeCredential("openrouter"), /unreadable or has an unsupported format/);
+    assert.equal(fs.readFileSync(credentialsPath(), "utf8"), original);
+    assert.equal(fs.statSync(credentialsPath()).mode & 0o777, mode);
+  });
+
   test("concurrent provider saves preserve every credential", async () => {
     const release = path.join(home, "release");
     const script = `
