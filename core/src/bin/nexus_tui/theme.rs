@@ -216,20 +216,32 @@ mod tests {
 
     #[test]
     fn mono_frames_emit_no_colour_sgr_through_the_real_backend() {
-        use ratatui::{Terminal, backend::CrosstermBackend, style::Style, widgets::Paragraph};
+        use ratatui::{
+            backend::{Backend, CrosstermBackend},
+            buffer::Buffer,
+            layout::Rect,
+            style::Style,
+            widgets::{Paragraph, Widget},
+        };
 
         apply_backend_policy(Depth::Mono);
+        let area = Rect::new(0, 0, 6, 1);
+        let mut buffer = Buffer::empty(area);
+        Paragraph::new("status")
+            .style(Style::default().fg(Color::Rgb(1, 2, 3)).bg(Color::Rgb(4, 5, 6)))
+            .render(area, &mut buffer);
+        downsample(&mut buffer, Depth::Mono);
+
         let mut output = Vec::new();
         {
-            let backend = CrosstermBackend::new(&mut output);
-            let mut terminal = Terminal::new(backend).unwrap();
-            terminal.draw(|frame| {
-                frame.render_widget(
-                    Paragraph::new("status").style(Style::default().fg(Color::Rgb(1, 2, 3)).bg(Color::Rgb(4, 5, 6))),
-                    frame.area(),
-                );
-                downsample(frame.buffer_mut(), Depth::Mono);
-            }).unwrap();
+            let mut backend = CrosstermBackend::new(&mut output);
+            backend
+                .draw(buffer.content.iter().enumerate().map(|(index, cell)| {
+                    let width = usize::from(area.width);
+                    ((index % width) as u16, (index / width) as u16, cell)
+                }))
+                .unwrap();
+            backend.flush().unwrap();
         }
         let output = String::from_utf8(output).unwrap();
         for reset in ["\x1b[39m", "\x1b[49m", "\x1b[59m"] {
