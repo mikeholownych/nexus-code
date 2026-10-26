@@ -7,7 +7,7 @@
 | Alerts | [#48](https://github.com/mikeholownych/nexus-code/security/code-scanning/48), [#49](https://github.com/mikeholownych/nexus-code/security/code-scanning/49) |
 | Rule | `js/bad-code-sanitization` (CodeQL 2.27.3, severity `error`, security severity `medium`, CWE-79/94/116) |
 | Location | `cli/test/eval_integrity.test.ts:815`, columns 104–132 (`JSON.stringify(signalMarker)`) and 205–232 (`JSON.stringify(readyMarker)`) |
-| Latest analysis | analysis `2024651921`, ref `refs/heads/main`, commit `e61255e`, 2026-10-26T04:23:43Z, 3 results |
+| Latest analysis at authoring | analysis `2024651921`, ref `refs/heads/main`, commit `e61255e`, 2026-10-26T04:23:43Z, 3 results. Superseded while this branch was prepared: analysis `2024783569` on `a7880b64` (2026-10-26T05:01:56Z) still reports the same two alerts; `cli/test/eval_integrity.test.ts` is unchanged between `e61255e` and `a7880b64`. |
 
 ## Review
 
@@ -38,8 +38,9 @@ The fixture now passes both marker paths as process arguments:
 - the parent program forwards its own `process.argv[1]`/`[2]` to the child;
 - `spawnContained` is invoked with `["-e", parentScript, signalMarker, readyMarker]`.
 
-No temporary-directory value is interpolated into executable source any more. Test semantics are unchanged: the child
-registers its SIGTERM handler, writes the ready marker, and flushes `flushed` 400 ms after the supervisor's SIGTERM.
+No temporary-directory value is interpolated into executable source in this fixture any more. Test semantics are
+unchanged: the child registers its SIGTERM handler, writes the ready marker, and flushes `flushed` 400 ms after the
+supervisor's SIGTERM.
 
 ## Verification
 
@@ -47,7 +48,8 @@ registers its SIGTERM handler, writes the ready marker, and flushes `flushed` 40
   and flushes `flushed` on SIGTERM.
 - Standalone parent→child check: a detached `node -e <parentScript> <signal> <ready>` writes `ready`, and a
   process-group SIGTERM flushes `flushed`.
-- `tsc --noEmit`, `git diff --check`: clean.
+- `git diff --check`: clean. `cli/tsconfig.json` includes `src/**/*` only, so `tsc --noEmit` does not type-check this
+  test file; the change is test-only, and the focused execution below is the gate.
 - Focused execution under the `SUITE` claim (isolated `HOME`/`XDG_CONFIG_HOME`):
   `npx tsx --test --test-concurrency=1 --test-name-pattern="SIGTERM grace" test/eval_integrity.test.ts`
   → **1/1 pass** (2.8 s), log `/tmp/opencode/codeql-sigterm.log`. The test needs the systemd user manager
@@ -60,6 +62,10 @@ No alert suppression or dismissal was used. After this branch is merged to `main
 
 ## Residual risk
 
-- Other evaluation fixtures in the same file still build programs for `node -e` (candidate probes, sandbox scripts) but
-  were not flagged by this analysis; they are outside this alert pair and were not changed.
+- Other evaluation fixtures in the same file still put environment-derived temporary paths into executed code and were
+  not flagged by this analysis: the `setsid sh -c 'touch ${readyMarker} …'` escaped-process fixture (~line 793), the
+  `runIsolated(\`node -e ${JSON.stringify(probeScript)}\`)` probes (~lines 1181, 1227) and the
+  `runIsolated(\`(sleep 2; touch ${JSON.stringify(descendantMarker)}) & wait\`)` fixture (~line 1199). They are
+  test-only, share the already-accepted threat model (whoever controls `TMPDIR`/`NEXUS_EVAL_TEST_WORKSPACE_ROOT`
+  already controls the test process), and changing their shell/JS quoting belongs in a separate slice.
 - The test remains dependent on a working systemd user scope (`XDG_RUNTIME_DIR`, `systemd-run`) and Bubblewrap, as before.
