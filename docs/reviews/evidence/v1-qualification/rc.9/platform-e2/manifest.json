@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-26T18:41:00Z",
+  "acceptance": "ACC-PLAT E2 fresh-install and unsupported-runtime preflight slice",
+  "status": "PARTIAL",
+  "candidate": {
+    "tag": "v1.0.0-rc.9",
+    "sourceCommit": "4cae11cbc3b0eab9bd6f56df7cc34e946b5dc566",
+    "releaseWorkflowRun": "40370485753",
+    "archiveSha256": "35795d2b7639b68a541c512976d8bc7f251115ebdccf48f6b9cf5f98ef1af9bb",
+    "installerSha256": "5620d56ef6f8d637fc102ae2c8ea3b055effbc4069243a2df68b67520b1e2302"
+  },
+  "environments": {
+    "platforms": ["Ubuntu 22.04", "Ubuntu 24.04", "Debian 12", "Fedora 40"],
+    "nodeNoneAnd20": "Prepared E2 images, network disabled",
+    "node22": "Prepared E2 images",
+    "node24": "Prepared Node 22 OS image with read-only Node v24.11.1 runtime overlay; runtime binary SHA-256 5796fd9700e83170bc7ddfdf7f18858c794a9f91cb39dd6f9e95060b292f2563",
+    "containerIdentity": "non-root uid/gid 10001; disposable container HOME",
+    "preparedImageLabels": "prepared-images.json"
+  },
+  "results": {
+    "noNode": "4/4 prerequisite checks passed before network access; HOME unchanged",
+    "node20": "4/4 prerequisite checks passed before network access; HOME unchanged",
+    "node22": "4/4 installed exact RC9 and passed launcher identity, doctor empty-stderr, install.build and engine.binary assertions",
+    "node24": "4/4 installed exact RC9 and passed launcher identity, doctor empty-stderr, install.build and engine.binary assertions",
+    "doctor": "Exit 2 because endpoint.reachable fails without configured inference and fresh session/task directories warn; no version warning. Container had no trusted gh, so installer checksum passed but in-container provenance was not verified.",
+    "hostAttestation": "Separately verified for the exact RC9 archive and checksum index; see release artifact evidence."
+  },
+  "notRun": [
+    "alpha.2 to RC9 upgrade",
+    "RC9 to alpha.2 rollback",
+    "repair",
+    "manual uninstall and state retention",
+    "checksum tamper non-mutation",
+    "upgrade self-test rollback",
+    "upgrade crash recovery",
+    "backup restore",
+    "incompatible downgrade refusal",
+    "post-publication no-version installer path"
+  ],
+  "rawLogs": "Per-platform/runtime logs and the runner are stored alongside this manifest.",
+  "checksums": "SHA256SUMS"
+}
