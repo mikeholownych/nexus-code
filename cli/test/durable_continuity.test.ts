@@ -1703,3 +1703,37 @@ describe("durable operation records match their start whatever the provider's ca
     }
   });
 });
+
+
+test("session continuation restores recovery fields without trusting its verifier baseline", async () => {
+  await withHome(async () => {
+    const gw = await gateway(() => done());
+    const repo = makeRepo();
+    const now = new Date().toISOString();
+    const operation = newOperation("resume-operation", "resume operation", [{ id: "unit", prompt: "continue" }], [], Date.now());
+    const providerRecovery = {
+      state: "WAITING", step: 1, startedAt: now, updatedAt: now, condition: "RATE_LIMITED", submissions: [], probes: 0, waitedMs: 0, unknownReplays: 0,
+      policy: { deadlineMs: 1000, maxDelayMs: 100, maxUnknownReplays: 1 },
+    };
+    const changeBaseline = { command: "npm test", failed: true, tests: null, at: now };
+    const agent = quiet(new AutonomousAgent(cfg(gw, repo), 0, undefined, { durable: false }));
+    try {
+      agent.restoreConversation({
+        messages: [{ role: "user", content: "continue" }],
+        operation,
+        providerRecovery,
+        changeBaseline,
+      } as any, () => ({ messages: [], unreadableLines: 0, uncommittedLines: 0, missingCompactions: [] }));
+      const saved = agent.checkpointDurableState();
+      assert.equal(saved.operation?.id, operation.id);
+      assert.deepEqual(saved.providerRecovery, providerRecovery);
+      assert.deepEqual(saved.changeBaseline, changeBaseline);
+      assert.equal((agent as any).verificationBaselineInvalidated, true);
+      assert.equal((agent as any).changeBaseline, null);
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});

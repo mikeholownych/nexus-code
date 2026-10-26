@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { slashCatalog } from "../src/slash/catalog.js";
 import { BenchmarkEvaluator, SweBenchInstance } from "../src/evaluator.js";
 import { AutonomousAgent } from "../src/agent.js";
+import { buildConfig } from "../src/config.js";
 import { isReadOnlyRole, READ_ONLY_ROLES } from "../src/core/roles.js";
 import { copyToClipboard } from "../src/clipboard.js";
 import { encodeImageFile, MAX_IMAGE_BYTES } from "../src/image.js";
@@ -260,4 +261,122 @@ index 1111111..2222222 100644
     assert.ok(files[0].hunks[0].lines.some((l) => l.includes("+line 2 edited")));
     assert.ok(files[0].hunks[0].lines.length >= 4);
   });
+});
+
+function extensionManagersReadOnly(agent: AutonomousAgent): boolean[] {
+  return [
+    (agent as any).skillManager.readOnly,
+    (agent as any).mcpManager.readOnly,
+    (agent as any).pluginManager.readOnly,
+    (agent as any).knowledge.readOnly,
+  ];
+}
+
+test("mode-selected read-only can be deliberately changed, unlike an explicit read-only launch", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-readonly-mode-change-"));
+  try {
+    const selected = new AutonomousAgent(buildConfig({ mode: "read-only", workspace: root }), 0, { durable: false });
+    assert.equal(selected.getApprovalMode(), "read-only");
+    assert.equal((selected as any).isReadOnly(), true, "mode-selected read-only is enforced before it is changed");
+    assert.equal((selected as any).bridge.readOnly, true, "the tool bridge starts read-only");
+    assert.equal((selected as any).authorityEngine.isReadOnly(), true, "authority starts read-only");
+    assert.deepEqual(extensionManagersReadOnly(selected), [true, true, true, true], "all extension managers start read-only");
+    selected.setApprovalMode("auto");
+    assert.equal(selected.getApprovalMode(), "auto");
+    assert.equal((selected as any).isReadOnly(), false);
+    assert.equal((selected as any).bridge.readOnly, false, "changing the mode restores write authority");
+    assert.equal((selected as any).authorityEngine.isReadOnly(), false, "authority also restores write authority");
+    assert.deepEqual(extensionManagersReadOnly(selected), [false, false, false, false]);
+    selected.shutdown();
+
+    const explicit = new AutonomousAgent(buildConfig({ readOnly: true, workspace: root }), 0, { durable: false });
+    explicit.setApprovalMode("auto");
+    assert.equal(explicit.getApprovalMode(), "read-only");
+    assert.equal((explicit as any).isReadOnly(), true);
+    assert.equal((explicit as any).bridge.readOnly, true, "an explicit --read-only launch cannot lower the bridge");
+    assert.equal((explicit as any).authorityEngine.isReadOnly(), true);
+    assert.deepEqual(extensionManagersReadOnly(explicit), [true, true, true, true]);
+    explicit.shutdown();
+
+    const runtime = new AutonomousAgent(buildConfig({ workspace: root }), 0, { durable: false });
+    runtime.setApprovalMode("read-only");
+    assert.equal(runtime.getApprovalMode(), "read-only");
+    assert.equal((runtime as any).isReadOnly(), true);
+    assert.equal((runtime as any).bridge.readOnly, true);
+    assert.equal((runtime as any).authorityEngine.isReadOnly(), true);
+    runtime.setApprovalMode("auto");
+    assert.equal(runtime.getApprovalMode(), "auto", "runtime mode-selected read-only can be left deliberately");
+    assert.equal((runtime as any).isReadOnly(), false);
+    assert.equal((runtime as any).bridge.readOnly, false);
+    assert.equal((runtime as any).authorityEngine.isReadOnly(), false);
+    assert.deepEqual(extensionManagersReadOnly(runtime), [false, false, false, false]);
+    runtime.shutdown();
+
+    const stable = new AutonomousAgent(buildConfig({ mode: "review", workspace: root }), 0, { durable: false });
+    const stableMcp = (stable as any).mcpManager;
+    const stablePlugins = (stable as any).pluginManager;
+    (stable as any).extensibilityInitialized = true;
+    stable.setApprovalMode("auto");
+    assert.strictEqual((stable as any).mcpManager, stableMcp, "review->auto must not recreate MCP");
+    assert.strictEqual((stable as any).pluginManager, stablePlugins, "review->auto must not recreate plugins");
+    assert.equal((stable as any).extensibilityInitialized, true, "review->auto keeps extensibility initialized");
+    stable.setApprovalMode("read-only");
+    assert.notStrictEqual((stable as any).mcpManager, stableMcp, "an effective read-only change refreshes MCP posture");
+    assert.notStrictEqual((stable as any).pluginManager, stablePlugins, "an effective read-only change refreshes plugins");
+    stable.shutdown();
+
+    const fallback = new AutonomousAgent(buildConfig({ mode: "review", workspace: root }), 0, { durable: false });
+    fallback.setCheckpointReadOnlyFallback(true);
+    assert.equal(fallback.getApprovalMode(), "read-only");
+    assert.equal((fallback as any).config.readOnly, false, "the transient fallback must not leak into config");
+    assert.equal((fallback as any).bridge.readOnly, true);
+    assert.equal((fallback as any).authorityEngine.isReadOnly(), true);
+    assert.deepEqual(extensionManagersReadOnly(fallback), [true, true, true, true]);
+    fallback.setApprovalMode("auto");
+    assert.equal(fallback.getApprovalMode(), "read-only", "the active fallback remains authoritative");
+    assert.equal((fallback as any).config.readOnly, false);
+    assert.equal((fallback as any).bridge.readOnly, true);
+    assert.equal((fallback as any).authorityEngine.isReadOnly(), true);
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-readonly-mode-other-"));
+    try {
+      fallback.setWorkspace(other);
+      assert.equal((fallback as any).isReadOnly(), true, "workspace switch keeps the fallback");
+      assert.equal((fallback as any).bridge.readOnly, true, "workspace switch rebuilds a read-only bridge");
+      assert.equal((fallback as any).authorityEngine.isReadOnly(), true);
+      assert.deepEqual(extensionManagersReadOnly(fallback), [true, true, true, true]);
+      fallback.setShell("bash");
+      assert.equal((fallback as any).bridge.readOnly, true, "shell switch keeps the fallback bridge read-only");
+      assert.equal((fallback as any).authorityEngine.isReadOnly(), true);
+      assert.deepEqual(extensionManagersReadOnly(fallback), [true, true, true, true]);
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+    fallback.setCheckpointReadOnlyFallback(false);
+    assert.equal(fallback.getApprovalMode(), "auto", "the queued auto mode resumes after the fallback");
+    assert.equal((fallback as any).bridge.readOnly, false);
+    assert.equal((fallback as any).authorityEngine.isReadOnly(), false);
+    assert.deepEqual(extensionManagersReadOnly(fallback), [false, false, false, false]);
+    fallback.shutdown();
+
+    const full = new AutonomousAgent(buildConfig({ yes: true, workspace: root }), 0, { durable: false });
+    assert.equal((full as any).authorityEngine.isFullAccess(), true, "full-access launch starts unrestricted");
+    full.setApprovalMode("read-only");
+    assert.equal((full as any).authorityEngine.isReadOnly(), true);
+    assert.equal((full as any).authorityEngine.isFullAccess(), false, "read-only clears engine full access");
+    assert.equal((full as any).config.fullAccess, false);
+    const outside = await (full as any).authorityEngine.confine(
+      { toolName: "read_file", args: { path: "/etc/passwd" }, actor: "agent", executionDomain: "agent_orchestration" },
+      { workspaceRoot: root },
+    );
+    assert.equal(outside.confined, false, "read-only cannot read outside the workspace");
+    full.setApprovalMode("auto");
+    assert.equal((full as any).authorityEngine.isFullAccess(), true, "configured full access returns in auto mode");
+    full.setCheckpointReadOnlyFallback(true);
+    assert.equal((full as any).authorityEngine.isFullAccess(), false, "the fallback disables engine full access");
+    full.setCheckpointReadOnlyFallback(false);
+    assert.equal((full as any).authorityEngine.isFullAccess(), true, "releasing the fallback restores engine full access");
+    full.shutdown();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
