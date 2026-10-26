@@ -14,7 +14,7 @@
 
 ## Superseded release checkpoint (observed 2026-10-25 23:43 UTC at `431cb194931f09eaaffdb6880dc464c1d7b5e2a1`)
 
-## Current release checkpoint (observed 2026-10-25 23:43 UTC at `431cb194931f09eaaffdb6880dc464c1d7b5e2a1`)
+## Earlier release checkpoint (superseded; observed 2026-10-25 23:43 UTC at `431cb194931f09eaaffdb6880dc464c1d7b5e2a1`)
 
 **Release state:** GitHub lists `v1.0.0-rc.6` as the latest published prerelease. Signed tag `v1.0.0-rc.7` (tag object `d1f79e58a27c0f79f1663f662a153ae4ec5a7824`) now points to source `431cb194931f09eaaffdb6880dc464c1d7b5e2a1`; Release workflow [40246054889](https://github.com/mikeholownych/nexus-code/actions/runs/40246054889) is in progress. GitHub has not published an RC7 release or assets yet. RC6 is not an accepted RC, and no stable `v1.0.0` release is claimed.
 
