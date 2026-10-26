@@ -274,6 +274,78 @@ describe("durable same-version transaction recovery",()=>{
   });
 });
 describe("complete private state/config backup restore",()=>{
+ it("reports byte progress while a single large file is still being copied",()=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-large-progress-"));
+  const originalNow=Date.now;
+  const originalWriteSync=fsDefault.writeSync;
+  let fakeNow=0;
+  let advancedClock=false;
+  const progress:Array<{filesCopied:number;bytesCopied:number}>=[];
+  try{
+   const source=path.join(home,".nexus/tasks");
+   fs.mkdirSync(source,{recursive:true,mode:0o700});
+   fs.chmodSync(path.join(home,".nexus"),0o700);fs.chmodSync(source,0o700);
+   fs.writeFileSync(path.join(source,"large-task.json"),Buffer.alloc(128*1024,0x61),{mode:0o600});
+   Date.now=()=>fakeNow;
+   fsDefault.writeSync=((...args:Parameters<typeof originalWriteSync>)=>{
+    const written=originalWriteSync(...args);
+    if(!advancedClock){fakeNow=5_000;advancedClock=true;}
+    return written;
+   }) as typeof fsDefault.writeSync;
+   syncBuiltinESMExports();
+
+   const backup=createPreMigrationBackup(home,item=>progress.push(item));
+   assert.ok(backup.stateBackupDir);
+   assert.ok(progress.some(item=>item.filesCopied===0&&item.bytesCopied>=64*1024),"progress must report bytes before the large file finishes");
+   assert.deepEqual(progress.at(-1),{filesCopied:1,bytesCopied:128*1024});
+  }finally{
+   Date.now=originalNow;
+   fsDefault.writeSync=originalWriteSync;
+   syncBuiltinESMExports();
+   fs.rmSync(home,{recursive:true,force:true});
+  }
+ });
+
+ it("reports only aggregate backup progress and syncs each copied directory once",()=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-progress-"));
+  const originalFsync=fsDefault.fsyncSync;
+  const directoryFlushes=new Map<string,number>();
+  const progress:Array<{filesCopied:number;bytesCopied:number}>=[];
+  try{
+   const source=path.join(home,".nexus/tasks");
+   fs.mkdirSync(source,{recursive:true,mode:0o700});
+   fs.chmodSync(path.join(home,".nexus"),0o700);fs.chmodSync(source,0o700);
+   const payload="PRIVATE-PAYLOAD-CANARY";
+   for(let index=0;index<32;index++) fs.writeFileSync(path.join(source,`task-${index}.json`),`${payload}-${index}`,{mode:0o600});
+
+   fsDefault.fsyncSync=((fd:number)=>{
+    const stat=fsDefault.fstatSync(fd);
+    if(stat.isDirectory()){
+     const key=`${stat.dev}:${stat.ino}`;
+     directoryFlushes.set(key,(directoryFlushes.get(key)??0)+1);
+    }
+    return originalFsync(fd);
+   }) as typeof fsDefault.fsyncSync;
+   syncBuiltinESMExports();
+
+   const backup=createPreMigrationBackup(home,item=>progress.push(item));
+   assert.ok(backup.stateBackupDir);
+   const copiedDirectory=path.join(backup.stateBackupDir!,"state","tasks");
+   const stat=fs.statSync(copiedDirectory);
+   assert.equal(directoryFlushes.get(`${stat.dev}:${stat.ino}`),1,"all task file entries must be synced together after their payloads");
+   assert.equal(fs.readdirSync(copiedDirectory).length,32);
+   assert.ok(progress.length>0,"large backups must report progress");
+   assert.deepEqual(progress.at(-1),{filesCopied:32,bytesCopied:Array.from({length:32},(_,index)=>Buffer.byteLength(`${payload}-${index}`)).reduce((sum,size)=>sum+size,0)});
+   assert.ok(progress.every(item=>Object.keys(item).sort().join(",")==="bytesCopied,filesCopied"),"progress must not expose names or payloads");
+   assert.equal(JSON.stringify(progress).includes(payload),false);
+   assert.equal(fs.statSync(path.join(copiedDirectory,"task-0.json")).mode&0o777,0o600);
+  }finally{
+   fsDefault.fsyncSync=originalFsync;
+   syncBuiltinESMExports();
+   fs.rmSync(home,{recursive:true,force:true});
+  }
+ });
+
  it("restores session payloads and config rather than copying an archive into config.env",()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-roundtrip-"));
   try{

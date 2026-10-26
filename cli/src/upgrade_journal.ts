@@ -53,6 +53,11 @@ export interface BackupResult {
   stateBackupDir?: string;
 }
 
+export interface BackupProgress {
+  filesCopied: number;
+  bytesCopied: number;
+}
+
 export function getJournalPath(prefix: string): string {
   return path.join(prefix, "lib", "nexus", ".upgrade-journal.json");
 }
@@ -138,9 +143,36 @@ export function clearJournal(prefix: string): void {
  * Creates pre-migration backups of configuration and durable state.
  * Files are created with strict 0600 permissions in 0700 directories.
  */
-export function createPreMigrationBackup(homeDir: string = process.env.HOME || ""): BackupResult {
+export function createPreMigrationBackup(
+  homeDir: string = process.env.HOME || "",
+  onProgress?: (progress: BackupProgress) => void,
+): BackupResult {
   const result: BackupResult = {};
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  let filesCopied = 0;
+  let bytesCopied = 0;
+  let lastProgressAt = Date.now();
+  let lastReportedFiles = 0;
+  let lastReportedBytes = 0;
+  const reportProgress = () => {
+    const now = Date.now();
+    if (now - lastProgressAt >= 5_000 || (filesCopied - lastReportedFiles >= 1_024 && now - lastProgressAt >= 2_000)) {
+      onProgress?.({ filesCopied, bytesCopied });
+      lastProgressAt = now;
+      lastReportedFiles = filesCopied;
+      lastReportedBytes = bytesCopied;
+    }
+  };
+  const observer = {
+    bytesCopied: (bytes: number) => {
+      bytesCopied += bytes;
+      reportProgress();
+    },
+    fileCopied: () => {
+      filesCopied += 1;
+      reportProgress();
+    },
+  };
 
   // 1. Config backup
   const configEnv = path.join(homeDir, ".config", "nexus", "config.env");
@@ -152,7 +184,8 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
     if (fs.realpathSync(backupDir) !== path.resolve(backupDir)) throw new Error("Configuration backup directory is redirected");
     if (!backupDirExisted) syncDirectory(path.dirname(backupDir));
     const backupFile = path.join(backupDir, `config.env.bak.${timestamp}`);
-    copyPrivateFileDurably(configEnv, backupFile);
+    copyPrivateFileDurably(configEnv, backupFile, true, observer.bytesCopied);
+    observer.fileCopied();
     result.configBackupPath = backupFile;
   }
 
@@ -172,9 +205,9 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
 
     // Snapshot all durable state, not just its index. Backup directories are
     // excluded to avoid recursion; symbolic links are refused rather than read.
-    withDurableStoreGuards(homeDir, () => copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups", "restore-control", STATE_RESTORE_PENDING_FILE])));
+    withDurableStoreGuards(homeDir, () => copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups", "restore-control", STATE_RESTORE_PENDING_FILE]), observer));
     const configDir = path.join(homeDir, ".config", "nexus");
-    if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups", STATE_RESTORE_PENDING_FILE]));
+    if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups", STATE_RESTORE_PENDING_FILE]), observer);
     const metadataPath = path.join(backupDest, "backup.json");
     const metadataFd = fs.openSync(metadataPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
     try {
@@ -186,6 +219,8 @@ export function createPreMigrationBackup(homeDir: string = process.env.HOME || "
 
     result.stateBackupDir = backupDest;
   }
+
+  if (filesCopied > lastReportedFiles || bytesCopied > lastReportedBytes) onProgress?.({ filesCopied, bytesCopied });
 
   return result;
 }
@@ -238,7 +273,12 @@ function validatePrivateTree(source: string): void {
   if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) throw new Error("Backup contains unsupported files");
   if (stat.isDirectory()) for (const name of fs.readdirSync(source)) validatePrivateTree(path.join(source, name));
 }
-function copyPrivateTree(source: string, destination: string, excluded = new Set<string>()): void {
+function copyPrivateTree(
+  source: string,
+  destination: string,
+  excluded = new Set<string>(),
+  observer?: { bytesCopied: (bytes: number) => void; fileCopied: () => void },
+): void {
   validatePrivateTreeExcept(source, excluded);
   const existed = fs.existsSync(destination);
   fs.mkdirSync(destination, { recursive:true, mode:0o700 });
@@ -248,14 +288,24 @@ function copyPrivateTree(source: string, destination: string, excluded = new Set
   for (const entry of fs.readdirSync(source, { withFileTypes:true })) {
     if (excluded.has(entry.name) || entry.name === STATE_STORE_GUARD_FILE || entry.name === STATE_RESTORE_PENDING_FILE) continue;
     const from = path.join(source, entry.name), to = path.join(destination, entry.name);
-    if (entry.isDirectory()) copyPrivateTree(from, to);
-    else copyPrivateFileDurably(from, to);
+    if (entry.isDirectory()) copyPrivateTree(from, to, new Set(), observer);
+    else {
+      copyPrivateFileDurably(from, to, false, observer?.bytesCopied);
+      observer?.fileCopied();
+    }
   }
+  // File contents are fsynced individually. Batch directory-entry durability
+  // once per directory instead of forcing a journal commit for every file.
   syncDirectory(destination);
 }
 
 /** A backup is not returned to the journal until its bytes and directory entry are durable. */
-function copyPrivateFileDurably(source: string, destination: string): void {
+function copyPrivateFileDurably(
+  source: string,
+  destination: string,
+  syncParentOnSuccess = true,
+  onBytesCopied?: (bytes: number) => void,
+): number {
   const sourcePath = path.resolve(source);
   if (fs.realpathSync(sourcePath) !== sourcePath) throw new Error("Backup source is redirected");
   const sourceFd = fs.openSync(sourcePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
@@ -275,14 +325,19 @@ function copyPrivateFileDurably(source: string, destination: string): void {
       const count = fs.readSync(sourceFd, buffer, 0, buffer.length, position);
       if (count === 0) break;
       let written = 0;
-      while (written < count) written += fs.writeSync(destinationFd, buffer, written, count - written);
+      while (written < count) {
+        const chunkWritten = fs.writeSync(destinationFd, buffer, written, count - written);
+        written += chunkWritten;
+        onBytesCopied?.(chunkWritten);
+      }
       position += count;
     }
     fs.fchmodSync(destinationFd, 0o600);
     fs.fsyncSync(destinationFd);
     fs.closeSync(destinationFd);
     destinationFd = undefined;
-    syncDirectory(path.dirname(destination));
+    if (syncParentOnSuccess) syncDirectory(path.dirname(destination));
+    return position;
   } catch (error) {
     if (destinationFd !== undefined) try { fs.closeSync(destinationFd); } catch {}
     if (destinationCreated) {

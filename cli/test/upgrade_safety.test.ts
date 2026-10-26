@@ -67,6 +67,19 @@ describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", 
       validateDownloadUrl("https://objects.githubusercontent.com/github-production-release-asset-2e65be/12345/nexus.tar.gz"),
       true
     );
+    // Newer GitHub releases redirect to a signed, release-specific asset host.
+    assert.equal(
+      validateDownloadUrl("https://release-assets.githubusercontent.com/github-production-release-asset/12345/a1111111-1111-4111-8111-111111111111"),
+      true
+    );
+    assert.equal(
+      validateDownloadUrl("https://release-assets.githubusercontent.com/other-content/payload.tar.gz"),
+      false
+    );
+    assert.equal(
+      validateDownloadUrl("http://release-assets.githubusercontent.com/github-production-release-asset/12345/asset"),
+      false
+    );
     // Localhost allowed for mock test servers
     assert.equal(validateDownloadUrl("http://127.0.0.1:4567/download/v1.0.0/nexus.tar.gz"), true);
     assert.equal(validateDownloadUrl("http://localhost:4567/download/v1.0.0/nexus.tar.gz"), true);
@@ -91,6 +104,9 @@ describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", 
           if (req.url === "/redirect-evil") {
             res.writeHead(302, { Location: "https://evil-untrusted-site.com/payload.tar.gz" });
             res.end();
+          } else if (req.url === "/redirect-evil-signed") {
+            res.writeHead(302, { Location: "https://evil-untrusted-site.com/payload.tar.gz?token=must-not-appear" });
+            res.end();
           } else if (req.url?.startsWith("/loop-")) {
             const count = parseInt(req.url.replace("/loop-", ""), 10);
             res.writeHead(302, { Location: `http://127.0.0.1:${evilPort}/loop-${count + 1}` });
@@ -111,6 +127,13 @@ describe("Download Origin, Redirect & Bounds Safety (REQ-REL-116, ACC-UPG-08)", 
         downloadFile(`http://127.0.0.1:${evilPort}/redirect-evil`, dest1, undefined, 5000),
         /Disallowed download origin or invalid URL/
       );
+
+      const secretUrl = `http://127.0.0.1:${evilPort}/redirect-evil-signed`;
+      await assert.rejects(downloadFile(secretUrl, path.join(testDir, "signed.tar.gz"), undefined, 5000), (error: Error) => {
+        assert.match(error.message, /Disallowed download origin or invalid URL \(https:\/\/evil-untrusted-site\.com\)/);
+        assert.doesNotMatch(error.message, /must-not-appear/);
+        return true;
+      });
 
       // 2. Too many redirects
       const dest2 = path.join(testDir, "test2.tar.gz");
