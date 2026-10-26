@@ -4,7 +4,7 @@
 |---|---|
 | Base revision | `468646bb58f22db573b06db2c2fc889b444df6cc` (`origin/main`, after PR #246) |
 | Branch | `v1/defect-update-plan-mutation` |
-| Affected behavior | The `update_plan` capability declares `mutating: true`, `effect: "internal"` and no `changesWorkspace`. `changesWorkspace()` falls back to `mutating`, so a successful `update_plan` was reported as `candidateMutated` and fired the candidate-mutation hook. The agent therefore marked the turn as having changed the workspace (`hasPendingModifications` / `turnMutations`) even though the plan lives only in durable task state. A plan-only (read-only) answer then carried a spurious verification obligation; with any unrelated passing verifier available it could end `VERIFIED`, and the `CONTEXT_EVIDENCE_NOT_RETAINED` check (which only applies when no verifier exists) never consulted the compacted-away output. This is finding 4 of `docs/reviews/NEXUS_POST_REMEDIATION_DOGFOOD_QUALIFICATION.md` §7/§22. |
+| Affected behavior | The `update_plan` capability declares `mutating: true`, `effect: "internal"` and no `changesWorkspace`. `changesWorkspace()` falls back to `mutating`, so a successful `update_plan` was reported as `candidateMutated` and fired the candidate-mutation hook. The agent therefore marked the turn as having changed the workspace (`hasPendingModifications` / `turnMutations`) even though the plan lives only in durable task state. A plan-only (read-only) answer then carried a spurious verification obligation. Pre-fix it entered the mutation branch of `buildTurnResult`, where `CONTEXT_EVIDENCE_NOT_RETAINED` is only consulted when no verifier exists; an unrelated passing verifier could therefore yield `REGRESSION_FREE` (or `VERIFIED` when deliverable-bound evidence/configured baseline also existed) without consulting the compacted-away output. Post-fix the turn stays obligation-free (`NOT_REQUIRED`). This is finding 4 of `docs/reviews/NEXUS_POST_REMEDIATION_DOGFOOD_QUALIFICATION.md` §7/§22. |
 | Severity | Medium: false unverified-change obligation and a context-evidence bypass for plan-only turns. |
 
 ## Reproduction (pre-fix)
@@ -30,6 +30,8 @@ Add `"changesWorkspace": false` to the `update_plan` capability. `mutating: true
 
 ## Residual risk
 
-- `update_plan` still counts as `mutating` for approval/read-only purposes; only the workspace-change signal was corrected.
+- `update_plan` still counts as `mutating`, so the AUTH-009 read-only gate keeps refusing it; only the workspace-change signal was corrected. Approval is driven by `effect: "internal"`, not by these flags.
 - The wider ordering issue (mutation branches in `buildTurnResult` run before the context-evidence check for genuinely workspace-changing tools) is unchanged and out of scope.
-- `manage_knowledge` keeps a workspace-change obligation because it writes `.nexus/knowledge.json`; if that file is meant to be workspace-internal metadata rather than a deliverable change, it would need a separate decision.
+- `manage_knowledge` keeps a workspace-change obligation because its `set`/`delete` actions write `.nexus/knowledge.json`; its read-only `list`/`get`/`query` actions are conservatively treated the same and would need a separate per-action decision.
+- Regression coverage asserts classification, the spine mutation flag and the agent obligation; it does not assert the full turn outcome (`NOT_REQUIRED`). A turn-level outcome test would need the fixture gateway used by the continuation suites.
+- The pre-fix failure is reproducible from the new test; no captured TAP log is retained in this evidence directory (only this README).
