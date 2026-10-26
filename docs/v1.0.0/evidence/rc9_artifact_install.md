@@ -1,8 +1,11 @@
 # RC9 artifact integrity and isolated installation record
 
-**Observed:** 2026-10-26 18:00 UTC  
-**Release:** `v1.0.0-rc.9`  
-**Source commit:** `4cae11cbc3b0eab9bd6f56df7cc34e946b5dc566`  
+**Observed:** 2026-10-26 18:00 UTC
+
+**Release:** `v1.0.0-rc.9`
+
+**Source commit:** `4cae11cbc3b0eab9bd6f56df7cc34e946b5dc566`
+
 **Disposition:** Artifact integrity and installation smoke evidence only. This is not exact-RC product qualification or acceptance.
 
 ## Published source and release
