@@ -17,7 +17,8 @@
 - Release workflow [40370485753](https://github.com/mikeholownych/nexus-code/actions/runs/40370485753) completed successfully. The prerelease was published at 2026-10-26 17:56:16 UTC.
 - Published Linux x86-64 archive: `nexus-linux-x86_64-v1.0.0-rc.9.tar.gz`, 4,859,736 bytes, SHA-256 `35795d2b7639b68a541c512976d8bc7f251115ebdccf48f6b9cf5f98ef1af9bb`.
 - Published `SHA256SUMS` asset SHA-256: `70a80c9afb658c40506534e8fd80eb5e7b4cdd28431aa7fd0e285f136513ce77`.
-- Downloading all listed release assets and running `sha256sum -c SHA256SUMS` succeeded for the archive and `compatibility.json`.
+- All 9 downloaded release assets matched the SHA-256 digests advertised for those assets by the GitHub Release API.
+- The separate `SHA256SUMS` file contains entries for the Linux archive and `compatibility.json`; `sha256sum -c SHA256SUMS` succeeded for both entries. It does not cover all 9 release assets.
 - `gh attestation verify` exited 0 for both the archive and `SHA256SUMS`, against repository `mikeholownych/nexus-code`. The verified archive attestation subject digest matches the published archive digest above.
 
 ## Isolated desktop installation
