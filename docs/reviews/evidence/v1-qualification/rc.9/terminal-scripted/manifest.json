@@ -33,9 +33,17 @@
     "r1a_lone_enter_denied": "PASS",
     "r1d_typed_ahead_y_denied": "PASS"
   },
+  "accessibilityProbe": {
+    "status": "PARTIAL_WITH_TERM_DUMB_FAILURE",
+    "evidence": "accessibility/README.md",
+    "noColor": "PASS_SUBCASE at 40x14 and 100x30 with zero color SGR parameters",
+    "termDumb": "FAIL at 40x14 and 100x30; color reset SGR 39m, 49m, 59m observed with NO_COLOR unset",
+    "capturedStates": ["idle", "approval"],
+    "allStateAcceptance": "NOT_ESTABLISHED"
+  },
   "notEstablished": [
     "ACC-TUI-MANUAL five-terminal by three-size human matrix",
-    "complete ACC-TUI-A11Y matrix for NO_COLOR and TERM=dumb at 40x14 and 100x30",
+    "complete all-state ACC-TUI-A11Y acceptance; TERM=dumb color-reset SGR criterion fails",
     "power-loss recovery",
     "provider and standalone qualification",
     "held-out task-quality qualification",

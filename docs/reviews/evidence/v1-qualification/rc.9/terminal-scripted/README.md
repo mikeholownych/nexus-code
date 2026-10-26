@@ -16,6 +16,6 @@ The package identity is source commit `4cae11cbc3b0eab9bd6f56df7cc34e946b5dc566`
 
 ## Scope and remaining gates
 
-These results cover scripted mock-gateway PTY scenarios only. They do not establish the manual five-terminal × three-size matrix (`ACC-TUI-MANUAL`), the full accessibility matrix for both `NO_COLOR` and `TERM=dumb` at 40×14 and 100×30, real provider qualification, held-out task quality, standalone gateway qualification, independent acceptance, or power-loss recovery. Failed or superseded harness attempts remain preserved outside this evidence directory under `/var/tmp/nexus-rc9-pty-4cae11c/attempt*`; they are not counted as passing evidence.
+These results cover scripted mock-gateway PTY scenarios only. They do not establish the manual five-terminal × three-size matrix (`ACC-TUI-MANUAL`), all-state accessibility, real provider qualification, held-out task quality, standalone gateway qualification, independent acceptance, or power-loss recovery. The partial installed-RC9 `NO_COLOR` / `TERM=dumb` probe is recorded under [`accessibility/`](accessibility/README.md): the `NO_COLOR=1` cells pass, but `TERM=dumb` emits color reset SGR sequences and fails that criterion. Failed or superseded harness attempts remain preserved outside this evidence directory under `/var/tmp/nexus-rc9-pty-4cae11c/attempt*`; they are not counted as passing evidence.
 
 All files in this directory are covered by `SHA256SUMS`.
