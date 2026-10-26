@@ -253,13 +253,31 @@ function egressDenied(message: string): InferenceError {
 }
 
 const MAX_PROVIDER_ERROR_CHARS = 2_000;
+const CLASSIFIED_STREAM_ERRORS = new Set([
+  "context_length_exceeded",
+  "overloaded_error",
+  "rate_limit_error",
+  "rate_limit_exceeded",
+  "invalid_request_error",
+  "authentication_error",
+  "permission_error",
+  "billing_error",
+  "insufficient_quota",
+]);
 /** Limit for requests that carry no task content (model lists, catalogs, embeddings): a silent server never hangs them. */
 const METADATA_TIMEOUT_MS = 15_000;
 
 /** Provider or endpoint error text as shown and stored: secrets redacted, at most MAX_PROVIDER_ERROR_CHARS (REQ-PRV-103). */
 export function boundedProviderText(text: string): string {
   const clean = redactSecrets(text);
-  return clean.length > MAX_PROVIDER_ERROR_CHARS ? `${clean.slice(0, MAX_PROVIDER_ERROR_CHARS)}… [${clean.length - MAX_PROVIDER_ERROR_CHARS} more characters]` : clean;
+  if (clean.length <= MAX_PROVIDER_ERROR_CHARS) return clean;
+  let omitted = clean.length - MAX_PROVIDER_ERROR_CHARS;
+  while (true) {
+    const suffix = `… [${omitted} more characters]`;
+    const prefixLength = MAX_PROVIDER_ERROR_CHARS - suffix.length;
+    if (omitted === clean.length - prefixLength) return `${clean.slice(0, prefixLength)}${suffix}`;
+    omitted = clean.length - prefixLength;
+  }
 }
 
 const metadataSignal = (signal?: AbortSignal): AbortSignal =>
@@ -1376,7 +1394,6 @@ export class LocalLlmClient {
         }
 
         if (!res.ok) {
-          watchdog.done();
           const errText = await res.text();
           throw this.httpError(res.status, errText, requestId, res.headers);
         }
@@ -1557,14 +1574,21 @@ export class LocalLlmClient {
       }
 
       if (!res.ok || !res.body) {
-        watchdog.done();
-        const errText = await res.text().catch(() => res.statusText);
-        throw this.httpError(res.status, errText, requestId, res.headers);
+        try {
+          const errText = await res.text();
+          throw this.httpError(res.status, errText, requestId, res.headers);
+        } catch (err: any) {
+          if (err instanceof InferenceError) throw err;
+          throw classifyTransportError(err, signal, requestId, "stream");
+        } finally {
+          watchdog.done();
+        }
       }
 
       this.lastAdmission = parseAdmissionHeaders((name) => res.headers.get(name));
       let fullContent = "";
       let reasoningContent = "";
+      let hasOutput = false;
       let finishReason: string | undefined;
       let sawDone = false;
       this.pending = { endpoint: currentEp, executions: this.pending?.executions };
@@ -1599,16 +1623,17 @@ export class LocalLlmClient {
           const em = typeof chunk.error === "string" ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
           const hints = providerHints(undefined, JSON.stringify({ error: chunk.error }));
           // The request was admitted. Only an explicit pre-generation code proves the model never ran it.
-          const classification: ProviderClassification =
-            hints.errorCode === "context_length_exceeded"
-              ? { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" }
-              : { condition: "TEMPORARILY_UNAVAILABLE", execution: hints.errorCode === "pre_generation" && !fullContent ? "NOT_EXECUTED" : "UNKNOWN" };
-          throw new InferenceError("provider_error_frame", "provider", `Provider error frame mid-stream: ${em}`, {
-            requestId,
-            partialText: fullContent,
-            hints,
-            ...classification,
-          });
+          if (hints.errorCode === "pre_generation") {
+            throw new InferenceError("provider_error_frame", "provider", `Provider error frame mid-stream: ${boundedProviderText(em)}`, {
+              requestId,
+              partialText: fullContent,
+              hints,
+              condition: "TEMPORARILY_UNAVAILABLE",
+              execution: hasOutput ? "UNKNOWN" : "NOT_EXECUTED",
+            });
+          }
+          const classifiedCode = hints.errorCode && CLASSIFIED_STREAM_ERRORS.has(hints.errorCode);
+          throw this.fromStreamError(new ProviderStreamError(em, classifiedCode ? hints.errorCode : hints.errorType ?? hints.errorCode, fullContent), requestId, hints, hasOutput);
         }
         if (this.pending && chunk && typeof chunk === "object") {
           if (chunk.usage) this.pending.usage = chatUsage(chunk.usage);
@@ -1621,6 +1646,7 @@ export class LocalLlmClient {
 
         // 1. Text token chunk
         if (delta.content) {
+          hasOutput = true;
           fullContent += delta.content;
           if (onToken) {
             onToken(delta.content);
@@ -1628,11 +1654,13 @@ export class LocalLlmClient {
         }
         const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
         if (typeof reasoningDelta === "string") {
+          if (reasoningDelta) hasOutput = true;
           reasoningContent += reasoningDelta;
         }
 
         // 2. Tool call chunks
         if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+          if (delta.tool_calls.length > 0) hasOutput = true;
           for (const tc of delta.tool_calls) {
             // Spec streams give every fragment an index. Some servers (and re-streamed non-streaming
             // responses) omit it; then a fragment that carries an id or a name starts a NEW call, and
@@ -1763,22 +1791,22 @@ export class LocalLlmClient {
     return { messages: this.sanitizeHistory(m.sanitizedPayload || messages), tools: outTools };
   }
 
-  /** A provider-reported stream error, typed by what it says about the provider. Partial output is never used. */
-  private fromStreamError(e: ProviderStreamError, requestId: string): InferenceError {
+  /** A provider-reported stream error, typed by what it says about the provider. Partial output is not a completed response. */
+  private fromStreamError(e: ProviderStreamError, requestId: string, hints: ProviderHints = {}, hasOutput = Boolean(e.partialText)): InferenceError {
     if (e.malformed) return new InferenceError("malformed_event", "provider", e.message, { requestId, partialText: e.partialText, failoverEligible: false });
     const t = e.errorType ?? "";
     const classification: ProviderClassification =
-      t === "context_length_exceeded" ? { condition: "CAPACITY_REJECTED", execution: "NOT_EXECUTED" }
+      t === "context_length_exceeded" ? { condition: "CAPACITY_REJECTED", execution: hasOutput ? "UNKNOWN" : "NOT_EXECUTED" }
       : t === "overloaded_error" ? { condition: "OVERLOADED", execution: "UNKNOWN" }
       : t === "rate_limit_error" || t === "rate_limit_exceeded" ? { condition: "RATE_LIMITED", execution: "UNKNOWN" }
       : t === "invalid_request_error" ? { condition: "REQUEST_REJECTED", execution: "UNKNOWN" }
       : t === "authentication_error" || t === "permission_error" ? { condition: "AUTH_FAILURE", execution: "UNKNOWN" }
       : t === "billing_error" || t === "insufficient_quota" ? { condition: "QUOTA_EXHAUSTED", execution: "UNKNOWN" }
       : { condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" };
-    return new InferenceError("provider_error_frame", "provider", redactSecrets(e.message).slice(0, MAX_PROVIDER_ERROR_CHARS), {
+    return new InferenceError("provider_error_frame", "provider", boundedProviderText(e.message), {
       requestId,
       partialText: e.partialText,
-      hints: t ? { errorType: t } : {},
+      hints: { ...(t ? { errorType: t } : {}), ...hints },
       ...classification,
     });
   }
@@ -1835,9 +1863,15 @@ export class LocalLlmClient {
         throw classifyTransportError(err, signal, requestId, "connect");
       }
       if (!res.ok || (stream && !res.body)) {
-        watchdog.done();
-        const errText = await res.text().catch(() => res.statusText);
-        throw this.httpError(res.status, errText, requestId, res.headers);
+        try {
+          const errText = await res.text();
+          throw this.httpError(res.status, errText, requestId, res.headers);
+        } catch (err: any) {
+          if (err instanceof InferenceError) throw err;
+          throw classifyTransportError(err, signal, requestId, "stream");
+        } finally {
+          watchdog.done();
+        }
       }
       const keepReasoning = Boolean(this.reasoningEffort);
       let result: NativeResult;

@@ -32,12 +32,246 @@ const sse = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
 
 test("boundedProviderText redacts secrets and caps length", () => {
   const out = boundedProviderText("key=sk-ant-api03-" + "A".repeat(40) + " " + "x".repeat(10_000));
-  assert.ok(out.length < 2_100, String(out.length));
+  assert.ok(out.length <= 2_000, String(out.length));
   assert.ok(!out.includes("sk-ant-api03-AAAA"));
 });
 
 test("a local endpoint's huge error body is bounded and redacted in the error (PRV-03)", async () => {
   const srv = await server((_req, _b, res) => { res.writeHead(500); res.end("upstream key=sk-ant-api03-" + "A".repeat(40) + " " + "x".repeat(200_000)); });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.ok(e.message.length < 2_200, `message length ${e.message.length}`);
+      assert.ok(!e.message.includes("sk-ant-api03-AAAA"));
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
+test("error-body reads retain caller cancellation and the response watchdog", async () => {
+  const srv = await server((_req, _b, res) => { res.writeHead(500); res.flushHeaders(); });
+  const ac = new AbortController();
+  const originalTotal = process.env.LOCAL_LLM_TIMEOUT_MS;
+  const originalFirstByte = process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS;
+  let timer: NodeJS.Timeout | undefined;
+  let abortTimer: NodeJS.Timeout | undefined;
+  const bounded = (pending: Promise<string>) => Promise.race([
+    pending,
+    new Promise<string>((resolve) => { timer = setTimeout(() => resolve("still pending"), 900); }),
+  ]);
+  try {
+    process.env.LOCAL_LLM_TIMEOUT_MS = "0";
+    process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS = "1000";
+    const aborted = client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "error-body-abort", ac.signal)
+      .then(() => "resolved", (e: any) => `rejected:${e.kind}`);
+    abortTimer = setTimeout(() => ac.abort(), 250);
+    assert.equal(await bounded(aborted), "rejected:aborted");
+    clearTimeout(timer);
+    clearTimeout(abortTimer);
+
+    process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS = "100";
+    const timedOut = client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "error-body-timeout")
+      .then(() => "resolved", (e: any) => `rejected:${e.kind}`);
+    assert.equal(await bounded(timedOut), "rejected:timeout");
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (abortTimer) clearTimeout(abortTimer);
+    ac.abort();
+    if (originalTotal === undefined) delete process.env.LOCAL_LLM_TIMEOUT_MS;
+    else process.env.LOCAL_LLM_TIMEOUT_MS = originalTotal;
+    if (originalFirstByte === undefined) delete process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS;
+    else process.env.LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS = originalFirstByte;
+    await srv.close();
+  }
+});
+
+test("an OpenAI invalid-request error frame is permanent", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(sse({ error: { type: "invalid_request_error", message: "bad request" } }));
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.kind, "provider_error_frame");
+      assert.equal(e.condition, "REQUEST_REJECTED");
+      assert.equal(e.execution, "UNKNOWN");
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
+test("a streaming HTTP error falls back to invalid-request type for an unrecognized code", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { code: "model_not_found", type: "invalid_request_error", message: "unknown model" } }));
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.condition, "REQUEST_REJECTED");
+      assert.equal(e.execution, "UNKNOWN");
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
+test("recognized pre-generation codes take precedence over invalid-request type in HTTP errors", async () => {
+  for (const status of [500, 502, 504]) {
+    const srv = await server((_req, _b, res) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "pre_generation", type: "invalid_request_error", message: "gateway failed" } }));
+    });
+    try {
+      await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+        assert.equal(e.condition, "TEMPORARILY_UNAVAILABLE");
+        assert.equal(e.execution, "NOT_EXECUTED");
+        return true;
+      });
+    } finally { await srv.close(); }
+  }
+});
+
+test("non-streaming HTTP errors use invalid-request type without changing status execution semantics", async () => {
+  for (const [status, execution] of [[500, "UNKNOWN"], [400, "NOT_EXECUTED"]] as const) {
+    const srv = await server((_req, _b, res) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "model_not_found", type: "invalid_request_error", message: "unknown model" } }));
+    });
+    try {
+      await assert.rejects(client(srv.url).chatCompletion([{ role: "user", content: "hi" }], [], "r"), (e: any) => {
+        assert.equal(e.condition, "REQUEST_REJECTED");
+        assert.equal(e.execution, execution);
+        return true;
+      });
+    } finally { await srv.close(); }
+  }
+});
+
+test("an unrecognized OpenAI error code falls back to the permanent error type", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(sse({ error: { type: "invalid_request_error", code: "model_not_found", message: "unknown model" } }));
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.condition, "REQUEST_REJECTED");
+      assert.equal(e.execution, "UNKNOWN");
+      assert.deepEqual(e.hints, { errorCode: "model_not_found", errorType: "invalid_request_error" });
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
+test("an OpenAI context error code takes precedence over its error type", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(sse({ error: { type: "invalid_request_error", code: "context_length_exceeded", message: "context exceeded" } }));
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.condition, "CAPACITY_REJECTED");
+      assert.equal(e.execution, "NOT_EXECUTED");
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
+test("an OpenAI pre-generation error code retains partial-output execution semantics", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      sse({ choices: [{ index: 0, delta: { content: "partial" } }] }) +
+      sse({ error: { type: "invalid_request_error", code: "pre_generation", message: "gateway failed" } }),
+    );
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.condition, "TEMPORARILY_UNAVAILABLE");
+      assert.equal(e.execution, "UNKNOWN");
+      assert.equal(e.partialText, "partial");
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
+for (const [kind, delta] of [
+  ["reasoning", { reasoning_content: "analysis" }],
+  ["tool-call", { tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "read_file", arguments: "{}" } }] }],
+] as const) {
+  test(`${kind} deltas before a pre-generation error prevent immediate failover`, async () => {
+    const primary = await server((_req, _b, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        sse({ choices: [{ index: 0, delta }] }) +
+        sse({ error: { type: "invalid_request_error", code: "pre_generation", message: "gateway failed" } }),
+      );
+    });
+    const backup = await server((_req, _b, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "from backup" }, finish_reason: "stop" }] }));
+    });
+    try {
+      const c = new LocalLlmClient({ endpoint: primary.url, fallbackEndpoints: [backup.url], model: "m", workspace: "/tmp", maxSteps: 1 } as any);
+      await assert.rejects(c.chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+        assert.equal(e.condition, "TEMPORARILY_UNAVAILABLE");
+        assert.equal(e.execution, "UNKNOWN");
+        assert.equal(e.failoverEligible, false);
+        return true;
+      });
+      assert.equal(backup.seen.length, 0, "no blind replay on the backup");
+    } finally {
+      await primary.close();
+      await backup.close();
+    }
+  });
+}
+
+test("a context error after partial text has unknown execution", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      sse({ choices: [{ index: 0, delta: { content: "partial" } }] }) +
+      sse({ error: { type: "invalid_request_error", code: "context_length_exceeded", message: "context exceeded" } }),
+    );
+  });
+  try {
+    await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+      assert.equal(e.condition, "CAPACITY_REJECTED");
+      assert.equal(e.execution, "UNKNOWN");
+      assert.equal(e.failoverEligible, false);
+      assert.equal(e.partialText, "partial");
+      return true;
+    });
+  } finally { await srv.close(); }
+});
+
+for (const [kind, delta] of [
+  ["reasoning", { reasoning_content: "analysis" }],
+  ["tool-call", { tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "read_file", arguments: "{}" } }] }],
+] as const) {
+  test(`${kind} deltas before a context error have unknown execution`, async () => {
+    const srv = await server((_req, _b, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        sse({ choices: [{ index: 0, delta }] }) +
+        sse({ error: { type: "invalid_request_error", code: "context_length_exceeded", message: "context exceeded" } }),
+      );
+    });
+    try {
+      await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
+        assert.equal(e.condition, "CAPACITY_REJECTED");
+        assert.equal(e.execution, "UNKNOWN");
+        assert.equal(e.failoverEligible, false);
+        assert.equal(e.partialText, "");
+        return true;
+      });
+    } finally { await srv.close(); }
+  });
+}
+
+test("an OpenAI error frame is bounded and redacted", async () => {
+  const srv = await server((_req, _b, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(sse({ error: { type: "overloaded_error", message: "upstream key=sk-ant-api03-" + "A".repeat(40) + " " + "x".repeat(10_000) } }));
+  });
   try {
     await assert.rejects(client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r"), (e: any) => {
       assert.ok(e.message.length < 2_200, `message length ${e.message.length}`);
