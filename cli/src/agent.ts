@@ -859,6 +859,10 @@ export class AutonomousAgent {
   private verificationBaselineInvalidated: boolean = false;
   /** A persisted baseline retained only as untrusted continuity evidence after recovery. */
   private untrustedRecoveredBaseline?: DurableTaskState["changeBaseline"];
+  private recoveredOperation?: DurableTaskState["operation"];
+  private extensionPosture?: { workspace: string; readOnly: boolean };
+  /** Full-access intent captured at construction; effective only while the mode permits it and read-only is off. */
+  private configuredFullAccess: boolean = false;
   /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
   private verificationEvidence?: VerificationEvidence;
   private verificationEvidenceRawOutput: string = "";
@@ -1061,6 +1065,8 @@ export class AutonomousAgent {
       this.config.readOnly = true;
       this.config.approvalMode = "read-only";
     }
+    this.configuredFullAccess = Boolean(this.config.fullAccess);
+    const initialReadOnly = this.isReadOnly();
 
     this.inheritedWorktreeScope = inheritedWorktreeScope;
     if (inheritedWorktreeScope && path.resolve(config.workspace) !== path.resolve(inheritedWorktreeScope.workspace)) {
@@ -1097,22 +1103,23 @@ export class AutonomousAgent {
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
     this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: verifierTimeoutSecs(config.verifierTimeoutSecs) }));
     this.browser = new BrowserDriver(ws);
-    this.knowledge = new KnowledgeGraph(ws, { readOnly: config.readOnly });
+    this.knowledge = new KnowledgeGraph(ws, { readOnly: initialReadOnly });
     this.bridge = new RustCoreBridge(
       ws,
       config.shell,
       config.coreBinaryPath,
       config.dryRun,
-      config.readOnly,
+      initialReadOnly,
       inheritedWorktreeScope ? (config.sandbox || "auto") : config.sandbox,
       Boolean(inheritedWorktreeScope?.requireSandbox),
     );
     this.bridge.setVerifierTimeoutSecs(config.verifierTimeoutSecs);
     this.securityManager = new SecurityManager(ws);
     this.ui = new TerminalUI();
-    this.skillManager = new SkillManager(ws, { readOnly: config.readOnly });
-    this.mcpManager = new McpClientManager(ws, { readOnly: config.readOnly });
-    this.pluginManager = new PluginManager(ws, { readOnly: config.readOnly });
+    this.skillManager = new SkillManager(ws, { readOnly: initialReadOnly });
+    this.mcpManager = new McpClientManager(ws, { readOnly: initialReadOnly });
+    this.pluginManager = new PluginManager(ws, { readOnly: initialReadOnly });
+    this.extensionPosture = { workspace: ws, readOnly: initialReadOnly };
     this.worktreeManager = new WorktreeManager(ws);
     if (config.recordFlight) {
       this.flightRecorder = new FlightRecorder(ws);
@@ -1121,8 +1128,8 @@ export class AutonomousAgent {
     this.candidateTracker = new CandidateTracker();
     this.capabilityRegistry = createDefaultRegistry();
     this.authorityEngine = new AuthorityAdmissionEngine({
-      readOnly: config.readOnly,
-      fullAccess: config.fullAccess ?? false,
+      readOnly: initialReadOnly,
+      fullAccess: Boolean(config.fullAccess) && !initialReadOnly,
       workspace: ws,
       registry: this.capabilityRegistry,
     });
@@ -1259,18 +1266,63 @@ export class AutonomousAgent {
   }
 
   public setApprovalMode(mode: ApprovalMode): void {
-    this.config.approvalMode = mode;
-    if (mode !== "auto") {
-      this.config.fullAccess = false;
+    // Read-only selected at runtime is a mode choice, not an explicit launch invariant: record that so a later
+    // /mode auto or /mode review can deliberately leave it, exactly like --mode read-only.
+    if (mode === "read-only" && !this.config.readOnly && !this.config.readOnlyModeSelected) {
+      this.config.readOnlyModeSelected = true;
     }
+    // config.readOnly is the configured (launch or deliberate mode) posture. The checkpoint fallback is transient
+    // and must never leak into it, or releasing the fallback could never restore the operator's mode.
+    const configuredReadOnly = this.modeReadOnly(mode);
+    this.config.approvalMode = mode;
+    this.config.readOnly = configuredReadOnly;
+    this.config.fullAccess = mode === "auto" ? this.configuredFullAccess : false;
+    this.applyReadOnlyAuthority(this.checkpointReadOnlyFallback || configuredReadOnly);
     this.clearApprovedEgressOrigins();
     this.clearApprovedVerifiers();
+  }
+
+  /** Read-only configured by an explicit launch or by a deliberate mode choice (not the transient fallback). */
+  private modeReadOnly(mode: ApprovalMode): boolean {
+    return Boolean((this.config.readOnly && !this.config.readOnlyModeSelected) || mode === "read-only");
+  }
+
+  /** Effective read-only authority for a permission mode, including the transient checkpoint fallback. */
+  private readOnlyForMode(mode: ApprovalMode): boolean {
+    return Boolean(this.checkpointReadOnlyFallback || this.modeReadOnly(mode));
+  }
+
+  private applyReadOnlyAuthority(readOnly: boolean): void {
+    this.bridge?.setReadOnly(readOnly);
+    this.authorityEngine.setReadOnly(readOnly);
+    this.authorityEngine.setFullAccess(Boolean(this.config.fullAccess) && !readOnly);
+    this.applyExtensionReadOnly(readOnly);
+  }
+
+  /** Keep workspace-scoped extension managers on the same effective posture as the bridge and authority. */
+  private applyExtensionReadOnly(readOnly: boolean): void {
+    // A permission-mode change that does not alter the effective posture (review <-> auto) must not tear down
+    // connected MCP servers, loaded plugins or the current turn's extensibility state.
+    const workspace = this.config.workspace;
+    if (this.extensionPosture?.workspace === workspace && this.extensionPosture.readOnly === readOnly) return;
+    if (this.knowledge) this.knowledge.setWorkspace(workspace, { readOnly });
+    if (this.skillManager) this.skillManager.setWorkspace(workspace, { readOnly });
+    if (this.mcpManager) {
+      this.mcpManager.shutdownAll();
+      this.mcpManager = new McpClientManager(workspace, { readOnly });
+    }
+    if (this.pluginManager) {
+      this.pluginManager = new PluginManager(workspace, { readOnly });
+      if (this.flightRecorder) this.pluginManager.setFlightRecorder(this.flightRecorder);
+    }
+    this.extensibilityInitialized = false;
+    this.extensionPosture = { workspace, readOnly };
   }
 
   public getApprovalMode(): ApprovalMode {
     // An explicit --read-only launch is an operator invariant: a later mode change (the /mode slash command,
     // setApprovalMode) must not lower it. The checkpoint fallback is the same class of restriction.
-    if (this.checkpointReadOnlyFallback || this.config.readOnly) return "read-only";
+    if (this.readOnlyForMode(this.config.approvalMode ?? "review")) return "read-only";
     if (this.config.approvalMode) return this.config.approvalMode;
     if (this.config.fullAccess) return "auto";
     // Workspace trust controls project instructions and integrations; permission settings alone select approval posture.
@@ -1280,6 +1332,7 @@ export class AutonomousAgent {
   /** Restrict this session to read-only authority when its workspace cannot be safely checkpointed. */
   public setCheckpointReadOnlyFallback(enabled: boolean): void {
     this.checkpointReadOnlyFallback = enabled;
+    this.applyReadOnlyAuthority(this.readOnlyForMode(this.config.approvalMode ?? "review"));
     if (enabled) {
       this.clearApprovedEgressOrigins();
       this.clearApprovedVerifiers();
@@ -1287,7 +1340,9 @@ export class AutonomousAgent {
   }
 
   private isReadOnly(): boolean {
-    return Boolean(this.config.readOnly || this.checkpointReadOnlyFallback);
+    // An explicit launch is authoritative; a mode-selected read-only posture is enforced until the operator
+    // deliberately changes the mode, and the checkpoint fallback is authoritative for the current turn.
+    return this.readOnlyForMode(this.config.approvalMode ?? "review");
   }
 
   private initTaskState(): void {
@@ -1351,6 +1406,7 @@ export class AutonomousAgent {
       unverifiedChangesPending: this.hasPendingModifications,
       durableNotes: notes ? [notes] : undefined,
       ...(this.compactionProvenance ? { compactionProvenance: this.compactionProvenance } : {}),
+      ...(this.recoveredOperation !== undefined ? { operation: this.recoveredOperation } : {}),
       providerRecovery: this.activeProviderRecovery,
       objective: this.objective ?? null,
       findings: this.getFindings(),
@@ -1421,6 +1477,8 @@ export class AutonomousAgent {
     this.messages = state.messages || [];
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
+    this.activeProviderRecovery = state.providerRecovery ?? null;
+    this.recoveredOperation = state.operation;
     // Durable task state is writable by the same local user who can run candidate
     // commands. Never trust a saved baseline, nor capture a new one over a
     // resumed workspace with pending changes: an attacker could delete the field
@@ -1507,10 +1565,11 @@ export class AutonomousAgent {
       await this.pluginManager.loadPlugins();
       await this.mcpManager.loadAndConnect();
       this.extensibilityInitialized = true;
-      const skipped = untrustedWorkspaceExtensions(this.config.workspace, this.config.readOnly);
+      const readOnly = this.isReadOnly();
+      const skipped = untrustedWorkspaceExtensions(this.config.workspace, readOnly);
       if (skipped.length && this.depth === 0) {
         const names = skipped.map((file) => path.relative(this.config.workspace, file)).join(", ");
-        const text = this.config.readOnly
+        const text = readOnly
           ? `Workspace MCP servers and plugins are not loaded in read-only mode (${names}).`
           : `Workspace MCP servers and plugins are not loaded because this workspace is not trusted (${names}). Run \`nexus trust\` in it to allow them.`;
         if (this.observer?.onNotice) this.observer.onNotice(text);
@@ -1726,7 +1785,13 @@ export class AutonomousAgent {
     this.findingsCondensed = recorded.some((state) => state.reduced);
   }
 
-  public restoreSession(msgs: ChatMessage[], unverifiedChangesPending?: boolean, objective?: ObjectiveLedger | null, findings?: readonly string[] | null): void {
+  public restoreSession(
+    msgs: ChatMessage[],
+    unverifiedChangesPending?: boolean,
+    objective?: ObjectiveLedger | null,
+    findings?: readonly string[] | null,
+    recovery?: Pick<DurableTaskState, "providerRecovery" | "operation" | "changeBaseline">,
+  ): void {
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
     this.messages = [...msgs];
@@ -1738,6 +1803,9 @@ export class AutonomousAgent {
       this.objective.continuation = { ...this.objective.continuation, segments: 1, lastProgressStep: 0 };
     }
     this.settleUnrecordedToolCalls();
+    this.activeProviderRecovery = recovery?.providerRecovery ?? null;
+    this.recoveredOperation = recovery?.operation;
+    this.untrustedRecoveredBaseline = recovery?.changeBaseline ?? undefined;
     // Session files are writable by the same local identity that can run candidate
     // commands. Their pending flag and any verifier snapshot cannot authenticate
     // that the workspace remained unchanged since the session was saved. Treat
@@ -2045,6 +2113,8 @@ export class AutonomousAgent {
     const hasTrustedInMemoryBaseline = workspaceIdentityIsCurrent && this.changeBaseline !== undefined && !this.verificationBaselineInvalidated;
     if (!hasTrustedInMemoryBaseline) this.changeBaseline = undefined;
     this.verificationBaselineInvalidated = this.verificationBaselineInvalidated || (this.hasPendingModifications && !hasTrustedInMemoryBaseline);
+    this.recoveredOperation = undefined;
+    this.activeProviderRecovery = null;
     this.enabledToolGroups = new Set();
     this.stepNoticeStep = 0;
     this.cutResponse = undefined;
@@ -2120,6 +2190,7 @@ export class AutonomousAgent {
         this.primaryWorkspacePathIdentity = selectedWorkspace;
       }
     }
+    const readOnly = this.isReadOnly();
     this.bridge.shutdown();
     this.mcpManager.shutdownAll();
     this.workspacePathIdentity = selectedWorkspace;
@@ -2134,22 +2205,19 @@ export class AutonomousAgent {
       this.config.shell,
       this.config.coreBinaryPath,
       this.config.dryRun,
-      this.config.readOnly,
+      readOnly,
       this.bridgeSandboxSetting(),
       Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
     );
-    this.skillManager.setWorkspace(newWorkspace);
+    this.applyReadOnlyAuthority(readOnly);
     // During an internally managed isolation switch, retain the manager bound
     // to the selected original workspace; the active checkout is only a
     // specimen worktree, not the repository manager's authority root.
     if (!this.managedWorktreeWorkspaceSwitch) this.worktreeManager = new WorktreeManager(newWorkspace);
-    this.mcpManager = new McpClientManager(newWorkspace, { readOnly: this.config.readOnly });
-    this.pluginManager = new PluginManager(newWorkspace, { readOnly: this.config.readOnly });
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
     this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(newWorkspace);
-    this.knowledge = new KnowledgeGraph(newWorkspace, { readOnly: this.config.readOnly });
-    this.skillManager.setWorkspace(newWorkspace, { readOnly: this.config.readOnly });
+    this.knowledge = new KnowledgeGraph(newWorkspace, { readOnly });
     this.extensibilityInitialized = false;
     this.setupSpineHandlers();
     this.resetConversation();
@@ -2157,6 +2225,7 @@ export class AutonomousAgent {
 
   public setShell(newShell: string): void {
     if (newShell !== this.config.shell) this.invalidateVerificationBaseline();
+    const readOnly = this.isReadOnly();
     this.bridge.shutdown();
     this.config.shell = newShell;
     this.bridge = new RustCoreBridge(
@@ -2164,10 +2233,11 @@ export class AutonomousAgent {
       this.config.shell,
       this.config.coreBinaryPath,
       this.config.dryRun,
-      this.config.readOnly,
+      readOnly,
       this.bridgeSandboxSetting(),
       Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
     );
+    this.applyReadOnlyAuthority(readOnly);
     this.setupSpineHandlers();
     this.resetConversation();
   }
@@ -2268,10 +2338,19 @@ export class AutonomousAgent {
    * the archive (interrupted compactions set aside, torn lines, missing originals), or undefined when it is whole.
    */
   public restoreConversation(
-    session: { messages: ChatMessage[]; unverifiedChangesPending?: boolean; objective?: ObjectiveLedger | null; findings?: readonly string[] | null; history?: any },
+    session: {
+      messages: ChatMessage[];
+      unverifiedChangesPending?: boolean;
+      objective?: ObjectiveLedger | null;
+      findings?: readonly string[] | null;
+      history?: any;
+      providerRecovery?: DurableTaskState["providerRecovery"];
+      operation?: DurableTaskState["operation"];
+      changeBaseline?: DurableTaskState["changeBaseline"];
+    },
     readArchive: (committed?: ReadonlySet<string>) => ArchiveRead<ChatMessage>,
   ): string | undefined {
-    this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings);
+    this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
     this.restoreHistory(session.history);
     const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
     const read = readArchive(committed);

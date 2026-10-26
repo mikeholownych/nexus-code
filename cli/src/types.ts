@@ -70,6 +70,7 @@ export interface HarnessConfig {
   coreBinaryPath?: string;   // Path to compiled harness-core executable
   dryRun?: boolean;          // Dry-run simulation mode without persisting file modifications
   readOnly?: boolean;        // Reject all mutating tool executions and commands
+  readOnlyModeSelected?: boolean; // Read-only is mode-selected (not the explicit --read-only launch) and may be changed deliberately
   approvalMode?: "auto" | "review" | "read-only"; // Permission posture: auto, review, or read-only (DEC-01, independent of folder trust)
   yes?: boolean;             // Run non-interactively without confirmation prompts (forces auto mode)
   fullAccess?: boolean;      // Broad full-access mode executing without confirmation prompts (AUTH-007, AUTH-008)
