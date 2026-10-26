@@ -512,6 +512,65 @@ describe("connecting from the picker", () => {
     }
   });
 
+  test("sidecar: failed local settings persistence restores the exact credential state", async () => {
+    const noPrior = await mock((s, res) => json(res, s.headers.authorization === "Bearer pending-no-prior" ? 200 : 401, { data: [{ id: "model-a" }] }));
+    const prior = await mock((s, res) => json(res, s.headers.authorization === "Bearer pending-with-prior" ? 200 : 401, { data: [{ id: "model-b" }] }));
+    const repo = makeRepo();
+    const configDir = path.join(home, ".config/nexus");
+    fs.mkdirSync(configDir, { recursive: true });
+    const configTarget = path.join(home, "previous-config.env");
+    const previousConfig = 'LOCAL_LLM_ENDPOINT="http://127.0.0.1:9/v1"\nLOCAL_LLM_MODEL="previous-model"\n';
+    fs.writeFileSync(configTarget, previousConfig, { mode: 0o600 });
+    const configFile = path.join(configDir, "config.env");
+    fs.symlinkSync(configTarget, configFile);
+    const app = new ApplicationCore({ endpoint: "http://127.0.0.1:9/v1", model: "previous-model", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash" } as any);
+    const lines: string[] = [];
+    const server = new SidecarServer({ app, mode: "auto", write: (line) => lines.push(line) });
+    server.start();
+    const events = () => lines.map((line) => JSON.parse(line));
+    const send = (message: Record<string, unknown>) => server.handleLine(JSON.stringify({ v: 1, ...message }));
+    let sequence = 0;
+    const waitFor = async (predicate: (event: any) => boolean) => {
+      for (let i = 0; i < 200; i++) {
+        const found = events().find(predicate);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.fail("event not seen");
+    };
+    const choosePendingModel = async (endpoint: string, key: string, model: string) => {
+      const n = ++sequence;
+      await send({ type: "provider.connect", id: `connect-${n}`, provider: "appliance", method: "local-endpoint", endpoint, key });
+      assert.equal((await waitFor((event) => event.type === "provider.result" && event.id === `connect-${n}`)).success, true);
+      await send({ type: "models.list", id: `models-${n}` });
+      const catalog = await waitFor((event) => event.type === "models.catalog" && event.id === `models-${n}`);
+      assert.ok(catalog.models.some((entry: any) => entry.provider === "appliance" && entry.id === model));
+      await send({ type: "model.select", id: `select-${n}`, provider: "appliance", model });
+      const result = await waitFor((event) => event.type === "model.result" && event.id === `select-${n}`);
+      assert.equal(result.success, false, "the config.env symlink must reject persistence");
+    };
+    try {
+      assert.equal(fs.existsSync(credentialsPath()), false);
+      await choosePendingModel(`${noPrior.url}/v1`, "pending-no-prior", "model-a");
+      assert.equal(fs.existsSync(credentialsPath()), false, "a new credential store is removed after failed settings persistence");
+      assert.equal(localEndpointCredential(`${noPrior.url}/v1`), undefined);
+
+      const priorEndpoint = `${prior.url}/v1`;
+      assert.equal(saveLocalEndpointCredential(priorEndpoint, "pre-existing-secret"), true);
+      const priorStore = fs.readFileSync(credentialsPath(), "utf8");
+      const priorEntry = JSON.parse(priorStore).providers[`nexus-local-endpoint:${prior.url}`];
+      await choosePendingModel(priorEndpoint, "pending-with-prior", "model-b");
+      assert.equal(fs.readlinkSync(configFile), configTarget);
+      assert.equal(fs.readFileSync(configTarget, "utf8"), previousConfig);
+      assert.equal(fs.readFileSync(credentialsPath(), "utf8"), priorStore, "rollback preserves the pre-existing credential store byte-for-byte");
+      assert.deepEqual(JSON.parse(fs.readFileSync(credentialsPath(), "utf8")).providers[`nexus-local-endpoint:${prior.url}`], priorEntry);
+    } finally {
+      await server.shutdown();
+      await noPrior.close();
+      await prior.close();
+    }
+  });
+
   test("sidecar: cancelling provisional local setup preserves prior selection and does not store its key", async () => {
     const oldEndpoint = await mock((_s, res) => json(res, 200, { data: [{ id: "old-model" }] }));
     const local = await mock((s, res) => json(res, s.headers.authorization === "Bearer pending-secret" ? 200 : 401, { data: [{ id: "pending-model" }] }));

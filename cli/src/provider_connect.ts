@@ -4,7 +4,7 @@
  * credential and then verified. Nothing here prints or returns a credential.
  */
 import { InferenceError, LocalLlmClient } from "./client.js";
-import { removeCredential, resolveCredential, saveCredential, saveLocalEndpointCredential, type StoredCredential } from "./credentials.js";
+import { commitLocalEndpointSetup, removeCredential, resolveCredential, saveCredential, saveLocalEndpointCredential, type StoredCredential } from "./credentials.js";
 import { APPLIANCE, applianceConfig, connectionOf, providerConfig, recordRecent, type ModelRef } from "./model_catalog.js";
 import { openBrowser, startAuthFlow, type AuthPrompt } from "./oauth.js";
 import { originOf, providerDefinition } from "./providers.js";
@@ -208,10 +208,12 @@ export function selectModel(agent: AutonomousAgent, config: HarnessConfig, ref: 
     if (pendingSelection?.persistModelOnSelection && originOf(a.endpoint) === originOf(pendingSelection.endpoint)) {
       try {
         const pendingKey = pendingApplianceEndpointKey(a.endpoint);
-        if (pendingKey && !saveLocalEndpointCredential(a.endpoint, pendingKey)) {
-          return { ok: false, message: "The endpoint was verified, but Nexus could not securely save the API key." };
+        if (pendingKey) {
+          const committed = commitLocalEndpointSetup(a.endpoint, pendingKey, () => saveLocalEndpointSettings(a.endpoint, model));
+          if (!committed) return { ok: false, message: "The endpoint was verified, but Nexus could not securely save the API key." };
+        } else {
+          saveLocalEndpointSettings(a.endpoint, model);
         }
-        saveLocalEndpointSettings(a.endpoint, model);
         activateApplianceEndpoint(a.endpoint, model, false);
       } catch {
         return { ok: false, message: "The model is available for this session, but Nexus could not securely save the selection." };

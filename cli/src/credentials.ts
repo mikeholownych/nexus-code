@@ -66,6 +66,36 @@ export function saveLocalEndpointCredential(endpoint: string, key: string): bool
   return true;
 }
 
+/** Save a verified endpoint key and its selected model as one failure-atomic setup operation. */
+export function commitLocalEndpointSetup(endpoint: string, key: string, commitSettings: () => void): boolean {
+  const id = localEndpointCredentialId(endpoint);
+  const value = key.trim();
+  if (!id || !value || /[\r\n]/.test(value)) return false;
+
+  const file = credentialsPath();
+  const hadStore = fs.existsSync(file);
+  const previous = readStore().providers[id];
+  try {
+    saveCredential(id, { type: "api", key: value, savedAt: now() });
+    commitSettings();
+    return true;
+  } catch (error) {
+    try {
+      if (previous) {
+        saveCredential(id, previous);
+      } else {
+        removeCredential(id);
+        if (!hadStore && Object.keys(readStore().providers).length === 0) {
+          try { fs.unlinkSync(file); } catch (unlinkError: any) { if (unlinkError?.code !== "ENOENT") throw unlinkError; }
+        }
+      }
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], "Local endpoint setup failed and its saved credential could not be restored.");
+    }
+    throw error;
+  }
+}
+
 export function localEndpointCredential(endpoint: string): { origin: string; key: string } | undefined {
   const id = localEndpointCredentialId(endpoint);
   if (!id) return undefined;
