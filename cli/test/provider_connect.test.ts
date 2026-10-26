@@ -482,6 +482,36 @@ describe("connecting from the picker", () => {
     assert.equal(fs.readFileSync(configFile, "utf8"), before, "an invalid binding must be repaired before endpoint mutation");
   });
 
+  test("a valid operator credential outranks a different installation key without changing origin", () => {
+    const previous = process.env.LOCAL_LLM_API_KEY;
+    const origin = "http://old-endpoint.invalid";
+    try {
+      process.env.LOCAL_LLM_API_KEY = "installation-key";
+      setCredentialAuthority({ LOCAL_LLM_API_KEY: "operator-key", LOCAL_LLM_CREDENTIAL_ORIGIN: origin }, home);
+      const config = buildConfig({ endpoint: "http://replacement.invalid/v1" });
+      assert.equal(config.apiKey, "operator-key");
+      assert.equal(config.credentialOrigin, origin);
+    } finally {
+      if (previous === undefined) delete process.env.LOCAL_LLM_API_KEY;
+      else process.env.LOCAL_LLM_API_KEY = previous;
+    }
+  });
+
+  test("a malformed operator binding still allows a distinct project credential", () => {
+    const previous = process.env.LOCAL_LLM_API_KEY;
+    const endpoint = "http://project-endpoint.invalid/v1";
+    try {
+      process.env.LOCAL_LLM_API_KEY = "project-key";
+      setCredentialAuthority({ LOCAL_LLM_API_KEY: "legacy-origin-key", LOCAL_LLM_CREDENTIAL_ORIGIN: "not a valid origin" }, home);
+      const config = buildConfig({ endpoint });
+      assert.equal(config.apiKey, "project-key");
+      assert.equal(config.credentialOrigin, new URL(endpoint).origin);
+    } finally {
+      if (previous === undefined) delete process.env.LOCAL_LLM_API_KEY;
+      else process.env.LOCAL_LLM_API_KEY = previous;
+    }
+  });
+
   test("settings permission failure leaves the prior config.env untouched", () => {
     const configFile = write(".config/nexus/config.env", 'LOCAL_LLM_ENDPOINT="http://127.0.0.1:1234/v1"\nLOCAL_LLM_MODEL="prior-model"\n');
     const before = fs.readFileSync(configFile, "utf8");
