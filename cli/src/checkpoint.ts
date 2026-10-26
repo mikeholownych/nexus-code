@@ -307,6 +307,29 @@ export class CheckpointManager {
     return paths;
   }
 
+  private directoryHasCleanupPreservedEntries(directory: string): boolean {
+    const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (ignored.has(entry.name)) return true;
+      if (entry.isDirectory()) {
+        if (this.directoryHasCleanupPreservedEntries(path.join(directory, entry.name))) return true;
+      } else if (!entry.isFile() && !entry.isSymbolicLink()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private assertSnapshotTargetsReplaceable(relativePaths: string[]): void {
+    for (const relativePath of relativePaths) {
+      const targetPath = path.join(this.workspace, relativePath);
+      const stat = fs.lstatSync(targetPath, { throwIfNoEntry: false });
+      if (stat?.isDirectory() && this.directoryHasCleanupPreservedEntries(targetPath)) {
+        throw new Error("Checkpoint snapshot target directory contains entries preserved by cleanup");
+      }
+    }
+  }
+
   private removeNonSnapshotEntries(snapshotFiles: string[]): void {
     const retained = new Set(snapshotFiles);
     const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
@@ -320,7 +343,7 @@ export class CheckpointManager {
           if (fs.readdirSync(fullPath).length === 0 && ![...retained].some((file) => file.startsWith(entryPath + "/"))) {
             fs.rmdirSync(fullPath);
           }
-        } else if (!retained.has(entryPath)) {
+        } else if ((entry.isFile() || entry.isSymbolicLink()) && !retained.has(entryPath)) {
           fs.rmSync(fullPath, { force: true });
         }
       }
@@ -661,6 +684,7 @@ export class CheckpointManager {
         try {
           this.assertUntrackedSnapshotSafe(cp.untrackedFiles, cp.snapshotDir, cp.allowSensitive === true);
           this.assertUntrackedDestinationSafe([...cp.untrackedFiles, ...this.workspaceSnapshotPaths(this.workspace)], this.workspace);
+          this.assertSnapshotTargetsReplaceable(cp.untrackedFiles);
         } catch {
           return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an incomplete or unsafe snapshot or destination; workspace was not changed` };
         }

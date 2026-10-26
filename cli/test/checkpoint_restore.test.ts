@@ -648,3 +648,76 @@ test("legacy Git restore refuses an ignored untracked tracked-deletion collision
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("non-Git restore preserves a pre-checkpoint FIFO", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-fifo-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.writeFileSync(path.join(workspace, "a.txt"), "captured\n");
+    const fifo = path.join(workspace, "pre-existing.fifo");
+    execFileSync("mkfifo", [fifo]);
+    const checkpoint = manager.createCheckpoint("preserve FIFO");
+    fs.writeFileSync(path.join(workspace, "a.txt"), "changed later\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.readFileSync(path.join(workspace, "a.txt"), "utf8"), "captured\n");
+    assert.equal(fs.lstatSync(fifo).isFIFO(), true);
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("non-Git restore refuses a file target containing ignored entries before cleanup", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-file-target-ignored-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.writeFileSync(path.join(workspace, "a"), "captured file\n");
+    fs.writeFileSync(path.join(workspace, "other.txt"), "captured other\n");
+    const checkpoint = manager.createCheckpoint("ignored file target obstruction");
+    fs.rmSync(path.join(workspace, "a"));
+    fs.mkdirSync(path.join(workspace, "a", "node_modules"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "a", "node_modules", "keep"), "ignored canary\n");
+    fs.writeFileSync(path.join(workspace, "other.txt"), "workspace canary\n");
+    fs.writeFileSync(path.join(workspace, "later.txt"), "post-checkpoint canary\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(workspace, "a", "node_modules", "keep"), "utf8"), "ignored canary\n");
+    assert.equal(fs.readFileSync(path.join(workspace, "other.txt"), "utf8"), "workspace canary\n");
+    assert.equal(fs.readFileSync(path.join(workspace, "later.txt"), "utf8"), "post-checkpoint canary\n");
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("non-Git restore refuses a file target containing a FIFO before cleanup", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-file-target-fifo-"));
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.writeFileSync(path.join(workspace, "a"), "captured file\n");
+    fs.writeFileSync(path.join(workspace, "other.txt"), "captured other\n");
+    const checkpoint = manager.createCheckpoint("FIFO file target obstruction");
+    fs.rmSync(path.join(workspace, "a"));
+    fs.mkdirSync(path.join(workspace, "a"));
+    execFileSync("mkfifo", [path.join(workspace, "a", "obstruction.fifo")]);
+    fs.writeFileSync(path.join(workspace, "other.txt"), "workspace canary\n");
+    fs.writeFileSync(path.join(workspace, "later.txt"), "post-checkpoint canary\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.lstatSync(path.join(workspace, "a", "obstruction.fifo")).isFIFO(), true);
+    assert.equal(fs.readFileSync(path.join(workspace, "other.txt"), "utf8"), "workspace canary\n");
+    assert.equal(fs.readFileSync(path.join(workspace, "later.txt"), "utf8"), "post-checkpoint canary\n");
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
