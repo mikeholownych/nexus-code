@@ -320,7 +320,7 @@ export function buildConfig(options: any): HarnessConfig {
   const operatorKey = operatorSetting("LOCAL_LLM_API_KEY");
   const projectApiKey = effectiveSetting("LOCAL_LLM_API_KEY");
   const envCredential = options.apiKey || provider ? undefined : environmentCredential(options.endpoint || DEFAULT_ENDPOINT);
-  const apiKey = options.apiKey || (provider ? providerKey(provider) : provisionalKey || operatorKey || projectApiKey || envCredential?.apiKey) || "local";
+  const apiKey = options.apiKey || (provider ? providerKey(provider) : provisionalKey || (operatorKey ? envCredential?.apiKey : projectApiKey)) || "local";
   const credentialOrigin = apiKey === "local" ? undefined : options.apiKey || provider || provisionalKey ? credentialOriginOf(endpoint) : (operatorKey ? envCredential?.origin : (projectApiKey ? credentialOriginOf(endpoint) : envCredential?.origin));
   const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;

@@ -459,11 +459,19 @@ describe("connecting from the picker", () => {
     }
   });
 
-  test("a malformed credential origin cannot fall back to and bind a legacy key to the selected endpoint", () => {
-    const endpoint = "http://127.0.0.1:5432/v1";
+  test("a malformed credential origin cannot fall back to and bind a legacy key to the selected endpoint", async () => {
+    const selected = await mock((_s, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ data: [] })); });
+    const endpoint = `${selected.url}/v1`;
     operator({ LOCAL_LLM_ENDPOINT: endpoint, LOCAL_LLM_API_KEY: "legacy-origin-key", LOCAL_LLM_CREDENTIAL_ORIGIN: "not a valid origin" });
     assert.equal(storedCredentialFor(endpoint), null);
     assert.equal(environmentCredential(endpoint), undefined, "an invalid explicit binding must not become the key's new origin");
+
+    try {
+      await new LocalLlmClient(buildConfig({ endpoint })).listModels();
+      assert.deepEqual(selected.seen.map((request) => request.headers.authorization), ["Bearer not-needed"], "the selected endpoint never receives the unbound key");
+    } finally {
+      await selected.close();
+    }
 
     const configFile = write(".config/nexus/config.env", `LOCAL_LLM_ENDPOINT=${JSON.stringify(endpoint)}\nLOCAL_LLM_API_KEY=legacy-origin-key\nLOCAL_LLM_CREDENTIAL_ORIGIN="not a valid origin"\n`);
     setCredentialAuthority({}, home);
