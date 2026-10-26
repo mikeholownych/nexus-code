@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
+import { parse as parseDotenv } from "dotenv";
 import { parseAdmissionHeaders, parseAdvertisement, parseServerContext, parseTokenizeResponse, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
@@ -52,14 +53,10 @@ export function credentialOriginOf(endpoint: string | undefined): string | undef
 }
 
 function readConfigEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
   try {
-    for (const line of fs.readFileSync(path.join(credentialStorageHome(), ".config/nexus/config.env"), "utf-8").split("\n")) {
-      const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-      if (m) out[m[1]] = m[2].trim();
-    }
+    return parseDotenv(fs.readFileSync(path.join(credentialStorageHome(), ".config/nexus/config.env"), "utf-8"));
   } catch {}
-  return out;
+  return {};
 }
 
 /**
@@ -115,8 +112,15 @@ setLocalityAuthorityResolver(operatorSetting);
 /** Origins that stored credentials belong to, and the operator-environment key with its own origin. */
 function storedCredentialHomes(): { gateway?: string; listed: Set<string>; envKey?: string; envKeyOrigin?: string } {
   const file = readConfigEnv();
-  const envKeyOrigin = originOf(authoritySetting("LOCAL_LLM_ENDPOINT"));
-  const gateway = originOf(file.LOCAL_LLM_ENDPOINT) ?? envKeyOrigin;
+  // When a legacy config.env key was present before the endpoint changed, the setup writer records its original
+  // origin explicitly. Apply that binding to the merged operator key too: loadEnvironment() intentionally combines
+  // shell and config.env values, so deriving the key origin from the new endpoint would silently rebind the old key.
+  const envKeyOrigin = originOf(authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGIN"))
+    ?? originOf(authoritySetting("LOCAL_LLM_ENDPOINT"));
+  const gateway = originOf(authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGIN"))
+    ?? originOf(file.LOCAL_LLM_CREDENTIAL_ORIGIN)
+    ?? originOf(file.LOCAL_LLM_ENDPOINT)
+    ?? envKeyOrigin;
   const listed = new Set(
     (authoritySetting("LOCAL_LLM_CREDENTIAL_ORIGINS") ?? "").split(",").map((o) => originOf(o)).filter((o): o is string => Boolean(o)),
   );
@@ -527,6 +531,7 @@ export class LocalLlmClient {
   private exchangedToken?: OAuthCredential;
   private readonly authorizedOrigins: Set<string>;
   private readonly cloudRoutedOrigins: string[];
+  private readonly allowCredentialReload: boolean;
   private readonly workspace?: string;
   private readonly role: string;
   /** Output allowance sent as max_tokens on local endpoints; resized from provider capabilities (setOutputAllowance). */
@@ -553,6 +558,8 @@ export class LocalLlmClient {
       role?: string;
       /** Optional diagnostic sink for bounded command surfaces that must sanitize provider-controlled labels. */
       diagnosticHandler?: (level: "error" | "warn", message: string) => void;
+      /** Disable 401 fallback to stored credentials while explicitly verifying a replacement local endpoint key. */
+      allowCredentialReload?: boolean;
     }
   ) {
     this.conn = connectionFor(config.provider, config.model);
@@ -603,6 +610,7 @@ export class LocalLlmClient {
         .filter((o): o is string => Boolean(o)),
     );
     this.cloudRoutedOrigins = config.cloudRoutedOrigins ?? [];
+    this.allowCredentialReload = options?.allowCredentialReload !== false;
     this.workspace = config.workspace;
     this.role = options?.role ?? (config.taskClass === "subagent" ? "subagent" : "main");
     this.maxOutputTokens = config.completionReserveTokens ?? 8192;
@@ -991,6 +999,7 @@ export class LocalLlmClient {
 
   /** After a 401 from `url`: re-read that gateway's stored credential (rotation). Never borrows another provider's. */
   public reloadAuthToken(url: string = this.endpoints[this.activeEndpointIndex]): boolean {
+    if (!this.allowCredentialReload) return false;
     const origin = originOf(url);
     if (!origin || this.conn.providerId) return false;
     const fresh = storedCredentialFor(url);

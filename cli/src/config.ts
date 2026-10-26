@@ -1,4 +1,4 @@
-import * as fs from "node:fs";
+import fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,13 +173,25 @@ export function saveLocalEndpointSettings(endpoint: string, model?: string): voi
   } catch (error: any) {
     if (error?.code !== "ENOENT") throw error;
   }
+  const existingSettings = parseDotenv(existing);
+  const previousEndpoint = existingSettings.LOCAL_LLM_ENDPOINT ?? operatorSetting("LOCAL_LLM_ENDPOINT");
+  const existingCredentialOrigin = existingSettings.LOCAL_LLM_CREDENTIAL_ORIGIN ?? operatorSetting("LOCAL_LLM_CREDENTIAL_ORIGIN");
+  const previousOrigin = originOf(previousEndpoint);
+  const nextOrigin = originOf(endpoint);
+  // Keep legacy LOCAL_LLM_API_KEY and gateway-token credentials bound to the endpoint they belonged to before
+  // the user changed the selection. New endpoint keys are stored separately by exact origin.
+  const preserveCredentialOrigin = !existingCredentialOrigin && previousOrigin && nextOrigin && previousOrigin !== nextOrigin
+    ? previousOrigin
+    : undefined;
   const keys = new Set(model === undefined ? ["LOCAL_LLM_ENDPOINT"] : ["LOCAL_LLM_ENDPOINT", "LOCAL_LLM_MODEL"]);
+  if (preserveCredentialOrigin) keys.add("LOCAL_LLM_CREDENTIAL_ORIGIN");
   const retained = existing.split(/\r?\n/).filter((line) => {
     const match = /^\s*(?:export\s+)?([A-Z0-9_]+)\s*=/.exec(line);
     return !match || !keys.has(match[1]);
   }).filter((line, index, lines) => line !== "" || index < lines.length - 1);
   const values = [`LOCAL_LLM_ENDPOINT=${JSON.stringify(endpoint)}`];
   if (model !== undefined) values.push(`LOCAL_LLM_MODEL=${JSON.stringify(model)}`);
+  if (preserveCredentialOrigin) values.push(`LOCAL_LLM_CREDENTIAL_ORIGIN=${JSON.stringify(preserveCredentialOrigin)}`);
   const contents = [...retained, ...values].join("\n").replace(/\n*$/, "\n");
   const temporary = `${configFile}.${process.pid}.${Date.now()}.tmp`;
   const fd = fs.openSync(temporary, "wx", 0o600);
@@ -190,8 +202,9 @@ export function saveLocalEndpointSettings(endpoint: string, model?: string): voi
     fs.closeSync(fd);
   }
   try {
+    // Set permissions before publishing the new file. A chmod failure must leave the old config intact.
+    fs.chmodSync(temporary, 0o600);
     fs.renameSync(temporary, configFile);
-    fs.chmodSync(configFile, 0o600);
   } catch (error) {
     try { fs.unlinkSync(temporary); } catch {}
     throw error;

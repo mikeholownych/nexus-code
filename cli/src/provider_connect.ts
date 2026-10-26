@@ -4,10 +4,10 @@
  * credential and then verified. Nothing here prints or returns a credential.
  */
 import { InferenceError, LocalLlmClient } from "./client.js";
-import { commitLocalEndpointSetup, removeCredential, resolveCredential, saveCredential, saveLocalEndpointCredential, type StoredCredential } from "./credentials.js";
+import { commitLocalEndpointSetup, removeCredential, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
 import { APPLIANCE, applianceConfig, connectionOf, providerConfig, recordRecent, type ModelRef } from "./model_catalog.js";
 import { openBrowser, startAuthFlow, type AuthPrompt } from "./oauth.js";
-import { originOf, providerDefinition } from "./providers.js";
+import { disclosureClass, originOf, providerDefinition } from "./providers.js";
 import { activateApplianceEndpoint, applianceEndpointSelection, pendingApplianceEndpointKey, resetApplianceEndpointOverride, saveLocalEndpointSettings } from "./config.js";
 import type { HarnessConfig } from "./types.js";
 import type { AutonomousAgent } from "./agent.js";
@@ -118,13 +118,19 @@ export async function prepareLocalEndpoint(base: HarnessConfig, endpointInput: s
   const request = { cancelled: false };
   if (requestId) localEndpointSetupRequests.set(requestId, request);
   try {
-    const models = await new LocalLlmClient(localEndpointConfig(base, parsed.endpoint, parsed.origin, key)).listModels();
+    const models = await new LocalLlmClient(localEndpointConfig(base, parsed.endpoint, parsed.origin, key), { allowCredentialReload: false }).listModels();
     if (request.cancelled) return { ok: false, cancelled: true, message: "Local endpoint setup was cancelled." };
     const available = models.filter((model) => /^[A-Za-z0-9._:/@+-]{1,160}$/.test(model));
     if (available.length === 0) return { ok: false, message: "That endpoint returned no usable chat models." };
     activateApplianceEndpoint(parsed.endpoint, undefined, true, key || undefined);
     provisionalLocalEndpointRequestId = requestId;
-    return { ok: true, message: `Local endpoint verified (${parsed.origin}; ${available.length} models found). Choose a model to save setup.` };
+    const disclosure = disclosureClass(parsed.endpoint, undefined, base.cloudRoutedOrigins);
+    return {
+      ok: true,
+      message: disclosure === "cloud"
+        ? `Cloud endpoint verified (${available.length} models found). Choosing a model will send task content to this endpoint.`
+        : `Local endpoint verified (${available.length} models found). Choose a model to save setup.`,
+    };
   } catch {
     if (request.cancelled) return { ok: false, cancelled: true, message: "Local endpoint setup was cancelled." };
     return { ok: false, message: "Could not list models from that endpoint. Check the URL and API key, then try again." };
@@ -152,7 +158,7 @@ export async function connectLocalEndpoint(
   const config = localEndpointConfig(base, endpoint, origin, key);
   let models: string[];
   try {
-    models = await new LocalLlmClient(config).listModels();
+    models = await new LocalLlmClient(config, { allowCredentialReload: false }).listModels();
   } catch {
     return { ok: false, message: "Could not list models from that endpoint. Check the URL and API key, then try again.", models: [] };
   }
@@ -165,19 +171,22 @@ export async function connectLocalEndpoint(
     return { ok: false, message: "Choose a model returned by the endpoint's model list.", models: available };
   }
   try {
-    // Persist non-secret selection first. The optional key is kept separately in Nexus's owner-only credential store.
-    saveLocalEndpointSettings(endpoint, model);
+    if (key) {
+      if (!commitLocalEndpointSetup(endpoint, key, () => saveLocalEndpointSettings(endpoint, model))) {
+        return { ok: false, message: "Nexus could not securely save the endpoint setup.", models: available };
+      }
+    } else {
+      saveLocalEndpointSettings(endpoint, model);
+    }
   } catch {
-    return { ok: false, message: "Models were discovered, but Nexus could not securely save the endpoint selection.", models: available };
-  }
-  if (key && !saveLocalEndpointCredential(origin, key)) {
-    return { ok: false, message: "The endpoint and model were saved, but Nexus could not securely save the API key.", models: available };
+    return { ok: false, message: "Models were discovered, but Nexus could not securely save the endpoint setup.", models: available };
   }
   activateApplianceEndpoint(endpoint, model, false);
   provisionalLocalEndpointRequestId = undefined;
+  const disclosure = disclosureClass(endpoint, undefined, base.cloudRoutedOrigins);
   return {
     ok: true,
-    message: `Local endpoint configured (${origin}; ${available.length} models available).${key ? " API key saved for this origin only." : " No API key was saved."}`,
+    message: `${disclosure === "cloud" ? "Cloud" : "Local"} endpoint configured (${available.length} models available).${key ? " API key saved for this origin only." : " No API key was saved."}`,
     models: available,
   };
 }
@@ -258,7 +267,13 @@ export function selectModel(agent: AutonomousAgent, config: HarnessConfig, ref: 
       authorizedDisclosureOrigins: [...new Set([...(config.authorizedDisclosureOrigins ?? []), ...(a.authorizedDisclosureOrigins ?? []), ...(originOf(a.endpoint) ? [originOf(a.endpoint)!] : [])])],
     });
     recordRecent({ provider: APPLIANCE, model });
-    return { ok: true, message: `Model: ${model} on the appliance.` };
+    const disclosure = disclosureClass(a.endpoint, undefined, config.cloudRoutedOrigins);
+    return {
+      ok: true,
+      message: disclosure === "cloud"
+        ? `Model: ${model} via the configured endpoint. Task content will be sent there.`
+        : `Model: ${model} on the local appliance.`,
+    };
   }
   const def = providerDefinition(ref.provider);
   if (!def) return { ok: false, message: `Unknown provider '${ref.provider}'.` };

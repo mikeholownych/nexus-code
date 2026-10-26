@@ -16,7 +16,7 @@ import { commitLocalEndpointSetup, credentialsPath, localEndpointCredential, rem
 import { setOAuthEndpoints, startAuthFlow } from "../src/oauth.js";
 import { connectLocalEndpoint, connectWithKey, disconnect, prepareLocalEndpoint } from "../src/provider_connect.js";
 import { buildCatalog } from "../src/model_catalog.js";
-import { buildConfig, resetApplianceEndpointOverride } from "../src/config.js";
+import { buildConfig, resetApplianceEndpointOverride, saveLocalEndpointSettings } from "../src/config.js";
 import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
 import { UsageLedger } from "../src/usage.js";
@@ -53,7 +53,7 @@ const responsesDone = (text: string) => [
 ];
 const chatDone = (text: string) => [{ choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }] }, "[DONE]"];
 
-const ENV = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NEXUS_PROVIDER", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_MODEL", "LOCAL_LLM_API_KEY", "NEXUS_NO_BROWSER"];
+const ENV = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NEXUS_PROVIDER", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_MODEL", "LOCAL_LLM_API_KEY", "LOCAL_LLM_CREDENTIAL_ORIGIN", "NEXUS_NO_BROWSER"];
 let home: string;
 let saved: Record<string, string | undefined>;
 beforeEach(() => {
@@ -359,6 +359,39 @@ describe("connecting from the picker", () => {
     }
   });
 
+  test("local setup result does not echo a credential-bearing endpoint path or API key", async () => {
+    const key = "endpoint-path-key";
+    const local = await mock((s, res) => json(res, s.headers.authorization === `Bearer ${key}` ? 200 : 401, { data: [{ id: "safe-model" }] }));
+    const endpoint = `${local.url}/tenant/endpoint-path-secret/v1`;
+    try {
+      const result = await connectLocalEndpoint(cfg(), endpoint, "safe-model", key);
+      assert.equal(result.ok, true, result.message);
+      assert.doesNotMatch(result.message, /endpoint-path-secret|endpoint-path-key|127\.0\.0\.1/);
+      assert.ok(local.seen.length >= 1, "the endpoint was actually verified");
+    } finally {
+      await local.close();
+    }
+  });
+
+  test("CLI local setup catches persistence failure and leaves prior config and credentials unchanged", async () => {
+    const local = await mock((s, res) => json(res, s.headers.authorization === "Bearer cli-pending-key" ? 200 : 401, { data: [{ id: "safe-model" }] }));
+    const configDir = path.join(home, ".config/nexus");
+    fs.mkdirSync(configDir, { recursive: true });
+    const target = path.join(home, "prior-config.env");
+    const previous = 'LOCAL_LLM_ENDPOINT="http://127.0.0.1:9/v1"\nLOCAL_LLM_MODEL="prior-model"\n';
+    fs.writeFileSync(target, previous, { mode: 0o600 });
+    fs.symlinkSync(target, path.join(configDir, "config.env"));
+    try {
+      const result = await connectLocalEndpoint(cfg(), `${local.url}/v1`, "safe-model", "cli-pending-key");
+      assert.equal(result.ok, false, "the CLI flow returns a safe failure instead of throwing");
+      assert.doesNotMatch(result.message, /cli-pending-key|127\.0\.0\.1/);
+      assert.equal(fs.readFileSync(target, "utf8"), previous);
+      assert.equal(fs.existsSync(credentialsPath()), false, "the uncommitted key is rolled back");
+    } finally {
+      await local.close();
+    }
+  });
+
   test("local endpoint credentials are never forwarded through redirects", async () => {
     const target = await mock((_s, res) => json(res, 200, { data: [{ id: "redirect-target-model" }] }));
     const source = await mock((_s, res) => {
@@ -377,6 +410,54 @@ describe("connecting from the picker", () => {
     } finally {
       await source.close();
       await target.close();
+    }
+  });
+
+  test("local setup rejects an invalid replacement key without retrying the prior saved key", async () => {
+    const endpoint = await mock((s, res) => json(res, s.headers.authorization === "Bearer existing-valid-key" ? 200 : 401, { data: [{ id: "model-a" }] }));
+    const url = `${endpoint.url}/v1`;
+    operator({ LOCAL_LLM_ENDPOINT: url });
+    assert.equal(saveLocalEndpointCredential(url, "existing-valid-key"), true);
+    try {
+      const result = await prepareLocalEndpoint(cfg(), url, "invalid-replacement-key", "invalid-replacement");
+      assert.equal(result.ok, false, "verification must reject the newly supplied key, not accept an old key after 401");
+      assert.deepEqual(endpoint.seen.map((request) => request.headers.authorization), ["Bearer invalid-replacement-key"]);
+      assert.equal(localEndpointCredential(url)?.key, "existing-valid-key", "failed verification must preserve the prior credential");
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  test("changing the local endpoint does not rebind a config.env key to the new origin", () => {
+    const oldEndpoint = "http://127.0.0.1:4321/v1";
+    const newEndpoint = "http://127.0.0.1:5432/v1";
+    const configFile = write(".config/nexus/config.env", `LOCAL_LLM_ENDPOINT=${JSON.stringify(oldEndpoint)}\nLOCAL_LLM_API_KEY=legacy-old-origin-key\n`);
+    setCredentialAuthority({ LOCAL_LLM_ENDPOINT: oldEndpoint, LOCAL_LLM_API_KEY: "legacy-old-origin-key" }, home);
+    assert.equal(storedCredentialFor(oldEndpoint), "legacy-old-origin-key");
+
+    saveLocalEndpointSettings(newEndpoint, "new-model");
+    setCredentialAuthority({
+      LOCAL_LLM_ENDPOINT: newEndpoint,
+      LOCAL_LLM_API_KEY: "legacy-old-origin-key",
+      LOCAL_LLM_CREDENTIAL_ORIGIN: "http://127.0.0.1:4321",
+    }, home);
+
+    assert.equal(storedCredentialFor(newEndpoint), null, "the legacy key must not follow the changed endpoint");
+    assert.equal(storedCredentialFor(oldEndpoint), "legacy-old-origin-key", "the legacy key remains usable only at its original origin");
+    assert.match(fs.readFileSync(configFile, "utf8"), /LOCAL_LLM_CREDENTIAL_ORIGIN="http:\/\/127\.0\.0\.1:4321"/);
+  });
+
+  test("settings permission failure leaves the prior config.env untouched", () => {
+    const configFile = write(".config/nexus/config.env", 'LOCAL_LLM_ENDPOINT="http://127.0.0.1:1234/v1"\nLOCAL_LLM_MODEL="prior-model"\n');
+    const before = fs.readFileSync(configFile, "utf8");
+    const chmod = fs.chmodSync;
+    (fs as any).chmodSync = () => { throw new Error("synthetic chmod failure"); };
+    try {
+      assert.throws(() => saveLocalEndpointSettings("http://127.0.0.1:4321/v1", "new-model"), /synthetic chmod failure/);
+      assert.equal(fs.readFileSync(configFile, "utf8"), before, "a failure before final rename cannot replace existing settings");
+      assert.equal(fs.readdirSync(path.dirname(configFile)).some((name) => name.endsWith(".tmp")), false, "failed temporary files are cleaned up");
+    } finally {
+      (fs as any).chmodSync = chmod;
     }
   });
 
@@ -437,6 +518,47 @@ describe("connecting from the picker", () => {
       assert.equal(orEntry.status, "cached");
       assert.ok(second.models.some((m) => m.id === "anthropic/claude-x"), "offline: last good list");
     } finally { await appliance.close(); await or.close(); }
+  });
+
+  test("the appliance model cache is isolated by endpoint origin", async () => {
+    const endpoint = await mock((s, res) => {
+      if (s.path === "/tenant-a/v1/models") return json(res, 200, { data: [{ id: "first-origin-model" }] });
+      return json(res, 503, {});
+    });
+    try {
+      operator({ LOCAL_LLM_ENDPOINT: `${endpoint.url}/tenant-a/v1` });
+      const first = await buildCatalog(cfg(), { timeoutMs: 500 });
+      assert.ok(first.models.some((model) => model.id === "first-origin-model"));
+
+      operator({ LOCAL_LLM_ENDPOINT: `${endpoint.url}/tenant-b/v1` });
+      const second = await buildCatalog(cfg(), { timeoutMs: 500 });
+      const appliance = second.providers.find((provider) => provider.id === "appliance")!;
+      assert.equal(appliance.status, "error");
+      assert.equal(second.models.some((model) => model.id === "first-origin-model"), false, "an offline new endpoint cannot inherit another endpoint's model cache");
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  test("the catalog discloses when a configured appliance endpoint is cloud-routed", async () => {
+    const originalFetch = globalThis.fetch;
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      requested.push(String(input));
+      return new Response(JSON.stringify({ data: [{ id: "cloud-model" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const endpoint = "https://api.openai.com/v1";
+      const prepared = await prepareLocalEndpoint(cfg(), endpoint, undefined, "cloud-appliance-setup");
+      assert.equal(prepared.ok, true, prepared.message);
+      assert.match(prepared.message, /Cloud endpoint verified.*send task content/);
+      const catalog = await buildCatalog(cfg());
+      const appliance = catalog.providers.find((provider) => provider.id === "appliance")!;
+      assert.equal(appliance.disclosure, "cloud");
+      assert.ok(requested.some((url) => url === `${endpoint}/models`));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("sidecar: models.list, provider.connect with a key, model.select switches the session to the provider", async () => {
