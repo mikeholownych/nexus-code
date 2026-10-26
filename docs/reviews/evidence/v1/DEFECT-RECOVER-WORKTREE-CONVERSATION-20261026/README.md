@@ -32,7 +32,8 @@ The first also fails on the pre-PR246 base `62e541c`; the second and third behav
    posture, and the switch is still gated on `worktreeStatus === "consistent"`.
 2. `checkpointDurableState` now writes the primary workspace identity (`primaryWorkspacePathIdentity`) whenever a
    worktree is active; the `worktreeBinding` continues to name the active checkout. The record therefore keeps the
-   repository-root identity that `--resume`, `listTasks` and retention resolve against.
+   repository-root identity that `--resume` and `listTasks({workspace: root})` resolve against (retention reads the
+   field only for reporting and its `/tmp/nexus-test-*` pollution heuristic).
 3. `recoverFromTaskState` records `originalWorkspace` from the primary identity before switching, so `/merge` and
    `/discard` return the agent to the checkout it was resumed from.
 
@@ -41,11 +42,12 @@ keeps using the current workspace identity exactly as before.
 
 ## Verification
 
-- Three regressions fail on base `468646b` and pass at HEAD. Each behaviour was also re-checked in isolation by
-  reverting only its fix: reverting the reorder fails test 1, reverting the checkpoint identity fails test 2, and
-  reverting the `originalWorkspace` line fails test 3.
-- Test 2 additionally re-recovers through a **third** fresh process after the resumed turn checkpointed, asserting the
-  conversation and worktree switch survive and the record no longer mismatches the repository root.
+- Three regressions fail on base `468646b` and pass at HEAD. Each behaviour was also re-checked by reverting only its
+  fix: reverting the reorder fails tests 1 and 2 (test 2 also asserts the restored conversation), reverting the
+  checkpoint identity fails only test 2, and reverting the `originalWorkspace` line fails only test 3.
+- Test 2 additionally re-recovers through a **third fresh `AutonomousAgent` in the same process** (state re-read from
+  disk) after the resumed turn checkpointed, asserting the conversation and worktree switch survive and the record no
+  longer mismatches the repository root.
 - Test 3 discards the recovered worktree through the public API and asserts the workspace returns to the primary
   checkout and the worktree directory is gone.
 - Focused: `recover_worktree_conversation.test.ts` (3) + `state.test.ts` (11) + `system_journey.test.ts` (2) +
@@ -59,7 +61,17 @@ keeps using the current workspace identity exactly as before.
 
 - `worktreeStatus === "consistent"` only checks that the recorded path exists. Recovery still does not prove the
   directory is the expected linked worktree of the primary repository or that its branch matches the recorded branch.
-- Resuming **from inside** the internal `.nexus/worktrees/<taskId>` checkout is refused with a workspace-identity
-  mismatch because the durable identity is the repository root. The root is the supported resume entry point; the
-  internal checkout is not.
+- **Pre-fix records are not migrated.** A durable record written by an earlier build (including `5d03e7c`, where
+  `checkpointDurableState` still stored the internal worktree) keeps `workspacePath` = `.nexus/worktrees/<taskId>`.
+  At HEAD, resuming such a record from the repository root still fails with `WorkspaceIdentityMismatchError`, while
+  resuming it from inside the internal checkout succeeds but binds the `WorktreeManager` to that checkout, so
+  `/discard` cannot remove the real worktree. The defect-2 symptom therefore persists for in-flight pre-fix records
+  until a checkpoint is written at HEAD. v1.0.0 has not shipped, so no released-state migration is included here; a
+  one-time identity normalisation (record whose `workspacePath` equals its own managed worktree path → repository
+  root) would be the follow-up if pre-release records must survive.
+- The internal checkout is not a supported resume entry point: its runner records `workspacePath` as that checkout,
+  and `repl /resume` of a session saved inside the worktree re-enters it with no `activeWorktree`.
 - The worktree binding's `createdAt` is synthesised on recovery; it was already not persisted by `activeWorktree`.
+- "No behaviour changes without a worktree" differs by site: recovery is gated on the **binding**, while
+  `checkpointDurableState` is gated on **`activeWorktree`** (a live, unresolved worktree), which is the same
+  condition under which the old code recorded the worktree path.
