@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-26T19:00:00Z",
+  "acceptance": "ACC-PLAT E2 platform and installer lifecycle qualification",
+  "status": "PARTIAL",
+  "candidate": {
+    "tag": "v1.0.0-rc.9",
+    "sourceCommit": "4cae11cbc3b0eab9bd6f56df7cc34e946b5dc566",
+    "releaseWorkflowRun": "40370485753",
+    "archiveSha256": "35795d2b7639b68a541c512976d8bc7f251115ebdccf48f6b9cf5f98ef1af9bb",
+    "installerSha256": "5620d56ef6f8d637fc102ae2c8ea3b055effbc4069243a2df68b67520b1e2302"
+  },
+  "environments": {
+    "platforms": ["Ubuntu 22.04", "Ubuntu 24.04", "Debian 12", "Fedora 40"],
+    "containerUser": "uid/gid 10001",
+    "nodeNoneNode12Node20": "prepared E2 images; network disabled",
+    "node22": "prepared E2 images",
+    "node24": "prepared Node22 OS image with read-only Node v24.11.1 overlay; runtime binary SHA-256 5796fd9700e83170bc7ddfdf7f18858c794a9f91cb39dd6f9e95060b292f2563",
+    "imageIdentities": "prepared-images.json"
+  },
+  "results": {
+    "freshInstallAndUnsupportedRuntime": "20/20 platform-runtime combinations passed",
+    "alpha2UpgradeRollbackReinstall": "PASS",
+    "sameVersionRepair": "PASS",
+    "manualUninstallStateRetention": "PASS",
+    "checksumTamperRefusalNonMutation": "PASS",
+    "stateAndConfigBackupRestore": "PASS",
+    "incompatibleDowngradeRefusal": "PASS",
+    "brokenPackageStagingSelfTest": "PASS; existing RC9 and state unchanged",
+    "controlledUpdaterSIGKILLRecovery": "PASS; durable switched journal and backup were inspected, RC9 restored, failed target retained, retry idempotent; synthetic candidate only",
+    "doctor": "Zero stderr; install.build and engine.binary pass; no version warning. Exit 2 due absent endpoint and fresh state directories.",
+    "containerProvenance": "Not verified inside containers because trusted gh was absent; SHA256SUMS verified. Host attestation evidence is separate.",
+    "powerLossRecovery": "NOT TESTED"
+  },
+  "notRun": [
+    "no-version installation after stable v1.0.0 publication",
+    "physical power-loss recovery"
+  ],
+  "checksums": "SHA256SUMS"
+}

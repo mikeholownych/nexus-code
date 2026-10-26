@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-26T19:17:00Z",
+  "acceptance": "ACC-TUI-A11Y partial installed-RC probe",
+  "status": "FAIL_WITH_LIMITATIONS",
+  "candidate": {
+    "tag": "v1.0.0-rc.9",
+    "sourceCommit": "4cae11cbc3b0eab9bd6f56df7cc34e946b5dc566",
+    "releaseWorkflowRun": "40370485753",
+    "archiveSha256": "35795d2b7639b68a541c512976d8bc7f251115ebdccf48f6b9cf5f98ef1af9bb",
+    "installedManifestSha256": "4cf1b288892891c3db6135c8bb9919e4a21e871ef2c5be5c211e39fa13bde0e6"
+  },
+  "environment": {
+    "host": "mike-dev",
+    "osKernel": "Linux 6.8.0-147-generic x86_64",
+    "node": "v24.11.1",
+    "python": "3.12",
+    "pyte": "0.8.2",
+    "gateway": "synthetic loopback mock",
+    "workspace": "synthetic only"
+  },
+  "matrix": [
+    {"mode": "NO_COLOR=1", "term": "xterm-256color", "size": "40x14", "colorSgr": [], "states": ["idle", "approval"], "result": "PASS_SUBCASE"},
+    {"mode": "NO_COLOR=1", "term": "xterm-256color", "size": "100x30", "colorSgr": [], "states": ["idle", "approval"], "result": "PASS_SUBCASE"},
+    {"mode": "TERM=dumb; NO_COLOR unset", "term": "dumb", "size": "40x14", "colorSgr": ["39m", "49m", "59m"], "states": ["idle", "approval"], "result": "FAIL"},
+    {"mode": "TERM=dumb; NO_COLOR unset", "term": "dumb", "size": "100x30", "colorSgr": ["39m", "49m", "59m"], "states": ["idle", "approval"], "result": "FAIL"}
+  ],
+  "notEstablished": [
+    "all-state distinguishability",
+    "human five-terminal by three-size matrix",
+    "full ACC-TUI-A11Y acceptance"
+  ],
+  "rawEncoding": "Base64",
+  "checksums": "../SHA256SUMS"
+}

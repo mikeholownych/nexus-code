@@ -1,0 +1,32 @@
+
+===== idle @ 1.81s (40x14) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== approval @ 4.31s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Write hello.txt                       │
+│Proposed: create hello.txt · +1 −0    │
+│                                      │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + hi there                     │
+│                                      │
+│ y Approve   a All later   n Deny     │
+│y or n, or ←→ then enter              │
+╰──────────────────────────────────────╯
+
+ approval needed · y approve · n de…────
+›

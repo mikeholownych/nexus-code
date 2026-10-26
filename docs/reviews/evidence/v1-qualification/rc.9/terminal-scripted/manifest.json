@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-26T18:32:41Z",
+  "acceptance": "scripted installed-RC terminal scenarios only",
+  "status": "PASS_WITH_LIMITATIONS",
+  "candidate": {
+    "tag": "v1.0.0-rc.9",
+    "sourceCommit": "4cae11cbc3b0eab9bd6f56df7cc34e946b5dc566",
+    "releaseWorkflowRun": "40370485753",
+    "archive": "nexus-linux-x86_64-v1.0.0-rc.9.tar.gz",
+    "archiveSha256": "35795d2b7639b68a541c512976d8bc7f251115ebdccf48f6b9cf5f98ef1af9bb",
+    "installedProvenanceFile": ".provenance.json",
+    "installedManifestSha256": "4cf1b288892891c3db6135c8bb9919e4a21e871ef2c5be5c211e39fa13bde0e6"
+  },
+  "environment": {
+    "host": "mike-dev",
+    "osKernel": "Linux 6.8.0-147-generic x86_64",
+    "node": "v24.11.1",
+    "terminalHarness": "Python PTY with pyte 0.8.2; synthetic mock gateway",
+    "installedLauncher": "/var/tmp/nexus-rc9-install-home-4cae11c/.local/bin/nexus",
+    "workspaceData": "synthetic fixtures only"
+  },
+  "scenarioResults": {
+    "s1_startup_unreachable": "PASS",
+    "s2_approval_input_isolation_40x14": "PASS",
+    "s3_truthful_unverified_completion": "PASS",
+    "s4_streaming_cancel_ack": "PASS; three acknowledgments in 2.13-2.16 ms, within one 60 Hz frame",
+    "s5_streaming_cancel_idle": "PASS; idle within 5 s (2.21 s in the retained single-run log; all three measured runs also returned idle under 5 s)",
+    "s6_steering_applied": "PASS; steering present in next model request and both synthetic files created",
+    "s7_session_resume": "PASS",
+    "s8_cancel_during_tool_cleanup": "PASS; idle in 0.79 s, no scoped sleep survivor",
+    "s9_quit_during_tool_cleanup": "PASS; no scoped RC9 processes after quit",
+    "r1a_lone_enter_denied": "PASS",
+    "r1d_typed_ahead_y_denied": "PASS"
+  },
+  "accessibilityProbe": {
+    "status": "PARTIAL_WITH_TERM_DUMB_FAILURE",
+    "evidence": "accessibility/README.md",
+    "noColor": "PASS_SUBCASE at 40x14 and 100x30 with zero color SGR parameters",
+    "termDumb": "FAIL at 40x14 and 100x30; color reset SGR 39m, 49m, 59m observed with NO_COLOR unset",
+    "capturedStates": ["idle", "approval"],
+    "allStateAcceptance": "NOT_ESTABLISHED"
+  },
+  "notEstablished": [
+    "ACC-TUI-MANUAL five-terminal by three-size human matrix",
+    "complete all-state ACC-TUI-A11Y acceptance; TERM=dumb color-reset SGR criterion fails",
+    "power-loss recovery",
+    "provider and standalone qualification",
+    "held-out task-quality qualification",
+    "independent acceptance",
+    "stable v1.0.0 release acceptance"
+  ],
+  "rawOutputs": "scenario logs, PTY byte captures, decoded screens, and exact harness scripts are stored alongside this manifest",
+  "checksums": "SHA256SUMS",
+  "rawOutputEncoding": "Base64-encoded exact PTY byte streams use the .raw.b64 suffix; decoded screen transcripts are also retained."
+}

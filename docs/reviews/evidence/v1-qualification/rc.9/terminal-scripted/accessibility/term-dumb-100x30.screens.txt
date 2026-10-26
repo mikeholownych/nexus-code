@@ -1,0 +1,64 @@
+
+===== idle @ 1.02s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+
+
+
+
+
+
+
+
+
+
+
+
+                                              N E X U S
+
+                 Understand the work. Inspect the evidence. Keep the decision yours.
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== approval @ 4.25s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Write hello.txt                                                                                   │
+│Proposed: create hello.txt · +1 −0                                                                │
+│                                                                                                  │
+│ ▎ @@ −0,0 +1,1 @@                                                                                │
+│ ▎   1 + hi there                                                                                 │
+│                                                                                                  │
+│ y Approve   a Approve all later actions   n Deny                                                 │
+│y or n, or ←→ then enter · ↑↓ scroll the change                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · y approve · n deny (after a pause) ──────────────────────────────────────────────
+›

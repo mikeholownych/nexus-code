@@ -1,0 +1,64 @@
+
+===== timeout-denial @ 13.38s (100x30) =====
+
+ NEXUS  local engineering agent
+Describe the outcome you want. Nexus will show meaningful activity and keep full evidence in the ses
+sion.
+Type /help for commands · /tui for the session view
+
+mode: review · sandbox: off · workspace: trusted
+WORKSPACE  ws [git: master]  /var/tmp/nexus-rc9-pty-4cae11c/runs/r1a_rc9/ws
+MODEL      m  · review mode
+session session_20261026_181844_pi2e2dtm · 1 messages · bash
+
+
+[Notice] Nexus retention: automatic daily GC keeps state for 90 days or up to 2 GB (0 items / 0.0 MB
+ reclaimable). Run 'nexus gc --ack' or set NEXUS_GC=auto to enable automatic background cleanup.
+
+nexus ws:master ❯ create hello.txt
+✔ Nexus is considering the next step
+  · Writing file  hello.txt
+
+⚠
+  Action: Create/overwrite hello.txt (9 bytes)
+  Approve [y]es, [n]o, [d]iff preview, [a]lways allow session? [y/N/d/a]:
+
+  (keystrokes during grace window discarded)
+
+
+
+
+
+
+
+===== timeout-denial @ 16.81s (100x30) =====
+ NEXUS  local engineering agent
+Describe the outcome you want. Nexus will show meaningful activity and keep full evidence in the ses
+sion.
+Type /help for commands · /tui for the session view
+
+mode: review · sandbox: off · workspace: trusted
+WORKSPACE  ws [git: master]  /var/tmp/nexus-rc9-pty-4cae11c/runs/r1a_rc9/ws
+MODEL      m  · review mode
+session session_20261026_181940_sjvpxug4 · 1 messages · bash
+
+
+[Notice] Nexus retention: automatic daily GC keeps state for 90 days or up to 2 GB (0 items / 0.0 MB
+ reclaimable). Run 'nexus gc --ack' or set NEXUS_GC=auto to enable automatic background cleanup.
+
+nexus ws:master ❯ create hello.txt
+✔ Nexus is considering the next step
+  · Writing file  hello.txt
+
+⚠
+  Action: Create/overwrite hello.txt (9 bytes)
+
+⚠
+✔ Nexus is considering the next step
+
+💭  Assistant: Wrote hello.txt. 完 成  ✅  — naïve café 🎉
+
+
+✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+
+nexus ws:master *1 ❯
