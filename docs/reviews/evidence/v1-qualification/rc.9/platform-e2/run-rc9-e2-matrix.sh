@@ -4,7 +4,7 @@ root=/var/tmp/nexus-rc9-e2-4cae11c
 installer=/home/mike/nexus-wt/rc9-credential-origin-binding/install.sh
 platforms=(ubuntu-22-04 ubuntu-24-04 debian-12 fedora-40)
 for platform in "${platforms[@]}"; do
-  for runtime in nodenone node20; do
+  for runtime in nodenone node12 node20; do
     image="nexus-e2/${platform}-${runtime}:prep-182e8addeee0"
     log="$root/${platform}-${runtime}.log"
     echo "START ${platform} ${runtime} $(date -u +%FT%TZ)"

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-26T18:41:00Z",
-  "acceptance": "ACC-PLAT E2 fresh-install and unsupported-runtime preflight slice",
+  "recordedAt": "2026-10-26T19:00:00Z",
+  "acceptance": "ACC-PLAT E2 platform and installer lifecycle qualification",
   "status": "PARTIAL",
   "candidate": {
     "tag": "v1.0.0-rc.9",
@@ -12,32 +12,29 @@
   },
   "environments": {
     "platforms": ["Ubuntu 22.04", "Ubuntu 24.04", "Debian 12", "Fedora 40"],
-    "nodeNoneAnd20": "Prepared E2 images, network disabled",
-    "node22": "Prepared E2 images",
-    "node24": "Prepared Node 22 OS image with read-only Node v24.11.1 runtime overlay; runtime binary SHA-256 5796fd9700e83170bc7ddfdf7f18858c794a9f91cb39dd6f9e95060b292f2563",
-    "containerIdentity": "non-root uid/gid 10001; disposable container HOME",
-    "preparedImageLabels": "prepared-images.json"
+    "containerUser": "uid/gid 10001",
+    "nodeNoneNode12Node20": "prepared E2 images; network disabled",
+    "node22": "prepared E2 images",
+    "node24": "prepared Node22 OS image with read-only Node v24.11.1 overlay; runtime binary SHA-256 5796fd9700e83170bc7ddfdf7f18858c794a9f91cb39dd6f9e95060b292f2563",
+    "imageIdentities": "prepared-images.json"
   },
   "results": {
-    "noNode": "4/4 prerequisite checks passed before network access; HOME unchanged",
-    "node20": "4/4 prerequisite checks passed before network access; HOME unchanged",
-    "node22": "4/4 installed exact RC9 and passed launcher identity, doctor empty-stderr, install.build and engine.binary assertions",
-    "node24": "4/4 installed exact RC9 and passed launcher identity, doctor empty-stderr, install.build and engine.binary assertions",
-    "doctor": "Exit 2 because endpoint.reachable fails without configured inference and fresh session/task directories warn; no version warning. Container had no trusted gh, so installer checksum passed but in-container provenance was not verified.",
-    "hostAttestation": "Separately verified for the exact RC9 archive and checksum index; see release artifact evidence."
+    "freshInstallAndUnsupportedRuntime": "20/20 platform-runtime combinations passed",
+    "alpha2UpgradeRollbackReinstall": "PASS",
+    "sameVersionRepair": "PASS",
+    "manualUninstallStateRetention": "PASS",
+    "checksumTamperRefusalNonMutation": "PASS",
+    "stateAndConfigBackupRestore": "PASS",
+    "incompatibleDowngradeRefusal": "PASS",
+    "brokenPackageStagingSelfTest": "PASS; existing RC9 and state unchanged",
+    "controlledUpdaterSIGKILLRecovery": "PASS; durable switched journal and backup were inspected, RC9 restored, failed target retained, retry idempotent; synthetic candidate only",
+    "doctor": "Zero stderr; install.build and engine.binary pass; no version warning. Exit 2 due absent endpoint and fresh state directories.",
+    "containerProvenance": "Not verified inside containers because trusted gh was absent; SHA256SUMS verified. Host attestation evidence is separate.",
+    "powerLossRecovery": "NOT TESTED"
   },
   "notRun": [
-    "alpha.2 to RC9 upgrade",
-    "RC9 to alpha.2 rollback",
-    "repair",
-    "manual uninstall and state retention",
-    "checksum tamper non-mutation",
-    "upgrade self-test rollback",
-    "upgrade crash recovery",
-    "backup restore",
-    "incompatible downgrade refusal",
-    "post-publication no-version installer path"
+    "no-version installation after stable v1.0.0 publication",
+    "physical power-loss recovery"
   ],
-  "rawLogs": "Per-platform/runtime logs and the runner are stored alongside this manifest.",
   "checksums": "SHA256SUMS"
 }

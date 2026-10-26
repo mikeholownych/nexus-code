@@ -9,6 +9,16 @@
     }
   },
   {
+    "image": "nexus-e2/ubuntu-22-04-node12:prep-182e8addeee0",
+    "imageId": "sha256:254ac905b220f504f10b1835be551e1f387e00d3f2b3ad348f8cd4d43e2ee478",
+    "labels": {
+      "org.nexus.e2.inputs-sha256": "182e8addeee0467d0d0ccd1ed10d5877bdaf0faa7d351e01398735985da3879c",
+      "org.nexus.e2.node-sha256": "e6d052364bfa2c17da92cf31794100cfd709ba147415ddaeed2222eec9ca1469",
+      "org.nexus.e2.role": "environment-preparation-only",
+      "org.opencontainers.image.version": "22.04"
+    }
+  },
+  {
     "image": "nexus-e2/ubuntu-22-04-node20:prep-182e8addeee0",
     "imageId": "sha256:117bfb4bf4d4c660b3906ee4e493a4de404c08b9e21ae9ba12fb824129c89918",
     "labels": {
@@ -33,6 +43,16 @@
     "imageId": "sha256:8e3f5128aec105d71b47eddf523fff7d2e5295c1d6a63f23767d04db09a65e2e",
     "labels": {
       "org.nexus.e2.inputs-sha256": "182e8addeee0467d0d0ccd1ed10d5877bdaf0faa7d351e01398735985da3879c",
+      "org.nexus.e2.role": "environment-preparation-only",
+      "org.opencontainers.image.version": "24.04"
+    }
+  },
+  {
+    "image": "nexus-e2/ubuntu-24-04-node12:prep-182e8addeee0",
+    "imageId": "sha256:d2877c914107fa0d1de5656d5559e50b8d282f1959b2ab2f427efe7de8ff02e9",
+    "labels": {
+      "org.nexus.e2.inputs-sha256": "182e8addeee0467d0d0ccd1ed10d5877bdaf0faa7d351e01398735985da3879c",
+      "org.nexus.e2.node-sha256": "e6d052364bfa2c17da92cf31794100cfd709ba147415ddaeed2222eec9ca1469",
       "org.nexus.e2.role": "environment-preparation-only",
       "org.opencontainers.image.version": "24.04"
     }
@@ -66,6 +86,15 @@
     }
   },
   {
+    "image": "nexus-e2/debian-12-node12:prep-182e8addeee0",
+    "imageId": "sha256:16cbab76de697c66aa0d6f88e2000318fa59b975d062e442bfa69e47bf6b6999",
+    "labels": {
+      "org.nexus.e2.inputs-sha256": "182e8addeee0467d0d0ccd1ed10d5877bdaf0faa7d351e01398735985da3879c",
+      "org.nexus.e2.node-sha256": "e6d052364bfa2c17da92cf31794100cfd709ba147415ddaeed2222eec9ca1469",
+      "org.nexus.e2.role": "environment-preparation-only"
+    }
+  },
+  {
     "image": "nexus-e2/debian-12-node20:prep-182e8addeee0",
     "imageId": "sha256:706fc9e63ec87f649927a4352de2891d5fa80197cf44a560aa6d07f09806f36e",
     "labels": {
@@ -89,6 +118,16 @@
     "labels": {
       "maintainer": "Clement Verna <cverna@fedoraproject.org>",
       "org.nexus.e2.inputs-sha256": "182e8addeee0467d0d0ccd1ed10d5877bdaf0faa7d351e01398735985da3879c",
+      "org.nexus.e2.role": "environment-preparation-only"
+    }
+  },
+  {
+    "image": "nexus-e2/fedora-40-node12:prep-182e8addeee0",
+    "imageId": "sha256:69257022ff8e733a50037ee40b1049ab57df031dfa685e48d65aec0b5c85eb55",
+    "labels": {
+      "maintainer": "Clement Verna <cverna@fedoraproject.org>",
+      "org.nexus.e2.inputs-sha256": "182e8addeee0467d0d0ccd1ed10d5877bdaf0faa7d351e01398735985da3879c",
+      "org.nexus.e2.node-sha256": "e6d052364bfa2c17da92cf31794100cfd709ba147415ddaeed2222eec9ca1469",
       "org.nexus.e2.role": "environment-preparation-only"
     }
   },
