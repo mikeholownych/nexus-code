@@ -40,12 +40,11 @@ any hook, fsmonitor program or diff helper can run. The two remaining shell-stri
 
 ## Residual risk
 
-- **Config-declared hooks (newer Git).** Git versions that support hooks declared in repository config
-  (`hook.<name>.event` / `hook.<name>.command`) may run them even when `core.hooksPath` points at `/dev/null`.
-  Repository config is workspace-controlled, so on such Git versions a hostile workspace can still execute a
-  config-declared `reference-transaction` or `post-index-change` hook during checkpoint operations. This slice does
-  not yet neutralize config-declared hooks; the separate retention follow-up is establishing the version matrix and a
-  shared strategy. Until it lands, a hostile workspace on those Git versions must be treated as code.
+- **Config-declared hooks (newer Git)** are now neutralized for checkpoint create/prune/restore: the shared
+  `core/git_hook_guard.ts` helper appends `hook.<name>.enabled=false` to `GIT_CONFIG_PARAMETERS` for the
+  `reference-transaction`/`post-index-change` events, with a Git 2.54 regression. See
+  `DEFECT-CONFIGURED-HOOKS-SHARED-20261027`. On Git versions without configuration hooks the `core.hooksPath`
+  override remains the only applicable control.
 - **Filter drivers remain reachable.** `filter.<name>.clean`, `.smudge` and `.process` (selected through the
   workspace's `.gitattributes`) still run external programs during `stash create`, the changed-path `git diff` and the
   worktree form of `/checkpoint diff` (clean filters), and during `reset --hard` (smudge filters). Git offers no

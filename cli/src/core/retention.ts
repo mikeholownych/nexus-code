@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
+import { envWithoutConfiguredHooks } from "./git_hook_guard.js";
 import { tryStateStoreGuard } from "./state_store_guard.js";
 import { ensurePrivateDir, writePrivateFile, fsyncDirectoryDurably } from "./durable_file.js";
 
@@ -1054,49 +1055,6 @@ function deleteCheckpointConfined(item: RetentionItem): void {
   }
 }
 
-function configuredReferenceTransactionHookEnv(workspace: string): NodeJS.ProcessEnv {
-  let configuredEvents: string;
-  try {
-    configuredEvents = execFileSync(
-      "git",
-      ["config", "--null", "--includes", "--get-regexp", "^hook\\..*\\.event$"],
-      { cwd: workspace, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    );
-  } catch (error: any) {
-    if (error?.status === 1) configuredEvents = "";
-    else throw error;
-  }
-
-  const disabledKeys = new Set<string>();
-  for (const entry of configuredEvents.split("\0")) {
-    if (!entry) continue;
-    const separator = entry.indexOf("\n");
-    if (separator < 0) throw new Error("Unexpected Git hook configuration output");
-    const key = entry.slice(0, separator);
-    const event = entry.slice(separator + 1);
-    if (event !== "reference-transaction" || !key.startsWith("hook.") || !key.endsWith(".event")) continue;
-    const friendlyName = key.slice("hook.".length, -".event".length);
-    const disableKey = `hook.${friendlyName}.enabled`;
-    if (disabledKeys.has(disableKey)) continue;
-    disabledKeys.add(disableKey);
-  }
-
-  if (disabledKeys.size === 0) return { ...process.env };
-  // GIT_CONFIG_PARAMETERS is Git's own command-line config channel and outranks the
-  // GIT_CONFIG_COUNT environment entries. Append our disables instead of relying on
-  // GIT_CONFIG_COUNT so a value inherited from a parent Git process cannot re-enable
-  // the hook. Keys and values are shell-quoted; friendly names may contain "=".
-  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-  const assignments = [...disabledKeys].map((key) => `${quote(key)}=${quote("false")}`);
-  const existingParameters = (process.env.GIT_CONFIG_PARAMETERS ?? "").trim();
-  return {
-    ...process.env,
-    GIT_CONFIG_PARAMETERS: existingParameters
-      ? `${existingParameters} ${assignments.join(" ")}`
-      : assignments.join(" "),
-  };
-}
-
 function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number; deadline?: number }): GcExecutionResult {
   const startTime = Date.now();
   const dryRun = Boolean(options.dryRun);
@@ -1152,7 +1110,7 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
 
       if (item.gitRef && item.workspace) {
         try {
-          const configuredHookEnv = configuredReferenceTransactionHookEnv(item.workspace);
+          const configuredHookEnv = envWithoutConfiguredHooks(item.workspace, ["reference-transaction"]);
           execFileSync(
             "git",
             [

@@ -114,6 +114,50 @@ test("checkpoint diff does not execute repo-configured external diff or fsmonito
   }
 });
 
+test("checkpoint operations do not execute hooks declared in repository config", () => {
+  const env = setup();
+  try {
+    // Leave only configuration-declared hooks (Git 2.54+) in play.
+    fs.rmSync(env.hook, { force: true });
+    fs.rmSync(path.join(env.workspace, ".git", "hooks", "post-index-change"), { force: true });
+    const gitVersion = execFileSync("git", ["--version"], { cwd: env.workspace, encoding: "utf8" });
+    const version = gitVersion.match(/git version (\d+)\.(\d+)/);
+    assert.ok(version, `could not parse Git version: ${gitVersion}`);
+    if (Number(version[1]) < 2 || (Number(version[1]) === 2 && Number(version[2]) < 54)) return;
+
+    const configuredMarker = path.join(env.root, "configured-hook-ran");
+    const included = path.join(env.root, "configured-hooks.inc");
+    fs.writeFileSync(
+      included,
+      `[hook "checkpoint-reference"]\n\tevent = reference-transaction\n\tcommand = touch '${configuredMarker}'\n` +
+        `[hook "checkpoint-index"]\n\tevent = post-index-change\n\tcommand = touch '${configuredMarker}'\n`
+    );
+    execFileSync("git", ["config", "--local", "include.path", included], { cwd: env.workspace });
+
+    // Prove each event actually runs before testing that the manager suppresses it.
+    const probeRef = "refs/nexus/checkpoints/config-hook-probe";
+    execFileSync("git", ["update-ref", probeRef, "HEAD"], { cwd: env.workspace });
+    assert.equal(fs.existsSync(configuredMarker), true, "reference-transaction config hook precondition did not run");
+    execFileSync("git", ["update-ref", "-d", probeRef], { cwd: env.workspace });
+    fs.rmSync(configuredMarker, { force: true });
+    fs.writeFileSync(path.join(env.workspace, "file.txt"), "dirty for config hook precondition\n");
+    execFileSync("git", ["stash", "create"], { cwd: env.workspace });
+    assert.equal(fs.existsSync(configuredMarker), true, "post-index-change config hook precondition did not run");
+    fs.rmSync(configuredMarker, { force: true });
+
+    fs.writeFileSync(path.join(env.workspace, "file.txt"), "dirty for checkpoint\n");
+    const manager = new CheckpointManager(env.workspace);
+    const cp = manager.createCheckpoint("config hook test");
+    assert.equal(fs.existsSync(configuredMarker), false, "checkpoint creation executed a configured hook");
+    manager.restore(cp.id);
+    assert.equal(fs.existsSync(configuredMarker), false, "checkpoint restore executed a configured hook");
+    manager.pruneCheckpoints(0);
+    assert.equal(fs.existsSync(configuredMarker), false, "checkpoint pruning executed a configured hook");
+  } finally {
+    env.restore();
+  }
+});
+
 test("checkpoint pruning does not execute a workspace git hook", () => {
   const env = setup();
   try {
