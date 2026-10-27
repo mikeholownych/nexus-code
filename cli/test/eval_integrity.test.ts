@@ -812,9 +812,11 @@ test("resource supervisor preserves SIGTERM grace for descendants after the main
   const signalMarker = path.join(markerDir, "flushed-state");
   try {
     const result = await new Promise<any>((resolve, reject) => {
-      const childScript = `process.on('SIGTERM',()=>setTimeout(()=>{require('node:fs').writeFileSync(${JSON.stringify(signalMarker)},'flushed');process.exit(143)},400));require('node:fs').writeFileSync(${JSON.stringify(readyMarker)},'ready');setInterval(()=>{},1000)`;
-      const parentScript = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:'ignore'});setInterval(()=>{},1000)`;
-      const { child, containment } = spawnContained({ cmd: process.execPath, argv: ["-e", parentScript] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
+      // Marker paths arrive as argv, never interpolated into the executed source: the paths derive from the
+      // environment's temporary directory, and building code from them is both unnecessary and unsafe.
+      const childScript = `const fs=require('node:fs');const [signal,ready]=process.argv.slice(1);process.on('SIGTERM',()=>setTimeout(()=>{fs.writeFileSync(signal,'flushed');process.exit(143)},400));fs.writeFileSync(ready,'ready');setInterval(()=>{},1000)`;
+      const parentScript = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childScript)},process.argv[1],process.argv[2]],{stdio:'ignore'});setInterval(()=>{},1000)`;
+      const { child, containment } = spawnContained({ cmd: process.execPath, argv: ["-e", parentScript, signalMarker, readyMarker] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
       const timeout = setTimeout(() => { containment!.kill(); reject(new Error("graceful SIGTERM fixture did not exit")); }, 15_000);
       child.on("error", (error) => { clearTimeout(timeout); reject(error); });
       child.on("close", async () => { clearTimeout(timeout); resolve(await containment!.final); });
