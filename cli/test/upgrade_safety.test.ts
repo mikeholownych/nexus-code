@@ -795,6 +795,7 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
     const home = path.join(tmpPrefix, "custom-home");
     process.env.HOME = home;
     try {
+      fs.mkdirSync(home, { recursive: true });
       const entry: UpgradeJournalEntry = {
         formatVersion: 1,
         id: "custom-prefix-backups",
