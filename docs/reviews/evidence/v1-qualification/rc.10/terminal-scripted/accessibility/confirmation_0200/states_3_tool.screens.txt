@@ -1,0 +1,64 @@
+
+===== tool-running @ 2.40s (100x30) =====
+ NEXUS   ws  ⎇ master ●2 changed  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  • Run sleep 20; echo finished
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠙ Run sleep 20; echo finished · 0:01 · step 1 · esc cancels ───────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== timeout-tool cancelled idle @ 7.64s (100x30) =====
+ NEXUS   ws  ⎇ master ●2 changed  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  • Run sleep 20; echo finished · 0:05
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠸ cancelling — waiting for run_command (5s) · ctrl-c again to quit ────────────────────────────────
+› type to steer the running turn · esc cancels it

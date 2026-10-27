@@ -1,0 +1,16 @@
+
+===== endpoint-error @ 1.71s (40x14) =====
+ NEXUS   ws  model m  mode: review
+  · Endpoint http://127.0.0.1:9/v1 is
+unreachable (fetch failed (cause: bad
+port)). Run `nexus doctor`, check
+LOCAL_LLM_ENDPOINT in
+~/.config/nexus/config.env, or use
+/connect.
+
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…

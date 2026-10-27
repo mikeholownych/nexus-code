@@ -1,0 +1,6 @@
+[   1.22s] SAW idle
+[   1.22s] SEND b'run it\r'
+[   2.03s] SAW tool-running
+[   3.59s] SEND Esc during tool
+[   6.80s] SCREEN 3s-after-esc (100x30)
+[   6.85s] SEND Ctrl-C (second request: quit)

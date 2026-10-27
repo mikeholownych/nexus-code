@@ -1,0 +1,27 @@
+[   1.45s] SAW idle
+[   1.45s] SCREEN idle (100x30)
+[   1.46s] SEND b'?'
+[   1.67s] SAW help
+[   1.67s] SCREEN help (100x30)
+[   1.67s] SEND b'\x1b'
+[   1.88s] SAW help closed
+[   1.88s] SEND b'/model\r'
+[   2.08s] SAW model picker
+[   2.08s] SCREEN model-picker (100x30)
+[   2.08s] SEND b'\x1b'
+[   2.28s] SAW model picker closed
+[   2.28s] SEND b'talk slowly\r'
+[   2.98s] SAW streaming
+[   3.98s] SCREEN streaming (100x30)
+[   3.98s] SEND Ctrl-C
+[   5.17s] SAW cancelled outcome
+[   5.17s] SCREEN cancelled (100x30)
+[   5.18s] SEND b'create a11y.txt\r'
+[   6.30s] SAW approval
+[   6.30s] SCREEN approval (100x30)
+[   8.80s] SEND b'y'
+[  10.00s] SEND b'\x1b[D'
+[  12.50s] SEND b'\r'
+[  13.30s] SEND b'\r'
+[  13.81s] SAW completion
+[  13.81s] SCREEN completion (100x30)

@@ -1,0 +1,4 @@
+[   0.92s] SAW idle
+[   0.92s] SEND b'run it\r'
+[   1.43s] SAW tool-running
+[   1.90s] SAW idle-after-esc

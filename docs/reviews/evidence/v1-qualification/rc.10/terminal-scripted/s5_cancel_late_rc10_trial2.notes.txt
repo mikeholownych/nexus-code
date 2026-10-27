@@ -1,0 +1,5 @@
+[   1.12s] SAW idle
+[   1.12s] SEND b'talk slowly\r'
+[   1.63s] SAW streaming
+[   4.84s] SAW idle-within-5s
+[   4.84s] SCREEN late-stream-cancel-final (100x30)
