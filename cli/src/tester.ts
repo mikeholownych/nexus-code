@@ -510,6 +510,9 @@ function isSafeWorkspaceFile(root: string, relative: string): boolean {
 /** Resolve a test's relative JS/TS imports to the exact scoped file (including NodeNext `.js` -> `.ts`). */
 function testReferencesFile(content: string, testFile: string, targetFile: string, root: string): boolean {
   const target = path.resolve(root, targetFile);
+  if (target.endsWith(".py") || testFile.endsWith(".py")) {
+    return pythonTestReferencesFile(content, target, root);
+  }
   const imports = /(?:\bfrom\s*|\bimport\s*\(|\brequire\s*\()\s*["']([^"']+)["']|(?:^|[;\n])\s*import\s*["']([^"']+)["']/gm;
   const extensions = [".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx", ".json"];
   for (const match of content.matchAll(imports)) {
@@ -527,6 +530,91 @@ function testReferencesFile(content: string, testFile: string, targetFile: strin
     if ([...candidates].some((candidate) => path.resolve(candidate) === target)) return true;
   }
   return false;
+}
+
+/**
+ * Bind Python tests through explicit, root-qualified imports. Unknown import
+ * layouts remain unbound rather than being inferred from output or basenames.
+ */
+function pythonTestReferencesFile(content: string, target: string, root: string): boolean {
+  const source = stripPythonStringsAndComments(content);
+  const moduleMatchesTarget = (name: string): boolean => {
+    if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) return false;
+    const base = path.resolve(root, ...name.split("."));
+    if (!base.startsWith(`${root}${path.sep}`)) return false;
+    return [`${base}.py`, path.join(base, "__init__.py")].some(
+      (candidate) => path.resolve(candidate) === target,
+    );
+  };
+
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const fromImport = line.match(/^from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+(.+)$/);
+    if (fromImport) {
+      const [, module, imported] = fromImport;
+      if (moduleMatchesTarget(module)) return true;
+      for (const part of imported.split(",")) {
+        const name = part.trim().split(/\s+as\s+/i, 1)[0];
+        if (/^[A-Za-z_]\w*$/.test(name) && moduleMatchesTarget(`${module}.${name}`)) return true;
+      }
+      continue;
+    }
+
+    const directImport = line.match(/^import\s+(.+)$/);
+    if (!directImport) continue;
+    for (const part of directImport[1].split(",")) {
+      const name = part.trim().split(/\s+as\s+/i, 1)[0];
+      if (moduleMatchesTarget(name)) return true;
+    }
+  }
+  return false;
+}
+
+/** Mask Python strings and comments so their contents cannot impersonate import statements. */
+function stripPythonStringsAndComments(source: string): string {
+  const chars = Array.from(source);
+  for (let i = 0; i < chars.length; i++) {
+    const current = chars[i];
+    if (current === "#") {
+      while (i < chars.length && chars[i] !== "\n" && chars[i] !== "\r") chars[i++] = " ";
+      i--;
+      continue;
+    }
+    if (current !== "'" && current !== '"') continue;
+
+    const triple = chars[i + 1] === current && chars[i + 2] === current;
+    const width = triple ? 3 : 1;
+    chars[i] = " ";
+    if (triple) {
+      chars[i + 1] = " ";
+      chars[i + 2] = " ";
+    }
+    i += width;
+    while (i < chars.length) {
+      if (chars[i] === "\\") {
+        if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = " ";
+        if (i + 1 < chars.length) {
+          if (chars[i + 1] !== "\n" && chars[i + 1] !== "\r") chars[i + 1] = " ";
+          i++;
+        }
+        i++;
+        continue;
+      }
+      if (triple
+        ? chars[i] === current && chars[i + 1] === current && chars[i + 2] === current
+        : chars[i] === current) {
+        for (let end = 0; end < width && i + end < chars.length; end++) chars[i + end] = " ";
+        i += width - 1;
+        break;
+      }
+      if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = " ";
+      i++;
+    }
+    i--;
+  }
+  return chars.join("");
 }
 
 /**

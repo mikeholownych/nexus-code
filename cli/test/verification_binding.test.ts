@@ -182,6 +182,50 @@ test("ACC-VER-03: VERIFIED binding requires operator scope and an executed uncha
   }
 });
 
+test("ACC-VER-03: Python unittest imports bind root-qualified product modules", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-python-binding-"));
+  try {
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(path.join(root, "src/slug.py"), "def slugify(text):\n    return text\n");
+    fs.mkdirSync(path.join(root, "tests"));
+    const target = path.join(root, "src/slug.py");
+    const verifier = "python3 tests/test_slug.py -v";
+    const output = "Ran 4 tests in 0.01s\n\nOK";
+    const scoped = new Set(["src/slug.py"]);
+
+    const fromModule = "from src.slug import slugify\n";
+    fs.writeFileSync(path.join(root, "tests/test_slug.py"), fromModule);
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", fromModule]])),
+      true,
+      "a pre-existing Python from-import of the scoped module binds",
+    );
+
+    const directModule = "import src.slug as slug\n";
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", directModule]])),
+      true,
+      "a pre-existing Python module import with an alias binds",
+    );
+
+    const importedSubmodule = "from src import slug\n";
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", importedSubmodule]])),
+      true,
+      "from-package imports bind an imported submodule",
+    );
+
+    const nonImportText = '# from src.slug import slugify\nmessage = "from src.slug import slugify"\ndoc = """\nfrom src.slug import slugify\n"""\n';
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", nonImportText]])),
+      false,
+      "comments, strings, and docstrings do not establish a Python import",
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ACC-VER-05: discoverVerifier and run_tests return no verifier for Makefile with only pytest: or empty workspace", async () => {
   const { RustCoreBridge } = await import("../src/tools.js");
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "a2discover-"));
