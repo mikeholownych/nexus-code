@@ -1,0 +1,7 @@
+[   1.01s] SAW tool-session idle
+[   1.01s] SEND b'run it\r'
+[   1.51s] SAW tool running
+[   1.51s] SCREEN tool-running (40x14)
+[   1.51s] SEND b'\x1b'
+[   1.91s] SAW tool cancelled idle
+[   1.91s] SCREEN tool-cancelled (40x14)

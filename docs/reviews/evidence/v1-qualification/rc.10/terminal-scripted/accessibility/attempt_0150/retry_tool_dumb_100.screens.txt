@@ -1,0 +1,64 @@
+
+===== running @ 1.43s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  • Run sleep 20; echo finished
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠼ Run sleep 20; echo finished · 0:00 · step 1 · esc cancels ───────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== after wait @ 1.83s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  ✓ Run sleep 20; echo finished · no exit code · no output
+
+◌ Cancelled  You stopped the turn during tool settling.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

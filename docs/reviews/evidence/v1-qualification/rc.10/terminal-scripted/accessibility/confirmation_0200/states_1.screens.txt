@@ -1,0 +1,224 @@
+
+===== idle @ 1.23s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+
+
+
+
+
+
+
+
+
+
+
+
+                                              N E X U S
+
+                 Understand the work. Inspect the evidence. Keep the decision yours.
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== help @ 1.43s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+  ╭ Help ────────────────────────────────────────────────────────────────────────────────────────╮
+  │Keys                                                                                          │
+  │  enter            send the prompt                                                            │
+  │  shift+enter      new line (alt+enter where shift is not reported)                           │
+  │  ↑ / ↓            move between lines; recall earlier prompts from the first line             │
+  │  ctrl+a / ctrl+e  start / end of the line                                                    │
+  │  ctrl+u / ctrl+k  delete to the start / end of the line                                      │
+  │  ctrl+w           delete the previous word                                                   │
+  │  ctrl+l           clear the draft                                                            │
+  │  paste            multi-line or long pastes become [Pasted text #n] buffers; newlines in     │
+  │                   them never send                                                            │
+  │  ctrl+o           view the paste buffer at the cursor                                        │
+  │  ctrl+d           review the complete diff of the selected (or newest) edit or /diff         │
+  │  ctrl+x           edit the paste buffer at the cursor as ordinary text                       │
+  │  backspace        right after a paste buffer: remove it                                      │
+  │  enter (working)  send steering: the agent applies it at its next step; esc cancels the      │
+  │                   turn                                                                       │
+  │  /                slash commands: type / to list them, tab completes                         │
+  │  /model           choose a model from the appliance or any connected cloud provider          │
+  │  ctrl+p           in /model: connect a provider (API key or sign-in); /connect opens it      │
+  │                   directly                                                                   │
+  │  !command         run a shell command directly; !n runs prompt n again                       │
+  │  tab              switch between the composer and the transcript                             │
+  │  pgup / pgdn      scroll the transcript                                                      │
+  │  ctrl+end         back to the newest output (the badge says when new output arrived)         │
+  │  [ / ]            in the transcript: select the previous / next tool call                    │
+  ╰ esc close  ↑↓ scroll  1–25 of 93 ────────────────────────────────────────────────────────────╯
+ esc close help ────────────────────────────────────────────────────────────────────────────────────
+›
+
+===== model-picker @ 1.83s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+  ╭ Select model ────────────────────────────────────────────────────────────────────────────────╮
+  │› type to filter by provider or model                                                         │
+  │                                                                                              │
+  │Appliance (127.0.0.1:21135)  local                                                            │
+  │  ● m                                                                                         │
+  │OpenRouter  cloud                                                                             │
+  │  + Connect OpenRouter…                                                                       │
+  │OpenAI  cloud                                                                                 │
+  │  + Connect OpenAI…                                                                           │
+  │Anthropic  cloud                                                                              │
+  │  + Connect Anthropic…                                                                        │
+  │ChatGPT plan  cloud                                                                           │
+  │  + Connect ChatGPT plan…                                                                     │
+  │GitHub Copilot  cloud                                                                         │
+  │  + Connect GitHub Copilot…                                                                   │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │ enter use  ctrl+p connect a provider  ↑↓ move  esc close                                     │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+ esc close · ↑↓ scroll ─────────────────────────────────────────────────────────────────────────────
+›
+
+===== streaming @ 3.44s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+› talk slowly
+
+Thinking about accessibility state. Thinking about accessibility state. Thinking about accessibility
+state. Thinking about accessibility state. Thinking about accessibility state. Thinking about
+accessibility state. Thinking about accessibility state. Thinking about accessibility state.
+Thinking about accessibility state. Thinking about accessibility state. Thinking about accessibility
+state. Thinking about accessibility state. Thinking about accessibility state. Thinking about
+accessibility state. Thinking about accessibility state. Thinking about accessibility state.
+Thinking about accessibility state. Thinking about accessibility state. Thinking about accessibility
+state. Thinking about accessibility state. Thinking about accessibility state.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠸ thinking · 0:01 · step 1 · esc cancels ──────────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== cancelled @ 4.06s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› talk slowly
+
+Thinking about accessibility state. Thinking about accessibility state. Thinking about accessibility
+state. Thinking about accessibility state. Thinking about accessibility state. Thinking about
+accessibility state. Thinking about accessibility state. Thinking about accessibility state.
+Thinking about accessibility state. Thinking about accessibility state. Thinking about accessibility
+state. Thinking about accessibility state. Thinking about accessibility state. Thinking about
+accessibility state. Thinking about accessibility state. Thinking about accessibility state.
+Thinking about accessibility state. Thinking about accessibility state. Thinking about accessibility
+state. Thinking about accessibility state. Thinking about accessibility state. Thinking about
+accessibility state.
+
+◌ Cancelled  You stopped the turn during inference.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== approval @ 4.47s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Write a11y.txt                                                                                    │
+│Proposed: create a11y.txt · +1 −0                                                                 │
+│                                                                                                  │
+│ ▎ @@ −0,0 +1,1 @@                                                                                │
+│ ▎   1 + accessible state                                                                         │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+›
+
+===== completion @ 12.08s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› talk slowly
+
+Thinking about accessibility state. Thinking about accessibility state. Thinking about accessibility
+state. Thinking about accessibility state. Thinking about accessibility state. Thinking about
+accessibility state. Thinking about accessibility state. Thinking about accessibility state.
+Thinking about accessibility state. Thinking about accessibility state. Thinking about accessibility
+state. Thinking about accessibility state. Thinking about accessibility state. Thinking about
+accessibility state. Thinking about accessibility state. Thinking about accessibility state.
+Thinking about accessibility state. Thinking about accessibility state. Thinking about accessibility
+state. Thinking about accessibility state. Thinking about accessibility state. Thinking about
+accessibility state.
+
+◌ Cancelled  You stopped the turn during inference.
+
+› create a11y.txt
+  ✓ approved Write a11y.txt
+
+  ✓ Created a11y.txt  +1 −0
+    ▎   1 + accessible state
+
+Done. The synthetic operation is complete.
+
+
+
+
+
+
+ ⠏ thinking · 0:07 · step 2 · esc cancels ──────────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it
