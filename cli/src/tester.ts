@@ -819,6 +819,7 @@ function topLevelStaticImports(source: string): string[] {
   let braces = 0;
   let parens = 0;
   let brackets = 0;
+  let requireIdentifierMayBeShadowed = false;
   let previous: JavaScriptToken | undefined;
   const regexPrefix = new Set(["(", "{", "[", "=", ":", ",", ";", "!", "?", "/", "&&", "||", "??", "=>", "return", "case"]);
 
@@ -895,6 +896,11 @@ function topLevelStaticImports(source: string): string[] {
       const start = index++;
       while (/[\w$]/.test(source[index] ?? "")) index++;
       const token = { kind: "identifier" as const, value: source.slice(start, index) };
+      if (token.value === "require" && (braces !== 0 || parens !== 0 || brackets !== 0)) {
+        // A binding or use in destructuring/import syntax or nested code is
+        // ambiguous without a full JavaScript scope analysis. Fail closed.
+        requireIdentifierMayBeShadowed = true;
+      }
       if (braces === 0 && parens === 0 && brackets === 0) tokens.push(token);
       previous = token;
       continue;
@@ -914,7 +920,6 @@ function topLevelStaticImports(source: string): string[] {
 
   const imports: string[] = [];
   const commonJsImports: string[] = [];
-  let requireIdentifierMayBeShadowed = false;
   for (let i = 0; i < tokens.length; i++) {
     if (tokens[i].kind === "identifier" && tokens[i].value === "require") {
       const previousToken = tokens[i - 1];

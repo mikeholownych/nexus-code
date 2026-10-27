@@ -85,6 +85,12 @@ test("ACC-VER-03: only executable JavaScript imports bind a declared deliverable
 
     const shadowedRequire = 'const require = loader;\nrequire("../src/a.js");\ntest("shadowed", () => {});\n';
     assert.equal(bind(shadowedRequire), false, "a shadowed CommonJS loader cannot establish coverage");
+
+    const destructuredRequire = 'const { require } = loader;\nrequire("../src/a.js");\ntest("destructured", () => {});\n';
+    assert.equal(bind(destructuredRequire), false, "a destructured CommonJS loader cannot establish coverage");
+
+    const importedRequire = 'import { require } from "loader";\nrequire("../src/a.js");\ntest("imported", () => {});\n';
+    assert.equal(bind(importedRequire), false, "an imported binding named require cannot establish coverage");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
