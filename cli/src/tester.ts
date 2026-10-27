@@ -721,6 +721,9 @@ function hasUnsupportedPyprojectPytestConfig(lines: string[]): boolean {
     if (!line || line.startsWith("#")) continue;
     if (line.startsWith("[") && line.endsWith("]")) {
       const rawTable = line.slice(1, -1);
+      // TOML escapes can spell any of the `tool.pytest` path components, so
+      // reject escaped table names instead of interpreting their raw spelling.
+      if (rawTable.includes("\\")) return true;
       if (/["']/.test(rawTable) && /^\s*(?:"tool"|'tool'|tool)(?:\s*\.|\s*$)/.test(rawTable)) return true;
       table = rawTable.replace(/["']/g, "").replace(/\s*\.\s*/g, ".").trim();
       if (table === "tool.pytest.ini_options" && rawTable.trim() !== table) return true;
@@ -729,6 +732,7 @@ function hasUnsupportedPyprojectPytestConfig(lines: string[]): boolean {
       if (table.startsWith("tool.pytest.") && table !== "tool.pytest.ini_options") return true;
       continue;
     }
+    if (!table && line.includes("\\") && /^(?:"[^"]*"|'[^']*')\s*\./.test(line)) return true;
     if (!table && line.includes("\\") && /^(?:"tool"|'tool'|tool)\s*\.\s*(?:"[^"]*"|'[^']*')/.test(line)) return true;
     if (table === "tool" && line.includes("\\") && /^(?:"[^"]*"|'[^']*')\s*(?:\.|=)/.test(line)) return true;
     if (!table && /^(?:"tool"|'tool'|tool)\s*\.\s*(?:"pytest"|'pytest'|pytest)(?:\s*\.|\s*=)/.test(line)) return true;
