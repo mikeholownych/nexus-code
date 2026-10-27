@@ -1,0 +1,6 @@
+host=mike-dev
+boot_id=8928bf1f-8ae0-441b-8070-f05ef8823a5e
+observed_utc=2026-10-27T16:52:20Z
+source=ceabfccf466ab39fc80c274400bae5aa0744a227
+node_version=v24.11.1
+node_path=/home/mike/.local/bin/node
