@@ -808,10 +808,10 @@ function testReferencesFile(content: string, testFile: string, targetFile: strin
 type JavaScriptToken = { kind: "identifier" | "string" | "punct"; value: string };
 
 /**
- * Extract only unambiguous, top-level ESM import declarations. Dynamic imports,
- * CommonJS calls, nested code, comments, strings, and templates cannot establish
- * a verifier binding: this deliberately prefers a false negative to VERIFIED
- * based on text that may never execute.
+ * Extract only unambiguous, top-level ESM imports and literal CommonJS require
+ * calls. Dynamic imports, conditional or nested calls, comments, strings, and
+ * templates cannot establish a verifier binding: this deliberately prefers a
+ * false negative to VERIFIED based on text that may never execute.
  */
 function topLevelStaticImports(source: string): string[] {
   const tokens: JavaScriptToken[] = [];
@@ -913,7 +913,28 @@ function topLevelStaticImports(source: string): string[] {
   }
 
   const imports: string[] = [];
+  const commonJsImports: string[] = [];
+  let requireIdentifierMayBeShadowed = false;
   for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].kind === "identifier" && tokens[i].value === "require") {
+      const previousToken = tokens[i - 1];
+      const atModuleStatement = !previousToken || [";", "}"].includes(previousToken.value);
+      const assignedAtModuleScope = previousToken?.value === "=" && braces === 0 && parens === 0 && brackets === 0;
+      const isMemberCall = previousToken?.value === "." || previousToken?.value === "?.";
+      const isLiteralCall = tokens[i + 1]?.value === "("
+        && tokens[i + 2]?.kind === "string"
+        && tokens[i + 2].value.length > 0
+        && tokens[i + 3]?.value === ")";
+      if (braces === 0 && parens === 0 && brackets === 0
+        && (atModuleStatement || assignedAtModuleScope) && !isMemberCall && isLiteralCall) {
+        commonJsImports.push(tokens[i + 2].value);
+      } else if (!isLiteralCall) {
+        // A top-level declaration, import, or alias named `require` makes it
+        // unsafe to assume later calls use Node's CommonJS loader.
+        requireIdentifierMayBeShadowed = true;
+      }
+      continue;
+    }
     if (tokens[i].kind !== "identifier" || tokens[i].value !== "import") continue;
     // Import declarations begin a module item. Requiring a clear boundary also
     // prevents JSX attributes named `import` from looking like side-effect imports.
@@ -934,6 +955,7 @@ function topLevelStaticImports(source: string): string[] {
       }
     }
   }
+  if (!requireIdentifierMayBeShadowed) imports.push(...commonJsImports);
   return imports;
 }
 

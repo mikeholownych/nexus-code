@@ -64,6 +64,27 @@ test("ACC-VER-03: only executable JavaScript imports bind a declared deliverable
 
     const actualBeforeDivision = 'import { a } from "../src/a.ts";\nconst ratio = 4 / 2;\ntest("actual", () => assert.equal(a * ratio, 2));\n';
     assert.equal(bind(actualBeforeDivision), true, "later arithmetic cannot invalidate an earlier unambiguous static import");
+
+    const commonJs = 'const { a } = require("../src/a.js");\ntest("actual", () => assert.equal(a, 1));\n';
+    assert.equal(bind(commonJs), true, "a top-level literal CommonJS require binds the tested deliverable");
+
+    const commonJsSideEffect = 'require("../src/a.js");\ntest("actual", () => {});\n';
+    assert.equal(bind(commonJsSideEffect), true, "a top-level literal CommonJS side-effect import is executable");
+
+    const conditionalRequire = 'if (enabled) require("../src/a.js");\ntest("conditional", () => {});\n';
+    assert.equal(bind(conditionalRequire), false, "a conditional CommonJS require cannot establish coverage");
+
+    const nestedRequire = 'function load() { require("../src/a.js"); }\ntest("nested", () => {});\n';
+    assert.equal(bind(nestedRequire), false, "a nested CommonJS require cannot establish coverage");
+
+    const dynamicRequire = 'const { a } = require(modulePath);\ntest("dynamic", () => assert.equal(a, 1));\n';
+    assert.equal(bind(dynamicRequire), false, "a computed CommonJS module path cannot establish coverage");
+
+    const memberRequire = 'loader.require("../src/a.js");\ntest("member", () => {});\n';
+    assert.equal(bind(memberRequire), false, "a member method named require cannot establish coverage");
+
+    const shadowedRequire = 'const require = loader;\nrequire("../src/a.js");\ntest("shadowed", () => {});\n';
+    assert.equal(bind(shadowedRequire), false, "a shadowed CommonJS loader cannot establish coverage");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
