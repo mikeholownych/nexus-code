@@ -1054,6 +1054,48 @@ function deleteCheckpointConfined(item: RetentionItem): void {
   }
 }
 
+function configuredReferenceTransactionHookEnv(workspace: string): NodeJS.ProcessEnv {
+  let configuredEvents: string;
+  try {
+    configuredEvents = execFileSync(
+      "git",
+      ["config", "--null", "--includes", "--get-regexp", "^hook\\..*\\.event$"],
+      { cwd: workspace, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+  } catch (error: any) {
+    if (error?.status === 1) configuredEvents = "";
+    else throw error;
+  }
+
+  const disabledKeys = new Set<string>();
+  for (const entry of configuredEvents.split("\0")) {
+    if (!entry) continue;
+    const separator = entry.indexOf("\n");
+    if (separator < 0) throw new Error("Unexpected Git hook configuration output");
+    const key = entry.slice(0, separator);
+    const event = entry.slice(separator + 1);
+    if (event !== "reference-transaction" || !key.startsWith("hook.") || !key.endsWith(".event")) continue;
+    const friendlyName = key.slice("hook.".length, -".event".length);
+    const disableKey = `hook.${friendlyName}.enabled`;
+    if (disabledKeys.has(disableKey)) continue;
+    disabledKeys.add(disableKey);
+  }
+
+  const env = { ...process.env };
+  const existingCountText = env.GIT_CONFIG_COUNT ?? "0";
+  if (!/^(0|[1-9]\d*)$/.test(existingCountText)) throw new Error("Invalid GIT_CONFIG_COUNT");
+  let count = Number(existingCountText);
+  if (!Number.isSafeInteger(count)) throw new Error("Invalid GIT_CONFIG_COUNT");
+  const overrides = [...disabledKeys].map((key) => [key, "false"] as const);
+  for (const [key, value] of overrides) {
+    env[`GIT_CONFIG_KEY_${count}`] = key;
+    env[`GIT_CONFIG_VALUE_${count}`] = value;
+    count += 1;
+  }
+  env.GIT_CONFIG_COUNT = String(count);
+  return env;
+}
+
 function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number; deadline?: number }): GcExecutionResult {
   const startTime = Date.now();
   const dryRun = Boolean(options.dryRun);
@@ -1109,10 +1151,22 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
 
       if (item.gitRef && item.workspace) {
         try {
-          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", `refs/nexus/checkpoints/${item.id}`], {
-            cwd: item.workspace,
-            stdio: "ignore",
-          });
+          const configuredHookEnv = configuredReferenceTransactionHookEnv(item.workspace);
+          execFileSync(
+            "git",
+            [
+              "-c",
+              "core.hooksPath=/dev/null",
+              "update-ref",
+              "-d",
+              `refs/nexus/checkpoints/${item.id}`,
+            ],
+            {
+              cwd: item.workspace,
+              env: configuredHookEnv,
+              stdio: "ignore",
+            },
+          );
         } catch {}
       }
 
