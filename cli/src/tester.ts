@@ -897,6 +897,12 @@ function topLevelStaticImports(source: string): string[] {
       const start = index++;
       while (/[\w$]/.test(source[index] ?? "")) index++;
       const token = { kind: "identifier" as const, value: source.slice(start, index) };
+      if (token.value === "eval") {
+        // Direct eval can reassign the CommonJS wrapper's `require` parameter.
+        // Without scope analysis, treat any executable eval identifier as
+        // making CommonJS import evidence ambiguous.
+        requireIdentifierMayBeShadowed = true;
+      }
       if (token.value === "require") {
         if (braces !== 0 || parens !== 0 || brackets !== 0) {
           // A binding or use in destructuring/import syntax or nested code is

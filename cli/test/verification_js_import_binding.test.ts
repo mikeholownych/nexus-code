@@ -91,6 +91,9 @@ test("ACC-VER-03: only executable JavaScript imports bind a declared deliverable
 
     const importedRequire = 'import { require } from "loader";\nrequire("../src/a.js");\ntest("imported", () => {});\n';
     assert.equal(bind(importedRequire), false, "an imported binding named require cannot establish coverage");
+
+    const reassignedRequire = 'eval("require = loader");\nrequire("../src/a.js");\ntest("eval", () => {});\n';
+    assert.equal(bind(reassignedRequire), false, "direct eval can replace the CommonJS loader");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
