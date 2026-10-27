@@ -629,7 +629,7 @@ function topLevelStaticImports(source: string): string[] {
   let parens = 0;
   let brackets = 0;
   let previous: JavaScriptToken | undefined;
-  const regexPrefix = new Set(["(", "{", "[", "=", ":", ",", ";", "!", "?", "/", "&&", "||", "??", "=>", "return", "case"]);
+  const regexPrefix = new Set(["(", ")", "{", "[", "=", ":", ",", ";", "!", "?", "/", "&&", "||", "??", "=>", "return", "case"]);
 
   while (index < source.length) {
     const char = source[index];

@@ -35,6 +35,9 @@ test("ACC-VER-03: only executable JavaScript imports bind a declared deliverable
     const regexOnly = 'const pattern = /import\\s+.*from\\s+\\"\\.\\.\\/src\\/a\\.ts\\"/;\ntest("unrelated", () => {});\n';
     assert.equal(bind(regexOnly), false, "a regular expression must not establish an import binding");
 
+    const regexAfterCondition = 'if (true) /import from "..\\/src\\/a.ts"/.test("");\ntest("unrelated", () => {});\n';
+    assert.equal(bind(regexAfterCondition), false, "a regular expression after a control condition must not establish an import binding");
+
     const unreachable = 'if (false) { import("../src/a.ts"); }\ntest("unrelated", () => {});\n';
     assert.equal(bind(unreachable), false, "an unreachable dynamic import must not establish a binding");
 
