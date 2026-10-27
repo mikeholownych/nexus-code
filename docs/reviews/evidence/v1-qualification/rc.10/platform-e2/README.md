@@ -34,6 +34,17 @@ Four platforms (Ubuntu 22.04, Ubuntu 24.04, Debian 12, Fedora 40) × two positiv
 
 At every step the synthetic `~/.nexus/tasks/item.json`, `~/.config/nexus/config.env` and an adjacent user file in `~/.local/bin` are preserved. Result: **PASS** ([log](ubuntu-22-04-node22-lifecycle.log)).
 
+### Additional lifecycle cells (Ubuntu 22.04 / Node 22)
+
+Fixtures were generated from the published RC10 archive (SHA-256 `444d0812ad583b7f688890ac8536cb872e92364c977d9fbf298fa0408d98b3e7`) by `lifecycle/prepare-lifecycle-fixtures.sh`; the fixture directory itself is not committed.
+
+| Case | Result | Evidence |
+|---|---|---|
+| Checksum tamper | Installer refused with `SHA-256 verification failed; no installation was changed.`; launcher symlink and synthetic state marker unchanged | [log](ubuntu-22-04-node22-checksum-tamper.log) |
+| Broken candidate self-test | `nexus upgrade --version v1.0.0-rc.10 --force --yes` against a fixture whose launcher reports `9.9.9` failed with `Unpacked binary failed staging self-test`; existing install and user state unchanged | [log](ubuntu-22-04-node22-upgrade-self-test-failure.log) |
+| Backup restore | Recognized private `~/.nexus/backups/...` backup restored state and config with 0700 directories / 0600 files | [log](ubuntu-22-04-node22-backup-restore.log) |
+| Updater process crash | Updater SIGKILLed after the durable journal reached `switched`; `nexus upgrade --recover` restored the verified RC10 package, cleaned staging, retained the failed target for diagnosis, and was idempotent. **Power loss is not tested** | [log](ubuntu-22-04-node22-upgrade-process-crash-recovery.log) |
+
 Per-cell logs and results: `results.tsv`; image names and IDs: `prepared-images.json`; digests: `SHA256SUMS`.
 
 ## Reproduce
@@ -47,6 +58,6 @@ The positive cells use Docker `--network bridge` to download the published RC10 
 
 ## Scope and residuals
 
-- This covers the fresh-install / doctor / Node-preflight matrix plus one Ubuntu 22.04 / Node 22 lifecycle cell for E2 (ACC-PLAT) on RC10. Checksum-tamper, attestation, self-test failure, crash recovery and backup-restore remain separate lifecycle cells; the RC9 lifecycle scripts live under `../rc.9/platform-e2/lifecycle/` and were not re-run against RC10 here. Lifecycle on the other platforms is also not covered by this record.
+- This covers the fresh-install / doctor / Node-preflight matrix plus the Ubuntu 22.04 / Node 22 lifecycle cells for E2 (ACC-PLAT) on RC10: install/upgrade/rollback/reinstall/repair/uninstall, checksum tamper, broken-candidate self-test, backup restore and updater process-crash recovery. Provenance attestation, power-loss durability, synthetic-journal recovery and incompatible-downgrade cells remain separate; lifecycle on the other platforms is not covered by this record.
 - `endpoint.reachable` failing is expected in the isolated containers and is not a product failure; the same doctor run on a host with a configured gateway is the installed-RC provider evidence path.
 - Images were prepared for the RC9 matrix (`prep-182e8addeee0`); their base distro and Node versions are recorded in `prepared-images.json`. Node 24 cells mount the host Node v24.11.1 runtime into the Node 22 image.

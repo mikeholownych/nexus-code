@@ -1,0 +1,9 @@
+d 700 nexus-e2 /home/nexus-e2/.nexus/backups/state-backup-20261026T185000Z
+d 700 nexus-e2 /home/nexus-e2/.nexus/backups/state-backup-20261026T185000Z/config
+d 700 nexus-e2 /home/nexus-e2/.nexus/backups/state-backup-20261026T185000Z/state
+d 700 nexus-e2 /home/nexus-e2/.nexus/backups/state-backup-20261026T185000Z/state/tasks
+f 600 nexus-e2 /home/nexus-e2/.nexus/backups/state-backup-20261026T185000Z/backup.json
+f 600 nexus-e2 /home/nexus-e2/.nexus/backups/state-backup-20261026T185000Z/config/config.env
+f 600 nexus-e2 /home/nexus-e2/.nexus/backups/state-backup-20261026T185000Z/state/tasks/item.json
+✔ Restored configuration/state backup from /home/nexus-e2/.nexus/backups/state-backup-20261026T185000Z.
+backup_restore=PASS config_and_state_restored_private_modes_preserved=true
