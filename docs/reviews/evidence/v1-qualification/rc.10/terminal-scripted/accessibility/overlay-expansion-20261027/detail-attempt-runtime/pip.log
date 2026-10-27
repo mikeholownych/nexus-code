@@ -1,0 +1,8 @@
+Collecting pyte==0.8.2
+  Using cached pyte-0.8.2-py3-none-any.whl.metadata (3.0 kB)
+Collecting wcwidth (from pyte==0.8.2)
+  Using cached wcwidth-0.9.4-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (23 kB)
+Using cached pyte-0.8.2-py3-none-any.whl (31 kB)
+Using cached wcwidth-0.9.4-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (785 kB)
+Installing collected packages: wcwidth, pyte
+Successfully installed pyte-0.8.2 wcwidth-0.9.4
