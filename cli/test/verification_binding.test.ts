@@ -208,6 +208,42 @@ test("ACC-VER-03: Python unittest imports bind root-qualified product modules", 
       "a pre-existing Python module import with an alias binds",
     );
 
+    fs.mkdirSync(path.join(root, "tests/nested"));
+    fs.writeFileSync(path.join(root, "tests/nested/test_decoy.py"), "from src.slug import slugify\n");
+    const discoveredTest = "import unittest\n\nclass SlugTests(unittest.TestCase):\n    def test_slugify(self):\n        self.assertTrue(True)\n";
+    const undiscoveredImport = "from src.slug import slugify\n";
+    assert.equal(
+      isVerifierDeliverableBound(
+        root,
+        [target],
+        "python3 -m unittest discover -s tests",
+        "Ran 1 test in 0.01s\n\nOK",
+        scoped,
+        new Map([
+          ["tests/test_slug.py", discoveredTest],
+          ["tests/nested/test_decoy.py", undiscoveredImport],
+        ]),
+      ),
+      false,
+      "an import in a nested non-package test that unittest discovery skips cannot bind a deliverable",
+    );
+    fs.writeFileSync(path.join(root, "tests/nested/__init__.py"), "");
+    assert.equal(
+      isVerifierDeliverableBound(
+        root,
+        [target],
+        "python3 -m unittest discover -s tests",
+        "Ran 1 test in 0.01s\n\nOK",
+        scoped,
+        new Map([
+          ["tests/test_slug.py", discoveredTest],
+          ["tests/nested/test_decoy.py", undiscoveredImport],
+        ]),
+      ),
+      true,
+      "a nested package test selected by unittest discovery may bind its imported deliverable",
+    );
+
     const importedSubmodule = "from src import slug\n";
     assert.equal(
       isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", importedSubmodule]])),

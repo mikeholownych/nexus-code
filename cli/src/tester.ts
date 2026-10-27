@@ -507,16 +507,98 @@ function isSafeWorkspaceFile(root: string, relative: string): boolean {
   }
 }
 
+/**
+ * Whether a Python file is reachable by the standard library unittest discovery
+ * command that selected the verifier. unittest only descends into package
+ * directories; the workspace snapshot is recursive and therefore also contains
+ * Python test files discovery will skip.
+ *
+ * Returns null when the verifier is not unittest discovery, allowing other
+ * verifier families to apply their own execution rules.
+ */
+function isPythonUnittestDiscoveryCandidate(root: string, testFile: string, command: string): boolean | null {
+  const match = command.match(/\bpython(?:\d+(?:\.\d+)?)?\s+-m\s+unittest\s+discover\b([\s\S]*)$/);
+  if (!match) return null;
+
+  const args = match[1].match(/(?:"[^"]*"|'[^']*'|\S+)/g) ?? [];
+  let startDirectory = ".";
+  let pattern = "test*.py";
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (token === "-s" || token === "--start-directory") {
+      const value = args[++index];
+      if (!value) return false;
+      startDirectory = value.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_whole, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted);
+    } else if (token.startsWith("--start-directory=")) {
+      startDirectory = token.slice("--start-directory=".length);
+    } else if (token === "-p" || token === "--pattern") {
+      const value = args[++index];
+      if (!value) return false;
+      pattern = value.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_whole, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted);
+    } else if (token.startsWith("--pattern=")) {
+      pattern = token.slice("--pattern=".length);
+    }
+  }
+
+  // Convert unittest's simple filename glob without interpreting shell syntax.
+  const patternExpression = new RegExp(`^${pattern.split("").map((character) => {
+    if (character === "*") return ".*";
+    if (character === "?") return ".";
+    return /[\\^$+.|{}()[\]]/.test(character) ? `\\${character}` : character;
+  }).join("")}$`);
+  const rootAbsolute = path.resolve(root);
+  const startAbsolute = path.resolve(rootAbsolute, startDirectory);
+  const startRelative = path.relative(rootAbsolute, startAbsolute);
+  if (startRelative === ".." || startRelative.startsWith(`..${path.sep}`) || path.isAbsolute(startRelative)) return false;
+  if (startRelative && !isSafeWorkspaceDirectory(rootAbsolute, startRelative)) return false;
+
+  const testAbsolute = path.resolve(rootAbsolute, testFile);
+  const relativeToStart = path.relative(startAbsolute, testAbsolute);
+  if (!relativeToStart || relativeToStart === ".." || relativeToStart.startsWith(`..${path.sep}`) || path.isAbsolute(relativeToStart)) return false;
+  const components = relativeToStart.split(path.sep);
+  if (!patternExpression.test(components.at(-1) ?? "") || !isSafeWorkspaceFile(rootAbsolute, testFile)) return false;
+
+  // `start_dir` itself does not need to be a package. Every nested directory
+  // unittest enters must contain a real, non-symlink __init__.py.
+  let cursor = startAbsolute;
+  for (const directory of components.slice(0, -1)) {
+    cursor = path.join(cursor, directory);
+    const relativeDirectory = path.relative(rootAbsolute, cursor);
+    if (!isSafeWorkspaceDirectory(rootAbsolute, relativeDirectory)) return false;
+    if (!isSafeWorkspaceFile(rootAbsolute, path.join(relativeDirectory, "__init__.py"))) return false;
+  }
+  return true;
+}
+
+function isSafeWorkspaceDirectory(root: string, relative: string): boolean {
+  try {
+    const rootReal = fs.realpathSync(root);
+    const absoluteRoot = path.resolve(root);
+    let cursor = absoluteRoot;
+    const lexical = path.relative(absoluteRoot, path.resolve(absoluteRoot, relative));
+    if (!lexical || lexical === ".." || lexical.startsWith(`..${path.sep}`) || path.isAbsolute(lexical)) return false;
+    for (const component of lexical.split(path.sep)) {
+      cursor = path.join(cursor, component);
+      const stat = fs.lstatSync(cursor);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+      const real = fs.realpathSync(cursor);
+      const fromRoot = path.relative(rootReal, real);
+      if (fromRoot === ".." || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Resolve a test's relative JS/TS imports to the exact scoped file (including NodeNext `.js` -> `.ts`). */
 function testReferencesFile(content: string, testFile: string, targetFile: string, root: string): boolean {
   const target = path.resolve(root, targetFile);
   if (target.endsWith(".py") || testFile.endsWith(".py")) {
     return pythonTestReferencesFile(content, target, root);
   }
-  const imports = /(?:\bfrom\s*|\bimport\s*\(|\brequire\s*\()\s*["']([^"']+)["']|(?:^|[;\n])\s*import\s*["']([^"']+)["']/gm;
   const extensions = [".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx", ".json"];
-  for (const match of content.matchAll(imports)) {
-    const specifier = match[1] ?? match[2];
+  for (const specifier of topLevelStaticImports(content)) {
     if (!specifier.startsWith(".")) continue;
     const base = path.resolve(path.dirname(path.resolve(root, testFile)), specifier);
     const candidates = new Set([base]);
@@ -530,6 +612,130 @@ function testReferencesFile(content: string, testFile: string, targetFile: strin
     if ([...candidates].some((candidate) => path.resolve(candidate) === target)) return true;
   }
   return false;
+}
+
+type JavaScriptToken = { kind: "identifier" | "string" | "punct"; value: string };
+
+/**
+ * Extract only unambiguous, top-level ESM import declarations. Dynamic imports,
+ * CommonJS calls, nested code, comments, strings, and templates cannot establish
+ * a verifier binding: this deliberately prefers a false negative to VERIFIED
+ * based on text that may never execute.
+ */
+function topLevelStaticImports(source: string): string[] {
+  const tokens: JavaScriptToken[] = [];
+  let index = 0;
+  let braces = 0;
+  let parens = 0;
+  let brackets = 0;
+  let previous: JavaScriptToken | undefined;
+  const regexPrefix = new Set(["(", "{", "[", "=", ":", ",", ";", "!", "?", "/", "&&", "||", "??", "=>", "return", "case"]);
+
+  while (index < source.length) {
+    const char = source[index];
+    if (/\s/.test(char)) { index++; continue; }
+    if (char === "/" && source[index + 1] === "/") {
+      index += 2;
+      while (index < source.length && source[index] !== "\n" && source[index] !== "\r") index++;
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) index++;
+      index = Math.min(source.length, index + 2);
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      const quote = char;
+      index++;
+      let value = "";
+      let escaped = false;
+      let valid = false;
+      while (index < source.length) {
+        const current = source[index++];
+        if (escaped) { escaped = false; value += current; continue; }
+        if (current === "\\") { escaped = true; continue; }
+        if (current === quote) { valid = true; break; }
+        if (current === "\n" || current === "\r") break;
+        value += current;
+      }
+      const token = { kind: "string" as const, value: valid && !escaped ? value : "" };
+      if (braces === 0 && parens === 0 && brackets === 0) tokens.push(token);
+      previous = token;
+      continue;
+    }
+    if (char === "`") {
+      // Skip the complete template. Imports in ${...} are expressions, never
+      // static ESM declarations, and literal text must not be tokenized.
+      index++;
+      let escaped = false;
+      while (index < source.length) {
+        const current = source[index++];
+        if (escaped) { escaped = false; continue; }
+        if (current === "\\") { escaped = true; continue; }
+        if (current === "`") break;
+      }
+      previous = { kind: "string", value: "" };
+      continue;
+    }
+    if (char === "/" && (!previous || regexPrefix.has(previous.value))) {
+      // A regular expression may contain arbitrary import-looking source text.
+      index++;
+      let escaped = false;
+      let inClass = false;
+      while (index < source.length) {
+        const current = source[index++];
+        if (escaped) { escaped = false; continue; }
+        if (current === "\\") { escaped = true; continue; }
+        if (current === "[") inClass = true;
+        else if (current === "]") inClass = false;
+        else if (current === "/" && !inClass) break;
+        else if (current === "\n" || current === "\r") break;
+      }
+      while (/[A-Za-z]/.test(source[index] ?? "")) index++;
+      previous = { kind: "punct", value: "/" };
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(char)) {
+      const start = index++;
+      while (/[\w$]/.test(source[index] ?? "")) index++;
+      const token = { kind: "identifier" as const, value: source.slice(start, index) };
+      if (braces === 0 && parens === 0 && brackets === 0) tokens.push(token);
+      previous = token;
+      continue;
+    }
+
+    const punct = source.slice(index, index + 2) === "?." ? "?." : char;
+    index += punct.length;
+    if (braces === 0 && parens === 0 && brackets === 0) tokens.push({ kind: "punct", value: punct });
+    if (punct === "{") braces++;
+    else if (punct === "}") braces = Math.max(0, braces - 1);
+    else if (punct === "(") parens++;
+    else if (punct === ")") parens = Math.max(0, parens - 1);
+    else if (punct === "[") brackets++;
+    else if (punct === "]") brackets = Math.max(0, brackets - 1);
+    previous = { kind: "punct", value: punct };
+  }
+
+  const imports: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].kind !== "identifier" || tokens[i].value !== "import") continue;
+    if (tokens[i - 1]?.value === "." || tokens[i - 1]?.value === "?.") continue;
+    const next = tokens[i + 1];
+    if (next?.kind === "string" && next.value) {
+      imports.push(next.value);
+      continue;
+    }
+    if (next?.value === "(") continue; // dynamic import()
+    for (let j = i + 1; j < tokens.length && j < i + 100; j++) {
+      if (tokens[j].value === ";" || tokens[j].value === "import") break;
+      if (tokens[j].kind === "identifier" && tokens[j].value === "from" && tokens[j + 1]?.kind === "string") {
+        if (tokens[j + 1].value) imports.push(tokens[j + 1].value);
+        break;
+      }
+    }
+  }
+  return imports;
 }
 
 /**
@@ -793,14 +999,20 @@ export function isVerifierDeliverableBound(
 
   const testFileExecuted = (testFileRel: string) => {
     // An unfiltered verifier run that executed tests ran the repository test suite
-    if (!isFiltered) return true;
+    if (!isFiltered) {
+      if (testFileRel.endsWith(".py")) {
+        const discovered = isPythonUnittestDiscoveryCandidate(root, testFileRel, verifierCommand);
+        if (discovered !== null) return discovered;
+      }
+      return true;
+    }
     return tokens.has(testFileRel) || verifierCommand.includes(testFileRel);
   };
 
   // Verifier output is candidate-influenced. Bind every operator-declared product
   // file to an actually executed, pre-existing test import instead of path text.
   return declaredScope.every((file) => [...baselineTests].some(([testRel, content]) =>
-    (!isFiltered || testFileExecuted(testRel)) &&
+    testFileExecuted(testRel) &&
     Boolean(content) && testReferencesFile(content, testRel, rel(file), root),
   ));
 }
