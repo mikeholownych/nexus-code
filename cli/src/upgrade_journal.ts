@@ -556,6 +556,7 @@ function atomicSymlinkSwap(targetFile: string, linkPath: string): void {
     // Hard-linking the temporary symlink creates the destination exclusively;
     // unlike rename, it cannot clobber an entry raced into place.
     fs.linkSync(tmpLink, linkPath);
+    fs.unlinkSync(tmpLink);
     if (launcher) fs.unlinkSync(displacedLink);
     syncDirectory(binDir);
   } catch (err: any) {
