@@ -20,7 +20,7 @@ All workspaces and gateway responses were synthetic. No user workspace, credenti
 
 The first late-cancel diagnostic and its retry attempt with incorrectly escaped control input are retained as incomplete harness attempts; neither is counted as a product result. The final corrected test used a real Ctrl-C byte.
 
-- ACC-TUI-A11Y sampled-state probe: PARTIAL_NOT_ACCEPTED. Ten states were captured with no color-setting SGR in the captured streams and a complete 40-column approval hint. Two full runs timed out waiting for Esc tool cancellation at TERM=dumb 100×30; one isolated retry passed in about 0.4 s. The state coverage is incomplete (eight of nine overlay variants were later observed in one TERM=dumb 40x14 supplemental subcase; the Detail overlay remains untested). A subsequent targeted TERM=dumb 100x30 cancellation recheck passed five of five attempts at 0–1 s delays, but the two original full-matrix timeouts remain unresolved. See accessibility/README.md and retained attempts.
+- ACC-TUI-A11Y sampled-state probe: PARTIAL_NOT_ACCEPTED. Ten states were captured with no color-setting SGR in the captured streams and a complete 40-column approval hint. Two full runs timed out waiting for Esc tool cancellation at TERM=dumb 100×30; one isolated retry passed in about 0.4 s. The state coverage is incomplete: all nine overlay variants were later observed across two TERM=dumb 40x14 supplemental probes, including the separately retained Detail capture; other configurations remain unverified. A subsequent targeted TERM=dumb 100x30 cancellation recheck passed five of five attempts at 0–1 s delays, but the two original full-matrix timeouts remain unresolved. See accessibility/README.md and retained attempts.
 
 ## Disposition and remaining scope
 

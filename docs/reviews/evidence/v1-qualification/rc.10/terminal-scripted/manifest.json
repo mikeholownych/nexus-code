@@ -17,7 +17,7 @@
     "originalStyleCtrlC": "1 observed outlier at 27.89s, followed by 6 exact-pattern passes at 2.21s."
   },
   "evidenceFilesSha256": {
-    "README.md": "9bdbe4c55a80790de1c3c6996b708938fa10bfd122b881ce99ae422ee845c646",
+    "README.md": "f664fc069e736fd59786853e92bb74616718b1773d21c73a23c51504935c6353",
     "accessibility/README.md": "9d02d4e934b3436360af95191aa0a10a0374730adf70b794e8722086f25a9ced",
     "accessibility/attempt_0150/gw_states_0.log": "2ea3793899f61fc304d679d0c59d8a89863594420d8d0ca7b3cdb92eb0431bca",
     "accessibility/attempt_0150/gw_states_1.log": "bc60613418a5661a8b8f13554f11e74b7848ac8c286e37c4875f23b2d9c5746c",
@@ -263,7 +263,7 @@
     "s9.raw.b64": "551e2dc050faa4da57c62482bf33404143a9902017c53cda4144172dc4e6f6f0",
     "s9_quit_tool.py": "4bf8e0dff1994fc529f20007c8a755dd22271ba7b2f1453737aacbe8c7865bb1",
     "s9_quit_tool.py.log": "8f922a470068db66746f01067e8e5555eaa8b073c0a8da95dd640a589346e3c9",
-    "accessibility/overlay-expansion-20261027/README.md": "c797709d3a1b346e66503341df656443038c3bd7ed646b34755875da643367d9",
+    "accessibility/overlay-expansion-20261027/README.md": "2925477714de4dfaac720759c833e0c48d982e15810eabb5ec49e3c96e121154",
     "accessibility/overlay-expansion-20261027/captured-8-of-9/gw.log": "5af67e587ff221bba1767183851a3671caeb94abb742a9db404ab33b5ed2a532",
     "accessibility/overlay-expansion-20261027/captured-8-of-9/mockgw_states.py": "9f89d26ab5d92c1812ca3b528f12e6912be1179f05b33d7f58858381393fb6bb",
     "accessibility/overlay-expansion-20261027/captured-8-of-9/overlay_dumb40.notes.txt": "3137c279e652cf0400bbb1cb04da23592cfb6b30b9ec3ffd31348df381513736",
