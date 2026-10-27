@@ -1,0 +1,14 @@
+{
+  "candidate": {
+    "tag": "v1.0.0-rc.10",
+    "sourceCommit": "16ee8ca3643824741b6da67936b41f262414fdf0",
+    "archive": "nexus-linux-x86_64-v1.0.0-rc.10.tar.gz",
+    "archiveSha256": "444d0812ad583b7f688890ac8536cb872e92364c977d9fbf298fa0408d98b3e7"
+  },
+  "acceptance": "ACC-TUI-MANUAL / REQ-QUAL-108",
+  "status": "PENDING_HUMAN_EXECUTION",
+  "completedCells": 0,
+  "requiredCells": 15,
+  "worksheetSha256": "60cdbe32052aa26b29e0e7237d06d7e99737f94155010b6d8c0412442c3bc8e4",
+  "noManualResultsClaimed": true
+}
