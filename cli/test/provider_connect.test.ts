@@ -5,6 +5,7 @@
  */
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -459,11 +460,19 @@ describe("connecting from the picker", () => {
     }
   });
 
-  test("a malformed credential origin cannot fall back to and bind a legacy key to the selected endpoint", () => {
-    const endpoint = "http://127.0.0.1:5432/v1";
+  test("a malformed credential origin cannot fall back to and bind a legacy key to the selected endpoint", async () => {
+    const selected = await mock((_s, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ data: [] })); });
+    const endpoint = `${selected.url}/v1`;
     operator({ LOCAL_LLM_ENDPOINT: endpoint, LOCAL_LLM_API_KEY: "legacy-origin-key", LOCAL_LLM_CREDENTIAL_ORIGIN: "not a valid origin" });
     assert.equal(storedCredentialFor(endpoint), null);
     assert.equal(environmentCredential(endpoint), undefined, "an invalid explicit binding must not become the key's new origin");
+
+    try {
+      await new LocalLlmClient(buildConfig({ endpoint })).listModels();
+      assert.deepEqual(selected.seen.map((request) => request.headers.authorization), ["Bearer not-needed"], "the selected endpoint never receives the unbound key");
+    } finally {
+      await selected.close();
+    }
 
     const configFile = write(".config/nexus/config.env", `LOCAL_LLM_ENDPOINT=${JSON.stringify(endpoint)}\nLOCAL_LLM_API_KEY=legacy-origin-key\nLOCAL_LLM_CREDENTIAL_ORIGIN="not a valid origin"\n`);
     setCredentialAuthority({}, home);
@@ -472,6 +481,95 @@ describe("connecting from the picker", () => {
     const before = fs.readFileSync(configFile, "utf8");
     assert.throws(() => saveLocalEndpointSettings("http://127.0.0.1:6543/v1", "new-model"), /existing local credential origin is invalid/);
     assert.equal(fs.readFileSync(configFile, "utf8"), before, "an invalid binding must be repaired before endpoint mutation");
+  });
+
+  test("a valid operator credential outranks a different installation key without changing origin", () => {
+    const previous = process.env.LOCAL_LLM_API_KEY;
+    const origin = "http://old-endpoint.invalid";
+    try {
+      process.env.LOCAL_LLM_API_KEY = "installation-key";
+      setCredentialAuthority({ LOCAL_LLM_API_KEY: "operator-key", LOCAL_LLM_CREDENTIAL_ORIGIN: origin }, home);
+      const config = buildConfig({ endpoint: "http://replacement.invalid/v1" });
+      assert.equal(config.apiKey, "operator-key");
+      assert.equal(config.credentialOrigin, origin);
+    } finally {
+      if (previous === undefined) delete process.env.LOCAL_LLM_API_KEY;
+      else process.env.LOCAL_LLM_API_KEY = previous;
+    }
+  });
+
+  test("a malformed operator binding still allows a distinct project credential", () => {
+    const previous = process.env.LOCAL_LLM_API_KEY;
+    const endpoint = "http://project-endpoint.invalid/v1";
+    try {
+      process.env.LOCAL_LLM_API_KEY = "project-key";
+      setCredentialAuthority({ LOCAL_LLM_API_KEY: "legacy-origin-key", LOCAL_LLM_CREDENTIAL_ORIGIN: "not a valid origin" }, home);
+      const config = buildConfig({ endpoint });
+      assert.equal(config.apiKey, "project-key");
+      assert.equal(config.credentialOrigin, new URL(endpoint).origin);
+    } finally {
+      if (previous === undefined) delete process.env.LOCAL_LLM_API_KEY;
+      else process.env.LOCAL_LLM_API_KEY = previous;
+    }
+  });
+
+  test("a malformed shell binding still allows a distinct project .env credential", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shell-fallback-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shell-fallback-project-"));
+    try {
+      fs.writeFileSync(path.join(project, ".env"), "LOCAL_LLM_API_KEY=project-key\n");
+      const result = spawnSync(process.execPath, ["--import", path.resolve(process.cwd(), "node_modules/tsx/dist/esm/index.mjs"), "--input-type=module", "--eval", `
+        import { loadEnvironment, buildConfig } from "${path.resolve(process.cwd(), "src/config.ts")}";
+        loadEnvironment();
+        const config = buildConfig({ endpoint: "http://project-endpoint.invalid/v1" });
+        console.log(JSON.stringify({ apiKey: config.apiKey, credentialOrigin: config.credentialOrigin }));
+      `], {
+        cwd: project,
+        env: {
+          HOME: home,
+          XDG_CONFIG_HOME: path.join(home, ".config"),
+          PATH: process.env.PATH,
+          LOCAL_LLM_API_KEY: "legacy-origin-key",
+          LOCAL_LLM_CREDENTIAL_ORIGIN: "not a valid origin",
+          LOCAL_LLM_ENDPOINT: "http://operator-endpoint.invalid/v1",
+        },
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { apiKey: "project-key", credentialOrigin: "http://project-endpoint.invalid" });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed shell binding cannot be bypassed by repeating the same key in project .env", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shell-same-home-"));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-shell-same-project-"));
+    try {
+      fs.writeFileSync(path.join(project, ".env"), "LOCAL_LLM_API_KEY=legacy-origin-key\n");
+      const result = spawnSync(process.execPath, ["--import", path.resolve(process.cwd(), "node_modules/tsx/dist/esm/index.mjs"), "--input-type=module", "--eval", `
+        import { loadEnvironment, buildConfig } from "${path.resolve(process.cwd(), "src/config.ts")}";
+        loadEnvironment();
+        console.log(JSON.stringify({ apiKey: buildConfig({ endpoint: "http://project-endpoint.invalid/v1" }).apiKey }));
+      `], {
+        cwd: project,
+        env: {
+          HOME: home,
+          XDG_CONFIG_HOME: path.join(home, ".config"),
+          PATH: process.env.PATH,
+          LOCAL_LLM_API_KEY: "legacy-origin-key",
+          LOCAL_LLM_CREDENTIAL_ORIGIN: "not a valid origin",
+          LOCAL_LLM_ENDPOINT: "http://operator-endpoint.invalid/v1",
+        },
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { apiKey: "local" });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(project, { recursive: true, force: true });
+    }
   });
 
   test("settings permission failure leaves the prior config.env untouched", () => {
