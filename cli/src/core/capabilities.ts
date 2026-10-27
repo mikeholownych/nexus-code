@@ -782,6 +782,7 @@ export const BASELINE_CAPABILITIES: CanonicalCapability[] = [
     "category": "orchestration",
     "mutating": true,
     "effect": "internal",
+    "changesWorkspace": false,
     "sideEffectContract": "Update task phases and execution roadmap",
     "backend": "ts_native",
     "toolDefinition": {
