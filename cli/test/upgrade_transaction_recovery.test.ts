@@ -97,6 +97,31 @@ describe("durable same-version transaction recovery",()=>{
       assert.equal(readJournal(prefix)?.state,"recovery_required");
     });
   }
+  it("preserves a regular launcher substituted after inspection",()=>{
+    const originalRename=fsDefault.renameSync;
+    let raced=false;
+    try {
+      fsDefault.renameSync=((from:string,to:string)=>{
+        if(!raced && from===entry.binPath && to.includes(".nexus-link-recovery-previous.")){
+          raced=true;
+          fs.unlinkSync(entry.binPath);
+          fs.writeFileSync(entry.binPath,"raced regular launcher; preserve me");
+        }
+        return originalRename(from,to);
+      }) as typeof fsDefault.renameSync;
+      syncBuiltinESMExports();
+      writeJournal(prefix,entry);
+      const result=recoverUpgrade(prefix);
+      assert.equal(raced,true,"the launcher replacement window was exercised");
+      assert.equal(result.action,"manual_intervention");
+      assert.equal(fs.lstatSync(entry.binPath).isFile(),true);
+      assert.equal(fs.readFileSync(entry.binPath,"utf8"),"raced regular launcher; preserve me");
+      assert.equal(readJournal(prefix)?.state,"recovery_required");
+    } finally {
+      fsDefault.renameSync=originalRename;
+      syncBuiltinESMExports();
+    }
+  });
   it("admits only one recovery when two contenders both observe the same stale lock",async()=>{
     writeJournal(prefix,entry);
     const libRoot=path.join(prefix,"lib/nexus"), barrier=path.join(prefix,"barrier");

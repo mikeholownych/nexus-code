@@ -10,6 +10,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./core/file_guard.js";
 import { withStateStoreGuard, STATE_RESTORE_PENDING_FILE, STATE_STORE_GUARD_FILE } from "./core/state_store_guard.js";
 import { restoreFromSources, stateRoot } from "./core/state_restore.js";
@@ -531,16 +532,36 @@ function isRealFile(filePath: string): boolean {
 }
 
 function atomicSymlinkSwap(targetFile: string, linkPath: string): void {
-  const launcher = fs.lstatSync(linkPath, { throwIfNoEntry:false });
-  if (launcher && !launcher.isSymbolicLink()) throw new Error("Upgrade launcher is not a symbolic link; refusing to replace it");
   const binDir = path.dirname(linkPath);
   fs.mkdirSync(binDir, { recursive: true });
-  const tmpLink = path.join(binDir, `.nexus-link-recovery.${process.pid}.${Date.now()}`);
+  const token = `${process.pid}.${Date.now()}.${randomUUID()}`;
+  const tmpLink = path.join(binDir, `.nexus-link-recovery.${token}`);
+  const displacedLink = path.join(binDir, `.nexus-link-recovery-previous.${token}`);
+  const launcher = fs.lstatSync(linkPath, { throwIfNoEntry:false });
+  if (launcher && !launcher.isSymbolicLink()) throw new Error("Upgrade launcher is not a symbolic link; refusing to replace it");
   try {
     fs.symlinkSync(targetFile, tmpLink);
-    fs.renameSync(tmpLink, linkPath);
+    if (launcher) {
+      // Move the old entry aside, then install with link(2), which fails with
+      // EEXIST instead of replacing a regular file created in the check/swap
+      // window. Verify what was moved before treating it as our old symlink.
+      fs.renameSync(linkPath, displacedLink);
+      const displaced = fs.lstatSync(displacedLink);
+      if (!displaced.isSymbolicLink() || displaced.dev !== launcher.dev || displaced.ino !== launcher.ino) {
+        fs.linkSync(displacedLink, linkPath);
+        fs.unlinkSync(displacedLink);
+        throw new Error("Upgrade launcher changed during recovery; refusing to replace it");
+      }
+    }
+    // Hard-linking the temporary symlink creates the destination exclusively;
+    // unlike rename, it cannot clobber an entry raced into place.
+    fs.linkSync(tmpLink, linkPath);
+    if (launcher) fs.unlinkSync(displacedLink);
     syncDirectory(binDir);
   } catch (err: any) {
+    if (fs.existsSync(displacedLink) && !fs.existsSync(linkPath)) {
+      try { fs.linkSync(displacedLink, linkPath); fs.unlinkSync(displacedLink); } catch {}
+    }
     try {
       fs.unlinkSync(tmpLink);
     } catch {}
