@@ -33,7 +33,7 @@ function classifyPathComponents(value: string): ReturnType<InformationFlowBounda
 }
 
 /** Verify that an uncertain-only path is an actual Nexus worktree in the selected repository. */
-function isManagedWorktreePath(
+export function isManagedWorktreePath(
   workspace: WorkspacePath,
   worktreePath: string,
   recordTaskId: string,
