@@ -12,6 +12,10 @@ An isolated immutable snapshot at `9344df578f8a39a55d82ead0f15c4811864d21f8` bui
 
 The 12:42 checkpoint immediately below is retained as historical evidence and superseded for current branch, CI, and test status by this checkpoint.
 
+## Historical terminal cancellation checkpoint (observed 2026-10-27 02:11 UTC)
+
+Five targeted synthetic installed-RC10 cancellation rechecks at `TERM=dumb`, 100×30 completed with Esc delays from 0 to 1 second; idle return measured 0.405–0.507 seconds. The two earlier full-matrix timeouts remained valid and unresolved; this targeted recheck did not promote ACC-TUI-A11Y or E3. Evidence and raw PTY streams are preserved in [the cancellation timing recheck](../reviews/evidence/v1-qualification/rc.10/terminal-scripted/accessibility/cancel-timing-recheck-20261027/README.md). Human terminal acceptance remained 0/15. This historical record is retained from the PR #264 merge history.
+
 ## Current release checkpoint (observed 2026-10-27 12:42 UTC)
 
 **Authoritative source and CI:** `origin/main` is `1d9357ee63b1066a891584a898842814de614fbf`, which integrates PR [#264](https://github.com/mikeholownych/nexus-code/pull/264). PR #264 merged at 12:38:40 UTC after exact-head CI [40499840211](https://github.com/mikeholownych/nexus-code/actions/runs/40499840211) passed its Node 22, Node 24, and Linux package/reproducibility jobs, and CodeQL [40499839711](https://github.com/mikeholownych/nexus-code/actions/runs/40499839711) passed. New post-merge main CI [40505388775](https://github.com/mikeholownych/nexus-code/actions/runs/40505388775) and CodeQL [40505388849](https://github.com/mikeholownych/nexus-code/actions/runs/40505388849) are still running on exact commit `1d9357e`; their results are not yet established. PR #264 is merged, not open.
