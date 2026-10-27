@@ -1,5 +1,17 @@
 # v1.0.0 release readiness checkpoint
 
+## Current release checkpoint (observed 2026-10-27 18:24 UTC)
+
+**Authoritative source and checks:** `origin/main` is `7a860c091297abc13371d92ae9633a9f06d67f7a`, integrating PR #277. Post-merge CI run [40554202482](https://github.com/mikeholownych/nexus-code/actions/runs/40554202482) is still in progress; CodeQL run [40554202502](https://github.com/mikeholownych/nexus-code/actions/runs/40554202502) passed on the exact same SHA. A clean detached worktree at `7a860c0` passed `node scripts/check_requirements.mjs --enforce` (123 rows: 108 tested, 6 partial, 2 implemented, 7 open; 12 requirements remain explicitly deferred to exact-RC qualification) and `node scripts/sync-version.mjs --check --tag v1.0.0-rc.10`. These are source-gate results, not installed-RC acceptance.
+
+**Readiness PR #268:** The remote PR remains open at head `2cf9e9949dc6ff8068099d07d765919e59e538d3`, based on `ceabfccf466ab39fc80c274400bae5aa0744a227`. Its exact-head Node 22, Node 24, Linux, JavaScript/TypeScript, and CodeQL checks passed on that older base. GitHub reports no review on the current PR head and currently marks it mergeable; those checks do not cover current `main@7a860c0`. This readiness branch has been brought forward to include `origin/main@7a860c0`; its refreshed change requires independent review and exact-head CI before its evidence can be relied on for current main.
+
+**Other open source PRs:** PR [#279](https://github.com/mikeholownych/nexus-code/pull/279) fixes configured-hook race and retention error handling. Its exact diff was independently accepted; CodeQL and JavaScript/TypeScript pass, while Node 22 and Node 24 are pending. PR [#278](https://github.com/mikeholownych/nexus-code/pull/278) records RC10 ChatGPT verification; CodeQL, JavaScript/TypeScript, Node 22, and Node 24 pass, while Linux packaging remains pending. Neither PR is merged.
+
+**Qualification and publication:** RC10 remains a prerelease; no stable `v1.0.0` release is claimed. Held-out custodian acceptance, T2/T3/T4, remaining live provider and standalone qualification, cross-runner reproducibility, independent exact-RC acceptance, and human terminal evidence remain open. The five-environment by three-size operator terminal matrix remains **0/15**; no cell result or screenshot is recorded. Automated PTY evidence does not substitute for these human cells. Acceptance remains `IN_PROGRESS`; stable publication remains gated on all mandatory acceptance criteria.
+
+The 17:31 and earlier checkpoints below are retained as historical evidence and superseded for current source, PR, CI, and requirements status by this checkpoint.
+
 ## Current release checkpoint (observed 2026-10-27 17:31 UTC)
 
 **Authoritative source and post-merge checks:** `origin/main` is `ceabfccf466ab39fc80c274400bae5aa0744a227`, integrating PR #275 after PR #273. Exact-main CI [40537474824](https://github.com/mikeholownych/nexus-code/actions/runs/40537474824) passed the Node 22, Node 24, and `linux-x86_64` jobs on `ceabfcc`; CodeQL [40537475057](https://github.com/mikeholownych/nexus-code/actions/runs/40537475057) also passed on that SHA. Earlier post-merge CI [40536704465](https://github.com/mikeholownych/nexus-code/actions/runs/40536704465) and CodeQL [40536704530](https://github.com/mikeholownych/nexus-code/actions/runs/40536704530) passed on `e94208d`. These establish source CI for those exact commits; they do not establish RC acceptance or release qualification.
