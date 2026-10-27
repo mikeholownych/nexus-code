@@ -682,7 +682,7 @@ function topLevelStaticImports(source: string): string[] {
       // A regular expression may contain arbitrary import-looking source text.
       // If the preceding token makes slash-vs-division ambiguous, abandon all
       // binding evidence from this file rather than risk treating regex text as code.
-      if (previous && !regexPrefix.has(previous.value)) return [];
+      if (previous && !regexPrefix.has(previous.value)) break;
       index++;
       let escaped = false;
       let inClass = false;

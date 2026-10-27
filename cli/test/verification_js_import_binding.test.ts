@@ -55,6 +55,9 @@ test("ACC-VER-03: only executable JavaScript imports bind a declared deliverable
 
     const actual = 'import { a } from "../src/a.ts";\ntest("actual", () => assert.equal(a, 1));\n';
     assert.equal(bind(actual), true, "an executable static import establishes a binding");
+
+    const actualBeforeDivision = 'import { a } from "../src/a.ts";\nconst ratio = 4 / 2;\ntest("actual", () => assert.equal(a * ratio, 2));\n';
+    assert.equal(bind(actualBeforeDivision), true, "later arithmetic cannot invalidate an earlier unambiguous static import");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
