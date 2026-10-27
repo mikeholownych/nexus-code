@@ -211,8 +211,15 @@ test("ACC-VER-03: Python unittest imports bind root-qualified product modules", 
     const importedSubmodule = "from src import slug\n";
     assert.equal(
       isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", importedSubmodule]])),
-      true,
-      "from-package imports bind an imported submodule",
+      false,
+      "ambiguous from-package imports do not bind a deliverable",
+    );
+
+    fs.writeFileSync(path.join(root, "src/__init__.py"), "slug = 'package attribute'\n");
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", importedSubmodule]])),
+      false,
+      "a package attribute with the same name as a submodule cannot falsely bind that submodule",
     );
 
     const nonImportText = '# from src.slug import slugify\nmessage = "from src.slug import slugify"\ndoc = """\nfrom src.slug import slugify\n"""\n';

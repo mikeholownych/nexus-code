@@ -555,10 +555,9 @@ function pythonTestReferencesFile(content: string, target: string, root: string)
     if (fromImport) {
       const [, module, imported] = fromImport;
       if (moduleMatchesTarget(module)) return true;
-      for (const part of imported.split(",")) {
-        const name = part.trim().split(/\s+as\s+/i, 1)[0];
-        if (/^[A-Za-z_]\w*$/.test(name) && moduleMatchesTarget(`${module}.${name}`)) return true;
-      }
+      // `from package import name` can resolve either a submodule or an
+      // attribute initialized by package/__init__.py. Without executing Python's
+      // import machinery, that form cannot safely bind a deliverable.
       continue;
     }
 
