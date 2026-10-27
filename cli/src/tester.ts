@@ -541,14 +541,10 @@ function pythonTestReferencesFile(content: string, target: string, root: string)
   const source = stripPythonStringsAndComments(content);
   const moduleMatchesTarget = (name: string): boolean => {
     if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) return false;
-    const base = path.resolve(root, ...name.split("."));
-    if (!base.startsWith(`${root}${path.sep}`)) return false;
-    return [`${base}.py`, path.join(base, "__init__.py")].some(
-      (candidate) => path.resolve(candidate) === target,
-    );
+    return resolvePythonModulePath(name, root) === target;
   };
 
-  for (const rawLine of source.split(/\r?\n/)) {
+  for (const rawLine of pythonLogicalLines(source)) {
     // A static line scan cannot prove that an import in a conditional, function,
     // class, or other indented block executes. Count only module-level imports.
     if (/^\s/.test(rawLine)) continue;
@@ -573,6 +569,79 @@ function pythonTestReferencesFile(content: string, target: string, root: string)
     }
   }
   return false;
+}
+
+/** Join explicit Python line continuations before inspecting import statements. */
+function pythonLogicalLines(source: string): string[] {
+  const logical: string[] = [];
+  let current = "";
+  for (const physical of source.split(/\r?\n/)) {
+    current = current ? `${current.replace(/\\\s*$/, "")} ${physical.trimStart()}` : physical;
+    if (/\\\s*$/.test(current)) continue;
+    logical.push(current);
+    current = "";
+  }
+  if (current) logical.push(current);
+  return logical;
+}
+
+/** Resolve only unambiguous source-module imports using Python package precedence. */
+function resolvePythonModulePath(name: string, root: string): string | null {
+  const absoluteRoot = path.resolve(root);
+  let cursor = absoluteRoot;
+  const parts = name.split(".");
+
+  const hasSafeType = (candidate: string, type: "file" | "directory"): boolean => {
+    const relative = path.relative(absoluteRoot, candidate);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+    let current = absoluteRoot;
+    const components = relative.split(path.sep);
+    try {
+      for (let index = 0; index < components.length; index++) {
+        current = path.join(current, components[index]);
+        const stat = fs.lstatSync(current);
+        if (stat.isSymbolicLink()) return false;
+        const final = index === components.length - 1;
+        if (final && (type === "file" ? !stat.isFile() : !stat.isDirectory())) return false;
+        if (!final && !stat.isDirectory()) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    const packageDirectory = path.join(cursor, part);
+    const packageInit = path.join(packageDirectory, "__init__.py");
+    const moduleFile = path.join(cursor, `${part}.py`);
+    const final = index === parts.length - 1;
+    const isSymlink = (candidate: string): boolean => {
+      try {
+        return fs.lstatSync(candidate).isSymbolicLink();
+      } catch {
+        return false;
+      }
+    };
+    if (isSymlink(packageDirectory) || isSymlink(packageInit) || isSymlink(moduleFile)) return null;
+
+    // Python chooses a regular package before a same-named module file.
+    if (hasSafeType(packageInit, "file")) {
+      if (final) return path.resolve(packageInit);
+      cursor = packageDirectory;
+      continue;
+    }
+    if (hasSafeType(moduleFile, "file")) return final ? path.resolve(moduleFile) : null;
+    // A directory without __init__.py is a namespace package when traversing
+    // further components, but is not itself a file deliverable.
+    if (!final && hasSafeType(packageDirectory, "directory")) {
+      cursor = packageDirectory;
+      continue;
+    }
+    return null;
+  }
+  return null;
 }
 
 /** Mask Python strings and comments so their contents cannot impersonate import statements. */

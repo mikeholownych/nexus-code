@@ -242,6 +242,36 @@ test("ACC-VER-03: Python unittest imports bind root-qualified product modules", 
       false,
       "a function-local import is not assumed to have executed",
     );
+
+    const continuedConditionalImport = "if False: \\\nfrom src.slug import slugify\n";
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", continuedConditionalImport]])),
+      false,
+      "an import continued from an unreachable one-line suite does not bind",
+    );
+
+    const continuedTopLevelImport = "from src.slug import \\\n    slugify\n";
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", continuedTopLevelImport]])),
+      true,
+      "an unconditional import continued across physical lines binds",
+    );
+
+    const packageModule = path.join(root, "src/slug/__init__.py");
+    fs.mkdirSync(path.dirname(packageModule));
+    fs.writeFileSync(packageModule, "def slugify(text):\n    return text\n");
+    const directImport = "import src.slug as slug\n";
+    const directImportMap = new Map([["tests/test_slug.py", directImport]]);
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, new Set(["src/slug.py"]), directImportMap),
+      false,
+      "a same-named package takes precedence over slug.py and cannot bind the module file",
+    );
+    assert.equal(
+      isVerifierDeliverableBound(root, [packageModule], verifier, output, new Set(["src/slug/__init__.py"]), directImportMap),
+      true,
+      "the selected package initializer is the imported deliverable",
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
