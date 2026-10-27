@@ -29,7 +29,11 @@ function homePath(homeDir: string): string {
   return canonical;
 }
 
-function nexusRoot(home: string): string { return path.join(home, ".nexus"); }
+function nexusRoot(home: string): string {
+  const processHome = fs.realpathSync(path.resolve(process.env.HOME || os.homedir()));
+  if (process.env.NEXUS_STATE_DIR && home === processHome) return path.resolve(process.env.NEXUS_STATE_DIR);
+  return path.join(home, ".nexus");
+}
 function controlRoot(home: string): string { return path.join(nexusRoot(home), CONTROL_DIR); }
 function activePath(home: string): string { return path.join(controlRoot(home), ACTIVE_FILE); }
 function transactionPath(home: string, id: string): string {
