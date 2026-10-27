@@ -705,7 +705,7 @@ function pytestTestPaths(root: string): string[] | null {
   if (file === "pyproject.toml") {
     // TOML decodes escapes in basic strings; this resolver deliberately does
     // not, so escaped test paths cannot safely establish collection evidence.
-    if (value.includes("\\")) return null;
+    if (value.includes("\\") || value.includes('"""') || value.includes("'''")) return null;
     const values = [...value.matchAll(/"((?:\\.|[^"\\])*)"|'([^']*)'/g)].map((entry) => entry[1] ?? entry[2]);
     const residue = value.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, "").replace(/[\[\],\s]/g, "");
     return values.length && !residue ? values : null;
@@ -733,6 +733,7 @@ function hasUnsupportedPyprojectPytestConfig(lines: string[]): boolean {
       continue;
     }
     if (!table && line.includes("\\") && /^(?:"[^"]*"|'[^']*')\s*\./.test(line)) return true;
+    if (!table && line.includes("\\") && /^(?:"[^"]*"|'[^']*')\s*=\s*\{/.test(line)) return true;
     if (!table && line.includes("\\") && /^(?:"tool"|'tool'|tool)\s*\.\s*(?:"[^"]*"|'[^']*')/.test(line)) return true;
     if (table === "tool" && line.includes("\\") && /^(?:"[^"]*"|'[^']*')\s*(?:\.|=)/.test(line)) return true;
     if (!table && /^(?:"tool"|'tool'|tool)\s*\.\s*(?:"pytest"|'pytest'|pytest)(?:\s*\.|\s*=)/.test(line)) return true;

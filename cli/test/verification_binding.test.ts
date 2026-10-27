@@ -520,6 +520,32 @@ test("ACC-VER-03: Python unittest imports bind root-qualified product modules", 
       false,
       "an escaped dotted TOML tool key that resolves to pytest must fail closed",
     );
+    fs.writeFileSync(path.join(root, "pyproject.toml"), '"to\\u006fl" = { pytest = { ini_options = { testpaths = ["tests/unit"] } } }\n');
+    assert.equal(
+      isVerifierDeliverableBound(
+        root,
+        [target],
+        "pytest",
+        "========================= 1 passed in 0.01s =========================",
+        scoped,
+        new Map([[defaultDiscoveryTest, pytestImportedTest]]),
+      ),
+      false,
+      "an escaped inline TOML tool key that resolves to pytest must fail closed",
+    );
+    fs.writeFileSync(path.join(root, "pyproject.toml"), '[tool.pytest.ini_options]\ntestpaths = """tests/unit"""\n');
+    assert.equal(
+      isVerifierDeliverableBound(
+        root,
+        [target],
+        "pytest",
+        "========================= 1 passed in 0.01s =========================",
+        scoped,
+        new Map([[defaultDiscoveryTest, pytestImportedTest]]),
+      ),
+      false,
+      "a TOML multiline testpaths scalar must not introduce empty roots that broaden collection",
+    );
     fs.writeFileSync(path.join(root, "pyproject.toml"), 'tool."py\\u0074est".ini_options.testpaths = ["tests/unit"]\n');
     assert.equal(
       isVerifierDeliverableBound(
