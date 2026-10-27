@@ -1,0 +1,69 @@
+{
+  "requirement": "REQ-REL-114",
+  "acceptance": "ACC-SUP-08",
+  "result": "PASS",
+  "workflowRun": "https://github.com/mikeholownych/nexus-code/actions/runs/40564959805",
+  "workflow": {
+    "ref": "refs/heads/main",
+    "sha": "cf05322cc0368af900b2fb425852daa2d0de403e",
+    "runId": "40564959805",
+    "runAttempt": "1"
+  },
+  "source": {
+    "version": "v1.0.0-rc.10",
+    "commit": "16ee8ca3643824741b6da67936b41f262414fdf0",
+    "tree": "4e76eadcb44f419001f67960241517000a8b682a",
+    "tagObject": "0e99eeb7268ec798d4859f01279c9db8b1ce42f6",
+    "tagCommit": "16ee8ca3643824741b6da67936b41f262414fdf0",
+    "lockfiles": {
+      "cli/package-lock.json": "a6c60449e4830ecaa42d2a0b5310c09119d8934536944ab14e91c516525f312f",
+      "core/Cargo.lock": "384795add06f6990cf50a8066f6d22bfa2ca6fb70def7e97407c4fd5eeb21c1d",
+      "rust-toolchain.toml": "97aab3493c1fb14fe9a21c760433577f434714f5725bbb176e67048dde581afe",
+      "scripts/release-tools/package-lock.json": "ca57fbb380d9eadcc135207d880257f53f7749346ff65fd6cc2082f623e05fae"
+    },
+    "untracked": []
+  },
+  "buildEnvironment": {
+    "rustContainerImage": "rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb"
+  },
+  "packagingTool": {
+    "commit": "cf05322cc0368af900b2fb425852daa2d0de403e",
+    "packageScriptSha256": "d948cdecbe4cd42663d298d652726a0414ac9b01727313b9e0d3107eb0fce788"
+  },
+  "artifacts": {
+    "SHA256SUMS": "760199fcb7e079b356ddbae4f739c74bc356a7b0a7a2edd956b554736651d8fe",
+    "THIRD_PARTY_NOTICES.txt": "512d808a937aedb6ba84d99b0988502af04c1ea3964f9c0c45114d4ce00053b9",
+    "compatibility.json": "500f4f05d089a3bad911becfd17e26c702747f5a0c9a26b6aac84497e88c1f94",
+    "install.sh": "5620d56ef6f8d637fc102ae2c8ea3b055effbc4069243a2df68b67520b1e2302",
+    "nexus-linux-x86_64-v1.0.0-rc.10.tar.gz": "444d0812ad583b7f688890ac8536cb872e92364c977d9fbf298fa0408d98b3e7",
+    "sbom.cdx.json": "1a082a2ed29950a9cff828fd00db33de8e182dcb2758846a4e1276849a4a2c3a"
+  },
+  "builders": [
+    {
+      "runner": {
+        "label": "ubuntu-22.04",
+        "image": "ubuntu22",
+        "imageVersion": "20261023.322.3"
+      },
+      "toolchain": {
+        "node": "v22.22.1",
+        "npm": "10.9.4",
+        "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+        "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+      }
+    },
+    {
+      "runner": {
+        "label": "ubuntu-24.04",
+        "image": "ubuntu24",
+        "imageVersion": "20261023.334.3"
+      },
+      "toolchain": {
+        "node": "v22.22.1",
+        "npm": "10.9.4",
+        "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+        "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+      }
+    }
+  ]
+}
