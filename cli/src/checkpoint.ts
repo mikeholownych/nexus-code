@@ -122,7 +122,7 @@ export class CheckpointManager {
           stdio: ["ignore", "pipe", "ignore"],
         });
         if (!allowSensitive) {
-          const indexEntry = execFileSync("git", ["ls-files", "--stage", "-z", "--", relativePath], {
+          const indexEntry = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--stage", "-z", "--", relativePath], {
             cwd: this.workspace,
             encoding: "utf8",
           });
@@ -164,7 +164,7 @@ export class CheckpointManager {
   }
 
   private gitUntrackedPaths(includeIgnored = false): string[] {
-    return execFileSync("git", ["ls-files", "--others", ...(includeIgnored ? [] : ["--exclude-standard"]), "-z"], {
+    return execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--others", ...(includeIgnored ? [] : ["--exclude-standard"]), "-z"], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
@@ -241,12 +241,12 @@ export class CheckpointManager {
   }
 
   private assertLegacyUntrackedRestoreSafe(gitRef: string): void {
-    const checkoutPaths = execFileSync("git", ["ls-tree", "-r", "--name-only", "-z", gitRef], {
+    const checkoutPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-tree", "-r", "--name-only", "-z", gitRef], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
     }).toString("utf8").split("\0").filter(Boolean);
-    const deletedPaths = execFileSync("git", ["diff", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
+    const deletedPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
@@ -258,7 +258,7 @@ export class CheckpointManager {
   }
 
   private removeTrackedDeletions(gitRef: string): void {
-    const deletedPaths = execFileSync("git", ["diff", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
+    const deletedPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
@@ -336,7 +336,7 @@ export class CheckpointManager {
     );
     if (directoryTargets.length === 0) return;
 
-    const changedPaths = execFileSync("git", ["diff", "--name-only", "-z", gitRef, "--"], {
+    const changedPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "-z", gitRef, "--"], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
@@ -346,7 +346,7 @@ export class CheckpointManager {
     }
 
     for (const relativePath of directoryTargets) {
-      const preview = execFileSync("git", ["clean", "-nd", "--", relativePath], {
+      const preview = execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "clean", "-nd", "--", relativePath], {
         cwd: this.workspace,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
@@ -451,7 +451,7 @@ export class CheckpointManager {
       } catch (error) {
         try {
           fs.rmSync(snapTarget, { recursive: true, force: true });
-          if (gitRef) execFileSync("git", ["update-ref", "-d", `refs/nexus/checkpoints/${id}`], { cwd: this.workspace, stdio: "ignore" });
+          if (gitRef) execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", `refs/nexus/checkpoints/${id}`], { cwd: this.workspace, stdio: "ignore", env: envWithoutConfiguredHooks(this.workspace, ["reference-transaction"]) });
         } catch {}
         throw error;
       }
