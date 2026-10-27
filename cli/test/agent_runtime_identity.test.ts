@@ -10,11 +10,13 @@ test("Nexus host identity remains explicit with a Claude model and activated cli
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-runtime-identity-workspace-"));
   const oldHome = process.env.HOME;
   const oldXdg = process.env.XDG_CONFIG_HOME;
+  const oldStateDir = process.env.NEXUS_STATE_DIR;
   let agent: AutonomousAgent | undefined;
 
   try {
     process.env.HOME = home;
     process.env.XDG_CONFIG_HOME = path.join(home, ".config");
+    process.env.NEXUS_STATE_DIR = path.join(home, ".nexus");
     const skillDir = path.join(home, ".nexus", "skills", "claude-client-setup");
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(
@@ -57,6 +59,8 @@ test("Nexus host identity remains explicit with a Claude model and activated cli
     process.env.HOME = oldHome;
     if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME;
     else process.env.XDG_CONFIG_HOME = oldXdg;
+    if (oldStateDir === undefined) delete process.env.NEXUS_STATE_DIR;
+    else process.env.NEXUS_STATE_DIR = oldStateDir;
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(workspace, { recursive: true, force: true });
   }
