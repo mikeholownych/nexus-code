@@ -78,7 +78,7 @@ export class TeamOrchestrator {
   plan(target: TeamTarget, objective: string): DurableOperationState {
     const now = this.opts.clock?.now() ?? Date.now();
     const resources = this.opts.resources ?? resourcesFromConfig(this.config);
-    return newOperation(this.opts.id ?? `team-${randomUUID().slice(0, 8)}`, objective, teamUnits(target, objective, this.opts), resources, now);
+    return newOperation(this.opts.id ?? `team-${randomUUID().slice(0, 8)}`, objective, teamUnits(target, objective, this.opts), resources, now, this.config.operationPolicy);
   }
 
   async run(target: TeamTarget, objective: string): Promise<TeamOutcome> {

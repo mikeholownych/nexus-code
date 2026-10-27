@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
-import { buildConfig, autoDetectModel } from "../src/config.js";
+import { buildConfig, autoDetectModel, configuredOperationPolicy } from "../src/config.js";
 import { startGateway } from "./helpers/fixtures.js";
 
 describe("config", () => {
@@ -91,5 +91,31 @@ describe("config", () => {
     } finally {
       await gw.close();
     }
+  });
+
+  test("operation scheduling policy reads validated operator settings", () => {
+    const settings: Record<string, string> = {
+      NEXUS_OPERATION_MAX_WAIT_MS: "3600000",
+      NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET: "0",
+      NEXUS_OPERATION_MAX_RUNS_PER_UNIT: "8",
+      NEXUS_OPERATION_MIN_WAIT_MS: "250",
+    };
+    assert.deepEqual(configuredOperationPolicy((key) => settings[key]), {
+      maxWaitMs: 3_600_000,
+      unknownResumeBudget: 0,
+      maxRunsPerUnit: 8,
+      minWaitMs: 250,
+    });
+  });
+
+  test("operation scheduling policy rejects invalid or contradictory operator values", () => {
+    assert.throws(
+      () => configuredOperationPolicy((key) => key === "NEXUS_OPERATION_MAX_RUNS_PER_UNIT" ? "1.5" : undefined),
+      /NEXUS_OPERATION_MAX_RUNS_PER_UNIT/,
+    );
+    assert.throws(
+      () => configuredOperationPolicy((key) => ({ NEXUS_OPERATION_MAX_WAIT_MS: "500", NEXUS_OPERATION_MIN_WAIT_MS: "1000" }[key])),
+      /must not exceed/,
+    );
   });
 });

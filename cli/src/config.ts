@@ -6,6 +6,7 @@ import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, operatorSetting, setCredentialAuthority } from "./client.js";
 import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
+import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
@@ -380,6 +381,7 @@ export function buildConfig(options: any): HarnessConfig {
   if (coderProvider && !coderModel) throw new Error(`Coder provider '${coderProvider}' needs an explicit model: pass --coder-model or set CODER_LLM_MODEL.`);
   const plannerApiKey = plannerProvider ? providerKey(plannerProvider) : undefined;
   const coderApiKey = coderProvider ? providerKey(coderProvider) : undefined;
+  const operationPolicy = configuredOperationPolicy();
 
   // Disclosure authority: destinations the operator selected (flags, operator environment, config.env) plus origins
   // listed in NEXUS_CLOUD_DISCLOSURE_ORIGINS. An endpoint chosen only by a project .env, and any fallback endpoint,
@@ -439,7 +441,37 @@ export function buildConfig(options: any): HarnessConfig {
     ...(cloudRoutedOrigins.length ? { cloudRoutedOrigins } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(anthropicThinkingBudget ? { anthropicThinkingBudget } : {}),
+    ...(operationPolicy ? { operationPolicy } : {}),
   };
+}
+
+/**
+ * Durable operation scheduling defaults are operator policy, so read them only through operatorSetting; a project
+ * `.env` cannot silently change how long an operation waits or how often Nexus retries work.
+ */
+export function configuredOperationPolicy(setting: (key: string) => string | undefined = operatorSetting): HarnessConfig["operationPolicy"] {
+  const fields = [
+    ["NEXUS_OPERATION_MAX_WAIT_MS", "maxWaitMs", 1],
+    ["NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET", "unknownResumeBudget", 0],
+    ["NEXUS_OPERATION_MAX_RUNS_PER_UNIT", "maxRunsPerUnit", 1],
+    ["NEXUS_OPERATION_MIN_WAIT_MS", "minWaitMs", 1],
+  ] as const;
+  const policy: NonNullable<HarnessConfig["operationPolicy"]> = {};
+  for (const [key, property, minimum] of fields) {
+    const raw = setting(key);
+    if (raw === undefined) continue;
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < minimum) {
+      throw new Error(`Invalid ${key}='${raw}': expected a safe integer of at least ${minimum}.`);
+    }
+    policy[property] = value;
+  }
+  const maxWaitMs = policy.maxWaitMs ?? DEFAULT_OPERATION_POLICY.maxWaitMs;
+  const minWaitMs = policy.minWaitMs ?? DEFAULT_OPERATION_POLICY.minWaitMs;
+  if (minWaitMs > maxWaitMs) {
+    throw new Error(`Invalid operation wait settings: NEXUS_OPERATION_MIN_WAIT_MS (${minWaitMs}) must not exceed NEXUS_OPERATION_MAX_WAIT_MS (${maxWaitMs}).`);
+  }
+  return Object.keys(policy).length ? policy : undefined;
 }
 
 /**
