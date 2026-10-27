@@ -533,8 +533,9 @@ function testReferencesFile(content: string, testFile: string, targetFile: strin
 }
 
 /**
- * Bind Python tests through explicit, root-qualified imports. Unknown import
- * layouts remain unbound rather than being inferred from output or basenames.
+ * Bind Python tests through unconditional module-level, root-qualified imports.
+ * Unknown import layouts remain unbound rather than being inferred from output
+ * or basenames.
  */
 function pythonTestReferencesFile(content: string, target: string, root: string): boolean {
   const source = stripPythonStringsAndComments(content);
@@ -548,6 +549,9 @@ function pythonTestReferencesFile(content: string, target: string, root: string)
   };
 
   for (const rawLine of source.split(/\r?\n/)) {
+    // A static line scan cannot prove that an import in a conditional, function,
+    // class, or other indented block executes. Count only module-level imports.
+    if (/^\s/.test(rawLine)) continue;
     const line = rawLine.trim();
     if (!line) continue;
 

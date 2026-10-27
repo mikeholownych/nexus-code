@@ -228,6 +228,20 @@ test("ACC-VER-03: Python unittest imports bind root-qualified product modules", 
       false,
       "comments, strings, and docstrings do not establish a Python import",
     );
+
+    const conditionalImport = "if False:\n    from src.slug import slugify\n";
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", conditionalImport]])),
+      false,
+      "an unreachable conditional import does not establish a Python deliverable binding",
+    );
+
+    const functionLocalImport = "def test_slugify():\n    from src.slug import slugify\n    assert slugify('x') == 'x'\n";
+    assert.equal(
+      isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", functionLocalImport]])),
+      false,
+      "a function-local import is not assumed to have executed",
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
