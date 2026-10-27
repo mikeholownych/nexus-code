@@ -20,7 +20,7 @@ import {
 } from "./candidate.js";
 import { AuthorityAdmissionEngine } from "./authority.js";
 import { WorktreeManager } from "../worktree.js";
-import { redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
+import { isManagedWorktreePath, redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
 import type { ObjectiveLedger } from "./objective.js";
 import { WorkspacePath } from "./workspace_path.js";
 import { writeFileDurably, writePrivateFile, appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, fsyncDirectoryDurably } from "./durable_file.js";
@@ -614,12 +614,28 @@ export class DurableStateManager {
 
     // Verify workspace binding if expectedWorkspace provided
     let selectedPaths = workspacePaths;
+    let normalizedLegacyWorkspace = false;
     if (expectedWorkspace && state.workspacePath) {
       const expectedIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(expectedWorkspace));
       const normExpected = expectedIdentity.value;
       const normActual = path.resolve(state.workspacePath);
       if (normExpected !== normActual) {
-        throw new WorkspaceIdentityMismatchError(normExpected, normActual);
+        // Earlier builds recorded the active speculative worktree as the task's workspace identity.
+        // Normalise such a record only when its own binding proves the expected root owns that exact
+        // managed worktree; every other mismatch stays fail-closed. The load path persists the
+        // normalised record below (workspacePath changes are protected identity fields).
+        const binding = state.worktreeBinding;
+        const bindingPath = binding?.worktreePath ? path.resolve(binding.worktreePath) : undefined;
+        if (
+          bindingPath !== normActual ||
+          !binding ||
+          !isManagedWorktreePath(expectedIdentity, normActual, taskId, binding)
+        ) {
+          throw new WorkspaceIdentityMismatchError(normExpected, normActual);
+        }
+        state.workspacePath = normExpected;
+        state.workspace = normExpected;
+        normalizedLegacyWorkspace = true;
       }
       selectedPaths = [...workspacePaths, expectedIdentity];
     }
@@ -641,7 +657,7 @@ export class DurableStateManager {
       if (changedIdentityFields.length > 0) {
         throw new TaskStateReadError(taskId, "Sensitive data intersects durable state identity");
       }
-      if (record.version < CURRENT_STATE_SCHEMA_VERSION || JSON.stringify(protectedState) !== JSON.stringify(state)) {
+      if (record.version < CURRENT_STATE_SCHEMA_VERSION || normalizedLegacyWorkspace || JSON.stringify(protectedState) !== JSON.stringify(state)) {
         // Migrate older plaintext state on disk before reporting a successful load.
         this.saveTaskState(protectedState, selectedPaths);
         return protectedState;

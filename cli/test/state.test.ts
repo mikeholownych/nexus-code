@@ -339,6 +339,122 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     assert.ok(recoveryResult.diagnostics.some((d) => d.includes("Recorded worktree path does not exist")));
   });
 
+  test("PERS-004: a legacy record that stored its managed worktree as the workspace recovers from the primary checkout", () => {
+    const rootIdentity = WorkspacePath.fromSelectedWorkspace(gitRepoDir);
+    const taskId = "task-legacy-worktree";
+    const worktree = new WorktreeManager(gitRepoDir).createWorktree(taskId);
+    const worktreeIdentity = WorkspacePath.fromSelectedWorkspace(worktree.worktreePath);
+    const binding = {
+      taskId,
+      worktreePath: worktree.worktreePath,
+      branch: worktree.branch,
+      createdAt: new Date().toISOString(),
+    };
+    const legacy: DurableTaskState = {
+      schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
+      taskId,
+      sessionId: taskId,
+      id: taskId,
+      title: "Legacy Worktree Task",
+      workspacePath: worktree.worktreePath,
+      workspace: worktree.worktreePath,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "in_progress",
+      activePlan: [],
+      milestones: [],
+      worktreeBinding: binding,
+      validationReceipts: [],
+      messages: [{ role: "user", content: "legacy worktree conversation" }],
+    };
+    const writer = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [rootIdentity, worktreeIdentity] });
+    writer.saveTaskState(legacy);
+    assert.strictEqual(writer.loadTaskState(taskId).workspacePath, worktree.worktreePath);
+
+    const reader = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [rootIdentity] });
+    const recoveryResult = reader.recoverTaskState(taskId, { expectedWorkspace: gitRepoDir });
+
+    assert.strictEqual(recoveryResult.worktreeStatus, "consistent");
+    assert.strictEqual(recoveryResult.state.workspacePath, rootIdentity.value);
+    const persisted = reader.loadTaskState(taskId);
+    assert.strictEqual(persisted.workspacePath, rootIdentity.value, "the legacy identity was not normalised on disk");
+    assert.strictEqual(persisted.worktreeBinding?.worktreePath, worktree.worktreePath);
+    assert.strictEqual(persisted.messages.length, 1);
+  });
+
+  test("PERS-004: an unrelated workspace identity still fails closed", () => {
+    const rootIdentity = WorkspacePath.fromSelectedWorkspace(gitRepoDir);
+    const taskId = "task-unrelated-worktree";
+    const external = path.join(tmpDir, "external-worktree");
+    fs.mkdirSync(external, { recursive: true });
+    const externalIdentity = WorkspacePath.fromSelectedWorkspace(external);
+    const writer = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [rootIdentity, externalIdentity] });
+    writer.saveTaskState({
+      schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
+      taskId,
+      sessionId: taskId,
+      id: taskId,
+      title: "Unrelated Workspace Task",
+      workspacePath: external,
+      workspace: external,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "in_progress",
+      activePlan: [],
+      milestones: [],
+      worktreeBinding: {
+        taskId,
+        worktreePath: external,
+        branch: `nexus/${taskId}`,
+        createdAt: new Date().toISOString(),
+      },
+      validationReceipts: [],
+      messages: [],
+    });
+
+    const reader = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [rootIdentity] });
+    assert.throws(
+      () => reader.recoverTaskState(taskId, { expectedWorkspace: gitRepoDir }),
+      WorkspaceIdentityMismatchError
+    );
+  });
+
+  test("PERS-004: a managed path with a mismatched binding branch still fails closed", () => {
+    const rootIdentity = WorkspacePath.fromSelectedWorkspace(gitRepoDir);
+    const taskId = "task-wrong-branch";
+    const worktree = new WorktreeManager(gitRepoDir).createWorktree(taskId);
+    const worktreeIdentity = WorkspacePath.fromSelectedWorkspace(worktree.worktreePath);
+    const writer = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [rootIdentity, worktreeIdentity] });
+    writer.saveTaskState({
+      schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
+      taskId,
+      sessionId: taskId,
+      id: taskId,
+      title: "Wrong Branch Task",
+      workspacePath: worktree.worktreePath,
+      workspace: worktree.worktreePath,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "in_progress",
+      activePlan: [],
+      milestones: [],
+      worktreeBinding: {
+        taskId,
+        worktreePath: worktree.worktreePath,
+        branch: "feature/not-nexus",
+        createdAt: new Date().toISOString(),
+      },
+      validationReceipts: [],
+      messages: [],
+    });
+
+    const reader = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [rootIdentity] });
+    assert.throws(
+      () => reader.recoverTaskState(taskId, { expectedWorkspace: gitRepoDir }),
+      WorkspaceIdentityMismatchError
+    );
+  });
+
   test("PERS-004 & Authority Invariance: Prior authority flags do not resurrect live authority", async () => {
     const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const taskId = "task-authority-invariance";
