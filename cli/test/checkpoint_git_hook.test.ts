@@ -173,3 +173,44 @@ test("checkpoint pruning does not execute a workspace git hook", () => {
     env.restore();
   }
 });
+
+test("checkpoint pruning preserves its record and reports unsupported Git 2.54 hook suppression", () => {
+  const env = setup();
+  const wrapperDir = path.join(env.root, "git-254-bin");
+  const previousPath = process.env.PATH;
+  const previousRealGit = process.env.REAL_GIT;
+  fs.mkdirSync(wrapperDir, { recursive: true });
+  try {
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const manager = new CheckpointManager(env.workspace);
+    const checkpoint = manager.createCheckpoint("git 2.54 prune guard");
+    const record = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    assert.equal(fs.existsSync(record), true, "checkpoint fixture was not persisted");
+
+    fs.writeFileSync(
+      path.join(wrapperDir, "git"),
+      `#!/bin/sh\nif [ "$1" = "--version" ]; then printf 'git version 2.54.0\\n'; else exec "$REAL_GIT" "$@"; fi\n`,
+      { mode: 0o755 },
+    );
+    fs.chmodSync(path.join(wrapperDir, "git"), 0o755);
+    process.env.REAL_GIT = realGit;
+    process.env.PATH = `${wrapperDir}${path.delimiter}${previousPath ?? ""}`;
+
+    const result = manager.pruneCheckpoints(0);
+    assert.equal(result.prunedCount, 0);
+    assert.match(result.message, /Git 2\.54 cannot safely disable all configured hooks/);
+    assert.equal(fs.existsSync(record), true, "failed pruning deleted the checkpoint record");
+    assert.doesNotThrow(() =>
+      execFileSync(realGit, ["show-ref", "--verify", "--quiet", `refs/nexus/checkpoints/${checkpoint.id}`], {
+        cwd: env.workspace,
+        stdio: "ignore",
+      }),
+      "failed pruning deleted the checkpoint ref",
+    );
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousRealGit === undefined) delete process.env.REAL_GIT;
+    else process.env.REAL_GIT = previousRealGit;
+    env.restore();
+  }
+});
