@@ -1,0 +1,150 @@
+[   1.01s] SAW idle
+[   1.01s] SCREEN idle (40x14)
+[   1.01s] SEND b'?'
+[   1.21s] SAW help
+[   1.21s] SCREEN help (40x14)
+[   1.21s] SEND b'\x1b'
+[   1.41s] SAW help closed
+[   1.41s] SEND b'/model\r'
+[   1.61s] SAW model picker
+[   1.61s] SCREEN model-picker (40x14)
+[   1.61s] SEND b'\x1b'
+[   1.81s] SAW model picker closed
+[   1.81s] SEND b'talk slowly\r'
+[   2.11s] SAW streaming
+[   3.11s] SCREEN streaming (40x14)
+[   3.11s] SEND Ctrl-C
+[   3.31s] SAW cancelled outcome
+[   3.31s] SCREEN cancelled (40x14)
+[   3.32s] SEND b'create a11y.txt\r'
+[   4.02s] SAW approval
+[   4.02s] SCREEN approval (40x14)
+[   6.52s] SEND b'y'
+[   7.72s] SEND b'\x1b[D'
+[  10.23s] SEND b'\r'
+[  11.03s] SEND b'\r'
+[  11.53s] SAW completion
+[  11.53s] SCREEN completion (40x14)
+[   0.91s] SAW tool-session idle
+[   0.91s] SEND b'run it\r'
+[   1.41s] SAW tool running
+[   1.41s] SCREEN tool-running (40x14)
+[   1.41s] SEND b'\x1b'
+[   1.81s] SAW tool cancelled idle
+[   1.81s] SCREEN tool-cancelled (40x14)
+[   1.01s] SAW unreachable endpoint
+[   1.01s] SCREEN endpoint-error (40x14)
+PASS xterm-256color 40x14 approval,cancelled,completion,endpoint_error,help,idle,model_picker,streaming,tool_cancelled,tool_running
+[   1.02s] SAW idle
+[   1.02s] SCREEN idle (100x30)
+[   1.02s] SEND b'?'
+[   1.22s] SAW help
+[   1.22s] SCREEN help (100x30)
+[   1.22s] SEND b'\x1b'
+[   1.43s] SAW help closed
+[   1.43s] SEND b'/model\r'
+[   1.63s] SAW model picker
+[   1.63s] SCREEN model-picker (100x30)
+[   1.63s] SEND b'\x1b'
+[   1.83s] SAW model picker closed
+[   1.83s] SEND b'talk slowly\r'
+[   2.24s] SAW streaming
+[   3.24s] SCREEN streaming (100x30)
+[   3.24s] SEND Ctrl-C
+[   3.44s] SAW cancelled outcome
+[   3.44s] SCREEN cancelled (100x30)
+[   3.44s] SEND b'create a11y.txt\r'
+[   3.95s] SAW approval
+[   3.95s] SCREEN approval (100x30)
+[   6.45s] SEND b'y'
+[   7.65s] SEND b'\x1b[D'
+[  10.15s] SEND b'\r'
+[  10.95s] SEND b'\r'
+[  11.35s] SAW completion
+[  11.35s] SCREEN completion (100x30)
+[   0.92s] SAW tool-session idle
+[   0.92s] SEND b'run it\r'
+[   1.42s] SAW tool running
+[   1.43s] SCREEN tool-running (100x30)
+[   1.43s] SEND b'\x1b'
+[   1.83s] SAW tool cancelled idle
+[   1.83s] SCREEN tool-cancelled (100x30)
+[   1.02s] SAW unreachable endpoint
+[   1.02s] SCREEN endpoint-error (100x30)
+PASS xterm-256color 100x30 approval,cancelled,completion,endpoint_error,help,idle,model_picker,streaming,tool_cancelled,tool_running
+[   1.01s] SAW idle
+[   1.01s] SCREEN idle (40x14)
+[   1.01s] SEND b'?'
+[   1.21s] SAW help
+[   1.21s] SCREEN help (40x14)
+[   1.21s] SEND b'\x1b'
+[   1.41s] SAW help closed
+[   1.41s] SEND b'/model\r'
+[   1.61s] SAW model picker
+[   1.61s] SCREEN model-picker (40x14)
+[   1.61s] SEND b'\x1b'
+[   1.81s] SAW model picker closed
+[   1.81s] SEND b'talk slowly\r'
+[   2.21s] SAW streaming
+[   3.21s] SCREEN streaming (40x14)
+[   3.21s] SEND Ctrl-C
+[   3.42s] SAW cancelled outcome
+[   3.42s] SCREEN cancelled (40x14)
+[   3.42s] SEND b'create a11y.txt\r'
+[   3.82s] SAW approval
+[   3.82s] SCREEN approval (40x14)
+[   6.32s] SEND b'y'
+[   7.52s] SEND b'\x1b[D'
+[  10.02s] SEND b'\r'
+[  10.82s] SEND b'\r'
+[  11.32s] SAW completion
+[  11.32s] SCREEN completion (40x14)
+[   1.01s] SAW tool-session idle
+[   1.01s] SEND b'run it\r'
+[   1.51s] SAW tool running
+[   1.51s] SCREEN tool-running (40x14)
+[   1.51s] SEND b'\x1b'
+[   1.91s] SAW tool cancelled idle
+[   1.91s] SCREEN tool-cancelled (40x14)
+[   1.01s] SAW unreachable endpoint
+[   1.01s] SCREEN endpoint-error (40x14)
+PASS dumb 40x14 approval,cancelled,completion,endpoint_error,help,idle,model_picker,streaming,tool_cancelled,tool_running
+[   1.02s] SAW idle
+[   1.02s] SCREEN idle (100x30)
+[   1.03s] SEND b'?'
+[   1.23s] SAW help
+[   1.23s] SCREEN help (100x30)
+[   1.23s] SEND b'\x1b'
+[   1.43s] SAW help closed
+[   1.43s] SEND b'/model\r'
+[   1.63s] SAW model picker
+[   1.63s] SCREEN model-picker (100x30)
+[   1.64s] SEND b'\x1b'
+[   1.84s] SAW model picker closed
+[   1.84s] SEND b'talk slowly\r'
+[   2.24s] SAW streaming
+[   3.24s] SCREEN streaming (100x30)
+[   3.24s] SEND Ctrl-C
+[   3.45s] SAW cancelled outcome
+[   3.45s] SCREEN cancelled (100x30)
+[   3.45s] SEND b'create a11y.txt\r'
+[   3.85s] SAW approval
+[   3.85s] SCREEN approval (100x30)
+[   6.35s] SEND b'y'
+[   7.55s] SEND b'\x1b[D'
+[  10.05s] SEND b'\r'
+[  10.86s] SEND b'\r'
+[  11.36s] SAW completion
+[  11.36s] SCREEN completion (100x30)
+[   0.92s] SAW tool-session idle
+[   0.92s] SEND b'run it\r'
+[   1.43s] SAW tool running
+[   1.43s] SCREEN tool-running (100x30)
+[   1.43s] SEND b'\x1b'
+[   6.71s] TIMEOUT waiting for tool cancelled idle
+[   6.71s] SCREEN timeout-tool cancelled idle (100x30)
+Traceback (most recent call last):
+  File "/var/tmp/nexus-rc10-a11y-state-matrix-corrected2-20261027T0150Z/run_states.py", line 67, in <module>
+    s2.send(b"\x1b"); assert s2.wait("enter send",5,"tool cancelled idle")
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

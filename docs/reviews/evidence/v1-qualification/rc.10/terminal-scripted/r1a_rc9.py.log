@@ -1,0 +1,6 @@
+[   1.02s] SAW repl-prompt
+[   1.02s] SEND b'create hello.txt\r'
+[   3.36s] SAW approval-prompt
+[   6.36s] SEND lone Enter defaults to deny
+tool_cancellation_visible_in_raw: True
+lone_enter_created_file: False

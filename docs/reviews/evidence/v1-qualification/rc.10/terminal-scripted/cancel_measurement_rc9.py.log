@@ -1,0 +1,21 @@
+[   1.02s] SAW idle
+[   1.02s] SEND b'talk slowly\r'
+[   1.43s] SAW streaming
+[   2.00s] SAW idle-after-cancel
+s5_cancel_measure_0 ack_seconds= 0.00218 ack_1frame= True idle= True
+[   1.02s] SAW idle
+[   1.02s] SEND b'talk slowly\r'
+[   1.43s] SAW streaming
+[   2.41s] SAW idle-after-cancel
+s5_cancel_measure_1 ack_seconds= 0.00215 ack_1frame= True idle= True
+[   1.03s] SAW idle
+[   1.03s] SEND b'talk slowly\r'
+[   1.43s] SAW streaming
+[   1.64s] SAW idle-after-cancel
+s5_cancel_measure_2 ack_seconds= 0.00214 ack_1frame= True idle= True
+[   0.92s] SAW idle
+[   0.92s] SEND b'run it\r'
+[   1.43s] SAW tool-running
+[   1.90s] SAW idle-after-esc
+s8_cancel_measure ack_seconds= 0.39824 ack_1frame= False idle= True sleep_survivors= []
+s8_cancel_measure tui_exited= True scoped_processes_after_quit= []

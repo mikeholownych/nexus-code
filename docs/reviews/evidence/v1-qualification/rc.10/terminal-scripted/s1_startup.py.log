@@ -1,0 +1,9 @@
+[   4.01s] SCREEN startup-unreachable (100x30)
+[   4.01s] TYPE 'say hello\r' gap=0.05
+[  12.51s] SCREEN after-prompt-unreachable (100x30)
+[  32.51s] SCREEN after-prompt-unreachable-28s (100x30)
+[  32.51s] SEND b'\x03'
+[  33.71s] SEND b'\x03'
+[  34.05s] SCREEN after-ctrl-c (100x30)
+alive False
+[   0.44s] SCREEN startup-default-endpoint (100x30)

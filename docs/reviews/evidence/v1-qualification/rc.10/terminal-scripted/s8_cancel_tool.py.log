@@ -1,0 +1,16 @@
+[   1.22s] SAW idle
+[   1.22s] SEND b'run it\r'
+[   2.03s] SAW tool-running
+before Esc:
+3930195 3930174       1 bash -c sleep 23.7; echo finished
+3930198 3930195       1 sleep 23.7
+[   3.59s] SEND Esc during tool
+[   6.80s] SCREEN 3s-after-esc (100x30)
+3s after Esc:
+
+[   6.85s] SEND Ctrl-C (second request: quit)
+alive after 2nd ctrl-c: False
+after quit:
+
+8s after quit:
+

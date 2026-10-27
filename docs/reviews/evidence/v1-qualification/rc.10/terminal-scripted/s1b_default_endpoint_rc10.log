@@ -1,0 +1,32 @@
+[   5.01s] SCREEN default-endpoint-startup (100x30)
+helpful_endpoint_or_model_guidance: True
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+  · Endpoint http://localhost:1234/v1 is unreachable (fetch failed (cause: ECONNREFUSED <-
+ECONNREFUSED: connect ECONNREFUSED ::1:1234 <- ECONNREFUSED: connect ECONNREFUSED 127.0.0.1:1234)).
+Run `nexus doctor`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
