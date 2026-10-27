@@ -112,7 +112,7 @@ export class CheckpointManager {
     for (const relativePath of changedPaths) {
       if (!allowSensitive) assertNoSensitivePersistenceContent(relativePath, "checkpoint");
       try {
-        const indexed = execFileSync("git", ["show", `:${relativePath}`], {
+        const indexed = execFileSync("git", ["-c", "core.fsmonitor=false", "show", `:${relativePath}`], {
           cwd: this.workspace,
           encoding: "buffer",
           maxBuffer: 64 * 1024 * 1024,

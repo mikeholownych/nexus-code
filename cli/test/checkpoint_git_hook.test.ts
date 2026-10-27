@@ -40,9 +40,16 @@ test("checkpoint creation does not execute a workspace git hook", () => {
   const env = setup();
   try {
     fs.writeFileSync(path.join(env.workspace, "file.txt"), "dirty\n");
+    // The changed-path index inspection (git show :path) can run a configured fsmonitor program.
+    const fsmonitorMarker = path.join(env.root, "fsmonitor-ran");
+    const fsmonitorScript = path.join(env.root, "creation-fsmonitor.sh");
+    fs.writeFileSync(fsmonitorScript, `#!/bin/sh\ntouch '${fsmonitorMarker}'\nexit 0\n`, { mode: 0o755 });
+    fs.chmodSync(fsmonitorScript, 0o755);
+    execFileSync("git", ["config", "core.fsmonitor", fsmonitorScript], { cwd: env.workspace });
     const manager = new CheckpointManager(env.workspace);
     manager.createCheckpoint("hook test");
     assert.equal(fs.existsSync(env.marker), false, "checkpoint creation executed a workspace hook");
+    assert.equal(fs.existsSync(fsmonitorMarker), false, "checkpoint creation executed a workspace fsmonitor");
     const refs = execFileSync("git", ["for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"], {
       cwd: env.workspace,
       encoding: "utf8",
