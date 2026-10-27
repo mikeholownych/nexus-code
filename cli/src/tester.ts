@@ -893,6 +893,12 @@ function topLevelStaticImports(source: string): string[] {
       previous = { kind: "punct", value: "/" };
       continue;
     }
+    if (char === "\\" && source[index + 1] === "u") {
+      // Unicode escapes are valid in identifiers. This narrow lexer does not
+      // decode them, so fail closed instead of missing escaped `eval` or
+      // `require` bindings.
+      return [];
+    }
     if (/[A-Za-z_$]/.test(char)) {
       const start = index++;
       while (/[\w$]/.test(source[index] ?? "")) index++;

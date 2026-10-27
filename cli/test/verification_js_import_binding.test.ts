@@ -94,6 +94,12 @@ test("ACC-VER-03: only executable JavaScript imports bind a declared deliverable
 
     const reassignedRequire = 'eval("require = loader");\nrequire("../src/a.js");\ntest("eval", () => {});\n';
     assert.equal(bind(reassignedRequire), false, "direct eval can replace the CommonJS loader");
+
+    const escapedEval = 'ev\\u0061l("require = loader");\nrequire("../src/a.js");\ntest("eval", () => {});\n';
+    assert.equal(bind(escapedEval), false, "Unicode-escaped eval cannot bypass the conservative lexer");
+
+    const escapedRequire = 'const requ\\u0069re = loader;\nrequire("../src/a.js");\ntest("require", () => {});\n';
+    assert.equal(bind(escapedRequire), false, "Unicode-escaped require cannot bypass the conservative lexer");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
