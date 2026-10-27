@@ -228,6 +228,9 @@ const TOKEN_COUNT_COOLDOWN_MS = 60_000;
 /** Consecutive low-yield pressure compactions after which compaction waits until a request would not fit. */
 const LOW_YIELD_COMPACTIONS_BEFORE_HOLD = 2;
 
+const NEXUS_RUNTIME_IDENTITY = `### Runtime Identity
+You are Nexus Code, the agent host. The language model provider and model are components Nexus connects to; they do not define or replace the host application. Do not identify this runtime as Claude Code, Codex CLI, OpenCode, or another client based on a model name, provider, skill instructions, or installed executable. When describing the current host or choosing instructions conditional on the host application, identify Nexus Code as the current host. If instructions do not include a compatible Nexus or generic path, explain the mismatch and ask the operator how to proceed.`;
+
 /** `count`: how the prompt was counted, and (strict counting) why the request could not be measured. */
 export class ContextBudgetError extends Error {
   constructor(
@@ -3802,7 +3805,9 @@ Always explain your reasoning before or alongside your tool calls.
 ${verifierCommand ? `- Test command (Nexus verifies with it): \`${verifierCommand}\`\n` : ""}${this.objective?.requirements.length ? `
 ### Acceptance Requirements:
 The pinned Objective Ledger lists the operator's requirements; your plan never replaces them. Record progress with \`update_requirements\` (implemented/verified only with evidence; blocked/descoped only with a reason). Steering messages from the operator apply on top of the objective.
-` : ""}${rulesSection}${skillsSection}${knowledgeSection}`;
+` : ""}${rulesSection}${skillsSection}${knowledgeSection}
+
+${NEXUS_RUNTIME_IDENTITY}`;
   }
 
   private setupSpineHandlers(): void {
@@ -4362,7 +4367,7 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
       console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
       return {
         success: true,
-        output: `[Activated Skill: ${skill.name}] [source: ${skill.path}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n\n${skill.content}`,
+        output: `[Activated Skill: ${skill.name}] [source: ${skill.path}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n[Host application: Nexus Code. Provider/model identity does not change the host; select host-specific instructions for Nexus Code.]\n\n${skill.content}`,
       };
     });
 
