@@ -1,0 +1,9 @@
+{
+  "requirement": "REQ-REL-114",
+  "acceptance": "ACC-SUP-08",
+  "status": "PASS",
+  "workflowRun": "40433818126",
+  "workflowSha": "16ee8ca3643824741b6da67936b41f262414fdf0",
+  "sourceCommit": "16ee8ca3643824741b6da67936b41f262414fdf0",
+  "reproEvidenceSha256": "f393db75f06cc9675b34941c8d5e42cb7de0f01892cc2f8e64a48c9998d4fcc7"
+}
