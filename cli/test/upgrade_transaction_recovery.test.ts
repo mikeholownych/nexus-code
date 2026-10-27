@@ -132,6 +132,30 @@ describe("durable same-version transaction recovery",()=>{
     assert.equal(fs.existsSync(displaced),false);
     assert.equal(verifyInstalledRuntime(entry.sourceInstallDir,"v1.0.0").healthy,true);
   });
+  it("continues after a process is interrupted while restoring the original symlink",()=>{
+    const displaced=`${entry.binPath}.nexus-recovery-previous`;
+    const previousTarget=path.join(prefix,"older-release","bin/nexus");
+    fs.unlinkSync(entry.binPath);
+    fs.symlinkSync(previousTarget,entry.binPath);
+    fs.linkSync(entry.binPath,displaced);
+    writeJournal(prefix,entry);
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.recovered,true,result.details);
+    assert.equal(fs.readlinkSync(entry.binPath),entry.sourceSymlinkTarget);
+    assert.equal(fs.existsSync(displaced),false);
+  });
+  it("preserves a regular launcher after an interrupted restore left both hard links",()=>{
+    const displaced=`${entry.binPath}.nexus-recovery-previous`;
+    fs.unlinkSync(entry.binPath);
+    fs.writeFileSync(entry.binPath,"preserve regular launcher");
+    fs.linkSync(entry.binPath,displaced);
+    writeJournal(prefix,entry);
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.recovered,false);
+    assert.equal(fs.readFileSync(entry.binPath,"utf8"),"preserve regular launcher");
+    assert.equal(fs.existsSync(displaced),false);
+    assert.equal(readJournal(prefix)?.state,"recovery_required");
+  });
   it("admits only one recovery when two contenders both observe the same stale lock",async()=>{
     writeJournal(prefix,entry);
     const libRoot=path.join(prefix,"lib/nexus"), barrier=path.join(prefix,"barrier");

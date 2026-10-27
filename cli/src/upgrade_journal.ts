@@ -548,6 +548,12 @@ function atomicSymlinkSwap(targetFile: string, linkPath: string): void {
       syncDirectory(binDir);
       fs.unlinkSync(displacedLink);
       syncDirectory(binDir);
+    } else if (current.dev === priorDisplacement.dev && current.ino === priorDisplacement.ino) {
+      // A prior process restored the displaced entry by exclusive hard link
+      // and stopped before unlinking the backup name. This also covers regular
+      // launchers and symlinks whose old target differs from this retry.
+      fs.unlinkSync(displacedLink);
+      syncDirectory(binDir);
     } else if (priorDisplacement.isSymbolicLink() && current.isSymbolicLink() && fs.readlinkSync(linkPath) === targetFile) {
       // The new launcher was installed and only backup cleanup was interrupted.
       fs.unlinkSync(displacedLink);
