@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import {
   assertNoSensitivePersistenceContent,
@@ -49,7 +49,7 @@ export class CheckpointManager {
 
   private checkGit(): void {
     try {
-      execSync("git rev-parse --is-inside-work-tree", { cwd: this.workspace, stdio: "ignore" });
+      execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: this.workspace, stdio: "ignore" });
       this.isGit = true;
     } catch {
       this.isGit = false;
@@ -104,7 +104,7 @@ export class CheckpointManager {
   }
 
   private assertGitChangesSafe(allowSensitive: boolean): void {
-    const changedPaths = execSync("git diff --name-only -z HEAD", {
+    const changedPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "-z", "HEAD"], {
       cwd: this.workspace,
       encoding: "buffer",
     }).toString("utf8").split("\0").filter(Boolean);
@@ -112,7 +112,7 @@ export class CheckpointManager {
     for (const relativePath of changedPaths) {
       if (!allowSensitive) assertNoSensitivePersistenceContent(relativePath, "checkpoint");
       try {
-        const indexed = execFileSync("git", ["show", `:${relativePath}`], {
+        const indexed = execFileSync("git", ["-c", "core.fsmonitor=false", "show", `:${relativePath}`], {
           cwd: this.workspace,
           encoding: "buffer",
           maxBuffer: 64 * 1024 * 1024,
@@ -124,7 +124,7 @@ export class CheckpointManager {
         try {
           // A staged deletion has no index blob and no worktree bytes to copy.
           // Any other inability to inspect an indexed object is fail-closed.
-          execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+          execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--error-unmatch", "--", relativePath], {
             cwd: this.workspace,
             stdio: "ignore",
           });
@@ -181,22 +181,26 @@ export class CheckpointManager {
         this.assertGitIndexUnlocked();
         this.assertGitChangesSafe(allowSensitive);
         // Create an untracked + tracked git stash commit without modifying working tree
-        const stashCommit = execSync("git stash create", { cwd: this.workspace, encoding: "utf-8" }).trim();
+        // Clean/smudge filter drivers (filter.* selected through .gitattributes) can still run external
+        // programs here and during restore; Git offers no single override for them, and refusing to
+        // checkpoint whenever a filter is configured would break Git LFS. Recorded as a known limitation
+        // in docs/reviews/evidence/v1/DEFECT-CHECKPOINT-GIT-HOOKS-20261026/README.md.
+        const stashCommit = execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "stash", "create"], { cwd: this.workspace, encoding: "utf-8" }).trim();
         if (stashCommit) {
           // Catch a Git operation that began during validation or stash creation.
           // This is a point-in-time guard; Git exposes no atomic lock spanning
           // stash creation and publication of this separate checkpoint ref.
           this.assertGitIndexUnlocked();
-          execFileSync("git", ["update-ref", `refs/nexus/checkpoints/${id}`, stashCommit], {
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", `refs/nexus/checkpoints/${id}`, stashCommit], {
             cwd: this.workspace,
             stdio: "ignore",
           });
           gitRef = stashCommit;
         } else {
           // Working tree was clean; record HEAD
-          const headCommit = execSync("git rev-parse HEAD", { cwd: this.workspace, encoding: "utf-8" }).trim();
+          const headCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: this.workspace, encoding: "utf-8" }).trim();
           this.assertGitIndexUnlocked();
-          execFileSync("git", ["update-ref", `refs/nexus/checkpoints/${id}`, headCommit], {
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", `refs/nexus/checkpoints/${id}`, headCommit], {
             cwd: this.workspace,
             stdio: "ignore",
           });
@@ -328,7 +332,7 @@ export class CheckpointManager {
           if (!cpBase || !cpBase.gitRef) {
             return { success: false, diff: "", error: `Base checkpoint '${baseCheckpointId}' not found.` };
           }
-          const out = execFileSync("git", ["diff", cpBase.gitRef, cpTarget.gitRef], {
+          const out = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--no-textconv", cpBase.gitRef, cpTarget.gitRef], {
             cwd: this.workspace,
             encoding: "utf-8",
             maxBuffer: 10 * 1024 * 1024,
@@ -336,7 +340,7 @@ export class CheckpointManager {
           return { success: true, diff: out };
         } else {
           // Diff checkpoint ref against current working tree
-          const out = execFileSync("git", ["diff", cpTarget.gitRef], {
+          const out = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--no-textconv", cpTarget.gitRef], {
             cwd: this.workspace,
             encoding: "utf-8",
             maxBuffer: 10 * 1024 * 1024,
@@ -370,7 +374,7 @@ export class CheckpointManager {
           fs.unlinkSync(jsonPath);
         }
         if (this.isGit && cp.gitRef) {
-          execFileSync("git", ["update-ref", "-d", `refs/nexus/checkpoints/${cp.id}`], { cwd: this.workspace, stdio: "ignore" });
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", `refs/nexus/checkpoints/${cp.id}`], { cwd: this.workspace, stdio: "ignore" });
         }
         if (cp.snapshotDir && fs.existsSync(cp.snapshotDir)) {
           fs.rmSync(cp.snapshotDir, { recursive: true, force: true });
@@ -403,8 +407,8 @@ export class CheckpointManager {
     try {
       if (this.isGit && cp.gitRef) {
         // Reset working tree to checkpoint commit/stash
-        execFileSync("git", ["reset", "--hard", cp.gitRef], { cwd: this.workspace, stdio: "ignore" });
-        execFileSync("git", ["clean", "-fd"], { cwd: this.workspace, stdio: "ignore" });
+        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "reset", "--hard", cp.gitRef], { cwd: this.workspace, stdio: "ignore" });
+        execFileSync("git", ["-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore" });
         return { success: true, message: `Restored workspace to checkpoint '${cp.name}' (${cp.id})` };
       }
 
