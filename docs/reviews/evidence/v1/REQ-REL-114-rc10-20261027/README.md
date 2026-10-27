@@ -19,7 +19,7 @@ The published RC10 tag resolved to the immutable commit above, passed version/ta
 - Ubuntu 24.04, image `20261023.334.3`
 - Both with Node `v22.22.1`, npm `10.9.4`, rustc/cargo `1.95.0` and the pinned `rust:1.95.0-bookworm` container.
 
-The `compare` job succeeded, confirming the two rebuilds are byte-identical:
+The `compare` job succeeded for the six release outputs listed below. For each listed output, the workflow compared both runner builds with each other and with the published RC. The comparison does not establish byte identity for other build outputs or the uploaded `repro-identity.json` manifests:
 
 | Artifact | SHA-256 |
 |---|---|
