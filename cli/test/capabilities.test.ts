@@ -62,8 +62,8 @@ describe("WP-01: CapabilityRegistry & Canonical Capability Model (INC-01)", () =
       "manage_knowledge",
     ];
 
+    assert.deepStrictEqual(toolNames, expected36, "Baseline tools must retain their exact registration order");
     for (const name of expected36) {
-      assert.ok(toolNames.includes(name), `Missing expected baseline tool: ${name}`);
       assert.ok(defaultRegistry.hasTool(name), `defaultRegistry must contain tool: ${name}`);
     }
   });
