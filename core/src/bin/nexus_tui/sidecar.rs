@@ -515,12 +515,18 @@ echo '{"v":1,"type":"hello","protocol":1,"pid":7}'"#),
         }
         // A throwaway HOME: the sidecar creates task state under ~/.nexus, which must never be the operator's.
         let home = std::env::temp_dir().join(format!("nexus-sidecar-test-{}", std::process::id()));
+        let redirected_state = home.join("unexpected-state");
         std::fs::create_dir_all(&home).unwrap();
         let spec = SidecarSpec {
             program: "env".into(),
             args: vec![
                 format!("HOME={}", home.display()),
                 format!("XDG_CONFIG_HOME={}", home.join(".config").display()),
+                // Simulate an inherited runner override, then pin state to this test's HOME.
+                format!("NEXUS_STATE_DIR={}", redirected_state.display()),
+                // The test runner may set this for its own isolation. Pin it to this test's HOME so
+                // ambient state-directory configuration cannot redirect the real sidecar elsewhere.
+                format!("NEXUS_STATE_DIR={}", home.join(".nexus").display()),
                 "node".into(),
                 script.display().to_string(),
                 "-w".into(),
@@ -546,7 +552,14 @@ echo '{"v":1,"type":"hello","protocol":1,"pid":7}'"#),
             other => panic!("expected session.state, got {other:?}"),
         }
         assert_eq!(sidecar.shutdown(Duration::from_secs(10)), Some(0));
-        assert!(home.join(".nexus").exists(), "the sidecar's state went to the throwaway HOME");
+        assert!(
+            home.join(".nexus").exists(),
+            "the sidecar's state went to the throwaway HOME"
+        );
+        assert!(
+            !redirected_state.exists(),
+            "the sidecar used the inherited state-directory override"
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 }
