@@ -50,6 +50,9 @@ test("ACC-VER-03: only executable JavaScript imports bind a declared deliverable
     const regexAfterTypeof = 'typeof /import from "..\\/src\\/a.ts"/.test("");\ntest("unrelated", () => {});\n';
     assert.equal(bind(regexAfterTypeof), false, "a regular expression after typeof must not establish an import binding");
 
+    const jsxAttribute = 'const element = <div import="../src/a.ts">text</div>;\ntest("unrelated", () => {});\n';
+    assert.equal(bind(jsxAttribute), false, "a JSX attribute named import must not establish an import binding");
+
     const unreachable = 'if (false) { import("../src/a.ts"); }\ntest("unrelated", () => {});\n';
     assert.equal(bind(unreachable), false, "an unreachable dynamic import must not establish a binding");
 

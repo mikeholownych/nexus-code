@@ -570,6 +570,98 @@ function isPythonUnittestDiscoveryCandidate(root: string, testFile: string, comm
   return true;
 }
 
+/**
+ * Determine whether an unfiltered Python verifier could import this baseline test.
+ * Only standard unittest discovery and pytest's default/testpaths discovery are
+ * modeled. Other commands or collection hooks fail closed.
+ */
+function isPythonTestExecutionCandidate(root: string, testFile: string, command: string): boolean {
+  const unittest = isPythonUnittestDiscoveryCandidate(root, testFile, command);
+  if (unittest !== null) return unittest;
+
+  const explicitPythonFile = command.match(/\bpython(?:\d+(?:\.\d+)?)?\s+(?!-m\s)(?:"([^"]+\.py)"|'([^']+\.py)'|(\S+\.py))(?:\s|$)/);
+  if (explicitPythonFile) {
+    const invoked = explicitPythonFile[1] ?? explicitPythonFile[2] ?? explicitPythonFile[3];
+    return path.resolve(root, invoked) === path.resolve(root, testFile);
+  }
+
+  if (!/^\s*(?:python(?:\d+(?:\.\d+)?)?\s+-m\s+)?pytest\s*$/.test(command)) return false;
+  // Command-line collection modifiers and environment-provided options/plugins
+  // are not modeled here. Filtered commands are handled by the explicit-path path.
+  if (/\b(?:-k|-m|--ignore|--ignore-glob|--deselect|--pyargs|--confcutdir|--rootdir)(?:\s|=)/.test(command)) return false;
+  if (process.env.PYTEST_ADDOPTS || process.env.PYTEST_PLUGINS) return false;
+
+  const testPaths = pytestTestPaths(root);
+  if (!testPaths) return false;
+  if (workspaceHasPytestCollectionHook(root)) return false;
+  const rootAbsolute = path.resolve(root);
+  const testAbsolute = path.resolve(rootAbsolute, testFile);
+  const relativeToRoot = path.relative(rootAbsolute, testAbsolute);
+  if (!relativeToRoot || relativeToRoot === ".." || relativeToRoot.startsWith(`..${path.sep}`) || path.isAbsolute(relativeToRoot)) return false;
+  if (!/^(?:test_.*|.*_test)\.py$/i.test(path.basename(testAbsolute)) || !isSafeWorkspaceFile(rootAbsolute, relativeToRoot)) return false;
+
+  const directories = relativeToRoot.split(path.sep).slice(0, -1);
+  if (directories.some((name) => name.startsWith(".") || SKIP_DIRS.has(name) || ["build", "{arch}"].includes(name))) return false;
+  return testPaths.some((start) => {
+    const startAbsolute = path.resolve(rootAbsolute, start);
+    const relative = path.relative(startAbsolute, testAbsolute);
+    const startRelative = path.relative(rootAbsolute, startAbsolute);
+    return (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) &&
+      (startRelative === "" || isSafeWorkspaceDirectory(rootAbsolute, startRelative));
+  });
+}
+
+/** Return pytest's standard collection roots, or null when configuration is unsupported. */
+function pytestTestPaths(root: string): string[] | null {
+  const configurations = [
+    ["pytest.ini", "[pytest]"],
+    [".pytest.ini", "[pytest]"],
+    ["tox.ini", "[pytest]"],
+    ["setup.cfg", "[tool:pytest]"],
+    ["pyproject.toml", "[tool.pytest.ini_options]"],
+  ] as const;
+  const configured = configurations.flatMap(([file, section]) => {
+    try {
+      const contents = fs.readFileSync(path.join(root, file), "utf8");
+      const start = contents.indexOf(section);
+      if (start < 0) return [];
+      const body = contents.slice(start + section.length).split(/^\s*\[[^\]]+\]\s*$/m, 1)[0];
+      return [{ file, section, body }];
+    } catch { return []; }
+  });
+  if (configured.length > 1) return null;
+  if (!configured.length) return ["."];
+
+  const { file, body } = configured[0];
+  const keys = [...body.matchAll(/^\s*([A-Za-z_][\w-]*)\s*=/gm)].map((match) => match[1].toLowerCase());
+  if (keys.some((key) => key !== "testpaths" && key !== "minversion" && key !== "markers" && key !== "filterwarnings")) return null;
+  const match = body.match(/^\s*testpaths\s*=\s*(\[[\s\S]*?\]|[^\r\n#]+)/m);
+  if (!match) return ["."];
+  const value = match[1].trim();
+  if (file === "pyproject.toml") {
+    const values = [...value.matchAll(/"((?:\\.|[^"\\])*)"|'([^']*)'/g)].map((entry) => entry[1] ?? entry[2]);
+    const residue = value.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, "").replace(/[\[\],\s]/g, "");
+    return values.length && !residue ? values : null;
+  }
+  return value.split(/\s+/).filter(Boolean);
+}
+
+/** Collection hooks can alter discovery or import arbitrary files; don't infer their results statically. */
+function workspaceHasPytestCollectionHook(root: string): boolean {
+  const walk = (directory: string, depth: number): boolean => {
+    if (depth > 6) return true;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return true; }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name) && walk(path.join(directory, entry.name), depth + 1)) return true;
+      } else if (entry.name === "conftest.py") return true;
+    }
+    return false;
+  };
+  return walk(root, 0);
+}
+
 function isSafeWorkspaceDirectory(root: string, relative: string): boolean {
   try {
     const rootReal = fs.realpathSync(root);
@@ -723,6 +815,10 @@ function topLevelStaticImports(source: string): string[] {
   const imports: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
     if (tokens[i].kind !== "identifier" || tokens[i].value !== "import") continue;
+    // Import declarations begin a module item. Requiring a clear boundary also
+    // prevents JSX attributes named `import` from looking like side-effect imports.
+    const previousToken = tokens[i - 1];
+    if (previousToken && ![";", "}"].includes(previousToken.value)) continue;
     if (tokens[i - 1]?.value === "." || tokens[i - 1]?.value === "?.") continue;
     const next = tokens[i + 1];
     if (next?.kind === "string" && next.value) {
@@ -1004,8 +1100,7 @@ export function isVerifierDeliverableBound(
     // An unfiltered verifier run that executed tests ran the repository test suite
     if (!isFiltered) {
       if (testFileRel.endsWith(".py")) {
-        const discovered = isPythonUnittestDiscoveryCandidate(root, testFileRel, verifierCommand);
-        if (discovered !== null) return discovered;
+        return isPythonTestExecutionCandidate(root, testFileRel, verifierCommand);
       }
       return true;
     }

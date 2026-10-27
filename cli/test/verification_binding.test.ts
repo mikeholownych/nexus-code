@@ -244,6 +244,44 @@ test("ACC-VER-03: Python unittest imports bind root-qualified product modules", 
       "a nested package test selected by unittest discovery may bind its imported deliverable",
     );
 
+    fs.mkdirSync(path.join(root, "tests/unit"), { recursive: true });
+    fs.mkdirSync(path.join(root, "tests/ignored"), { recursive: true });
+    fs.writeFileSync(path.join(root, "pyproject.toml"), '[tool.pytest.ini_options]\ntestpaths = ["tests/unit"]\n');
+    const pytestRealTest = "tests/unit/test_slug.py";
+    const pytestIgnoredTest = "tests/ignored/test_decoy.py";
+    fs.writeFileSync(path.join(root, pytestRealTest), discoveredTest);
+    assert.equal(
+      isVerifierDeliverableBound(
+        root,
+        [target],
+        "pytest",
+        "========================= 1 passed in 0.01s =========================",
+        scoped,
+        new Map([
+          [pytestRealTest, discoveredTest],
+          [pytestIgnoredTest, undiscoveredImport],
+        ]),
+      ),
+      false,
+      "an import in a Python test outside pytest testpaths cannot bind a deliverable",
+    );
+    const pytestImportedTest = "from src.slug import slugify\n";
+    assert.equal(
+      isVerifierDeliverableBound(
+        root,
+        [target],
+        "pytest",
+        "========================= 1 passed in 0.01s =========================",
+        scoped,
+        new Map([
+          [pytestRealTest, pytestImportedTest],
+          [pytestIgnoredTest, undiscoveredImport],
+        ]),
+      ),
+      true,
+      "a root-qualified import in a test under pytest testpaths may bind a deliverable",
+    );
+
     const importedSubmodule = "from src import slug\n";
     assert.equal(
       isVerifierDeliverableBound(root, [target], verifier, output, scoped, new Map([["tests/test_slug.py", importedSubmodule]])),
