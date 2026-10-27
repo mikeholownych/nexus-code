@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./core/file_guard.js";
 import { withStateStoreGuard, STATE_RESTORE_PENDING_FILE, STATE_STORE_GUARD_FILE } from "./core/state_store_guard.js";
-import { restoreFromSources } from "./core/state_restore.js";
+import { restoreFromSources, stateRoot } from "./core/state_restore.js";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
 
 export type JournalState =
@@ -111,7 +111,7 @@ function isValidJournal(value: any, prefix: string): value is UpgradeJournalEntr
         !/^config\.env\.bak\.[A-Za-z0-9T_.-]+$/.test(path.basename(value.configBackupPath))) return false;
   }
   if (value.stateBackupDir !== undefined) {
-    const backups = path.join(process.env.HOME || "", ".nexus", "backups");
+    const backups = path.join(stateRoot(process.env.HOME || ""), "backups");
     if (typeof value.stateBackupDir !== "string" || path.dirname(path.resolve(value.stateBackupDir)) !== backups ||
         !/^state-backup-[A-Za-z0-9T_.-]+$/.test(path.basename(value.stateBackupDir))) return false;
   }
@@ -190,7 +190,7 @@ export function createPreMigrationBackup(
   }
 
   // 2. State backup
-  const stateDir = path.join(homeDir, ".nexus");
+  const stateDir = path.join(stateRoot(homeDir),);
   if (fs.existsSync(stateDir)) {
     const stateBackupsDir = path.join(stateDir, "backups");
     const stateBackupsDirExisted = fs.existsSync(stateBackupsDir);
@@ -234,7 +234,7 @@ export function restoreConfigBackup(backupPath: string, homeDir: string = proces
     if (fs.realpathSync(resolved) !== resolved) return false;
     const configRoot = path.join(homeDir, ".config", "nexus");
     if (fs.lstatSync(resolved).isDirectory()) {
-      if (path.dirname(resolved) !== path.join(homeDir, ".nexus", "backups") || !/^state-backup-[A-Za-z0-9T_.-]+$/.test(path.basename(resolved))) return false;
+      if (path.dirname(resolved) !== path.join(stateRoot(homeDir), "backups") || !/^state-backup-[A-Za-z0-9T_.-]+$/.test(path.basename(resolved))) return false;
       const metadata = JSON.parse(fs.readFileSync(path.join(resolved, "backup.json"), "utf8"));
       if (metadata.formatVersion !== 1 || metadata.kind !== "nexus-state-config") return false;
       // Validate the entire source tree before touching live configuration/state.
@@ -258,8 +258,8 @@ export function restoreConfigBackup(backupPath: string, homeDir: string = proces
 /** Keep permanent guard inodes even when rolling back to a backup without that store. */
 /** New clients serialize task/session multi-file snapshots in a fixed lock order. */
 function withDurableStoreGuards<T>(homeDir: string, callback: () => T): T {
-  const tasks = path.join(homeDir, ".nexus", "tasks");
-  const sessions = path.join(homeDir, ".nexus", "sessions");
+  const tasks = path.join(stateRoot(homeDir), "tasks");
+  const sessions = path.join(stateRoot(homeDir), "sessions");
   for (const directory of [tasks, sessions]) {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     if (fs.realpathSync(directory) !== path.resolve(directory)) throw new Error("State store is redirected");

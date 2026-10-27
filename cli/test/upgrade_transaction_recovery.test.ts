@@ -386,6 +386,34 @@ describe("complete private state/config backup restore",()=>{
   }finally{fs.rmSync(home,{recursive:true,force:true});}
  });
 
+ it("captures and restores task and session state rooted at NEXUS_STATE_DIR",()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-state-dir-backup-"));
+  const home=path.join(root,"home"), stateRoot=path.join(root,"state-root");
+  const previousStateDir=process.env.NEXUS_STATE_DIR, previousHome=process.env.HOME;
+  try{
+   process.env.HOME=home;
+   process.env.NEXUS_STATE_DIR=stateRoot;
+   fs.mkdirSync(path.join(stateRoot,"tasks"),{recursive:true,mode:0o700});
+   fs.mkdirSync(path.join(stateRoot,"sessions/a"),{recursive:true,mode:0o700});
+   fs.mkdirSync(home,{mode:0o700});
+   const task=path.join(stateRoot,"tasks","task.json"), session=path.join(stateRoot,"sessions/a/events.jsonl");
+   fs.writeFileSync(task,"original task",{mode:0o600});fs.writeFileSync(session,"original session",{mode:0o600});
+   const backup=createPreMigrationBackup(home);
+   assert.ok(backup.stateBackupDir);
+   assert.equal(path.dirname(backup.stateBackupDir!),path.join(stateRoot,"backups"));
+   assert.equal(fs.readFileSync(path.join(backup.stateBackupDir!,"state/tasks/task.json"),"utf8"),"original task");
+   assert.equal(fs.readFileSync(path.join(backup.stateBackupDir!,"state/sessions/a/events.jsonl"),"utf8"),"original session");
+   fs.writeFileSync(task,"modified task");fs.writeFileSync(session,"modified session");
+   assert.equal(restoreConfigBackup(backup.stateBackupDir!,home),true);
+   assert.equal(fs.readFileSync(task,"utf8"),"original task");
+   assert.equal(fs.readFileSync(session,"utf8"),"original session");
+  }finally{
+   if(previousStateDir===undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR=previousStateDir;
+   if(previousHome===undefined) delete process.env.HOME; else process.env.HOME=previousHome;
+   fs.rmSync(root,{recursive:true,force:true});
+  }
+ });
+
  it("flushes every automatic backup payload and containing directory before returning",()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-fsync-"));
   const originalFsync=fsDefault.fsyncSync;
