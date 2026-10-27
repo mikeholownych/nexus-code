@@ -507,13 +507,289 @@ function isSafeWorkspaceFile(root: string, relative: string): boolean {
   }
 }
 
+/**
+ * Whether a Python file is reachable by the standard library unittest discovery
+ * command that selected the verifier. unittest only descends into package
+ * directories; the workspace snapshot is recursive and therefore also contains
+ * Python test files discovery will skip.
+ *
+ * Returns null when the verifier is not unittest discovery, allowing other
+ * verifier families to apply their own execution rules.
+ */
+function isPythonUnittestDiscoveryCandidate(root: string, testFile: string, command: string): boolean | null {
+  const match = command.match(/\bpython(?:\d+(?:\.\d+)?)?\s+-m\s+unittest\s+discover\b([\s\S]*)$/);
+  if (!match) return null;
+
+  const args = match[1].match(/(?:"[^"]*"|'[^']*'|\S+)/g) ?? [];
+  let startDirectory = ".";
+  let pattern = "test*.py";
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (token === "-s" || token === "--start-directory") {
+      const value = args[++index];
+      if (!value) return false;
+      startDirectory = value.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_whole, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted);
+    } else if (token.startsWith("--start-directory=")) {
+      startDirectory = token.slice("--start-directory=".length);
+    } else if (token === "-p" || token === "--pattern") {
+      const value = args[++index];
+      if (!value) return false;
+      pattern = value.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_whole, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted);
+    } else if (token.startsWith("--pattern=")) {
+      pattern = token.slice("--pattern=".length);
+    }
+  }
+
+  // Convert unittest's simple filename glob without interpreting shell syntax.
+  const patternExpression = new RegExp(`^${pattern.split("").map((character) => {
+    if (character === "*") return ".*";
+    if (character === "?") return ".";
+    return /[\\^$+.|{}()[\]]/.test(character) ? `\\${character}` : character;
+  }).join("")}$`);
+  const rootAbsolute = path.resolve(root);
+  const startAbsolute = path.resolve(rootAbsolute, startDirectory);
+  const startRelative = path.relative(rootAbsolute, startAbsolute);
+  if (startRelative === ".." || startRelative.startsWith(`..${path.sep}`) || path.isAbsolute(startRelative)) return false;
+  if (startRelative && !isSafeWorkspaceDirectory(rootAbsolute, startRelative)) return false;
+
+  const testAbsolute = path.resolve(rootAbsolute, testFile);
+  const relativeToStart = path.relative(startAbsolute, testAbsolute);
+  if (!relativeToStart || relativeToStart === ".." || relativeToStart.startsWith(`..${path.sep}`) || path.isAbsolute(relativeToStart)) return false;
+  const components = relativeToStart.split(path.sep);
+  if (!patternExpression.test(components.at(-1) ?? "") || !isSafeWorkspaceFile(rootAbsolute, testFile)) return false;
+
+  // `start_dir` itself does not need to be a package. Every nested directory
+  // unittest enters must contain a real, non-symlink __init__.py.
+  let cursor = startAbsolute;
+  for (const directory of components.slice(0, -1)) {
+    cursor = path.join(cursor, directory);
+    const relativeDirectory = path.relative(rootAbsolute, cursor);
+    if (!isSafeWorkspaceDirectory(rootAbsolute, relativeDirectory)) return false;
+    if (!isSafeWorkspaceFile(rootAbsolute, path.join(relativeDirectory, "__init__.py"))) return false;
+  }
+  return true;
+}
+
+/**
+ * Determine whether an unfiltered Python verifier could import this baseline test.
+ * Only standard unittest discovery and pytest's default/testpaths discovery are
+ * modeled. Other commands or collection hooks fail closed.
+ */
+function isPythonTestExecutionCandidate(root: string, testFile: string, command: string, baselineHasPytestPlugins = false): boolean {
+  const unittest = isPythonUnittestDiscoveryCandidate(root, testFile, command);
+  if (unittest !== null) return unittest;
+
+  const explicitPythonFile = command.match(/\bpython(?:\d+(?:\.\d+)?)?\s+(?!-m\s)(?:"([^"]+\.py)"|'([^']+\.py)'|(\S+\.py))(?:\s|$)/);
+  if (explicitPythonFile) {
+    const invoked = explicitPythonFile[1] ?? explicitPythonFile[2] ?? explicitPythonFile[3];
+    return path.resolve(root, invoked) === path.resolve(root, testFile);
+  }
+
+  if (!/^\s*(?:python(?:\d+(?:\.\d+)?)?\s+-m\s+)?pytest\s*$/.test(command)) return false;
+  // Command-line collection modifiers and environment-provided options/plugins
+  // are not modeled here. Filtered commands are handled by the explicit-path path.
+  if (/\b(?:-k|-m|--ignore|--ignore-glob|--deselect|--pyargs|--confcutdir|--rootdir)(?:\s|=)/.test(command)) return false;
+  if (process.env.PYTEST_ADDOPTS || process.env.PYTEST_PLUGINS || !process.env.PYTEST_DISABLE_PLUGIN_AUTOLOAD) return false;
+  if (baselineHasPytestPlugins) return false;
+
+  const testPaths = pytestTestPaths(root);
+  if (!testPaths) return false;
+  if (workspaceHasPytestCollectionHook(root)) return false;
+  const rootAbsolute = path.resolve(root);
+  const testAbsolute = path.resolve(rootAbsolute, testFile);
+  const relativeToRoot = path.relative(rootAbsolute, testAbsolute);
+  if (!relativeToRoot || relativeToRoot === ".." || relativeToRoot.startsWith(`..${path.sep}`) || path.isAbsolute(relativeToRoot)) return false;
+  if (!/^(?:test_.*|.*_test)\.py$/.test(path.basename(testAbsolute)) || !isSafeWorkspaceFile(rootAbsolute, relativeToRoot)) return false;
+
+  const directories = relativeToRoot.split(path.sep).slice(0, -1);
+  if (directories.some((name) => name.startsWith(".") || SKIP_DIRS.has(name) || ["build", "{arch}", "_darcs", "CVS"].includes(name) || name.endsWith(".egg"))) return false;
+  let directory = rootAbsolute;
+  if (isPytestVirtualenvDirectory(directory)) return false;
+  for (const component of directories) {
+    directory = path.join(directory, component);
+    if (isPytestVirtualenvDirectory(directory)) return false;
+  }
+  return testPaths.some((start) => {
+    const startAbsolute = path.resolve(rootAbsolute, start);
+    const relative = path.relative(startAbsolute, testAbsolute);
+    const startRelative = path.relative(rootAbsolute, startAbsolute);
+    return (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) &&
+      (startRelative === "" || isSafeWorkspaceDirectory(rootAbsolute, startRelative));
+  });
+}
+
+/** Pytest skips virtual-environment roots by default during recursive collection. */
+function isPytestVirtualenvDirectory(directory: string): boolean {
+  try {
+    const pyvenv = fs.lstatSync(path.join(directory, "pyvenv.cfg"));
+    if (pyvenv.isSymbolicLink() || pyvenv.isFile()) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
+  }
+  try {
+    const condaMeta = fs.lstatSync(path.join(directory, "conda-meta"));
+    const history = fs.lstatSync(path.join(directory, "conda-meta", "history"));
+    if (condaMeta.isSymbolicLink() || history.isSymbolicLink()) return true;
+    return condaMeta.isDirectory() && history.isFile();
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
+/** Return pytest's standard collection roots, or null when configuration is unsupported. */
+function pytestTestPaths(root: string): string[] | null {
+  // These config formats take precedence in supported pytest versions, but
+  // this static resolver does not interpret their TOML option layout.
+  for (const file of ["pytest.toml", ".pytest.toml"]) {
+    try {
+      fs.lstatSync(path.join(root, file));
+      return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+    }
+  }
+  const configurations = [
+    ["pytest.ini", "[pytest]"],
+    [".pytest.ini", "[pytest]"],
+    ["tox.ini", "[pytest]"],
+    ["setup.cfg", "[tool:pytest]"],
+    ["pyproject.toml", "[tool.pytest.ini_options]"],
+  ] as const;
+  const configured = configurations.flatMap(([file, section]): Array<{ file: string; section: string; body: string | null }> => {
+    try {
+      const configPath = path.join(root, file);
+      const stat = fs.lstatSync(configPath);
+      if (stat.isSymbolicLink() || !stat.isFile() || !isSafeWorkspaceFile(path.resolve(root), file)) {
+        return [{ file, section, body: null }];
+      }
+      const lines = fs.readFileSync(configPath, "utf8").split(/\r?\n/);
+      if (file === "pyproject.toml" && hasUnsupportedPyprojectPytestConfig(lines)) {
+        return [{ file, section: "[tool.pytest]", body: null }];
+      }
+      const start = lines.findIndex((line) => line.replace(/\s+#.*$/, "").trim() === section);
+      if (start < 0) return [];
+      const nextSection = lines.slice(start + 1).findIndex((line) => /^\s*\[[^\]]+\]\s*(?:#.*)?$/.test(line));
+      const body = lines.slice(start + 1, nextSection < 0 ? undefined : start + 1 + nextSection).join("\n");
+      return [{ file, section, body }];
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? [] : [{ file, section, body: null }];
+    }
+  });
+  if (configured.length > 1) return null;
+  if (!configured.length) {
+    let parent = path.dirname(path.resolve(root));
+    while (parent !== path.dirname(parent)) {
+      for (const file of ["pytest.toml", ".pytest.toml", ...configurations.map(([name]) => name)]) {
+        try {
+          fs.lstatSync(path.join(parent, file));
+          return null;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+        }
+      }
+      parent = path.dirname(parent);
+    }
+    return ["."];
+  }
+
+  const { file, body } = configured[0];
+  if (body === null) return null;
+  // TOML permits quoted option names. This static parser does not model them,
+  // so don't treat an unrecognized `testpaths` spelling as pytest's default.
+  if (file === "pyproject.toml" && /^\s*["'][^"']+["']\s*=/m.test(body)) return null;
+  const keys = [...body.matchAll(/^\s*([A-Za-z_][\w-]*)\s*=/gm)].map((match) => match[1].toLowerCase());
+  if (keys.some((key) => key !== "testpaths" && key !== "minversion" && key !== "markers" && key !== "filterwarnings")) return null;
+  const match = body.match(/^\s*testpaths\s*=\s*(\[[\s\S]*?\]|[^\r\n#]+)/m);
+  if (!match) return ["."];
+  const value = match[1].trim();
+  if (file === "pyproject.toml") {
+    // TOML decodes escapes in basic strings; this resolver deliberately does
+    // not, so escaped test paths cannot safely establish collection evidence.
+    if (value.includes("\\") || value.includes('"""') || value.includes("'''")) return null;
+    const values = [...value.matchAll(/"((?:\\.|[^"\\])*)"|'([^']*)'/g)].map((entry) => entry[1] ?? entry[2]);
+    const residue = value.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, "").replace(/[\[\],\s]/g, "");
+    return values.length && !residue ? values : null;
+  }
+  return value.split(/\s+/).filter(Boolean);
+}
+
+/** Reject pytest configuration expressed through TOML forms this resolver cannot model. */
+function hasUnsupportedPyprojectPytestConfig(lines: string[]): boolean {
+  let table = "";
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+#.*$/, "").trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("[") && line.endsWith("]")) {
+      const rawTable = line.slice(1, -1);
+      // TOML escapes can spell any of the `tool.pytest` path components, so
+      // reject escaped table names instead of interpreting their raw spelling.
+      if (rawTable.includes("\\")) return true;
+      if (/["']/.test(rawTable) && /^\s*(?:"tool"|'tool'|tool)(?:\s*\.|\s*$)/.test(rawTable)) return true;
+      table = rawTable.replace(/["']/g, "").replace(/\s*\.\s*/g, ".").trim();
+      if (table === "tool.pytest.ini_options" && rawTable.trim() !== table) return true;
+      if ((table === "tool.pytest" || table.startsWith("tool.pytest.")) && /["']/.test(rawTable)) return true;
+      if (table === "tool.pytest") return true;
+      if (table.startsWith("tool.pytest.") && table !== "tool.pytest.ini_options") return true;
+      continue;
+    }
+    if (!table && line.includes("\\") && /^(?:"[^"]*"|'[^']*')\s*\./.test(line)) return true;
+    if (!table && line.includes("\\") && /^(?:"[^"]*"|'[^']*')\s*=\s*\{/.test(line)) return true;
+    if (!table && line.includes("\\") && /^(?:"tool"|'tool'|tool)\s*\.\s*(?:"[^"]*"|'[^']*')/.test(line)) return true;
+    if (table === "tool" && line.includes("\\") && /^(?:"[^"]*"|'[^']*')\s*(?:\.|=)/.test(line)) return true;
+    if (!table && /^(?:"tool"|'tool'|tool)\s*\.\s*(?:"pytest"|'pytest'|pytest)(?:\s*\.|\s*=)/.test(line)) return true;
+    if (!table && /^(?:"tool"|'tool'|tool)\s*=\s*\{/.test(line)) return true;
+    if (table !== "tool") continue;
+    const firstKey = line.match(/^(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*(?:\.|=)/);
+    if (firstKey && (firstKey[1] ?? firstKey[2] ?? firstKey[3]) === "pytest") return true;
+  }
+  return false;
+}
+
+/** Collection hooks can alter discovery or import arbitrary files; don't infer their results statically. */
+function workspaceHasPytestCollectionHook(root: string): boolean {
+  const walk = (directory: string, depth: number): boolean => {
+    if (depth > 6) return true;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return true; }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name) && walk(path.join(directory, entry.name), depth + 1)) return true;
+      } else if (entry.name === "conftest.py") return true;
+    }
+    return false;
+  };
+  return walk(root, 0);
+}
+
+function isSafeWorkspaceDirectory(root: string, relative: string): boolean {
+  try {
+    const rootReal = fs.realpathSync(root);
+    const absoluteRoot = path.resolve(root);
+    let cursor = absoluteRoot;
+    const lexical = path.relative(absoluteRoot, path.resolve(absoluteRoot, relative));
+    if (!lexical || lexical === ".." || lexical.startsWith(`..${path.sep}`) || path.isAbsolute(lexical)) return false;
+    for (const component of lexical.split(path.sep)) {
+      cursor = path.join(cursor, component);
+      const stat = fs.lstatSync(cursor);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+      const real = fs.realpathSync(cursor);
+      const fromRoot = path.relative(rootReal, real);
+      if (fromRoot === ".." || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Resolve a test's relative JS/TS imports to the exact scoped file (including NodeNext `.js` -> `.ts`). */
 function testReferencesFile(content: string, testFile: string, targetFile: string, root: string): boolean {
   const target = path.resolve(root, targetFile);
-  const imports = /(?:\bfrom\s*|\bimport\s*\(|\brequire\s*\()\s*["']([^"']+)["']|(?:^|[;\n])\s*import\s*["']([^"']+)["']/gm;
+  if (target.endsWith(".py") || testFile.endsWith(".py")) {
+    return pythonTestReferencesFile(content, target, root);
+  }
   const extensions = [".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx", ".json"];
-  for (const match of content.matchAll(imports)) {
-    const specifier = match[1] ?? match[2];
+  for (const specifier of topLevelStaticImports(content)) {
     if (!specifier.startsWith(".")) continue;
     const base = path.resolve(path.dirname(path.resolve(root, testFile)), specifier);
     const candidates = new Set([base]);
@@ -527,6 +803,365 @@ function testReferencesFile(content: string, testFile: string, targetFile: strin
     if ([...candidates].some((candidate) => path.resolve(candidate) === target)) return true;
   }
   return false;
+}
+
+type JavaScriptToken = { kind: "identifier" | "string" | "punct"; value: string };
+
+/**
+ * Extract only unambiguous, top-level ESM imports and literal CommonJS require
+ * calls. Dynamic imports, conditional or nested calls, comments, strings, and
+ * templates cannot establish a verifier binding: this deliberately prefers a
+ * false negative to VERIFIED based on text that may never execute.
+ */
+function topLevelStaticImports(source: string): string[] {
+  const tokens: JavaScriptToken[] = [];
+  const commonJsImports: string[] = [];
+  let index = 0;
+  let braces = 0;
+  let parens = 0;
+  let brackets = 0;
+  let requireIdentifierMayBeShadowed = false;
+  let previous: JavaScriptToken | undefined;
+  const regexPrefix = new Set(["(", "{", "[", "=", ":", ",", ";", "!", "?", "/", "&&", "||", "??", "=>", "return", "case"]);
+
+  while (index < source.length) {
+    const char = source[index];
+    if (/\s/.test(char)) { index++; continue; }
+    if (char === "/" && source[index + 1] === "/") {
+      index += 2;
+      while (index < source.length && source[index] !== "\n" && source[index] !== "\r") index++;
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) index++;
+      index = Math.min(source.length, index + 2);
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      const quote = char;
+      index++;
+      let value = "";
+      let escaped = false;
+      let valid = false;
+      while (index < source.length) {
+        const current = source[index++];
+        if (escaped) { escaped = false; value += current; continue; }
+        if (current === "\\") { escaped = true; continue; }
+        if (current === quote) { valid = true; break; }
+        if (current === "\n" || current === "\r") break;
+        value += current;
+      }
+      const token = { kind: "string" as const, value: valid && !escaped ? value : "" };
+      if (braces === 0 && parens === 0 && brackets === 0) tokens.push(token);
+      previous = token;
+      continue;
+    }
+    if (char === "`") {
+      // Skip the complete template. Imports in ${...} are expressions, never
+      // static ESM declarations, and literal text must not be tokenized.
+      index++;
+      let escaped = false;
+      while (index < source.length) {
+        const current = source[index++];
+        if (escaped) { escaped = false; continue; }
+        if (current === "\\") { escaped = true; continue; }
+        if (current === "$" && source[index] === "{") return [];
+        if (current === "`") break;
+      }
+      previous = { kind: "string", value: "" };
+      continue;
+    }
+    if (char === "/") {
+      // A regular expression may contain arbitrary import-looking source text.
+      // If the preceding token makes slash-vs-division ambiguous, abandon all
+      // binding evidence from this file rather than risk treating regex text as code.
+      if (previous && !regexPrefix.has(previous.value)) break;
+      index++;
+      let escaped = false;
+      let inClass = false;
+      while (index < source.length) {
+        const current = source[index++];
+        if (escaped) { escaped = false; continue; }
+        if (current === "\\") { escaped = true; continue; }
+        if (current === "[") inClass = true;
+        else if (current === "]") inClass = false;
+        else if (current === "/" && !inClass) break;
+        else if (current === "\n" || current === "\r") break;
+      }
+      while (/[A-Za-z]/.test(source[index] ?? "")) index++;
+      previous = { kind: "punct", value: "/" };
+      continue;
+    }
+    if (char === "\\" && source[index + 1] === "u") {
+      // Unicode escapes are valid in identifiers. This narrow lexer does not
+      // decode them, so fail closed instead of missing escaped `eval` or
+      // `require` bindings.
+      return [];
+    }
+    if (/[A-Za-z_$]/.test(char)) {
+      const start = index++;
+      while (/[\w$]/.test(source[index] ?? "")) index++;
+      const token = { kind: "identifier" as const, value: source.slice(start, index) };
+      if (token.value === "eval") {
+        // Direct eval can reassign the CommonJS wrapper's `require` parameter.
+        // Without scope analysis, treat any executable eval identifier as
+        // making CommonJS import evidence ambiguous.
+        requireIdentifierMayBeShadowed = true;
+      }
+      if (token.value === "require") {
+        if (braces !== 0 || parens !== 0 || brackets !== 0) {
+          // A binding or use in destructuring/import syntax or nested code is
+          // ambiguous without a full JavaScript scope analysis. Fail closed.
+          requireIdentifierMayBeShadowed = true;
+        } else {
+          const previousIsMember = previous?.value === "." || previous?.value === "?.";
+          const previousIsStatementBoundary = !previous || [";", "}"].includes(previous.value);
+          const previousIsAssignment = previous?.value === "=";
+          const specifier = literalRequireSpecifierAt(source, index);
+          if (!previousIsMember && (previousIsStatementBoundary || previousIsAssignment) && specifier !== null) {
+            commonJsImports.push(specifier);
+          } else if (specifier === null) {
+            // A top-level declaration, import, or alias named `require` makes
+            // it unsafe to assume later calls use Node's CommonJS loader.
+            requireIdentifierMayBeShadowed = true;
+          }
+        }
+      }
+      if (braces === 0 && parens === 0 && brackets === 0) tokens.push(token);
+      previous = token;
+      continue;
+    }
+
+    const punct = source.slice(index, index + 2) === "?." ? "?." : char;
+    index += punct.length;
+    if (braces === 0 && parens === 0 && brackets === 0) tokens.push({ kind: "punct", value: punct });
+    if (punct === "{") braces++;
+    else if (punct === "}") braces = Math.max(0, braces - 1);
+    else if (punct === "(") parens++;
+    else if (punct === ")") parens = Math.max(0, parens - 1);
+    else if (punct === "[") brackets++;
+    else if (punct === "]") brackets = Math.max(0, brackets - 1);
+    previous = { kind: "punct", value: punct };
+  }
+
+  const imports: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].kind !== "identifier" || tokens[i].value !== "import") continue;
+    // Import declarations begin a module item. Requiring a clear boundary also
+    // prevents JSX attributes named `import` from looking like side-effect imports.
+    const previousToken = tokens[i - 1];
+    if (previousToken && ![";", "}"].includes(previousToken.value)) continue;
+    if (tokens[i - 1]?.value === "." || tokens[i - 1]?.value === "?.") continue;
+    const next = tokens[i + 1];
+    if (next?.kind === "string" && next.value) {
+      imports.push(next.value);
+      continue;
+    }
+    if (next?.value === "(") continue; // dynamic import()
+    for (let j = i + 1; j < tokens.length && j < i + 100; j++) {
+      if (tokens[j].value === ";" || tokens[j].value === "import") break;
+      if (tokens[j].kind === "identifier" && tokens[j].value === "from" && tokens[j + 1]?.kind === "string") {
+        if (tokens[j + 1].value) imports.push(tokens[j + 1].value);
+        break;
+      }
+    }
+  }
+  if (!requireIdentifierMayBeShadowed) imports.push(...commonJsImports);
+  return imports;
+}
+
+/** Read a deliberately narrow, literal-only `require("module")` call. */
+function literalRequireSpecifierAt(source: string, offset: number): string | null {
+  let index = offset;
+  const skipTrivia = (): void => {
+    while (index < source.length) {
+      if (/\s/.test(source[index])) { index++; continue; }
+      if (source[index] === "/" && source[index + 1] === "/") {
+        index += 2;
+        while (index < source.length && source[index] !== "\n" && source[index] !== "\r") index++;
+        continue;
+      }
+      if (source[index] === "/" && source[index + 1] === "*") {
+        const end = source.indexOf("*/", index + 2);
+        if (end < 0) { index = source.length; return; }
+        index = end + 2;
+        continue;
+      }
+      break;
+    }
+  };
+
+  skipTrivia();
+  if (source[index++] !== "(") return null;
+  skipTrivia();
+  const quote = source[index++];
+  if (quote !== "'" && quote !== '"') return null;
+  const start = index;
+  while (index < source.length && source[index] !== quote) {
+    if (source[index] === "\\" || source[index] === "\n" || source[index] === "\r") return null;
+    index++;
+  }
+  if (index >= source.length) return null;
+  const specifier = source.slice(start, index++);
+  if (!specifier) return null;
+  skipTrivia();
+  return source[index] === ")" ? specifier : null;
+}
+
+/**
+ * Bind Python tests through unconditional module-level, root-qualified imports.
+ * Unknown import layouts remain unbound rather than being inferred from output
+ * or basenames.
+ */
+function pythonTestReferencesFile(content: string, target: string, root: string): boolean {
+  const source = stripPythonStringsAndComments(content);
+  const moduleMatchesTarget = (name: string): boolean => {
+    if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) return false;
+    return resolvePythonModulePath(name, root) === target;
+  };
+
+  for (const rawLine of pythonLogicalLines(source)) {
+    // A static line scan cannot prove that an import in a conditional, function,
+    // class, or other indented block executes. Count only module-level imports.
+    if (/^\s/.test(rawLine)) continue;
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const fromImport = line.match(/^from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+(.+)$/);
+    if (fromImport) {
+      const [, module, imported] = fromImport;
+      if (moduleMatchesTarget(module)) return true;
+      // `from package import name` can resolve either a submodule or an
+      // attribute initialized by package/__init__.py. Without executing Python's
+      // import machinery, that form cannot safely bind a deliverable.
+      continue;
+    }
+
+    const directImport = line.match(/^import\s+(.+)$/);
+    if (!directImport) continue;
+    for (const part of directImport[1].split(",")) {
+      const name = part.trim().split(/\s+as\s+/i, 1)[0];
+      if (moduleMatchesTarget(name)) return true;
+    }
+  }
+  return false;
+}
+
+/** Join explicit Python line continuations before inspecting import statements. */
+function pythonLogicalLines(source: string): string[] {
+  const logical: string[] = [];
+  let current = "";
+  for (const physical of source.split(/\r?\n/)) {
+    current = current ? `${current.replace(/\\\s*$/, "")} ${physical.trimStart()}` : physical;
+    if (/\\\s*$/.test(current)) continue;
+    logical.push(current);
+    current = "";
+  }
+  if (current) logical.push(current);
+  return logical;
+}
+
+/** Resolve only unambiguous source-module imports using Python package precedence. */
+function resolvePythonModulePath(name: string, root: string): string | null {
+  const absoluteRoot = path.resolve(root);
+  let cursor = absoluteRoot;
+  const parts = name.split(".");
+
+  const hasSafeType = (candidate: string, type: "file" | "directory"): boolean => {
+    const relative = path.relative(absoluteRoot, candidate);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+    let current = absoluteRoot;
+    const components = relative.split(path.sep);
+    try {
+      for (let index = 0; index < components.length; index++) {
+        current = path.join(current, components[index]);
+        const stat = fs.lstatSync(current);
+        if (stat.isSymbolicLink()) return false;
+        const final = index === components.length - 1;
+        if (final && (type === "file" ? !stat.isFile() : !stat.isDirectory())) return false;
+        if (!final && !stat.isDirectory()) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    const packageDirectory = path.join(cursor, part);
+    const packageInit = path.join(packageDirectory, "__init__.py");
+    const moduleFile = path.join(cursor, `${part}.py`);
+    const final = index === parts.length - 1;
+    const isSymlink = (candidate: string): boolean => {
+      try {
+        return fs.lstatSync(candidate).isSymbolicLink();
+      } catch {
+        return false;
+      }
+    };
+    if (isSymlink(packageDirectory) || isSymlink(packageInit) || isSymlink(moduleFile)) return null;
+
+    // Python chooses a regular package before a same-named module file.
+    if (hasSafeType(packageInit, "file")) {
+      if (final) return path.resolve(packageInit);
+      cursor = packageDirectory;
+      continue;
+    }
+    if (hasSafeType(moduleFile, "file")) return final ? path.resolve(moduleFile) : null;
+    // Namespace-package portions can merge with entries from other sys.path
+    // locations, where a later regular package may take precedence. Without
+    // executing Python's import machinery, that resolution is ambiguous.
+    if (!final && hasSafeType(packageDirectory, "directory")) return null;
+    return null;
+  }
+  return null;
+}
+
+/** Mask Python strings and comments so their contents cannot impersonate import statements. */
+function stripPythonStringsAndComments(source: string): string {
+  const chars = Array.from(source);
+  for (let i = 0; i < chars.length; i++) {
+    const current = chars[i];
+    if (current === "#") {
+      while (i < chars.length && chars[i] !== "\n" && chars[i] !== "\r") chars[i++] = " ";
+      i--;
+      continue;
+    }
+    if (current !== "'" && current !== '"') continue;
+
+    const triple = chars[i + 1] === current && chars[i + 2] === current;
+    const width = triple ? 3 : 1;
+    chars[i] = " ";
+    if (triple) {
+      chars[i + 1] = " ";
+      chars[i + 2] = " ";
+    }
+    i += width;
+    while (i < chars.length) {
+      if (chars[i] === "\\") {
+        if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = " ";
+        if (i + 1 < chars.length) {
+          if (chars[i + 1] !== "\n" && chars[i + 1] !== "\r") chars[i + 1] = " ";
+          i++;
+        }
+        i++;
+        continue;
+      }
+      if (triple
+        ? chars[i] === current && chars[i + 1] === current && chars[i + 2] === current
+        : chars[i] === current) {
+        for (let end = 0; end < width && i + end < chars.length; end++) chars[i + end] = " ";
+        i += width - 1;
+        break;
+      }
+      if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = " ";
+      i++;
+    }
+    i--;
+  }
+  return chars.join("");
 }
 
 /**
@@ -630,17 +1265,25 @@ export function isVerifierDeliverableBound(
   if (changedTargets.some((file) => !declaredScopeSet.has(file) || !isSafeWorkspaceFile(root, file))) return false;
   const tokens = extractPathTokens(root, `${verifierCommand}\n${testOutput}`);
   const isFiltered = isFilteredVerifierCommand(verifierCommand);
+  const baselineHasPytestPlugins = [...baselineTests].some(([testFile, content]) =>
+    testFile.endsWith(".py") && /\bpytest_plugins\b/.test(stripPythonStringsAndComments(content)),
+  );
 
   const testFileExecuted = (testFileRel: string) => {
     // An unfiltered verifier run that executed tests ran the repository test suite
-    if (!isFiltered) return true;
+    if (!isFiltered) {
+      if (testFileRel.endsWith(".py")) {
+        return isPythonTestExecutionCandidate(root, testFileRel, verifierCommand, baselineHasPytestPlugins);
+      }
+      return true;
+    }
     return tokens.has(testFileRel) || verifierCommand.includes(testFileRel);
   };
 
   // Verifier output is candidate-influenced. Bind every operator-declared product
   // file to an actually executed, pre-existing test import instead of path text.
   return declaredScope.every((file) => [...baselineTests].some(([testRel, content]) =>
-    (!isFiltered || testFileExecuted(testRel)) &&
+    testFileExecuted(testRel) &&
     Boolean(content) && testReferencesFile(content, testRel, rel(file), root),
   ));
 }
