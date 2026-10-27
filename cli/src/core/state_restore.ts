@@ -29,8 +29,23 @@ function homePath(homeDir: string): string {
   return canonical;
 }
 
-function nexusRoot(home: string): string { return path.join(home, ".nexus"); }
-function controlRoot(home: string): string { return path.join(nexusRoot(home), CONTROL_DIR); }
+export function stateRoot(home: string): string {
+  const configuredStateDir = process.env.NEXUS_STATE_DIR;
+  if (configuredStateDir) {
+    const processHome = path.resolve(process.env.HOME || os.homedir());
+    const requestedHome = path.resolve(home);
+    if (requestedHome === processHome) return path.resolve(configuredStateDir);
+    try {
+      if (fs.realpathSync(requestedHome) === fs.realpathSync(processHome)) return path.resolve(configuredStateDir);
+    } catch (error) {
+      // A not-yet-created HOME has no symlink identity to resolve. Keep its
+      // normal per-home state root instead of making journal validation fail.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return path.join(home, ".nexus");
+}
+function controlRoot(home: string): string { return path.join(stateRoot(home), CONTROL_DIR); }
 function activePath(home: string): string { return path.join(controlRoot(home), ACTIVE_FILE); }
 function transactionPath(home: string, id: string): string {
   if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("Invalid restore transaction identity");
@@ -134,7 +149,7 @@ function removeDurably(file: string): void {
 }
 
 function canonicalControl(home: string, create: boolean): string {
-  const root = nexusRoot(home);
+  const root = stateRoot(home);
   if (create) ensurePrivateDirectory(root);
   else if (!lstatIfPresent(root)) return path.join(root, CONTROL_DIR);
   const rootStat = fs.lstatSync(root);
@@ -305,8 +320,8 @@ function readAndVerifyManifest(home: string, active: ActiveRestore): RestoreMani
 function storeMarkerPaths(home: string, stores: Record<RestoreStore, RestoreMode | null>): string[] {
   const result: string[] = [];
   if (stores.state) {
-    result.push(path.join(nexusRoot(home), "tasks", STATE_RESTORE_PENDING_FILE));
-    result.push(path.join(nexusRoot(home), "sessions", STATE_RESTORE_PENDING_FILE));
+    result.push(path.join(stateRoot(home), "tasks", STATE_RESTORE_PENDING_FILE));
+    result.push(path.join(stateRoot(home), "sessions", STATE_RESTORE_PENDING_FILE));
   }
   if (stores.config) result.push(path.join(home, ".config", "nexus", STATE_RESTORE_PENDING_FILE));
   return result;
@@ -314,7 +329,7 @@ function storeMarkerPaths(home: string, stores: Record<RestoreStore, RestoreMode
 
 function ensureStoreLocks<T>(home: string, stores: Record<RestoreStore, RestoreMode | null>, action: () => T): T {
   const directories: string[] = [];
-  if (stores.state) directories.push(path.join(nexusRoot(home), "tasks"), path.join(nexusRoot(home), "sessions"));
+  if (stores.state) directories.push(path.join(stateRoot(home), "tasks"), path.join(stateRoot(home), "sessions"));
   for (const directory of directories) ensurePrivateDirectory(directory);
   const guards: ReturnType<typeof acquireFileGuard>[] = [];
   try {
@@ -393,7 +408,7 @@ function applyTree(source: string, destination: string, rootPreserve: Set<string
 
 function applyRestore(home: string, active: ActiveRestore): void {
   const payload = path.join(transactionPath(home, active.id), "payload");
-  if (active.stores.state) applyTree(path.join(payload, "state"), nexusRoot(home), new Set(["backups", CONTROL_DIR]));
+  if (active.stores.state) applyTree(path.join(payload, "state"), stateRoot(home), new Set(["backups", CONTROL_DIR]));
   if (active.stores.config === "tree") applyTree(path.join(payload, "config"), path.join(home, ".config", "nexus"), new Set(["backups"]));
   if (active.stores.config === "file") {
     const source = path.join(payload, "config", "config.env");
