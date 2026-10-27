@@ -1,0 +1,6 @@
+[   1.02s] SAW startup idle
+[   1.02s] SEND b'run it\r'
+[   1.53s] SAW running synthetic command
+[   2.03s] SEND Esc delay=0.5
+[   2.53s] SAW cancelled idle
+[   2.53s] SCREEN trial-4-final (100x30)

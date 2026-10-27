@@ -17,8 +17,8 @@
     "originalStyleCtrlC": "1 observed outlier at 27.89s, followed by 6 exact-pattern passes at 2.21s."
   },
   "evidenceFilesSha256": {
-    "README.md": "86840a9b84252f4d563ada8a177e3d7a82553b27e5e3165482d7c8ca856e72c5",
-    "accessibility/README.md": "7ab25762c437cc558d01603ebd3dbc770bc7499e84a1f6e4cb742866f718e37a",
+    "README.md": "9bdbe4c55a80790de1c3c6996b708938fa10bfd122b881ce99ae422ee845c646",
+    "accessibility/README.md": "9d02d4e934b3436360af95191aa0a10a0374730adf70b794e8722086f25a9ced",
     "accessibility/attempt_0150/gw_states_0.log": "2ea3793899f61fc304d679d0c59d8a89863594420d8d0ca7b3cdb92eb0431bca",
     "accessibility/attempt_0150/gw_states_1.log": "bc60613418a5661a8b8f13554f11e74b7848ac8c286e37c4875f23b2d9c5746c",
     "accessibility/attempt_0150/gw_states_2.log": "c296a6fdd67d6cd25b2e27b09500b6661adc3d79b6231db286123a1985bd1111",
@@ -263,7 +263,7 @@
     "s9.raw.b64": "551e2dc050faa4da57c62482bf33404143a9902017c53cda4144172dc4e6f6f0",
     "s9_quit_tool.py": "4bf8e0dff1994fc529f20007c8a755dd22271ba7b2f1453737aacbe8c7865bb1",
     "s9_quit_tool.py.log": "8f922a470068db66746f01067e8e5555eaa8b073c0a8da95dd640a589346e3c9",
-    "accessibility/overlay-expansion-20261027/README.md": "fe4a5c2a92a395eccce100e875ee1311d81c500a95fecfca71a7c1ff6d377ae8",
+    "accessibility/overlay-expansion-20261027/README.md": "c797709d3a1b346e66503341df656443038c3bd7ed646b34755875da643367d9",
     "accessibility/overlay-expansion-20261027/captured-8-of-9/gw.log": "5af67e587ff221bba1767183851a3671caeb94abb742a9db404ab33b5ed2a532",
     "accessibility/overlay-expansion-20261027/captured-8-of-9/mockgw_states.py": "9f89d26ab5d92c1812ca3b528f12e6912be1179f05b33d7f58858381393fb6bb",
     "accessibility/overlay-expansion-20261027/captured-8-of-9/overlay_dumb40.notes.txt": "3137c279e652cf0400bbb1cb04da23592cfb6b30b9ec3ffd31348df381513736",
@@ -308,7 +308,46 @@
     "accessibility/overlay-expansion-20261027/detail-attempt-runtime/pip.log": "c49d2d10cd6f3acdbff4ec323dca453a77b702e62229f94324088bf072bfd46b",
     "accessibility/overlay-expansion-20261027/detail-attempt-runtime/ptylib.py": "0df7c3f82cbb11283c37593076bfbd6a8a3c0a4066276417200ba5e0d274cdbd",
     "accessibility/overlay-expansion-20261027/detail-attempt-runtime/run.log": "9e48085e651ee1d48e86e34890bffd5036baed8f80b3156eb4593959140f0d87",
-    "accessibility/overlay-expansion-20261027/detail-attempt-runtime/run_overlay.py": "6380369f99e8b7bd8dd71b7aaed1363d051466f0d3ca7b3af14c85ef7a6daa56"
+    "accessibility/overlay-expansion-20261027/detail-attempt-runtime/run_overlay.py": "6380369f99e8b7bd8dd71b7aaed1363d051466f0d3ca7b3af14c85ef7a6daa56",
+    "accessibility/overlay-expansion-20261027/corrected-approval-path/README.md": "1761c7a9ede07be79c974ec2d1abb3d5160fd8badb91d8d47aabef1cb05006d6",
+    "accessibility/overlay-expansion-20261027/corrected-approval-path/SHA256SUMS": "ce32f8c99d15cbb7a5e666c43be5d09f7b113311ccffaeb925d53bfecd1937e1",
+    "accessibility/overlay-expansion-20261027/corrected-approval-path/approval_timing.notes.txt": "c52df3ce0bdc43c4e019608d1d46bf7b1e1b18712a58173ddbefbb2391bd7679",
+    "accessibility/overlay-expansion-20261027/corrected-approval-path/approval_timing.raw": "da0c9725c3fe18b198d803aabf328ca3f80e1c389e4622a90aff795dbd6d49a3",
+    "accessibility/overlay-expansion-20261027/corrected-approval-path/approval_timing.screens.txt": "c6e036afdce3492ce9b325a0fc610bb9b32079621184f7d1c67fde440e85a446",
+    "accessibility/overlay-expansion-20261027/corrected-approval-path/gw.log": "bc15bd59e36f296877c4368823d2c087f7ec25dfc77cf50f332c15d710dde540",
+    "accessibility/overlay-expansion-20261027/corrected-approval-path/mockgw_overlay.py": "79027a6b1a0b3244f585aa2bfc572b4efde103a90dc23de908fa8def0e3b3138",
+    "accessibility/overlay-expansion-20261027/corrected-approval-path/run_corrected.py": "2ce0d03c8caf3f8fd8fd4d533fb989b8f5236b88d0158987206c6c684d3e88fa",
+    "accessibility/cancel-timing-recheck-20261027/README.md": "cf18cb7a3315a1e59cd01d07a54430071bce907ea495fd5a64d71e2297242a27",
+    "accessibility/cancel-timing-recheck-20261027/gw.log": "dd8eb7e45fd65245af8f1bd971be8d526970bc1302660e9a6870b7dc3fed74db",
+    "accessibility/cancel-timing-recheck-20261027/mockgw_states.py": "9f89d26ab5d92c1812ca3b528f12e6912be1179f05b33d7f58858381393fb6bb",
+    "accessibility/cancel-timing-recheck-20261027/ptylib.py": "0df7c3f82cbb11283c37593076bfbd6a8a3c0a4066276417200ba5e0d274cdbd",
+    "accessibility/cancel-timing-recheck-20261027/results.json": "e4afb355b7ecb390e2845bf68a9434096283e1a474d1594cd223434594beb08c",
+    "accessibility/cancel-timing-recheck-20261027/run.log": "cb145ecde526071b5843e82e6a5bb98c7b175ea9fe3a286e6709b2f454218e53",
+    "accessibility/cancel-timing-recheck-20261027/run_cancel_timing.py": "3269a9bea71a809d5bdacd9a4147af428a6d5c65b64a4c1c8dfba712352a1701",
+    "accessibility/cancel-timing-recheck-20261027/trial_1.notes.txt": "bd0d6c9a1193de552f9e95ec666b802e0d9cd7a824198b93133ecdf92a28e321",
+    "accessibility/cancel-timing-recheck-20261027/trial_1.raw": "3834326060f79b28504d1ea8dc45389efbe64ef7d2943fd76a2bd071607ad20f",
+    "accessibility/cancel-timing-recheck-20261027/trial_1.screens.txt": "5a4f09830839fb1acdd89c77708a17dba9c7b3dc64454a67cbc5ba81364eeb89",
+    "accessibility/cancel-timing-recheck-20261027/trial_2.notes.txt": "8ccfa0622f68d417c9cdb050453eee7395c626d6393efd3582a6a4298e9d3ff3",
+    "accessibility/cancel-timing-recheck-20261027/trial_2.raw": "5191135e44241e1ae0b69202a1d8c37c4fb5432577b2e75e317aa395eec9144d",
+    "accessibility/cancel-timing-recheck-20261027/trial_2.screens.txt": "d228f1f50a7b3b643c49df90cfaef862e8d0e869197fc5c293f0cb21c18d294e",
+    "accessibility/cancel-timing-recheck-20261027/trial_3.notes.txt": "6282584587260abaf20cae351d0979b4016c34194afb070dd0dc6785cf29b9ee",
+    "accessibility/cancel-timing-recheck-20261027/trial_3.raw": "b89ae70b42c6e26df2a184889c30620cb05fc628de7dd501b69e960851b50b61",
+    "accessibility/cancel-timing-recheck-20261027/trial_3.screens.txt": "313aa20a50322ee359f9bc7ef415bf74d186a0ba0565832799f730c143e15acc",
+    "accessibility/cancel-timing-recheck-20261027/trial_4.notes.txt": "29844583ed43cc2c6961f63dd8e9e8a71f6ca70f48b1e3cfbaa975dbbc8da080",
+    "accessibility/cancel-timing-recheck-20261027/trial_4.raw": "a254dbbbbcef1776347ee82aec67a7c0b9af11b1a6beb8009c1f7fc872453ed0",
+    "accessibility/cancel-timing-recheck-20261027/trial_4.screens.txt": "c5622aee8403752601df5c4f83b1a11b72700032d64f14536fddee4d86b66ed4",
+    "accessibility/cancel-timing-recheck-20261027/trial_5.notes.txt": "4e8c76dea163479ee78a098ccd0927700a46c0586ee31f7fc7a89044e94bd813",
+    "accessibility/cancel-timing-recheck-20261027/trial_5.raw": "5508b80b21c7ccda7d8e3845b16646e1b9667548bc453e586f19469508e2f2be",
+    "accessibility/cancel-timing-recheck-20261027/trial_5.screens.txt": "10b5fef00d63d1dca59f1108f9b22456ed3b4f3516fe9bd10c8ffab2fd2cd5d3",
+    "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/README.md": "4126a4c347a176a2f795225bfbe719e07740efe38011bf2d8277b429e612307d",
+    "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/detail_overlay.notes.txt": "b92f5483d275cde45d90604b618c641f052fc18958ddde2ca1991cfaf7cf666a",
+    "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/detail_overlay.raw": "676b3f7e61f163d9aa181b3021b218da5ce284ff7bf628312a9580c88cbea757",
+    "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/detail_overlay.screens.txt": "4e776dce65646eb35fe18c8eb390c93d249e9e414fb1a7c72c495154f3c9578e",
+    "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/gw.log": "bbeaafec68d7830772aeb391beb1abeae96dc90c5ab2588a8dc7d47e60b53722",
+    "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/mockgw_overlay.py": "79027a6b1a0b3244f585aa2bfc572b4efde103a90dc23de908fa8def0e3b3138",
+    "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/ptylib.py": "0df7c3f82cbb11283c37593076bfbd6a8a3c0a4066276417200ba5e0d274cdbd",
+    "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/run.log": "f4971cb4b9b178aff7ec6e7e19ecff6a02a007b2ec2c25eb44f4a60a22877e46",
+    "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/run_detail.py": "f87e00043b5bf201a331365e9f2952a5ea44cab3599f10a7f8b8b78dc28607e8"
   },
   "accessibilityProbe": {
     "disposition": "PARTIAL_NOT_ACCEPTED",
@@ -330,21 +369,42 @@
       "TERM=dumb 40x14",
       "TERM=dumb 100x30"
     ],
-    "result": "Two full TERM=dumb 100x30 runs timed out waiting for Esc tool cancellation; one isolated retry passed in about 0.4 seconds. Supplemental TERM=dumb 40x14 probe rendered 8 of 9 Overlay variants; Detail remains untested. Overall disposition remains PARTIAL_NOT_ACCEPTED.",
+    "result": "Two full TERM=dumb 100x30 runs timed out waiting for Esc tool cancellation; one isolated retry passed in about 0.4 seconds. All 9 Overlay variants were later observed at TERM=dumb 40x14 across two synthetic probes. A targeted TERM=dumb 100x30 cancellation recheck passed 5/5 at 0-1s delays, but original timeouts remain. Overall disposition remains PARTIAL_NOT_ACCEPTED.",
     "evidence": "accessibility/README.md",
     "overlayVariantsObserved": [
       "Approval",
       "CheckpointChoice",
       "Help",
+      "Detail",
       "Receipt",
       "Models",
       "Connect",
       "Paste",
       "Review"
     ],
-    "overlayVariantsNotObserved": [
-      "Detail"
-    ],
-    "supplementalEvidence": "accessibility/overlay-expansion-20261027/README.md"
+    "overlayVariantsNotObserved": [],
+    "supplementalEvidence": "accessibility/overlay-expansion-20261027/README.md",
+    "cancelTimingRecheck": {
+      "terminal": "TERM=dumb 100x30",
+      "trials": 5,
+      "passed": 5,
+      "delaysSeconds": [
+        0,
+        0.1,
+        0.2,
+        0.5,
+        1.0
+      ],
+      "idleSeconds": [
+        0.405,
+        0.405,
+        0.406,
+        0.507,
+        0.407
+      ],
+      "evidence": "accessibility/cancel-timing-recheck-20261027/README.md"
+    },
+    "overlayCoverage": "All 9 source Overlay variants were rendered at TERM=dumb 40x14 across two synthetic PTY runs; other configurations remain unverified.",
+    "supplementalDetailEvidence": "accessibility/overlay-expansion-20261027/corrected-detail-capture-20261027/README.md"
   }
 }

@@ -1,0 +1,32 @@
+
+===== trial-4-final @ 2.54s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  ✓ Run sleep 20; echo finished · no exit code · no output · 0.6s
+
+◌ Cancelled  You stopped the turn during tool settling.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

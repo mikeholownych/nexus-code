@@ -1,0 +1,37 @@
+{
+  "candidate": "v1.0.0-rc.10",
+  "sourceCommit": "16ee8ca3643824741b6da67936b41f262414fdf0",
+  "terminal": "TERM=dumb 100x30",
+  "results": [
+    {
+      "trial": 1,
+      "delay_after_tool_render_s": 0.0,
+      "idle_within_5s": true,
+      "cancel_to_idle_s": 0.405
+    },
+    {
+      "trial": 2,
+      "delay_after_tool_render_s": 0.1,
+      "idle_within_5s": true,
+      "cancel_to_idle_s": 0.405
+    },
+    {
+      "trial": 3,
+      "delay_after_tool_render_s": 0.2,
+      "idle_within_5s": true,
+      "cancel_to_idle_s": 0.406
+    },
+    {
+      "trial": 4,
+      "delay_after_tool_render_s": 0.5,
+      "idle_within_5s": true,
+      "cancel_to_idle_s": 0.507
+    },
+    {
+      "trial": 5,
+      "delay_after_tool_render_s": 1.0,
+      "idle_within_5s": true,
+      "cancel_to_idle_s": 0.407
+    }
+  ]
+}
