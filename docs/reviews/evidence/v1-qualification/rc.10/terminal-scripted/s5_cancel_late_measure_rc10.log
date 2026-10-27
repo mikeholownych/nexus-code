@@ -1,0 +1,9 @@
+[   1.33s] SAW idle
+[   1.33s] SEND b'talk slowly\\r'
+[  16.61s] TIMEOUT waiting for streaming
+[  16.61s] SCREEN timeout-streaming (100x30)
+Traceback (most recent call last):
+  File "/var/tmp/nexus-rc10-scripted-pty-staging-20261027T0110Z/s5_cancel_late_measure_rc10.py", line 10, in <module>
+    assert s.wait("Thinking about it",15,"streaming")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

@@ -1,0 +1,2 @@
+{"n": 1, "t": 1793063455.8499382, "tools": 0, "stream": true, "last": "create hello.txt\n\n[Git Status: master (0 uncommitted dirty files)]", "user_messages": ["create hello.txt\n\n[Git Status: master (0 uncommitted dirty files)]"]}
+{"n": 2, "t": 1793063469.248213, "tools": 1, "stream": true, "last": "[Operator steering g3beba55bb2ddd-1]: yes y y please yy", "user_messages": ["create hello.txt\n\n[Git Status: master (0 uncommitted dirty files)]", "[Operator steering g3beba55bb2ddd-1]: yes y y please yy"]}

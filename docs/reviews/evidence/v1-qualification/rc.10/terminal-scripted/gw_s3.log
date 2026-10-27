@@ -1,0 +1,2 @@
+{"n": 1, "t": 1793063474.286673, "tools": 0, "stream": true, "last": "create hello.txt\n\n[Git Status: master (0 uncommitted dirty files)]", "user_messages": ["create hello.txt\n\n[Git Status: master (0 uncommitted dirty files)]"]}
+{"n": 2, "t": 1793063480.3382223, "tools": 1, "stream": true, "last": "{\n  \"bytes_written\": 9,\n  \"path\": \"hello.txt\",\n  \"status\": \"created\"\n}", "user_messages": ["create hello.txt\n\n[Git Status: master (0 uncommitted dirty files)]"]}

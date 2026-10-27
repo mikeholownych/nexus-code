@@ -1,0 +1,9 @@
+[   1.34s] SAW idle
+[   1.34s] SEND b'talk slowly\r'
+[   1.74s] SAW streaming
+[   5.33s] SAW idle-within-5s
+late_stream_cancel_ack_seconds: 0.00223
+late_stream_cancel_ack_within_one_frame: True
+idle_within_5s: True observed_after_seconds: 0.584
+eventual_idle: True total_seconds: 0.584
+[   5.33s] SCREEN late-stream-cancel-final (100x30)

@@ -1,0 +1,13 @@
+[   1.22s] SAW idle
+[   1.22s] SEND b'run it\r'
+[   1.73s] SAW tool-running
+tui pid 3930482
+before:
+3930497 3930482       2 /var/tmp/nexus-rc10-install-home/.local/nexus-rc10/lib/nexus/v1.0.0-rc.10/lib/core/nexus-tui --live --sidecar /var/tmp/nexus-rc10-install-home/.local/nexus-rc10/lib/nexus/v1.0.0-rc.10/lib/cli/dist/sidecar.js --node /home/mike/.local/node-v24.11.1-linux-x64/bin/node -- -w /var/tmp/nexus-rc10-scripted-pty-staging-20261027T0110Z/runs/s9/ws -e http://127.0.0.1:22699/v1 -m m --yes
+3930499 3930497       2 /home/mike/.local/node-v24.11.1-linux-x64/bin/node /var/tmp/nexus-rc10-install-home/.local/nexus-rc10/lib/nexus/v1.0.0-rc.10/lib/cli/dist/sidecar.js -w /var/tmp/nexus-rc10-scripted-pty-staging-20261027T0110Z/runs/s9/ws -e http://127.0.0.1:22699/v1 -m m --yes
+3930616 3930499       1 /var/tmp/nexus-rc10-install-home/.local/nexus-rc10/lib/nexus/v1.0.0-rc.10/lib/core/harness-core --workspace /var/tmp/nexus-rc10-scripted-pty-staging-20261027T0110Z/runs/s9/ws rpc
+[   3.29s] SEND Ctrl-C
+[   3.99s] SEND Ctrl-C again -> quit
+tui alive: False
+after quit +6s:
+
