@@ -13,6 +13,7 @@ test("checkpoint gc disables repository hooks and deletes the checkpoint ref", (
   const partition = path.join(home, ".nexus", "checkpoints", "partition");
   fs.mkdirSync(partition, { recursive: true });
   fs.mkdirSync(workspace, { recursive: true });
+  const previousGitConfigParameters = process.env.GIT_CONFIG_PARAMETERS;
   try {
     execFileSync("git", ["init", "-q"], { cwd: workspace });
     execFileSync("git", ["config", "user.email", "t@t.invalid"], { cwd: workspace });
@@ -32,6 +33,9 @@ test("checkpoint gc disables repository hooks and deletes the checkpoint ref", (
       '[hook "retention=extra"]\n\tevent = reference-transaction\n\tcommand = touch configured-hook-ran\n',
     );
     execFileSync("git", ["config", "--local", "include.path", includedHookConfig], { cwd: workspace });
+    // A parent Git process can pass config through this internal environment variable; it outranks
+    // GIT_CONFIG_COUNT, so an inherited value must not be able to re-enable the configured hook.
+    process.env.GIT_CONFIG_PARAMETERS = "'hook.retention=extra.enabled'='true'";
     const gitVersion = execFileSync("git", ["--version"], { cwd: workspace, encoding: "utf8" });
     const version = gitVersion.match(/git version (\d+)\.(\d+)/);
     assert.ok(version, `could not parse Git version: ${gitVersion}`);
@@ -65,6 +69,8 @@ test("checkpoint gc disables repository hooks and deletes the checkpoint ref", (
       `git show-ref did not confirm ref deletion: ${refLookup.error?.message ?? refLookup.stderr?.toString()}`,
     );
   } finally {
+    if (previousGitConfigParameters === undefined) delete process.env.GIT_CONFIG_PARAMETERS;
+    else process.env.GIT_CONFIG_PARAMETERS = previousGitConfigParameters;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

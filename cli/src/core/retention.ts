@@ -1081,19 +1081,20 @@ function configuredReferenceTransactionHookEnv(workspace: string): NodeJS.Proces
     disabledKeys.add(disableKey);
   }
 
-  const env = { ...process.env };
-  const existingCountText = env.GIT_CONFIG_COUNT ?? "0";
-  if (!/^(0|[1-9]\d*)$/.test(existingCountText)) throw new Error("Invalid GIT_CONFIG_COUNT");
-  let count = Number(existingCountText);
-  if (!Number.isSafeInteger(count)) throw new Error("Invalid GIT_CONFIG_COUNT");
-  const overrides = [...disabledKeys].map((key) => [key, "false"] as const);
-  for (const [key, value] of overrides) {
-    env[`GIT_CONFIG_KEY_${count}`] = key;
-    env[`GIT_CONFIG_VALUE_${count}`] = value;
-    count += 1;
-  }
-  env.GIT_CONFIG_COUNT = String(count);
-  return env;
+  if (disabledKeys.size === 0) return { ...process.env };
+  // GIT_CONFIG_PARAMETERS is Git's own command-line config channel and outranks the
+  // GIT_CONFIG_COUNT environment entries. Append our disables instead of relying on
+  // GIT_CONFIG_COUNT so a value inherited from a parent Git process cannot re-enable
+  // the hook. Keys and values are shell-quoted; friendly names may contain "=".
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  const assignments = [...disabledKeys].map((key) => `${quote(key)}=${quote("false")}`);
+  const existingParameters = (process.env.GIT_CONFIG_PARAMETERS ?? "").trim();
+  return {
+    ...process.env,
+    GIT_CONFIG_PARAMETERS: existingParameters
+      ? `${existingParameters} ${assignments.join(" ")}`
+      : assignments.join(" "),
+  };
 }
 
 function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number; deadline?: number }): GcExecutionResult {
