@@ -1,0 +1,25 @@
+[   1.01s] SAW idle
+[   1.01s] SCREEN idle (40x14)
+[   1.01s] SEND b'run harmless command\r'
+[   1.51s] SAW approval
+[   1.51s] SCREEN approval-unselected (40x14)
+[   4.11s] SEND left: choose approve
+[   6.31s] SCREEN approval-focused (40x14)
+[   6.31s] SEND enter: request confirmation
+[   7.01s] SEND enter: confirm approval
+[   7.52s] SAW tool completion
+[   7.52s] SCREEN tool-completion (40x14)
+[   7.72s] SAW idle after completion
+[   7.72s] SEND focus transcript
+[   7.92s] SEND select latest tool call
+[   8.12s] SEND open tool detail
+[   8.32s] SAW detail overlay
+[   8.32s] SCREEN detail-overlay (40x14)
+[   8.32s] SEND close detail
+[  13.54s] TIMEOUT waiting for detail closed
+[  13.54s] SCREEN timeout-detail closed (40x14)
+Traceback (most recent call last):
+  File "/var/tmp/nexus-rc10-detail-overlay-confirm-20261027T0219Z/run_detail.py", line 17, in <module>
+    session.send(b'\t',label='focus transcript'); session.send(b']',label='select latest tool call'); session.send(b'\r',label='open tool detail'); assert session.wait('Tool call',10,'detail overlay'); session.dump('detail-overlay'); session.send(b'\x1b',label='close detail'); assert session.wait('enter send',5,'detail closed')
+                                                                                                                                                                                                                                                                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

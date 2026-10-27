@@ -1,0 +1,11 @@
+[   1.01s] SAW idle
+[   1.01s] SCREEN idle (40x14)
+[   1.01s] SEND b'run harmless command\r'
+[   1.91s] SAW harmless command approval
+[   1.91s] SCREEN command-approval (40x14)
+[   4.41s] SEND b'y'
+[   5.61s] SEND b'\x1b[D'
+[   8.12s] SEND b'\r'
+[   8.92s] SEND b'\r'
+[  24.17s] TIMEOUT waiting for harmless command completion
+[  24.17s] SCREEN timeout-harmless command completion (40x14)

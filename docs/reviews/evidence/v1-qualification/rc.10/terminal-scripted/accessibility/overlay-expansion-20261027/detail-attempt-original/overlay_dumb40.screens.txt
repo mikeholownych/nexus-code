@@ -1,0 +1,176 @@
+
+===== idle @ 1.52s (40x14) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== help @ 1.94s (40x14) =====
+ NEXUS   ws  model m  mode: review
+ ╭ Help ──────────────────────────────╮
+ │Keys                                │
+ │  enter            send the prompt  │
+ │  shift+enter      new line         │
+ │                   (alt+enter       │
+ │                   where shift is   │
+ │                   not reported)    │
+ │  ↑ / ↓            move between     │
+ │                   lines; recall    │
+ │                   earlier prompts  │
+ ╰ esc close  ↑↓ scroll  1–9 of 194 ──╯
+ esc close help ────────────────────────
+›
+
+===== models @ 2.34s (40x14) =====
+ NEXUS   ws  model m  mode: review
+ ╭ Select model ──────────────────────╮
+ │› type to filter by provider or mode│
+ │                                    │
+ │Appliance (127.0.0.1:17853)  local  │
+ │  ● m                               │
+ │OpenRouter  cloud                   │
+ │  + Connect OpenRouter…             │
+ │OpenAI  cloud                       │
+ │  + Connect OpenAI…                 │
+ │ enter use  ctrl+p connect a provide│
+ ╰────────────────────────────────────╯
+ esc close · ↑↓ scroll ─────────────────
+›
+
+===== connect @ 2.74s (40x14) =====
+ NEXUS   ws  model m  mode: review
+ ╭ Connect a provider ────────────────╮
+ │ ✓ Appliance (127.0.0.1:17853) not c│
+ │ ○ OpenRouter           not connecte│
+ │ ○ OpenAI               not connecte│
+ │ ○ Anthropic            not connecte│
+ │ ○ ChatGPT plan         not connecte│
+ │ ○ GitHub Copilot       not connecte│
+ │                                    │
+ │                                    │
+ │ enter connect  ctrl+d remove Nexus'│
+ ╰────────────────────────────────────╯
+ esc close · ↑↓ scroll ─────────────────
+›
+
+===== paste @ 4.04s (40x14) =====
+ NEXUS   ws  model m  mode: review
+ ╭ [Pasted text #1: 3 lines] ─────────╮
+ │   1 first line                     │
+ │   2 second line                    │
+ │   3 third line                     │
+ │                                    │
+ │                                    │
+ │                                    │
+ │                                    │
+ │                                    │
+ │                                    │
+ ╰ esc close  ↑↓ scroll  ctrl+x edit i╯
+ esc close · ↑↓ scroll ─────────────────
+› [Pasted text #1: 3 lines]
+
+===== checkpoint-choice @ 4.65s (40x14) =====
+ NEXUS   ws  model m  mode: review
+ ╭ Checkpoint could not be created ───╮
+ │Sensitive content may persist if you│
+ │create a checkpoint anyway.         │
+ │  1. Read-only                      │
+ │  2. Continue without checkpoint    │
+ │  3. Create checkpoint anyway       │
+ │  4. Cancel this turn               │
+ │  5. Other (re-enter instruction)   │
+ │1–5 choose · enter · esc cancel     │
+ ╰────────────────────────────────────╯
+
+ checkpoint choice · 1–5 choose · e…────
+›
+
+===== approval @ 5.55s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Write a11y.txt                        │
+│Proposed: create a11y.txt · +1 −0     │
+│                                      │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + accessible state             │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== completion @ 12.95s (40x14) =====
+ NEXUS   ws  model m  mode: review
+  ! INTERNAL: This turn was cancelled
+before it started.
+
+› create a11y.txt
+  ✓ approved Write a11y.txt
+
+  ✓ Created a11y.txt  +1 −0
+    ▎   1 + accessible state
+
+Done. The synthetic operation is
+complete.
+ ⠇ thinking · 0:07 · step 2 · esc c…────
+› type to steer the running turn · esc …
+
+===== review @ 14.36s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Edit diff · this opera rows 1–2 of 2 ╮
+│Created a11y.txt  +1 −0   edit 1 of 1 │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + accessible state             │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+╰ esc back  ↑↓ scroll  ←→ pan  n p hunk╯
+ reviewing a diff · esc returns to …────
+›
+
+===== receipt @ 14.76s (40x14) =====
+ NEXUS   ws  model m  mode: review
+ ╭ Receipt ───────────────────────────╮
+ │Last turn                           │
+ │  result         TURN ENDED -       │
+ │UNVERIFIED                          │
+ │  execution      COMPLETED          │
+ │  outcome        UNVERIFIED         │
+ │  reason                            │
+ │NO_APPLICABLE_VERIFIER              │
+ │  steps          2 of Infinity      │
+ │  model stop     FINAL_TEXT         │
+ ╰ esc close  ↑↓ scroll ──────────────╯
+ esc close · ↑↓ scroll ─────────────────
+›
+
+===== timeout-harmless command approval @ 25.25s (40x14) =====
+ NEXUS   ws  model m  mode: review
+› run harmless command
+
+Done. The synthetic operation is
+complete.
+
+! Done · not verified  Files changed,
+  and no test command was found for this
+  workspace.
+  → next: check the changes yourself
+    (/diff), or run /test <command> ·
+    v receipt
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…

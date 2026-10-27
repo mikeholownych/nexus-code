@@ -1,0 +1,32 @@
+
+===== tool-running @ 1.41s (40x14) =====
+ NEXUS   ws  model m  mode: auto
+› run it
+  • Run sleep 20; echo finished
+
+
+
+
+
+
+
+
+
+ ⠼ Run sleep 20; echo finished · 0:…────
+› type to steer the running turn · esc …
+
+===== tool-cancelled @ 2.22s (40x14) =====
+ NEXUS   ws  model m  mode: auto
+› run it
+  ✓ Run sleep 20; echo finished · no
+    exit code · no output
+
+◌ Cancelled  You stopped the turn during
+  tool settling.
+
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…

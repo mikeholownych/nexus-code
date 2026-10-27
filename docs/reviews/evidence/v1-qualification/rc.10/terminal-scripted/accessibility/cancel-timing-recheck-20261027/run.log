@@ -1,0 +1,35 @@
+[   1.02s] SAW startup idle
+[   1.02s] SEND b'run it\r'
+[   1.73s] SAW running synthetic command
+[   1.73s] SEND Esc delay=0.0
+[   2.14s] SAW cancelled idle
+[   2.14s] SCREEN trial-1-final (100x30)
+{"trial": 1, "delay_after_tool_render_s": 0.0, "idle_within_5s": true, "cancel_to_idle_s": 0.405}
+[   1.13s] SAW startup idle
+[   1.13s] SEND b'run it\r'
+[   1.64s] SAW running synthetic command
+[   1.74s] SEND Esc delay=0.1
+[   2.14s] SAW cancelled idle
+[   2.14s] SCREEN trial-2-final (100x30)
+{"trial": 2, "delay_after_tool_render_s": 0.1, "idle_within_5s": true, "cancel_to_idle_s": 0.405}
+[   1.02s] SAW startup idle
+[   1.02s] SEND b'run it\r'
+[   1.63s] SAW running synthetic command
+[   1.83s] SEND Esc delay=0.2
+[   2.24s] SAW cancelled idle
+[   2.24s] SCREEN trial-3-final (100x30)
+{"trial": 3, "delay_after_tool_render_s": 0.2, "idle_within_5s": true, "cancel_to_idle_s": 0.406}
+[   1.02s] SAW startup idle
+[   1.02s] SEND b'run it\r'
+[   1.53s] SAW running synthetic command
+[   2.03s] SEND Esc delay=0.5
+[   2.53s] SAW cancelled idle
+[   2.53s] SCREEN trial-4-final (100x30)
+{"trial": 4, "delay_after_tool_render_s": 0.5, "idle_within_5s": true, "cancel_to_idle_s": 0.507}
+[   1.02s] SAW startup idle
+[   1.02s] SEND b'run it\r'
+[   1.42s] SAW running synthetic command
+[   2.42s] SEND Esc delay=1.0
+[   2.83s] SAW cancelled idle
+[   2.83s] SCREEN trial-5-final (100x30)
+{"trial": 5, "delay_after_tool_render_s": 1.0, "idle_within_5s": true, "cancel_to_idle_s": 0.407}

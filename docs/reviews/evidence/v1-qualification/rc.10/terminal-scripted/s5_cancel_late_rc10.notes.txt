@@ -1,0 +1,7 @@
+[   1.02s] SAW idle
+[   1.02s] SEND b'talk slowly\r'
+[   1.42s] SAW streaming
+[  10.47s] TIMEOUT waiting for idle-within-5s
+[  10.47s] SCREEN timeout-idle-within-5s (100x30)
+[  32.51s] SAW eventual-idle-after-acceptance-window
+[  32.51s] SCREEN late-stream-cancel-final (100x30)

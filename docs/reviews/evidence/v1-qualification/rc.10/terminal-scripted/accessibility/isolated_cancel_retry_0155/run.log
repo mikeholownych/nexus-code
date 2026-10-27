@@ -1,0 +1,8 @@
+[   0.92s] SAW idle
+[   0.92s] SEND b'run it\r'
+[   1.43s] SAW running
+[   1.43s] SCREEN running (100x30)
+[   1.43s] SEND b'\x1b'
+[   1.83s] SAW idle after Esc
+[   1.83s] SCREEN after wait (100x30)
+FINAL True

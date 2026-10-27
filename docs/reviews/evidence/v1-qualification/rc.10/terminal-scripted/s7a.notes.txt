@@ -1,0 +1,7 @@
+[   1.01s] SAW idle
+[   1.01s] SEND b'remember the word \xe5\xae\xbd\xe5\xad\x97\xe7\xac\xa6 please\r'
+[   1.51s] SAW turn-done
+[   1.51s] SCREEN unicode-40x20 (40x20)
+[   1.51s] RESIZE 100x30
+[   2.51s] SCREEN unicode-100x30 (100x30)
+[   2.52s] SEND b'/quit\r'

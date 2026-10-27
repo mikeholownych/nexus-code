@@ -1,0 +1,7 @@
+Host: mike-dev (Linux x86_64; boot_id 8928bf1f-8ae0-441b-8070-f05ef8823a5e)
+Node: v24.11.1
+Python: 3.12.3
+pyte: 0.8.2 (private venv)
+Terminal: xterm-256color; synthetic PTYs at scenario-specific sizes
+Gateway: local mock OpenAI-compatible server; no real inference or credentials
+Workspace: disposable synthetic Git repositories under /var/tmp

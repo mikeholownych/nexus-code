@@ -1,0 +1,96 @@
+
+===== idle @ 1.01s (40x14) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== approval-unselected @ 1.51s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Run echo synthetic-safe               │
+│Proposed: run a shell command in the  │
+│  workspace                           │
+│                                      │
+│$ echo synthetic-safe                 │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== approval-focused @ 6.31s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Run echo synthetic-safe               │
+│Proposed: run a shell command in the  │
+│  workspace                           │
+│                                      │
+│$ echo synthetic-safe                 │
+│                                      │
+│▸Approve   All later   Deny           │
+│enter twice approves · → deny         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== tool-completion @ 7.52s (40x14) =====
+ NEXUS   ws  model m  mode: review
+› run harmless command
+  ✓ approved Run echo synthetic-safe
+  ✓ Run echo synthetic-safe · exit 0 · 1
+    line
+    ▎ synthetic-safe
+
+Done. The synthetic operation is
+complete.
+
+
+
+ ⠼ thinking · 0:06 · step 2 · esc c…────
+› type to steer the running turn · esc …
+
+===== detail-overlay @ 8.32s (40x14) =====
+ NEXUS   ws  model m  mode: review
+ ╭ Tool call ─────────────────────────╮
+ │Run echo synthetic-safe             │
+ │succeeded · 5.8 s                   │
+ │Arguments                           │
+ │{                                   │
+ │  "command": "echo synthetic-safe"  │
+ │}                                   │
+ │                                    │
+ │Output                              │
+ │{                                   │
+ ╰ esc close  ↑↓ scroll ──────────────╯
+ esc close · ↑↓ scroll ─────────────────
+›
+
+===== timeout-detail closed @ 13.54s (40x14) =====
+ NEXUS   ws  model m  mode: review
+  ✓ Run echo synthetic-safe · exit 0 · 1
+    line
+    ▎ synthetic-safe
+
+Done. The synthetic operation is
+complete.
+
+! Done · not verified  Files changed,
+  and no test command was found for this
+  workspace.
+  → next: check the changes yoursel ↓ 2
+ transcript · ↑↓ scroll · [ ] tools…────
+›
