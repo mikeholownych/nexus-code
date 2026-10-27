@@ -22,6 +22,7 @@ expected '<root>', found '<root>/.nexus/worktrees/task-legacy-worktree'
 
 In `loadTaskStateLocked`, when `expectedWorkspace` and `state.workspacePath` differ, normalise the record **only** when its own binding proves the expected root owns the recorded path:
 
+- the record's canonical `taskId` matches the requested id (a legacy session-id alias alone is not enough);
 - `binding.worktreePath` resolves to the recorded `workspacePath`;
 - the existing `isManagedWorktreePath` validator accepts it: `binding.taskId === taskId`, `binding.branch === "nexus/<taskId>"`, the path is exactly `<gitRoot>/.nexus/worktrees/<taskId>` with no symlink, and the worktree's root, branch and git-common-dir match the expected repository.
 
@@ -41,3 +42,5 @@ No read without `expectedWorkspace` migrates anything, and records already writt
 - Only the exact managed layout (`<root>/.nexus/worktrees/<taskId>`, branch `nexus/<taskId>`, matching repository) is migrated. A pre-fix record whose worktree lived elsewhere (or whose branch was renamed) remains fail-closed; there is no safe way to prove it belongs to the expected root.
 - Resuming from inside the internal checkout is still unsupported; the repository root is the entry point.
 - The migration is triggered by a recovery read with `expectedWorkspace`; a bare `loadTaskState` still returns the recorded identity unchanged.
+- `listTasks({ workspace: root })` and `--resume latest` do not normalise: an un-migrated pre-fix record stays out of the root listing until an explicit `--resume <id>` (or `recoverTaskState`) migrates it. `SessionManager.recoverSession/loadSession` likewise ignore such records.
+- A hand-crafted record whose in-file `taskId` differs from its filename but whose `sessionId` matches the requested id is not migrated (canonical-id gate); it keeps failing closed. This avoids writing a sibling record under the in-file id.

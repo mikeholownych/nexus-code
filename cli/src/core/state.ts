@@ -627,6 +627,7 @@ export class DurableStateManager {
         const binding = state.worktreeBinding;
         const bindingPath = binding?.worktreePath ? path.resolve(binding.worktreePath) : undefined;
         if (
+          state.taskId !== taskId ||
           bindingPath !== normActual ||
           !binding ||
           !isManagedWorktreePath(expectedIdentity, normActual, taskId, binding)
