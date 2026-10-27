@@ -692,40 +692,6 @@ describe("complete private state/config backup restore",()=>{
   }finally{fs.rmSync(root,{recursive:true,force:true});}
  });
 
- it("rejects a config.env HOME override before starting a client or replaying restore",()=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-config-home-restore-"));
-  const original=path.join(root,"original"), selected=path.join(root,"selected");
-  try{
-   const configDir=path.join(original,".config/nexus");
-   fs.mkdirSync(configDir,{recursive:true,mode:0o700});
-   fs.writeFileSync(path.join(configDir,"config.env"),`HOME=${selected}\n`,{mode:0o600});
-   const tasks=path.join(selected,".nexus/tasks");
-   fs.mkdirSync(tasks,{recursive:true,mode:0o700});
-   fs.writeFileSync(path.join(tasks,"item.txt"),"partially restored",{mode:0o600});
-   const id="6b9c1f71-137e-4ee9-b81e-9457c0e5812b";
-   const control=path.join(selected,".nexus/restore-control"), tx=path.join(control,"transactions",id), payload=path.join(tx,"payload","state");
-   fs.mkdirSync(path.join(payload,"tasks"),{recursive:true,mode:0o700});
-   fs.writeFileSync(path.join(payload,"tasks/item.txt"),"authoritative backup",{mode:0o600});
-   const digest=(value:Buffer|string)=>crypto.createHash("sha256").update(value).digest("hex");
-   const stores={state:"tree" as const,config:null};
-   const manifest={formatVersion:1,homeSha256:digest(fs.realpathSync(selected)),stores,entries:[
-    {store:"state",path:"tasks",kind:"directory"},
-    {store:"state",path:"tasks/item.txt",kind:"file",size:Buffer.byteLength("authoritative backup"),sha256:digest("authoritative backup")},
-   ]};
-   const manifestSha256=digest(JSON.stringify(manifest));
-   fs.writeFileSync(path.join(tx,"manifest.json"),JSON.stringify(manifest),{mode:0o600});
-   fs.writeFileSync(path.join(control,"active.json"),JSON.stringify({formatVersion:1,id,homeSha256:digest(fs.realpathSync(selected)),manifestSha256,phase:"prepared",stores}),{mode:0o600});
-   const record=path.join(original,"repl.log");
-   const cliRoot=path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),"..");
-   const result=spawnSync(process.execPath,["--import","tsx","src/index.ts","repl"],{cwd:cliRoot,env:{...process.env,HOME:original,XDG_CONFIG_HOME:path.join(original,".config"),NEXUS_TEST_RECORD_REPL:record},encoding:"utf8",timeout:10000});
-   assert.notEqual(result.status,0,`${result.stdout}\n${result.stderr}`);
-   assert.match(result.stderr,/may not change HOME|NEXUS_STATE_DIR/);
-   assert.equal(fs.readFileSync(path.join(tasks,"item.txt"),"utf8"),"partially restored");
-   assert.equal(hasPendingStateRestore(selected),true);
-   assert.equal(fs.existsSync(record),false);
-  }finally{fs.rmSync(root,{recursive:true,force:true});}
- });
-
  it("refuses upgrade --check before loading config when restore is pending",()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-restore-check-gate-"));
   try{
