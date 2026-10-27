@@ -102,7 +102,7 @@ describe("durable same-version transaction recovery",()=>{
     let raced=false;
     try {
       fsDefault.renameSync=((from:string,to:string)=>{
-        if(!raced && from===entry.binPath && to.includes(".nexus-link-recovery-previous.")){
+        if(!raced && from===entry.binPath && to===`${entry.binPath}.nexus-recovery-previous`){
           raced=true;
           fs.unlinkSync(entry.binPath);
           fs.writeFileSync(entry.binPath,"raced regular launcher; preserve me");
@@ -121,6 +121,16 @@ describe("durable same-version transaction recovery",()=>{
       fsDefault.renameSync=originalRename;
       syncBuiltinESMExports();
     }
+  });
+  it("restores an entry displaced by a process interrupted before launcher installation",()=>{
+    const displaced=`${entry.binPath}.nexus-recovery-previous`;
+    fs.renameSync(entry.binPath,displaced);
+    writeJournal(prefix,entry);
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.recovered,true,result.details);
+    assert.equal(fs.readlinkSync(entry.binPath),entry.sourceSymlinkTarget);
+    assert.equal(fs.existsSync(displaced),false);
+    assert.equal(verifyInstalledRuntime(entry.sourceInstallDir,"v1.0.0").healthy,true);
   });
   it("admits only one recovery when two contenders both observe the same stale lock",async()=>{
     writeJournal(prefix,entry);

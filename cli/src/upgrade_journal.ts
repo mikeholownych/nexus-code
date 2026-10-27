@@ -536,7 +536,26 @@ function atomicSymlinkSwap(targetFile: string, linkPath: string): void {
   fs.mkdirSync(binDir, { recursive: true });
   const token = `${process.pid}.${Date.now()}.${randomUUID()}`;
   const tmpLink = path.join(binDir, `.nexus-link-recovery.${token}`);
-  const displacedLink = path.join(binDir, `.nexus-link-recovery-previous.${token}`);
+  const displacedLink = `${linkPath}.nexus-recovery-previous`;
+  const priorDisplacement = fs.lstatSync(displacedLink, { throwIfNoEntry:false });
+  if (priorDisplacement) {
+    const current = fs.lstatSync(linkPath, { throwIfNoEntry:false });
+    if (!current) {
+      // A previous process stopped after moving the launcher aside. Restore it
+      // exclusively before retrying, including when the displaced entry is a
+      // raced regular file that the previous process had not yet inspected.
+      fs.linkSync(displacedLink, linkPath);
+      syncDirectory(binDir);
+      fs.unlinkSync(displacedLink);
+      syncDirectory(binDir);
+    } else if (priorDisplacement.isSymbolicLink() && current.isSymbolicLink() && fs.readlinkSync(linkPath) === targetFile) {
+      // The new launcher was installed and only backup cleanup was interrupted.
+      fs.unlinkSync(displacedLink);
+      syncDirectory(binDir);
+    } else {
+      throw new Error("An interrupted launcher recovery needs manual intervention; preserving both entries");
+    }
+  }
   const launcher = fs.lstatSync(linkPath, { throwIfNoEntry:false });
   if (launcher && !launcher.isSymbolicLink()) throw new Error("Upgrade launcher is not a symbolic link; refusing to replace it");
   try {
@@ -546,22 +565,26 @@ function atomicSymlinkSwap(targetFile: string, linkPath: string): void {
       // EEXIST instead of replacing a regular file created in the check/swap
       // window. Verify what was moved before treating it as our old symlink.
       fs.renameSync(linkPath, displacedLink);
+      syncDirectory(binDir);
       const displaced = fs.lstatSync(displacedLink);
       if (!displaced.isSymbolicLink() || displaced.dev !== launcher.dev || displaced.ino !== launcher.ino) {
         fs.linkSync(displacedLink, linkPath);
+        syncDirectory(binDir);
         fs.unlinkSync(displacedLink);
+        syncDirectory(binDir);
         throw new Error("Upgrade launcher changed during recovery; refusing to replace it");
       }
     }
     // Hard-linking the temporary symlink creates the destination exclusively;
     // unlike rename, it cannot clobber an entry raced into place.
     fs.linkSync(tmpLink, linkPath);
+    syncDirectory(binDir);
     fs.unlinkSync(tmpLink);
     if (launcher) fs.unlinkSync(displacedLink);
     syncDirectory(binDir);
   } catch (err: any) {
     if (fs.existsSync(displacedLink) && !fs.existsSync(linkPath)) {
-      try { fs.linkSync(displacedLink, linkPath); fs.unlinkSync(displacedLink); } catch {}
+      try { fs.linkSync(displacedLink, linkPath); syncDirectory(binDir); fs.unlinkSync(displacedLink); syncDirectory(binDir); } catch {}
     }
     try {
       fs.unlinkSync(tmpLink);
