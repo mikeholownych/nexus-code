@@ -83,6 +83,20 @@ describe("durable same-version transaction recovery",()=>{
     assert.ok(fs.existsSync(entry.stagingDir!));
     assert.ok(fs.existsSync(entry.displacedTargetDir!));
   });
+  for (const state of ["downloading", "verified"] as const) {
+    it(`preserves a regular launcher file and refuses ${state} recovery`,()=>{
+      fs.unlinkSync(entry.binPath);
+      fs.writeFileSync(entry.binPath,"DO NOT LOSE");
+      entry.state=state;
+      writeJournal(prefix,entry);
+      const result=recoverUpgrade(prefix);
+      assert.equal(result.recovered,false);
+      assert.equal(result.action,"manual_intervention");
+      assert.equal(fs.lstatSync(entry.binPath).isFile(),true);
+      assert.equal(fs.readFileSync(entry.binPath,"utf8"),"DO NOT LOSE");
+      assert.equal(readJournal(prefix)?.state,"recovery_required");
+    });
+  }
   it("admits only one recovery when two contenders both observe the same stale lock",async()=>{
     writeJournal(prefix,entry);
     const libRoot=path.join(prefix,"lib/nexus"), barrier=path.join(prefix,"barrier");

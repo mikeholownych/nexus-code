@@ -531,6 +531,8 @@ function isRealFile(filePath: string): boolean {
 }
 
 function atomicSymlinkSwap(targetFile: string, linkPath: string): void {
+  const launcher = fs.lstatSync(linkPath, { throwIfNoEntry:false });
+  if (launcher && !launcher.isSymbolicLink()) throw new Error("Upgrade launcher is not a symbolic link; refusing to replace it");
   const binDir = path.dirname(linkPath);
   fs.mkdirSync(binDir, { recursive: true });
   const tmpLink = path.join(binDir, `.nexus-link-recovery.${process.pid}.${Date.now()}`);
