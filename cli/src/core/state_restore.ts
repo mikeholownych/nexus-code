@@ -31,7 +31,8 @@ function homePath(homeDir: string): string {
 
 export function stateRoot(home: string): string {
   const processHome = fs.realpathSync(path.resolve(process.env.HOME || os.homedir()));
-  if (process.env.NEXUS_STATE_DIR && home === processHome) return path.resolve(process.env.NEXUS_STATE_DIR);
+  const requestedHome = fs.realpathSync(home);
+  if (process.env.NEXUS_STATE_DIR && requestedHome === processHome) return path.resolve(process.env.NEXUS_STATE_DIR);
   return path.join(home, ".nexus");
 }
 function controlRoot(home: string): string { return path.join(stateRoot(home), CONTROL_DIR); }

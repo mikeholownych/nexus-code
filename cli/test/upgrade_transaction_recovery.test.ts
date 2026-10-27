@@ -414,6 +414,31 @@ describe("complete private state/config backup restore",()=>{
   }
  });
 
+ it("honors NEXUS_STATE_DIR when HOME is a symlink",()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-state-home-alias-"));
+  const home=path.join(root,"home"), alias=path.join(root,"home-alias"), stateRoot=path.join(root,"state-root");
+  const previousStateDir=process.env.NEXUS_STATE_DIR, previousHome=process.env.HOME;
+  try{
+   fs.mkdirSync(home,{mode:0o700});
+   fs.symlinkSync(home,alias,"dir");
+   process.env.HOME=alias;
+   process.env.NEXUS_STATE_DIR=stateRoot;
+   fs.mkdirSync(path.join(stateRoot,"tasks"),{recursive:true,mode:0o700});
+   const task=path.join(stateRoot,"tasks","task.json");
+   fs.writeFileSync(task,"original task",{mode:0o600});
+   const backup=createPreMigrationBackup();
+   assert.ok(backup.stateBackupDir);
+   assert.equal(path.dirname(backup.stateBackupDir!),path.join(stateRoot,"backups"));
+   fs.writeFileSync(task,"modified task");
+   assert.equal(restoreConfigBackup(backup.stateBackupDir!,alias),true);
+   assert.equal(fs.readFileSync(task,"utf8"),"original task");
+  }finally{
+   if(previousStateDir===undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR=previousStateDir;
+   if(previousHome===undefined) delete process.env.HOME; else process.env.HOME=previousHome;
+   fs.rmSync(root,{recursive:true,force:true});
+  }
+ });
+
  it("flushes every automatic backup payload and containing directory before returning",()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-fsync-"));
   const originalFsync=fsDefault.fsyncSync;
