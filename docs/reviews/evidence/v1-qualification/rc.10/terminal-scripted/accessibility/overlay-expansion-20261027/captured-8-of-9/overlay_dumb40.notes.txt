@@ -1,0 +1,59 @@
+[   0.91s] SAW idle
+[   0.91s] SCREEN idle (40x14)
+[   0.91s] SEND b'?'
+[   1.11s] SAW help
+[   1.11s] SCREEN help (40x14)
+[   1.11s] SEND b'\x1b'
+[   1.31s] SAW help closed
+[   1.31s] SEND b'/model\r'
+[   1.51s] SAW models
+[   1.51s] SCREEN models (40x14)
+[   1.51s] SEND b'\x1b'
+[   1.71s] SAW models closed
+[   1.71s] SEND b'/connect\r'
+[   1.91s] SAW connect
+[   1.91s] SCREEN connect (40x14)
+[   1.91s] SEND b'\x1b'
+[   2.11s] SAW connect back to model picker
+[   2.11s] SEND b'\x1b'
+[   2.32s] SAW connect closed
+[   2.32s] SEND b'\x1b[200~first line\nsecond line\nthird line\x1b[201~'
+[   3.02s] SEND b'\x0f'
+[   3.22s] SAW paste
+[   3.22s] SCREEN paste (40x14)
+[   3.22s] SEND b'\x1b'
+[   3.42s] SAW paste closed
+[   3.42s] SEND b'\x0c'
+[   3.62s] SAW paste cleared
+[   3.62s] SEND b'review the sensitive workspace\r'
+[   3.82s] SAW checkpoint choice
+[   3.82s] SCREEN checkpoint-choice (40x14)
+[   3.82s] SEND b'4'
+[   4.02s] SEND b'\r'
+[   4.22s] SAW checkpoint choice cancelled
+[   4.22s] SAW checkpoint choice closed
+[   4.22s] SEND b'create a11y.txt\r'
+[   5.09s] SAW approval
+[   5.09s] SCREEN approval (40x14)
+[   7.59s] SEND b'y'
+[   8.79s] SEND b'\x1b[D'
+[  11.29s] SEND b'\r'
+[  12.10s] SEND b'\r'
+[  13.20s] SAW completion
+[  13.20s] SCREEN completion (40x14)
+[  13.68s] SAW post-completion idle
+[  13.68s] SEND b'\x04'
+[  13.88s] SAW review
+[  13.88s] SCREEN review (40x14)
+[  13.88s] SEND b'\x1b'
+[  14.08s] SAW review closed
+[  14.08s] SEND b'/receipt\r'
+[  14.29s] SAW receipt
+[  14.29s] SCREEN receipt (40x14)
+[  14.29s] SEND b'\x1b'
+[  14.49s] SAW receipt closed
+[  14.49s] SEND b'\t'
+[  14.69s] SEND b']'
+[  14.89s] SEND b'\r'
+[  25.15s] TIMEOUT waiting for detail
+[  25.15s] SCREEN timeout-detail (40x14)
