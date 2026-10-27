@@ -64,8 +64,44 @@ test("checkpoint restore does not execute a workspace git hook", () => {
     fs.chmodSync(env.hook, 0o755);
     fs.writeFileSync(path.join(env.workspace, ".git", "hooks", "post-index-change"), `#!/bin/sh\ntouch '${env.marker}'\n`, { mode: 0o755 });
     fs.chmodSync(path.join(env.workspace, ".git", "hooks", "post-index-change"), 0o755);
+    // Config-driven execution must stay off on restore as well: fsmonitor may run for the clean scan.
+    const fsmonitorScript = path.join(env.root, "fsmonitor-canary.sh");
+    fs.writeFileSync(fsmonitorScript, `#!/bin/sh\ntouch '${env.marker}'\nexit 0\n`, { mode: 0o755 });
+    fs.chmodSync(fsmonitorScript, 0o755);
+    execFileSync("git", ["config", "core.fsmonitor", fsmonitorScript], { cwd: env.workspace });
     manager.restore(cp.id);
-    assert.equal(fs.existsSync(env.marker), false, "checkpoint restore executed a workspace hook");
+    assert.equal(fs.existsSync(env.marker), false, "checkpoint restore executed a workspace hook or fsmonitor");
+  } finally {
+    env.restore();
+  }
+});
+
+test("checkpoint diff does not execute repo-configured external diff or fsmonitor", () => {
+  const env = setup();
+  try {
+    // The diff test is about config-driven programs, not hooks.
+    fs.rmSync(env.hook, { force: true });
+    fs.rmSync(path.join(env.workspace, ".git", "hooks", "post-index-change"), { force: true });
+    const manager = new CheckpointManager(env.workspace);
+    fs.writeFileSync(path.join(env.workspace, "file.txt"), "first change\n");
+    const base = manager.createCheckpoint("diff base");
+    fs.writeFileSync(path.join(env.workspace, "file.txt"), "second change\n");
+    const next = manager.createCheckpoint("diff next");
+
+    const externalMarker = path.join(env.root, "external-diff-ran");
+    const fsmonitorMarker = path.join(env.root, "fsmonitor-ran");
+    const canary = path.join(env.root, "diff-canary.sh");
+    fs.writeFileSync(canary, `#!/bin/sh\ntouch '${externalMarker}'\ntouch '${fsmonitorMarker}'\nexit 0\n`, { mode: 0o755 });
+    fs.chmodSync(canary, 0o755);
+    execFileSync("git", ["config", "diff.external", canary], { cwd: env.workspace });
+    execFileSync("git", ["config", "core.fsmonitor", canary], { cwd: env.workspace });
+
+    const worktreeDiff = manager.getDiff(next.id);
+    const refDiff = manager.getDiff(next.id, base.id);
+    assert.equal(worktreeDiff.success, true, worktreeDiff.error);
+    assert.equal(refDiff.success, true, refDiff.error);
+    assert.equal(fs.existsSync(externalMarker), false, "checkpoint diff executed diff.external");
+    assert.equal(fs.existsSync(fsmonitorMarker), false, "checkpoint diff executed core.fsmonitor");
   } finally {
     env.restore();
   }
