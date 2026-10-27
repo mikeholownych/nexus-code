@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
+import { envWithoutConfiguredHooks } from "./core/git_hook_guard.js";
 import crypto from "node:crypto";
 import {
   assertNoSensitivePersistenceContent,
@@ -185,7 +186,10 @@ export class CheckpointManager {
         // programs here and during restore; Git offers no single override for them, and refusing to
         // checkpoint whenever a filter is configured would break Git LFS. Recorded as a known limitation
         // in docs/reviews/evidence/v1/DEFECT-CHECKPOINT-GIT-HOOKS-20261026/README.md.
-        const stashCommit = execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "stash", "create"], { cwd: this.workspace, encoding: "utf-8" }).trim();
+        // Config-declared hooks (Git 2.54+) ignore core.hooksPath; disable the events these
+        // commands can raise while keeping traditional hooks off with the argv override.
+        const hookGuardEnv = envWithoutConfiguredHooks(this.workspace, ["reference-transaction", "post-index-change"]);
+        const stashCommit = execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "stash", "create"], { cwd: this.workspace, encoding: "utf-8", env: hookGuardEnv }).trim();
         if (stashCommit) {
           // Catch a Git operation that began during validation or stash creation.
           // This is a point-in-time guard; Git exposes no atomic lock spanning
@@ -194,6 +198,7 @@ export class CheckpointManager {
           execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", `refs/nexus/checkpoints/${id}`, stashCommit], {
             cwd: this.workspace,
             stdio: "ignore",
+            env: hookGuardEnv,
           });
           gitRef = stashCommit;
         } else {
@@ -203,6 +208,7 @@ export class CheckpointManager {
           execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", `refs/nexus/checkpoints/${id}`, headCommit], {
             cwd: this.workspace,
             stdio: "ignore",
+            env: hookGuardEnv,
           });
           gitRef = headCommit;
         }
@@ -374,7 +380,11 @@ export class CheckpointManager {
           fs.unlinkSync(jsonPath);
         }
         if (this.isGit && cp.gitRef) {
-          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", `refs/nexus/checkpoints/${cp.id}`], { cwd: this.workspace, stdio: "ignore" });
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", `refs/nexus/checkpoints/${cp.id}`], {
+            cwd: this.workspace,
+            stdio: "ignore",
+            env: envWithoutConfiguredHooks(this.workspace, ["reference-transaction"]),
+          });
         }
         if (cp.snapshotDir && fs.existsSync(cp.snapshotDir)) {
           fs.rmSync(cp.snapshotDir, { recursive: true, force: true });
@@ -407,8 +417,9 @@ export class CheckpointManager {
     try {
       if (this.isGit && cp.gitRef) {
         // Reset working tree to checkpoint commit/stash
-        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "reset", "--hard", cp.gitRef], { cwd: this.workspace, stdio: "ignore" });
-        execFileSync("git", ["-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore" });
+        const hookGuardEnv = envWithoutConfiguredHooks(this.workspace, ["reference-transaction", "post-index-change"]);
+        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "reset", "--hard", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
+        execFileSync("git", ["-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
         return { success: true, message: `Restored workspace to checkpoint '${cp.name}' (${cp.id})` };
       }
 

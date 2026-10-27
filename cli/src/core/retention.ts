@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
+import { envWithoutConfiguredHooks } from "./git_hook_guard.js";
 import { tryStateStoreGuard } from "./state_store_guard.js";
 import { ensurePrivateDir, writePrivateFile, fsyncDirectoryDurably } from "./durable_file.js";
 
@@ -1109,10 +1110,22 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
 
       if (item.gitRef && item.workspace) {
         try {
-          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", `refs/nexus/checkpoints/${item.id}`], {
-            cwd: item.workspace,
-            stdio: "ignore",
-          });
+          const configuredHookEnv = envWithoutConfiguredHooks(item.workspace, ["reference-transaction"]);
+          execFileSync(
+            "git",
+            [
+              "-c",
+              "core.hooksPath=/dev/null",
+              "update-ref",
+              "-d",
+              `refs/nexus/checkpoints/${item.id}`,
+            ],
+            {
+              cwd: item.workspace,
+              env: configuredHookEnv,
+              stdio: "ignore",
+            },
+          );
         } catch {}
       }
 
