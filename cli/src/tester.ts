@@ -575,7 +575,7 @@ function isPythonUnittestDiscoveryCandidate(root: string, testFile: string, comm
  * Only standard unittest discovery and pytest's default/testpaths discovery are
  * modeled. Other commands or collection hooks fail closed.
  */
-function isPythonTestExecutionCandidate(root: string, testFile: string, command: string): boolean {
+function isPythonTestExecutionCandidate(root: string, testFile: string, command: string, baselineHasPytestPlugins = false): boolean {
   const unittest = isPythonUnittestDiscoveryCandidate(root, testFile, command);
   if (unittest !== null) return unittest;
 
@@ -589,7 +589,8 @@ function isPythonTestExecutionCandidate(root: string, testFile: string, command:
   // Command-line collection modifiers and environment-provided options/plugins
   // are not modeled here. Filtered commands are handled by the explicit-path path.
   if (/\b(?:-k|-m|--ignore|--ignore-glob|--deselect|--pyargs|--confcutdir|--rootdir)(?:\s|=)/.test(command)) return false;
-  if (process.env.PYTEST_ADDOPTS || process.env.PYTEST_PLUGINS) return false;
+  if (process.env.PYTEST_ADDOPTS || process.env.PYTEST_PLUGINS || !process.env.PYTEST_DISABLE_PLUGIN_AUTOLOAD) return false;
+  if (baselineHasPytestPlugins) return false;
 
   const testPaths = pytestTestPaths(root);
   if (!testPaths) return false;
@@ -598,10 +599,16 @@ function isPythonTestExecutionCandidate(root: string, testFile: string, command:
   const testAbsolute = path.resolve(rootAbsolute, testFile);
   const relativeToRoot = path.relative(rootAbsolute, testAbsolute);
   if (!relativeToRoot || relativeToRoot === ".." || relativeToRoot.startsWith(`..${path.sep}`) || path.isAbsolute(relativeToRoot)) return false;
-  if (!/^(?:test_.*|.*_test)\.py$/i.test(path.basename(testAbsolute)) || !isSafeWorkspaceFile(rootAbsolute, relativeToRoot)) return false;
+  if (!/^(?:test_.*|.*_test)\.py$/.test(path.basename(testAbsolute)) || !isSafeWorkspaceFile(rootAbsolute, relativeToRoot)) return false;
 
   const directories = relativeToRoot.split(path.sep).slice(0, -1);
-  if (directories.some((name) => name.startsWith(".") || SKIP_DIRS.has(name) || ["build", "{arch}"].includes(name))) return false;
+  if (directories.some((name) => name.startsWith(".") || SKIP_DIRS.has(name) || ["build", "{arch}", "_darcs", "CVS"].includes(name) || name.endsWith(".egg"))) return false;
+  let directory = rootAbsolute;
+  if (isPytestVirtualenvDirectory(directory)) return false;
+  for (const component of directories) {
+    directory = path.join(directory, component);
+    if (isPytestVirtualenvDirectory(directory)) return false;
+  }
   return testPaths.some((start) => {
     const startAbsolute = path.resolve(rootAbsolute, start);
     const relative = path.relative(startAbsolute, testAbsolute);
@@ -611,8 +618,36 @@ function isPythonTestExecutionCandidate(root: string, testFile: string, command:
   });
 }
 
+/** Pytest skips virtual-environment roots by default during recursive collection. */
+function isPytestVirtualenvDirectory(directory: string): boolean {
+  try {
+    const pyvenv = fs.lstatSync(path.join(directory, "pyvenv.cfg"));
+    if (pyvenv.isSymbolicLink() || pyvenv.isFile()) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
+  }
+  try {
+    const condaMeta = fs.lstatSync(path.join(directory, "conda-meta"));
+    const history = fs.lstatSync(path.join(directory, "conda-meta", "history"));
+    if (condaMeta.isSymbolicLink() || history.isSymbolicLink()) return true;
+    return condaMeta.isDirectory() && history.isFile();
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
 /** Return pytest's standard collection roots, or null when configuration is unsupported. */
 function pytestTestPaths(root: string): string[] | null {
+  // These config formats take precedence in supported pytest versions, but
+  // this static resolver does not interpret their TOML option layout.
+  for (const file of ["pytest.toml", ".pytest.toml"]) {
+    try {
+      fs.lstatSync(path.join(root, file));
+      return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+    }
+  }
   const configurations = [
     ["pytest.ini", "[pytest]"],
     [".pytest.ini", "[pytest]"],
@@ -620,30 +655,89 @@ function pytestTestPaths(root: string): string[] | null {
     ["setup.cfg", "[tool:pytest]"],
     ["pyproject.toml", "[tool.pytest.ini_options]"],
   ] as const;
-  const configured = configurations.flatMap(([file, section]) => {
+  const configured = configurations.flatMap(([file, section]): Array<{ file: string; section: string; body: string | null }> => {
     try {
-      const contents = fs.readFileSync(path.join(root, file), "utf8");
-      const start = contents.indexOf(section);
+      const configPath = path.join(root, file);
+      const stat = fs.lstatSync(configPath);
+      if (stat.isSymbolicLink() || !stat.isFile() || !isSafeWorkspaceFile(path.resolve(root), file)) {
+        return [{ file, section, body: null }];
+      }
+      const lines = fs.readFileSync(configPath, "utf8").split(/\r?\n/);
+      if (file === "pyproject.toml" && hasUnsupportedPyprojectPytestConfig(lines)) {
+        return [{ file, section: "[tool.pytest]", body: null }];
+      }
+      const start = lines.findIndex((line) => line.replace(/\s+#.*$/, "").trim() === section);
       if (start < 0) return [];
-      const body = contents.slice(start + section.length).split(/^\s*\[[^\]]+\]\s*$/m, 1)[0];
+      const nextSection = lines.slice(start + 1).findIndex((line) => /^\s*\[[^\]]+\]\s*(?:#.*)?$/.test(line));
+      const body = lines.slice(start + 1, nextSection < 0 ? undefined : start + 1 + nextSection).join("\n");
       return [{ file, section, body }];
-    } catch { return []; }
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? [] : [{ file, section, body: null }];
+    }
   });
   if (configured.length > 1) return null;
-  if (!configured.length) return ["."];
+  if (!configured.length) {
+    let parent = path.dirname(path.resolve(root));
+    while (parent !== path.dirname(parent)) {
+      for (const file of ["pytest.toml", ".pytest.toml", ...configurations.map(([name]) => name)]) {
+        try {
+          fs.lstatSync(path.join(parent, file));
+          return null;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+        }
+      }
+      parent = path.dirname(parent);
+    }
+    return ["."];
+  }
 
   const { file, body } = configured[0];
+  if (body === null) return null;
+  // TOML permits quoted option names. This static parser does not model them,
+  // so don't treat an unrecognized `testpaths` spelling as pytest's default.
+  if (file === "pyproject.toml" && /^\s*["'][^"']+["']\s*=/m.test(body)) return null;
   const keys = [...body.matchAll(/^\s*([A-Za-z_][\w-]*)\s*=/gm)].map((match) => match[1].toLowerCase());
   if (keys.some((key) => key !== "testpaths" && key !== "minversion" && key !== "markers" && key !== "filterwarnings")) return null;
   const match = body.match(/^\s*testpaths\s*=\s*(\[[\s\S]*?\]|[^\r\n#]+)/m);
   if (!match) return ["."];
   const value = match[1].trim();
   if (file === "pyproject.toml") {
+    // TOML decodes escapes in basic strings; this resolver deliberately does
+    // not, so escaped test paths cannot safely establish collection evidence.
+    if (value.includes("\\")) return null;
     const values = [...value.matchAll(/"((?:\\.|[^"\\])*)"|'([^']*)'/g)].map((entry) => entry[1] ?? entry[2]);
     const residue = value.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, "").replace(/[\[\],\s]/g, "");
     return values.length && !residue ? values : null;
   }
   return value.split(/\s+/).filter(Boolean);
+}
+
+/** Reject pytest configuration expressed through TOML forms this resolver cannot model. */
+function hasUnsupportedPyprojectPytestConfig(lines: string[]): boolean {
+  let table = "";
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+#.*$/, "").trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("[") && line.endsWith("]")) {
+      const rawTable = line.slice(1, -1);
+      if (/["']/.test(rawTable) && /^\s*(?:"tool"|'tool'|tool)(?:\s*\.|\s*$)/.test(rawTable)) return true;
+      table = rawTable.replace(/["']/g, "").replace(/\s*\.\s*/g, ".").trim();
+      if (table === "tool.pytest.ini_options" && rawTable.trim() !== table) return true;
+      if ((table === "tool.pytest" || table.startsWith("tool.pytest.")) && /["']/.test(rawTable)) return true;
+      if (table === "tool.pytest") return true;
+      if (table.startsWith("tool.pytest.") && table !== "tool.pytest.ini_options") return true;
+      continue;
+    }
+    if (!table && line.includes("\\") && /^(?:"tool"|'tool'|tool)\s*\.\s*(?:"[^"]*"|'[^']*')/.test(line)) return true;
+    if (table === "tool" && line.includes("\\") && /^(?:"[^"]*"|'[^']*')\s*(?:\.|=)/.test(line)) return true;
+    if (!table && /^(?:"tool"|'tool'|tool)\s*\.\s*(?:"pytest"|'pytest'|pytest)(?:\s*\.|\s*=)/.test(line)) return true;
+    if (!table && /^(?:"tool"|'tool'|tool)\s*=\s*\{/.test(line)) return true;
+    if (table !== "tool") continue;
+    const firstKey = line.match(/^(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*(?:\.|=)/);
+    if (firstKey && (firstKey[1] ?? firstKey[2] ?? firstKey[3]) === "pytest") return true;
+  }
+  return false;
 }
 
 /** Collection hooks can alter discovery or import arbitrary files; don't infer their results statically. */
@@ -765,6 +859,7 @@ function topLevelStaticImports(source: string): string[] {
         const current = source[index++];
         if (escaped) { escaped = false; continue; }
         if (current === "\\") { escaped = true; continue; }
+        if (current === "$" && source[index] === "{") return [];
         if (current === "`") break;
       }
       previous = { kind: "string", value: "" };
@@ -938,12 +1033,10 @@ function resolvePythonModulePath(name: string, root: string): string | null {
       continue;
     }
     if (hasSafeType(moduleFile, "file")) return final ? path.resolve(moduleFile) : null;
-    // A directory without __init__.py is a namespace package when traversing
-    // further components, but is not itself a file deliverable.
-    if (!final && hasSafeType(packageDirectory, "directory")) {
-      cursor = packageDirectory;
-      continue;
-    }
+    // Namespace-package portions can merge with entries from other sys.path
+    // locations, where a later regular package may take precedence. Without
+    // executing Python's import machinery, that resolution is ambiguous.
+    if (!final && hasSafeType(packageDirectory, "directory")) return null;
     return null;
   }
   return null;
@@ -1095,12 +1188,15 @@ export function isVerifierDeliverableBound(
   if (changedTargets.some((file) => !declaredScopeSet.has(file) || !isSafeWorkspaceFile(root, file))) return false;
   const tokens = extractPathTokens(root, `${verifierCommand}\n${testOutput}`);
   const isFiltered = isFilteredVerifierCommand(verifierCommand);
+  const baselineHasPytestPlugins = [...baselineTests].some(([testFile, content]) =>
+    testFile.endsWith(".py") && /\bpytest_plugins\b/.test(stripPythonStringsAndComments(content)),
+  );
 
   const testFileExecuted = (testFileRel: string) => {
     // An unfiltered verifier run that executed tests ran the repository test suite
     if (!isFiltered) {
       if (testFileRel.endsWith(".py")) {
-        return isPythonTestExecutionCandidate(root, testFileRel, verifierCommand);
+        return isPythonTestExecutionCandidate(root, testFileRel, verifierCommand, baselineHasPytestPlugins);
       }
       return true;
     }

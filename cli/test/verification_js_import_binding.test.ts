@@ -32,6 +32,9 @@ test("ACC-VER-03: only executable JavaScript imports bind a declared deliverable
     const textOnly = 'const note = "import { a } from \\\"../src/a.ts\\\"";\ntest("unrelated", () => {});\n';
     assert.equal(bind(textOnly), false, "a string literal must not establish an import binding");
 
+    const nestedTemplateText = ';`${`import "../src/a.ts"`}`;\ntest("unrelated", () => {});\n';
+    assert.equal(bind(nestedTemplateText), false, "nested template text must not expose import-looking tokens");
+
     const regexOnly = 'const pattern = /import\\s+.*from\\s+\\"\\.\\.\\/src\\/a\\.ts\\"/;\ntest("unrelated", () => {});\n';
     assert.equal(bind(regexOnly), false, "a regular expression must not establish an import binding");
 
