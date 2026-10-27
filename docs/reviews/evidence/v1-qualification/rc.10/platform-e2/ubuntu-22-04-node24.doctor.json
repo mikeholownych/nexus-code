@@ -1,0 +1,354 @@
+{
+  "schemaVersion": 2,
+  "tool": "nexus doctor",
+  "nexusVersion": "1.0.0-rc.10",
+  "buildIdentity": {
+    "version": "1.0.0-rc.10",
+    "commit": "16ee8ca36438",
+    "commitTime": "2026-10-26T19:23:16-04:00",
+    "branch": null,
+    "dirty": false,
+    "string": "1.0.0-rc.10 (16ee8ca36438)"
+  },
+  "posture": {
+    "mode": "review",
+    "sandbox": "off",
+    "trusted": false
+  },
+  "context": "cli",
+  "deep": false,
+  "generatedAt": "2026-10-27T20:06:55.544Z",
+  "durationMs": 84,
+  "summary": {
+    "pass": 13,
+    "warn": 2,
+    "fail": 1,
+    "skip": 7
+  },
+  "effectiveConfig": [
+    {
+      "key": "NEXUS_PROVIDER",
+      "value": "(not set)",
+      "source": "default"
+    },
+    {
+      "key": "LOCAL_LLM_ENDPOINT",
+      "value": "http://localhost:1234/v1",
+      "source": "default"
+    },
+    {
+      "key": "LOCAL_LLM_MODEL",
+      "value": "local-model",
+      "source": "default"
+    },
+    {
+      "key": "LOCAL_LLM_API_KEY",
+      "value": "not set",
+      "source": "derived"
+    },
+    {
+      "key": "LOCAL_HARNESS_SHELL",
+      "value": "bash",
+      "source": "command-line flag"
+    },
+    {
+      "key": "workspace",
+      "value": "/work",
+      "source": "current directory"
+    },
+    {
+      "key": "max steps per segment",
+      "value": "30 (checkpoint interval, not a limit)",
+      "source": "derived"
+    },
+    {
+      "key": "NEXUS_MAX_TOTAL_STEPS",
+      "value": "none",
+      "source": "default"
+    },
+    {
+      "key": "NEXUS_MAX_TURN_MINUTES",
+      "value": "none",
+      "source": "default"
+    },
+    {
+      "key": "NEXUS_STAGNATION_STEPS",
+      "value": "12",
+      "source": "default"
+    },
+    {
+      "key": "NEXUS_VERIFIER_TIMEOUT_SECS",
+      "value": "300",
+      "source": "default"
+    },
+    {
+      "key": "PLANNER_LLM_MODEL",
+      "value": "(not set)",
+      "source": "default"
+    },
+    {
+      "key": "CODER_LLM_MODEL",
+      "value": "(not set)",
+      "source": "default"
+    }
+  ],
+  "findings": [
+    {
+      "id": "install.build",
+      "category": "install",
+      "status": "pass",
+      "explanation": "The CLI build is present and not older than its source.",
+      "evidence": [
+        "version 1.0.0-rc.10",
+        "built from 16ee8ca36438",
+        "install root /home/nexus-e2/.local/lib/nexus/v1.0.0-rc.10"
+      ],
+      "repairAvailable": false,
+      "durationMs": 62
+    },
+    {
+      "id": "tui.launch",
+      "category": "install",
+      "status": "pass",
+      "explanation": "The live TUI is launchable and its sidecar resolves.",
+      "evidence": [
+        "/home/nexus-e2/.local/lib/nexus/v1.0.0-rc.10/lib/core/nexus-tui",
+        "/home/nexus-e2/.local/lib/nexus/v1.0.0-rc.10/lib/cli/dist/sidecar.js"
+      ],
+      "repairAvailable": false,
+      "durationMs": 71
+    },
+    {
+      "id": "runtime.node",
+      "category": "runtime",
+      "status": "pass",
+      "explanation": "Node.js 24.11.1 (supported).",
+      "evidence": [
+        "/opt/node24/bin/node"
+      ],
+      "repairAvailable": false,
+      "durationMs": 55
+    },
+    {
+      "id": "runtime.launcher",
+      "category": "runtime",
+      "status": "pass",
+      "explanation": "The `nexus` launcher on PATH is this packaged installation.",
+      "evidence": [
+        "The nexus launcher resolves to this packaged installation."
+      ],
+      "repairAvailable": false,
+      "durationMs": 54
+    },
+    {
+      "id": "config.valid",
+      "category": "config",
+      "status": "pass",
+      "explanation": "The configuration builds with the same rules a session uses.",
+      "evidence": [
+        "provider (appliance / OpenAI-compatible endpoint)",
+        "model local-model"
+      ],
+      "repairAvailable": false,
+      "durationMs": 53
+    },
+    {
+      "id": "config.project_env_ignored",
+      "category": "config",
+      "status": "skip",
+      "explanation": "The workspace has no .env.",
+      "evidence": [
+        "/work/.env"
+      ],
+      "repairAvailable": false,
+      "durationMs": 53
+    },
+    {
+      "id": "endpoint.configured",
+      "category": "endpoint",
+      "status": "pass",
+      "explanation": "An inference endpoint is configured.",
+      "evidence": [
+        "http://localhost:1234/v1",
+        "locality LOCAL_APPLIANCE (loopback_ip)",
+        "credential none configured; stored gateway credentials are attached per origin by the client"
+      ],
+      "repairAvailable": false,
+      "durationMs": 73
+    },
+    {
+      "id": "endpoint.reachable",
+      "category": "endpoint",
+      "status": "fail",
+      "explanation": "The endpoint did not answer.",
+      "evidence": [
+        "http://localhost:1234/v1",
+        "fetch failed (cause: ECONNREFUSED: connect ECONNREFUSED 127.0.0.1:1234)"
+      ],
+      "action": "Start the local model server (LM Studio / vLLM) or point LOCAL_LLM_ENDPOINT / -e at a running one.",
+      "repairAvailable": false,
+      "durationMs": 73
+    },
+    {
+      "id": "endpoint.authenticated",
+      "category": "endpoint",
+      "status": "skip",
+      "explanation": "Skipped: the endpoint was not reachable.",
+      "evidence": [],
+      "repairAvailable": false,
+      "durationMs": 73
+    },
+    {
+      "id": "model.available",
+      "category": "endpoint",
+      "status": "skip",
+      "explanation": "Skipped: the endpoint was not reachable.",
+      "evidence": [],
+      "repairAvailable": false,
+      "durationMs": 73
+    },
+    {
+      "id": "inference.verified",
+      "category": "endpoint",
+      "status": "skip",
+      "explanation": "Inference was not tested: a listed model is not proof that inference works. --deep sends one minimal request.",
+      "evidence": [],
+      "action": "Run `nexus doctor --deep` to send one short inference request (it costs model work, and tokens on paid providers).",
+      "repairAvailable": false,
+      "durationMs": 20
+    },
+    {
+      "id": "shell.executable",
+      "category": "runtime",
+      "status": "pass",
+      "explanation": "The shell bash runs commands.",
+      "evidence": [
+        "/usr/bin/bash"
+      ],
+      "repairAvailable": false,
+      "durationMs": 28
+    },
+    {
+      "id": "engine.binary",
+      "category": "engine",
+      "status": "pass",
+      "explanation": "The Rust engine binary runs and matches the CLI version.",
+      "evidence": [
+        "/home/nexus-e2/.local/lib/nexus/v1.0.0-rc.10/lib/core/harness-core",
+        "harness-core 1.0.0-rc.10"
+      ],
+      "repairAvailable": false,
+      "durationMs": 23
+    },
+    {
+      "id": "workspace.access",
+      "category": "workspace",
+      "status": "pass",
+      "explanation": "The workspace is readable and writable; it is not a git repository, so checkpoints use file snapshots.",
+      "evidence": [
+        "/work"
+      ],
+      "repairAvailable": false,
+      "durationMs": 8
+    },
+    {
+      "id": "state.sessions",
+      "category": "state",
+      "status": "warn",
+      "explanation": "The saved sessions directory does not exist yet; Nexus creates it on first save.",
+      "evidence": [
+        "/home/nexus-e2/.nexus/sessions"
+      ],
+      "repairAvailable": true,
+      "repair": {
+        "id": "state.create",
+        "description": "Create /home/nexus-e2/.nexus/sessions with mode 0700"
+      },
+      "durationMs": 7
+    },
+    {
+      "id": "state.tasks",
+      "category": "state",
+      "status": "warn",
+      "explanation": "The durable task state directory does not exist yet; Nexus creates it on first save.",
+      "evidence": [
+        "/home/nexus-e2/.nexus/tasks"
+      ],
+      "repairAvailable": true,
+      "repair": {
+        "id": "state.create",
+        "description": "Create /home/nexus-e2/.nexus/tasks with mode 0700"
+      },
+      "durationMs": 7
+    },
+    {
+      "id": "state.permissions",
+      "category": "state",
+      "status": "pass",
+      "explanation": "Nexus state directories and files are private (0700/0600).",
+      "evidence": [
+        "/home/nexus-e2/.nexus"
+      ],
+      "repairAvailable": false,
+      "durationMs": 6
+    },
+    {
+      "id": "state.integrity",
+      "category": "state",
+      "status": "pass",
+      "explanation": "No saved sessions or task state yet.",
+      "evidence": [],
+      "repairAvailable": false,
+      "durationMs": 14
+    },
+    {
+      "id": "credentials.store",
+      "category": "state",
+      "status": "pass",
+      "explanation": "Nexus's own credential store is not in use (credentials come from the environment or other clients).",
+      "evidence": [
+        "/home/nexus-e2/.config/nexus/credentials.json"
+      ],
+      "repairAvailable": false,
+      "durationMs": 4
+    },
+    {
+      "id": "config.env",
+      "category": "config",
+      "status": "pass",
+      "explanation": "No ~/.config/nexus/config.env file present (optional configuration).",
+      "evidence": [
+        "/home/nexus-e2/.config/nexus/config.env"
+      ],
+      "repairAvailable": false,
+      "durationMs": 4
+    },
+    {
+      "id": "config.custom_ca",
+      "category": "config",
+      "status": "skip",
+      "explanation": "No custom CA certificate bundle (NODE_EXTRA_CA_CERTS) is configured (optional).",
+      "evidence": [],
+      "repairAvailable": false,
+      "durationMs": 4
+    },
+    {
+      "id": "mcp.config",
+      "category": "extensions",
+      "status": "skip",
+      "explanation": "No MCP servers are configured (optional).",
+      "evidence": [],
+      "repairAvailable": false,
+      "durationMs": 3
+    },
+    {
+      "id": "plugins.config",
+      "category": "extensions",
+      "status": "skip",
+      "explanation": "No plugins are installed (optional).",
+      "evidence": [],
+      "repairAvailable": false,
+      "durationMs": 1
+    }
+  ]
+}
