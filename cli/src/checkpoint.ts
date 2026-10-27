@@ -372,30 +372,66 @@ export class CheckpointManager {
 
     const toPrune = checkpoints.slice(keepCount);
     let count = 0;
+    const failures: string[] = [];
 
     for (const cp of toPrune) {
+      let deletedRefTarget: string | undefined;
+      let hookEnv: NodeJS.ProcessEnv | undefined;
+      const ref = cp.gitRef ? `refs/nexus/checkpoints/${cp.id}` : undefined;
       try {
         const jsonPath = path.join(this.checkpointDir, `${cp.id}.json`);
-        if (fs.existsSync(jsonPath)) {
-          fs.unlinkSync(jsonPath);
+        if (this.isGit && ref) {
+          // Resolve hook suppression before mutating checkpoint state. Git 2.54 cannot
+          // suppress every configured hook without a discovery race, so retain the record.
+          hookEnv = envWithoutConfiguredHooks(this.workspace, ["reference-transaction"]);
+          try {
+            deletedRefTarget = execFileSync("git", ["show-ref", "--hash", "--verify", ref], {
+              cwd: this.workspace,
+              env: hookEnv,
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "ignore"],
+            }).trim();
+          } catch (error: any) {
+            if (error?.status !== 1) throw error;
+          }
+          if (deletedRefTarget) {
+            execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", ref, deletedRefTarget], {
+              cwd: this.workspace,
+              stdio: "ignore",
+              env: hookEnv,
+            });
+          }
         }
-        if (this.isGit && cp.gitRef) {
-          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", `refs/nexus/checkpoints/${cp.id}`], {
-            cwd: this.workspace,
-            stdio: "ignore",
-            env: envWithoutConfiguredHooks(this.workspace, ["reference-transaction"]),
-          });
+
+        try {
+          if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
+        } catch (error) {
+          if (deletedRefTarget && ref && hookEnv) {
+            try {
+              execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", ref, deletedRefTarget, "0".repeat(deletedRefTarget.length)], {
+                cwd: this.workspace,
+                stdio: "ignore",
+                env: hookEnv,
+              });
+            } catch (restoreError: any) {
+              throw new Error(`${error instanceof Error ? error.message : String(error)}; checkpoint ref restoration failed: ${restoreError?.message || String(restoreError)}`);
+            }
+          }
+          throw error;
         }
         if (cp.snapshotDir && fs.existsSync(cp.snapshotDir)) {
           fs.rmSync(cp.snapshotDir, { recursive: true, force: true });
         }
         count++;
-      } catch {}
+      } catch (error: any) {
+        failures.push(`${cp.id}: ${error?.message || String(error)}`);
+      }
     }
 
+    const message = `Pruned ${count} old checkpoints (retained ${keepCount} most recent).`;
     return {
       prunedCount: count,
-      message: `Pruned ${count} old checkpoints (retained ${keepCount} most recent).`,
+      message: failures.length === 0 ? message : `${message} ${failures.length} checkpoint(s) could not be pruned: ${failures.join("; ")}`,
     };
   }
 

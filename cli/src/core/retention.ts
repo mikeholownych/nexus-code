@@ -1055,6 +1055,92 @@ function deleteCheckpointConfined(item: RetentionItem): void {
   }
 }
 
+function validateCheckpointConfined(item: RetentionItem): void {
+  const stateRootIdentity = item.checkpointStateRootIdentity;
+  const checkpointsRootIdentity = item.checkpointRootIdentity;
+  const partitionIdentity = item.checkpointPartitionIdentity;
+  if (!stateRootIdentity || !checkpointsRootIdentity || !partitionIdentity || !item.primaryIdentity) {
+    throw new Error("Checkpoint plan is missing directory identity evidence; checkpoint was preserved");
+  }
+
+  const partitionPath = path.dirname(item.primaryFile);
+  const checkpointsPath = path.dirname(partitionPath);
+  const stateRootPath = path.dirname(checkpointsPath);
+  let stateFd: number | undefined;
+  let checkpointsFd: number | undefined;
+  let partitionFd: number | undefined;
+  let snapshotsFd: number | undefined;
+  let snapshotParentFd: number | undefined;
+  try {
+    stateFd = openDirectoryNoFollow(stateRootPath, stateRootIdentity);
+    checkpointsFd = openChildDirectory(stateFd, path.basename(checkpointsPath), checkpointsRootIdentity);
+    partitionFd = openChildDirectory(checkpointsFd, path.basename(partitionPath), partitionIdentity);
+
+    const recordPath = procFdPath(partitionFd, path.basename(item.primaryFile));
+    const recordStat = fs.lstatSync(recordPath);
+    if (!recordStat.isFile() || recordStat.isSymbolicLink() || statIdentity(recordStat) !== item.primaryIdentity) {
+      throw new Error("Checkpoint record changed since planning; checkpoint was preserved");
+    }
+
+    if (item.checkpointSnapshotRelativePath) {
+      if (!item.checkpointSnapshotsIdentity || !item.checkpointSnapshotIdentity) {
+        throw new Error("Checkpoint plan is missing snapshot identity evidence; checkpoint was preserved");
+      }
+      snapshotsFd = openChildDirectory(partitionFd, "snapshots", item.checkpointSnapshotsIdentity);
+      const openedSnapshot = openSnapshotParent(snapshotsFd, item.checkpointSnapshotRelativePath, item.checkpointSnapshotIdentity);
+      if (openedSnapshot.ownsParentFd) snapshotParentFd = openedSnapshot.parentFd;
+    }
+  } finally {
+    if (snapshotParentFd !== undefined) fs.closeSync(snapshotParentFd);
+    if (snapshotsFd !== undefined) fs.closeSync(snapshotsFd);
+    if (partitionFd !== undefined) fs.closeSync(partitionFd);
+    if (checkpointsFd !== undefined) fs.closeSync(checkpointsFd);
+    if (stateFd !== undefined) fs.closeSync(stateFd);
+  }
+}
+
+function checkpointRefTarget(workspace: string, ref: string, env: NodeJS.ProcessEnv): string | undefined {
+  try {
+    return execFileSync("git", ["show-ref", "--hash", "--verify", ref], {
+      cwd: workspace,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch (error: any) {
+    if (error?.status === 1) return undefined;
+    throw error;
+  }
+}
+
+function deleteCheckpointRef(workspace: string, id: string): string | undefined {
+  const ref = `refs/nexus/checkpoints/${id}`;
+  const env = envWithoutConfiguredHooks(workspace, ["reference-transaction"]);
+  const target = checkpointRefTarget(workspace, ref, env);
+  if (!target) return undefined;
+
+  try {
+    // The expected old object prevents deleting a ref changed after the read above.
+    execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", ref, target], {
+      cwd: workspace, env, stdio: "ignore",
+    });
+  } catch (error) {
+    // A concurrent collector may have removed the same ref after our presence check.
+    // Treat that as complete only after Git confirms the ref is absent.
+    if (checkpointRefTarget(workspace, ref, env)) throw error;
+  }
+  return target;
+}
+
+function restoreCheckpointRef(workspace: string, id: string, target: string): void {
+  const ref = `refs/nexus/checkpoints/${id}`;
+  const env = envWithoutConfiguredHooks(workspace, ["reference-transaction"]);
+  // The all-zero old value makes restoration create-only; never overwrite a concurrent ref.
+  execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", ref, target, "0".repeat(target.length)], {
+    cwd: workspace, env, stdio: "ignore",
+  });
+}
+
 function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean; timeBudgetMs?: number; deadline?: number }): GcExecutionResult {
   const startTime = Date.now();
   const dryRun = Boolean(options.dryRun);
@@ -1102,31 +1188,44 @@ function executeRetentionLocked(plan: RetentionPlan, options: { dryRun?: boolean
 
     if (item.kind === "checkpoint") {
       try {
-        deleteCheckpointConfined(item);
+        // Reject stale/replaced records before removing their associated Git refs.
+        // deleteCheckpointConfined repeats the identity checks immediately before cleanup.
+        validateCheckpointConfined(item);
       } catch (err: any) {
         errors.push({ path: item.primaryFile, error: err?.message || String(err) });
         continue;
       }
 
-      if (item.gitRef && item.workspace) {
+      let deletedRefTarget: string | undefined;
+      if (item.gitRef) {
+        if (!item.workspace) {
+          errors.push({ path: item.primaryFile, error: "Checkpoint ref workspace is missing; checkpoint was preserved" });
+          continue;
+        }
         try {
-          const configuredHookEnv = envWithoutConfiguredHooks(item.workspace, ["reference-transaction"]);
-          execFileSync(
-            "git",
-            [
-              "-c",
-              "core.hooksPath=/dev/null",
-              "update-ref",
-              "-d",
-              `refs/nexus/checkpoints/${item.id}`,
-            ],
-            {
-              cwd: item.workspace,
-              env: configuredHookEnv,
-              stdio: "ignore",
-            },
-          );
-        } catch {}
+          deletedRefTarget = deleteCheckpointRef(item.workspace, item.id);
+        } catch (err: any) {
+          errors.push({ path: item.primaryFile, error: err?.message || String(err) });
+          continue;
+        }
+      }
+
+      try {
+        deleteCheckpointConfined(item);
+      } catch (err: any) {
+        let error = err?.message || String(err);
+        if (deletedRefTarget && item.workspace) {
+          try {
+            fs.lstatSync(item.primaryFile);
+            restoreCheckpointRef(item.workspace, item.id, deletedRefTarget);
+          } catch (restoreError: any) {
+            if (restoreError?.code !== "ENOENT") {
+              error += `; checkpoint ref restoration failed: ${restoreError?.message || String(restoreError)}`;
+            }
+          }
+        }
+        errors.push({ path: item.primaryFile, error });
+        continue;
       }
 
       deletedCount++;
