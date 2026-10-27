@@ -83,6 +83,79 @@ describe("durable same-version transaction recovery",()=>{
     assert.ok(fs.existsSync(entry.stagingDir!));
     assert.ok(fs.existsSync(entry.displacedTargetDir!));
   });
+  for (const state of ["downloading", "verified"] as const) {
+    it(`preserves a regular launcher file and refuses ${state} recovery`,()=>{
+      fs.unlinkSync(entry.binPath);
+      fs.writeFileSync(entry.binPath,"DO NOT LOSE");
+      entry.state=state;
+      writeJournal(prefix,entry);
+      const result=recoverUpgrade(prefix);
+      assert.equal(result.recovered,false);
+      assert.equal(result.action,"manual_intervention");
+      assert.equal(fs.lstatSync(entry.binPath).isFile(),true);
+      assert.equal(fs.readFileSync(entry.binPath,"utf8"),"DO NOT LOSE");
+      assert.equal(readJournal(prefix)?.state,"recovery_required");
+    });
+  }
+  it("preserves a regular launcher substituted after inspection",()=>{
+    const originalRename=fsDefault.renameSync;
+    let raced=false;
+    try {
+      fsDefault.renameSync=((from:string,to:string)=>{
+        if(!raced && from===entry.binPath && to===`${entry.binPath}.nexus-recovery-previous`){
+          raced=true;
+          fs.unlinkSync(entry.binPath);
+          fs.writeFileSync(entry.binPath,"raced regular launcher; preserve me");
+        }
+        return originalRename(from,to);
+      }) as typeof fsDefault.renameSync;
+      syncBuiltinESMExports();
+      writeJournal(prefix,entry);
+      const result=recoverUpgrade(prefix);
+      assert.equal(raced,true,"the launcher replacement window was exercised");
+      assert.equal(result.action,"manual_intervention");
+      assert.equal(fs.lstatSync(entry.binPath).isFile(),true);
+      assert.equal(fs.readFileSync(entry.binPath,"utf8"),"raced regular launcher; preserve me");
+      assert.equal(readJournal(prefix)?.state,"recovery_required");
+    } finally {
+      fsDefault.renameSync=originalRename;
+      syncBuiltinESMExports();
+    }
+  });
+  it("restores an entry displaced by a process interrupted before launcher installation",()=>{
+    const displaced=`${entry.binPath}.nexus-recovery-previous`;
+    fs.renameSync(entry.binPath,displaced);
+    writeJournal(prefix,entry);
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.recovered,true,result.details);
+    assert.equal(fs.readlinkSync(entry.binPath),entry.sourceSymlinkTarget);
+    assert.equal(fs.existsSync(displaced),false);
+    assert.equal(verifyInstalledRuntime(entry.sourceInstallDir,"v1.0.0").healthy,true);
+  });
+  it("continues after a process is interrupted while restoring the original symlink",()=>{
+    const displaced=`${entry.binPath}.nexus-recovery-previous`;
+    const previousTarget=path.join(prefix,"older-release","bin/nexus");
+    fs.unlinkSync(entry.binPath);
+    fs.symlinkSync(previousTarget,entry.binPath);
+    fs.linkSync(entry.binPath,displaced);
+    writeJournal(prefix,entry);
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.recovered,true,result.details);
+    assert.equal(fs.readlinkSync(entry.binPath),entry.sourceSymlinkTarget);
+    assert.equal(fs.existsSync(displaced),false);
+  });
+  it("preserves a regular launcher after an interrupted restore left both hard links",()=>{
+    const displaced=`${entry.binPath}.nexus-recovery-previous`;
+    fs.unlinkSync(entry.binPath);
+    fs.writeFileSync(entry.binPath,"preserve regular launcher");
+    fs.linkSync(entry.binPath,displaced);
+    writeJournal(prefix,entry);
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.recovered,false);
+    assert.equal(fs.readFileSync(entry.binPath,"utf8"),"preserve regular launcher");
+    assert.equal(fs.existsSync(displaced),false);
+    assert.equal(readJournal(prefix)?.state,"recovery_required");
+  });
   it("admits only one recovery when two contenders both observe the same stale lock",async()=>{
     writeJournal(prefix,entry);
     const libRoot=path.join(prefix,"lib/nexus"), barrier=path.join(prefix,"barrier");
@@ -372,6 +445,59 @@ describe("complete private state/config backup restore",()=>{
   }finally{fs.rmSync(home,{recursive:true,force:true});}
  });
 
+ it("captures and restores task and session state rooted at NEXUS_STATE_DIR",()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-state-dir-backup-"));
+  const home=path.join(root,"home"), stateRoot=path.join(root,"state-root");
+  const previousStateDir=process.env.NEXUS_STATE_DIR, previousHome=process.env.HOME;
+  try{
+   process.env.HOME=home;
+   process.env.NEXUS_STATE_DIR=stateRoot;
+   fs.mkdirSync(path.join(stateRoot,"tasks"),{recursive:true,mode:0o700});
+   fs.mkdirSync(path.join(stateRoot,"sessions/a"),{recursive:true,mode:0o700});
+   fs.mkdirSync(home,{mode:0o700});
+   const task=path.join(stateRoot,"tasks","task.json"), session=path.join(stateRoot,"sessions/a/events.jsonl");
+   fs.writeFileSync(task,"original task",{mode:0o600});fs.writeFileSync(session,"original session",{mode:0o600});
+   const backup=createPreMigrationBackup(home);
+   assert.ok(backup.stateBackupDir);
+   assert.equal(path.dirname(backup.stateBackupDir!),path.join(stateRoot,"backups"));
+   assert.equal(fs.readFileSync(path.join(backup.stateBackupDir!,"state/tasks/task.json"),"utf8"),"original task");
+   assert.equal(fs.readFileSync(path.join(backup.stateBackupDir!,"state/sessions/a/events.jsonl"),"utf8"),"original session");
+   fs.writeFileSync(task,"modified task");fs.writeFileSync(session,"modified session");
+   assert.equal(restoreConfigBackup(backup.stateBackupDir!,home),true);
+   assert.equal(fs.readFileSync(task,"utf8"),"original task");
+   assert.equal(fs.readFileSync(session,"utf8"),"original session");
+  }finally{
+   if(previousStateDir===undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR=previousStateDir;
+   if(previousHome===undefined) delete process.env.HOME; else process.env.HOME=previousHome;
+   fs.rmSync(root,{recursive:true,force:true});
+  }
+ });
+
+ it("honors NEXUS_STATE_DIR when HOME is a symlink",()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-state-home-alias-"));
+  const home=path.join(root,"home"), alias=path.join(root,"home-alias"), stateRoot=path.join(root,"state-root");
+  const previousStateDir=process.env.NEXUS_STATE_DIR, previousHome=process.env.HOME;
+  try{
+   fs.mkdirSync(home,{mode:0o700});
+   fs.symlinkSync(home,alias,"dir");
+   process.env.HOME=alias;
+   process.env.NEXUS_STATE_DIR=stateRoot;
+   fs.mkdirSync(path.join(stateRoot,"tasks"),{recursive:true,mode:0o700});
+   const task=path.join(stateRoot,"tasks","task.json");
+   fs.writeFileSync(task,"original task",{mode:0o600});
+   const backup=createPreMigrationBackup();
+   assert.ok(backup.stateBackupDir);
+   assert.equal(path.dirname(backup.stateBackupDir!),path.join(stateRoot,"backups"));
+   fs.writeFileSync(task,"modified task");
+   assert.equal(restoreConfigBackup(backup.stateBackupDir!,alias),true);
+   assert.equal(fs.readFileSync(task,"utf8"),"original task");
+  }finally{
+   if(previousStateDir===undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR=previousStateDir;
+   if(previousHome===undefined) delete process.env.HOME; else process.env.HOME=previousHome;
+   fs.rmSync(root,{recursive:true,force:true});
+  }
+ });
+
  it("flushes every automatic backup payload and containing directory before returning",()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-fsync-"));
   const originalFsync=fsDefault.fsyncSync;
@@ -594,6 +720,37 @@ describe("complete private state/config backup restore",()=>{
   }finally{fs.rmSync(activeHome,{recursive:true,force:true});fs.rmSync(storeHome,{recursive:true,force:true});}
  });
 
+ it("replays a pending restore rooted at NEXUS_STATE_DIR before starting the REPL",()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-state-dir-restore-"));
+  const home=path.join(root,"home"), stateRoot=path.join(root,"state-root");
+  try{
+   fs.mkdirSync(home,{mode:0o700});
+   const tasks=path.join(stateRoot,"tasks");
+   fs.mkdirSync(tasks,{recursive:true,mode:0o700});
+   fs.writeFileSync(path.join(tasks,"item.txt"),"partially restored",{mode:0o600});
+   const id="6b9c1f71-137e-4ee9-b81e-9457c0e5812b";
+   const control=path.join(stateRoot,"restore-control"), tx=path.join(control,"transactions",id), payload=path.join(tx,"payload","state");
+   fs.mkdirSync(path.join(payload,"tasks"),{recursive:true,mode:0o700});
+   fs.writeFileSync(path.join(payload,"tasks/item.txt"),"authoritative backup",{mode:0o600});
+   const digest=(value:Buffer|string)=>crypto.createHash("sha256").update(value).digest("hex");
+   const stores={state:"tree" as const,config:null};
+   const manifest={formatVersion:1,homeSha256:digest(fs.realpathSync(home)),stores,entries:[
+    {store:"state",path:"tasks",kind:"directory"},
+    {store:"state",path:"tasks/item.txt",kind:"file",size:Buffer.byteLength("authoritative backup"),sha256:digest("authoritative backup")},
+   ]};
+   const manifestSha256=digest(JSON.stringify(manifest));
+   fs.writeFileSync(path.join(tx,"manifest.json"),JSON.stringify(manifest),{mode:0o600});
+   fs.writeFileSync(path.join(control,"active.json"),JSON.stringify({formatVersion:1,id,homeSha256:digest(fs.realpathSync(home)),manifestSha256,phase:"prepared",stores}),{mode:0o600});
+   const record=path.join(home,"repl.log");
+   const cliRoot=path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),"..");
+   const result=spawnSync(process.execPath,["--import","tsx","src/index.ts","repl"],{cwd:cliRoot,env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,".config"),NEXUS_STATE_DIR:stateRoot,NEXUS_TEST_RECORD_REPL:record},encoding:"utf8",timeout:10000});
+   assert.equal(result.status,0,`${result.stdout}\n${result.stderr}`);
+   assert.equal(fs.readFileSync(path.join(tasks,"item.txt"),"utf8"),"authoritative backup");
+   assert.equal(fs.existsSync(path.join(control,"active.json")),false);
+   assert.equal(fs.readFileSync(record,"utf8").trim(),"repl");
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+ });
+
  it("refuses upgrade --check before loading config when restore is pending",()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-restore-check-gate-"));
   try{
@@ -603,7 +760,7 @@ describe("complete private state/config backup restore",()=>{
    const id="6b9c1f71-137e-4ee9-b81e-9457c0e5812b";
    fs.writeFileSync(path.join(control,"active.json"),JSON.stringify({formatVersion:1,id,homeSha256:crypto.createHash("sha256").update(fs.realpathSync(home)).digest("hex"),manifestSha256:"a".repeat(64),phase:"prepared",stores:{state:"tree",config:null}}),{mode:0o600});
    const cliRoot=path.resolve(import.meta.dirname || path.dirname(new URL(import.meta.url).pathname),"..");
-   const result=spawnSync(process.execPath,["--import","tsx","src/index.ts","upgrade","--check"],{cwd:cliRoot,env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,".config")},encoding:"utf8",timeout:10000});
+   const result=spawnSync(process.execPath,["--import","tsx","src/index.ts","upgrade","--check"],{cwd:cliRoot,env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,".config"),NEXUS_STATE_DIR:path.join(home,".nexus")},encoding:"utf8",timeout:10000});
    assert.equal(result.status,2,`${result.stdout}\n${result.stderr}`);
    assert.match(result.stderr,/Pending state restore must be recovered before running upgrade --check/);
   }finally{fs.rmSync(home,{recursive:true,force:true});}

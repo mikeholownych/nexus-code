@@ -10,9 +10,10 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./core/file_guard.js";
 import { withStateStoreGuard, STATE_RESTORE_PENDING_FILE, STATE_STORE_GUARD_FILE } from "./core/state_store_guard.js";
-import { restoreFromSources } from "./core/state_restore.js";
+import { restoreFromSources, stateRoot } from "./core/state_restore.js";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
 
 export type JournalState =
@@ -111,7 +112,7 @@ function isValidJournal(value: any, prefix: string): value is UpgradeJournalEntr
         !/^config\.env\.bak\.[A-Za-z0-9T_.-]+$/.test(path.basename(value.configBackupPath))) return false;
   }
   if (value.stateBackupDir !== undefined) {
-    const backups = path.join(process.env.HOME || "", ".nexus", "backups");
+    const backups = path.join(stateRoot(process.env.HOME || ""), "backups");
     if (typeof value.stateBackupDir !== "string" || path.dirname(path.resolve(value.stateBackupDir)) !== backups ||
         !/^state-backup-[A-Za-z0-9T_.-]+$/.test(path.basename(value.stateBackupDir))) return false;
   }
@@ -190,7 +191,7 @@ export function createPreMigrationBackup(
   }
 
   // 2. State backup
-  const stateDir = path.join(homeDir, ".nexus");
+  const stateDir = path.join(stateRoot(homeDir),);
   if (fs.existsSync(stateDir)) {
     const stateBackupsDir = path.join(stateDir, "backups");
     const stateBackupsDirExisted = fs.existsSync(stateBackupsDir);
@@ -234,7 +235,7 @@ export function restoreConfigBackup(backupPath: string, homeDir: string = proces
     if (fs.realpathSync(resolved) !== resolved) return false;
     const configRoot = path.join(homeDir, ".config", "nexus");
     if (fs.lstatSync(resolved).isDirectory()) {
-      if (path.dirname(resolved) !== path.join(homeDir, ".nexus", "backups") || !/^state-backup-[A-Za-z0-9T_.-]+$/.test(path.basename(resolved))) return false;
+      if (path.dirname(resolved) !== path.join(stateRoot(homeDir), "backups") || !/^state-backup-[A-Za-z0-9T_.-]+$/.test(path.basename(resolved))) return false;
       const metadata = JSON.parse(fs.readFileSync(path.join(resolved, "backup.json"), "utf8"));
       if (metadata.formatVersion !== 1 || metadata.kind !== "nexus-state-config") return false;
       // Validate the entire source tree before touching live configuration/state.
@@ -258,8 +259,8 @@ export function restoreConfigBackup(backupPath: string, homeDir: string = proces
 /** Keep permanent guard inodes even when rolling back to a backup without that store. */
 /** New clients serialize task/session multi-file snapshots in a fixed lock order. */
 function withDurableStoreGuards<T>(homeDir: string, callback: () => T): T {
-  const tasks = path.join(homeDir, ".nexus", "tasks");
-  const sessions = path.join(homeDir, ".nexus", "sessions");
+  const tasks = path.join(stateRoot(homeDir), "tasks");
+  const sessions = path.join(stateRoot(homeDir), "sessions");
   for (const directory of [tasks, sessions]) {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     if (fs.realpathSync(directory) !== path.resolve(directory)) throw new Error("State store is redirected");
@@ -533,12 +534,64 @@ function isRealFile(filePath: string): boolean {
 function atomicSymlinkSwap(targetFile: string, linkPath: string): void {
   const binDir = path.dirname(linkPath);
   fs.mkdirSync(binDir, { recursive: true });
-  const tmpLink = path.join(binDir, `.nexus-link-recovery.${process.pid}.${Date.now()}`);
+  const token = `${process.pid}.${Date.now()}.${randomUUID()}`;
+  const tmpLink = path.join(binDir, `.nexus-link-recovery.${token}`);
+  const displacedLink = `${linkPath}.nexus-recovery-previous`;
+  const priorDisplacement = fs.lstatSync(displacedLink, { throwIfNoEntry:false });
+  if (priorDisplacement) {
+    const current = fs.lstatSync(linkPath, { throwIfNoEntry:false });
+    if (!current) {
+      // A previous process stopped after moving the launcher aside. Restore it
+      // exclusively before retrying, including when the displaced entry is a
+      // raced regular file that the previous process had not yet inspected.
+      fs.linkSync(displacedLink, linkPath);
+      syncDirectory(binDir);
+      fs.unlinkSync(displacedLink);
+      syncDirectory(binDir);
+    } else if (current.dev === priorDisplacement.dev && current.ino === priorDisplacement.ino) {
+      // A prior process restored the displaced entry by exclusive hard link
+      // and stopped before unlinking the backup name. This also covers regular
+      // launchers and symlinks whose old target differs from this retry.
+      fs.unlinkSync(displacedLink);
+      syncDirectory(binDir);
+    } else if (priorDisplacement.isSymbolicLink() && current.isSymbolicLink() && fs.readlinkSync(linkPath) === targetFile) {
+      // The new launcher was installed and only backup cleanup was interrupted.
+      fs.unlinkSync(displacedLink);
+      syncDirectory(binDir);
+    } else {
+      throw new Error("An interrupted launcher recovery needs manual intervention; preserving both entries");
+    }
+  }
+  const launcher = fs.lstatSync(linkPath, { throwIfNoEntry:false });
+  if (launcher && !launcher.isSymbolicLink()) throw new Error("Upgrade launcher is not a symbolic link; refusing to replace it");
   try {
     fs.symlinkSync(targetFile, tmpLink);
-    fs.renameSync(tmpLink, linkPath);
+    if (launcher) {
+      // Move the old entry aside, then install with link(2), which fails with
+      // EEXIST instead of replacing a regular file created in the check/swap
+      // window. Verify what was moved before treating it as our old symlink.
+      fs.renameSync(linkPath, displacedLink);
+      syncDirectory(binDir);
+      const displaced = fs.lstatSync(displacedLink);
+      if (!displaced.isSymbolicLink() || displaced.dev !== launcher.dev || displaced.ino !== launcher.ino) {
+        fs.linkSync(displacedLink, linkPath);
+        syncDirectory(binDir);
+        fs.unlinkSync(displacedLink);
+        syncDirectory(binDir);
+        throw new Error("Upgrade launcher changed during recovery; refusing to replace it");
+      }
+    }
+    // Hard-linking the temporary symlink creates the destination exclusively;
+    // unlike rename, it cannot clobber an entry raced into place.
+    fs.linkSync(tmpLink, linkPath);
+    syncDirectory(binDir);
+    fs.unlinkSync(tmpLink);
+    if (launcher) fs.unlinkSync(displacedLink);
     syncDirectory(binDir);
   } catch (err: any) {
+    if (fs.existsSync(displacedLink) && !fs.existsSync(linkPath)) {
+      try { fs.linkSync(displacedLink, linkPath); syncDirectory(binDir); fs.unlinkSync(displacedLink); syncDirectory(binDir); } catch {}
+    }
     try {
       fs.unlinkSync(tmpLink);
     } catch {}
