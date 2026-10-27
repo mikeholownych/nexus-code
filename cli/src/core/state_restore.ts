@@ -30,9 +30,19 @@ function homePath(homeDir: string): string {
 }
 
 export function stateRoot(home: string): string {
-  const processHome = fs.realpathSync(path.resolve(process.env.HOME || os.homedir()));
-  const requestedHome = fs.realpathSync(home);
-  if (process.env.NEXUS_STATE_DIR && requestedHome === processHome) return path.resolve(process.env.NEXUS_STATE_DIR);
+  const configuredStateDir = process.env.NEXUS_STATE_DIR;
+  if (configuredStateDir) {
+    const processHome = path.resolve(process.env.HOME || os.homedir());
+    const requestedHome = path.resolve(home);
+    if (requestedHome === processHome) return path.resolve(configuredStateDir);
+    try {
+      if (fs.realpathSync(requestedHome) === fs.realpathSync(processHome)) return path.resolve(configuredStateDir);
+    } catch (error) {
+      // A not-yet-created HOME has no symlink identity to resolve. Keep its
+      // normal per-home state root instead of making journal validation fail.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
   return path.join(home, ".nexus");
 }
 function controlRoot(home: string): string { return path.join(stateRoot(home), CONTROL_DIR); }

@@ -8,6 +8,7 @@ import * as http from "node:http";
 import * as zlib from "node:zlib";
 import { execSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { stateRoot } from "../src/core/state_restore.js";
 import {
   validateDownloadUrl,
   downloadFile,
@@ -686,6 +687,27 @@ describe("Upgrade Journal, Crash Recovery & PATH Shadowing (REQ-REL-116, ACC-UPG
 
   afterEach(() => {
     fs.rmSync(tmpPrefix, { recursive: true, force: true });
+  });
+
+  it("resolves the state root when HOME has not been created yet", () => {
+    const previousHome = process.env.HOME;
+    const previousStateDir = process.env.NEXUS_STATE_DIR;
+    const home = path.join(tmpPrefix, "not-created-home");
+    process.env.HOME = home;
+    delete process.env.NEXUS_STATE_DIR;
+    try {
+      assert.equal(fs.existsSync(home), false);
+      assert.equal(stateRoot(home), path.join(home, ".nexus"));
+
+      const configuredStateDir = path.join(tmpPrefix, "configured-state");
+      process.env.NEXUS_STATE_DIR = configuredStateDir;
+      assert.equal(stateRoot(home), configuredStateDir);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousStateDir === undefined) delete process.env.NEXUS_STATE_DIR;
+      else process.env.NEXUS_STATE_DIR = previousStateDir;
+    }
   });
 
   it("recovers an interrupted upgrade that crashed during downloading or staging", () => {
