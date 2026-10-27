@@ -1,6 +1,12 @@
 # v1.0.0 release readiness checkpoint
 
 
+## Current release checkpoint (observed 2026-10-27 02:11 UTC)
+
+**Terminal recheck:** Installed RC10 synthetic tool cancellation at `TERM=dumb`, 100×30 passed five targeted trials with Esc delays from 0 to 1 second; idle return measured 0.405–0.507 seconds. The two earlier full-matrix timeouts remain valid and unresolved; this recheck does not promote ACC-TUI-A11Y or E3. Evidence and raw PTY streams are in [the cancellation timing recheck](../reviews/evidence/v1-qualification/rc.10/terminal-scripted/accessibility/cancel-timing-recheck-20261027/README.md). The separate supplemental probes now observed all nine overlay variants at `TERM=dumb` 40×14. The Detail panel opened and closed; its final idle-prompt predicate was too specific after focus moved to transcript. Human matrix is still 0/15.
+
+**Release state:** Public `v1.0.0-rc.10` remains a prerelease on source `16ee8ca3643824741b6da67936b41f262414fdf0`; `origin/main` still resolves to that commit. Stable `v1.0.0` is not published. Issues #1 and #2 remain open. Exact-RC T2/T3/T4, evaluator custody/host acceptance, live provider/standalone, independent acceptance, and human terminal acceptance remain incomplete. Keep publication gated.
+
 ## Current release checkpoint (observed 2026-10-27 02:01 UTC)
 
 **Recovered terminal evidence lane:** Resumed worktree `/home/mike/nexus-wt/rc10-scripted-terminal`, branch `v1/rc10-scripted-terminal`, HEAD `5bf40f4f79cac92f85543e4c89422cbf897ee6b9`; no PR is open for this evidence-only branch and no probe process survived recovery. Earlier interrupted Detail-overlay probes are classified harness-incomplete. The successful supplemental PTY run rendered eight of nine source `Overlay` variants at `TERM=dumb`, 40×14; `Detail` remains untested. Follow-up synthetic command approval attempts did not complete and are not product failures. See [supplemental overlay evidence](../reviews/evidence/v1-qualification/rc.10/terminal-scripted/accessibility/overlay-expansion-20261027/README.md). The ACC-TUI-A11Y disposition remains `PARTIAL_NOT_ACCEPTED`: the earlier intermittent `TERM=dumb` 100×30 cancellation timeouts remain, other terminal configurations are not covered by this supplemental run, and human acceptance remains separate.

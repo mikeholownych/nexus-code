@@ -23,4 +23,9 @@ The two failed full-matrix attempts, the successful isolated retry, their runner
 
 ## Supplemental overlay-state probe (2026-10-27)
 
-A later installed-RC10 synthetic probe rendered eight of the nine source `Overlay` variants at `TERM=dumb`, 40×14. The `Detail` overlay was not captured. Follow-up attempts displayed the command approval panel but did not complete the synthetic approval sequence; they are classified as harness-incomplete, not product failures. Raw streams, screenshots, driver, mock gateway and attempts are archived under [overlay-expansion-20261027](overlay-expansion-20261027/README.md). This narrows the earlier overlay-coverage gap but does not change the overall `PARTIAL_NOT_ACCEPTED` disposition: other terminal configurations are uncovered, the intermittent cancellation timeouts remain, and human terminal acceptance remains pending.
+A later installed-RC10 synthetic probe rendered all nine source `Overlay` variants across two synthetic runs at `TERM=dumb`, 40×14. The Detail capture is retained separately; its final idle predicate timed out after Esc visibly closed the panel. Follow-up attempts displayed the command approval panel but did not complete the synthetic approval sequence; they are classified as harness-incomplete, not product failures. Raw streams, screenshots, driver, mock gateway and attempts are archived under [overlay-expansion-20261027](overlay-expansion-20261027/README.md). This narrows the earlier overlay-coverage gap but does not change the overall `PARTIAL_NOT_ACCEPTED` disposition: other terminal configurations are uncovered, the intermittent cancellation timeouts remain, and human terminal acceptance remains pending.
+
+
+## Supplemental cancellation timing recheck (2026-10-27)
+
+A bounded synthetic recheck at `TERM=dumb`, 100×30 passed five of five targeted tool-cancel attempts, returning idle in 0.405–0.507 seconds after delays of 0–1 second. This narrows timing evidence but does not clear the two original full-matrix timeout observations. The gate remains `PARTIAL_NOT_ACCEPTED`. See [raw recheck evidence](cancel-timing-recheck-20261027/README.md).
