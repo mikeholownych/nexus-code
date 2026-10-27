@@ -1,0 +1,13 @@
+[   1.71s] SAW idle
+[   1.71s] SEND b'run harmless command\r'
+[   2.42s] SAW approval
+[   5.42s] SEND b'\x1b[D'
+[   6.62s] SEND b'\r'
+[   7.82s] SEND b'\r'
+[  28.06s] TIMEOUT waiting for completion
+[  28.06s] SCREEN timeout-completion (40x14)
+Traceback (most recent call last):
+  File "/var/tmp/nexus-rc10-overlay-detail-confirm5-20261027T0320Z/run_overlay.py", line 11, in <module>
+    s.send(b'\x1b[D'); s.pump(1); s.send(b'\r'); s.pump(1); s.send(b'\r'); assert s.wait('Done',20,'completion'); s.dump('completion'); assert s.wait('enter send',10,'idle')
+                                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
