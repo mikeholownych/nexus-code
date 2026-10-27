@@ -1,0 +1,141 @@
+{
+  "formatVersion": 1,
+  "gate": "installed-RC ChatGPT sign-in provider verification",
+  "disposition": "passed",
+  "executedAt": "2026-10-27T17:48:05.639Z",
+  "candidate": {
+    "version": "v1.0.0-rc.10",
+    "sourceCommit": "16ee8ca3643824741b6da67936b41f262414fdf0",
+    "tagSignature": "valid GPG signature by release key FAC522F6588C64266ABC7742140FD4DD53964C08",
+    "artifact": "nexus-linux-x86_64-v1.0.0-rc.10.tar.gz",
+    "artifactSha256": "444d0812ad583b7f688890ac8536cb872e92364c977d9fbf298fa0408d98b3e7",
+    "installation": "official GitHub installer into isolated temporary prefix; installed VERSION and provenance revision/digest matched candidate"
+  },
+  "execution": {
+    "host": "mike-dev",
+    "platform": "Linux x86_64",
+    "binaryVersion": "1.0.0-rc.10 (16ee8ca36438)",
+    "provider": "chatgpt",
+    "selectedModel": "gpt-6-luna",
+    "effectiveModel": "gpt-6-luna",
+    "endpointOrigin": "https://chatgpt.com",
+    "protocol": "openai-responses",
+    "limits": {
+      "maxRequests": 3,
+      "maxTokens": 12000
+    },
+    "isolation": {
+      "home": "temporary directory",
+      "xdgConfig": "temporary directory",
+      "stateDir": "temporary directory",
+      "workspace": "empty temporary directory; no repository/project files were provided",
+      "credentialSource": "existing local ChatGPT sign-in auth file via read-only use; credential values not recorded"
+    }
+  },
+  "checks": [
+    {
+      "name": "streamed completion",
+      "passed": true,
+      "requestId": "4fbacb94-b364-4168-b6d6-3b0c568f7dd1",
+      "usage": {
+        "inputTokens": 13,
+        "outputTokens": 5,
+        "usageConfidence": "provider"
+      }
+    },
+    {
+      "name": "tool call",
+      "passed": true,
+      "requestId": "0773868e-e22f-4ffc-ab18-6ac1030152db",
+      "detail": "echo_token tool call completed (one call)",
+      "usage": {
+        "inputTokens": 95,
+        "outputTokens": 22,
+        "usageConfidence": "provider"
+      }
+    },
+    {
+      "name": "tool result round trip",
+      "passed": true,
+      "requestId": "d4e159b7-1bb3-4fa7-ad91-7ac8e4069afe",
+      "usage": {
+        "inputTokens": 136,
+        "outputTokens": 17,
+        "usageConfidence": "provider"
+      }
+    }
+  ],
+  "result": {
+    "commandExitCode": 0,
+    "providerVerifierPassed": true,
+    "receiptCount": 3,
+    "sourceWorkspaceContentSent": false
+  },
+  "limitations": [
+    "This establishes only the ChatGPT sign-in provider verification for this exact RC10 artifact and run.",
+    "It does not establish standalone engineering-task correctness, held-out qualification, cross-runner reproducibility, terminal acceptance, or independent RC acceptance.",
+    "An earlier exploratory invocation wrote three receipts into the shared checkout's ignored .nexus ledger; those exact three request-ID records were removed, and all other 1313 records were preserved. The accepted run used the isolated temporary workspace and state directory."
+  ],
+  "providerReceipts": [
+    {
+      "at": "2026-10-27T17:48:02.197Z",
+      "requestId": "4fbacb94-b364-4168-b6d6-3b0c568f7dd1",
+      "role": "qualification",
+      "providerId": "chatgpt",
+      "selectedModel": "gpt-6-luna",
+      "effectiveModel": "gpt-6-luna",
+      "endpointOrigin": "https://chatgpt.com",
+      "protocol": "openai-responses",
+      "disclosure": "cloud",
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 13,
+        "outputTokens": 5,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 0
+      },
+      "usageConfidence": "provider",
+      "costConfidence": "unknown"
+    },
+    {
+      "at": "2026-10-27T17:48:03.906Z",
+      "requestId": "0773868e-e22f-4ffc-ab18-6ac1030152db",
+      "role": "qualification",
+      "providerId": "chatgpt",
+      "selectedModel": "gpt-6-luna",
+      "effectiveModel": "gpt-6-luna",
+      "endpointOrigin": "https://chatgpt.com",
+      "protocol": "openai-responses",
+      "disclosure": "cloud",
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 95,
+        "outputTokens": 22,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 0
+      },
+      "usageConfidence": "provider",
+      "costConfidence": "unknown"
+    },
+    {
+      "at": "2026-10-27T17:48:05.637Z",
+      "requestId": "d4e159b7-1bb3-4fa7-ad91-7ac8e4069afe",
+      "role": "qualification",
+      "providerId": "chatgpt",
+      "selectedModel": "gpt-6-luna",
+      "effectiveModel": "gpt-6-luna",
+      "endpointOrigin": "https://chatgpt.com",
+      "protocol": "openai-responses",
+      "disclosure": "cloud",
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 136,
+        "outputTokens": 17,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 0
+      },
+      "usageConfidence": "provider",
+      "costConfidence": "unknown"
+    }
+  ]
+}
