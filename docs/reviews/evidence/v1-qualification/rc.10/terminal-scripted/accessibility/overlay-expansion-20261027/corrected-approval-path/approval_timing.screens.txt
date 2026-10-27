@@ -1,0 +1,112 @@
+
+===== approval-unselected @ 1.71s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Run echo synthetic-safe               │
+│Proposed: run a shell command in the  │
+│  workspace                           │
+│                                      │
+│$ echo synthetic-safe                 │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== approval-focused @ 6.52s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Run echo synthetic-safe               │
+│Proposed: run a shell command in the  │
+│  workspace                           │
+│                                      │
+│$ echo synthetic-safe                 │
+│                                      │
+│▸Approve   All later   Deny           │
+│enter twice approves · → deny         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== timeout-tool completion @ 22.39s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Run echo synthetic-safe               │
+│Proposed: run a shell command in the  │
+│  workspace                           │
+│                                      │
+│$ echo synthetic-safe                 │
+│                                      │
+│ y Approve   a All later   n Deny     │
+│y or n, or ←→ then enter              │
+╰──────────────────────────────────────╯
+
+ approval needed · y approve · n de…────
+›
+
+===== timeout-approval panel @ 11.25s (40x14) =====
+ NEXUS   ws  model m  mode: review
+preserved.
+  · Inference provider at
+http://127.0.0.1:20747/v1 temporarily
+unavailable (network_error); waiting 4s
+before checking again. Work is
+preserved.
+  · Inference provider at
+http://127.0.0.1:20747/v1 temporarily
+unavailable (network_error); waiting 5s
+before checking again. Work is
+preserved.
+ ⠹ waiting for the inference provid…────
+› type to steer the running turn · esc …
+
+===== approval-unselected @ 1.51s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Run echo synthetic-safe               │
+│Proposed: run a shell command in the  │
+│  workspace                           │
+│                                      │
+│$ echo synthetic-safe                 │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== approval-focused @ 6.31s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Run echo synthetic-safe               │
+│Proposed: run a shell command in the  │
+│  workspace                           │
+│                                      │
+│$ echo synthetic-safe                 │
+│                                      │
+│▸Approve   All later   Deny           │
+│enter twice approves · → deny         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== tool-completion @ 7.72s (40x14) =====
+ NEXUS   ws  model m  mode: review
+› run harmless command
+  ✓ approved Run echo synthetic-safe
+  ✓ Run echo synthetic-safe · exit 0 · 1
+    line
+    ▎ synthetic-safe
+
+Done. The synthetic operation is
+complete.
+
+
+
+ ⠧ thinking · 0:06 · step 2 · esc c…────
+› type to steer the running turn · esc …

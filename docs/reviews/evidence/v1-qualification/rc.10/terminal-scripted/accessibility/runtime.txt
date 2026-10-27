@@ -1,0 +1,6 @@
+host_platform=Linux-6.8.0-147-generic-x86_64-with-glibc2.39
+python=3.12.3
+node=v24.11.1
+pyte=0.8.2
+installed_tui_sha256=9facf7b6326c74b9193247566a69ff29a374ead64f0ab403227497cd680264e4
+installed_cli_sha256=931cc9b979d7f768919b2e3ad96dae2b2c6e8e463bd1c4da0193a417f1bf19ff

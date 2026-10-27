@@ -1,0 +1,112 @@
+
+===== idle-review-mode @ 1.01s (40x14) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== panel-after-typing @ 4.39s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Write hello.txt                       │
+│Proposed: create hello.txt · +1 −0    │
+│                                      │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + hi there                     │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== after-paste @ 5.59s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Write hello.txt                       │
+│Proposed: create hello.txt · +1 −0    │
+│                                      │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + hi there                     │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== approval-40x14 @ 6.79s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Write hello.txt                       │
+│Proposed: create hello.txt · +1 −0    │
+│                                      │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + hi there                     │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== after-deliberate-y @ 11.69s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Write hello.txt                       │
+│Proposed: create hello.txt · +1 −0    │
+│                                      │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + hi there                     │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== after-enter1 @ 15.00s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Write hello.txt                       │
+│Proposed: create hello.txt · +1 −0    │
+│                                      │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + hi there                     │
+│                                      │
+│▸Approve   All later   Deny           │
+│enter again approves · esc denies     │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== after-enter2 @ 18.20s (40x14) =====
+ NEXUS   ws  model m  mode: review
+  ✓ Created hello.txt  +1 −0
+    ▎   1 + hi there
+
+Wrote hello.txt. 完 成  ✅  — naïve café 🎉
+
+! Done · not verified  Files changed,
+  and no test command was found for this
+  workspace.
+  → next: check the changes yourself
+    (/diff), or run /test <command> ·
+    v receipt
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…

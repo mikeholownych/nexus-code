@@ -1,0 +1,48 @@
+
+===== idle @ 1.01s (40x14) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== command-approval @ 1.91s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Run echo synthetic-safe               │
+│Proposed: run a shell command in the  │
+│  workspace                           │
+│                                      │
+│$ echo synthetic-safe                 │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== timeout-harmless command completion @ 24.17s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Run echo synthetic-safe               │
+│Proposed: run a shell command in the  │
+│  workspace                           │
+│                                      │
+│$ echo synthetic-safe                 │
+│                                      │
+│ y Approve   a All later   n Deny     │
+│y or n, or ←→ then enter              │
+╰──────────────────────────────────────╯
+
+ approval needed · y approve · n de…────
+›

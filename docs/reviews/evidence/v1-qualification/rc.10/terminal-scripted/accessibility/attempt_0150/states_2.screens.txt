@@ -1,0 +1,112 @@
+
+===== idle @ 1.01s (40x14) =====
+ NEXUS   ws  model m  mode: review
+
+
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+
+
+
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== help @ 1.21s (40x14) =====
+ NEXUS   ws  model m  mode: review
+ ╭ Help ──────────────────────────────╮
+ │Keys                                │
+ │  enter            send the prompt  │
+ │  shift+enter      new line         │
+ │                   (alt+enter       │
+ │                   where shift is   │
+ │                   not reported)    │
+ │  ↑ / ↓            move between     │
+ │                   lines; recall    │
+ │                   earlier prompts  │
+ ╰ esc close  ↑↓ scroll  1–9 of 194 ──╯
+ esc close help ────────────────────────
+›
+
+===== model-picker @ 1.61s (40x14) =====
+ NEXUS   ws  model m  mode: review
+ ╭ Select model ──────────────────────╮
+ │› type to filter by provider or mode│
+ │                                    │
+ │Appliance (127.0.0.1:27639)  local  │
+ │  ● m                               │
+ │OpenRouter  cloud                   │
+ │  + Connect OpenRouter…             │
+ │OpenAI  cloud                       │
+ │  + Connect OpenAI…                 │
+ │ enter use  ctrl+p connect a provide│
+ ╰────────────────────────────────────╯
+ esc close · ↑↓ scroll ─────────────────
+›
+
+===== streaming @ 3.21s (40x14) =====
+ NEXUS   ws  model m  mode: review
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+ ⠸ thinking · 0:01 · step 1 · esc c…────
+› type to steer the running turn · esc …
+
+===== cancelled @ 3.42s (40x14) =====
+ NEXUS   ws  model m  mode: review
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+Thinking about accessibility state.
+
+◌ Cancelled  You stopped the turn during
+  inference.
+ enter send · shift+enter newline ·…────
+› ask Nexus · / for commands · ? for ke…
+
+===== approval @ 3.82s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Write a11y.txt                        │
+│Proposed: create a11y.txt · +1 −0     │
+│                                      │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + accessible state             │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+›
+
+===== completion @ 11.32s (40x14) =====
+ NEXUS   ws  model m  mode: review
+◌ Cancelled  You stopped the turn during
+  inference.
+
+› create a11y.txt
+  ✓ approved Write a11y.txt
+
+  ✓ Created a11y.txt  +1 −0
+    ▎   1 + accessible state
+
+Done. The synthetic operation is
+complete.
+ ⠇ thinking · 0:07 · step 2 · esc c…────
+› type to steer the running turn · esc …

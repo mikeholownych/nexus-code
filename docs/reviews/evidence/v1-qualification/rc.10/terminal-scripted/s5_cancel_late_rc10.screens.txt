@@ -1,0 +1,96 @@
+
+===== timeout-streaming @ 16.61s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+
+
+
+
+
+
+
+
+
+
+
+
+                                              N E X U S
+
+                 Understand the work. Inspect the evidence. Keep the decision yours.
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› talk slowly\r
+
+===== timeout-idle-within-5s @ 10.48s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+› talk slowly
+
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it.
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠼ thinking · 0:09 · step 1 · esc cancels · enter steers ───────────────────────────────────────────
+› \x03
+
+===== late-stream-cancel-final @ 32.51s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+
+✓ Done  No files changed, so there was nothing to verify.
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› \x03

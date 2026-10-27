@@ -1,0 +1,64 @@
+
+===== 2s-after-ctrl-c @ 6.53s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› talk slowly
+
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+
+◌ Cancelled  You stopped the turn during inference.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== idle-after-ctrl-c @ 6.53s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› talk slowly
+
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+
+◌ Cancelled  You stopped the turn during inference.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

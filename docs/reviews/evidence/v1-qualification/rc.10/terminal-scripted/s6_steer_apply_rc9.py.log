@@ -1,0 +1,10 @@
+[   2.04s] SAW idle
+[   2.04s] SEND b'write two files\r'
+[   2.24s] TYPE steering during first model step gap=0.05
+[   6.03s] SAW turn-complete
+[   6.03s] SCREEN after-steer-turn (100x30)
+turn_completed: True
+gateway_requests: 3
+steering_found_in_user_messages: True
+files_created: True True
+gateway_user_messages: [["write two files\n\n[Git Status: master (0 uncommitted dirty files)]"], ["write two files\n\n[Git Status: master (0 uncommitted dirty files)]", "[Operator steering g3bf55e868a35b3-1]: also mention cats"], ["write two files\n\n[Git Status: master (0 uncommitted dirty files)]", "[Operator steering g3bf55e868a35b3-1]: also mention cats"]]
