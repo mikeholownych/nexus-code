@@ -815,6 +815,7 @@ type JavaScriptToken = { kind: "identifier" | "string" | "punct"; value: string 
  */
 function topLevelStaticImports(source: string): string[] {
   const tokens: JavaScriptToken[] = [];
+  const commonJsImports: string[] = [];
   let index = 0;
   let braces = 0;
   let parens = 0;
@@ -896,10 +897,24 @@ function topLevelStaticImports(source: string): string[] {
       const start = index++;
       while (/[\w$]/.test(source[index] ?? "")) index++;
       const token = { kind: "identifier" as const, value: source.slice(start, index) };
-      if (token.value === "require" && (braces !== 0 || parens !== 0 || brackets !== 0)) {
-        // A binding or use in destructuring/import syntax or nested code is
-        // ambiguous without a full JavaScript scope analysis. Fail closed.
-        requireIdentifierMayBeShadowed = true;
+      if (token.value === "require") {
+        if (braces !== 0 || parens !== 0 || brackets !== 0) {
+          // A binding or use in destructuring/import syntax or nested code is
+          // ambiguous without a full JavaScript scope analysis. Fail closed.
+          requireIdentifierMayBeShadowed = true;
+        } else {
+          const previousIsMember = previous?.value === "." || previous?.value === "?.";
+          const previousIsStatementBoundary = !previous || [";", "}"].includes(previous.value);
+          const previousIsAssignment = previous?.value === "=";
+          const specifier = literalRequireSpecifierAt(source, index);
+          if (!previousIsMember && (previousIsStatementBoundary || previousIsAssignment) && specifier !== null) {
+            commonJsImports.push(specifier);
+          } else if (specifier === null) {
+            // A top-level declaration, import, or alias named `require` makes
+            // it unsafe to assume later calls use Node's CommonJS loader.
+            requireIdentifierMayBeShadowed = true;
+          }
+        }
       }
       if (braces === 0 && parens === 0 && brackets === 0) tokens.push(token);
       previous = token;
@@ -919,27 +934,7 @@ function topLevelStaticImports(source: string): string[] {
   }
 
   const imports: string[] = [];
-  const commonJsImports: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
-    if (tokens[i].kind === "identifier" && tokens[i].value === "require") {
-      const previousToken = tokens[i - 1];
-      const atModuleStatement = !previousToken || [";", "}"].includes(previousToken.value);
-      const assignedAtModuleScope = previousToken?.value === "=" && braces === 0 && parens === 0 && brackets === 0;
-      const isMemberCall = previousToken?.value === "." || previousToken?.value === "?.";
-      const isLiteralCall = tokens[i + 1]?.value === "("
-        && tokens[i + 2]?.kind === "string"
-        && tokens[i + 2].value.length > 0
-        && tokens[i + 3]?.value === ")";
-      if (braces === 0 && parens === 0 && brackets === 0
-        && (atModuleStatement || assignedAtModuleScope) && !isMemberCall && isLiteralCall) {
-        commonJsImports.push(tokens[i + 2].value);
-      } else if (!isLiteralCall) {
-        // A top-level declaration, import, or alias named `require` makes it
-        // unsafe to assume later calls use Node's CommonJS loader.
-        requireIdentifierMayBeShadowed = true;
-      }
-      continue;
-    }
     if (tokens[i].kind !== "identifier" || tokens[i].value !== "import") continue;
     // Import declarations begin a module item. Requiring a clear boundary also
     // prevents JSX attributes named `import` from looking like side-effect imports.
@@ -962,6 +957,44 @@ function topLevelStaticImports(source: string): string[] {
   }
   if (!requireIdentifierMayBeShadowed) imports.push(...commonJsImports);
   return imports;
+}
+
+/** Read a deliberately narrow, literal-only `require("module")` call. */
+function literalRequireSpecifierAt(source: string, offset: number): string | null {
+  let index = offset;
+  const skipTrivia = (): void => {
+    while (index < source.length) {
+      if (/\s/.test(source[index])) { index++; continue; }
+      if (source[index] === "/" && source[index + 1] === "/") {
+        index += 2;
+        while (index < source.length && source[index] !== "\n" && source[index] !== "\r") index++;
+        continue;
+      }
+      if (source[index] === "/" && source[index + 1] === "*") {
+        const end = source.indexOf("*/", index + 2);
+        if (end < 0) { index = source.length; return; }
+        index = end + 2;
+        continue;
+      }
+      break;
+    }
+  };
+
+  skipTrivia();
+  if (source[index++] !== "(") return null;
+  skipTrivia();
+  const quote = source[index++];
+  if (quote !== "'" && quote !== '"') return null;
+  const start = index;
+  while (index < source.length && source[index] !== quote) {
+    if (source[index] === "\\" || source[index] === "\n" || source[index] === "\r") return null;
+    index++;
+  }
+  if (index >= source.length) return null;
+  const specifier = source.slice(start, index++);
+  if (!specifier) return null;
+  skipTrivia();
+  return source[index] === ")" ? specifier : null;
 }
 
 /**
