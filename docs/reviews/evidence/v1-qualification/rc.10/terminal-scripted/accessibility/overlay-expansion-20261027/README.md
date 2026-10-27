@@ -10,4 +10,4 @@ Earlier Detail follow-up attempts did not reach the overlay because their approv
 
 ## Disposition
 
-`PARTIAL_NOT_ACCEPTED`. Eight overlays observed in one terminal configuration do not establish all-configuration readability. The Detail overlay remains untested; prior two full `TERM=dumb` 100×30 cancellation timeouts remain unresolved despite one passing isolated retry; the human real-terminal acceptance matrix remains separate and pending. This evidence does not change the gate disposition.
+`PARTIAL_NOT_ACCEPTED`. All nine overlays were observed across the original and corrected synthetic probes at one terminal configuration; this does not establish all-configuration readability. The corrected Detail capture is valid, while its post-Esc idle predicate remained harness-limited. Prior two full `TERM=dumb` 100×30 cancellation timeouts remain unresolved despite one passing isolated retry; the human real-terminal acceptance matrix remains separate and pending. This evidence does not change the gate disposition.
