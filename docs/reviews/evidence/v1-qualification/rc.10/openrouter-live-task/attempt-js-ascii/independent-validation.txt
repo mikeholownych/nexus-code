@@ -1,0 +1,29 @@
+RC10 installed CLI:
+1.0.0-rc.10 (16ee8ca36438)
+
+Configured verifier rerun:
+TAP version 13
+# Subtest: lowercases ASCII only and collapses non-alphanumeric runs
+ok 1 - lowercases ASCII only and collapses non-alphanumeric runs
+  ---
+  duration_ms: 2.90722
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 227.047296
+
+Independent additional edge assertions:
+3 passed
+
+Final changed paths:
+ M src/slug.mjs
+
+Baseline commit:
+d3cfb387f62ca7ff20b4ed5a4bd8e90ee871cb41
