@@ -450,6 +450,9 @@ export function buildConfig(options: any): HarnessConfig {
  * `.env` cannot silently change how long an operation waits or how often Nexus retries work.
  */
 export function configuredOperationPolicy(setting: (key: string) => string | undefined = operatorSetting): HarnessConfig["operationPolicy"] {
+  // Node timers clamp larger delays to 1 ms. Keep operator policy inside the
+  // supported timer range so long waits cannot turn into a wake/revalidate loop.
+  const maxTimerDelayMs = 2_147_483_647;
   const fields = [
     ["NEXUS_OPERATION_MAX_WAIT_MS", "maxWaitMs", 1],
     ["NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET", "unknownResumeBudget", 0],
@@ -460,9 +463,15 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
   for (const [key, property, minimum] of fields) {
     const raw = setting(key);
     if (raw === undefined) continue;
+    if (!/^\d+$/.test(raw.trim())) {
+      throw new Error(`Invalid ${key}='${raw}': expected a non-empty decimal integer.`);
+    }
     const value = Number(raw);
     if (!Number.isSafeInteger(value) || value < minimum) {
       throw new Error(`Invalid ${key}='${raw}': expected a safe integer of at least ${minimum}.`);
+    }
+    if ((property === "maxWaitMs" || property === "minWaitMs") && value > maxTimerDelayMs) {
+      throw new Error(`Invalid ${key}='${raw}': must not exceed Node's timer limit (${maxTimerDelayMs} ms).`);
     }
     policy[property] = value;
   }

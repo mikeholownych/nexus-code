@@ -117,5 +117,17 @@ describe("config", () => {
       () => configuredOperationPolicy((key) => ({ NEXUS_OPERATION_MAX_WAIT_MS: "500", NEXUS_OPERATION_MIN_WAIT_MS: "1000" }[key])),
       /must not exceed/,
     );
+  assert.throws(
+    () => configuredOperationPolicy((key) => ({ NEXUS_OPERATION_MAX_WAIT_MS: "3000000000", NEXUS_OPERATION_MIN_WAIT_MS: "2147483648" }[key])),
+    /Node's timer limit/,
+  );
+  assert.throws(
+    () => configuredOperationPolicy((key) => key === "NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET" ? "" : undefined),
+    /non-empty decimal integer/,
+  );
+  assert.throws(
+    () => configuredOperationPolicy((key) => key === "NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET" ? "2e0" : undefined),
+    /non-empty decimal integer/,
+  );
   });
 });
