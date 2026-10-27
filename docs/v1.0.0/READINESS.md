@@ -1,5 +1,18 @@
 # v1.0.0 release readiness checkpoint
 
+## Current release checkpoint (observed 2026-10-27 16:10 UTC)
+
+**Authoritative source and post-merge checks:** `origin/main` is `ceabfccf466ab39fc80c274400bae5aa0744a227`, integrating PR #275 after PR #273. Main CI [40537474824](https://github.com/mikeholownych/nexus-code/actions/runs/40537474824) is still running on exact `ceabfcc`; CodeQL [40537475057](https://github.com/mikeholownych/nexus-code/actions/runs/40537475057) passed on that SHA. Earlier main CI [40536704465](https://github.com/mikeholownych/nexus-code/actions/runs/40536704465) remains in progress on `e94208d`, and CodeQL [40536704530](https://github.com/mikeholownych/nexus-code/actions/runs/40536704530) passed on `e94208d`. These are separate exact-source runs; neither is called complete until its CI run succeeds.
+
+**Readiness PR #268:** GitHub still reports PR [#268](https://github.com/mikeholownych/nexus-code/pull/268) open at head `98f87bee6ca112e6d50f6fb2bc480fc47723c648`, based on `3b7af5d3cd46ab1b83e9c8df9862e09cee22b1a7`. The earlier local readiness candidate includes a newer unpushed commit and is being advanced to current `ceabfcc`; PR #268's old checks do not validate the refreshed candidate. No push or merge is claimed.
+
+**Merged fixes:** PR #274 merged at `b17c64a2c84a6324fb78bc55d3a39a7c9cc4ed47`; exact post-merge CI [40529300314](https://github.com/mikeholownych/nexus-code/actions/runs/40529300314) and CodeQL [40529300519](https://github.com/mikeholownych/nexus-code/actions/runs/40529300519) passed. PR #273 merged at `e94208d09cb4d5023e4379187fc6c603bba960d2`; its post-merge CodeQL passed, while CI remains in progress. PR #275 subsequently merged at `ceabfcc`; its post-merge CI/CodeQL are recorded above.
+
+**Qualification and publication:** Public `v1.0.0-rc.10` remains a prerelease; no stable `v1.0.0` is listed. The human five-terminal by three-size matrix remains **0/15** and pending. The user's informal observation is that rendering works at tested sizes except tmux in GNOME Terminal, where the smallest usable size is 43×13; there are no per-cell records or screenshots, so human acceptance is not established. Issue [#1](https://github.com/mikeholownych/nexus-code/issues/1) remains open without custodian acceptance. T2/T3/T4, evaluator custody and host acceptance, live provider/standalone, independent exact-RC, scripted terminal, and human acceptance gates remain incomplete. Publication remains gated on all required acceptance gates.
+
+The 15:12 and earlier checkpoints below are retained as historical evidence and superseded for current source, PR, and CI status by this checkpoint.
+
+
 ## Current release checkpoint (observed 2026-10-27 15:12 UTC)
 
 **Authoritative source and CI:** `origin/main` is `3b7af5d3cd46ab1b83e9c8df9862e09cee22b1a7`, integrating PRs [#269](https://github.com/mikeholownych/nexus-code/pull/269) and [#270](https://github.com/mikeholownych/nexus-code/pull/270) after #271 and #272. Exact-main CI [40521505143](https://github.com/mikeholownych/nexus-code/actions/runs/40521505143) and CodeQL [40521505001](https://github.com/mikeholownych/nexus-code/actions/runs/40521505001) both passed on `3b7af5d`; CI passed Node 22, Node 24, Linux tests, security gates, packaging, reproducibility, package smoke, and installer smoke. PR #269 merge-commit CI [40519862728](https://github.com/mikeholownych/nexus-code/actions/runs/40519862728) passed on `f059770`. These runs establish CI for their exact commits, not the RC10 release gates.
