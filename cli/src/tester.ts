@@ -629,7 +629,7 @@ function topLevelStaticImports(source: string): string[] {
   let parens = 0;
   let brackets = 0;
   let previous: JavaScriptToken | undefined;
-  const regexPrefix = new Set(["(", ")", "{", "}", "[", "=", ":", ",", ";", "!", "?", "/", "&&", "||", "??", "=>", "return", "case"]);
+  const regexPrefix = new Set(["(", "{", "[", "=", ":", ",", ";", "!", "?", "/", "&&", "||", "??", "=>", "return", "case"]);
 
   while (index < source.length) {
     const char = source[index];
@@ -678,8 +678,11 @@ function topLevelStaticImports(source: string): string[] {
       previous = { kind: "string", value: "" };
       continue;
     }
-    if (char === "/" && (!previous || regexPrefix.has(previous.value))) {
+    if (char === "/") {
       // A regular expression may contain arbitrary import-looking source text.
+      // If the preceding token makes slash-vs-division ambiguous, abandon all
+      // binding evidence from this file rather than risk treating regex text as code.
+      if (previous && !regexPrefix.has(previous.value)) return [];
       index++;
       let escaped = false;
       let inClass = false;

@@ -41,6 +41,15 @@ test("ACC-VER-03: only executable JavaScript imports bind a declared deliverable
     const regexAfterBlock = 'if (true) {} /import from "..\\/src\\/a.ts"/.test("");\ntest("unrelated", () => {});\n';
     assert.equal(bind(regexAfterBlock), false, "a regular expression after a block must not establish an import binding");
 
+    const regexAfterAwait = 'await /import from "..\\/src\\/a.ts"/.test("");\ntest("unrelated", () => {});\n';
+    assert.equal(bind(regexAfterAwait), false, "a regular expression after await must not establish an import binding");
+
+    const regexAfterVoid = 'void /import from "..\\/src\\/a.ts"/.test("");\ntest("unrelated", () => {});\n';
+    assert.equal(bind(regexAfterVoid), false, "a regular expression after void must not establish an import binding");
+
+    const regexAfterTypeof = 'typeof /import from "..\\/src\\/a.ts"/.test("");\ntest("unrelated", () => {});\n';
+    assert.equal(bind(regexAfterTypeof), false, "a regular expression after typeof must not establish an import binding");
+
     const unreachable = 'if (false) { import("../src/a.ts"); }\ntest("unrelated", () => {});\n';
     assert.equal(bind(unreachable), false, "an unreachable dynamic import must not establish a binding");
 
