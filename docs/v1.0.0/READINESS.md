@@ -1,6 +1,6 @@
 # v1.0.0 release readiness checkpoint
 
-## Current release checkpoint (observed 2026-10-27 21:52 UTC)
+## Current release checkpoint (observed 2026-10-27 22:07 UTC)
 
 **Authoritative source and checks:** `origin/main` is `356520225c3dd5b5fc282d101e4fde6931595245`, integrating PR #283 after PR #282's reproducibility-scope correction, PR #281's RC10 reproducibility evidence, and PR #280's configured state-directory recovery fix. Exact-main CI [40584934940](https://github.com/mikeholownych/nexus-code/actions/runs/40584934940) and CodeQL [40584934952](https://github.com/mikeholownych/nexus-code/actions/runs/40584934952) passed on that SHA. On the refreshed readiness worktree, requirements enforcement passed (123 rows: 108 tested, 6 partial, 2 implemented, 7 open; 12 explicitly deferred to exact-RC qualification), and version synchronization confirms every component remains `1.0.0-rc.10`. These are source checks, not installed-RC acceptance.
 
