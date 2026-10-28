@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b065qdsov</task-id>
+<tool-use-id>toolu_01ViWFDycP6qm9K1s6DJbeZT</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/b065qdsov.output</output-file>
+<status>completed</status>
+<summary>Background command "Build and test hardened-checks slice" completed (exit code 0)</summary>
+</task-notification>
