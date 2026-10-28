@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bjd5stphj</task-id>
+<summary>Monitor event: "new review comments (ACCEPT/CHANGES) on PR #56"</summary>
+<event>PR56 review 2026-10-20T03:34:12Z: The exact-head checks for `804de582be5457644f0cc9151804f38bc24e0f67` are now terminal SUCCESS (run 39361295133 plus CodeQL), and the independent source-only ACCEPT at this head is recorded. The worktr</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
