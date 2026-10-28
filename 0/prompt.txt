@@ -1,0 +1,22 @@
+<pasted_content id="ac96">
+**Acceptance remains blocked by repair safety and objective-preservation defects found in the patch.** The supplied evidence does substantiate the reported test results.
+
+Verified:
+
+- Patch, test log, and recording match their manifest hashes.
+- Recording timestamps are monotonic through **18.0057 seconds**, with a resume marker.
+- The [raw log](/mnt/c/Users/mike/Downloads/final_make_test.log) records **192 Rust tests, 705 CLI tests, passing security gates, and `MAKE_TEST=0`**. I did not independently rerun that suite.
+
+Actionable findings:
+
+| Priority | Finding | Required correction |
+|---|---|---|
+| **P1** | **Repairs still follow symlinked parent directories.** Checking `lstat(target)` only detects a link at the final component. With `home/.nexus → elsewhere`, `home/.nexus/sessions` passes the check and `chmod` changes the external directory. I reproduced this filesystem behavior in an isolated temporary directory. The separate check and path-based mutation also leave a replacement race. [Patch](/mnt/c/Users/mike/Downloads/implementation.patch:5832) | Validate the path ancestry and bind permission changes to the validated filesystem object. Cover parent links and replacement races for repairs, locks, and backups. |
+| **P2** | **A detailed follow-up replaces an unfinished objective.** `isNewObjective` treats any prompt over 400 characters—or containing multiple numbered items—as a new objective. The caller replaces the ledger, retaining only queued steering. A detailed correction after a turn can therefore discard unresolved requirements. [Classifier](/mnt/c/Users/mike/Downloads/implementation.patch:4695), [replacement](/mnt/c/Users/mike/Downloads/implementation.patch:593) | Preserve the active objective unless the operator explicitly replaces it. Test long and numbered follow-ups after incomplete turns. |
+| **P2** | **Pinned context truncates the original objective.** Once its original message leaves context, only the first 24,000 characters are supplied. Requirements retain heading lines rather than their complete bodies, so later acceptance details can disappear from inference context despite remaining on disk. [Patch](/mnt/c/Users/mike/Downloads/implementation.patch:4883) | Preserve all unresolved acceptance details through compaction, with reliable retrieval when the full request cannot fit. Add a long-objective regression test. |
+| **P2** | **“Verified” requirement evidence is only a nonempty string.** An arbitrary path or assertion satisfies the evidence check; both `implemented` and `verified` count as done. This improves tracking but does not establish requirement-level validation. [Patch](/mnt/c/Users/mike/Downloads/implementation.patch:4797) | Distinguish model-reported implementation from recorded verification. Tie verified status to relevant receipts, and invalidate it when affected inputs change. |
+
+Evidence packaging also remains partial: the local metrics and transcript are older copies whose hashes do not match this manifest. Baseline logs, build/Clippy logs, and extracted inference receipts were listed but not attached, so those claims remain unconfirmed here.
+
+**Recommended next action:** send these four findings back for targeted fixes and regression tests. The demonstrated TUI improvements and passing suite stand; they do not cover these newly identified paths.
+</pasted_content id="ac96">
