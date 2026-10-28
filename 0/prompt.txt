@@ -1,0 +1,66 @@
+<task-notification>
+<task-id>af177777e3a67b30d</task-id>
+<tool-use-id>toolu_01AURF1LRhxQyJMKHXD1YUyd</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/af177777e3a67b30d.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review PRs 18-20" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #18 (10h, history isolation): ACCEPT WITH NITS
+
+I found no path from a descendant object, ref, packed ref, reflog, tag or cache path into the workspace. I did not run the new test.
+
+Why the staging holds:
+- A fresh `git init` plus `fetch &lt;sha&gt;` transfers only objects reachable from that commit through upload-pack, so no descendant object can be copied. It creates no alternates, remote, tags, `packed-refs` or `FETCH_HEAD`, and the reflog holds only the checkout.
+- `GIT_ALLOW_PROTOCOL=file` applies only to the fetch, and every other git call runs with `none`. The full 40-hex check also blocks ref-name smuggling.
+- The cache is never mounted into the sandbox, and nothing records its path in `.git`.
+
+Nits:
+1. `cli/test/eval_integrity.test.ts` (new test, "Control" block) — the control only asserts `/alternates/`. It never proves the child commit is reachable in the `--shared` layout. If `workspaceHistoryProblem` regressed to check only alternates, the control would still pass. Fix: also assert `git cat-file -e child` succeeds in `leaky` (and fails in `ws`, as it already does).
+2. `eval/workspace.mjs:21` — `workspaceHistoryProblem` does not check `.git/config` for `url`/`insteadOf` entries or `info/grafts`. Neither can arise from the current staging, so this is defense-in-depth only.
+
+## PR #19 (10i, resource contract): CHANGES REQUIRED
+
+Every task-controlled spawn is routed through `spawnContained`:
+- setup commands
+- candidate agent
+- black-box oracle
+- legacy hidden and regression checks
+- agent version probe
+
+The remaining `spawnSync` calls in `run.mjs` and `workspace.mjs`, and the one in `isolate.mjs`, are trusted. I found no uncontained path. `node --check` passes on `resources.mjs` and `cgroup_supervisor.mjs`.
+
+I also checked these and found them sound:
+- **Escape from the cgroup:** the bwrap sandbox mounts no `/sys`, so the payload cannot write `cgroup.procs`, including in the same-uid dev case.
+- **fd 3 leak:** a local experiment shows the report fd does not reach the payload.
+- **Running before the limits apply:** the shell joins the payload cgroup before `exec`.
+
+Blockers:
+1. `eval/README.md`, "Resource contract" bullet 2 — the claim "the agent's writes stay charged after it exits" is false, and the storage bound is overstated. When a scope is removed, the kernel reparents tmpfs charges to the parent cgroup, where nothing limits them.
+   - **Failure scenario:** the agent fills about `memoryBytes` of tmpfs and exits. The hidden and regression phases each get a fresh `memory.max` and can write another `memoryBytes`. Total retained storage is about 3x `memoryBytes` or more, bounded only by the tmpfs default of 50% of RAM.
+   - **Fix:** mount the `workspaceRoot` tmpfs with an explicit `size=` and have preflight verify it (`statfs` blocks, not only the magic number). Then reword the README: "per-phase charge, plus a hard tmpfs size cap".
+2. `eval/resources.mjs`, `kill()` (about line 66) — a kill that arrives before the shell has joined the payload leaf is lost. `cgroup.kill` on an empty leaf succeeds and returns, and the payload then starts unkilled. The report arrives before `spawn`, so overflow or timeout handling could hit this window.
+   - **Failure scenario:** `kill()` is called right after the cgroup path is reported. The cgroup kill hits an empty leaf and the 10s fallback is cleared. The payload runs to natural exit, and `close` never fires until then.
+   - **Fix:** have the supervisor emit a second `{joined:true}` line after the shell joins the payload cgroup. Until then, `kill()` should also SIGTERM the supervisor, and the supervisor should check a "stop requested" flag before spawning. Or make `kill()` retry the cgroup write until `populated 0`.
+
+Non-blocking:
+3. `eval/cgroup_supervisor.mjs`, `finish` — SIGKILL or OOM of the supervisor leaves the payload orphaned until the harness `close` handler runs `cgroup.kill`. Fail-closed holds, since there is no report, but nothing restricts the payload in the meantime. The fallback `process.kill(-pid)` misses setsid'd processes. Fix: the harness fallback should always write `cgroup.kill` as well.
+4. `eval/cgroup_supervisor.mjs:~35` — `memory.max` read-back differs when `memoryBytes` is not a multiple of the page size. Fix: validate `memoryBytes % 4096 === 0` in `resourceConfigProblem`.
+5. `memory.oom.group` is not set. An OOM kill of a validator child can make a check fail rather than error. Fix: set `memory.oom.group=1` and treat `oomKills&gt;0` in hidden or regression phases as a containment error.
+6. `cli/test/eval_integrity.test.ts` — the new test asserts `qualificationResourceIsolationProblem({resources: ok}) === null`, so it hard-fails on any host without a user systemd manager. Fix: gate it on an env flag, as the CI step does.
+7. `scripts/ensure-ci-user-cgroups.sh` delegates `cpuset io`, which is not needed. Fix: use `Delegate=cpu memory pids`.
+
+No acceptance thresholds are weakened. Qualification moves from always-blocked to blocked unless the probe passes. The 64 MiB, 8 task and 10% floors are minimums only.
+
+## PR #20 (7e, repro identity): ACCEPT WITH NITS
+
+Script injection: none. `version` and `commit` are validated by regex in a step before checkout, they reach shell only through `env:`, and `${{ inputs.version }}` in `with:` is not shell-evaluated. `actionlint` is clean and `node --check` passes. I could not run the unit test because `~/nexus-wt/p07e` has no `node_modules`.
+
+The wrong-ref risk is covered: tag→commit, `HEAD==commit`, a clean tree, `sync-version --tag` and a full-SHA requirement. Evidence records `commit`, `tree` and `tagObject`. The `compare` job also fails on any commit mismatch.
+
+Findings:
+1. `.github/workflows/repro.yml` ("Record source and toolchain identity") — there is no clean-tree and HEAD re-check after `package-linux.sh`. The identity records `HEAD^{tree}`, not the working tree. If `npm ci` or the packaging scripts dirty tracked files, the artifacts no longer match the recorded commit, and both runners could do this identically. Fix: run `git status --porcelain` and `git rev-parse HEAD` again inside `record` (or just before it), and fail on any difference.
+2. `scripts/repro-identity.mjs`, `compare` — builder distinctness is by `runner.label`, which comes from the workflow matrix. `image` and `imageVersion` may be null and are not required or compared. Fix: require non-null `ImageOS` and `ImageVersion`, and require the builder labels to equal the expected set `{ubuntu-22.04, ubuntu-24.04}`.
+3. The evidence does not bind the workflow itself. `workflow_dispatch` runs the workflow file from whatever ref was dispatched, and the evidence records neither `GITHUB_WORKFLOW_SHA` nor `GITHUB_REF`. A modified `repro.yml` on a branch could produce a PASS. Fix: record `GITHUB_WORKFLOW_SHA`, `GITHUB_RUN_ATTEMPT` and `GITHUB_REF` in the evidence, and require the workflow ref to be protected.
+4. Nit: the tools downloaded by `curl` (cargo-deny, cargo-about, cyclonedx) have no checksum verification, and the actions are pinned by tag, not SHA. This is pre-existing, but it matters for release provenance.</result>
+<usage><subagent_tokens>68152</subagent_tokens><tool_uses>13</tool_uses><duration_ms>158198</duration_ms></usage>
+</task-notification>
