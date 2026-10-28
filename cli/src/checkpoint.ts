@@ -18,7 +18,64 @@ export interface CheckpointInfo {
   workspace?: string;
   gitRef?: string;
   snapshotDir?: string;
+  allowSensitive?: boolean;
+  untrackedFiles?: string[];
+  untrackedFileModes?: Record<string, number>;
   files?: Array<{ path: string; content: string }>;
+}
+
+function gitNulEntries(output: Buffer): Buffer[] {
+  const entries: Buffer[] = [];
+  let start = 0;
+  for (let end = output.indexOf(0); end !== -1; end = output.indexOf(0, start)) {
+    if (end > start) entries.push(output.subarray(start, end));
+    start = end + 1;
+  }
+  if (start < output.length) entries.push(output.subarray(start));
+  for (const entry of entries) {
+    const decoded = entry.toString("utf8");
+    if (!Buffer.from(decoded, "utf8").equals(entry)) {
+      throw new GitPathEncodingError();
+    }
+  }
+  return entries;
+}
+
+function isGitPathIgnored(workspace: string, relativePath: string): boolean {
+  const escapedPathspec = `./${relativePath.replace(/[\\*?\[\]]/g, (character) => `\\${character}`)}`;
+  try {
+    execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", escapedPathspec], {
+      cwd: workspace,
+      stdio: "ignore",
+    });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException & { status?: number })?.status === 1) return false;
+    throw error;
+  }
+}
+
+function stripGitLineEnding(value: string): string {
+  return value.endsWith("\n") ? value.slice(0, -1) : value;
+}
+
+class GitPathEncodingError extends Error {
+  constructor() {
+    super("Checkpoint cannot safely process Git paths that are not valid UTF-8");
+    this.name = "GitPathEncodingError";
+  }
+}
+
+const NESTED_GIT_REPOSITORY_ERROR = "Checkpoint destination parent is a nested Git repository";
+
+function lstatOrAbsent(target: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(target, { throwIfNoEntry: false });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw error;
+  }
 }
 
 class GitIndexLockError extends Error {
@@ -39,6 +96,8 @@ export class CheckpointManager {
   private workspace: string;
   private checkpointDir: string;
   private isGit: boolean = false;
+  private repositoryRootCache: string | undefined;
+  private workspacePrefixCache: string | undefined;
 
   constructor(workspace: string) {
     this.workspace = path.resolve(workspace);
@@ -57,13 +116,169 @@ export class CheckpointManager {
     }
   }
 
+  private gitRoot(): string {
+    if (!this.repositoryRootCache) {
+      this.repositoryRootCache = fs.realpathSync(stripGitLineEnding(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: this.workspace,
+        encoding: "utf8",
+      })));
+    }
+    return this.repositoryRootCache;
+  }
+
+  private gitWorkspacePrefix(): string {
+    if (this.workspacePrefixCache === undefined) {
+      const prefix = stripGitLineEnding(execFileSync("git", ["rev-parse", "--show-prefix"], {
+        cwd: this.workspace,
+        encoding: "utf8",
+      }));
+      this.workspacePrefixCache = prefix.replace(/\\/g, "/");
+    }
+    return this.workspacePrefixCache;
+  }
+
+  private workspaceRelativeGitPath(gitPath: string): string | undefined {
+    const prefix = this.gitWorkspacePrefix();
+    if (!prefix) return gitPath;
+    return gitPath.startsWith(prefix) ? gitPath.slice(prefix.length) : undefined;
+  }
+
+  private captureUntrackedFileModes(relativePaths: string[], sourceRoot: string): Record<string, number> {
+    const modes: Record<string, number> = Object.create(null);
+    for (const relativePath of relativePaths) {
+      const stat = fs.lstatSync(path.join(sourceRoot, relativePath));
+      if (stat.isFile()) modes[relativePath] = stat.mode & 0o777;
+    }
+    return modes;
+  }
+
+  private assertNoActiveGitOperation(): void {
+    const markers = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-apply", "rebase-merge", "sequencer"];
+    for (const marker of markers) {
+      const gitPath = stripGitLineEnding(execFileSync("git", ["rev-parse", "--git-path", marker], {
+        cwd: this.workspace,
+        encoding: "utf8",
+      }));
+      const absolutePath = path.isAbsolute(gitPath) ? gitPath : path.resolve(this.workspace, gitPath);
+      if (lstatOrAbsent(absolutePath)) {
+        throw new Error("Checkpoint cannot restore while Git operation state is present; workspace was not changed");
+      }
+    }
+  }
+
+  private assertNoIgnoredAddedPaths(relativePaths: string[]): void {
+    for (const relativePath of relativePaths) {
+      const target = lstatOrAbsent(path.join(this.workspace, relativePath));
+      // removeTrackedDeletions never removes a directory target, preserving
+      // ignored descendants while the checkpoint's file deletion remains absent.
+      if (target?.isDirectory() && !target.isSymbolicLink()) continue;
+      // restore's tracked-deletion cleanup deliberately skips targets beneath
+      // a missing, non-directory, or symlinked parent. Git check-ignore cannot
+      // inspect such a path reliably (and may follow external links), so there
+      // is no ignored target that this restore could remove in that case.
+      let parent = this.workspace;
+      let blocked = false;
+      for (const component of relativePath.split("/").slice(0, -1)) {
+        parent = path.join(parent, component);
+        const stat = lstatOrAbsent(parent);
+        if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+      let ignored: boolean;
+      try {
+        ignored = isGitPathIgnored(this.workspace, relativePath);
+      } catch {
+        throw new Error("Checkpoint could not verify whether a staged addition is ignored; workspace was not changed");
+      }
+      if (ignored) throw new Error("Checkpoint restore refuses to remove a staged addition ignored by current Git rules (untracked collision); workspace was not changed");
+    }
+  }
+
+  private restoreGitIndex(gitRef: string, hookGuardEnv: NodeJS.ProcessEnv): void {
+    const prefix = this.gitWorkspacePrefix();
+    const repositoryRoot = this.gitRoot();
+    if (!prefix) {
+      execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", gitRef], {
+        cwd: repositoryRoot,
+        stdio: "ignore",
+        env: hookGuardEnv,
+      });
+      return;
+    }
+
+    // Build the checkpoint index separately, then replace only entries owned
+    // by this workspace in the real index. A whole-tree read-tree would also
+    // reset staged changes belonging to sibling workspaces in the repository.
+    const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-index-"));
+    try {
+      const targetIndex = path.join(temporaryDir, "index");
+      const targetEnv = { ...hookGuardEnv, GIT_INDEX_FILE: targetIndex };
+      execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", gitRef], {
+        cwd: repositoryRoot,
+        stdio: "ignore",
+        env: targetEnv,
+      });
+
+      const workspacePathspec = prefix ? [`:(top,literal)${prefix.slice(0, -1)}`] : [];
+      const indexPaths = ["-c", "core.fsmonitor=false", "ls-files", "--stage", "-z", "--full-name", ...(workspacePathspec.length ? ["--", ...workspacePathspec] : [])];
+      const targetEntries = execFileSync("git", indexPaths, {
+        cwd: repositoryRoot,
+        env: targetEnv,
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      const currentEntries = execFileSync("git", indexPaths, {
+        cwd: repositoryRoot,
+        env: hookGuardEnv,
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      const prefixBytes = Buffer.from(prefix);
+      const parseEntries = (entries: Buffer): Array<{ metadata: Buffer; filePath: Buffer }> =>
+        entries.toString("binary").split("\0").filter(Boolean).map((entry) => {
+          const separator = entry.indexOf("\t");
+          if (separator < 0) throw new Error("Git returned a malformed index entry");
+          return {
+            metadata: Buffer.from(entry.slice(0, separator), "binary"),
+            filePath: Buffer.from(entry.slice(separator + 1), "binary"),
+          };
+        });
+      const inWorkspace = (filePath: Buffer): boolean => filePath.subarray(0, prefixBytes.length).equals(prefixBytes);
+      const target = parseEntries(targetEntries).filter(({ filePath }) => inWorkspace(filePath));
+      const current = parseEntries(currentEntries).filter(({ filePath }) => inWorkspace(filePath));
+      const indexInfo: Buffer[] = [];
+
+      for (const { metadata, filePath } of current) {
+        const [, objectId, stage] = metadata.toString("ascii").split(" ");
+        if (!objectId || !stage) throw new Error("Git returned an incomplete index entry");
+        indexInfo.push(Buffer.from(`0 ${"0".repeat(objectId.length)} ${stage}\t`, "ascii"), filePath, Buffer.from("\0"));
+      }
+      for (const { metadata, filePath } of target) {
+        indexInfo.push(metadata, Buffer.from("\t"), filePath, Buffer.from("\0"));
+      }
+
+      if (indexInfo.length > 0) {
+        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "update-index", "-z", "--index-info"], {
+          cwd: repositoryRoot,
+          input: Buffer.concat(indexInfo),
+          stdio: ["pipe", "ignore", "pipe"],
+          env: hookGuardEnv,
+        });
+      }
+    } finally {
+      fs.rmSync(temporaryDir, { recursive: true, force: true });
+    }
+  }
+
   private gitIndexLockExists(): boolean {
     let lockPath: string;
     try {
       lockPath = execFileSync("git", ["rev-parse", "--git-path", "index.lock"], {
         cwd: this.workspace,
         encoding: "utf-8",
-      }).trim();
+      });
+      lockPath = stripGitLineEnding(lockPath);
     } catch {
       throw new GitIndexLockCheckError();
     }
@@ -105,66 +320,613 @@ export class CheckpointManager {
   }
 
   private assertGitChangesSafe(allowSensitive: boolean): void {
-    const changedPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "-z", "HEAD"], {
-      cwd: this.workspace,
+    const gitRoot = this.gitRoot();
+    const changedPaths = gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--no-renames", "--name-only", "-z", "HEAD"], {
+      cwd: gitRoot,
       encoding: "buffer",
-    }).toString("utf8").split("\0").filter(Boolean);
-
+    })).map((entry) => entry.toString("utf8")).flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
+    const changedPathByRootPath = new Map(changedPaths.map((relativePath) => [
+      Buffer.from(`${this.gitWorkspacePrefix()}${relativePath}`, "utf8").toString("hex"),
+      relativePath,
+    ]));
+    const indexEntriesByPath = new Map<string, Array<{ mode: string; objectId: string; stage: string }>>();
+    const rawIndex = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--stage", "--full-name", "-z"], {
+      cwd: gitRoot,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    for (const entry of gitNulEntries(rawIndex)) {
+      const tab = entry.indexOf("\t");
+      if (tab < 0) throw new Error("Checkpoint could not verify protected Git index state");
+      const relativePath = changedPathByRootPath.get(entry.subarray(tab + 1).toString("hex"));
+      if (relativePath === undefined) continue;
+      const [mode, objectId, stage] = entry.subarray(0, tab).toString("ascii").split(" ");
+      const existing = indexEntriesByPath.get(relativePath) ?? [];
+      existing.push({ mode, objectId, stage });
+      indexEntriesByPath.set(relativePath, existing);
+    }
     for (const relativePath of changedPaths) {
-      if (!allowSensitive) assertNoSensitivePersistenceContent(relativePath, "checkpoint");
-      try {
-        const indexed = execFileSync("git", ["-c", "core.fsmonitor=false", "show", `:${relativePath}`], {
-          cwd: this.workspace,
-          encoding: "buffer",
-          maxBuffer: 64 * 1024 * 1024,
-          stdio: ["ignore", "pipe", "ignore"],
-        });
-        if (!allowSensitive) assertNoSensitivePersistenceContent(indexed.toString("utf8"), "checkpoint");
-      } catch (error) {
-        if (error instanceof SensitivePersistenceError) throw error;
-        try {
-          // A staged deletion has no index blob and no worktree bytes to copy.
-          // Any other inability to inspect an indexed object is fail-closed.
-          execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--error-unmatch", "--", relativePath], {
-            cwd: this.workspace,
-            stdio: "ignore",
-          });
-          throw new Error("Checkpoint could not verify protected Git index state");
-        } catch (indexError) {
-          if (
-            indexError instanceof Error &&
-            indexError.message === "Checkpoint could not verify protected Git index state"
-          ) throw indexError;
-          if ((indexError as NodeJS.ErrnoException & { status?: number })?.status !== 1) {
-            throw new Error("Checkpoint could not verify protected Git index state");
-          }
-          // Not present in the index: the path may be a staged deletion. Git's
-          // checkpoint operation will not persist any untracked replacement.
-        }
+      if (!allowSensitive) this.assertSnapshotTextSafe(relativePath);
+      const indexEntries = indexEntriesByPath.get(relativePath) ?? [];
+      if (indexEntries.length === 0) continue;
+      if (indexEntries.length !== 1 || indexEntries[0].stage !== "0") {
+        throw new Error("Checkpoint could not verify protected Git index state");
+      }
+      const { mode, objectId } = indexEntries[0];
+      const indexed = execFileSync("git", ["-c", "core.fsmonitor=false", "cat-file", "blob", objectId], {
+        cwd: gitRoot,
+        encoding: "buffer",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      if (!allowSensitive) {
+        if (mode === "120000") this.assertSnapshotTextSafe(indexed.toString("utf8"));
+        else assertNoSensitivePersistenceContent(indexed.toString("utf8"), "checkpoint");
       }
 
       const worktreePath = path.join(this.workspace, relativePath);
-      if (fs.existsSync(worktreePath) && fs.statSync(worktreePath).isFile()) {
+      let ancestor = this.workspace;
+      let unsafeParent = false;
+      for (const component of relativePath.split("/").slice(0, -1)) {
+        ancestor = path.join(ancestor, component);
+        const parentStat = lstatOrAbsent(ancestor);
+        if (!parentStat || !parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+          unsafeParent = true;
+          break;
+        }
+      }
+      if (unsafeParent) continue;
+      const stat = lstatOrAbsent(worktreePath);
+      if (stat?.isSymbolicLink()) {
+        if (!allowSensitive) this.assertSnapshotTextSafe(fs.readlinkSync(worktreePath));
+      } else if (stat?.isFile()) {
         if (!allowSensitive) assertNoSensitivePersistenceContent(fs.readFileSync(worktreePath, "utf8"), "checkpoint");
       }
     }
   }
 
-  private assertFallbackSnapshotSafe(workspacePath: string, allowSensitive: boolean): void {
+  private gitUntrackedPaths(includeIgnored = false): string[] {
+    const paths = gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--others", "--full-name", ...(includeIgnored ? [] : ["--exclude-standard"]), "-z"], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    })).map((entry) => entry.toString("utf8"));
+    return paths.flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
+  }
+
+  private assertSnapshotTextSafe(value: string): void {
+    assertNoSensitivePersistenceContent(value, "checkpoint");
+    for (const component of value.split(/[\\/]/)) assertNoSensitivePersistenceContent(component, "checkpoint");
+  }
+
+  private assertUntrackedEntriesSafe(relativePaths: string[], sourceRoot: string, allowSensitive: boolean): void {
+    for (const relativePath of relativePaths) {
+      const sourcePath = path.join(sourceRoot, relativePath);
+      const stat = fs.lstatSync(sourcePath);
+      if (!allowSensitive) this.assertSnapshotTextSafe(relativePath);
+      if (stat.isSymbolicLink()) {
+        if (!allowSensitive) this.assertSnapshotTextSafe(fs.readlinkSync(sourcePath));
+      } else if (stat.isFile()) {
+        if (!allowSensitive) assertNoSensitivePersistenceContent(fs.readFileSync(sourcePath, "utf8"), "checkpoint");
+      } else {
+        throw new Error("Checkpoint untracked entries must be regular files or symbolic links");
+      }
+    }
+  }
+
+  private assertNoNestedGitRepositoryAncestors(
+    relativePaths: string[],
+    targetRoot: string,
+    allowExternalSymlinkAncestors = false,
+  ): void {
+    const root = fs.realpathSync(targetRoot);
+    for (const relativePath of relativePaths) {
+      const destination = path.resolve(root, relativePath);
+      const relativeDestination = path.relative(root, destination);
+      if (!relativeDestination || relativeDestination === ".." || relativeDestination.startsWith(`..${path.sep}`) || path.isAbsolute(relativeDestination)) {
+        throw new Error("Checkpoint destination path escapes the workspace");
+      }
+      const relativeParent = path.dirname(relativeDestination);
+      const parentComponents = relativeParent === "." ? [] : relativeParent.split(path.sep);
+      const destinationStat = lstatOrAbsent(destination);
+      // A directory at the exact destination can itself be a repository, for
+      // example when an untracked checkpoint file was replaced by a bare repo.
+      // Include that leaf only when it is currently a directory; ordinary file
+      // destinations still need only their parents checked.
+      const components = destinationStat?.isDirectory()
+        ? [...parentComponents, path.basename(relativeDestination)]
+        : parentComponents;
+      let parent = root;
+      for (const component of components) {
+        parent = path.join(parent, component);
+        const stat = lstatOrAbsent(parent);
+        if (!stat) break;
+        if (stat.isSymbolicLink()) {
+          if (allowExternalSymlinkAncestors) {
+            try {
+              const resolvedParent = fs.realpathSync(parent);
+              if (resolvedParent !== root && !resolvedParent.startsWith(root + path.sep)) break;
+            } catch {
+              // Deletion cleanup already skips dangling or inaccessible parents.
+              break;
+            }
+          }
+          throw new Error("Checkpoint destination parent is a symbolic link");
+        }
+        if (!stat.isDirectory()) break;
+        const dotGit = lstatOrAbsent(path.join(parent, ".git"));
+        const bareHead = lstatOrAbsent(path.join(parent, "HEAD"));
+        const bareConfig = lstatOrAbsent(path.join(parent, "config"));
+        const bareObjects = lstatOrAbsent(path.join(parent, "objects"));
+        const bareRefs = lstatOrAbsent(path.join(parent, "refs"));
+        if (dotGit) {
+          throw new Error("Checkpoint destination parent is a nested Git repository");
+        }
+
+        // Probe a private, bounded snapshot instead of asking Git to inspect
+        // the destination. The destination config may be a FIFO, may change
+        // during inspection, or may include an external file. Ordinary source
+        // directories named `HEAD`, `config`, `objects`, or `refs` remain
+        // valid unless Git recognizes their safe snapshot as a repository.
+        if (bareHead && (bareConfig || bareObjects || bareRefs)) {
+          const nestedRepositoryError = NESTED_GIT_REPOSITORY_ERROR;
+          if (!bareHead.isFile() || !bareConfig?.isFile() || bareHead.size > 4096 || bareConfig.size > 1024 * 1024) {
+            throw new Error(nestedRepositoryError);
+          }
+          if ((bareObjects && !bareObjects.isDirectory()) || (bareRefs && !bareRefs.isDirectory())) {
+            throw new Error(nestedRepositoryError);
+          }
+
+          const readBoundedRegularFile = (filePath: string, expected: fs.Stats, maxBytes: number): Buffer => {
+            const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+            const nonBlocking = fs.constants.O_NONBLOCK ?? 0;
+            const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow | nonBlocking);
+            try {
+              const opened = fs.fstatSync(fd);
+              if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino || opened.size > maxBytes) {
+                throw new Error(nestedRepositoryError);
+              }
+              const content = Buffer.alloc(opened.size);
+              let offset = 0;
+              while (offset < content.length) {
+                const count = fs.readSync(fd, content, offset, content.length - offset, offset);
+                if (count === 0) throw new Error(nestedRepositoryError);
+                offset += count;
+              }
+              const afterRead = fs.fstatSync(fd);
+              if (afterRead.size !== opened.size || afterRead.mtimeMs !== opened.mtimeMs) {
+                throw new Error(nestedRepositoryError);
+              }
+              return content;
+            } finally {
+              fs.closeSync(fd);
+            }
+          };
+
+          let headSnapshot: Buffer;
+          let configSnapshot: Buffer;
+          try {
+            headSnapshot = readBoundedRegularFile(path.join(parent, "HEAD"), bareHead, 4096);
+            configSnapshot = readBoundedRegularFile(path.join(parent, "config"), bareConfig, 1024 * 1024);
+          } catch {
+            throw new Error(nestedRepositoryError);
+          }
+          const configText = configSnapshot.toString("utf8");
+          if (/^\s*\[\s*include(?:\s|\]|if(?:\s|\]))/im.test(configText)) {
+            throw new Error(nestedRepositoryError);
+          }
+
+          const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-git-probe-"));
+          try {
+            const probeConfig = path.join(probeRoot, "config");
+            writePrivateFile(path.join(probeRoot, "HEAD"), headSnapshot, { mode: 0o600 });
+            writePrivateFile(probeConfig, configSnapshot, { mode: 0o600 });
+            ensurePrivateDir(path.join(probeRoot, "objects"));
+            ensurePrivateDir(path.join(probeRoot, "refs"));
+
+            const gitProbeEnv: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull };
+            for (const key of Object.keys(gitProbeEnv)) {
+              if (key.startsWith("GIT_") && key !== "GIT_CONFIG_NOSYSTEM" && key !== "GIT_CONFIG_GLOBAL") delete gitProbeEnv[key];
+            }
+            try {
+              const discoveredGitDir = stripGitLineEnding(execFileSync("git", ["-C", probeRoot, "rev-parse", "--absolute-git-dir"], {
+                cwd: root,
+                encoding: "utf8",
+                env: gitProbeEnv,
+                maxBuffer: 1024 * 1024,
+                timeout: 2000,
+                stdio: ["ignore", "pipe", "ignore"],
+              }));
+              if (fs.realpathSync(discoveredGitDir) === fs.realpathSync(probeRoot)) {
+                throw new Error(nestedRepositoryError);
+              }
+            } catch (error) {
+              if (error instanceof Error && error.message === nestedRepositoryError) throw error;
+              const status = (error as NodeJS.ErrnoException & { status?: number })?.status;
+              if (status !== 128) throw new Error("Checkpoint could not verify nested Git repository state");
+            }
+
+            try {
+              const configuredBare = execFileSync("git", ["config", "--no-includes", "--file", probeConfig, "--type=bool", "--get", "core.bare"], {
+                cwd: root,
+                encoding: "utf8",
+                env: gitProbeEnv,
+                maxBuffer: 1024 * 1024,
+                timeout: 2000,
+                stdio: ["ignore", "pipe", "ignore"],
+              }).trim();
+              if (configuredBare === "true") throw new Error(nestedRepositoryError);
+            } catch (error) {
+              if (error instanceof Error && error.message === nestedRepositoryError) throw error;
+              const status = (error as NodeJS.ErrnoException & { status?: number })?.status;
+              if (status !== 1) throw new Error("Checkpoint destination has an invalid Git configuration");
+            }
+          } finally {
+            fs.rmSync(probeRoot, { recursive: true, force: true });
+          }
+        }
+      }
+    }
+  }
+
+  private assertUntrackedDestinationSafe(relativePaths: string[], targetRoot: string): void {
+    this.assertNoNestedGitRepositoryAncestors(relativePaths, targetRoot);
+    const root = fs.realpathSync(targetRoot);
+    for (const relativePath of relativePaths) {
+      const destination = path.resolve(root, relativePath);
+      const relativeDestination = path.relative(root, destination);
+      const relativeParent = path.dirname(relativeDestination);
+      let parent = root;
+      for (const component of relativeParent === "." ? [] : relativeParent.split(path.sep)) {
+        parent = path.join(parent, component);
+        const stat = lstatOrAbsent(parent);
+        if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) {
+          throw new Error("Checkpoint destination parent is not a real directory");
+        }
+      }
+    }
+  }
+
+  private copyUntrackedEntries(
+    relativePaths: string[],
+    sourceRoot: string,
+    targetRoot: string,
+    allowSensitive: boolean,
+    restoreModes?: Record<string, number>,
+  ): void {
+    ensurePrivateDir(targetRoot);
+    for (const relativePath of relativePaths) {
+      const sourcePath = path.join(sourceRoot, relativePath);
+      const targetPath = path.join(targetRoot, relativePath);
+      this.assertUntrackedDestinationSafe([relativePath], targetRoot);
+      ensurePrivateDir(path.dirname(targetPath));
+      this.assertUntrackedDestinationSafe([relativePath], targetRoot);
+      const stat = fs.lstatSync(sourcePath);
+      if (stat.isSymbolicLink()) {
+        const linkTarget = fs.readlinkSync(sourcePath);
+        if (!allowSensitive) this.assertSnapshotTextSafe(linkTarget);
+        if (lstatOrAbsent(targetPath)) fs.rmSync(targetPath, { force: true });
+        fs.symlinkSync(linkTarget, targetPath);
+      } else if (stat.isFile()) {
+        const content = fs.readFileSync(sourcePath);
+        if (!allowSensitive) assertNoSensitivePersistenceContent(content.toString("utf8"), "checkpoint");
+        writePrivateFile(targetPath, content);
+        const mode = restoreModes?.[relativePath];
+        if (mode !== undefined) fs.chmodSync(targetPath, mode & 0o777);
+      } else {
+        throw new Error("Checkpoint untracked entries must be regular files or symbolic links");
+      }
+    }
+  }
+
+  private assertUntrackedSnapshotSafe(relativePaths: string[], snapshotDir: string, allowSensitive: boolean): void {
+    const root = fs.realpathSync(snapshotDir);
+    for (const relativePath of relativePaths) {
+      const parent = fs.realpathSync(path.dirname(path.join(root, relativePath)));
+      if (parent !== root && !parent.startsWith(root + path.sep)) throw new Error("Checkpoint snapshot path escapes its root");
+    }
+    this.assertUntrackedEntriesSafe(relativePaths, root, allowSensitive);
+  }
+
+  private assertLegacyUntrackedRestoreSafe(gitRef: string): void {
+    const checkoutPaths = gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "ls-tree", "-r", "--name-only", "--full-tree", "-z", gitRef], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    })).map((entry) => entry.toString("utf8")).flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
+    const deletedPaths = gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--no-renames", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    })).map((entry) => entry.toString("utf8")).flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
+    const mutationPaths = new Set([...checkoutPaths, ...deletedPaths]);
+    if (this.gitUntrackedPaths(true).some((relativePath) => {
+      for (let candidate = relativePath; candidate && candidate !== "."; candidate = path.posix.dirname(candidate)) {
+        if (mutationPaths.has(candidate)) return true;
+      }
+      return false;
+    })) {
+      throw new Error("Checkpoint legacy restore would overwrite or delete an uncaptured untracked file");
+    }
+  }
+
+  private removeTrackedDeletions(gitRef: string, addedPaths: string[] = []): void {
+    const deletedPaths = this.gitRefDeletedPaths(gitRef);
+    const workspaceRoot = fs.realpathSync(this.workspace);
+    for (const relativePath of new Set([...deletedPaths, ...addedPaths])) {
+      const targetPath = path.join(workspaceRoot, relativePath);
+      const relativeTarget = path.relative(workspaceRoot, targetPath);
+      if (!relativeTarget || relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`) || path.isAbsolute(relativeTarget)) continue;
+      let parent = workspaceRoot;
+      let blocked = false;
+      for (const component of path.dirname(relativeTarget).split(path.sep).filter((part) => part && part !== ".")) {
+        parent = path.join(parent, component);
+        const parentStat = lstatOrAbsent(parent);
+        if (!parentStat || !parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+      try {
+        if (lstatOrAbsent(targetPath)?.isDirectory()) continue;
+        fs.rmSync(targetPath, { force: true });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      }
+    }
+  }
+
+  private gitRefDeletedPaths(gitRef: string): string[] {
+    const paths = gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--no-renames", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
+      cwd: this.gitRoot(),
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    }));
+    const decodedPaths = paths.map((entry) => entry.toString("utf8"));
+    return decodedPaths.flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
+  }
+
+  private trackedPathsAddedSince(gitRef: string): string[] {
+    const root = this.gitRoot();
+    const committed = gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--no-renames", "--name-only", "--diff-filter=A", "-z", gitRef, "HEAD"], {
+      cwd: root,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    })).map((entry) => entry.toString("utf8")).flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
+    const staged = gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "diff-index", "--cached", "--no-renames", "--name-only", "--diff-filter=A", "-z", gitRef], {
+      cwd: root,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    })).map((entry) => entry.toString("utf8")).flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
+    return [...new Set([...committed, ...staged])];
+  }
+
+  private workspaceSnapshotPaths(root: string): string[] {
     const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
-    const visit = (directory: string): void => {
+    const paths: string[] = [];
+    const visit = (directory: string, relative: string): void => {
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         if (ignored.has(entry.name)) continue;
-        if (!allowSensitive) assertNoSensitivePersistenceContent(entry.name, "checkpoint");
-        const sourcePath = path.join(directory, entry.name);
+        const entryPath = relative ? `${relative}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) visit(path.join(directory, entry.name), entryPath);
+        else if (entry.isFile() || entry.isSymbolicLink()) paths.push(entryPath);
+      }
+    };
+    visit(root, "");
+    return paths;
+  }
+
+  private workspaceSnapshotDirectories(root: string): string[] {
+    const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
+    const paths: string[] = [];
+    const visit = (directory: string, relative: string): void => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (ignored.has(entry.name) || !entry.isDirectory()) continue;
+        const entryPath = relative ? `${relative}/${entry.name}` : entry.name;
+        paths.push(entryPath);
+        visit(path.join(directory, entry.name), entryPath);
+      }
+    };
+    visit(root, "");
+    return paths;
+  }
+
+  private directoryHasCleanupPreservedEntries(directory: string): boolean {
+    const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (ignored.has(entry.name)) return true;
+      if (entry.isDirectory()) {
+        if (this.directoryHasCleanupPreservedEntries(path.join(directory, entry.name))) return true;
+      } else if (!entry.isFile() && !entry.isSymbolicLink()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private assertSnapshotTargetsReplaceable(relativePaths: string[]): void {
+    for (const relativePath of relativePaths) {
+      const targetPath = path.join(this.workspace, relativePath);
+      const stat = lstatOrAbsent(targetPath);
+      if (stat?.isDirectory() && this.directoryHasCleanupPreservedEntries(targetPath)) {
+        throw new Error("Checkpoint snapshot target directory contains entries preserved by cleanup");
+      }
+    }
+  }
+
+  private assertGitSnapshotTargetsReplaceable(relativePaths: string[], gitRef: string): void {
+    const directoryTargets = relativePaths.filter((relativePath) =>
+      lstatOrAbsent(path.join(this.workspace, relativePath))?.isDirectory(),
+    );
+    if (directoryTargets.length === 0) return;
+
+    const changedPaths = gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--no-renames", "--name-only", "-z", gitRef, "--"], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    })).map((entry) => entry.toString("utf8"));
+    if (changedPaths.some((relativePath) => path.basename(relativePath) === ".gitignore")) {
+      throw new Error("Checkpoint Git ignore rules differ from the current worktree");
+    }
+
+    for (const relativePath of directoryTargets) {
+      // A clean preview can be empty when the directory path is also tracked in the index,
+      // even though ordinary untracked children beneath it are removable.
+      if (this.directoryContainsOnlyGitCleanRemovableEntries(relativePath)
+        && this.gitTrackedDescendantPaths(relativePath).length === 0) {
+        continue;
+      }
+      if (!this.directoryContainsOnlyTrackedRemovableEntries(relativePath)) {
+        throw new Error("Checkpoint snapshot target directory contains entries preserved by Git clean");
+      }
+    }
+  }
+
+  /** Tracked file entries that checkout-index may recreate from this checkpoint tree. Gitlinks are not blobs. */
+  private gitRefBlobPaths(gitRef: string): string[] {
+    const entries = gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "ls-tree", "-r", "-z", "--full-tree", gitRef], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    }));
+
+    const paths: string[] = [];
+    for (const rawEntry of entries) {
+      const entry = rawEntry.toString("utf8");
+      const separator = entry.indexOf("\t");
+      if (separator < 0) throw new Error("Could not parse checkpoint Git tree entry");
+      const objectType = entry.slice(0, separator).split(" ")[1];
+      if (objectType === "blob") {
+        const relativePath = this.workspaceRelativeGitPath(entry.slice(separator + 1));
+        if (relativePath) paths.push(relativePath);
+      }
+    }
+    return paths;
+  }
+
+  private directoryContainsOnlyGitCleanRemovableEntries(relativePath: string): boolean {
+    const root = path.join(this.workspace, relativePath);
+    const visit = (directory: string, relative: string): boolean => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const child = relative ? `${relative}/${entry.name}` : entry.name;
+        if (entry.name === ".git") return false;
+        const fullPath = path.join(directory, entry.name);
         if (entry.isDirectory()) {
-          visit(sourcePath);
-        } else if (entry.isFile()) {
-          if (!allowSensitive) assertNoSensitivePersistenceContent(fs.readFileSync(sourcePath, "utf8"), "checkpoint");
+          try {
+            if (isGitPathIgnored(this.workspace, `${relativePath}/${child}`)) return false;
+          } catch {
+            return false;
+          }
+          if (!visit(fullPath, child)) return false;
+        } else if (entry.isFile() || entry.isSymbolicLink()) {
+          try {
+            if (isGitPathIgnored(this.workspace, `${relativePath}/${child}`)) return false;
+          } catch {
+            return false;
+          }
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+    return visit(root, "");
+  }
+
+  private gitTrackedDescendantPaths(relativePath: string): string[] {
+    const rootRelativePath = `${this.gitWorkspacePrefix()}${relativePath}`;
+    return gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--cached", "--full-name", "-z", "--", `:(top,literal)${rootRelativePath}`], {
+      cwd: this.gitRoot(),
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    })).map((entry) => entry.toString("utf8")).flatMap((gitPath) => {
+      const workspacePath = this.workspaceRelativeGitPath(gitPath);
+      return workspacePath?.startsWith(`${relativePath}/`) ? [workspacePath] : [];
+    });
+  }
+
+  private directoryContainsOnlyTrackedRemovableEntries(relativePath: string): boolean {
+    const root = path.join(this.workspace, relativePath);
+    const diskEntries: string[] = [];
+    const visit = (directory: string, relative: string): boolean => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const child = relative ? `${relative}/${entry.name}` : entry.name;
+        const fullPath = path.join(directory, entry.name);
+        if (entry.name === ".git") return false;
+        if (entry.isDirectory()) {
+      try {
+        if (isGitPathIgnored(this.workspace, `${relativePath}/${child}`)) return false;
+      } catch {
+        return false;
+      }
+          if (!visit(fullPath, child)) return false;
+        } else if (entry.isFile() || entry.isSymbolicLink()) {
+          diskEntries.push(`${relativePath}/${child}`);
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    if (!visit(root, "")) return false;
+    if (diskEntries.length === 0) return false;
+    const trackedEntries = this.gitTrackedDescendantPaths(relativePath);
+    const tracked = new Set(trackedEntries);
+    if (diskEntries.length !== tracked.size || diskEntries.some((entry) => !tracked.has(entry))) return false;
+
+    for (const entry of diskEntries) {
+      try {
+        if (isGitPathIgnored(this.workspace, entry)) return false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private removeNonSnapshotEntries(snapshotFiles: string[]): void {
+    const retained = new Set(snapshotFiles);
+    const ignored = new Set(["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"]);
+    const visit = (directory: string, relative: string): void => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (ignored.has(entry.name)) continue;
+        const entryPath = relative ? `${relative}/${entry.name}` : entry.name;
+        const fullPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          visit(fullPath, entryPath);
+          if (fs.readdirSync(fullPath).length === 0 && ![...retained].some((file) => file.startsWith(entryPath + "/"))) {
+            fs.rmdirSync(fullPath);
+          }
+        } else if ((entry.isFile() || entry.isSymbolicLink()) && !retained.has(entryPath)) {
+          fs.rmSync(fullPath, { force: true });
         }
       }
     };
-    visit(workspacePath);
+    visit(this.workspace, "");
   }
 
   public createCheckpoint(name?: string, options: { allowSensitive?: boolean } = {}): CheckpointInfo {
@@ -176,11 +938,16 @@ export class CheckpointManager {
 
     let gitRef: string | undefined;
     let snapshotDir: string | undefined;
+    let untrackedPaths: string[] = [];
+    let untrackedFileModes: Record<string, number> = {};
 
     if (this.isGit) {
       try {
         this.assertGitIndexUnlocked();
         this.assertGitChangesSafe(allowSensitive);
+        untrackedPaths = this.gitUntrackedPaths();
+        this.assertUntrackedEntriesSafe(untrackedPaths, this.workspace, allowSensitive);
+        untrackedFileModes = this.captureUntrackedFileModes(untrackedPaths, this.workspace);
         // Create an untracked + tracked git stash commit without modifying working tree
         // Clean/smudge filter drivers (filter.* selected through .gitattributes) can still run external
         // programs here and during restore; Git offers no single override for them, and refusing to
@@ -216,22 +983,30 @@ export class CheckpointManager {
         if (
           error instanceof SensitivePersistenceError ||
           error instanceof GitIndexLockError ||
-          error instanceof GitIndexLockCheckError
+          error instanceof GitIndexLockCheckError ||
+          error instanceof GitPathEncodingError
         ) throw error;
         if (this.gitIndexLockExists()) throw new GitIndexLockError();
         throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
       }
     }
 
-    if (!gitRef) {
+    if (untrackedPaths.length > 0 || !gitRef) {
       const snapTarget = path.join(this.checkpointDir, "snapshots", id);
       try {
-        this.assertFallbackSnapshotSafe(this.workspace, allowSensitive);
-        this.copyDirFiltered(this.workspace, snapTarget, allowSensitive);
+        if (gitRef) {
+          this.copyUntrackedEntries(untrackedPaths, this.workspace, snapTarget, allowSensitive);
+        } else {
+          untrackedPaths = this.workspaceSnapshotPaths(this.workspace);
+          this.assertUntrackedEntriesSafe(untrackedPaths, this.workspace, allowSensitive);
+          untrackedFileModes = this.captureUntrackedFileModes(untrackedPaths, this.workspace);
+          this.copyUntrackedEntries(untrackedPaths, this.workspace, snapTarget, allowSensitive);
+        }
         snapshotDir = snapTarget;
       } catch (error) {
         try {
           fs.rmSync(snapTarget, { recursive: true, force: true });
+          if (gitRef) execFileSync("git", ["-c", "core.hooksPath=/dev/null", "update-ref", "-d", `refs/nexus/checkpoints/${id}`], { cwd: this.workspace, stdio: "ignore", env: envWithoutConfiguredHooks(this.workspace, ["reference-transaction"]) });
         } catch {}
         throw error;
       }
@@ -244,6 +1019,8 @@ export class CheckpointManager {
       workspace: this.workspace,
       gitRef,
       snapshotDir,
+      ...(allowSensitive ? { allowSensitive: true } : {}),
+      ...(this.isGit || snapshotDir ? { untrackedFiles: untrackedPaths, untrackedFileModes } : {}),
     };
 
     const targetFile = path.join(this.checkpointDir, `${id}.json`);
@@ -295,6 +1072,24 @@ export class CheckpointManager {
     if (typeof raw.gitRef === "string" && /^[0-9a-f]{7,64}$/i.test(raw.gitRef)) checkpoint.gitRef = raw.gitRef;
     const snapshotDir = this.confinedSnapshotDir(raw.id, raw.snapshotDir);
     if (snapshotDir) checkpoint.snapshotDir = snapshotDir;
+    if (raw.allowSensitive === true) checkpoint.allowSensitive = true;
+    if (raw.untrackedFiles !== undefined) {
+      if (!Array.isArray(raw.untrackedFiles) || !raw.untrackedFiles.every((entry: any) =>
+        typeof entry === "string" && entry.length > 0 && !entry.includes("\0") && !entry.startsWith("/") &&
+        !/^[A-Za-z]:/.test(entry) && path.posix.normalize(entry) === entry && entry !== ".." &&
+        !entry.startsWith("../") && !entry.split("/").includes(".git"),
+      )) return null;
+      checkpoint.untrackedFiles = [...new Set<string>(raw.untrackedFiles)];
+    }
+    if (raw.untrackedFileModes !== undefined) {
+      if (!raw.untrackedFileModes || typeof raw.untrackedFileModes !== "object" || Array.isArray(raw.untrackedFileModes)) return null;
+      const modes: Record<string, number> = Object.create(null);
+      for (const [filePath, mode] of Object.entries(raw.untrackedFileModes)) {
+        if (!checkpoint.untrackedFiles?.includes(filePath) || !Number.isInteger(mode) || (mode as number) < 0 || (mode as number) > 0o777) return null;
+        modes[filePath] = mode as number;
+      }
+      checkpoint.untrackedFileModes = modes;
+    }
     if (Array.isArray(raw.files)) checkpoint.files = raw.files;
     return checkpoint;
   }
@@ -449,19 +1244,98 @@ export class CheckpointManager {
     if (!cp) {
       return { success: false, message: `Checkpoint '${id}' not found.` };
     }
+    if (cp.gitRef && !this.isGit) {
+      return { success: false, message: `Rollback failed: checkpoint '${cp.id}' requires its Git repository metadata; workspace was not changed` };
+    }
 
     try {
       if (this.isGit && cp.gitRef) {
-        // Reset working tree to checkpoint commit/stash
         const hookGuardEnv = envWithoutConfiguredHooks(this.workspace, ["reference-transaction", "post-index-change"]);
-        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "reset", "--hard", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
-        execFileSync("git", ["-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
-        return { success: true, message: `Restored workspace to checkpoint '${cp.name}' (${cp.id})` };
+        const postCheckpointAdditions = this.trackedPathsAddedSince(cp.gitRef);
+        const deletedPaths = this.gitRefDeletedPaths(cp.gitRef);
+        const checkoutPaths = this.gitRefBlobPaths(cp.gitRef);
+        const writePaths = [...new Set([...checkoutPaths, ...(cp.untrackedFiles ?? [])])];
+        const removalPaths = [...new Set([...deletedPaths, ...postCheckpointAdditions])];
+        if (cp.untrackedFiles !== undefined && cp.untrackedFiles.length > 0) {
+          if (!cp.snapshotDir) return { success: false, message: `Rollback failed: checkpoint '${cp.id}' is missing its untracked snapshot; workspace was not changed` };
+          try {
+            this.assertUntrackedSnapshotSafe(cp.untrackedFiles, cp.snapshotDir, cp.allowSensitive === true);
+            this.assertUntrackedDestinationSafe(cp.untrackedFiles, this.workspace);
+          } catch (error) {
+            if (error instanceof Error && error.message === NESTED_GIT_REPOSITORY_ERROR) {
+              return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has a destination in a nested Git repository; workspace was not changed` };
+            }
+            return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an unsafe untracked snapshot or destination; workspace was not changed` };
+          }
+        }
+        // Validate every path that restore may write or remove before read-tree
+        // mutates the outer index. Tracked deletions are destructive too: they
+        // must not cross into nested repositories in the current worktree.
+        this.assertNoNestedGitRepositoryAncestors(writePaths, this.workspace);
+        // Tracked deletion cleanup intentionally leaves targets behind when a
+        // parent symlink resolves outside the workspace. Preserve that behavior
+        // while still rejecting a nested repository reachable within the tree.
+        this.assertNoNestedGitRepositoryAncestors(removalPaths, this.workspace, true);
+        // Ignore matching may fail when Git encounters an embedded repository.
+        // Reject unsafe nested-repository destinations first for a precise,
+        // deterministic failure before any index or worktree mutation.
+        this.assertNoIgnoredAddedPaths(postCheckpointAdditions);
+        if (cp.untrackedFiles !== undefined) {
+          const replacementTargets = [...new Set([...cp.untrackedFiles, ...checkoutPaths])];
+          this.assertGitSnapshotTargetsReplaceable(replacementTargets, cp.gitRef);
+        }
+        if (cp.untrackedFiles === undefined) this.assertLegacyUntrackedRestoreSafe(cp.gitRef);
+        this.assertNoActiveGitOperation();
+        this.restoreGitIndex(cp.gitRef, hookGuardEnv);
+        // Remove checkpoint-deleted paths while their current ancestors are still
+        // present. Installing checkpoint symlinks first could redirect deletion
+        // through an in-workspace link into unrelated ignored data.
+        this.removeTrackedDeletions(cp.gitRef, postCheckpointAdditions);
+        // Use literal index paths from the checkpoint tree. checkout-index does
+        // not accept directory pathspecs, and an all-index checkout would overwrite
+        // sibling worktree content in repositories with nested workspaces.
+        if (checkoutPaths.length > 0) {
+          const checkoutInput = Buffer.from(checkoutPaths.map((filePath) => `${filePath}\0`).join(""), "utf8");
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f", "-q", "-z", "--stdin"], {
+            cwd: this.workspace,
+            input: checkoutInput,
+            stdio: ["pipe", "ignore", "ignore"],
+            env: hookGuardEnv,
+          });
+        }
+        if (cp.untrackedFiles !== undefined) {
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
+          if (cp.untrackedFiles.length > 0) {
+            this.copyUntrackedEntries(cp.untrackedFiles, cp.snapshotDir!, this.workspace, cp.allowSensitive === true, cp.untrackedFileModes);
+          }
+          return { success: true, message: `Restored workspace to checkpoint '${cp.name}' (${cp.id})` };
+        }
+        return { success: true, message: `Restored tracked workspace to checkpoint '${cp.name}' (${cp.id}); legacy untracked files were not captured and were left unchanged` };
+      }
+
+      if (cp.snapshotDir && cp.untrackedFiles !== undefined) {
+        try {
+          this.assertUntrackedSnapshotSafe(cp.untrackedFiles, cp.snapshotDir, cp.allowSensitive === true);
+          this.assertUntrackedDestinationSafe([...cp.untrackedFiles, ...this.workspaceSnapshotPaths(this.workspace)], this.workspace);
+          this.assertSnapshotTargetsReplaceable(cp.untrackedFiles);
+        } catch {
+          return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an incomplete or unsafe snapshot or destination; workspace was not changed` };
+        }
+        this.removeNonSnapshotEntries(cp.untrackedFiles);
+        this.copyUntrackedEntries(cp.untrackedFiles, cp.snapshotDir, this.workspace, cp.allowSensitive === true, cp.untrackedFileModes);
+        return { success: true, message: `Restored workspace files from snapshot '${cp.name}' (${cp.id})` };
       }
 
       if (cp.snapshotDir && fs.existsSync(cp.snapshotDir)) {
-        this.copyDirFiltered(cp.snapshotDir, this.workspace);
-        return { success: true, message: `Restored workspace files from snapshot '${cp.name}' (${cp.id})` };
+        const snapshotFiles = this.workspaceSnapshotPaths(cp.snapshotDir);
+        const snapshotDirectories = this.workspaceSnapshotDirectories(cp.snapshotDir);
+        this.assertUntrackedSnapshotSafe(snapshotFiles, cp.snapshotDir, cp.allowSensitive === true);
+        if (!cp.allowSensitive) {
+          for (const relativePath of snapshotDirectories) this.assertSnapshotTextSafe(relativePath);
+        }
+        this.assertUntrackedDestinationSafe([...snapshotFiles, ...snapshotDirectories], this.workspace);
+        this.copyDirFiltered(cp.snapshotDir, this.workspace, cp.allowSensitive === true);
+        return { success: true, message: `Restored workspace files from legacy snapshot '${cp.name}' (${cp.id}); other entries were left unchanged` };
       }
 
       return { success: false, message: `Cannot restore checkpoint: no valid snapshot recorded.` };
