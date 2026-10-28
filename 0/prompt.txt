@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>a4a47d0259ff52114</task-id>
+<tool-use-id>toolu_01HFEzhdLPX3ghDKKjQrnrop</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/a4a47d0259ff52114.output</output-file>
+<status>completed</status>
+<summary>Agent "Context-convergence status review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I wrote the deliverable to `/tmp/claude-1000/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2/scratchpad/assess/context.md`. fix/context-convergence (31d6622) builds and merges cleanly, but it is not acceptable yet: the only test run of 31d6622 produced nothing to assess, and I reproduced a P1 defect in its new findings store.
+
+**Branch state (2026-10-12)**
+- **History:** the merge base with main is e9422c9. The branch has 32 commits main lacks, including two merges of main. It lacks 3 main commits: 35ef104, 5e8cfd1 and 3727938.
+- **Merging:** it merges into main and into feat/tui-surface with no conflicts. The committed `cli/dist` has to be rebuilt after any merge.
+- **Build:** `make build` passed. The rebuilt `cli/dist` is byte-identical to the committed one.
+- **Rust tests:** `cargo test --release --locked` passed 192/192.
+- **CLI tests:** the context tests passed 234 of 235. The full suite passed 759 of 763. Three of the failures only happen because an extract is not a git checkout; they pass in a local clone. The fourth, a TUI end-to-end test, failed once and passed on rerun, so it is flaky.
+- **Main:** its context tests passed 135/135.
+
+**Acceptance status**
+- **Latest committed review (2026-10-11):** the d88a897 run ended VERIFIED, but substantive acceptance failed. A finding was cut down and then dropped to fit the 24K findings budget. It recorded that `cli/src/tools.ts` launches harness-core. A later `| head -20` re-check cut the output before tools.ts, and nothing marked it as incomplete. The review then said no TypeScript code spawns the Rust core. The verifier only checks structure and that citations exist, so the run still ended VERIFIED.
+- **What 31d6622 changes:** it keeps every finding in full with an id, saves it with the session, and adds a `read_findings` tool. It also marks output cut by `head`/`tail` as unable to show absence.
+- **Last test run (run_31d6622_r1, 2026-10-12):** FAILED at step 119 with no artifact. The gateway timed out the single long write and Nexus replayed it identically until recovery ran out. That run's results file is not committed to the branch.
+- **Retention in that run:** the session file shows the Rust-core fact is now kept (findings F16, F20, F24, F27). But 27 of 30 findings were shown only as lists of names, not their claims. Avoiding a false "this is absent" claim now depends only on instructions to the model.
+
+**Findings**
+- **CTX-01 (P1, reproduced, fix branch only):** findings recorded during a turn are not saved until the turn ends. After a crash and resume, `read_findings` says no findings exist even though the saved conversation names F1 and F2. New findings then reuse those ids, and the first new one vanishes from what the model sees. I reproduced this with the mock gateway; the script is `repro_findings_crash.repro.ts`.
+- **CTX-02 (P1, reproduced at function level, both branches):** the pinned objective shows only the last 10 operator steering messages, each cut to 600 characters. No tool returns the rest, and compaction deliberately drops the original steering messages. An operator constraint can therefore disappear silently.
+- **CTX-03 (P1, from source, both branches):** for any turn that writes a file, VERIFIED means only that the operator's verifier passed. Context loss is checked only for read-only turns, so incorrect work can still end VERIFIED, as d88a897 showed.
+- **CTX-04 (P2):** the incomplete-output warning misses `grep -m`, `sed -n` and `awk NR` limits (reproduced). Main has no such warning at all.
+- **CTX-05 (P1):** the identical replay of a write that exceeds the gateway timeout blocks acceptance of the fix branch. The gateway side of this is reported in the run notes but I did not verify it.
+- **CTX-06 to CTX-08 (P2/P3, from source):**
+  - Nexus's own recovery notes are treated as operator requests during compaction and findings recording.
+  - Findings shown only as names push the model to re-check the same facts.
+  - There are smaller defects in the findings memory.
+- **No history retrieval:** compacted history is archived on both branches, but no tool lets the model read it back. It is an audit record only.
+
+The document lists seven exit criteria. The main ones are fixing CTX-01, CTX-02 and CTX-05, rebasing onto current main, and one real rerun that produces an artifact and passes a fact check with no false absence claims.
+
+**Limitations**
+- No live inference was used, so the gateway-timeout cause comes only from the run notes.
+- I did not compare feat/tui-surface (the installed runtime) against main for the context files. Main's findings apply to it only by inference.
+- The steering reproduction calls the objective functions directly rather than running a full agent turn.
+- I ran `make test` as its separate parts, not as one command.
+
+The reproduction scripts are under `assess/ctx/cc/cli/test/` and are outside the product test pattern. Nothing in the repository was modified.</result>
+<usage><subagent_tokens>189146</subagent_tokens><tool_uses>66</tool_uses><duration_ms>972225</duration_ms></usage>
+</task-notification>
