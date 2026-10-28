@@ -1,0 +1,875 @@
+<pasted_content id="d5de">
+NEXUS — INDEPENDENT CURRENT-STATE REASSESSMENT AND DEVELOPMENT DIRECTION
+
+You are performing an independent engineering reassessment of Nexus.
+
+This is a REVIEW AND PLANNING task.
+
+DO NOT implement fixes.
+DO NOT modify Nexus source.
+DO NOT merge, commit, push, publish, rebase, reset, stash, clean, or discard anything.
+DO NOT alter the operator's existing uncommitted work.
+DO NOT start another experiment unless explicitly authorized after this review.
+DO NOT assume the previous roadmap, architecture, defect priorities, or research direction remains correct.
+
+Your job is to determine, from current reality and accumulated evidence:
+
+    Given what Nexus actually is today, everything we have now learned,
+    and what we currently understand Nexus needs to become, what is the
+    shortest coherent progression toward a workable system?
+
+The output must be an independent assessment. Prior reports, agent conclusions,
+designs, classifications, and architectural ideas are EVIDENCE INPUTS, not
+authority.
+
+========================================================================
+1. OPERATING PRINCIPLES
+========================================================================
+
+Apply these principles throughout the review:
+
+- Distrust by Default.
+- Trust, but Verify.
+- Evidence Changes What We Know.
+- Control what you can. Constrain the authority of what you cannot control.
+- Forward progress matters.
+- Thinking may be graph-shaped. Execution still needs a next action.
+- Implementation != demonstrated usefulness != durable architecture.
+- A defect is not automatically the next task merely because it exists.
+- A new idea is not automatically architecture merely because it is promising.
+- A prior PASS remains historical evidence; relevant change affects its
+  applicability rather than rewriting history.
+- Tests are evidence about properties under tested conditions, not immutable
+  product authority.
+- LLM output is input to the system, not authority over the system.
+- Nexus should be governable, but Nexus is not the governor.
+- Nexus provides reasonable safeguards; it is not intended to become a
+  governance/compliance/policy-enforcement platform.
+
+Do not optimize for agreement with previous analyses.
+
+Where evidence conflicts, preserve the conflict and investigate only as far as
+necessary to determine whether it changes the development direction.
+
+========================================================================
+2. CURRENT PRODUCT PRIORITY
+========================================================================
+
+For this development phase, the primary objective is:
+
+    Can Nexus complete its objective despite perceived blockers?
+
+Current ordering:
+
+    1. Objective completion / recovery / workflow mechanics
+    2. Completion reliability
+    3. Reasoning and output quality
+    4. Efficiency and optimization
+
+Shorthand:
+
+    Finish reliably
+        -> improve what was produced
+        -> make producing it efficient
+
+Accuracy, eloquence, optimal reasoning, and output quality are currently
+NON-GATING for objective completion.
+
+However, DO NOT weaken the meaning of COMPLETED.
+
+COMPLETED means the requested deliverable actually exists.
+
+A model saying "done", returning final prose, emitting task_completed, exhausting
+a todo list, or stopping inference is only a candidate-completion signal.
+
+Current terminal concepts:
+
+- COMPLETED
+    Requested deliverable actually exists.
+
+- ABANDONED_BOUNDEDLY
+    Nexus deliberately determines that continued attempts are no longer
+    productively advancing the objective and exits in a controlled way.
+    This is controlled behavior, but it is NOT objective completion.
+
+- UNCONTROLLED_FAILURE
+    Crash, hang, unrecovered context death, pathological loop until external
+    intervention, lost workflow state, silent disappearance, or equivalent.
+    This should trend toward essentially zero.
+
+========================================================================
+3. ESTABLISH CURRENT REALITY FIRST
+========================================================================
+
+Before recommending work, inspect and establish the actual current state.
+
+At minimum determine:
+
+- current branch and HEAD;
+- working-tree state;
+- operator-owned uncommitted changes;
+- relevant candidate/research branches and worktrees;
+- current tests and their actual status;
+- current execution-loop architecture;
+- persistence/checkpoint machinery;
+- context admission/materialization behavior;
+- recovery behavior;
+- subagent/delegation behavior;
+- verification/completion behavior;
+- current orchestration/routing machinery;
+- existing graph/knowledge/dependency machinery, if any;
+- CLI/TUI state where relevant;
+- known defects;
+- demonstrated failures;
+- demonstrated capabilities;
+- research artefacts and reports relevant to the reassessment.
+
+Do not touch the operator's existing changes.
+
+Record the exact source state used for this review.
+
+Distinguish:
+
+    OBSERVED
+    EVIDENCED
+    INFERRED
+    HYPOTHESIZED
+    UNKNOWN
+
+Do not silently promote one category into another.
+
+========================================================================
+4. REVIEW THE ACCUMULATED RESEARCH
+========================================================================
+
+Review the relevant existing research and evidence, including at least:
+
+- first dogfood campaign;
+- six-remediation candidate;
+- independent review of that candidate;
+- context correctness fixes;
+- C2 observation-reference experiment;
+- investigation-targeting experiment;
+- E3 evidence-to-decision experiment;
+- E4 evidence-delivery ordering experiment;
+- comparative open-source harness review;
+- any available research concerning closed-source harness maturity trajectories;
+- current Nexus implementation itself.
+
+For E4 specifically, preserve the bounded findings.
+
+The report is:
+
+    /home/mike/df2/e4/REPORT.md
+
+Do NOT automatically authorize E5.
+
+Treat E4 as evidence that, under the tested conditions:
+
+- message ordering materially affects model behavior;
+- tool-result delivery itself was not demonstrated to be the cause;
+- evidence presence does not guarantee evidence attention;
+- evidence attention does not guarantee later retention/use;
+- exact causal mechanism remains unresolved;
+- W3 remains inconclusive.
+
+Determine whether any unresolved E4 question is actually material to the next
+development progression.
+
+========================================================================
+5. REASSESS THE DEFECT BACKLOG AGAINST FORWARD DEVELOPMENT
+========================================================================
+
+Do NOT create a generic "fix all defects first" plan.
+
+For each material known defect, determine its relationship to the next coherent
+development progression.
+
+Classify it as one of:
+
+A. MUST RESOLVE FIRST
+   It prevents or materially contaminates the next development work.
+
+B. RESOLVE AS PART OF FORWARD DEVELOPMENT
+   The next capability naturally replaces or repairs the defective mechanism.
+
+C. PRESERVE AS REPRODUCER / ACCEPTANCE CASE
+   Forward development may supersede the implementation, but the demonstrated
+   failure remains useful for proving the new behavior.
+
+D. DEFER
+   Real defect, but not material to the current progression.
+
+E. SUPERSEDED
+   The affected mechanism is being legitimately replaced and independent repair
+   would provide little value.
+
+F. NEEDS INVESTIGATION
+   Only where uncertainty materially changes what should be done next.
+
+Do not use "forward development" as an excuse to hide unresolved defects.
+
+If a defect is expected to disappear through new development, require the
+original reproducer or equivalent acceptance case to demonstrate that it is
+actually resolved before closing it.
+
+========================================================================
+6. REASSESS THE PRODUCT MODEL
+========================================================================
+
+Evaluate, rather than assume, the following concepts.
+
+----------------------------------------------------------------------
+A. Durable objective reference
+----------------------------------------------------------------------
+
+Investigate whether Nexus needs a durable representation of:
+
+- original intent;
+- requested deliverable;
+- required coverage;
+- scope and constraints;
+- operator amendments/decisions;
+- completion definition.
+
+The objective should not conceptually depend on survival of an individual
+inference context.
+
+Do not assume a particular storage representation.
+
+----------------------------------------------------------------------
+B. Durable consequences of work
+----------------------------------------------------------------------
+
+Consider whether Nexus needs durable representation of:
+
+- workflow state;
+- accumulated work product;
+- evidence/artifacts;
+- material findings;
+- failed or ruled-out approaches;
+- epoch/workstream dispositions;
+- dependencies and blockers.
+
+Do NOT assume that full transcripts should remain active context.
+
+A useful working principle is:
+
+    Context is ephemeral.
+    Intent, progress, evidence, work product, and material outcomes are durable.
+
+Also evaluate:
+
+    Do not make context durable.
+    Make the consequences of useful context durable, and reconstruct disposable
+    working context as required to keep pursuing the objective.
+
+Summarization is a possible context-materialization technique, NOT automatically
+the durability mechanism.
+
+----------------------------------------------------------------------
+C. Situational awareness
+----------------------------------------------------------------------
+
+This is an important candidate concept.
+
+Evaluate whether Nexus needs:
+
+1. LOCAL SITUATIONAL AWARENESS
+   What an execution epoch needs for its immediate work.
+
+2. RELATIONAL SITUATIONAL AWARENESS
+   What workstream A needs to know about B, C, defects, findings, dependencies,
+   changes, assumptions, artifacts, etc. because they materially affect A.
+
+3. GLOBAL SITUATIONAL AWARENESS
+   What the objective/orchestration level needs to know about the entire
+   undertaking.
+
+Shared awareness does NOT imply shared transcript.
+
+Consider the principle:
+
+    Shared knowledge does not require shared attention.
+
+For example, A may need to know:
+
+    B is modifying interface X.
+    B is blocked by D.
+    B produced artifact Y required by A.
+    B invalidated assumption Z.
+
+A probably does not need B's entire reasoning history unless deeper inspection
+becomes material.
+
+Evaluate:
+
+    Durable global understanding
+        +
+    selectively materialized local awareness
+
+as a concept, not as a predetermined implementation.
+
+----------------------------------------------------------------------
+D. Relational / graph concepts
+----------------------------------------------------------------------
+
+Do NOT assume Nexus needs a graph database.
+
+Instead assess whether graph-like semantics would improve the representation of
+relationships such as:
+
+    REQUIRES
+    DEPENDS_ON
+    BLOCKED_BY
+    CAN_COEXIST_WITH
+    MUST_SERIALIZE_WITH
+    MUST_REMAIN_INDEPENDENT_OF
+    PRODUCES
+    SATISFIES
+    SUPPORTS
+    CONTRADICTS
+    INVALIDATES_ASSUMPTION_OF
+    SUPERSEDES
+    RULED_OUT_FOR
+    MATERIAL_TO
+    UNKNOWN_RELATIONSHIP
+
+Inspect whether Nexus already contains machinery that provides some of this.
+
+Consider concepts previously encountered in Graphify or similar work only as
+candidate mechanisms to cannibalize where useful.
+
+Do not adopt another project's architecture wholesale.
+
+Ask whether a durable objective may be fundamentally relational while an
+inference context is merely a temporary projection of the relevant relationship
+space.
+
+----------------------------------------------------------------------
+E. Objective-level orchestration / supervision
+----------------------------------------------------------------------
+
+Determine whether the desired behavior belongs:
+
+- inside the existing execution loop;
+- as extensions to ApplicationCore/current orchestration;
+- in a distinct supervisor;
+- in a broader orchestrator;
+- in multiple cooperating layers;
+- or somewhere else.
+
+Do not decide this before inspecting the current implementation.
+
+The capability under consideration is broader than "keep retrying an agent."
+
+Potential responsibilities include:
+
+- preserve objective continuity across inference epochs;
+- determine what work actually remains;
+- decompose work where useful;
+- identify dependencies;
+- identify real blockers;
+- determine what work can coexist;
+- determine what must serialize;
+- determine what should remain epistemically independent;
+- identify the critical path;
+- allocate finite inference resources;
+- choose when escalation is warranted;
+- accumulate work products;
+- respond to discoveries that change the work graph;
+- trigger completion reconciliation.
+
+Treat a blocker relationally:
+
+    condition X blocks required work Y
+
+not automatically:
+
+    condition X blocks the entire objective.
+
+Evaluate whether:
+
+    Blocked(A) != Blocked(Objective)
+
+whenever other useful paths remain.
+
+----------------------------------------------------------------------
+F. Escalation and differentiated capability
+----------------------------------------------------------------------
+
+Consider the operational model:
+
+    routine autonomous execution
+        -> exception / uncertainty
+        -> escalation to stronger/specialized resource
+        -> useful consequence becomes durable
+        -> routine autonomous execution resumes
+
+Do not assume the strongest model should remain permanently in the critical
+path.
+
+Investigate whether durable situational knowledge could allow expensive
+reasoning to resolve uncertainty once, while cheaper/faster resources execute
+against what has subsequently been established.
+
+This is a hypothesis, not an implementation requirement.
+
+----------------------------------------------------------------------
+G. Completion reconciliation
+----------------------------------------------------------------------
+
+Evaluate the concept:
+
+    objective completion =
+        registered intent reconciled against observable accumulated reality
+
+Execution participants should not be sole completion authority.
+
+Potential lifecycle:
+
+    REGISTER INTENT
+        -> execute / recover / delegate / investigate
+        -> accumulate durable consequences
+        -> CANDIDATE COMPLETION
+        -> COMPLETION RECONCILIATION
+        -> either:
+             COMPLETE
+           or
+             derive unresolved delta and continue
+
+Separate:
+
+- completion reconciliation:
+    Has the requested objective actually been satisfied?
+
+- finalization:
+    How should accumulated work be assembled into the requested deliverable?
+
+Finalization may expose a missing requirement and return the objective to active
+work.
+
+For the CURRENT phase, keep completion semantics intentionally simple:
+
+1. What was requested?
+2. What constitutes the requested work product?
+3. What coverage/data must it contain?
+4. Does accumulated observable reality contain it?
+
+Modifiers such as:
+
+    thoughtful
+    elegant
+    concise
+    high-quality
+    optimal
+
+belong primarily to later quality qualification unless they materially define
+the existence of the requested deliverable.
+
+Complete != correct in the current development phase.
+
+========================================================================
+7. WORKSTREAM TOPOLOGY AND PARALLELISM
+========================================================================
+
+Do not assume that two available inference workers means two tasks should always
+run.
+
+Evaluate workstream coexistence based on actual relationships.
+
+Consider:
+
+- file/worktree conflicts;
+- shared mutable state;
+- dependency ordering;
+- external resource conflicts;
+- verification dependencies;
+- epistemic independence;
+- authority;
+- context relationships;
+- integration cost;
+- model specialization;
+- inference capacity.
+
+Possible outcomes include:
+
+    CAN execute concurrently
+    SHOULD execute concurrently
+    MUST serialize
+    MUST remain independent
+    BLOCKED_BY
+    UNKNOWN coexistence
+
+An idle worker can be the correct state.
+
+The optimization target is objective progress/completion, not worker utilization.
+
+========================================================================
+8. CONTEXT AND FINITE INFERENCE RESOURCES
+========================================================================
+
+Do not treat 65K context as inherently inadequate.
+
+Do not treat the inference host as the presumed limiting component.
+
+The current systems question is:
+
+    Given finite inference resources, how should Nexus orchestrate the available
+    capability to maximize probability of objective completion?
+
+Context exhaustion should be evaluated as a potential inference-epoch boundary,
+not automatically objective death.
+
+Consider:
+
+    context exhausted
+        -> preserve material consequences
+        -> materialize appropriate next context
+        -> continue objective
+
+But determine from the current implementation what machinery actually exists and
+what is missing.
+
+Do not optimize tokens, cache hit rate, context residency, GPU utilization, or
+parallelism merely because those metrics can be improved.
+
+An apparent local inefficiency may protect global process success.
+
+Examples potentially worth preserving where justified:
+
+- independent review;
+- deliberate isolation;
+- redundant validation;
+- durable evidence;
+- deterministic reconciliation;
+- bounded re-investigation;
+- unused worker capacity where parallel work is inappropriate.
+
+Measure efficiency against success of the overall process.
+
+========================================================================
+9. EXTERNAL RESEARCH AS DIRECTIONAL INPUT
+========================================================================
+
+Use prior open-source harness research as mechanism evidence.
+
+Use closed-source changelog/release-history research only for what it can
+actually establish:
+
+- publicly observable capability evolution;
+- recurring problem classes;
+- apparent maturity humps;
+- chronology of product attention.
+
+Do NOT infer private implementation from changelogs.
+
+Look for useful concepts that can be cannibalized without copying architectures.
+
+Candidate maturity themes worth comparing against Nexus include:
+
+- single-agent capability;
+- tool reliability;
+- long-run survivability;
+- context/recovery;
+- isolated subtask execution;
+- parallel work;
+- dependency-aware parallelism;
+- durable goals;
+- shared project knowledge;
+- coordination/orchestration.
+
+Chronology does NOT establish dependency or causation.
+
+The question is:
+
+    Are these useful signals about problems Nexus is now earning the right to
+    solve?
+
+========================================================================
+10. PRODUCT BOUNDARY
+========================================================================
+
+Do not accidentally turn Nexus into an AI governance platform.
+
+Nexus should exercise reasonable engineering care and may respect externally
+supplied authority constraints.
+
+But identity governance, organizational policy, approvals, compliance,
+separation of duties, mandatory enforcement, and cross-product governance belong
+to AI Syndicate or another governance substrate unless concrete Nexus evidence
+requires a narrowly scoped mechanism.
+
+Use:
+
+    Nexus should be governable, but it should not be the governor.
+
+Also preserve the documentation principle:
+
+    Product boundaries are part of the product specification.
+
+Future public documentation should deliberately state:
+
+- what Nexus is;
+- what Nexus is not;
+- what it does;
+- what it deliberately does not claim;
+- what users should expect;
+- what users should not expect;
+- residual uncertainty/risk;
+- where responsibility passes beyond Nexus.
+
+This review may identify documentation work, but implementation/publication is
+not authorized by this task.
+
+========================================================================
+11. LOOK FOR COMBINED LEVERAGE
+========================================================================
+
+Do not produce a sequence of isolated fixes if a coherent forward-development
+increment can solve multiple problems.
+
+Explicitly look for opportunities such as:
+
+    missing capability
+        +
+    existing defect(s)
+        +
+    recovery weakness
+        +
+    context weakness
+
+being addressed by one justified architectural progression.
+
+Conversely, do not bundle unrelated work merely to make the plan look elegant.
+
+For every proposed increment, identify:
+
+- capability gained;
+- defects naturally resolved;
+- defects deliberately not resolved;
+- evidence/reproducers that must be retained;
+- prerequisites;
+- work that can happen concurrently;
+- work that must serialize;
+- expected proof of completion;
+- rollback/recovery implications.
+
+========================================================================
+12. REQUIRED OUTPUT
+========================================================================
+
+Produce a report with the following sections.
+
+1. EXECUTIVE ASSESSMENT
+
+State where Nexus actually stands now.
+
+Do not reuse previous readiness classifications without re-establishing them.
+
+2. CURRENT REALITY
+
+Exact repository/worktree/test/architecture state and material demonstrated
+capabilities/failures.
+
+3. WHAT WE NOW KNOW
+
+Synthesize the strongest established findings from implementation, dogfood,
+experiments, comparative research, and recent E4 work.
+
+Separate evidence from interpretation.
+
+4. WHAT REMAINS UNKNOWN
+
+Only include unknowns that could plausibly matter to development direction.
+
+Identify which ones need investigation now and which should remain unresolved.
+
+5. PRODUCT DELTA
+
+Describe the delta between Nexus as it exists and the minimum workable Nexus
+implied by the current product objective.
+
+6. DEFECT DISPOSITION
+
+For every material known defect:
+
+    MUST RESOLVE FIRST
+    RESOLVE THROUGH FORWARD DEVELOPMENT
+    PRESERVE AS ACCEPTANCE CASE
+    DEFER
+    SUPERSEDED
+    NEEDS INVESTIGATION
+
+Explain why.
+
+7. ARCHITECTURAL OPTIONS
+
+Evaluate plausible ways to obtain:
+
+- objective continuity;
+- situational awareness;
+- workstream/dependency management;
+- recovery across inference epochs;
+- selective context materialization;
+- escalation;
+- completion reconciliation.
+
+Include existing Nexus machinery that can be extended.
+
+Do not present one preferred architecture until alternatives have been assessed.
+
+8. ORCHESTRATION / WORK GRAPH ASSESSMENT
+
+Determine whether Nexus actually needs a broader orchestration capability and,
+if so, what minimum responsibilities it requires.
+
+Explicitly evaluate:
+
+- dependencies;
+- blockers;
+- coexistence;
+- serialization;
+- independence;
+- critical path;
+- resource allocation;
+- dynamic replanning after discoveries.
+
+9. CONCEPT-HARVESTING ASSESSMENT
+
+Identify useful concepts from:
+
+- existing Nexus research;
+- open-source harnesses;
+- closed-source maturity trajectories;
+- Graphify/relational ideas;
+- operational/CaC lessons where applicable.
+
+For each concept distinguish:
+
+    useful principle
+    candidate mechanism
+    evidence supporting relevance
+    reason not to adopt wholesale
+
+10. SHORTEST COHERENT DEVELOPMENT PROGRESSION
+
+Propose the smallest sequence of development increments that gets Nexus from
+current state toward a genuinely workable system.
+
+Do not optimize for number of steps.
+
+Optimize for coherent forward progress and combined leverage.
+
+For each increment state:
+
+    PURPOSE
+    WHY NOW
+    PREREQUISITES
+    WHAT IT CHANGES
+    DEFECTS IT ABSORBS OR RESOLVES
+    WORK THAT CAN RUN IN PARALLEL
+    ACCEPTANCE EVIDENCE
+    WHAT REMAINS AFTERWARD
+
+11. CRITICAL PATH
+
+Identify the actual critical path.
+
+Distinguish:
+
+    blocks next work
+    blocks later work
+    can proceed concurrently
+    backlog only
+
+12. NEXT ENGINEERING ACTION
+
+Recommend exactly ONE next engineering action after this review.
+
+It may be:
+
+- implementation;
+- a narrowly scoped experiment;
+- a defect repair;
+- an architectural spike;
+- additional inspection;
+
+but it must follow from the reassessment rather than from the previous roadmap.
+
+Explain what evidence would demonstrate that action succeeded.
+
+13. NON-ACTIONS
+
+Explicitly identify tempting work that should NOT be done yet and why.
+
+Include research questions that are legitimate but do not currently warrant
+spending inference or engineering effort.
+
+========================================================================
+13. REVIEW DISCIPLINE
+========================================================================
+
+Do not confuse:
+
+- newest with best;
+- implemented with useful;
+- passing tests with product completion;
+- model completion claims with objective completion;
+- context occupancy with objective progress;
+- available parallelism with useful parallelism;
+- defect existence with defect priority;
+- architecture ideas with architecture decisions;
+- external convergence with proof Nexus needs the same solution;
+- local efficiency with global process efficiency.
+
+Where possible, establish:
+
+    what changed?
+    what evidence applies?
+    what does that evidence establish?
+    what does it NOT establish?
+    does resolving the remaining uncertainty change what we should do next?
+
+If not, preserve the uncertainty and move forward.
+
+========================================================================
+14. STOP CONDITION
+========================================================================
+
+STOP after producing the reassessment report.
+
+Do not implement the recommended next action.
+
+Do not modify Nexus.
+
+Do not begin E5.
+
+Do not merge any candidate.
+
+Do not clean the working tree.
+
+Do not publish anything.
+
+The operator will review the reassessment and independently decide what work is
+authorized next.
+
+End with:
+
+    NEXUS_REASSESSMENT: <classification>
+
+    CURRENT_STATE:
+    <concise statement>
+
+    CRITICAL_PATH:
+    <concise statement>
+
+    NEXT_RECOMMENDED_ACTION:
+    <exactly one action>
+
+    WHY:
+    <concise evidence-based rationale>
+
+    OPERATOR_DECISION_REQUIRED:
+    YES
+</pasted_content id="d5de">
