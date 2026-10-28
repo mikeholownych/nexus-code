@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b9wrj4wem</task-id>
+<tool-use-id>toolu_01FW1qkKvS1sX3kLrHFkHj52</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/f7a4bcb7-09e5-4c81-85ad-62b124a835f4/tasks/b9wrj4wem.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR89 linux job; check corrections" completed (exit code 0)</summary>
+</task-notification>
