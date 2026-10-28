@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b4fjj1axb</task-id>
+<tool-use-id>toolu_01FopGrcWXCym2yX48EkHWAy</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/b4fjj1axb.output</output-file>
+<status>completed</status>
+<summary>Background command "timeout 3000 ssh -o BatchMode=yes mike@10.0.8.5 'until [ "$(cat /tmp/evalx/out-vllm.log /tmp/evalx/out-llama.log | grep -c "^RESULT")" -ge 2 ]; do sleep 20; done; echo done'" completed (exit code 0)</summary>
+</task-notification>
