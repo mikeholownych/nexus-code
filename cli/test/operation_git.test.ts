@@ -439,3 +439,140 @@ test("a missing integration worktree is repaired on resume", async () => {
   assert.equal(fs.existsSync(state.git!.integrationWorktree), true);
   assert.equal(fs.readFileSync(path.join(state.git!.integrationWorktree, "u1.txt"), "utf8"), "u1\n");
 });
+
+test("a failed post-hoc check does not mark the unit integrated; a retry re-checks and merges its work", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state, { verifyTimeoutSecs: 30 });
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  git(prep.workspace, ["add", "-A"]);
+  git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u1"]);
+  git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
+
+  const failed = await ops.integrate(
+    unit("u1"),
+    completed({ verification: { command: "test -f missing.txt", status: "PASSED", hasExecutedTests: true } }),
+  );
+  assert.equal(failed.kind, "failed");
+  assert.equal(state.units.u1.integratedCommit, undefined, "a failed post-hoc check must not be recorded as integrated");
+
+  // The retry produces new work; it must be merged, not skipped as ALREADY_INTEGRATED.
+  fs.writeFileSync(path.join(prep.workspace, "retry-work.txt"), "new\n");
+  const retried = await ops.integrate(
+    unit("u1"),
+    completed({ verification: { command: "test -f retry-work.txt", status: "PASSED", hasExecutedTests: true } }),
+  );
+  assert.equal(retried.kind, "integrated");
+  if (retried.kind === "integrated") {
+    assert.equal(retried.receipt.verification, "PASSED");
+    assert.deepEqual(retried.receipt.files, ["retry-work.txt"]);
+  }
+  assert.equal(fs.existsSync(path.join(p.integrationWorktree, "retry-work.txt")), true);
+});
+
+test("a post-hoc check cleans its own artifacts", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state, { verifyTimeoutSecs: 30 });
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  git(prep.workspace, ["add", "-A"]);
+  git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u1"]);
+  git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
+
+  const result = await ops.integrate(
+    unit("u1"),
+    completed({ verification: { command: "touch posthoc-artifact.txt && test -f u1.txt", status: "PASSED", hasExecutedTests: true } }),
+  );
+  assert.equal(result.kind, "nothing");
+  if (result.kind === "nothing") assert.equal(result.receipt.verification, "PASSED_POSTHOC");
+  assert.equal(git(p.integrationWorktree, ["status", "--porcelain"]), "");
+  assert.equal(fs.existsSync(path.join(p.integrationWorktree, "posthoc-artifact.txt")), false);
+});
+
+test("restart after an externally removed worktree really starts from the integration tip", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const first = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(first.workspace, "old.txt"), "old\n");
+  git(first.workspace, ["add", "-A"]);
+  git(first.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "old"]);
+
+  // Remove the directory without Git knowing: the registration survives, as after an external delete.
+  fs.rmSync(first.workspace, { recursive: true, force: true });
+  const tip = ops.currentTip();
+  const restarted = ops.prepareUnit(unit("u1"), { restart: true });
+
+  assert.equal(restarted.reused, false);
+  assert.equal(state.units.u1.baseCommit, tip);
+  assert.equal(git(restarted.workspace, ["rev-parse", "HEAD"]), tip);
+  assert.equal(fs.existsSync(path.join(restarted.workspace, "old.txt")), false, "the old branch was discarded");
+  assert.equal(git(root, ["rev-parse", restarted.branch]), tip, "the recreated branch sits on the integration tip");
+});
+
+test("operations with integrated history fail closed when both the branch and worktree are gone", async () => {
+  const root = repo();
+  const state = isolatedState([{ id: "u1" }], root);
+  const p = state.git!;
+  git(root, ["worktree", "remove", "--force", p.integrationWorktree]);
+  git(root, ["branch", "-D", p.integrationBranch]);
+  state.integrations = [
+    {
+      unitId: "u1",
+      branch: "nexus/op-old",
+      commit: "a".repeat(40),
+      integratedCommit: "b".repeat(40),
+      mergedAt: "2026-10-28T11:00:00.000Z",
+      files: ["u1.txt"],
+      outcome: "VERIFIED",
+      summary: "one",
+      verification: "PASSED",
+    },
+  ];
+
+  const runs: string[] = [];
+  const executor: WorkUnitExecutor = {
+    async run(current) {
+      runs.push(current.id);
+      return completed();
+    },
+  };
+  const runner = new OperationRunner(state, { executor, clock: clock(), persist: () => {} });
+  await runner.run();
+
+  assert.equal(state.status, "BLOCKED");
+  assert.equal(runs.length, 0, "work must not run on a recreated branch that lost integrated history");
+  assert.equal(state.blocked?.decisions[0].id, "operation#git");
+  assert.match(state.blocked!.decisions[0].question, /already integrated work/);
+  assert.equal(fs.existsSync(p.integrationWorktree), false);
+});
+
+test("an unrepairable integration pair becomes an operation decision", async () => {
+  const root = repo();
+  const state = isolatedState([{ id: "u1" }], root);
+  // Delete the branch while its worktree exists: there is no safe automatic repair.
+  git(root, ["update-ref", "-d", `refs/heads/${state.git!.integrationBranch}`]);
+
+  const runs: string[] = [];
+  const executor: WorkUnitExecutor = {
+    async run(current) {
+      runs.push(current.id);
+      return completed();
+    },
+  };
+  const runner = new OperationRunner(state, { executor, clock: clock(), persist: () => {} });
+  await runner.run();
+
+  assert.equal(state.status, "BLOCKED");
+  assert.equal(runs.length, 0);
+  assert.equal(state.blocked?.decisions[0].id, "operation#git");
+  assert.match(state.blocked!.decisions[0].question, /branch is gone/);
+});

@@ -108,7 +108,11 @@ export class OperationRunner {
     }
     if (this.git) {
       try {
-        ensureIntegrationWorktree(planFromState(this.state), this.state.git!);
+        ensureIntegrationWorktree(planFromState(this.state), this.state.git!, {
+          hasHistory:
+            (this.state.integrations?.length ?? 0) > 0 ||
+            Object.values(this.state.git!.units).some((entry) => entry.integratedCommit !== undefined),
+        });
       } catch (error: any) {
         this.scheduler.finish({
           kind: "blocked",
