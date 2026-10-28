@@ -1,0 +1,1 @@
+the priority is a usable and working system. any changes should be done through the ansible playbook, then applied to the host. also, I'm not confident that the chosen model is the absolutely best choice for this setup.
