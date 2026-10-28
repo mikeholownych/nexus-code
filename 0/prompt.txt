@@ -1,0 +1,1 @@
+why not ensure .nexus is added to .gitignore?
