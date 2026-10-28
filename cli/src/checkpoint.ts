@@ -375,7 +375,12 @@ export class CheckpointManager {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       });
-      if (preview.trim() === `Would remove ${relativePath}/`) continue;
+      if (preview.trim() === `Would remove ${relativePath}/`) {
+        if (!this.directoryContainsOnlyGitCleanRemovableEntries(relativePath)) {
+          throw new Error("Checkpoint snapshot target directory contains entries preserved by Git clean");
+        }
+        continue;
+      }
       if (preview.trim() !== "" || !this.directoryContainsOnlyTrackedRemovableEntries(relativePath)) {
         throw new Error("Checkpoint snapshot target directory contains entries preserved by Git clean");
       }
@@ -398,6 +403,43 @@ export class CheckpointManager {
       if (objectType === "blob") paths.push(entry.slice(separator + 1));
     }
     return paths;
+  }
+
+  private directoryContainsOnlyGitCleanRemovableEntries(relativePath: string): boolean {
+    const root = path.join(this.workspace, relativePath);
+    const visit = (directory: string, relative: string): boolean => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const child = relative ? `${relative}/${entry.name}` : entry.name;
+        if (entry.name === ".git") return false;
+        const fullPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          try {
+            execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `${relativePath}/${child}`], {
+              cwd: this.workspace,
+              stdio: "ignore",
+            });
+            return false;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException & { status?: number })?.status !== 1) return false;
+          }
+          if (!visit(fullPath, child)) return false;
+        } else if (entry.isFile() || entry.isSymbolicLink()) {
+          try {
+            execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `${relativePath}/${child}`], {
+              cwd: this.workspace,
+              stdio: "ignore",
+            });
+            return false;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException & { status?: number })?.status !== 1) return false;
+          }
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+    return visit(root, "");
   }
 
   private directoryContainsOnlyTrackedRemovableEntries(relativePath: string): boolean {
