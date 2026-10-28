@@ -313,7 +313,15 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         const decision = ctx.operatorDecision
           ? `The operator decided: ${ctx.operatorDecision.label}${ctx.operatorDecision.note ? ` — ${ctx.operatorDecision.note}` : ""}.\n`
           : "";
-        if (unusable) {
+        if (ctx.operatorDecision?.restart && !unusable) {
+          // A restart may have recreated this unit's isolated worktree from the integration tip. Its former
+          // conversation describes discarded files, so never resume that history on the fresh worktree.
+          agent.restartConversation(!recovered?.obligationRecordPresent);
+          prompt =
+            `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
+            "Note: this unit was explicitly restarted. Its earlier conversation is not being continued; inspect any " +
+            "workspace changes that remain, because they are still unverified.";
+        } else if (unusable) {
           // A partial record is never continued or taken as evidence; only the operator can start the unit over.
           if (!ctx.operatorDecision?.restart) {
             return {
