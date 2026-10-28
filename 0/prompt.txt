@@ -1,0 +1,57 @@
+The other agent that had been working on the local LLM host has provided this as an explanation of intent:
+
+
+<pasted_content id="bd2e">
+Local LLM Host: Purpose and Engineering Objective
+The local LLM host exists to provide a high-quality, dependable, locally controlled inference capability for autonomous software engineering workloads.
+The objective is not to maximize a single benchmark, run the largest possible model, or preserve a particular inference runtime. The objective is to make the available hardware produce the best useful engineering outcomes it reasonably can.
+The primary workload is agentic software engineering: understanding repositories and existing systems, investigating problems, designing changes, writing and reviewing code, running iterative engineering workflows, identifying mistakes, incorporating evidence, and completing multi-stage tasks with limited human intervention.
+The system should therefore be optimized in roughly this order:
+1. Engineering correctness and task success. The model must produce correct, useful engineering work. A faster runtime that produces materially worse solutions is not an improvement.
+2. Reasoning and repository comprehension. The system must handle substantial code and system context, reason across files and components, investigate unfamiliar systems, and maintain coherence through multi-step tasks.
+3. Agent reliability. Models must reliably follow instructions, use tools, produce structured outputs where required, respond appropriately to validation failures, and participate in iterative agent workflows without excessive intervention.
+4. Useful context capacity. Context should be large enough for real repository engineering, but maximum advertised context is not itself a goal. The relevant measure is how much context can be used effectively and accurately within acceptable latency and resource limits.
+5. Iteration speed. TTFT, decode rate, end-to-end task duration, and concurrency matter because engineering agents repeatedly observe, reason, act, validate, and retry. What ultimately matters is time to a correct engineering outcome rather than tokens per second in isolation.
+6. Efficient use of the hardware. The Dell Precision T5820 and its two Intel Arc Pro B65 GPUs should be used intelligently. This may mean independent workers, heterogeneous models, CPU/GPU cooperation, different quantizations, or another topology if evidence shows better results.
+7. Operational reliability and observability. The host should behave like an inference appliance: predictable startup and recovery, bounded resource consumption, useful health/metrics information, reproducible configuration, and failures that can be diagnosed.
+Runtime and Model Selection
+No inference runtime is architecturally privileged.
+vLLM was selected and extensively qualified because it provided a practical OpenAI-compatible serving environment and supported the hardware and workloads being investigated. That does not make vLLM a permanent requirement.
+llama.cpp, vLLM, or another runtime should be evaluated according to measured engineering outcomes on this hardware. If llama.cpp produces materially better model quality, supports better quantizations, makes more effective use of the Arc GPUs, provides better context behavior, or improves total engineering-task performance, it should be considered even if its serving architecture differs from the existing system.
+Similarly, model selection should not be restricted to Qwen or to the models currently deployed. Candidate models should be evaluated on the work Nexus actually needs them to perform.
+A runtime/model combination should not be promoted because it wins a synthetic throughput test while losing engineering capability. Conversely, a modest reduction in inference quality may sometimes be worthwhile if a substantial speed or concurrency improvement increases end-to-end autonomous task success. These are empirical trade-offs.
+Hardware Constraints
+The current platform is intentionally constrained:
+- Dell Precision T5820
+- two Intel Arc Pro B65 GPUs
+- approximately 32 GiB VRAM per GPU
+- PCIe Gen3 platform
+- current system memory and CPU platform
+These constraints are part of the optimization problem, not defects to abstract away.
+The system should determine what architecture works best on this machine, rather than assuming architectures optimized for NVIDIA datacenter GPUs will also be optimal here.
+The previous investigation already demonstrated why this matters: distributing one model across both GPUs can impose communication costs, while independent single-GPU workers can provide a different performance/reliability profile. Those findings should remain evidence about the tested configurations, not immutable architectural rules.
+Evaluation Standard
+Runtime and model comparisons should use representative engineering workloads rather than relying primarily on generic language benchmarks.
+Evaluation should include tasks such as repository comprehension, bug investigation, constrained code changes, test-driven correction, code review, architecture reasoning, structured/tool-calling behavior, long-context reasoning, recovery after an incorrect first attempt, and multi-agent cooperation.
+Measurements should distinguish:
+Quality: correctness, completeness, validator acceptance, reasoning quality, hallucination/error rate, instruction adherence, and useful review findings.
+Performance: TTFT, decode rate, total task duration, concurrency behavior, context-processing cost, and time to validated solution.
+Reliability: crashes, malformed responses, tool-call failures, context failures, resource exhaustion, and reproducibility across repeated runs.
+Resource efficiency: GPU memory, host memory, CPU utilization, GPU utilization where observable, model loading overhead, and concurrency capacity.
+Most importantly, comparisons should measure time and resources required to reach an externally validated engineering result.
+A useful headline metric is therefore not simply:
+tokens / second
+but something closer to:
+validated engineering work / unit time / available hardware
+Relationship to Nexus
+The inference host is a capability provider to Nexus, not Nexus itself.
+Nexus should be able to request engineering capabilities without becoming tightly coupled to one model or inference runtime. The orchestration layer can select different models or workers according to task requirements, qualification evidence, cost, latency, context requirements, or specialization.
+This leaves room for configurations such as a stronger but slower reasoning model for architecture and difficult debugging, a faster model for routine implementation, independent reviewer and implementer models, or different runtimes serving different model formats if that produces better overall results.
+The desired architecture is therefore heterogeneous where heterogeneity is useful, but not heterogeneous merely for its own sake.
+Decision Principle
+The local LLM host is successful when it makes Nexus materially better at autonomous engineering.
+Runtime, model, quantization, context size, worker topology, and serving protocol are means to that end.
+Existing configurations should remain as reproducible baselines. New candidates should be compared against them using controlled experiments and external validation. A new configuration replaces an existing one because evidence demonstrates a meaningful improvement in the workloads we care about, not because it is newer, theoretically faster, or preferred by a particular agent.
+The governing question for any proposed change is:
+Does this make the system better at completing real engineering work correctly, reliably, and efficiently on the hardware we actually have?
+</pasted_content id="bd2e">
