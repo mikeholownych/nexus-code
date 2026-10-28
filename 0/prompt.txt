@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>af177777e3a67b30d</task-id>
+<tool-use-id>toolu_01Js73rKSqEzM2TceytWKrTY</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/af177777e3a67b30d.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review PRs 18-20" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #33 (hardened checks, head 7d15283): CHANGES REQUIRED
+
+Of my last findings, the symlink write-through, the size cap, deleted manifests, the positive allowlist and the golden/snapshot blocks are fixed. The remaining blocker is a bypass of the manifest guard, which I found by reading `eval/hardened_check.mjs`. I ran no tests.
+
+**Blocker**
+
+1. **`hardened_check.mjs`, `sections()` (default header regex) misparses TOML headers, so a forbidden section can be attributed to an allowed one.**
+   - The regex is `^\[([^\]]+)\]\s*$`. It does not match `[[array.of.tables]]`, nor a header with a trailing comment such as `[tool.pytest.ini_options] # x`. Those lines are appended to the previous section.
+   - **Scenario A:**
+     1. The agent appends the following after `[project]`: `[tool.pytest.ini_options] # x` and `addopts = "--deselect hidden"`.
+     2. `sections()` files the text under `project`, which is allowed.
+     3. The agent has now rewritten the pytest configuration.
+   - **Scenario B (Cargo):**
+     1. The agent appends, after `[dependencies]`: `[[test]]`, `name = "hidden_x"`, `required-features = ["nope"]`.
+     2. It is attributed to `dependencies`. The `path =`/`git =` regex does not fire.
+     3. The hidden test target never builds, `cargo test` runs zero tests and exits 0, and the check passes vacuously.
+   - The same applies to `[profile.test]`, `[lib] test = false` and `[patch]` (when the `path`/`git` regex is not triggered).
+   - Fix: parse with a real TOML parser. Failing that, refuse the manifest if any line starting with `[` is not an exact header from an allow set (`[project]`, `[project.optional-dependencies]`, `[dependencies]`, `[dependencies.&lt;name&gt;]`, `[package]` unchanged), and refuse `[[`. Also refuse the whole file when a multi-line string could contain a bracket line.
+
+**Suggestions**
+
+2. **`hardened_check.mjs:104-107` (`go.mod`), the directive check is line-based.**
+   - Entries inside an existing `replace ( … )` block are not detected. They do not begin with the keyword.
+   - **Scenario:** a baseline that already has a replace block lets the agent add `x =&gt; ./fake` inside it.
+   - Fix: compare the file with all `require` blocks stripped and require every other line to be identical.
+
+3. **New manifests.** `MANIFESTS` lets the agent add a new `go.mod`, `package.json`, `pyproject.toml` or `Cargo.toml` anywhere.
+   - **Scenario:** a new `go.mod` in the directory above the hidden tests turns the hidden path into a separate module. `go test ./...` skips it and exits 0. A nested `package.json` or `pyproject.toml` can also move the rootdir.
+   - Fix: refuse any added manifest that has no baseline counterpart.
+
+4. **`hardened_check.mjs:171-175`, the Python path rule is too weak for src layouts.**
+   - A new `.py` file only needs an existing directory below the root. In a `src/` layout, `src` is itself on `sys.path` after an editable install. A new `src/packaging.py` or `src/iniconfig.py` shadows a dependency of pytest and passes the `SHADOWED` list.
+   - Fix: require the directory to already contain `__init__.py` in the baseline, or add every top-level distribution name installed in the fresh environment to the shadow list.
+
+5. **Cargo `[dev-dependencies]` and `[build-dependencies]`.** They refuse, which is safe but hurts legitimate test-only dependency additions. The README should say so.
+
+6. **The vacuous-pass class** needs the custodian-side expected-test count you documented. Until then, say in the README that a task whose hidden tests run zero tests passes.</result>
+<usage><subagent_tokens>273470</subagent_tokens><tool_uses>1</tool_uses><duration_ms>54580</duration_ms></usage>
+</task-notification>
