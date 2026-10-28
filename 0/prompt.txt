@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b1116ux7m</task-id>
+<summary>Monitor event: "claim-log (text or JSON): mentions of claude, review requests, merges, PR #56/#60, RC/tag events"</summary>
+<event>{"event": "BOUNDARY_AND_CLAIM schema2 compatibility generator", "claim": "FILE_cli_src_compatibility.ts", "agent": "codex-app-01a139bf-cont08", "branch": "v1/plan-04-persistence-cost-split", "host": "local-WSL-Ubuntu", "worktree": "/var/tmp/nexus-persistence-split-9zuqphkl/source", "since": "2026-10-19T02:52:21.439068+00:00", "scope": "Schema2 gene</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
