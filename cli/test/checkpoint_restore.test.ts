@@ -1063,12 +1063,37 @@ test("Git manifest restore refuses to copy an untracked file into a nested bare 
     assert.match(result.message, /destination|unsafe|snapshot/i);
     assert.equal(fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8"), bareHeadBefore);
     assert.equal(fs.readFileSync(path.join(bareRepo, "config"), "utf8"), bareConfigBefore);
+    assert.equal(fs.existsSync(path.join(bareRepo, "captured.txt")), false, "rejection must not copy the captured file into the bare repository");
     assert.equal(fs.readFileSync(path.join(bareRepo, "repository-canary.txt"), "utf8"), "bare repository canary\n");
     assert.equal(execFileSync("git", ["-C", bareRepo, "rev-parse", "--is-bare-repository"], { encoding: "utf8" }).trim(), "true");
     assert.equal(fs.readFileSync(path.join(repo, "staged-after-checkpoint.txt"), "utf8"), "staged canary\n");
     assert.equal(git("rev-parse", "HEAD"), outerHeadBefore);
     const outerIndexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
     assert.equal(outerIndexAfter, outerIndexBefore, "rejection must preserve outer index entries");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git manifest restore allows an ordinary directory with bare-repository-like names", () => {
+  const { repo, git } = gitRepo();
+  const lookalike = path.join(repo, "ordinary-layout");
+  try {
+    fs.mkdirSync(path.join(lookalike, "objects"), { recursive: true });
+    fs.mkdirSync(path.join(lookalike, "refs"), { recursive: true });
+    fs.writeFileSync(path.join(lookalike, "HEAD"), "this is an ordinary project file\n");
+    fs.writeFileSync(path.join(lookalike, "config"), "[core]\nfilemode = true\n");
+    fs.writeFileSync(path.join(lookalike, "captured.txt"), "checkpoint content\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("ordinary directory resembles a bare repository");
+    fs.writeFileSync(path.join(lookalike, "captured.txt"), "changed after checkpoint\n");
+    const headBefore = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.readFileSync(path.join(lookalike, "captured.txt"), "utf8"), "checkpoint content\n");
+    assert.equal(git("rev-parse", "HEAD"), headBefore);
   } finally {
     cleanupGitRepo(repo);
   }
