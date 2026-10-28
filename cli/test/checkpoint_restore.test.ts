@@ -1083,6 +1083,52 @@ test("Git manifest restore refuses a tracked destination inside a nested reposit
   }
 });
 
+test("Git manifest restore refuses a tracked destination through a symlinked nested repository before mutation", () => {
+  const { repo, git } = gitRepo();
+  const nestedRepo = path.join(repo, "nested-repo");
+  const nestedGit = (...args: string[]) => execFileSync("git", ["-C", nestedRepo, ...args], { encoding: "utf8" }).trim();
+  try {
+    fs.mkdirSync(path.join(repo, "a"));
+    fs.writeFileSync(path.join(repo, "a", "captured.txt"), "checkpoint tracked content\n");
+    git("add", "a/captured.txt");
+    git("commit", "-qm", "tracked nested destination");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("tracked path through nested repo symlink");
+
+    fs.rmSync(path.join(repo, "a"), { recursive: true, force: true });
+    fs.mkdirSync(nestedRepo);
+    nestedGit("init", "-q");
+    nestedGit("config", "user.email", "nested@example.invalid");
+    nestedGit("config", "user.name", "Nested Test");
+    fs.writeFileSync(path.join(nestedRepo, "captured.txt"), "nested repository canary\n");
+    nestedGit("add", "captured.txt");
+    nestedGit("commit", "-qm", "nested canary");
+    fs.symlinkSync("nested-repo", path.join(repo, "a"));
+    const nestedHeadBefore = nestedGit("rev-parse", "HEAD");
+    const nestedIndexBefore = execFileSync("git", ["-C", nestedRepo, "ls-files", "--stage", "-z"], { encoding: "buffer" }).toString("hex");
+
+    fs.writeFileSync(path.join(repo, "staged-after-checkpoint.txt"), "staged canary\n");
+    git("add", "staged-after-checkpoint.txt");
+    const outerHeadBefore = git("rev-parse", "HEAD");
+    const outerIndexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(nestedRepo, "captured.txt"), "utf8"), "nested repository canary\n");
+    assert.equal(nestedGit("rev-parse", "HEAD"), nestedHeadBefore);
+    const nestedIndexAfter = execFileSync("git", ["-C", nestedRepo, "ls-files", "--stage", "-z"], { encoding: "buffer" }).toString("hex");
+    assert.equal(nestedIndexAfter, nestedIndexBefore, "rejection must preserve nested repository index entries");
+    assert.equal(git("rev-parse", "HEAD"), outerHeadBefore);
+    const outerIndexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+    assert.equal(outerIndexAfter, outerIndexBefore, "rejection must preserve outer index entries");
+    assert.equal(fs.readFileSync(path.join(repo, "staged-after-checkpoint.txt"), "utf8"), "staged canary\n");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
 test("Git manifest restore refuses an ignored directory replacing a tracked checkpoint file before Git mutation", () => {
   const { repo, git } = gitRepo();
   try {
