@@ -1,0 +1,84 @@
+<pasted_content id="bd2e">
+This is a much stronger result than the point observations suggested, because Claude now has enough longitudinal data to distinguish transient values from sustained behavior.
+
+The most important result is not the peak temperatures. It is the combination of **thermal equilibrium + stable throughput + zero thermal-throttle indications**. Both 22-minute loaded phases apparently reached equilibrium quickly, with 90% of the temperature rise occurring within 83–189 seconds and last-five-minute slopes within ±0.14 °C/min. If those calculations reproduce from the raw samples, that is strong evidence that we were observing steady-state behavior within this tested envelope, rather than temperatures that were still climbing when the experiment ended.
+
+The actual operating points are also useful. Decode steady state was about **66°C package / 76°C hottest VRAM on GPU0**, and **69°C package / 82.6°C hottest VRAM on GPU1**, with GPU1 peaking at 84°C VRAM. Prefill ran several degrees cooler despite the enormous prompt throughput we saw. Most importantly, Claude reports **zero thermal, prochot, VR thermal, and RATL flags across all 3,244 samples on both GPUs**, while throughput remained essentially flat across each phase.
+
+That materially strengthens the proposition:
+
+> **Within this workload, ambient condition, hardware configuration and observation period, the T5820 cooling system reached a thermal equilibrium while both GPUs sustained useful inference without observed thermal throttling or temperature-correlated throughput degradation.**
+
+That's a defensible conclusion. It says nothing about warmer rooms, restricted airflow, different workloads, component aging, or maximum safe temperatures.
+
+### The surprising result is GPU1's PL2 behavior
+
+GPU1 apparently asserted PL2 power limiting for **94% of loaded samples**, while GPU0 never did. Yet GPU1's frequency remained around 2333 MHz during decode versus 2400 MHz nominal, only about 2.8% lower, and throughput remained stable.
+
+That's potentially much more interesting for future optimization than thermals.
+
+It doesn't yet establish that increasing or changing power limits would improve useful performance. It establishes that **the 27B workload is routinely encountering a power-control boundary before encountering a thermal-control boundary** under this test.
+
+That's exactly the kind of thing this experiment was supposed to uncover. We started asking a thermal question and discovered another potentially relevant operating constraint. No reason to tune it yet. Preserve it as the next hypothesis.
+
+### The current 75°C VRAM warning has now been experimentally characterized
+
+This is particularly clear.
+
+During loaded operation, VRAM was at or above 75°C for **39% of GPU0's loaded samples and 95.5% of GPU1's**. Yet there was no corresponding thermal throttling, throughput degradation, failure, or inability to reach equilibrium.
+
+So Claude's wording that the existing warning largely means *“inference is running”* is directionally fair for this workload.
+
+That doesn't prove 75°C is universally safe or tell us what the replacement threshold should be. It demonstrates that **75°C is poorly discriminating as an operational warning for this qualified workload**.
+
+And Claude correctly did **not** change it.
+
+### The abort analysis uncovered a design issue separate from temperature selection
+
+The current benchmark safety mechanism appears to use the hottest reading from all temperature sensors and abort on a single sample.
+
+The soak suggests that sensor selection may actually be reasonable in one respect: the maximum VRAM reading tracks the hottest physical GDDR channel, which is meaningfully hotter than the median. We shouldn't average that away.
+
+But **single-sample threshold semantics** are a separate question.
+
+At an 80°C threshold, GPU1 would apparently have generated 47 aborts with no persistence requirement, despite only 20 excursions lasting ≥30 seconds and one lasting ≥60 seconds. At 85°C or 90°C, none occurred.
+
+So there are really at least three independent policy decisions here:
+
+```text
+WHAT is measured?
+    package / hottest VRAM / other sensors
+
+WHAT does the threshold mean?
+    warning / critical / protective abort
+
+HOW must it occur?
+    instantaneous / persistence / hysteresis / combination
+```
+
+Those shouldn't be collapsed into one temperature number.
+
+### Intel documentation remains appropriately unresolved
+
+I'm glad Claude didn't manufacture a B65 limit from neighboring products or reinterpret the unexplained `temp2_max=60°C`.
+
+The useful facts remain device-reported protection points and Linux driver semantics. The soak establishes observed behavior below those protection points. Neither establishes Intel's unpublished recommended continuous operating temperature.
+
+So **“maximum safe B65 temperature” remains unknown**, and it doesn't prevent us from establishing our own conservative operational policy from measured behavior.
+
+### There are also two secondary findings worth preserving
+
+The busiest CPU core reaching **98% while total CPU was only 28%** supports the existing observation that a single-thread bottleneck remains somewhere in the llama.cpp path. That's now worth keeping on the future optimization list, but not disturbing the current system over.
+
+And the workload design was better than simply “54 minutes at full load”: approximately 22 minutes decode-heavy followed by 22 minutes of unique ~14K-token prompts exercised two materially different inference regimes. That helps explain why we saw very different KV/cache and prompt/decode behavior while watching the TUI.
+
+Your auditory observation belongs in the evidence package too, but exactly as we just scoped it: **no conspicuous fan-noise excursion was perceived by the operator in a noisy multi-host environment**. It shouldn't be used to infer RPM or cooling-controller behavior.
+
+Overall, I would accept this soak as **strong evidence for thermal adequacy within the tested operating envelope**, subject to reproducing Claude's calculations from the preserved raw evidence before treating the numerical conclusions as independently corroborated.
+
+And I would leave every threshold unchanged for the moment.
+
+The experiment has done something better than giving us an arbitrary new set of numbers. It has given us enough evidence to now design the **temperature policy deliberately**: separate package from VRAM, separate warning from protective action, decide whether persistence/hysteresis belongs in each, and determine the operational margins we actually want.
+
+That should be a small follow-on analysis, not another blind soak.
+</pasted_content id="bd2e">
