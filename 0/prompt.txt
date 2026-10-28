@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bmmrvus8t</task-id>
+<tool-use-id>toolu_01Va1PUxCWRX5hGUgcSYe2U6</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/bmmrvus8t.output</output-file>
+<status>completed</status>
+<summary>Background command "PTY repetition runs on 028ca90" completed (exit code 0)</summary>
+</task-notification>
