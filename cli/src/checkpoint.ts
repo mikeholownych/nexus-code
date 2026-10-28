@@ -214,14 +214,21 @@ export class CheckpointManager {
         const bareConfig = fs.lstatSync(bareConfigPath, { throwIfNoEntry: false });
         const bareObjects = fs.lstatSync(path.join(parent, "objects"), { throwIfNoEntry: false });
         const bareRefs = fs.lstatSync(path.join(parent, "refs"), { throwIfNoEntry: false });
-        const hasBareRepositoryLayout = bareHead?.isFile()
-          && !bareHead.isSymbolicLink()
-          && bareConfig?.isFile()
-          && !bareConfig.isSymbolicLink()
-          && bareObjects?.isDirectory()
-          && !bareObjects.isSymbolicLink()
-          && bareRefs?.isDirectory()
-          && !bareRefs.isSymbolicLink();
+        const bareRepositoryMarkerCount = [bareHead, bareObjects, bareRefs].filter(Boolean).length;
+        const hasBareRepositoryMarkers = bareRepositoryMarkerCount > 0;
+        const hasBareRepositoryShape = bareRepositoryMarkerCount >= 2;
+        if (hasBareRepositoryMarkers && bareConfig && (
+          (bareHead && (!bareHead.isFile() || bareHead.isSymbolicLink()))
+          || (bareObjects && (!bareObjects.isDirectory() || bareObjects.isSymbolicLink()))
+          || (bareRefs && (!bareRefs.isDirectory() || bareRefs.isSymbolicLink()))
+          || !bareConfig.isFile() || bareConfig.isSymbolicLink()
+        )) {
+          throw new Error("Checkpoint destination has an ambiguous bare Git repository layout");
+        }
+        if (hasBareRepositoryShape && !bareConfig) {
+          throw new Error("Checkpoint destination has an ambiguous bare Git repository layout");
+        }
+        const hasBareRepositoryLayout = hasBareRepositoryMarkers && !!bareConfig && bareConfig.isFile() && !bareConfig.isSymbolicLink();
         let declaresBareRepository = false;
         if (hasBareRepositoryLayout && bareConfig) {
           if (bareConfig.size > 1024 * 1024) {
@@ -230,6 +237,16 @@ export class CheckpointManager {
           let inCoreSection = false;
           for (const line of fs.readFileSync(bareConfigPath, "utf8").split(/\r?\n/)) {
             const entry = line.replace(/[;#].*$/, "").trim();
+            if (/\\\s*$/.test(entry)) {
+              // Git joins continued values across lines; this parser intentionally
+              // does not emulate that syntax, so reject it rather than miss core.bare.
+              throw new Error("Checkpoint destination Git configuration uses line continuations");
+            }
+            if (/^\[\s*include(?:if)?(?:\s|\])/i.test(entry)) {
+              // An include may change core.bare after this file is parsed. Do not
+              // try to partially reproduce Git's includeIf matching here.
+              throw new Error("Checkpoint destination Git configuration uses includes");
+            }
             if (/^\[\s*core\s*\]$/i.test(entry)) {
               inCoreSection = true;
             } else if (/^\[/.test(entry)) {
