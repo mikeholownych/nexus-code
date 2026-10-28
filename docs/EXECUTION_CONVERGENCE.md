@@ -100,6 +100,31 @@ it on `unit.decisions`, emits `DECISION_APPLIED` and resumes the operation under
 them with `nexus operation decide <operation> <decision> <option> [--note …] [--no-resume]`. Nothing else mutates a
 BLOCKED unit.
 
+### Rejected decisions
+
+`nexus operation decide` reports a rejected choice as `Decision rejected: …` on stderr and exits with status `2`.
+The rejection happens before the updated operation state is saved, so the pending decision remains available for
+inspection. Run `nexus operation status <operation> --json` and inspect `units[].blocked.decision` and
+`blocked.decisions` for the current decision IDs, questions, and offered option IDs. The human-readable status view
+shows blocked reasons, but does not list every unit decision's options. Retry with an option ID in the current JSON
+state. Do not reuse an option from an older status display: decisions can become stale after another operator action
+or after the operation changes state.
+
+The CLI rejects a decision when the operation is already complete or cancelled, the decision ID is no longer
+pending, or the option ID is not one currently offered. It also rejects actions that would violate the operation's
+contract: `revise` requires `--note`, a required unit cannot be dropped, and `assign` must name a configured resource
+that satisfies the unit's minimum trust boundary. Trust requirements cannot be overridden by an operator decision.
+For example, inspect the current choices before applying one:
+
+```sh
+nexus operation status op-123
+nexus operation decide op-123 research#1 2 --note "Use the approved local source"
+```
+
+The option number above is illustrative; use the ID shown by `status` for the current operation. The command resumes
+the operation after a valid decision unless `--no-resume` is supplied. With `--no-resume`, Nexus records the valid
+decision and prints the updated status without starting the operation again.
+
 ## 4. /team on the convergence foundation
 
 `TeamOrchestrator` is now a strategy: it maps the request to work units and drives them through `driveOperation`
