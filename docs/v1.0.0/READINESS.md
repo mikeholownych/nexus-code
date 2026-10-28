@@ -1,6 +1,6 @@
 # v1.0.0 release readiness checkpoint
 
-## Current release checkpoint (observed 2026-10-28 13:04 UTC)
+## Current release checkpoint (observed 2026-10-28 13:03 UTC)
 
 **Authoritative source:** `origin/main` is `4cac22d5a3f2bff6e7fe7e423db71ab84c4e8263`, the PR #303 merge. Post-merge CI [40691510019](https://github.com/mikeholownych/nexus-code/actions/runs/40691510019) is running its Node 22/24 jobs (both are in `npm --prefix cli test`); post-merge CodeQL [40691510091](https://github.com/mikeholownych/nexus-code/actions/runs/40691510091) passed. The workflow's requirements script passed in non-enforced mode on this head; enforced requirements evidence is still the prior exact-main run on `b293b4414db9834dc992ee79190251cb595fb9ff` (123 requirements: 108 tested, 6 partial, 2 implemented, 7 open, with 12 exact-RC qualification rows deferred). The enforced gate has not yet been rerun on `4cac22d`.
 
