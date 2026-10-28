@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bo0wk29s9</task-id>
+<summary>Monitor event: "pilot: non-passing results and runner errors"</summary>
+<event>2026-10-13T12:31:01.222Z aider@gateway/engineering/lead t2-feature-slugify run 1: exit 0 hidden=false regression=false 83s</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
