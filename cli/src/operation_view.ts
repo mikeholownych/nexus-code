@@ -246,28 +246,33 @@ function criticalPath(units: WorkUnit[]): string[] {
 
   // Longest chain of not-yet-complete units; a completed dependency ends that branch.
   const chain = new Map<string, string[]>();
-  const build = (id: string, seen: Set<string>): string[] => {
+  const build = (id: string, seen: Set<string>): { path: string[]; cycleTruncated: boolean } => {
     const known = chain.get(id);
-    if (known) return known;
-    if (seen.has(id)) return [];
+    if (known) return { path: known, cycleTruncated: false };
+    if (seen.has(id)) return { path: [], cycleTruncated: true };
     seen.add(id);
     let best: string[] = [];
+    let cycleTruncated = false;
     for (const dep of byId.get(id)?.dependsOn ?? []) {
       if (!unfinished.has(dep)) continue;
-      const candidate = [...build(dep, seen), id];
+      const dependency = build(dep, seen);
+      cycleTruncated ||= dependency.cycleTruncated;
+      const candidate = [...dependency.path, id];
       if (candidate.length > best.length || (candidate.length === best.length && candidate.join(">") < best.join(">"))) {
         best = candidate;
       }
     }
     if (!best.length) best = [id];
     seen.delete(id);
-    chain.set(id, best);
-    return best;
+    // A path computed while an ancestor was excluded by a cycle is context-specific.
+    // Caching it could hide a longer simple path when that node is later a root.
+    if (!cycleTruncated) chain.set(id, best);
+    return { path: best, cycleTruncated };
   };
 
   let best: string[] = [];
   for (const id of [...unfinished.keys()].sort()) {
-    const candidate = build(id, new Set());
+    const candidate = build(id, new Set()).path;
     if (candidate.length > best.length || (candidate.length === best.length && candidate.join(">") < best.join(">"))) {
       best = candidate;
     }
