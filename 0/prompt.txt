@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b1116ux7m</task-id>
+<summary>Monitor event: "claim-log (text or JSON): mentions of claude, review requests, merges, PR #56/#60, RC/tag events"</summary>
+<event>2026-10-19T03:08:08Z CLAIM SEC_HTML_TAG_FILTER opencode branch=v1/sec-html-tag-filter base=0df45af149690206642e652ddb1a07618744d5d2 (CodeQL alerts 8-11: replace regex script/tag stripping with single-pass scanner htmlToText shared by tools.ts+search_web.ts) by=opencode</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
