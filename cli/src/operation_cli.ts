@@ -17,6 +17,8 @@ import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
+import { buildOperationView, renderOperationView, watchOperation } from "./operation_view.js";
+import { safeTerminal } from "./ui.js";
 import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
 import { createOperationAccountIdentity } from "./core/account_identity.js";
 import { credentialStorageHome, operatorSetting } from "./client.js";
@@ -60,23 +62,23 @@ function normalizeResources(spec: OperationSpec, config: HarnessConfig, identity
 
 function printEvent(e: OperationEvent): void {
   const color = e.type === "OPERATION_BLOCKED" || e.type === "WORK_BLOCKED" ? pc.red : e.type.startsWith("RESOURCE_") ? pc.dim : e.type === "OPERATION_COMPLETED" ? pc.green : pc.cyan;
-  console.log(color(`◆ ${e.message}`));
+  console.log(color(`◆ ${safeTerminal(e.message)}`));
 }
 
 function printStatus(op: DurableOperationState): void {
-  console.log(pc.bold(`Operation ${op.id}: ${op.status}`) + pc.dim(`  (${op.objective})`));
+  console.log(pc.bold(`Operation ${op.id}: ${op.status}`) + pc.dim(`  (${safeTerminal(op.objective)})`));
   for (const u of op.units) {
     const extra =
       u.status === "PARKED" ? ` — ${u.parked!.reason}; wakes ${u.parked!.wakeAt}` :
       u.status === "BLOCKED" ? ` — ${u.blocked!.reason}` :
       u.status === "COMPLETE" ? ` — on ${u.result!.resourceId}` :
       u.assignment ? ` — ${u.assignment.resourceId}` : "";
-    console.log(`  ${u.status.padEnd(22)} ${u.title}${pc.dim(extra)}`);
+    console.log(`  ${u.status.padEnd(22)} ${safeTerminal(u.title)}${pc.dim(safeTerminal(extra))}`);
   }
-  if (op.wait) console.log(pc.yellow(`Waiting until ${op.wait.wakeAt}: ${op.wait.reason}`));
+  if (op.wait) console.log(pc.yellow(`Waiting until ${op.wait.wakeAt}: ${safeTerminal(op.wait.reason)}`));
   for (const d of op.blocked?.decisions ?? []) {
-    console.log(pc.red(`Decision ${d.id} needed: ${d.question}`));
-    for (const o of d.options) console.log(pc.red(`  [${o.id}] ${o.label}`));
+    console.log(pc.red(`Decision ${d.id} needed: ${safeTerminal(d.question)}`));
+    for (const o of d.options) console.log(pc.red(`  [${o.id}] ${safeTerminal(o.label)}`));
     if (d.options.length) console.log(pc.dim(`  nexus operation decide ${op.id} ${d.id} <option> [--note <text>]`));
   }
 }
@@ -165,12 +167,120 @@ export function registerOperationCommands(program: Command): void {
     .argument("[id]", "Operation id (default: all operations in this workspace)")
     .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
     .option("-j, --json", "JSON output")
+    .option("--dag", "Read-only view: work-unit DAG, resource eligibility and the open decision")
+    .option("--events <count>", "Events to include with --dag (newest kept)", "20")
     .description("Show operation state, parked work, wake time and pending decisions")
     .action((id: string | undefined, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      if (options.dag) {
+        const eventLimit = Number(options.events);
+        if (!Number.isFinite(eventLimit) || eventLimit < 0) {
+          console.error(pc.red(`--events must be a non-negative number (got '${options.events}')`));
+          process.exitCode = 2;
+          return;
+        }
+        // The view path never takes the operation lock, so it can inspect an operation another process is driving.
+        // The state loader may still migrate or quarantine a legacy/corrupt record, exactly as `status` does.
+        let ops: DurableOperationState[];
+        try {
+          ops = id ? [store.load(id)] : store.list();
+        } catch (error: any) {
+          console.error(pc.red(`Cannot read operation ${id ?? "(all)"}: ${safeTerminal(String(error?.message ?? error))}`));
+          process.exitCode = 2;
+          return;
+        }
+        const views = ops.map((state) => buildOperationView(state, { events: Math.floor(eventLimit) }));
+        if (options.json) return void console.log(JSON.stringify(views, null, 2));
+        if (!views.length) return void console.log("No operations in this workspace.");
+        const width = process.stdout.isTTY ? process.stdout.columns ?? 0 : 0;
+        views.forEach((view) => console.log(renderOperationView(view, { width })));
+        return;
+      }
       const ops = id ? [store.loadForInspection(id)] : store.listForInspection();
       if (options.json) return void console.log(JSON.stringify(ops, null, 2));
       if (!ops.length) return void console.log("No operations in this workspace.");
       ops.forEach(printStatus);
+    });
+
+  op.command("watch")
+    .argument("[id]", "Operation id (default: the only operation in this workspace)")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .option("--interval <seconds>", "Refresh interval (minimum 0.25)", "2")
+    .option("--events <count>", "Events to include (newest kept)", "20")
+    .description("Watch an operation read-only until it completes or you stop it (Ctrl-C)")
+    .action(async (id: string | undefined, options: any) => {
+      const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      const intervalSecs = Number(options.interval);
+      const eventLimit = Number(options.events);
+      if (!Number.isFinite(intervalSecs) || intervalSecs <= 0 || !Number.isFinite(eventLimit) || eventLimit < 0) {
+        console.error(pc.red("--interval must be a positive number of seconds and --events a non-negative number"));
+        process.exitCode = 2;
+        return;
+      }
+      let target = id;
+      if (!target) {
+        let operations: DurableOperationState[];
+        try {
+          operations = store.list();
+        } catch (error: any) {
+          console.error(pc.red(`Cannot read operations: ${safeTerminal(String(error?.message ?? error))}`));
+          process.exitCode = 2;
+          return;
+        }
+        if (!operations.length) {
+          console.error(pc.red("No operations in this workspace."));
+          process.exitCode = 2;
+          return;
+        }
+        if (operations.length > 1) {
+          console.error(pc.red("More than one operation in this workspace; pass an id:"));
+          for (const operation of operations) console.error(`  ${operation.id}  ${operation.status}  ${operation.objective}`);
+          process.exitCode = 2;
+          return;
+        }
+        target = operations[0].id;
+      }
+      const watchId = target;
+      if (!process.stdout.isTTY) {
+        // A pipe is not a live view; render the current snapshot once so scripts get an answer instead of a hang.
+        let state: DurableOperationState;
+        try {
+          state = store.load(watchId);
+        } catch (error: any) {
+          console.error(pc.red(`Cannot read operation ${watchId}: ${safeTerminal(String(error?.message ?? error))}`));
+          process.exitCode = 2;
+          return;
+        }
+        const view = buildOperationView(state, { events: Math.floor(eventLimit) });
+        console.log(renderOperationView(view));
+        process.exitCode = state.status === "COMPLETE" ? 0 : state.status === "CANCELLED" ? 130 : 2;
+        return;
+      }
+      const controller = new AbortController();
+      const onSignal = () => controller.abort();
+      process.once("SIGINT", onSignal);
+      try {
+        const result = await watchOperation({
+          load: () => store.load(watchId),
+          render: (state) =>
+            renderOperationView(buildOperationView(state, { events: Math.floor(eventLimit) }), {
+              width: process.stdout.columns ?? 0,
+            }),
+          intervalMs: Math.max(250, Math.round(intervalSecs * 1000)),
+          signal: controller.signal,
+          clear: true,
+        });
+        let status: DurableOperationState["status"] | undefined;
+        try {
+          status = store.load(watchId).status;
+        } catch {
+          status = undefined;
+        }
+        process.exitCode =
+          result.stopped === "terminal" && status === "COMPLETE" ? 0 :
+          result.stopped === "aborted" || status === "CANCELLED" ? 130 : 2;
+      } finally {
+        process.off("SIGINT", onSignal);
+      }
     });
 }
