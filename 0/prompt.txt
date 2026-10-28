@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>b2yvlcosw</task-id>
+<tool-use-id>toolu_01JmNz41mvXEM8Rkokqyv1ta</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/b2yvlcosw.output</output-file>
+<status>completed</status>
+<summary>Monitor "CI for PR 31 at de23520" stream ended</summary>
+<event>pr31 exit=0 test-matrix (24)=success,test-matrix (20)=success,test-matrix (22)=success,cloudflare-contest-contract=success,linux-x86_64=success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
