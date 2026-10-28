@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bgwjbc2tv</task-id>
+<tool-use-id>toolu_01M7WJEJ2thNfT7czAd2tJ4B</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/bgwjbc2tv.output</output-file>
+<status>completed</status>
+<summary>Background command "Build core and CLI in PR-10i worktree" completed (exit code 0)</summary>
+</task-notification>
