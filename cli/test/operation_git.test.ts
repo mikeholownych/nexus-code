@@ -624,3 +624,316 @@ test("an unrepairable integration pair becomes an operation decision", async () 
   assert.equal(state.blocked?.decisions[0].id, "operation#git");
   assert.match(state.blocked!.decisions[0].question, /branch is gone/);
 });
+
+test("integration refuses a unit worktree that is on a different branch", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  git(prep.workspace, ["checkout", "-b", "other"]);
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  const otherTip = git(prep.workspace, ["rev-parse", "HEAD"]);
+  const unitBranchTip = git(root, ["rev-parse", prep.branch]);
+
+  const result = await ops.integrate(unit("u1"), completed());
+
+  assert.equal(result.kind, "failed");
+  if (result.kind === "failed") assert.match(result.reason, /branch/);
+  assert.equal(fs.existsSync(path.join(p.integrationWorktree, "u1.txt")), false);
+  assert.equal(state.units.u1.integratedCommit, undefined);
+  assert.equal(git(prep.workspace, ["rev-parse", "HEAD"]), otherTip);
+  assert.equal(git(root, ["rev-parse", prep.branch]), unitBranchTip);
+  assert.match(git(prep.workspace, ["status", "--porcelain"]), /\?\? u1.txt/);
+});
+
+test("a verifier that rewinds the integration branch cannot produce a receipt", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  const before = ops.currentTip();
+
+  const result = await ops.integrate(
+    unit("u1"),
+    completed({ verification: { command: "git reset --hard HEAD~1", status: "PASSED", hasExecutedTests: true } }),
+  );
+
+  assert.equal(result.kind, "failed");
+  if (result.kind === "failed") assert.match(result.reason, /no longer|rewritten|reachable/);
+  assert.equal(git(p.integrationWorktree, ["rev-parse", "--abbrev-ref", "HEAD"]), p.integrationBranch);
+  assert.equal(ops.currentTip(), before);
+  assert.equal(state.units.u1.integratedCommit, undefined);
+});
+
+test("operation cleanup preserves a unit's uncommitted work", () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "draft.txt"), "preserve\n");
+
+  ops.disposeAllUnits();
+
+  assert.equal(fs.readFileSync(path.join(prep.workspace, "draft.txt"), "utf8"), "preserve\n");
+});
+
+test("a merged unit recovers after its worktree is removed before receipt persistence", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  git(prep.workspace, ["add", "-A"]);
+  git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u1"]);
+  git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
+  const mergedTip = ops.currentTip();
+  git(root, ["worktree", "remove", "--force", prep.workspace]);
+
+  assert.deepEqual(ops.missingWorktrees(), []);
+  const result = await ops.integrate(unit("u1"), completed());
+
+  assert.equal(result.kind, "nothing");
+  if (result.kind === "nothing") {
+    assert.equal(result.receipt.integratedCommit, mergedTip);
+    assert.equal(result.receipt.commit, git(root, ["rev-parse", prep.branch]));
+  }
+  assert.equal(state.units.u1.integratedCommit, mergedTip);
+});
+
+test("a verifier cannot move integration to another branch", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  const before = ops.currentTip();
+
+  const result = await ops.integrate(
+    unit("u1"),
+    completed({ verification: { command: "git checkout -b unrelated", status: "PASSED", hasExecutedTests: true } }),
+  );
+
+  assert.equal(result.kind, "failed");
+  assert.equal(git(p.integrationWorktree, ["rev-parse", "--abbrev-ref", "HEAD"]), p.integrationBranch);
+  assert.equal(ops.currentTip(), before);
+  assert.equal(state.units.u1.integratedCommit, undefined);
+});
+
+test("a post-hoc verifier cannot erase an already merged unit", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  git(prep.workspace, ["add", "-A"]);
+  git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u1"]);
+  const unitCommit = git(prep.workspace, ["rev-parse", "HEAD"]);
+  git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
+  const mergedTip = ops.currentTip();
+
+  const result = await ops.integrate(
+    unit("u1"),
+    completed({ verification: { command: "git reset --hard HEAD~1", status: "PASSED", hasExecutedTests: true } }),
+  );
+
+  assert.equal(result.kind, "failed");
+  assert.equal(git(p.integrationWorktree, ["rev-parse", "--abbrev-ref", "HEAD"]), p.integrationBranch);
+  assert.equal(ops.currentTip(), mergedTip);
+  assert.doesNotThrow(() => git(p.integrationWorktree, ["merge-base", "--is-ancestor", unitCommit, "HEAD"]));
+  assert.equal(state.units.u1.integratedCommit, undefined);
+});
+
+test("a missing worktree is not recovered without a new unit commit", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  git(root, ["worktree", "remove", "--force", prep.workspace]);
+  const before = ops.currentTip();
+
+  assert.deepEqual(ops.missingWorktrees(), [{ unitId: "u1", worktree: prep.workspace }]);
+  const result = await ops.integrate(unit("u1"), completed());
+
+  assert.equal(result.kind, "failed");
+  if (result.kind === "failed") assert.match(result.reason, /missing/);
+  assert.equal(state.units.u1.integratedCommit, undefined);
+  assert.equal(ops.currentTip(), before);
+});
+
+test("operation cleanup preserves ignored files", () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, ".gitignore"), "/ignored.txt\n");
+  git(prep.workspace, ["add", ".gitignore"]);
+  git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "ignore"]);
+  fs.writeFileSync(path.join(prep.workspace, "ignored.txt"), "preserve\n");
+
+  ops.disposeAllUnits();
+
+  assert.equal(fs.readFileSync(path.join(prep.workspace, "ignored.txt"), "utf8"), "preserve\n");
+});
+
+test("the runner completes a merged unit without rerunning after disposal-before-receipt", async () => {
+  const root = repo();
+  const state = isolatedState([{ id: "u1" }], root);
+  const p = plan(root, state.id);
+  const ops = new OperationGit(p, state.git!);
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  git(prep.workspace, ["add", "-A"]);
+  git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u1"]);
+  const unitCommit = git(prep.workspace, ["rev-parse", "HEAD"]);
+  git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
+  const mergedTip = ops.currentTip();
+  git(root, ["worktree", "remove", "--force", prep.workspace]);
+  state.units[0].status = "RUNNING";
+  let calls = 0;
+  const persisted: DurableOperationState[] = [];
+  const executor: WorkUnitExecutor = { async run() { calls++; throw new Error("must not rerun"); } };
+  const runner = new OperationRunner(state, {
+    executor,
+    clock: clock(),
+    persist: (snapshot) => { persisted.push(structuredClone(snapshot)); },
+  });
+
+  await runner.run();
+
+  assert.equal(calls, 0);
+  assert.equal(state.status, "COMPLETE");
+  assert.equal(state.integrations?.length, 1);
+  assert.equal(persisted[persisted.length - 1]?.integrations?.length, 1);
+  assert.equal(persisted[persisted.length - 1]?.integrations?.[0].unitId, "u1");
+  assert.equal(persisted[persisted.length - 1]?.integrations?.[0].commit, unitCommit);
+  assert.equal(persisted[persisted.length - 1]?.integrations?.[0].integratedCommit, mergedTip);
+});
+
+test("a verifier cannot discard earlier integrated history", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const first = ops.prepareUnit(unit("u1"));
+  const second = ops.prepareUnit(unit("u2"));
+  fs.writeFileSync(path.join(first.workspace, "u1.txt"), "one\n");
+  fs.writeFileSync(path.join(second.workspace, "u2.txt"), "two\n");
+  assert.equal((await ops.integrate(unit("u1"), completed())).kind, "integrated");
+  const acceptedTip = ops.currentTip();
+
+  const result = await ops.integrate(
+    unit("u2"),
+    completed({ verification: { command: `git reset --hard ${second.branch}`, status: "PASSED", hasExecutedTests: true } }),
+  );
+
+  assert.equal(result.kind, "failed");
+  assert.equal(git(p.integrationWorktree, ["rev-parse", "--abbrev-ref", "HEAD"]), p.integrationBranch);
+  assert.equal(ops.currentTip(), acceptedTip);
+  assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "u1.txt"), "utf8"), "one\n");
+  assert.equal(fs.existsSync(path.join(p.integrationWorktree, "u2.txt")), false);
+  assert.equal(state.units.u2.integratedCommit, undefined);
+});
+
+test("a post-hoc verifier cannot discard earlier integrated history", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const first = ops.prepareUnit(unit("u1"));
+  const second = ops.prepareUnit(unit("u2"));
+  fs.writeFileSync(path.join(first.workspace, "u1.txt"), "one\n");
+  fs.writeFileSync(path.join(second.workspace, "u2.txt"), "two\n");
+  assert.equal((await ops.integrate(unit("u1"), completed())).kind, "integrated");
+  git(second.workspace, ["add", "-A"]);
+  git(second.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u2"]);
+  git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", second.branch]);
+  const mergedTip = ops.currentTip();
+
+  const result = await ops.integrate(
+    unit("u2"),
+    completed({ verification: { command: `git reset --hard ${second.branch}`, status: "PASSED", hasExecutedTests: true } }),
+  );
+
+  assert.equal(result.kind, "failed");
+  assert.equal(git(p.integrationWorktree, ["rev-parse", "--abbrev-ref", "HEAD"]), p.integrationBranch);
+  assert.equal(ops.currentTip(), mergedTip);
+  assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "u1.txt"), "utf8"), "one\n");
+  assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "u2.txt"), "utf8"), "two\n");
+  assert.equal(state.units.u2.integratedCommit, undefined);
+});
+
+test("integration restores a branch deleted by a verifier", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  const before = ops.currentTip();
+
+  const result = await ops.integrate(
+    unit("u1"),
+    completed({
+      verification: {
+        command: `git checkout -b unrelated && git branch -D ${p.integrationBranch}`,
+        status: "PASSED",
+        hasExecutedTests: true,
+      },
+    }),
+  );
+
+  assert.equal(result.kind, "failed");
+  assert.equal(git(p.integrationWorktree, ["rev-parse", "--abbrev-ref", "HEAD"]), p.integrationBranch);
+  assert.equal(ops.currentTip(), before);
+  assert.equal(fs.existsSync(path.join(p.integrationWorktree, "u1.txt")), false);
+});
+
+test("post-hoc recovery restores a branch deleted by a verifier", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const prep = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
+  git(prep.workspace, ["add", "-A"]);
+  git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u1"]);
+  git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
+  const mergedTip = ops.currentTip();
+
+  const result = await ops.integrate(
+    unit("u1"),
+    completed({
+      verification: {
+        command: `git checkout -b unrelated && git branch -D ${p.integrationBranch}`,
+        status: "PASSED",
+        hasExecutedTests: true,
+      },
+    }),
+  );
+
+  assert.equal(result.kind, "failed");
+  assert.equal(git(p.integrationWorktree, ["rev-parse", "--abbrev-ref", "HEAD"]), p.integrationBranch);
+  assert.equal(ops.currentTip(), mergedTip);
+  assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "u1.txt"), "utf8"), "one\n");
+});
