@@ -456,6 +456,11 @@ export function hasExecutedTests(rawOutput: string): boolean {
 }
 
 const TEST_PATH = /(?:^|[\\/])(?:tests?|__tests__|spec)[\\/]|(?:^|[\\/])test_[^\\/]+\.py$|[._-](?:test|spec)\.[A-Za-z0-9]+$|_test\.(?:go|rs|py)$/i;
+
+/** True when a workspace-relative path is a test file by the same rule the tester uses. */
+export function isTestPath(relativePath: string): boolean {
+  return TEST_PATH.test(relativePath);
+}
 export const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", "build", "vendor", ".venv", "venv", "__pycache__", ".nexus"]);
 const MAX_TEST_FILES = 2000;
 export const MAX_TEST_BYTES = 256 * 1024;
