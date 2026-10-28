@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bp01ngn2j</task-id>
+<tool-use-id>toolu_015b6GJYZJmYw4cDGmSXffWj</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/bp01ngn2j.output</output-file>
+<status>completed</status>
+<summary>Background command "cd /home/mike/nexus-code/cli &amp;&amp; timeout 600 npx tsx --test test/objective_continuation.test.ts 2&gt;&amp;1 | grep -E "^(✔|✖)|^ℹ (pass|fail)|AssertionError|actual|expected|Error" | head -60" completed (exit code 0)</summary>
+</task-notification>
