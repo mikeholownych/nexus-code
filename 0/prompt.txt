@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bd3f8kh4j</task-id>
+<tool-use-id>toolu_0155QLtMZQhT7X7gENZh85nw</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/26300d54-a7ac-4f4a-abd6-dea8cdc072cd/tasks/bd3f8kh4j.output</output-file>
+<status>completed</status>
+<summary>Background command "Skip refresh when origin/main is already indexed" completed (exit code 0)</summary>
+</task-notification>
