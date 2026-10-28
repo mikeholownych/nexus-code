@@ -1,0 +1,299 @@
+<pasted_content id="e171">
+NEXUS POST-PHASE-3 DEFECT REMEDIATION
+Priority: D4 → D3 → D2 → D1
+Mode: evidence-led engineering
+Current Phase 3 candidate: local main, including Phase 3C and the accepted Backspace fix
+
+CONTEXT
+
+Phase 3A, 3B, and 3C are complete on local main. The operator has manually
+confirmed that the Backspace fix works correctly in the actual SSH terminal.
+
+The Phase 3 TUI is now materially closer to being usable as the normal Nexus
+development interface.
+
+Before further Phase 4 polish or declaring Nexus ready for meaningful
+self-dogfooding, address the execution defects deliberately deferred until
+Phase 3 was complete.
+
+This is a defect-remediation campaign, NOT authorization to redesign Nexus,
+implement speculative recovery architecture, build a new context planner,
+implement cumulative recovery epochs, or expand scope into unrelated
+hardening.
+
+GOVERNING ENGINEERING DISCIPLINE
+
+Throughout this work explicitly distinguish:
+
+- what we KNOW from evidence;
+- what we DO NOT KNOW;
+- what we currently HYPOTHESIZE;
+- what we NEED to know to remediate the demonstrated defect;
+- what may be interesting to know but is not required now.
+
+Do not promote a hypothesis to causal fact.
+
+Investigation is led by current evidence but does not preclude other
+explanations or later testing.
+
+If you discover worthwhile work that is not required to complete this
+campaign, preserve it as a deferred/backlog item with evidence and rationale.
+Do not implement it merely because it was discovered.
+
+Finish existing work loops before expanding scope.
+
+PRIORITY 1 — D4: CONTEXT-CAPACITY FAILURE
+
+Known observations include:
+
+- Nexus can reach the context admission boundary during ordinary repository
+  investigation.
+- Example failures have occurred around:
+    estimated prompt tokens
+    + 8192 completion tokens
+    + 4096 tool-response reserve
+    > 65536.
+- The over-budget request is rejected before being sent to the inference
+  gateway.
+- The submitted user message is nevertheless retained in session history.
+- Retrying can append another user message and make the session progressively
+  less recoverable.
+- A sufficiently large retained tool result can make subsequent admission
+  impossible.
+- Existing compaction may be unable to recover when the oversized retained
+  item remains.
+- The condition currently surfaces as UNHANDLED_ERROR.
+- Real TUI sessions have remained alive but unable to make useful forward
+  progress after the failure.
+
+Immediate objective:
+
+Correct the demonstrated D4 semantics and state mutation so a rejected
+pre-inference admission does not progressively damage the session merely
+because the operator retries.
+
+Required properties:
+
+1. Context-capacity rejection is a first-class bounded condition, not
+   UNHANDLED_ERROR.
+
+2. If no inference request was admitted/sent, retrying must not duplicate or
+   otherwise progressively accumulate the pending user submission.
+
+3. Preserve truthful evidence about:
+   - requested objective/message;
+   - admission calculation;
+   - reason execution could not proceed;
+   - whether any model call occurred;
+   - resulting session state.
+
+4. The operator must receive a truthful, actionable condition rather than a
+   misleading generic failure.
+
+5. Existing valid conversation/evidence must not be silently discarded merely
+   to manufacture a PASS.
+
+6. Do not silently reduce the operator's objective.
+
+7. Do not implement speculative context-recovery mechanisms as part of this
+   fix.
+
+Research candidates such as cumulative recovery epochs, durable externalized
+knowledge, alternate-strategy recovery, aggressive eviction, or new context
+planning belong outside this remediation unless a minimal mechanism is
+strictly necessary to satisfy the demonstrated defect contract. If so, stop
+and explain the necessity before expanding scope.
+
+Use RED → GREEN evidence where practical. Reproduce the pre-fix behavior with
+a focused fixture/test before changing it.
+
+PRIORITY 2 — D3: TOOL / VERIFIER TIMEOUT LIFECYCLE
+
+Known observations include:
+
+- A JavaScript/RPC bridge timeout around 35 seconds can fire before the Rust
+  command runner's approximately 60-second timeout.
+- The caller can lose structured result and partial output when the bridge
+  times out.
+- The underlying process may continue running after the caller has stopped
+  waiting.
+- Killing only the shell can leave descendants alive and pipes open.
+- Existing runner timeout information can be discarded before reaching the
+  higher-level verification result.
+- This can make a timeout appear like an ordinary failure.
+- A recent live TUI run demonstrated:
+      cargo check → RPC timeout
+      cargo check → subsequent success
+  which shows the agent can attempt local recovery, but retry safety is not
+  established if the first process is still running.
+
+Immediate objective:
+
+Establish coherent timeout ownership and cancellation semantics such that a
+timed-out operation has a truthful terminal state before Nexus permits unsafe
+retry assumptions.
+
+Required properties:
+
+1. Explicit deadline relationship between caller/bridge and command runner.
+
+2. Timeout is represented as a first-class semantic outcome/reason.
+
+3. Preserve useful partial output/evidence where feasible.
+
+4. Terminate the relevant process tree/process group, not merely the immediate
+   shell, when cancellation/timeout requires termination.
+
+5. Establish that retry after timeout does not unknowingly overlap an orphaned
+   prior execution.
+
+6. Reuse existing TurnReason / VerificationEvidence or other existing
+   semantics where appropriate rather than creating a parallel result system.
+
+7. Do not solve this by merely increasing the timeout.
+
+Use deterministic fixtures that prove process cleanup and timeout
+classification. Include a child/descendant-process case capable of detecting
+the previous orphan behavior.
+
+PRIORITY 3 — D2: `run -j` OUTPUT TRUNCATION
+
+Known root cause:
+
+- `run -j` can write JSON using console.log and immediately call process.exit.
+- Under piped stdout, output around/above 65536 bytes can be truncated while
+  the process still exits 0.
+- File output, natural process exit, and callback/drain-aware controls do not
+  exhibit the same truncation.
+- This is currently bounded primarily to the CLI path.
+
+Immediate objective:
+
+Remove the premature-exit/truncated-output behavior using the smallest
+correct lifecycle fix.
+
+Required properties:
+
+- Large JSON output reaches the consumer intact.
+- Exit status remains correct.
+- Existing small-output behavior remains compatible.
+- Add a regression test above the previously demonstrated truncation boundary.
+- Do not redesign the CLI output subsystem unless evidence establishes that it
+  is necessary.
+
+PRIORITY 4 — D1: LEGACY REPL MULTILINE INPUT LOSS
+
+Important changed context:
+
+`harness` now launches the TUI by default.
+
+The old readline REPL remains explicitly available as:
+
+    harness --repl
+
+Therefore D1 remains a real defect but no longer blocks the default TUI
+dogfooding path.
+
+Known cause:
+
+- Multiple lines arriving in the same stdin/readline chunk can be parsed
+  before the next `rl.question()` listener is installed.
+- Subsequent lines can therefore be silently discarded.
+- Paste/piped input and bracketed-paste forms have reproduced the problem.
+- Slowly entered individual prompts do not.
+
+Do not allow D1 to delay D4/D3/D2.
+
+After those are complete, determine the smallest honest disposition for D1:
+fix it, explicitly constrain legacy REPL behavior, or present evidence for a
+different bounded disposition.
+
+Do not modify the already-qualified TUI multiline semantics to solve a
+legacy-readline problem.
+
+EXECUTION RULES
+
+Before modifying each defect:
+
+1. Inspect current main and confirm the defect still exists.
+2. Establish the exact current behavior with focused evidence.
+3. Separate observation from causal interpretation.
+4. State the minimal remediation contract.
+5. Add or identify a test that fails for the demonstrated defect.
+6. Implement the smallest coherent fix.
+7. Run focused tests.
+8. Run appropriate affected regression suites.
+9. Reproduce the original failure condition after the fix where practical.
+10. Independently inspect whether the test actually proves the intended
+    property rather than merely producing GREEN.
+
+Do not weaken tests to obtain PASS.
+
+If evidence contradicts any supplied causal explanation, stop treating that
+explanation as authoritative and investigate from the new evidence.
+
+Do not touch unrelated Phase 4 UX work.
+
+Do not push or publish anything.
+
+Do not treat any configured `origin` as Nexus publication authority.
+
+Do not read, print, expose, or commit secrets. In particular, do not expose
+the contents of cli/.env.
+
+Preserve existing unrelated uncommitted operator files.
+
+Do not modify Cloudflare contest artifacts unless strictly necessary for a
+demonstrated regression, and do not modify the frozen final contest video.
+
+COMMIT STRATEGY
+
+Prefer one coherent commit per independently remediated defect so each change
+can be inspected/reverted independently.
+
+Do not merge speculative research code.
+
+If a defect cannot be safely completed without architectural decisions not
+authorized here, stop that defect at a clean evidence boundary, document the
+decision required, and continue only if doing so cannot compromise later
+work.
+
+FINAL QUALIFICATION
+
+After the campaign:
+
+- verify local main;
+- run the appropriate Rust and CLI suites;
+- run clippy/build checks;
+- exercise the real TUI path where relevant;
+- preserve known unrelated failures distinctly rather than hiding them;
+- confirm no unrelated files were staged or modified;
+- confirm no publication occurred.
+
+Then report:
+
+1. exact starting and ending SHAs;
+2. commits created per defect;
+3. for D1-D4:
+   - pre-fix observed behavior;
+   - established cause, if actually established;
+   - remediation;
+   - evidence proving the remediation;
+   - residual limitations;
+   - final disposition;
+4. all tests/checks run and exact results;
+5. any failures remaining and whether they pre-existed;
+6. new backlog/research items discovered but deliberately NOT implemented;
+7. whether the resulting baseline is suitable for the next operator
+   dogfooding assessment.
+
+Do NOT declare:
+
+    DOGFOODING_READY
+
+That remains an operator/system-level judgment based on the assembled
+experience, not a consequence of closing four defects.
+
+Stop after reporting the qualified defect-remediation baseline. Do not begin
+Phase 4 or additional feature work.
+</pasted_content id="e171">
