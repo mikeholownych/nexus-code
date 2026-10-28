@@ -375,12 +375,9 @@ export class CheckpointManager {
     }
 
     for (const relativePath of directoryTargets) {
-      const preview = execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "clean", "-nd", "--", relativePath], {
-        cwd: this.workspace,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      if (preview.trim() !== "" && this.directoryContainsOnlyGitCleanRemovableEntries(relativePath)
+      // A clean preview can be empty when the directory path is also tracked in the index,
+      // even though ordinary untracked children beneath it are removable.
+      if (this.directoryContainsOnlyGitCleanRemovableEntries(relativePath)
         && this.gitTrackedDescendantPaths(relativePath).length === 0) {
         continue;
       }

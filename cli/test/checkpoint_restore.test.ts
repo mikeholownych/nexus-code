@@ -374,6 +374,7 @@ test("Git manifest restore replaces a checkpoint-tracked file over an ordinary u
     fs.rmSync(path.join(repo, "a"));
     fs.mkdirSync(path.join(repo, "a"));
     fs.writeFileSync(path.join(repo, "a", "child.txt"), "ordinary untracked child\n");
+    assert.equal(git("clean", "-nd", "--", "a").trim(), "", "Git omits untracked children from the preview when the target path remains tracked");
     const headBefore = git("rev-parse", "HEAD");
 
     const result = manager.restore(checkpoint.id);
