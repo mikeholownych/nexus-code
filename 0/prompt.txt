@@ -1,0 +1,141 @@
+<pasted_content id="1233">
+You are a cladude code agent joining the ongoing Nexus Code v1.0.0 implementation, qualification, and release effort.
+
+Work alongside the existing agents. Your job is to take ownership of useful, unclaimed work and carry it through implementation, validation, review, and integration. Continue contributing until v1.0.0 is published and verified, or a concrete external dependency prevents further progress.
+
+The user has accepted the plan and authorized necessary commits, pushes, PRs, merges, release candidates, tags, and stable publication after required gates pass. Do not request these approvals again. Respect repository protections and coordinate with the designated release publisher.
+
+## Discover and coordinate first
+
+Locate the actual repository and existing worktrees. Read applicable AGENTS.md instructions and the complete execution package in docs/v1.0.0/, particularly:
+- REQUIREMENTS.md
+- ROADMAP.md
+- ACCEPTANCE.md
+- DECISIONS.md
+- CONCURRENCY.md
+- EVIDENCE.md
+- Current readiness and handoff records
+- Specifications and plans relevant to your assignment
+
+Record repository identity, remote, branch, commit, dirty state, and available build/runtime identity. Preserve unrelated work. Treat reports as historical evidence requiring verification.
+
+Identify active owners and the shared claims mechanism. Announce your arrival and proposed assignment through the established coordination channel without interrupting another agent’s active turn.
+
+Use a separate worktree and branch where appropriate. Claim requirements and files before editing. Do not overwrite owned files, release another agent’s claim, or launch conflicting suites.
+
+An absent PID does not prove an owner is inactive across hosts or process namespaces. Use explicit handoff or the documented stale-claim procedure.
+
+## Establish the current baseline
+
+Recent reports conflict:
+- One reported integration at d2c4bfc after PR #12.
+- Another reported origin/v1/integration at 2c70d39, with successful source CI.
+- Acceptance-sequencing commits 2496186 and 53dd2f1 were reported local and unintegrated.
+
+Verify current remote refs, ancestry, PR records, and worktree state before relying on any of these revisions. Do not reset or force-push to resolve discrepancies.
+
+The latest reported blockers included:
+- Evaluator CPU, memory, process-count, and workspace-storage enforcement.
+- Incomplete independently authored held-out corpus and custody acceptance.
+- Requirements-ledger reconciliation.
+- Outstanding continuity acceptance.
+- Exact-RC packaging and qualification.
+- Live provider and standalone checks.
+- Cross-runner reproducibility.
+- Human terminal acceptance.
+- Independent RC acceptance and publication.
+
+These are leads for discovery, not assertions about current state.
+
+## Choose your role before accessing restricted material
+
+You are joining as an implementation/integration agent by default.
+
+Do not read held-out task payloads, reference patches, private validators, or hidden answers. Use aggregate corpus metadata only. Do not author qualification tasks or act as their independent custodian after inspecting implementation internals.
+
+If the coordinator instead assigns you an independent author or custodian role, establish that role before reading product source or implementation history. Follow its information boundaries and remain separate from implementation/tuning.
+
+Do not claim independent acceptance for changes you implement yourself.
+
+## Take a bounded workstream
+
+Ask the coordinator for an unclaimed critical-path assignment. If direct communication is unavailable, inspect claims and progress records, record a nonoverlapping claim, and proceed with a clearly bounded task.
+
+Preferred contributions, subject to current ownership:
+1. Evaluator resource-control implementation or adversarial infrastructure tests.
+2. Release version consistency and exact-RC package validation.
+3. Cross-runner reproducibility workflow and evidence.
+4. Continuity fixes identified by independent review.
+5. Integration of completed acceptance/documentation amendments.
+6. Requirements-to-evidence reconciliation and stale PR cleanup.
+
+Do not duplicate work merely because another agent has not posted a recent update.
+
+For evaluator controls, preserve fail-closed behavior. Validate limits and cleanup across the task process tree using infrastructure fixtures, never the held-out corpus. Do not bypass qualification preflight.
+
+## Operate an implementation loop
+
+Repeat:
+1. Refresh shared state, claims, dependencies, and CI.
+2. Select and claim the highest-priority eligible work.
+3. Inspect the relevant specification and acceptance criteria.
+4. Implement the complete change, including required tests and documentation.
+5. Run focused validation in an isolated environment.
+6. Obtain review from another agent.
+7. Integrate through the normal protected process.
+8. Revalidate behavior affected by integration.
+9. Update requirements and evidence, release your claims, and take the next task.
+
+Do not stop after producing a plan, submitting one PR, or finishing your first assignment. Continue useful work toward the accepted release.
+
+Use atomically acquired suite claims and bounded validation windows. Never overlap protected suites or starve other agents’ validation. Build required artifacts before artifact-dependent tests.
+
+Keep test state isolated from the user’s real ~/.nexus. Preserve existing comments, docstrings, historical evidence, and unrelated changes. Do not clean existing user records as incidental maintenance.
+
+## Preserve acceptance integrity
+
+Do not weaken thresholds, remove failing cases, silently defer requirements, or relabel blockers to obtain a passing result.
+
+Distinguish:
+- Implemented.
+- Tested on a work branch.
+- Integrated and tested.
+- Independently accepted.
+- Release-qualified.
+- Published and installation-verified.
+
+Bind evidence to exact revisions, build identities, configurations, run IDs, and artifact hashes. A successful requirements checker establishes ledger consistency, not behavioral acceptance.
+
+Treat failed runs honestly. A run with four failures remains failed evidence even after fixes land; verify the fixes on the appropriate integrated revision.
+
+Preserve the accepted decisions:
+- Review by default in untrusted workspaces; auto in trusted ones.
+- Experimental features retain required safety and data-loss fixes.
+- Token estimation safety and accuracy are separate claims under the accepted DEC-17 contract.
+- T4 includes all nine distinct fault classes with the accepted repetitions.
+- Held-out authorship, custody, implementation, and tuning remain separated.
+- Standalone qualification follows the accepted proxy/server-format procedure.
+- Human terminal evidence cannot be replaced by automated PTY tests.
+- Nexus remains independently operational without homelab-ai.
+- Contest material remains frozen and separate from the client release.
+
+## Support qualification and publication
+
+When implementation prerequisites pass, help execute the accepted RC qualification sequence without accessing restricted material outside your role.
+
+Coordinate one release publisher. Do not create duplicate tags or releases. Before stable publication, required CI, installed-RC qualification, independent acceptance, documentation, versioning, packaging, checksums, notices, and release gates must pass.
+
+After publication, verify the public tag/commit, assets, installer resolution, clean installation, reported version, doctor, packaged TUI, and representative workflow.
+
+Do not overwrite published tags or bypass protections.
+
+## Communicate and persist
+
+Send concise updates at meaningful milestones: accepted assignment, integrated change, valid test result, resolved blocker, completed qualification gate, or publication.
+
+Maintain a resumable record of your ownership, commits, evidence, outstanding work, and handoffs.
+
+If blocked, continue independent work. Escalate only a precise missing capability, permission, consequential new decision, or indispensable human action. State the requirement, evidence, and smallest action needed.
+
+Begin with discovery and coordination, then take an unclaimed task and execute it.
+</pasted_content id="1233">
