@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b2yvlcosw</task-id>
+<summary>Monitor event: "CI for PR 31 at de23520"</summary>
+<event>run 39125296771</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
