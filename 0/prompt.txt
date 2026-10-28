@@ -1,0 +1,358 @@
+Independent-review boundary: The active Nexus TUI Phase 3 implementation is being executed by a separate Cursor Agent. You are not the Phase 3 implementer. Treat Cursor's implementation, plans, tests, and eventual reports as evidence to inspect, not conclusions to inherit. Do not modify, coordinate, redirect, or interfere with Cursor's active work. Your task is to independently determine how the four defects relate to Phase 3 and report any material collision, missing qualification, or independent backlog item.
+
+
+
+<pasted_content id="e171">
+NEXUS DEFECT RECONCILIATION REVIEW
+Context-validation findings vs. active TUI Phase 3 work
+
+MODE
+
+Independent review and reconciliation only.
+
+DO NOT:
+- modify product code
+- modify the active Phase 3 worktree/branch
+- interrupt or redirect Phase 3
+- fix any defect
+- weaken or change tests
+- create speculative architecture
+- start additional context experiments
+- merge, rebase, cherry-pick, push, publish, tag, or deploy
+- alter the Cloudflare contest artifacts
+- expose secrets or read/print cli/.env
+
+You may create a review document and commit that document only if doing so
+cannot interfere with the active Phase 3 work.
+
+OBJECTIVE
+
+Review four defects surfaced during the context-engineering investigation and
+determine:
+
+1. whether each defect is already being addressed by the active TUI Phase 3
+   implementation;
+2. whether Phase 3 merely exposes/observes the defect rather than fixes it;
+3. whether the defect remains entirely outside Phase 3;
+4. whether any defect conflicts with, invalidates, or creates a dependency for
+   the Phase 3 design;
+5. what evidence would be required to close each defect;
+6. whether any existing Phase 3 qualification should naturally prove closure
+   without expanding Phase 3 scope.
+
+This is a classification and evidence task.
+
+Do not turn every discovered issue into a Phase 3 requirement.
+
+AUTHORITATIVE CURRENT CONTEXT
+
+Context validation is complete for the current architectural decision.
+
+Experiment commit:
+  9b6efe9
+
+Disposition commit:
+  84239e7
+
+Decision:
+  The turn-specific context planner is rejected for the current architecture
+  and evidence envelope, not disproven.
+
+No retained context mechanism is currently authorized for implementation.
+
+Active TUI work is Phase 3 and must continue independently.
+
+The current Phase 3 roadmap is:
+
+- 3A Interaction Core
+- 3B Slash Commands and Default Entry
+- 3C Detail Overlays
+
+Review the actual Phase 3 specification/plans and current implementation rather
+than relying on this prompt's summary.
+
+DEFECTS TO REVIEW
+
+D1 — MULTILINE INPUT LOSS
+
+Earlier investigation reproduced a path where multiline text pasted into the
+legacy REPL can result in only the first line reaching the agent/objective.
+
+This materially confounded the earlier 30-step dogfooding run because the
+intended objective was not demonstrated to have reached the model intact.
+
+Phase 3 is building a real multiline TUI composer.
+
+Determine precisely:
+
+- which input path contains the original defect;
+- whether the Phase 3 TUI uses that path;
+- whether Phase 3 avoids, supersedes, or actually repairs the defective path;
+- whether legacy `harness --repl` remains affected;
+- whether bracketed paste, embedded newlines, multiline editing and submission
+  preserve the complete objective;
+- whether there is already an end-to-end test proving that the complete
+  normalized multiline objective reaches the sidecar/agent;
+- if not, whether adding such a qualification test is already within Phase 3's
+  intended behavior rather than scope expansion.
+
+Do not declare the defect fixed merely because the new composer contains
+multiline data structures.
+
+Closure requires evidence across the relevant boundary.
+
+At minimum consider an eventual qualification case equivalent to:
+
+  paste realistic multiline engineering objective
+    -> edit it
+    -> submit exactly once
+    -> observe exactly one prompt submission
+    -> prove complete normalized content reaches the sidecar/agent
+    -> prove line ordering/content is preserved
+    -> prove no additional pasted line is interpreted as another command
+
+D2 — `harness run -j` PIPE OUTPUT TRUNCATION
+
+Context-validation work observed that:
+
+  harness run -j
+
+can truncate JSON stdout at approximately 64 KB when stdout is piped.
+
+The working hypothesis is process termination/output-drain behavior, but that
+cause is NOT established merely by the observation.
+
+Review:
+
+- implementation path for `harness run -j`;
+- output writer/lifecycle;
+- process termination behavior;
+- whether the sidecar/TUI uses any shared output lifecycle;
+- whether Phase 3 can plausibly affect this defect;
+- whether a common lower-level primitive creates an unexpected dependency.
+
+Do not reproduce destructively or fix it.
+
+Classify whether this is:
+
+- TUI_RELATED
+- SHARED_INFRASTRUCTURE
+- CLI_ONLY
+- UNKNOWN
+
+Preserve observation separately from causal hypothesis.
+
+D3 — 35-SECOND VERIFIER TIMEOUT
+
+Earlier dogfooding repeatedly encountered a verifier operation bounded by an
+approximately 35-second RPC timeout. This prevented completion of verification
+using `make test`.
+
+Review the actual verifier/execution path and determine:
+
+- where the timeout is imposed;
+- whether it is fixed, configurable, inherited, or incidental;
+- which component owns it;
+- whether TUI Phase 3 changes that component;
+- whether the TUI merely renders the resulting authoritative failure;
+- whether any Phase 3 tests depend on verifier operations that could encounter
+  the same timeout;
+- whether this represents a Phase 3 blocker, qualification consideration, or
+  independent runtime backlog defect.
+
+Do not change timeout values.
+
+Do not assume that increasing a timeout is the correct remediation.
+
+The problem to identify is the behavioral contract and ownership, not merely a
+number.
+
+D4 — SMALL-WINDOW `context budget exceeded`
+
+Controlled context validation found:
+
+- plain Nexus with the tested 65K context completed the controlled task 4/4;
+- the constrained 32K plain condition failed 0/4 with
+  `context budget exceeded`;
+- a cap/dedup/eviction policy made the 32K condition workable, but at
+  substantially greater request count and wall time.
+
+The experiment therefore rejected routine turn-specific rebuilding/eviction
+for the current evidence envelope.
+
+Review the 32K failure independently as a runtime/recovery defect.
+
+Determine:
+
+- which component emits `context budget exceeded`;
+- whether it is an intentional fail-closed condition or an unhandled capacity
+  state;
+- what state is preserved when it occurs;
+- whether the user/agent can recover without restarting or losing useful work;
+- whether Phase 3 interacts with this mechanism;
+- whether Phase 3 merely presents the error;
+- whether anything in Phase 3 could accidentally mask or misrepresent it.
+
+Do NOT implement context eviction, planner logic, summarization, packet
+rebuilding, or any other context architecture.
+
+The context experiment has already answered the current architectural question.
+
+REQUIRED REVIEW METHOD
+
+For each defect:
+
+1. Locate the actual implementation path.
+2. Identify the component that detects/emits the observed behavior.
+3. Identify the component that owns remediation.
+4. Trace whether Phase 3 touches that path.
+5. Inspect relevant tests.
+6. Separate:
+   - observation
+   - reproduced behavior
+   - causal hypothesis
+   - established cause
+   - proposed remediation
+   - closure evidence
+7. Determine whether Phase 3:
+   - directly repairs it;
+   - supersedes the affected path;
+   - improves visibility only;
+   - shares infrastructure;
+   - is independent;
+   - conflicts with it.
+
+Do not infer FIXED from code inspection alone where behavioral evidence is
+required.
+
+PHASE 3 NON-INTERFERENCE ANALYSIS
+
+Explicitly answer:
+
+A. Does any defect require Phase 3 implementation to stop or change now?
+
+B. Does any defect make the current Phase 3 architecture unsafe or invalid?
+
+C. Does any defect create a hidden dependency that Phase 3 currently ignores?
+
+D. Is any defect naturally addressed by functionality already required by
+   Phase 3?
+
+E. Is there a qualification test we should add to Phase 3 because it proves
+   functionality Phase 3 already claims to provide, rather than expanding
+   scope?
+
+F. Which defects should remain independent backlog items after Phase 3?
+
+Pay particular attention to D1.
+
+The expected distinction to investigate is:
+
+  "new TUI path no longer exhibits legacy defect"
+
+versus
+
+  "legacy defect itself has been repaired."
+
+Those are not equivalent.
+
+EVIDENCE DISCIPLINE
+
+Use the repository, commits, specifications, tests and experiment artifacts as
+evidence.
+
+Do not treat prior agent reports as authority.
+
+If a claim cannot be established, report UNKNOWN.
+
+Historical evidence remains valid for the state it tested. Do not reinterpret
+old PASS/FAIL results merely because the architecture changed.
+
+Do not classify a defect as Phase 3 blocking merely because Phase 3 could
+theoretically improve it.
+
+Ask:
+
+  Will resolving this uncertainty materially change what Phase 3 should do?
+
+If no, preserve the finding and keep Phase 3 moving.
+
+DELIVERABLE
+
+Produce a concise review containing a matrix with these columns:
+
+DEFECT
+OBSERVED BEHAVIOR
+REPRODUCTION STATUS
+ESTABLISHED OWNER
+PHASE 3 RELATIONSHIP
+PHASE 3 CONFLICT
+CURRENT USER IMPACT
+CLOSURE EVIDENCE REQUIRED
+RECOMMENDED DISPOSITION
+
+Then provide:
+
+1. Phase 3 non-interference conclusion
+2. Any qualification additions that are already within Phase 3 scope
+3. Independent backlog defects remaining after Phase 3
+4. Unknowns that actually matter
+5. Unknowns that do NOT currently justify investigation
+6. Exact files/tests/commits used as evidence
+
+Use these final statuses:
+
+DEFECT_D1_MULTILINE_INPUT:
+  PHASE3_ADDRESSES |
+  PHASE3_SUPERSEDES_PATH |
+  INDEPENDENT |
+  CONFLICT |
+  UNKNOWN
+
+DEFECT_D2_JSON_PIPE_TRUNCATION:
+  PHASE3_ADDRESSES |
+  SHARED_INFRASTRUCTURE |
+  CLI_ONLY |
+  CONFLICT |
+  UNKNOWN
+
+DEFECT_D3_VERIFIER_TIMEOUT:
+  PHASE3_ADDRESSES |
+  OBSERVABILITY_ONLY |
+  INDEPENDENT |
+  CONFLICT |
+  UNKNOWN
+
+DEFECT_D4_CONTEXT_BUDGET:
+  PHASE3_ADDRESSES |
+  OBSERVABILITY_ONLY |
+  INDEPENDENT |
+  CONFLICT |
+  UNKNOWN
+
+PHASE3_ARCHITECTURE_CONFLICT:
+  NONE_FOUND |
+  FOUND |
+  UNKNOWN
+
+PHASE3_SCOPE_CHANGE_REQUIRED:
+  NO |
+  YES |
+  UNKNOWN
+
+PHASE3_QUALIFICATION_ADDITION:
+  NONE |
+  RECOMMENDED
+
+DEFECT_REMEDIATION_AUTHORIZED:
+  NO
+
+PHASE3_INTERRUPTION_AUTHORIZED:
+  NO
+
+The preferred outcome is not "no defects."
+
+The preferred outcome is an accurate map of which layer owns each defect,
+which evidence is still missing, and whether any of it should alter the work
+already in progress.
+</pasted_content id="e171">
