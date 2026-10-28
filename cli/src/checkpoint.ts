@@ -88,6 +88,76 @@ export class CheckpointManager {
     return gitPath.startsWith(prefix) ? gitPath.slice(prefix.length) : undefined;
   }
 
+  private restoreGitIndex(gitRef: string, hookGuardEnv: NodeJS.ProcessEnv): void {
+    const prefix = this.gitWorkspacePrefix();
+    const repositoryRoot = this.gitRoot();
+    if (!prefix) {
+      execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", gitRef], {
+        cwd: repositoryRoot,
+        stdio: "ignore",
+        env: hookGuardEnv,
+      });
+      return;
+    }
+
+    // Build the checkpoint index separately, then replace only entries owned
+    // by this workspace in the real index. A whole-tree read-tree would also
+    // reset staged changes belonging to sibling workspaces in the repository.
+    const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-index-"));
+    try {
+      const targetIndex = path.join(temporaryDir, "index");
+      const targetEnv = { ...hookGuardEnv, GIT_INDEX_FILE: targetIndex };
+      execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", gitRef], {
+        cwd: repositoryRoot,
+        stdio: "ignore",
+        env: targetEnv,
+      });
+
+      const targetEntries = execFileSync("git", ["ls-files", "--stage", "-z"], {
+        cwd: repositoryRoot,
+        env: targetEnv,
+      });
+      const currentEntries = execFileSync("git", ["ls-files", "--stage", "-z"], {
+        cwd: repositoryRoot,
+        env: hookGuardEnv,
+      });
+      const prefixBytes = Buffer.from(prefix);
+      const parseEntries = (entries: Buffer): Array<{ metadata: Buffer; filePath: Buffer }> =>
+        entries.toString("binary").split("\0").filter(Boolean).map((entry) => {
+          const separator = entry.indexOf("\t");
+          if (separator < 0) throw new Error("Git returned a malformed index entry");
+          return {
+            metadata: Buffer.from(entry.slice(0, separator), "binary"),
+            filePath: Buffer.from(entry.slice(separator + 1), "binary"),
+          };
+        });
+      const inWorkspace = (filePath: Buffer): boolean => filePath.subarray(0, prefixBytes.length).equals(prefixBytes);
+      const target = parseEntries(targetEntries).filter(({ filePath }) => inWorkspace(filePath));
+      const current = parseEntries(currentEntries).filter(({ filePath }) => inWorkspace(filePath));
+      const indexInfo: Buffer[] = [];
+
+      for (const { metadata, filePath } of current) {
+        const [, objectId, stage] = metadata.toString("ascii").split(" ");
+        if (!objectId || !stage) throw new Error("Git returned an incomplete index entry");
+        indexInfo.push(Buffer.from(`0 ${"0".repeat(objectId.length)} ${stage}\t`, "ascii"), filePath, Buffer.from("\0"));
+      }
+      for (const { metadata, filePath } of target) {
+        indexInfo.push(metadata, Buffer.from("\t"), filePath, Buffer.from("\0"));
+      }
+
+      if (indexInfo.length > 0) {
+        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "update-index", "-z", "--index-info"], {
+          cwd: repositoryRoot,
+          input: Buffer.concat(indexInfo),
+          stdio: ["pipe", "ignore", "pipe"],
+          env: hookGuardEnv,
+        });
+      }
+    } finally {
+      fs.rmSync(temporaryDir, { recursive: true, force: true });
+    }
+  }
+
   private gitIndexLockExists(): boolean {
     let lockPath: string;
     try {
@@ -1021,7 +1091,7 @@ export class CheckpointManager {
           this.assertGitSnapshotTargetsReplaceable(replacementTargets, cp.gitRef);
         }
         if (cp.untrackedFiles === undefined) this.assertLegacyUntrackedRestoreSafe(cp.gitRef);
-        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
+        this.restoreGitIndex(cp.gitRef, hookGuardEnv);
         // Remove checkpoint-deleted paths while their current ancestors are still
         // present. Installing checkpoint symlinks first could redirect deletion
         // through an in-workspace link into unrelated ignored data.
