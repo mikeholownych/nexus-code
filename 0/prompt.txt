@@ -1,0 +1,1 @@
+what about 2 different models.. the gateway as you referred to it.. or the orchestrator as the last agent referred to it, should have model routing capabilities.
