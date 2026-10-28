@@ -24,6 +24,7 @@ import { writePrivateFile } from "../src/core/durable_file.js";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { syncBuiltinESMExports } from "node:module";
 
 const resource: ResourceDescriptor = {
   id: "primary",
@@ -392,6 +393,41 @@ test("a checkpoint copies the conversation journals too and restores them withou
     assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "with-journal"), /does not match its recorded hash/);
     assert.equal(fs.readFileSync(journal, "utf8"), before);
   } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("a journal write failure rolls back the task and preserves the blocked operation", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  const originalRename = fs.renameSync;
+  try {
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "before-checkpoint\n", { durable: true });
+    createContextCheckpoint(store.manager, state, "u1", "atomic");
+    writePrivateFile(taskFile, JSON.stringify({ taskId: "task-u1", messages: [{ role: "user", content: "current" }] }), { durable: true });
+    writePrivateFile(journal, "current-journal\n", { durable: true });
+    const taskBefore = fs.readFileSync(taskFile, "utf8");
+    const journalBefore = fs.readFileSync(journal, "utf8");
+    state.units[0].status = "BLOCKED";
+    let failed = false;
+    (fs as any).renameSync = (from: fs.PathLike, to: fs.PathLike) => {
+      if (!failed && String(to) === journal) {
+        failed = true;
+        throw new Error("simulated journal rename failure");
+      }
+      return originalRename(from, to);
+    };
+    syncBuiltinESMExports();
+
+    assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "atomic"), /simulated journal rename failure/);
+    assert.equal(failed, true);
+    assert.equal(fs.readFileSync(taskFile, "utf8"), taskBefore);
+    assert.equal(fs.readFileSync(journal, "utf8"), journalBefore);
+    assert.equal(state.units[0].status, "BLOCKED");
+  } finally {
+    fs.renameSync = originalRename;
+    syncBuiltinESMExports();
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }

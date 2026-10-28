@@ -169,13 +169,33 @@ export function restoreContextCheckpoint(
 
   const target = taskFile(store, record.taskId);
   const backupDir = path.join(checkpointDir(base, state.id), "backups", `${slug(unitId)}--${name}--${now}`);
+  const originals = new Map<ContextCheckpointFile["name"], Buffer | undefined>();
   for (const entry of BUNDLE_FILES) {
     const current = path.join(base, `${record.taskId}${entry.suffix}`);
-    if (fs.existsSync(current)) {
-      writePrivateFile(path.join(backupDir, entry.file), fs.readFileSync(current), { durable: true });
+    const original = fs.existsSync(current) ? fs.readFileSync(current) : undefined;
+    originals.set(entry.name, original);
+    if (original) writePrivateFile(path.join(backupDir, entry.file), original, { durable: true });
+  }
+  try {
+    for (const entry of BUNDLE_FILES) {
+      const restored = contents.get(entry.name);
+      if (restored) writePrivateFile(path.join(base, `${record.taskId}${entry.suffix}`), restored, { durable: true });
     }
-    const restored = contents.get(entry.name);
-    if (restored) writePrivateFile(current, restored, { durable: true });
+  } catch (error: any) {
+    const rollbackFailures: string[] = [];
+    for (const entry of BUNDLE_FILES) {
+      const current = path.join(base, `${record.taskId}${entry.suffix}`);
+      const original = originals.get(entry.name);
+      try {
+        if (original) writePrivateFile(current, original, { durable: true });
+        else fs.rmSync(current, { force: true });
+      } catch {
+        rollbackFailures.push(entry.name);
+      }
+    }
+    throw new ContextCheckpointError(
+      `${error?.message ?? error}${rollbackFailures.length ? `; rollback also failed for ${rollbackFailures.join(", ")}` : ""}`,
+    );
   }
 
   unit.agentTaskId = record.taskId;
