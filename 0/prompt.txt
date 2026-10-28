@@ -1,0 +1,132 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+## 1. Primary Request and Intent
+
+The user (Mike Holownych) pursued these requests in sequence:
+
+1. **Independent Nexus authority review.** It was read-only, with 19 report sections and a prescribed final line. I did not read the other agent's research until the last comparison section. Delivered to a scratchpad file.
+2. **A similar review of `~/Projects/aihost`.** Delivered to a scratchpad file, with a corrected credentials finding.
+3. **Make the local inference host usable.** Context: aihost is installed on ai-5820-01 (10.0.8.5, Dell Precision T5820, two Intel Arc Pro B65 32 GB GPUs). nexus-code is a custom agent harness. The user said "the priority is a usable and working system. any changes should be done through the ansible playbook, then applied to the host." They also said "I'm not confident that the chosen model is the absolutely best choice" and later "first priority is getting everything working properly.. once that's done, then any key rotation can happen. Hashicorp Vault management of keys is supposed to be setup already."
+4. **Test llama.cpp SYCL**, then decide which setup is better "all around. accuracy is more important than tps throughput."
+5. **Build the gateway route table first, then test both second-model roles (fast helper and independent reviewer), then determine the best models for each role.**
+6. **Work on vllm-top** (the TTY1 monitor). Quote: "vllm-top was built to show the system stats on TTY1.. it's vLLM based.. so if we don't stay on vLLM, that will require updates too... not that there weren't other things that needed fixing there."
+7. **Fix the xpu-smi syslog errors** the user pasted.
+8. **Adopt the other agent's engineering-intent standard** (validated engineering work per unit time; baselines stay reproducible; no runtime privileged; external validation).
+9. **Install pytest on the host if it truly doesn't exist.** Done via Ansible.
+10. **Most recent explicit request: "deploy it."** This is the two-pool layout described in section 7.
+
+## 2. Key Technical Concepts
+
+- Ansible-managed host (`playbooks/inference.yml` is the safe scoped playbook; do **not** run `site.yml` unscoped, it would break the host). Roles: `vllm_xpu` (dual_tp1 mode), `orchestrator_gateway`, `llama_cpp_container`, `xpu_smi_log_filter`, `vllm_top_console`, `test_tooling`.
+- vLLM v0.29.0 on XPU, TP=1 per GPU, Qwen3-Coder-30B-A3B AWQ-4bit. Prefix caching on, chunked prefill, decode CPU-bound at ~18 tok/s.
+- llama.cpp SYCL (container `ghcr.io/ggml-org/llama.cpp:server-intel`, digest `sha256:2f4940610095fe48aabff3db7f87feb4f553081302b1a5a8744a589eb123b451`, build 11347), rootless podman as the `aihost-runtime` account via `runuser`, systemd units.
+- Gateway (`orchestrator_gateway/` plus `orchestrator_runtime/`): OpenAI-compatible router with per-worker `WorkerRecord` (pool, engine, context_limit, capabilities), session-affinity routing (rendezvous hash), deterministic route table, evidence JSONL, `X-AIHost-Route` header, `/v1/routes`, engine stats in `/health`.
+- Engine-agnostic monitoring: the gateway holds worker credentials and republishes neutral engine stats, so monitors need no worker keys.
+- Evaluation harnesses on the host (`/tmp/evalx/`): `evalx.py` (HumanEval, needle, tools, edits), `reviewx.py` (mutation-based reviewer benchmark), `engx.py` plus `engx_tasks.py` (12 engineering tasks, hidden pytest, retry loop), runners `cand.sh`, `cand2.sh`, `runall*.sh`. Code runs under bubblewrap (no network, read-only system).
+- Credential handling: per-worker API key files (`/etc/local-ai/vllm/workerN/worker-api-key`, `/etc/local-ai/llama/workerN/worker-api-key`), gateway client token separate, Vault not yet wired into the inference stack.
+
+## 3. Files and Code Sections
+
+**Repo `~/Projects/aihost` (branch `fix/usable-live-topology`, many commits, not merged to main):**
+- `playbooks/inference.yml`: scoped play with roles `vllm_xpu`, `xpu_smi_log_filter`, `llama_cpp_container`, `orchestrator_gateway`, `vllm_top_console`, `test_tooling`.
+- `inventory/production/host_vars/ai-5820-01.yml`:
+  - `vllm_xpu_deployment_mode: dual_tp1`, `vllm_xpu_workers` (worker1 gpu0 port 8000 and worker2, both with `extra_config: speculative-config: '{"method":"ngram","num_speculative_tokens":5,"prompt_lookup_max":5,"prompt_lookup_min":2}'`; worker2 vLLM entry later removed).
+  - `llama_cpp_container_enabled: true`, `llama_cpp_container_digest`, `llama_cpp_container_retired_services: [aihost-vllm-worker2.service]`, `llama_cpp_container_workers.worker2` (gpu 1, port 8001, model `Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf`, context 65536).
+  - Gateway: `orchestrator_gateway_release_id`/`_dir` set to `t5820-gateway-af6aa94` (this is the release currently deployed on the host, per commit "chore(inference): deploy gateway release af6aa94"). Routes `[{id: default, match: {}, pool: lead}]`, aliases `engineering/lead: lead`. Workers: `b0-live-tp1-worker1` (pool lead, engine vllm, token_file `/etc/local-ai/vllm/worker1/worker-api-key`) and `b0-live-llama-worker2` (pool lead, engine llama.cpp, token_file `/etc/local-ai/llama/worker2/worker-api-key`, artifact_digest `sha256:fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad`).
+  - `vllm_top_console_enabled: true`.
+- `roles/vllm_xpu/tasks/dual_tp1.yml`: per-worker API-key preserve/generate (slurp `{{ config_dir }}/worker-api-key`), restarts only changed workers one at a time via `restart_worker.yml` (waits on `/health`). Templates: `vllm-worker-config.yaml.j2` (renders `extra_config` entries), `vllm-worker.env.j2`, `vllm-worker.service.j2` (`CDI_DEVICE=local-ai.intel/gpu={{ cdi_device | default("all") }}`). Defaults: `vllm_xpu_max_num_seqs: 2`, `vllm_xpu_max_num_batched_tokens: 4096`.
+- `roles/llama_cpp_container/`: `defaults/main.yml` (default args `["-ngl","99","--jinja","-np","1","-fa","on","-b","4096","-ub","2048","--metrics"]`), `templates/llama-worker.service.j2`, `tasks/main.yml` (assert digest, model-file check, per-worker key preserve/generate, image pre-pull via `runuser -u aihost-runtime -- env XDG_RUNTIME_DIR=/run/user/999 TMPDIR=/var/lib/aihost-runtime/tmp podman pull`, `args.chdir`, retired-services stop), `tasks/start_worker.yml` (start/restart then wait on health). The model dir is `/var/lib/local-ai/models/gguf`.
+- `roles/orchestrator_gateway/`: tasks validate the route table with the gateway's own `Router` before deploy (delegate localhost); `templates/gateway.env.j2` (`ORCHESTRATOR_ROUTES`, `ORCHESTRATOR_MODEL_ALIASES`, `ALLOW_WORKER_PINNING`, `SCHEDULING_MODE`); handler `Restart gateway service`; obsolete drop-ins removed; `files/gateway-readiness.py` (the live version).
+- `roles/xpu_smi_log_filter/` (rsyslog drop-in `if $programname == 'xpu-smi' and ($msg contains 'Intel MEI driver' or $msg contains 'IGSC:' or $msg contains 'HECI') then stop`), `roles/vllm_top_console/` (installs `/usr/local/bin/vllm-top` root-owned from `../../vllm-top/target/release/vllm-top`, requires version ≥ 0.7.1, manages `vllm-top-console.service` on tty1, user mike), `roles/test_tooling/` (`python3-pytest`).
+- Gateway Python code:
+  - `orchestrator_runtime/routing.py`: `Router`, `RouteRule`, `RouteDecision`, `RouteConfigError`, `Router.from_config(rules_cfg, aliases)`; the last rule must be an unconditional default; `decide(model, task_class, has_tools, prompt_tokens)`; alias names bypass the table.
+  - `orchestrator_runtime/runtime.py`: `ProviderError(status, body)`; max_tokens clamp; 4xx provider errors returned as `rejected` 400 without marking the worker unhealthy; `upstream_timeout` 600 s (`ORCHESTRATOR_UPSTREAM_TIMEOUT_SECONDS`); usage passthrough; `_affinity_key` (explicit `X-Session-ID` or hash of leading messages); `WorkerRecord.pool` and `.engine`; route evidence; `aihost_route_decisions_total`.
+  - `orchestrator_runtime/engine_stats.py` (`parse_prometheus`, `extract` for engines `vllm` and `llama.cpp`), `orchestrator_runtime/health.py` (`_collect_engine_stats`, `collect_all_engine_stats`, `_stats_loop` every 1 s (`ORCHESTRATOR_ENGINE_STATS_INTERVAL_SECONDS`), `ENGINE_STATS_MAX_AGE_SECONDS = 15.0`, `/health` worker entries include `pool`, `engine`, `engine_stats`), `orchestrator_gateway/server.py` (`X-Task-Class` header, `/v1/routes`, aliases in `/v1/models`, `_route_headers`), `orchestrator_gateway/__main__.py` (`load_router`, worker spec fields `pool`, `engine`).
+  - Tests: `tests/test_orchestrator_{gateway,runtime,routing,engine_stats}.py` (56 passing at last run).
+
+**Repo `~/Projects/vllm-top`** (new git repo; commits: import 0.6.0, 0.7.0, 0.7.1):
+- `src/orchestrator.rs`: `WorkerHealth` gained `pool`, `engine`, `model_id`, `engine_stats`; new `EngineStats`, `EngineRates`, `engine_rates()`; `MetricsTotals.routes`.
+- `src/app.rs`: `update_engine_rates`, `orch_worker_rates`; GPU probe now takes cached `(index, bdf)` targets.
+- `src/gpu.rs`: `probe(targets)` no longer runs `xpu-smi discovery`; `hwmon_temps(root, bdf)`; `GpuStats.temp_c`/`vram_temp_c`.
+- `src/ui/mod.rs`: worker rows show `pool/engine`, run/wait/kv/hit, gen/prompt tok/s, `routes` line, temperatures; 123 tests passed at 0.7.1.
+- Source facts relevant to the in-progress step: `config::SourceKind` is `{Direct, Prometheus}`; `config::resolve` falls back to a placeholder `http://localhost:8000` direct instance when discovery finds none; `source::MetricsSource::fetch() -> Vec<Sample>`; `Snapshot::from_samples` reads `vllm:*` names (`vllm:num_requests_running`, `...waiting`, `vllm:kv_cache_usage_perc`, `vllm:prompt_tokens`, `vllm:generation_tokens`, prefix hits/queries, histograms); `app.rs` matches on `SourceKind` at about line 329 and `ui/mod.rs` at about line 1513.
+
+**Scratchpad files** (`/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/scratchpad/`): `NEXUS_INDEPENDENT_AUTHORITY_REVIEW.md`, `AIHOST_INDEPENDENT_AUTHORITY_REVIEW.md`, `AIHOST_LIVE_HOST_DIAGNOSTICS.md`, `AIHOST_USABILITY_PLAN.md`, `ACCURACY_COMPARISON.md`, `evalx.py`, `engx.py`, `engx_tasks.py`, `reviewx.py`, `cand.sh`, `cand2.sh`, `engsum.py` and others.
+
+## 4. Errors and fixes
+
+- Redaction filter missed worker API keys in command output (two keys exposed in the transcript, not written to files). I told the user to rotate them later.
+- My first aihost review said no credentials were committed; a prefix-only secret scan was wrong. Corrected in the report (§4.8).
+- A `pkill -f` pattern matched its own SSH shell and killed it. Fixed with a `[x]`-bracket pattern.
+- A misplaced `tr -c` terminal-screen decode confused output; resolved by reading `/dev/vcs1` with the right width.
+- My accuracy harness had two bugs: the code-fence regex, and needle sizes over the context window. Both fixed. The first HumanEval 78%/84% scores were artifacts.
+- `engx.py` invoked without the `run` subcommand (twice): once for the vLLM lead, once because I overwrote the fixed remote `cand2.sh` with a stale local copy. Fixed and verified the command line.
+- The T01 hidden test demanded ValueError from `paginate` directly, which the instruction never stated (unfair). Fixed. T03 cross-type key distinction removed. Another own edit created a duplicate cache key; caught by self-check.
+- The first engine parser required the literal "### FILE:" marker; the model sometimes writes "### a.py". Parser made tolerant, with a self-test. The lead's first 4/12 score was invalid.
+- The `become_user` into an unprivileged account failed (`chmod ... A+` error). Switched to `runuser`. Image pull needed `chdir` and `TMPDIR` (`mkdir /var/tmp/...: no such file or directory` under runuser).
+- Running apply of the playbook before check passed (I chained commands without gating). It failed harmlessly mid-run.
+- The route-table tests initially listed `engineering/b0` as an alias, which bypasses rules; fixed so only `engineering/lead` and `engineering/aux` bypass the table.
+- A rsyslog `validate:` fragment check failed on temp-file permissions; replaced with a block/rescue validating the full config.
+- The thinking-mode reviewer run for Qwen3.5-27B would take hours; stopped it (non-thinking result kept).
+- Background watchers hit their time limits twice; checked real state each time.
+
+## 5. Problem Solving
+
+- Playbooks did not describe the live host: brought the dual-worker and gateway roles from `t5820-release-integrity` onto a branch off main, reconciled with live state, verified an empty diff for workers.
+- Failure causes: context overflow, timeout and health flapping fixed in the gateway.
+- Decode speed: speculative decoding then llama.cpp.
+- Evaluation validity: found fake phase-12 validators and replaced them with real hidden-test validation.
+- Evidence (engineering loop, 12 tasks × 3 reps, 3 attempts, hidden pytest): Qwen3.5-27B 86.1% validated (58.3% first try, 49.9 s/task), llama.cpp lead 80.6% (61.1%, 10.9 s/task), vLLM AWQ lead 75.0% (50.0%, 34.4 s/task), Qwen3.5-9B 72.2% (50.0%), Devstral-24B 66.7% (52.8%). Reviewer benchmark (75 pairs): lead 86.7% acc / 82.7% recall / 4.0% FP; Devstral 86.7/78.7/5.3; 9B 82.7/88.0/6.7; 27B 87.3/90.7/5.3 (15 unparsed). The 27B uniquely solves T10; the lead uniquely solves T07 (hypothesis: lead-then-27B cascade covers ~11/12). A 9B helper adds no speed over the lead.
+- Caveats stated: 12 tasks (36 trials/model), a proxy for real repo work, 27B thinking mode and Q5/Q6 quants untested.
+- Production restored after tests: the playbook was re-applied, so the llama lead on GPU 1 is running again with `--metrics`, and both workers show engine stats in the gateway health.
+
+## 6. All user messages
+
+1. The Nexus independent architecture review prompt (pasted block, "ROLE... READ ONLY... DO NOT seek, read, or rely upon that agent's research ... INDEPENDENT_AUTHORITY_REVIEW_COMPLETE / _INCOMPLETE / EXISTING_AUTHORITY_INVARIANT_VIOLATION_CONFIRMED").
+2. "provide the above output in a file"
+3. "perform a similar review of ~/Projects/aihost"
+4. "the main thing with the aihost codebase: this is a local ai installation that is currently installed on ai-5820-01 (10.0.8.5). The intended goal is to ensure that it is fully usable for actual work. thus far, that has been a challenge. the nexus-code codebase is a custom agent harness that is being built to optimize that localai usage.. but I feel like there's more work required on the ai inference host itself."
+5. "yes, run the read-only diagnostics on 10.0.8.5"
+6. "the priority is a usable and working system. any changes should be done through the ansible playbook, then applied to the host. also, I'm not confident that the chosen model is the absolutely best choice for this setup."
+7. "you are authorized to get the system to a usable state."
+8. (mid-turn) "first priority is getting everything working properly.. once that's done, then any key rotation can happen. Hashicorp Vault management of keys is supposed to be setup already."
+9. "continue" (twice)
+10. "test llama.cpp SYCL next"
+11. "determine which setup is better all around. accuracy is more important than tps throughput"
+12. (mid-turn) "bubblwrap is now available on the host"
+13. "I'm seeing a lot of errors in the syslog:" (pasted xpu-smi MEI/IGSC permission-denied lines)
+14. (mid-turn) "vllm-top was built to show the system stats on TTY1.. it's vLLM based.. so if we don't stay on vLLM, that will require updates too... not that there weren't other things that needed fixing there."
+15. "what about 2 different models.. the gateway as you referred to it.. or the orchestrator as the last agent referred to it, should have model routing capabilities."
+16. "build the route table first, then test both, then determine what models would be best for each."
+17. "while we wait for the downloads, might as well work on the vllm-top app"
+18. The other agent's "Local LLM Host: Purpose and Engineering Objective" document (pasted).
+19. "install pytest if it truly doesn't exist" (mid-turn)
+20. "deploy it"
+
+## 7. Pending Tasks
+
+- **Deploy the two-pool layout through the playbook**, staged to limit downtime:
+  - GPU 0: replace vLLM worker1 with a llama.cpp lead worker (Qwen3-Coder-30B Q4_K_M, pool `lead`, port 8000, context 65536, `-np 1`). New worker id `b0-live-llama-worker1`, new config dir `/etc/local-ai/llama/worker1` (key generated by the role).
+  - GPU 1: change llama worker2 to Qwen3.5-27B Q4_K_M, pool `deep`, port 8001, id such as `b0-live-llama-deep-worker2`; its GGUF sha256 and a `revision: gguf-<sha12>` are still to be computed.
+  - Retire vLLM worker1 without deleting the config (baseline stays reproducible): add a role variable such as `vllm_xpu_workers_state` (default `started`) that makes the dual_tp1 state task use `stopped`/disabled, and guard the restart include.
+  - Route table: aliases `engineering/lead → lead`, `engineering/deep → deep`; rules such as task_class `[review, escalate, architecture, debug-hard]` → `deep` with `fallback: [lead]`, default → `lead` with `fallback: [deep]`. Update gateway worker specs and release id, then verify via `/v1/routes`, health and an end-to-end request.
+  - Nexus must send `X-Task-Class` (or the alias) for the gateway to use `deep`; this change is not yet made.
+- **vllm-top gateway-instance support** (in progress; needed before retiring vLLM, or the console shows a misleading placeholder `localhost:8000` vLLM instance): add `SourceKind::Gateway`, a `GatewaySource` that reads `/health` and synthesizes `vllm:*` samples from `engine_stats`, auto-configure gateway instances in `config::resolve` for non-vLLM workers, tests, version 0.8.0, rebuild, deploy via the `vllm_top_console` role.
+- Merge `fix/usable-live-topology` to main (the user's decision).
+- Fix the `aihost-reconcile`/`aihost-validate` timers; Vault wiring; key rotation (including keys exposed in the transcript and tokens in Git history); the legacy manual `vllm-top` process (pid 1040613, from `~/.cargo/bin`); old gateway releases and `/var/backups/aihost-pre-converge-*.tgz` cleanup.
+
+## 8. Current Work
+
+Immediately before this summary, I was preparing to deploy the recommended heterogeneous layout. I checked whether `vllm-top` would break once vLLM is retired from GPU 0: with no vLLM instance discovered, `config::resolve` falls back to a placeholder `http://localhost:8000` direct instance, so the console would show a misleading instance. I decided to add a gateway-instance source. As the first step I changed the gateway so engine stats refresh every second (`HealthManager._stats_loop`, `collect_all_engine_stats`, `ENGINE_STATS_MAX_AGE_SECONDS = 15.0`, test added; 56 gateway tests passed; committed as "feat(gateway): refresh engine stats every second, independent of health probes"). I had just finished reading `~/Projects/vllm-top/src/{config.rs,app.rs,source.rs,metrics.rs,ui/mod.rs}` to design the Rust change; no Rust edits for the gateway source had been made yet. The gateway release deployed on the host is still `af6aa94`. The 1-second stats refresh was committed but not yet deployed.
+
+## 9. Optional Next Step
+
+Directly continuing the "deploy it" request: implement `SourceKind::Gateway` in `~/Projects/vllm-top` (config enum and `label()`, `GatewaySource` in `source.rs` building `vllm:*`-named samples from the gateway's per-worker `engine_stats`, `app.rs`/`ui/mod.rs` match arms, auto-configuration in `config::resolve`, tests, version 0.8.0). Then stage the deploy through `playbooks/inference.yml`:
+1. Bring up the llama lead on GPU 0 and stop vLLM worker1 (using the `vllm_xpu_workers_state` switch).
+2. Swap GPU 1 to Qwen3.5-27B in the `deep` pool, with the new gateway release.
+3. Add the route table and aliases.
+4. Verify end to end (`/v1/routes`, health, routed requests).
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
