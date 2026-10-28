@@ -1,0 +1,1 @@
+that sufficiently concludes the work required to get the contest work being done by another agent going again. For you, lets move back to vllm-top. The observability metrics don't seem to be populating/plotting for all fields. Lets review the existing setup/configuration of vllm-top to ensure that we're actually capturing that data after the switch to llama.cpp
