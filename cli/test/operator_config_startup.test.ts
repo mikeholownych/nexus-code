@@ -133,7 +133,7 @@ test("doctor remains available after root options when operator config is invali
 });
 
 test("interactive REPL exits successfully when stdin reaches EOF", () => {
-  withOperatorConfig("{}", (home) => {
+  withOperatorConfig('{"version": 1}', (home) => {
     const result = runCli(home, ["--repl", "--endpoint", "http://127.0.0.1:9"], "");
     assert.equal(result.status, 0, result.stderr);
     assert.doesNotMatch(result.stderr, /unsettled top-level await/i);
