@@ -1,0 +1,49 @@
+<task-notification>
+<task-id>a605f4c448cfe9a75</task-id>
+<tool-use-id>toolu_01BoXKtFkB6wVYsWSe4WsoG4</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/a605f4c448cfe9a75.output</output-file>
+<status>completed</status>
+<summary>Agent "Tools, execution, persistence review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've finished the review and written it to `/tmp/claude-1000/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2/scratchpad/assess/tools_persistence.md` (538 lines). It has 16 tool/execution findings (T1–T16) and 6 persistence findings (P1–P6), plus "What is solid", "Checks actually run" and "Limitations". I ran everything on main 3727938 in my own extract (`assess/tp/main`). Neither branch changes the tool-layer files (`file_ops.rs`, `runner.rs`, `main.rs`, `tools.ts`, `sandbox.ts`, `tester.ts`), so the tool findings should apply to feat/tui-surface, fix/context-convergence and the installed runtime too. I judged that from the diff only and did not rerun the probes on those branches.
+
+**P1 findings I reproduced:**
+- **T1 – edits land on the wrong text:** `edit_file` falls back to a fuzzy match at 85% similarity. A snippet naming a line that doesn't exist (`check_permissions(a)`) succeeded and deleted the real `audit_log(a)` line, with no sign that a fuzzy match happened.
+- **T2 – wrong match edited:** when the snippet appears more than once, only the first copy is replaced, but the result says `replacements: 2`.
+- **T3 – unsafe writes:** `edit_file` and `write_file` overwrite in place, with no temp file and no fsync, and nothing checks whether the file changed since the model read it. The fallback rewrites every CRLF in the file to LF. `write_file` always reports `overwritten`, even for a new file.
+- **T4 – `patch_file` damages files:** it overwrites any existing `&lt;name&gt;.tmp_patch` file, drops the executable bit, replaces a symlink with a regular file, strips CRLF, and applies each hunk at the first matching context.
+- **T6 – lost tool requests:** shell commands inherit the engine daemon's stdin, which carries the queued tool requests. A `cat` command swallowed a queued `write_file` request, which never ran and never got a reply.
+- **T11 – `run_tests` filter injection:**
+  - The `filter` argument is pasted unescaped into a shell command; a probe filter created a file.
+  - The command goes through no approval prompt.
+  - `run_tests` is treated as read-only, so it runs in parallel with other tools.
+  - A trailing `echo` can make a failing suite count as a passed verification.
+- **P1 – persistence failures are silent:** every durable write is wrapped in an empty catch. With the state directory made read-only, a turn modified the workspace while the saved state stayed at 0 messages, with no warning anywhere.
+
+**Lower-priority findings I reproduced:**
+- **T7:** after the shell exits, the timeout no longer applies, so background children keep the call open (8 s against a 3 s timeout).
+- **T8:** the engine panics when output over 32 KB is cut through a multi-byte character, so a command that ran shows as failed.
+- **T10:** commands inherit the full environment. The `LOCAL_LLM_API_KEY` value and passwords in DB URLs reach the provider; only `sk-`-style keys are masked.
+- **T13:** dry-run actually executes commands that look read-only, such as `echo x &gt; file`.
+- **T15:** `list_dir`, `file_tree` and `cst_symbols` can list paths outside the workspace (`/etc/ssh` worked).
+- **T16:** search results are silently capped at 50 with no "truncated" flag, and a single match can return a 200 KB line.
+- **P2:** every `update_plan` call records all completed phases as new milestones again.
+- **P3:** the state file is written mode 664, without fsync, and with no lock against a second writer.
+
+**Found by reading the code, not reproduced:**
+- **T14 (P1):** subagents run in the same workspace without approval prompts, and their edits don't demote requirements already marked verified.
+- **T5:** `delete_file` removes whole directories with no approval prompt.
+- **T12:** the parallel path skips the cancellation check, and the engine has no way to cancel a running command.
+- **T9:** command output is buffered in memory without limit before it is truncated.
+- **P4:** only one in-flight operation is recorded, so a crash during a parallel batch under-reports.
+- **P5:** resuming by session id uses a substring match, and every load error is reported as "not found".
+- **P6:** fix/context-convergence adds a `findings` field without a schema version bump and drops the on-disk full diffs.
+
+**What held up:** timeouts kill the whole process group (a child ignoring SIGTERM was gone; PTY mode too). Command output truncation is clearly marked. The working directory and file descriptors are confined to the workspace. `patch_file` changes nothing unless every hunk matches. Per-operation diffs are accurate. State saves are atomic, loading fails closed on corrupt or future-version files, and older files are migrated, all covered by existing tests. Saved redaction keeps commit SHAs and UUIDs and gives tool calls stable ids. Reuse of a passing verification is tightly keyed to the workspace state, with gaps only through T11 and T14.
+
+**Limitations:**
+- I didn't run crash or concurrent-writer tests, didn't check the installed runtime, and didn't compare the TUI banner against the saved state.
+- My probe files exist only in the extract. The test helper also left some throwaway `nexus-capacity-*` repos under the system temp dir.
+- One probe printed a real API key from my own shell environment. It is redacted in the report and isn't in any file I wrote.</result>
+<usage><subagent_tokens>220583</subagent_tokens><tool_uses>8</tool_uses><duration_ms>171498</duration_ms></usage>
+</task-notification>
