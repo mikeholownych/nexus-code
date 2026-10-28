@@ -1,0 +1,485 @@
+<pasted_content id="e171">
+NEXUS INDEPENDENT CODEBASE ASSESSMENT
+DOGFOODING READINESS, PRODUCT COHERENCE, AND HIGH-VALUE POLISH
+
+You are starting a NEW SESSION.
+
+Do not rely on conclusions from previous agents, prior reports, conversation history,
+or assumptions about what Nexus is supposed to contain.
+
+Treat the repository itself, its tests, executable behavior, and directly reproducible
+evidence as your primary sources.
+
+Repository:
+  /home/mike/nexus-code
+
+This is an ASSESSMENT task first.
+
+Do not begin implementing fixes merely because you find deficiencies.
+Do not refactor opportunistically.
+Do not change dependencies.
+Do not push, tag, publish, or alter remotes.
+Do not modify inference-host configuration.
+
+CONTEXT
+
+Nexus is approaching the point where it is intended to be dogfooded for real
+engineering work using a local inference appliance.
+
+The inference service itself has undergone substantial qualification. This task is
+NOT an inference benchmark or inference-host review.
+
+The question is now whether Nexus, as the client/orchestration/product layer, is
+coherent, reliable, observable, recoverable, and usable enough for sustained real
+engineering sessions.
+
+A recent example of the kind of issue that matters:
+
+The REPL could instantiate and successfully execute one agent run, but afterward
+silently ceased being useful for another run. The primitive worked, but the
+interactive lifecycle did not support sustained use.
+
+Another class of behavior we care about:
+
+A protected operation encounters an unexpected repository HEAD. Stopping the
+protected mutation may be correct, but if safe read-only investigation can determine
+whether the discrepancy is relevant, the desired behavior is not necessarily to
+terminate the entire engineering objective immediately.
+
+Containment should constrain unsafe action. It should not unnecessarily terminate
+safe investigation or recovery.
+
+These are examples only. Do not anchor the assessment around them.
+
+ENGINEERING PHILOSOPHY
+
+Use these principles when evaluating the implementation:
+
+- Distrust by Default.
+- Trust but Verify.
+- Evidence Changes What We Know.
+
+A baseline is a known state supported by the evidence available at that time.
+Engineering progress is:
+
+  establish baseline
+      →
+  act on current knowledge
+      →
+  test assumptions
+      →
+  push boundaries
+      →
+  observe consequences
+      →
+  update knowledge
+      →
+  establish a stronger baseline
+
+Prior evidence does not become invalid merely because the system evolves.
+Its applicability may change when relevant state changes.
+
+Tests are evidence instruments, not the purpose of the product.
+
+A PASS is not automatically good engineering.
+A FAIL is not automatically bad engineering.
+
+The objective is to determine whether the product actually does what it is intended
+to do, within a deliberately understood operating envelope.
+
+Unexpected does not automatically mean invalid.
+Unknown does not automatically mean unauthorized.
+Novel does not automatically mean unsafe.
+
+Fail closed where proceeding could violate a protected invariant.
+Elsewhere, prefer bounded investigation, recovery, reassessment, and continued
+progress where evidence and authority permit.
+
+A failed precondition should stop the operation whose safety depends upon it.
+It should not automatically terminate the larger objective when safe,
+authorized investigation can resolve the uncertainty.
+
+Agents advise.
+Evidence constrains.
+Experiments discriminate.
+The operator decides.
+Decisions remain revisable.
+
+PRIMARY QUESTION
+
+If the operator starts Nexus today and attempts to use it continuously for genuine
+repository engineering work, what will actually happen?
+
+Assess the complete operator and agent journey, not merely whether individual
+components or unit tests exist.
+
+TRACE THE REAL SYSTEM
+
+Begin by establishing the current repository state:
+
+- HEAD and branch
+- ancestry and recent relevant commits
+- dirty state
+- remotes, without changing them
+- build/test commands
+- executable entry points
+- CLI entry points
+- REPL/TUI entry points
+- configuration loading
+- inference/provider integration
+- agent/profile construction
+- session lifecycle
+- task/invocation lifecycle
+- tool execution
+- validation
+- evidence/state persistence
+- cancellation/interruption
+- error propagation
+- recovery/resume behavior
+- completion determination
+
+Then trace at least one representative engineering interaction from:
+
+  operator input
+      →
+  Nexus interaction surface
+      →
+  agent/profile selection
+      →
+  inference request
+      →
+  model response
+      →
+  tool execution
+      →
+  observation/evidence
+      →
+  reassessment
+      →
+  validation
+      →
+  completion
+      →
+  return to a state capable of accepting the next task
+
+Do not assume these stages exist merely because similarly named classes/modules exist.
+
+Establish actual call paths.
+
+DOGFOODING READINESS
+
+Evaluate whether Nexus currently supports sustained interactive engineering rather
+than isolated successful invocations.
+
+Specifically investigate:
+
+1. INTERACTION LIFECYCLE
+
+Can an operator:
+
+- start Nexus
+- execute multiple tasks in one session
+- inspect progress
+- recover from an invocation failure
+- cancel or interrupt appropriately
+- continue after tool/validation/model errors
+- understand whether Nexus is working, waiting, blocked, failed, or finished
+- deliberately exit
+
+Look for silent termination, dead states, orphan state, stale state, blocking input,
+lost input, lifecycle ambiguity, and restart-only recovery.
+
+2. STATE AND TRAJECTORY LEGIBILITY
+
+Determine whether the operator can understand:
+
+- current objective
+- active agent
+- selected capability/model
+- current operation
+- tool activity
+- validation activity
+- dependencies
+- unresolved uncertainty
+- evidence acquired
+- reason for reassessment
+- reason for stop/block
+- completion status
+
+Distinguish information that exists internally from information actually projected
+to the operator.
+
+3. TUI / HUMAN INTERACTION
+
+Assess the current terminal interaction architecture.
+
+Determine:
+
+- whether a TUI framework is already present
+- current rendering/event architecture
+- whether rendering can block execution
+- whether input can be lost or blocked during model/tool activity
+- whether streaming output is handled coherently
+- whether long sessions degrade interaction
+- whether state is structured or flattened into transcript/log text
+- whether resize, redraw, scrolling, focus, cancellation and exit are handled
+- whether multiple concurrent agents/tasks can be represented
+- whether TUI state is a projection of canonical Nexus state or risks becoming a
+  second source of truth
+
+Do NOT optimize for visual decoration.
+
+Evaluate whether a performant, state-aware TUI would materially reduce operator
+comprehension and decision latency.
+
+4. FAILURE AND RECOVERY
+
+Trace representative failure paths:
+
+- inference request failure
+- malformed model output
+- tool failure
+- validator failure
+- changed repository state
+- stale evidence
+- dependency failure
+- interrupted execution
+- provider unavailable
+- unexpected but potentially recoverable state
+
+Determine whether Nexus distinguishes:
+
+  OPERATION_BLOCKED
+  INVESTIGATION_REQUIRED
+  REQUALIFICATION_REQUIRED
+  OPERATOR_DECISION_REQUIRED
+  EXTERNAL_REMEDIATION_REQUIRED
+
+These names are conceptual, not required implementation identifiers.
+
+Look specifically for places where:
+
+  anomaly → immediate terminal stop
+
+could safely and productively become:
+
+  anomaly
+    → contain affected action
+    → investigate within existing authority
+    → reassess
+    → continue / requalify / escalate
+
+Do NOT recommend weakening protected invariants.
+
+5. COMPLETION SEMANTICS
+
+Determine what causes Nexus or an agent to declare work complete.
+
+Distinguish:
+
+- model says it is done
+- execution ended
+- tests passed
+- validators passed
+- requested outcome demonstrated
+- operator acceptance
+
+Look for false-completion risks and places where successful process execution could
+be confused with successful engineering outcome.
+
+6. CONTEXT AND SESSION CONTINUITY
+
+Assess:
+
+- context accumulation
+- context reuse
+- durable state
+- resume behavior
+- changed-state detection
+- context compaction/pruning if present
+- provenance
+- repeated reconstruction of information Nexus already possesses
+- whether a long engineering session remains coherent
+
+Do not assume maximum context utilization is desirable.
+
+7. LOCAL INFERENCE CONSUMPTION
+
+Review Nexus as a CONSUMER of the inference service.
+
+Do not benchmark the inference host.
+
+Determine whether Nexus:
+
+- consistently uses the orchestrator gateway
+- treats worker topology as an implementation detail
+- preserves explicit capability/model routing semantics
+- handles streaming correctly
+- reconstructs tool calls correctly
+- handles protocol errors without poisoning subsequent work
+- exposes enough inference state to diagnose client-versus-provider failures
+- introduces avoidable serialization, waiting, redundant calls, or context rebuilding
+
+Do not assume every observed inference error originates in the inference runtime.
+
+Distinguish origin from detection point.
+
+8. TESTS VERSUS PRODUCT BEHAVIOR
+
+Review existing tests, but independently inspect whether they demonstrate the
+behavior the operator actually needs.
+
+Identify:
+
+- important behavior with strong tests
+- tests that establish only implementation mechanics
+- product journeys not represented by tests
+- tests whose expectations may have become detached from current intended behavior
+- places where integration behavior differs from unit-level confidence
+
+Do not change a test merely because current implementation fails it.
+
+9. POLISH WITH ENGINEERING VALUE
+
+Identify rough edges that materially affect sustained engineering work.
+
+Separate:
+
+A. DOGFOODING BLOCKER
+   Prevents or corrupts sustained real engineering use.
+
+B. HIGH-VALUE INTERACTION/POLISH
+   System works, but operator/agent efficiency, comprehension, recovery or
+   confidence is materially degraded.
+
+C. ORDINARY PRODUCT POLISH
+   Useful improvement but not important to beginning sustained dogfooding.
+
+D. FUTURE / SPECULATIVE
+   No present evidence that this work is needed.
+
+Do not create a giant aspirational backlog.
+
+Prioritize demonstrated friction in the actual current system.
+
+10. PERFORMANCE AS A WHOLE-SYSTEM PROPERTY
+
+Do not treat tokens/second as the sole performance measure.
+
+Consider:
+
+  inference latency
+  orchestration latency
+  tool latency
+  validation latency
+  unnecessary serialization
+  redundant work
+  human comprehension latency
+  human decision latency
+  interaction overhead
+  recovery cost
+
+Look for places where improving the client could materially improve effective
+engineering throughput even without changing inference performance.
+
+VALIDATION APPROACH
+
+Prefer:
+
+- repository inspection
+- existing tests
+- targeted tests
+- safe local execution
+- deterministic fixtures
+- read-only traces
+- direct reproduction
+
+over speculation.
+
+If running Nexus against the configured inference gateway is safe and already
+supported by the environment, bounded read-only/low-consequence interaction may be
+used to establish actual behavior.
+
+Do not modify the inference appliance.
+
+Do not manufacture broad destructive scenarios.
+
+If an assertion cannot be reproduced, label it accordingly.
+
+EPISTEMIC STATUS
+
+For significant findings distinguish:
+
+OBSERVED
+directly seen in source/runtime/evidence
+
+REPRODUCED
+behavior independently triggered
+
+INFERRED
+supported interpretation but not directly demonstrated
+
+UNRESOLVED
+insufficient evidence
+
+Do not call something "confirmed" merely because an earlier report says so.
+
+OUTPUT
+
+Produce:
+
+docs/reviews/NEXUS_DOGFOODING_READINESS_REVIEW_2026-10-03.md
+
+The report should contain:
+
+1. Executive assessment
+2. Exact repository state reviewed
+3. Current architecture as actually implemented
+4. End-to-end engineering journey
+5. Interaction lifecycle assessment
+6. TUI/human interaction assessment
+7. Failure/recovery assessment
+8. Completion semantics assessment
+9. Context/session continuity assessment
+10. Local-inference consumption assessment
+11. Test-versus-product-behavior assessment
+12. Whole-system performance/friction assessment
+13. Findings classified A/B/C/D
+14. Reproduction evidence for material findings
+15. Unknowns and limitations
+16. Recommended next engineering slice
+
+For the recommended next slice:
+
+- keep it bounded
+- explain why it is the highest-value next step
+- identify the behavior it should improve
+- identify how success would be demonstrated
+- identify what should explicitly NOT be included
+
+Do NOT implement that slice in this task.
+
+Also provide a concise terminal summary containing:
+
+- DOGFOODING READINESS:
+  READY / READY_WITH_FRICTION / NOT_READY
+
+- number of A/B/C/D findings
+
+- highest-value demonstrated problem
+
+- whether current TUI/REPL architecture is adequate for sustained use
+
+- whether Nexus itself currently appears more limiting to dogfooding than the
+  inference substrate, and the evidence for that conclusion
+
+- exact report path and SHA-256
+
+- repository state after assessment
+
+Do not push or publish anything.
+
+If you create the review document, commit only that review and directly necessary
+non-product evidence artifacts in a local commit. Do not include unrelated existing
+working-tree changes.
+</pasted_content id="e171">
