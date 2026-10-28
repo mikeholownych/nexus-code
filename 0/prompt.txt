@@ -1,0 +1,12 @@
+<pasted_content id="9bc7">
+ NEXUS   nexus-code  ⎇ main ●42  chatgpt · gpt-6-luna  auto
+› /model chatgpt gpt-6-luna
+  Model: gpt-6-luna via ChatGPT plan (https://chatgpt.com). Task content is sent to this provider.
+
+› review this repo
+  · Provider recovery not_recoverable: REQUEST_REJECTED is not a temporary provider condition
+
+× TURN FAILED  execution=FAILED outcome=NOT_ESTABLISHED (INFERENCE_FAILED: http_error/client HTTP 400)
+Inference error (HTTP 400): {"detail":"Unsupported parameter: temperature"}
+
+</pasted_content id="9bc7">
