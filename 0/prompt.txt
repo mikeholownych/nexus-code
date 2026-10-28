@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>ac68d7d7207aa2b37</task-id>
+<tool-use-id>toolu_01GGLkE65Di6GrMmykcv4CsF</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/ac68d7d7207aa2b37.output</output-file>
+<status>completed</status>
+<summary>Agent "Author held-out T2 tasks batch 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 10 batch-1 tasks are written and every one validated. Each was run twice in a fresh clone: the hidden test failed before my reference patch and passed after it, and the regression command passed both times. I discarded no tasks.
+
+| id | language | class | difficulty | validation |
+|---|---|---|---|---|
+| ho-py-feature-01 | Python | feature | medium | pass ×2 |
+| ho-py-bugfix-01 | Python | bugfix | easy | pass ×2 |
+| ho-py-refactor-01 | Python | refactor | easy | pass ×2 |
+| ho-js-feature-01 | TS | feature | hard | pass ×2 |
+| ho-js-bugfix-01 | JS | bugfix | medium | pass ×2 |
+| ho-js-debug-01 | JS | debug | medium | pass ×2 |
+| ho-go-feature-01 | Go | feature | medium | pass ×2 |
+| ho-go-debug-01 | Go | debug | medium | pass ×2 |
+| ho-rs-bugfix-01 | Rust | bugfix | medium | pass ×2 |
+| ho-rs-refactor-01 | Rust | refactor | medium | pass ×2 |
+
+Total time was about 40 minutes. The repos are parse, schema, cachetools, css-what, whatwg-mimetype, negotiator, go-humanize, Masterminds/semver, humantime and bytesize, all pinned to their current HEAD. The manifest is `/home/mike/nexus-heldout/MANIFEST-batch1.json`, and everything under `/home/mike/nexus-heldout` is now owner-only.
+
+Things that limit validity or independence:
+- **History squashing (I added this):** for the five tasks with an injected defect, setup also squashes git history into one orphan `baseline` commit, removes the origin remote and runs gc. Otherwise `git show HEAD` would show the agent the injected change. The side effect is that the upstream commit isn't reachable inside those workspaces, so a harness that diffs against `repo.commit` won't work for them.
+- **Tests miss bugs:** ho-py-bugfix-01 is a real, unfixed upstream bug, not an injected one. Several of these libraries have tests so thorough that most defects I tried were caught, so I chose defects the existing tests miss.
+- **Unpinned dependencies:** negotiator and humantime have no committed lockfile, so they resolve current dependency versions at install time. The other Node and Rust repos install from their lockfiles, and the Python tasks install pytest unpinned.
+- **Network:** setup needs network for npm, pip and cargo fetch. ho-js-bugfix-01's regression leaves out the web-platform-tests suite, which downloads from the network.
+- **Go not on PATH:** on this machine Go is only at `/usr/local/go/bin`, so the harness must put it on PATH.
+- **Cache isolation:** my validation used local Go and Cargo caches under `work/`, but harness runs will use the default caches.
+- **Structural refactor checks:** the hidden tests for the two refactor tasks check the source text, so a valid but unusual restructuring could be falsely rejected.
+
+I did not access any of the forbidden paths. My working copies of the clones and the validation script are under `/home/mike/nexus-heldout/work` and `/home/mike/nexus-heldout/bin`.</result>
+<usage><subagent_tokens>244289</subagent_tokens><tool_uses>117</tool_uses><duration_ms>2360266</duration_ms></usage>
+</task-notification>
