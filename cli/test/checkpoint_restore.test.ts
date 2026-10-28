@@ -1038,6 +1038,42 @@ test("Git manifest restore refuses to copy an untracked file into a nested-repos
   }
 });
 
+test("Git manifest restore refuses to copy an untracked file into a nested bare repository", () => {
+  const { repo, git } = gitRepo();
+  const bareRepo = path.join(repo, "nested-bare");
+  try {
+    fs.mkdirSync(bareRepo);
+    fs.writeFileSync(path.join(bareRepo, "captured.txt"), "checkpoint content\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("nested bare repository descendant");
+
+    fs.rmSync(path.join(bareRepo, "captured.txt"));
+    execFileSync("git", ["init", "--bare", "-q", bareRepo]);
+    const bareHeadBefore = fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8");
+    const bareConfigBefore = fs.readFileSync(path.join(bareRepo, "config"), "utf8");
+    fs.writeFileSync(path.join(bareRepo, "repository-canary.txt"), "bare repository canary\n");
+    fs.writeFileSync(path.join(repo, "staged-after-checkpoint.txt"), "staged canary\n");
+    git("add", "staged-after-checkpoint.txt");
+    const outerHeadBefore = git("rev-parse", "HEAD");
+    const outerIndexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8"), bareHeadBefore);
+    assert.equal(fs.readFileSync(path.join(bareRepo, "config"), "utf8"), bareConfigBefore);
+    assert.equal(fs.readFileSync(path.join(bareRepo, "repository-canary.txt"), "utf8"), "bare repository canary\n");
+    assert.equal(execFileSync("git", ["-C", bareRepo, "rev-parse", "--is-bare-repository"], { encoding: "utf8" }).trim(), "true");
+    assert.equal(fs.readFileSync(path.join(repo, "staged-after-checkpoint.txt"), "utf8"), "staged canary\n");
+    assert.equal(git("rev-parse", "HEAD"), outerHeadBefore);
+    const outerIndexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+    assert.equal(outerIndexAfter, outerIndexBefore, "rejection must preserve outer index entries");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
 test("Git manifest restore refuses a tracked destination inside a nested repository before changing either index", () => {
   const { repo, git } = gitRepo();
   const trackedParent = path.join(repo, "a");
