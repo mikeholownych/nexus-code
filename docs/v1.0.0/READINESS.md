@@ -1,6 +1,16 @@
 # v1.0.0 release readiness checkpoint
 
-## Current release checkpoint (observed 2026-10-28 20:18 UTC)
+## Current release checkpoint (observed 2026-10-28 21:17 UTC)
+
+**Authoritative source and source gates:** `origin/main` is `10c84df89d391987454e4997aaa8f97529cc2496`, the PR #308 merge commit. Post-merge CI run [40770466028](https://github.com/mikeholownych/nexus-code/actions/runs/40770466028) is in progress on this exact SHA; Node 22 and Node 24 test matrices are running. CodeQL run [40770465935](https://github.com/mikeholownych/nexus-code/actions/runs/40770465935) is also in progress. On a clean detached worktree at this exact SHA, `node scripts/check_requirements.mjs --enforce` passed: 123 rows, 108 tested, 6 partial, 2 implemented, 7 open, with 12 requirements deferred to exact-RC qualification. `node scripts/sync-version.mjs --check` reports all components at `1.0.0-rc.10`. These are source-stage results, not installed-RC qualification.
+
+**Integrated changes:** PR #309 merged as `b3dea1a96fb204e5fa48becc90f12bf5042076af` at 20:36 UTC with checksummed RC10 ChatGPT-plan provider evidence. PR #300 merged as `79cba842e86d64f895e1a269636776cdf1e7e6da` at 21:07:46 UTC after Node 22/24, Linux packaging/tests, JavaScript/TypeScript and CodeQL passed. PR #308 merged as `10c84df89d391987454e4997aaa8f97529cc2496` at 21:15:37 UTC; exact PR head `9829c61d9b2556bba25a5ec6aee8fa9f1acf9bc8` passed Node 22/24 and Linux, with JavaScript/TypeScript and CodeQL passed. PR #131 is post-v1 documentation; no open v1 release-critical PR is currently identified. The current main readiness text has not yet caught up to these merges; this checkpoint corrects it.
+
+**Qualification and release:** Public `v1.0.0-rc.10` remains the latest prerelease; no stable `v1.0.0` release exists. RC10 cross-runner evidence and provider records remain bound to RC10 and do not qualify current main or a successor RC. The source requirements gate does not replace installed-RC gates. Issue [#1](https://github.com/mikeholownych/nexus-code/issues/1) remains open and unassigned, last updated at 20:25:33 UTC; no custodian handoff or fresh custody acceptance is recorded, so held-out T2/T3/T4 qualification remains unstarted. The five-environment, three-size terminal matrix remains 0/15. `ubuntu-desktop` at `10.0.8.3` is reachable with an active Wayland session and all five terminal applications installed, but there is no successor RC to qualify there. Standalone/provider, fault-injection, successor-RC reproducibility, manual terminal behavior, and independent exact-RC acceptance remain outstanding.
+
+**Disposition:** `NEXUS_V1_CONVERGENCE_ACTIVE`; acceptance `IN_PROGRESS`. Stable publication remains gated on mandatory exact-RC qualification and acceptance. Publication authorization remains granted; no further authorization is requested.
+
+## Historical checkpoint (observed 2026-10-28 20:18 UTC; superseded)
 
 **Authoritative source and source gates:** `origin/main` is `13e45a07361866d697e16b2c90e48e4fdfcd15e0`, the merge commit for PR #305. Exact-main CI run [40751988282](https://github.com/mikeholownych/nexus-code/actions/runs/40751988282) and CodeQL run [40751988267](https://github.com/mikeholownych/nexus-code/actions/runs/40751988267) passed on that SHA. The source requirements check passed on this revision with 123 rows: 108 tested, 6 partial, 2 implemented, 7 open, and 12 deferred to exact-RC qualification. These source-stage results do not qualify an installed release candidate.
 
