@@ -1,0 +1,353 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { OperationStore } from "../src/core/operation_runner.js";
+import { newOperation, type DurableOperationState } from "../src/core/operation.js";
+import { scopeKey, type ResourceDescriptor } from "../src/core/resources.js";
+import { OPERATION_VIEW_SCHEMA_VERSION, buildOperationView, renderOperationView, watchOperation } from "../src/operation_view.js";
+
+const NOW = Date.parse("2026-10-28T12:00:00.000Z");
+
+function resource(id: string, overrides: Partial<ResourceDescriptor> = {}): ResourceDescriptor {
+  return {
+    id,
+    provider: "https://api.test",
+    endpoint: "https://api.test/v1",
+    model: `model-${id}`,
+    capabilities: ["tools"],
+    rank: 0,
+    ...overrides,
+  };
+}
+
+function state(): DurableOperationState {
+  const op = newOperation(
+    "op-view",
+    "Ship the operator view",
+    [
+      { id: "u1", title: "Implement the projector", prompt: "Implement it", role: "implementer" },
+      { id: "u2", title: "Test the projector", prompt: "Test it", role: "tester", dependsOn: ["u1"] },
+      { id: "u3", title: "Review the projector", prompt: "Review it", role: "reviewer", dependsOn: ["u2"], required: false },
+    ],
+    [resource("primary"), resource("secondary", { rank: 1, contextLength: 200_000 })],
+    NOW,
+  );
+  op.units[0].status = "COMPLETE";
+  op.units[0].result = {
+    summary: "projector implemented",
+    completedAt: "2026-10-28T11:00:00.000Z",
+    resourceId: "primary",
+    outcome: "VERIFIED",
+  };
+  op.units[1].status = "BLOCKED";
+  op.units[1].blocked = {
+    since: "2026-10-28T11:10:00.000Z",
+    reason: "verifier failed twice",
+    decision: {
+      id: "d1",
+      unitId: "u2",
+      cause: "NOT_CONVERGING",
+      question: "u2 keeps failing its verifier. What now?",
+      options: [
+        { id: "1", label: "retry", action: { kind: "retry" } },
+        { id: "2", label: "revise the unit (note required)", action: { kind: "revise" } },
+      ],
+    },
+  };
+  op.units[2].status = "WAITING_ON_DEPENDENCY";
+  op.status = "BLOCKED";
+  op.blocked = { since: "2026-10-28T11:10:00.000Z", decisions: [op.units[1].blocked!.decision] };
+  op.events = [
+    { type: "WORK_STARTED", at: "2026-10-28T10:59:00.000Z", message: "u1 started on primary", unitId: "u1", resourceId: "primary" },
+    { type: "WORK_COMPLETED", at: "2026-10-28T11:00:00.000Z", message: "u1 complete (VERIFIED)", unitId: "u1" },
+    { type: "WORK_BLOCKED", at: "2026-10-28T11:10:00.000Z", message: "u2 blocked: verifier failed twice", unitId: "u2" },
+  ];
+  return op;
+}
+
+test("projects units, depth, durable state and the open decision", () => {
+  const op = state();
+  op.units[0].agentTaskId = "task-u1";
+  const view = buildOperationView(op, { now: NOW });
+
+  assert.equal(view.schemaVersion, OPERATION_VIEW_SCHEMA_VERSION);
+  assert.equal(view.id, "op-view");
+  assert.equal(view.status, "BLOCKED");
+  assert.equal(view.terminal, false);
+  assert.deepEqual(view.counts, { total: 3, complete: 1, running: 0, blocked: 1, parked: 0, waiting: 1 });
+
+  const [u1, u2, u3] = view.units;
+  assert.equal(u1.depth, 0);
+  assert.equal(u1.durable, true);
+  assert.equal(u1.result?.outcome, "VERIFIED");
+  assert.equal(u2.depth, 1);
+  assert.equal(u2.detail, "verifier failed twice");
+  assert.deepEqual(u2.blocked, { reason: "verifier failed twice", decisionId: "d1" });
+  assert.equal(u3.depth, 2);
+  assert.equal(u3.required, false);
+
+  assert.deepEqual(view.dag.edges, [
+    { from: "u1", to: "u2" },
+    { from: "u2", to: "u3" },
+  ]);
+  assert.deepEqual(view.dag.criticalPath, ["u2", "u3"]);
+  assert.deepEqual(view.dag.missingDependencies, []);
+  assert.deepEqual(view.dag.cycles, []);
+
+  assert.equal(view.decisions.length, 1);
+  assert.equal(view.decisions[0].id, "d1");
+  assert.equal(view.decisions[0].unitId, "u2");
+  assert.deepEqual(view.decisions[0].options.map((option) => option.id), ["1", "2"]);
+  assert.equal(view.decisions[0].command, "nexus operation decide op-view d1 <option> [--note <text>]");
+});
+
+test("reports resource eligibility with the scheduler's own rules", () => {
+  const op = state();
+  const key = scopeKey(op.resources[0], "model");
+  assert.ok(key);
+  op.conditions = [
+    {
+      scope: "model",
+      key: key!,
+      condition: "RATE_LIMITED",
+      temporary: true,
+      recheckAt: "2026-10-28T12:05:00.000Z",
+      source: "backoff",
+      confidence: "derived",
+      reason: "rate limited (HTTP 429)",
+      observedAt: "2026-10-28T11:59:00.000Z",
+      failures: 1,
+      resourceId: "primary",
+    },
+  ];
+
+  const blocked = buildOperationView(op, { now: NOW });
+  assert.equal(blocked.resources[0].eligible, false);
+  assert.equal(blocked.resources[0].eligibleAt, "2026-10-28T12:05:00.000Z");
+  assert.deepEqual(
+    blocked.resources[0].blocking?.map((condition) => [condition.condition, condition.scope]),
+    [["RATE_LIMITED", "model"]],
+  );
+  assert.equal(blocked.resources[1].eligible, true);
+  assert.equal(blocked.resources[1].eligibleAt, undefined);
+
+  const after = buildOperationView(op, { now: Date.parse("2026-10-28T12:06:00.000Z") });
+  assert.equal(after.resources[0].eligible, true);
+  assert.equal(after.resources[0].blocking, undefined);
+  assert.equal(after.resources[0].eligibleAt, undefined);
+});
+
+test("shows a missing dependency and a cycle instead of hiding them", () => {
+  const op = state();
+  op.units[2].dependsOn = ["u2", "u404"];
+  const missing = buildOperationView(op, { now: NOW });
+  assert.deepEqual(missing.dag.missingDependencies, ["u404"]);
+
+  const cyclic = state();
+  cyclic.units[0].dependsOn = ["u2"];
+  const view = buildOperationView(cyclic, { now: NOW });
+  assert.ok(view.dag.cycles.includes("u1") || view.dag.cycles.includes("u2"));
+});
+
+test("keeps only the newest events and honours an explicit limit", () => {
+  const op = state();
+  const view = buildOperationView(op, { now: NOW, events: 2 });
+  assert.deepEqual(view.events.map((event) => event.type), ["WORK_COMPLETED", "WORK_BLOCKED"]);
+  assert.deepEqual(buildOperationView(op, { now: NOW, events: 0 }).events, []);
+  assert.equal(buildOperationView(op, { now: NOW }).events.length, 3);
+});
+
+test("is read-only: building a view does not modify the operation", () => {
+  const op = state();
+  const before = structuredClone(op);
+  const view = buildOperationView(op, { now: NOW });
+  renderOperationView(view, { width: 80 });
+  assert.deepEqual(op, before);
+});
+
+test("renders units, decisions and the critical path deterministically", () => {
+  const view = buildOperationView(state(), { now: NOW });
+  const text = renderOperationView(view, { width: 80 });
+  assert.match(text, /^Operation op-view: BLOCKED \(1\/3 complete, 1 blocked\)/m);
+  assert.match(text, /u1 \[implementer\] Implement the projector\s+COMPLETE/);
+  assert.match(text, /u2 \[tester\] Test the projector\s+BLOCKED/);
+  assert.match(text, /verifier failed twice/);
+  assert.match(text, /Critical path: u2 → u3/);
+  assert.match(text, /Decision needed: u2 keeps failing its verifier/);
+  assert.match(text, /nexus operation decide op-view d1 <option>/);
+  assert.match(text, /WORK_BLOCKED u2: u2 blocked/);
+  assert.equal(renderOperationView(view, { width: 80 }), text);
+});
+
+test("truncates long titles when a width is given and leaves them alone otherwise", () => {
+  const op = state();
+  op.units[0].title = "x".repeat(120);
+  const view = buildOperationView(op, { now: NOW });
+  assert.match(renderOperationView(view, { width: 40 }), /x{38}…/);
+  assert.match(renderOperationView(view), new RegExp(`x{120}`));
+});
+
+test("a complete operation is terminal and has an empty critical path", () => {
+  const op = state();
+  op.status = "COMPLETE";
+  op.blocked = undefined;
+  for (const unit of op.units) {
+    unit.status = "COMPLETE";
+    unit.blocked = undefined;
+    unit.result = unit.result ?? { summary: "done", completedAt: "2026-10-28T11:30:00.000Z", resourceId: "primary", outcome: "VERIFIED" };
+  }
+  const view = buildOperationView(op, { now: NOW });
+  assert.equal(view.terminal, true);
+  assert.equal(view.status, "COMPLETE");
+  assert.deepEqual(view.dag.criticalPath, []);
+  assert.deepEqual(view.decisions, []);
+});
+
+test("watch renders until the operation is terminal and never mutates it", async () => {
+  const op = state();
+  const snapshots = [structuredClone(op), structuredClone(op)];
+  const final = state();
+  final.status = "COMPLETE";
+  final.blocked = undefined;
+  for (const unit of final.units) {
+    unit.status = "COMPLETE";
+    unit.blocked = undefined;
+    unit.result = unit.result ?? { summary: "done", completedAt: "2026-10-28T11:30:00.000Z", resourceId: "primary", outcome: "VERIFIED" };
+  }
+  snapshots.push(final);
+  const before = snapshots.map((snapshot) => structuredClone(snapshot));
+  let reads = 0;
+  const writes: string[] = [];
+  const result = await watchOperation({
+    load: () => snapshots[Math.min(reads++, snapshots.length - 1)],
+    intervalMs: 0,
+    sleep: async () => {},
+    write: (text) => writes.push(text),
+    now: () => NOW,
+  });
+
+  assert.deepEqual(result, { renders: 3, stopped: "terminal" });
+  assert.deepEqual(snapshots, before);
+  assert.match(writes[0], /Operation op-view: BLOCKED/);
+  assert.match(writes[2], /Operation op-view: COMPLETE \(3\/3 complete\)/);
+});
+
+test("watch stops on abort, on a render limit and after repeated read failures", async () => {
+  const op = state();
+  const controller = new AbortController();
+  const limited = await watchOperation({
+    load: () => op,
+    intervalMs: 0,
+    signal: controller.signal,
+    sleep: async () => controller.abort(),
+    write: () => {},
+    maxRenders: 10,
+    now: () => NOW,
+  });
+  assert.deepEqual(limited, { renders: 1, stopped: "aborted" });
+
+  const capped = await watchOperation({
+    load: () => op,
+    intervalMs: 0,
+    sleep: async () => {},
+    write: () => {},
+    maxRenders: 2,
+    now: () => NOW,
+  });
+  assert.deepEqual(capped, { renders: 2, stopped: "limit" });
+
+  const writes: string[] = [];
+  const unreadable = await watchOperation({
+    load: () => {
+      throw new Error("operation file is being replaced");
+    },
+    intervalMs: 0,
+    sleep: async () => {},
+    write: (text) => writes.push(text),
+    maxReadFailures: 3,
+  });
+  assert.deepEqual(unreadable, { renders: 0, stopped: "unreadable" });
+  assert.equal(writes.length, 2);
+  assert.match(writes[0], /could not read the operation: operation file is being replaced/);
+});
+
+test("watch clears the screen only when asked", async () => {
+  const op = state();
+  const writes: string[] = [];
+  await watchOperation({ load: () => op, intervalMs: 0, sleep: async () => {}, write: (text) => writes.push(text), clear: true, maxRenders: 1, now: () => NOW });
+  assert.equal(writes[0], "\x1b[2J\x1b[H");
+  const plain: string[] = [];
+  await watchOperation({ load: () => op, intervalMs: 0, sleep: async () => {}, write: (text) => plain.push(text), maxRenders: 1, now: () => NOW });
+  assert.doesNotMatch(plain[0], /\x1b/);
+});
+
+const cliDir = fileURLToPath(new URL("..", import.meta.url));
+
+function runCli(args: string[], workspace: string): { status: number; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/index.ts"), ...args, "-w", workspace], {
+      cwd: cliDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 60_000,
+    });
+    return { status: 0, stdout, stderr: "" };
+  } catch (error: any) {
+    return { status: Number(error?.status ?? -1), stdout: String(error?.stdout ?? ""), stderr: String(error?.stderr ?? "") };
+  }
+}
+
+function saveFixture(id: string): { workspace: string; file: string } {
+  const workspace = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "nexus-view-ws-"));
+  const op = state();
+  op.id = id;
+  op.units[1].blocked!.decision.id = `d-${id}`;
+  op.units[1].blocked!.decision.unitId = "u2";
+  op.blocked!.decisions = [op.units[1].blocked!.decision];
+  new OperationStore(workspace).save(op);
+  const file = path.join(process.env.HOME ?? "", ".nexus", "tasks", `${id}.json`);
+  return { workspace, file };
+}
+
+test("status --dag prints the view and --dag --json prints the same facts without writing the operation", () => {
+  const { workspace, file } = saveFixture("op-cli-view");
+  const before = { hash: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), mtime: fs.statSync(file).mtimeMs };
+
+  const text = runCli(["operation", "status", "--dag", "op-cli-view"], workspace);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /Operation op-cli-view: BLOCKED/);
+  assert.match(text.stdout, /Critical path: u2 → u3/);
+  assert.match(text.stdout, /Decision needed:/);
+
+  const json = runCli(["operation", "status", "--dag", "--json", "op-cli-view"], workspace);
+  assert.equal(json.status, 0, json.stderr);
+  const views = JSON.parse(json.stdout);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].id, "op-cli-view");
+  assert.deepEqual(views[0].dag.edges, [{ from: "u1", to: "u2" }, { from: "u2", to: "u3" }]);
+  assert.equal(views[0].resources[0].eligible, true);
+
+  const after = { hash: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), mtime: fs.statSync(file).mtimeMs };
+  assert.deepEqual(after, before, "the view path wrote the operation");
+});
+
+test("watch on a pipe renders one snapshot and exits non-zero while the operation is blocked", () => {
+  const { workspace, file } = saveFixture("op-cli-watch");
+  const before = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  const result = runCli(["operation", "watch", "op-cli-watch"], workspace);
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /Operation op-cli-watch: BLOCKED/);
+  assert.equal(createHash("sha256").update(fs.readFileSync(file)).digest("hex"), before);
+});
+
+test("status --dag rejects a malformed --events instead of guessing", () => {
+  const { workspace } = saveFixture("op-cli-events");
+  const result = runCli(["operation", "status", "--dag", "--events", "-1", "op-cli-events"], workspace);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--events must be a non-negative number/);
+  assert.equal(result.stdout, "");
+});

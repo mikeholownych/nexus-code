@@ -17,6 +17,7 @@ import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
+import { buildOperationView, renderOperationView, watchOperation } from "./operation_view.js";
 import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
 import { createOperationAccountIdentity } from "./core/account_identity.js";
 import { credentialStorageHome, operatorSetting } from "./client.js";
@@ -165,12 +166,96 @@ export function registerOperationCommands(program: Command): void {
     .argument("[id]", "Operation id (default: all operations in this workspace)")
     .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
     .option("-j, --json", "JSON output")
+    .option("--dag", "Read-only view: work-unit DAG, resource eligibility and the open decision")
+    .option("--events <count>", "Events to include with --dag (newest kept)", "20")
     .description("Show operation state, parked work, wake time and pending decisions")
     .action((id: string | undefined, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      if (options.dag) {
+        // The view is read-only: `load`/`list` never take the operation lock or write a migration, so it can inspect an
+        // operation another process is driving.
+        const ops = id ? [store.load(id)] : store.list();
+        const eventLimit = Number(options.events);
+        if (!Number.isFinite(eventLimit) || eventLimit < 0) {
+          console.error(pc.red(`--events must be a non-negative number (got '${options.events}')`));
+          process.exitCode = 2;
+          return;
+        }
+        const views = ops.map((state) => buildOperationView(state, { events: Math.floor(eventLimit) }));
+        if (options.json) return void console.log(JSON.stringify(views, null, 2));
+        if (!views.length) return void console.log("No operations in this workspace.");
+        const width = process.stdout.isTTY ? process.stdout.columns ?? 0 : 0;
+        views.forEach((view) => console.log(renderOperationView(view, { width })));
+        return;
+      }
       const ops = id ? [store.loadForInspection(id)] : store.listForInspection();
       if (options.json) return void console.log(JSON.stringify(ops, null, 2));
       if (!ops.length) return void console.log("No operations in this workspace.");
       ops.forEach(printStatus);
+    });
+
+  op.command("watch")
+    .argument("[id]", "Operation id (default: the only operation in this workspace)")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .option("--interval <seconds>", "Refresh interval", "2")
+    .option("--events <count>", "Events to include (newest kept)", "20")
+    .description("Watch an operation read-only until it completes or you stop it (Ctrl-C)")
+    .action(async (id: string | undefined, options: any) => {
+      const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      const intervalSecs = Number(options.interval);
+      const eventLimit = Number(options.events);
+      if (!Number.isFinite(intervalSecs) || intervalSecs <= 0 || !Number.isFinite(eventLimit) || eventLimit < 0) {
+        console.error(pc.red("--interval must be a positive number of seconds and --events a non-negative number"));
+        process.exitCode = 2;
+        return;
+      }
+      let target = id;
+      if (!target) {
+        const operations = store.list();
+        if (!operations.length) {
+          console.error(pc.red("No operations in this workspace."));
+          process.exitCode = 2;
+          return;
+        }
+        if (operations.length > 1) {
+          console.error(pc.red("More than one operation in this workspace; pass an id:"));
+          for (const operation of operations) console.error(`  ${operation.id}  ${operation.status}  ${operation.objective}`);
+          process.exitCode = 2;
+          return;
+        }
+        target = operations[0].id;
+      }
+      const watchId = target;
+      if (!process.stdout.isTTY) {
+        // A pipe is not a live view; render the current snapshot once so scripts get an answer instead of a hang.
+        const state = store.load(watchId);
+        const view = buildOperationView(state, { events: Math.floor(eventLimit) });
+        console.log(renderOperationView(view));
+        process.exitCode = state.status === "COMPLETE" ? 0 : state.status === "CANCELLED" ? 130 : 2;
+        return;
+      }
+      const controller = new AbortController();
+      const onSignal = () => controller.abort();
+      process.once("SIGINT", onSignal);
+      try {
+        const result = await watchOperation({
+          load: () => store.load(watchId),
+          render: (state) => renderOperationView(buildOperationView(state, { events: Math.floor(eventLimit) })),
+          intervalMs: Math.max(250, Math.round(intervalSecs * 1000)),
+          signal: controller.signal,
+          clear: true,
+        });
+        let status: DurableOperationState["status"] | undefined;
+        try {
+          status = store.load(watchId).status;
+        } catch {
+          status = undefined;
+        }
+        process.exitCode =
+          result.stopped === "terminal" && status === "COMPLETE" ? 0 :
+          result.stopped === "aborted" || status === "CANCELLED" ? 130 : 2;
+      } finally {
+        process.off("SIGINT", onSignal);
+      }
     });
 }

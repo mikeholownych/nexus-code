@@ -1,6 +1,7 @@
 # v1.1 proposal: operation observability
 
-Status: proposed. Owner: unclaimed. Depends on: nothing. Size: medium (2–3 weeks).
+Status: slice 1 implemented (`v1/feature-operation-view`); TUI pane, replay and in-view decisions remain proposed.
+Owner: unclaimed. Depends on: nothing. Size: medium (2–3 weeks).
 
 ## What exists today
 
@@ -14,15 +15,21 @@ Status: proposed. Owner: unclaimed. Depends on: nothing. Size: medium (2–3 wee
 
 ## What to build
 
-1. **A read-only operation view** (`nexus operation watch <id>`, and a pane in the TUI) that renders:
+1. **A read-only operation view** (`nexus operation status --dag`, `nexus operation watch [id]`, and later a pane in the
+   TUI) that renders:
    - the work-unit DAG with dependencies, statuses, attempts, and the current critical path;
    - the resource registry with eligibility, capacity/quota observations, and the reason each resource is ineligible;
    - a streaming event log grouped by unit and turn, with the escalation decision at the top when one is open.
 2. **A machine-readable snapshot** (`nexus operation status --json --dag`) with a stable schema for scripts and the
    sidecar, generated from the same model as the human view.
 3. **Decision interaction** in the view: choose an escalation option with a note and persist it through the same
-   `applyOperatorDecision` path the CLI uses. No new decision semantics.
+   `applyOperatorDecision` path the CLI uses. No new decision semantics. (Slice 1 prints the exact `nexus operation
+   decide` command instead; the watch path stays strictly read-only.)
 4. **Replay** of a finished operation from its event log and unit conversations (read-only, no re-execution).
+
+What slice 1 already ships is recorded in
+`docs/reviews/evidence/v1.1/OPERATION-VIEW-20261028/README.md`: the view model, human and JSON rendering, the critical
+path, resource eligibility from the scheduler's own rules, and the bounded watch loop.
 
 ## Design constraints
 
