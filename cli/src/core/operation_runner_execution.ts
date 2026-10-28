@@ -16,6 +16,7 @@ import { turnSucceeded, type InferenceFailure, type TurnResult } from "./turn.js
 import type { UnitRunContext, WorkUnitExecutor } from "./operation_runner.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 import { isTestPath } from "../tester.js";
+import { isContextAdmissible } from "../tokens.js";
 import { ensurePrivateDir, writePrivateFile } from "./durable_file.js";
 
 function origin(endpoint: string): string {
@@ -141,6 +142,47 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       plannerProvider: undefined,
       coderProvider: undefined,
       ...(unit?.role && isReadOnlyRole(unit.role) ? { readOnly: true, approvalMode: "read-only" as const } : {}),
+    };
+  }
+
+  /**
+   * A unit budget below the resource's capacity is an operator cap. If the start prompt fits the resource but not the
+   * cap, fail before inference; resource-limit pressure stays with the agent's admission/compaction path.
+   */
+  private contextBudgetFailure(agent: AutonomousAgent, unit: WorkUnit, prompt: string): UnitRunResult | undefined {
+    if (!unit.contextBudget || unit.contextBudget <= 0) return undefined;
+    const estimate = agent.estimateTurnAdmission(prompt);
+    unit.context = {
+      estimatedPromptTokens: estimate.estimatedPromptTokens,
+      budgetTokens: unit.contextBudget,
+      contextLimit: estimate.contextLimit,
+      at: new Date().toISOString(),
+    };
+    // If the prompt does not fit the resource, admission/compaction owns it (it may compact and continue): the
+    // operator's cap is only the binding constraint when the prompt would otherwise be admitted.
+    if (!estimate.admissible) return undefined;
+    if (unit.contextBudget >= estimate.contextLimit) return undefined;
+    const fitsBudget = isContextAdmissible(
+      estimate.estimatedPromptTokens,
+      Math.min(unit.contextBudget, estimate.contextLimit),
+      estimate.completionReserve,
+      estimate.toolResponseReserve,
+    );
+    if (fitsBudget) return undefined;
+    const total = estimate.estimatedPromptTokens + estimate.completionReserve + estimate.toolResponseReserve;
+    return {
+      kind: "failed",
+      cause: "CONTEXT_BUDGET",
+      reason:
+        `estimated ${estimate.estimatedPromptTokens} prompt tokens + ${estimate.completionReserve} completion + ` +
+        `${estimate.toolResponseReserve} tool-response reserves exceed the unit budget of ${unit.contextBudget}`,
+      question:
+        `${unit.title} needs about ${total} tokens (prompt ${estimate.estimatedPromptTokens}, completion ` +
+        `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over its ${unit.contextBudget}-token ` +
+        `budget. Assign it to a resource with more context, revise it, or stop?`,
+      // Reassigning cannot clear a cap (the cap travels with the unit) and revise only grows the prompt, so the offered
+      // remedy changes the thing that blocks: the budget itself.
+      options: [{ label: "lift this unit's context budget", action: { kind: "lift_context_budget" } }],
     };
   }
 
@@ -332,7 +374,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       let redVerifiedNow = false;
       if (tdd && !redEvidence) {
         const beforeRed = this.tddTestSnapshot(agent);
-        const redTurn = await agent.runTurn(`${prompt}\n\n${TDD_RED_PROTOCOL}`, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
+        const redPrompt = `${prompt}\n\n${TDD_RED_PROTOCOL}`;
+        const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt);
+        if (budgetFailure) return budgetFailure;
+        const redTurn = await agent.runTurn(redPrompt, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
         const afterRed = this.tddTestSnapshot(agent);
         const testPaths = [...afterRed]
           .filter(([file, hash]) => !beforeRed.has(file) || beforeRed.get(file) !== hash)
@@ -399,6 +444,8 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         }
       }
       const greenPrompt = tdd && redEvidence ? `${prompt}\n\n${tddGreenProtocol(redEvidence)}` : prompt;
+      const budgetFailure = this.contextBudgetFailure(agent, unit, greenPrompt);
+      if (budgetFailure) return budgetFailure;
       const turn = await agent.runTurn(greenPrompt, undefined, { signal: ctx.signal, resume: isResume || (tdd && redEvidence !== undefined) });
       const configuredVerifier = config.authoritativeVerifierCommand?.trim();
       const testerVerifiedThisTurn = unit.role === "tester" &&

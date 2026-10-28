@@ -63,6 +63,8 @@ export type DecisionAction =
   | { kind: "assign"; resourceId: string; overriding: string[] }
   /** Append the operator's note to the unit's task and run it again. */
   | { kind: "revise" }
+  /** Remove this unit's context budget and run it again (the resource limit still applies). */
+  | { kind: "lift_context_budget" }
   /** Drop an advisory unit (required units cannot be dropped: the objective would be unmet). */
   | { kind: "drop" }
   | { kind: "cancel_operation" }
@@ -78,6 +80,7 @@ export type BlockCause =
   | "EXECUTION_FAILED"
   | "MERGE_CONFLICT"
   | "INTEGRATION_FAILED"
+  | "CONTEXT_BUDGET"
   | "EXECUTION_UNKNOWN"
   | "INTERRUPTED"
   | "NO_QUALIFIED_RESOURCE"
@@ -136,6 +139,13 @@ export interface WorkUnit {
   /** Executions started whose inference outcome was never received (process ended mid-run). */
   unknownResumes: number;
   modelsUsed: string[];
+  /**
+   * Operator cap on this unit's prompt context, in tokens. The resource's advertised capacity still applies; a unit
+   * whose start prompt cannot fit this budget is blocked before any inference.
+   */
+  contextBudget?: number;
+  /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
+  context?: { estimatedPromptTokens: number; budgetTokens: number; contextLimit: number; at: string };
 }
 
 export type OperationEventType =
@@ -205,6 +215,26 @@ export interface OperationGitState {
   units: Record<string, OperationGitUnit>;
 }
 
+/** A durable snapshot of a unit's conversation, restorable by the operator. */
+export interface ContextCheckpointFile {
+  name: "task" | "messages" | "history";
+  bytes: number;
+  sha256: string;
+}
+
+export interface ContextCheckpoint {
+  unitId: string;
+  name: string;
+  at: string;
+  taskId: string;
+  messages: number;
+  bytes: number;
+  /** SHA-256 of the task state (also the bundle's name); restore refuses a checkpoint that no longer matches. */
+  sha256: string;
+  /** The copied task state and journals with their own hashes. */
+  files: ContextCheckpointFile[];
+}
+
 /** What was integrated, and the evidence the merge was accepted with. */
 export interface IntegrationReceipt {
   unitId: string;
@@ -237,6 +267,8 @@ export interface DurableOperationState {
   git?: OperationGitState;
   /** Accepted unit integrations, oldest first. */
   integrations?: IntegrationReceipt[];
+  /** Operator-created conversation snapshots, oldest first. */
+  contextCheckpoints?: ContextCheckpoint[];
 }
 
 /** An option before it is numbered into a decision. */
@@ -285,6 +317,8 @@ export interface WorkUnitSpec {
   requires?: WorkRequirements;
   required?: boolean;
   taskClass?: string;
+  /** Operator cap on this unit's prompt context, in tokens. */
+  contextBudget?: number;
 }
 
 export function newOperation(
@@ -302,6 +336,9 @@ export function newOperation(
   }
   const byId = new Map(units.map((u) => [u.id, u]));
   for (const u of units) {
+    if (u.contextBudget !== undefined && (!Number.isInteger(u.contextBudget) || u.contextBudget <= 0)) {
+      throw new Error(`Work unit '${u.id}': contextBudget must be a positive integer number of tokens`);
+    }
     for (const d of u.dependsOn ?? []) {
       if (!ids.has(d)) throw new Error(`Work unit '${u.id}' depends on unknown unit '${d}'`);
       if (u.required !== false && byId.get(d)!.required === false) {
@@ -329,6 +366,7 @@ export function newOperation(
       requires: u.requires ?? {},
       ...(u.required === false ? { required: false } : {}),
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
+      ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
       status: "WAITING_ON_DEPENDENCY",
       reroutes: [],
       runs: 0,
