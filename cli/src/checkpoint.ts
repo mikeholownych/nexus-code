@@ -353,14 +353,107 @@ export class CheckpointManager {
           throw new Error("Checkpoint destination parent is a nested Git repository");
         }
 
-        // A bare repository (including an incomplete one) has a HEAD marker
-        // alongside its config or object/ref storage. Treat that combination
-        // as protected without asking Git to inspect the untrusted directory:
-        // Git config can include external files, and opening a FIFO config or
-        // include could block checkpoint restore indefinitely. Ordinary source
-        // directories named `objects` and `refs` remain valid without HEAD.
+        // Probe a private, bounded snapshot instead of asking Git to inspect
+        // the destination. The destination config may be a FIFO, may change
+        // during inspection, or may include an external file. Ordinary source
+        // directories named `HEAD`, `config`, `objects`, or `refs` remain
+        // valid unless Git recognizes their safe snapshot as a repository.
         if (bareHead && (bareConfig || bareObjects || bareRefs)) {
-          throw new Error("Checkpoint destination parent is a nested Git repository");
+          const nestedRepositoryError = "Checkpoint destination parent is a nested Git repository";
+          if (!bareHead.isFile() || !bareConfig?.isFile() || bareHead.size > 4096 || bareConfig.size > 1024 * 1024) {
+            throw new Error(nestedRepositoryError);
+          }
+          if ((bareObjects && !bareObjects.isDirectory()) || (bareRefs && !bareRefs.isDirectory())) {
+            throw new Error(nestedRepositoryError);
+          }
+
+          const readBoundedRegularFile = (filePath: string, expected: fs.Stats, maxBytes: number): Buffer => {
+            const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+            const nonBlocking = fs.constants.O_NONBLOCK ?? 0;
+            const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow | nonBlocking);
+            try {
+              const opened = fs.fstatSync(fd);
+              if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino || opened.size > maxBytes) {
+                throw new Error(nestedRepositoryError);
+              }
+              const content = Buffer.alloc(opened.size);
+              let offset = 0;
+              while (offset < content.length) {
+                const count = fs.readSync(fd, content, offset, content.length - offset, offset);
+                if (count === 0) throw new Error(nestedRepositoryError);
+                offset += count;
+              }
+              const afterRead = fs.fstatSync(fd);
+              if (afterRead.size !== opened.size || afterRead.mtimeMs !== opened.mtimeMs) {
+                throw new Error(nestedRepositoryError);
+              }
+              return content;
+            } finally {
+              fs.closeSync(fd);
+            }
+          };
+
+          let headSnapshot: Buffer;
+          let configSnapshot: Buffer;
+          try {
+            headSnapshot = readBoundedRegularFile(path.join(parent, "HEAD"), bareHead, 4096);
+            configSnapshot = readBoundedRegularFile(path.join(parent, "config"), bareConfig, 1024 * 1024);
+          } catch {
+            throw new Error(nestedRepositoryError);
+          }
+          const configText = configSnapshot.toString("utf8");
+          if (/^\s*\[\s*include(?:\s|\]|if(?:\s|\]))/im.test(configText)) {
+            throw new Error(nestedRepositoryError);
+          }
+
+          const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-git-probe-"));
+          try {
+            const probeConfig = path.join(probeRoot, "config");
+            fs.writeFileSync(path.join(probeRoot, "HEAD"), headSnapshot, { mode: 0o600, flag: "wx" });
+            fs.writeFileSync(probeConfig, configSnapshot, { mode: 0o600, flag: "wx" });
+            fs.mkdirSync(path.join(probeRoot, "objects"), { mode: 0o700 });
+            fs.mkdirSync(path.join(probeRoot, "refs"), { mode: 0o700 });
+
+            const gitProbeEnv: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull };
+            for (const key of Object.keys(gitProbeEnv)) {
+              if (key.startsWith("GIT_") && key !== "GIT_CONFIG_NOSYSTEM" && key !== "GIT_CONFIG_GLOBAL") delete gitProbeEnv[key];
+            }
+            try {
+              const discoveredGitDir = execFileSync("git", ["-C", probeRoot, "rev-parse", "--absolute-git-dir"], {
+                cwd: root,
+                encoding: "utf8",
+                env: gitProbeEnv,
+                maxBuffer: 1024 * 1024,
+                timeout: 2000,
+                stdio: ["ignore", "pipe", "ignore"],
+              }).trim();
+              if (fs.realpathSync(discoveredGitDir) === fs.realpathSync(probeRoot)) {
+                throw new Error(nestedRepositoryError);
+              }
+            } catch (error) {
+              if (error instanceof Error && error.message === nestedRepositoryError) throw error;
+              const status = (error as NodeJS.ErrnoException & { status?: number })?.status;
+              if (status !== 128) throw new Error("Checkpoint could not verify nested Git repository state");
+            }
+
+            try {
+              const configuredBare = execFileSync("git", ["config", "--no-includes", "--file", probeConfig, "--type=bool", "--get", "core.bare"], {
+                cwd: root,
+                encoding: "utf8",
+                env: gitProbeEnv,
+                maxBuffer: 1024 * 1024,
+                timeout: 2000,
+                stdio: ["ignore", "pipe", "ignore"],
+              }).trim();
+              if (configuredBare === "true") throw new Error(nestedRepositoryError);
+            } catch (error) {
+              if (error instanceof Error && error.message === nestedRepositoryError) throw error;
+              const status = (error as NodeJS.ErrnoException & { status?: number })?.status;
+              if (status !== 1) throw new Error("Checkpoint destination has an invalid Git configuration");
+            }
+          } finally {
+            fs.rmSync(probeRoot, { recursive: true, force: true });
+          }
         }
       }
     }
