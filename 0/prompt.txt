@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bwca98xfk</task-id>
+<summary>Monitor event: "pilot: false VERIFIED, runner errors, killed runs"</summary>
+<event>2026-10-13T12:38:28.383Z nexus@gateway/engineering/lead t2-refactor-tax run 1: UNVERIFIED hidden=false regression=true 258s</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
