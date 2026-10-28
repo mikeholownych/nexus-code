@@ -738,13 +738,14 @@ test("subdirectory workspace restore preserves sibling worktree and index change
     const checkpoint = manager.createCheckpoint("subdirectory scoped restore");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "sibling staged work\n");
     git("add", "tracked.txt");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "sibling unstaged work\n");
     fs.writeFileSync(path.join(workspace, "tracked.txt"), "subdirectory later work\n");
     git("add", "sub/tracked.txt");
 
     const result = manager.restore(checkpoint.id);
 
     assert.equal(result.success, true, result.message);
-    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "sibling staged work\n");
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "sibling unstaged work\n");
     assert.equal(git("show", ":tracked.txt"), "sibling staged work");
     assert.equal(fs.readFileSync(path.join(workspace, "tracked.txt"), "utf8"), "subdirectory base\n");
     assert.equal(git("show", ":sub/tracked.txt"), "subdirectory base");

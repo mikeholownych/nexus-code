@@ -1096,7 +1096,16 @@ export class CheckpointManager {
         // present. Installing checkpoint symlinks first could redirect deletion
         // through an in-workspace link into unrelated ignored data.
         this.removeTrackedDeletions(cp.gitRef, postCheckpointAdditions);
-        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f", "-a"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
+        const checkoutArgs = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f"];
+        const workspacePrefix = this.gitWorkspacePrefix();
+        if (workspacePrefix) {
+          // The real index still contains sibling entries. Restrict checkout to
+          // this workspace so staged sibling content cannot overwrite its worktree.
+          checkoutArgs.push("--", `:(top,literal)${workspacePrefix.slice(0, -1)}`);
+        } else {
+          checkoutArgs.push("-a");
+        }
+        execFileSync("git", checkoutArgs, { cwd: this.gitRoot(), stdio: "ignore", env: hookGuardEnv });
         if (cp.untrackedFiles !== undefined) {
           execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
           if (cp.untrackedFiles.length > 0) {
