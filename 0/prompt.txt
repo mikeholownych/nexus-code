@@ -1,0 +1,5 @@
+<task-notification>
+<task-id>b9pfw561v</task-id>
+<summary>Monitor event: "claim-log: claude mentions, review requests, merges, PRs opened, #56/#60, RC/publish"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
