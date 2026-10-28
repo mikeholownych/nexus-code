@@ -270,6 +270,8 @@ test("a checkpoint copies the conversation and restore brings it back with a bac
     state.status = "BLOCKED";
     state.blocked = { since: new Date().toISOString(), decisions: [state.units[0].blocked.decision] };
     state.wait = { since: new Date().toISOString(), wakeAt: new Date().toISOString(), reason: "parked", parkedUnits: ["u1"] };
+    // A stale result from an earlier attempt must be cleared by the restore.
+    state.units[0].result = { summary: "old", completedAt: new Date().toISOString(), resourceId: "primary", outcome: "VERIFIED" };
 
     const restored = restoreContextCheckpoint(store.manager, state, "u1", "before-refactor", 1_800_000_001_000);
     assert.equal(restored.record.name, "before-refactor");

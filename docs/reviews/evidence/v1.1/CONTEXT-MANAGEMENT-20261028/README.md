@@ -12,21 +12,23 @@
 `units[].contextBudget` (tokens) is an operator cap below the resource's advertised capacity. Before every turn (RED and
 GREEN in a TDD unit) the executor asks the agent for its own admission estimate for that prompt — the same messages,
 tool definitions, completion reserve and tool-response reserve as the conversation so far — and records
-`unit.context = { estimatedPromptTokens, budgetTokens, contextLimit, at }`. The estimate is a lower bound: the turn
-adds the tool groups its prompt enables, runtime context and any freshly pinned requirement ledger.
+`unit.context = { estimatedPromptTokens, budgetTokens, contextLimit, at }`. It is a start-of-turn lower bound, explained
+below.
 
 If the prompt fits the resource but not the unit budget, the unit fails before inference with `CONTEXT_BUDGET`, names the
 prompt tokens and the completion/tool reserves that exceed the budget, offers `revise`, and sets `offerReassign` so the
 scheduler adds its "assign to another resource" options. If the prompt does not fit the resource at all, or the budget is at or above the resource capacity,
 resource-limit pressure stays with the agent's normal admission/compaction path (which can compact and continue), so the
-preflight never pre-empts it. The estimate is a start-of-turn lower bound: the turn adds the tool groups its prompt
-enables, runtime context and, for a fresh objective, the pinned requirement ledger. The cap therefore gates the start
-prompt; mid-turn growth is bounded by the resource limit, not by the unit budget.
+preflight never pre-empts it.
+
+The estimate is a start-of-turn lower bound: the turn adds the tool groups its prompt enables, runtime context and, for
+a fresh objective, the pinned requirement ledger. The cap therefore gates the start prompt; mid-turn growth is bounded
+by the resource limit, not by the unit budget.
 
 ## Context checkpoints
 
-`nexus operation checkpoint <op> <unit> [--name <name>]` snapshots a settled (not running, not complete) unit's durable
-task-state file byte for byte
+`nexus operation checkpoint <op> <unit> [--name <name>]` snapshots a settled (not running, not complete) unit's
+durable task-state file byte for byte
 (0600, fsync) under `<task store>/context-checkpoints/<operation>/`, and records `{unitId, name, at, taskId, messages,
 bytes, sha256}` on the operation. `checkpoints` lists them; `restore` verifies the file's hash, copies it back, keeps the
 pre-restore file under `context-checkpoints/<operation>/backups/` (not beside the live task files, where it would appear
