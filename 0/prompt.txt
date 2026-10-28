@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bekwx8dul</task-id>
+<summary>Monitor event: "claim-log: claude-code mentions, review requests, merges, RC/tag events"</summary>
+<event>2026-10-18T22:17:21Z DELTA REVIEW PR #51 8ea75d8-&gt;5b0ee0f by claude-code: ACCEPT (O_NOFOLLOW|O_NONBLOCK guard reopen correct; no other source change).</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
