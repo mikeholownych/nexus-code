@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b56ox10ex</task-id>
+<summary>Monitor event: "Nexus rerun (ed17e99): every result"</summary>
+<event>2026-10-13T14:45:05.872Z nexus@gateway/engineering/lead t2-feature-inventory run 1: REGRESSION_FREE hidden=true regression=true 29s</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
