@@ -18,7 +18,7 @@ For each unit whose role is unset (implementer) or `implementer`:
    task, run the project's verifier, and do not implement the fix yet. `task_completed` is allowed to record the failing
    verifier for this turn only (`runTurn(..., { tddRed: true })`); normal completion still requires a passing verifier.
    The RED turn is accepted only when the turn's verification evidence is `FAILED`, executed at least one test, and a
-   test file was added or its content hash changed (candidate diff against HEAD, using the tester's path rule). For this
+   at least one reported test file was newly added (candidate diff against HEAD, using the tester's path rule). For this
    turn only, the workspace-resolved verifier definition binding is skipped: adding the reproduction test legitimately
    changes that definition, and RED does not claim verification.
 2. **Evidence.** The accepted verifier command, test paths and their content hashes are written to a private sidecar
