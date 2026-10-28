@@ -1,0 +1,1 @@
+resume -- folder trust should be separate from approval mode settings
