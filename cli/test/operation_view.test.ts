@@ -490,16 +490,18 @@ test("watch's multiple-operation list sanitizes persisted objectives", (t) => {
   const first = saveFixture(fixture, "op-cli-list-a");
   const second = saveFixture(fixture, "op-cli-list-b");
   const record = JSON.parse(fs.readFileSync(second, "utf8"));
+  record.operation.id = "op-cli-list-b\u001b]52;c;payload\u0007";
   record.operation.objective = "hostile\u001b]52;c;payload\u0007\u001b[2J forged\nline\tend\u009c";
   fs.writeFileSync(second, JSON.stringify(record));
   assert.ok(fs.existsSync(first));
 
   const result = runCli(["operation", "watch"], fixture);
   assert.equal(result.status, 2);
-  const operationRows = result.stderr.split("\n").filter((line) => line.startsWith("  op-cli-list-"));
+  const operationRows = result.stderr.split("\n").filter((line) => line.includes("  BLOCKED  "));
   assert.equal(operationRows.length, 2);
   assert.doesNotMatch(operationRows.join("\n"), /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
-  assert.equal(operationRows.some((line) => line.startsWith("line")), false);
+  assert.equal(result.stderr.split("\n").some((line) => line.startsWith("line")), false);
+  assert.match(operationRows.join("\n"), /op-cli-list-b␛\]52;c;payload␇  BLOCKED/);
   assert.match(operationRows.join("\n"), /hostile.*forged line end<U\+009C>/);
 });
 
