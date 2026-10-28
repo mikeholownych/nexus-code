@@ -10,13 +10,14 @@
 ## Per-unit context budget
 
 `units[].contextBudget` (tokens) is an operator cap below the resource's advertised capacity. Before every turn (RED and
-GREEN in a TDD unit) the executor asks the agent for its own admission estimate for that exact prompt — the same
-messages, tool definitions, completion reserve and tool-response reserve the next request will use — and records
-`unit.context = { estimatedPromptTokens, budgetTokens, contextLimit, at }`.
+GREEN in a TDD unit) the executor asks the agent for its own admission estimate for that prompt — the same messages,
+tool definitions, completion reserve and tool-response reserve as the conversation so far — and records
+`unit.context = { estimatedPromptTokens, budgetTokens, contextLimit, at }`. The estimate is a lower bound: the turn
+adds the tool groups its prompt enables, runtime context and any freshly pinned requirement ledger.
 
 If the prompt fits the resource but not the unit budget, the unit fails before inference with `CONTEXT_BUDGET`, names the
-estimate and the budget, offers `revise`, and sets `offerReassign` so the scheduler adds its "assign to another
-resource" options. If the prompt does not fit the resource at all, or the budget is at or above the resource capacity,
+prompt tokens and the completion/tool reserves that exceed the budget, offers `revise`, and sets `offerReassign` so the
+scheduler adds its "assign to another resource" options. If the prompt does not fit the resource at all, or the budget is at or above the resource capacity,
 resource-limit pressure stays with the agent's normal admission/compaction path (which can compact and continue), so the
 preflight never pre-empts it. The estimate is a start-of-turn lower bound: the turn adds the tool groups its prompt
 enables, runtime context and, for a fresh objective, the pinned requirement ledger. The cap therefore gates the start
@@ -24,7 +25,8 @@ prompt; mid-turn growth is bounded by the resource limit, not by the unit budget
 
 ## Context checkpoints
 
-`nexus operation checkpoint <op> <unit> [--name <name>]` snapshots the unit's durable task-state file byte for byte
+`nexus operation checkpoint <op> <unit> [--name <name>]` snapshots a settled (not running, not complete) unit's durable
+task-state file byte for byte
 (0600, fsync) under `<task store>/context-checkpoints/<operation>/`, and records `{unitId, name, at, taskId, messages,
 bytes, sha256}` on the operation. `checkpoints` lists them; `restore` verifies the file's hash, copies it back, keeps the
 pre-restore file under `context-checkpoints/<operation>/backups/` (not beside the live task files, where it would appear
@@ -78,7 +80,8 @@ clean, isolated HOME/XDG.
   conversation referring to stale files; the resume is fail-closed for verification but the agent is not told which
   files moved.
 - Checkpoints are not garbage-collected and are kept in the task store; removing them is an operator action. There is
-  no retention policy and no size cap.
+  no retention policy and no size cap. A completed unit cannot be checkpointed (and a checkpoint cannot be restored
+  after its unit completes), because restoring would re-run work whose integration receipt already exists.
 - Checkpoint/restore hold the operation lock and refuse a RUNNING unit, so a live driver is excluded; the remaining
   race is a turn that starts after the lock is released but before the next resume, which the RUNNABLE state makes
   explicit.

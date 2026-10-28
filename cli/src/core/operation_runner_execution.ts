@@ -169,13 +169,17 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       estimate.toolResponseReserve,
     );
     if (fitsBudget) return undefined;
+    const total = estimate.estimatedPromptTokens + estimate.completionReserve + estimate.toolResponseReserve;
     return {
       kind: "failed",
       cause: "CONTEXT_BUDGET",
-      reason: `estimated ${estimate.estimatedPromptTokens} prompt tokens exceed the unit budget of ${unit.contextBudget}`,
+      reason:
+        `estimated ${estimate.estimatedPromptTokens} prompt tokens + ${estimate.completionReserve} completion + ` +
+        `${estimate.toolResponseReserve} tool-response reserves exceed the unit budget of ${unit.contextBudget}`,
       question:
-        `${unit.title} needs about ${estimate.estimatedPromptTokens} prompt tokens (including completion and tool reserves), ` +
-        `over its ${unit.contextBudget}-token budget. Assign it to a resource with more context, revise it, or stop?`,
+        `${unit.title} needs about ${total} tokens (prompt ${estimate.estimatedPromptTokens}, completion ` +
+        `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over its ${unit.contextBudget}-token ` +
+        `budget. Assign it to a resource with more context, revise it, or stop?`,
       options: [{ label: "revise the unit (note required)", action: { kind: "revise" } }],
       offerReassign: true,
     };

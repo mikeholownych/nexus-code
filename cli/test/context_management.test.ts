@@ -117,7 +117,8 @@ test("a unit budget below the resource capacity blocks before inference when the
   assert.equal(outcome.kind, "failed");
   if (outcome.kind === "failed") {
     assert.equal(outcome.cause, "CONTEXT_BUDGET");
-    assert.match(outcome.reason, /20000 prompt tokens exceed the unit budget of 15000/);
+    assert.match(outcome.reason, /20000 prompt tokens \+ 8192 completion \+ 4096 tool-response reserves exceed the unit budget of 15000/);
+    assert.match(outcome.question!, /needs about 32288 tokens/);
     assert.equal(outcome.offerReassign, true, "the scheduler must offer a larger resource");
     assert.deepEqual(outcome.options.map((option) => option.action.kind), ["revise"]);
   }
@@ -192,6 +193,9 @@ test("no budget means no preflight and no recorded estimate", async () => {
 
 test("a real agent estimates the next turn with its own budget and tools", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-budget-ws-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-budget-state-"));
+  const previousStateDir = process.env.NEXUS_STATE_DIR;
+  process.env.NEXUS_STATE_DIR = stateRoot;
   const agent = new AutonomousAgent({
     endpoint: "http://127.0.0.1:9/v1",
     model: "m",
@@ -211,7 +215,10 @@ test("a real agent estimates the next turn with its own budget and tools", () =>
     assert.ok(large.estimatedPromptTokens > 32_768);
   } finally {
     agent.shutdown();
+    if (previousStateDir === undefined) delete process.env.NEXUS_STATE_DIR;
+    else process.env.NEXUS_STATE_DIR = previousStateDir;
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
@@ -234,9 +241,8 @@ function checkpointFixture(): {
     [{ id: "primary", provider: "http://p", endpoint: "http://p/v1", model: "m", capabilities: ["tools"] }],
     Date.now(),
   );
-  state.units[0].status = "COMPLETE";
+  state.units[0].status = "RUNNABLE";
   state.units[0].agentTaskId = "task-u1";
-  state.units[0].result = { summary: "done", completedAt: new Date().toISOString(), resourceId: "primary", outcome: "VERIFIED" };
   store.save(state);
   const taskFile = path.join(store.manager.getBaseDir(), "task-u1.json");
   writePrivateFile(taskFile, JSON.stringify({ taskId: "task-u1", messages: [{ role: "system", content: "s" }, { role: "user", content: "hi" }] }), { durable: true });
@@ -244,7 +250,7 @@ function checkpointFixture(): {
 }
 
 test("a checkpoint copies the conversation and restore brings it back with a backup", () => {
-  const { store, state, taskFile, workspace } = checkpointFixture();
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
   try {
     const record = createContextCheckpoint(store.manager, state, "u1", "before-refactor", 1_800_000_000_000);
     assert.equal(record.messages, 2);
@@ -263,6 +269,7 @@ test("a checkpoint copies the conversation and restore brings it back with a bac
     };
     state.status = "BLOCKED";
     state.blocked = { since: new Date().toISOString(), decisions: [state.units[0].blocked.decision] };
+    state.wait = { since: new Date().toISOString(), wakeAt: new Date().toISOString(), reason: "parked", parkedUnits: ["u1"] };
 
     const restored = restoreContextCheckpoint(store.manager, state, "u1", "before-refactor", 1_800_000_001_000);
     assert.equal(restored.record.name, "before-refactor");
@@ -274,15 +281,16 @@ test("a checkpoint copies the conversation and restore brings it back with a bac
     assert.equal(state.units[0].result, undefined);
     assert.equal(state.status, "RUNNING");
     assert.equal(state.blocked, undefined);
+    assert.equal(state.wait, undefined);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
 test("restore refuses tampered checkpoints and lifecycle states it does not own", () => {
-  const { store, state, workspace } = checkpointFixture();
+  const { store, state, workspace, stateRoot } = checkpointFixture();
   try {
-    state.units[0].status = "RUNNABLE";
     createContextCheckpoint(store.manager, state, "u1", "cp");
     const file = checkpointFile(store.manager.getBaseDir(), state.id, "u1", "cp");
     writePrivateFile(file, JSON.stringify({ taskId: "task-u1", messages: [{ role: "system", content: "tampered" }] }), { durable: true });
@@ -299,11 +307,12 @@ test("restore refuses tampered checkpoints and lifecycle states it does not own"
     assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "cp2"), /was dropped/);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
 test("restoring one unit keeps an operation-level decision intact", () => {
-  const { store, state, workspace } = checkpointFixture();
+  const { store, state, workspace, stateRoot } = checkpointFixture();
   try {
     createContextCheckpoint(store.manager, state, "u1", "cp");
     state.status = "BLOCKED";
@@ -328,17 +337,20 @@ test("restoring one unit keeps an operation-level decision intact", () => {
     assert.equal(state.status, "RUNNING");
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
 test("checkpoints refuse traversal, running units, missing conversations and unknown names", () => {
-  const { store, state, workspace } = checkpointFixture();
+  const { store, state, workspace, stateRoot } = checkpointFixture();
   try {
     assert.throws(() => createContextCheckpoint(store.manager, state, "u1", "../escape"), ContextCheckpointError);
     assert.throws(() => createContextCheckpoint(store.manager, state, "u1", "bad name"), ContextCheckpointError);
     state.units[0].status = "RUNNING";
     assert.throws(() => createContextCheckpoint(store.manager, state, "u1", "cp"), /is running/);
     state.units[0].status = "COMPLETE";
+    assert.throws(() => createContextCheckpoint(store.manager, state, "u1", "cp"), /is complete/);
+    state.units[0].status = "RUNNABLE";
     state.units[0].agentTaskId = undefined;
     assert.throws(() => createContextCheckpoint(store.manager, state, "u1", "cp"), /no durable conversation/);
     state.units[0].agentTaskId = "task-missing";
@@ -347,6 +359,7 @@ test("checkpoints refuse traversal, running units, missing conversations and unk
     assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "nope"), /no checkpoint/);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 

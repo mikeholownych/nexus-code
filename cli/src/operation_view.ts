@@ -520,7 +520,7 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
       const durable = unit.durable ? " · durable" : "";
       const integrated = unit.integration ? ` · integrated ${text(unit.integration.integratedCommit.slice(0, 12), width)}` : "";
       const budget = unit.context
-        ? ` · context ${unit.context.estimatedPromptTokens}/${Math.min(unit.context.budgetTokens, unit.context.contextLimit)}`
+        ? ` · context ${unit.context.estimatedPromptTokens} tokens (effective cap ${Math.min(unit.context.budgetTokens, unit.context.contextLimit)})`
         : unit.contextBudget
           ? ` · budget ${unit.contextBudget}`
           : "";

@@ -258,7 +258,7 @@ export function registerOperationCommands(program: Command): void {
           process.exitCode = 2;
           return;
         }
-        console.error(pc.red(`Checkpoint rejected: ${error.message}`));
+        console.error(pc.red(`Checkpoint rejected: ${safeTerminal(error.message)}`));
         process.exitCode = 2;
       }
     });
@@ -317,7 +317,7 @@ export function registerOperationCommands(program: Command): void {
           process.exitCode = 2;
           return;
         }
-        console.error(pc.red(`Restore rejected: ${error.message}`));
+        console.error(pc.red(`Restore rejected: ${safeTerminal(error.message)}`));
         process.exitCode = 2;
       }
     });

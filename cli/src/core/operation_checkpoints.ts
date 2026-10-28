@@ -57,6 +57,9 @@ export function createContextCheckpoint(
   if (unit.status === "RUNNING") {
     throw new ContextCheckpointError(`unit '${unitId}' is running; checkpoint it when the turn has settled`);
   }
+  if (unit.status === "COMPLETE") {
+    throw new ContextCheckpointError(`unit '${unitId}' is complete; checkpoint it before it completes (restore refuses a complete unit)`);
+  }
   if (!unit.agentTaskId) throw new ContextCheckpointError(`unit '${unitId}' has no durable conversation yet`);
   const source = taskFile(store, unit.agentTaskId);
   if (!fs.existsSync(source)) throw new ContextCheckpointError(`unit '${unitId}' has no task state at ${source}`);

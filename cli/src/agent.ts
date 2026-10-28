@@ -1872,9 +1872,9 @@ export class AutonomousAgent {
   }
 
   /**
-   * The admission estimate for adding one user message, using the same budget, reserves and tool definitions the next
-   * turn will use. Compaction is not attempted here: callers use it to reject a prompt that cannot fit even before
-   * admission runs.
+   * The admission estimate for adding one user message, using the same budget, reserves and current tool definitions.
+   * Tool groups enabled by the prompt, runtime context and a freshly pinned objective ledger are added inside the turn
+   * and are not included, so this is a lower bound. Compaction is not attempted here.
    */
   public estimateTurnAdmission(content: string): {
     estimatedPromptTokens: number;
