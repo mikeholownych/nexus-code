@@ -1,0 +1,139 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - **First pasted brief.** Join the Nexus Code v1.0.0 effort as an implementation/integration agent. Take unclaimed critical-path work through implementation, validation, review and integration until v1.0.0 is published and verified. The user pre-authorized commits, pushes, PRs, merges, RC creation, tags and stable publication after the required gates ("Do not request these approvals again"). Respect repository protections and coordinate with the designated release publisher.
+   - **Second pasted brief.** "Continue with qualification preparation and release coordination. Your completed lane does not end the overall assignment."
+     - **Host readiness.** Inspect the contract and the host. Prepare a resource profile and freeze it before qualification, without adjusting it after outcomes. Keep the tmpfs and memory accounting and the CPU throttle-versus-budget distinction explicit. Prepare the mount, the nexus-eval account, narrow privileges, persistence, rollback and validation, using the canonical mechanism.
+     - **Release ownership.** Designate a publisher and a backup.
+     - **Protections.** Prepare protections without changing admin settings unless authorized.
+     - **Acceptance.** Advance remaining acceptance work. Report completed, running, queued and externally blocked work separately.
+   - **User decisions:**
+     - "approve running provision.sh on mike-dev and T3 should also gate 'false presence'"
+     - For the T2 oracle format, the user selected "Harden legacy tests (Recommended)", i.e. SWE-bench style.
+     - Earlier: "kiro-cli agent is inactive (dead)". Several plain "continue" messages after logins and usage resets.
+   - **Security and process constraints (preserve):**
+     - Do not read held-out task payloads, reference patches, private validators or hidden answers; use aggregate metadata only.
+     - Do not author qualification tasks or act as custodian. Do not claim independent acceptance for my own work.
+     - Keep test state isolated from the real ~/.nexus.
+     - Never use `pkill -f` or `killall`; kill only PIDs you started.
+     - Use the canonical host-management mechanism. Do not modify the inference appliance, firewall, gateway, model workers, credentials or unrelated services.
+     - Do not overwrite published tags or bypass protections. Do not weaken thresholds or drop failing cases. Preserve failed runs as evidence.
+     - Held-out authorship, custody, implementation and tuning stay separated.
+     - Human terminal evidence cannot be replaced by automated PTY tests.
+     - Contest material stays frozen.
+     - An absent PID doesn't prove an owner inactive; use explicit handoff.
+     - Claims live in /home/mike/nexus-code/.git/nexus-claims and the log in .git/nexus-claims.log (CONCURRENCY.md). Take the SUITE claim before running test files.
+     - Do not run `redis-server` actions: "DO NOT kill, renice, or reassign that process" (the docker redis running as nexus-eval's UID).
+
+2. Key Technical Concepts:
+   - **Coordination.** CONCURRENCY.md protocol: mkdir-atomic claims, FILE_ claims, the SUITE lock and the claim log. Agents involved: opencode (custodian/integrator), codex-lead (reviewer), eval-impl (codex exec, now owns evaluator slices), codex-api-root (now RELEASE_PUBLISHER), antigravity.
+   - **Resource contract.** Delegated `systemd-run --user --scope`, with cgroup v2 cpu.max, memory.max, memory.swap.max=0, memory.oom.group and pids.max, plus cgroup.kill cleanup. The workspace sits on a dedicated tmpfs, so writes are charged to the memcg.
+   - **Profile.** cpuPercent 800, memoryBytes 16 GiB, tasks 4096, storageBytes 20 GiB at /srv/nexus-qual/ws (status "proposed"; calibration by the custodian is reportedly done, 40/40).
+   - **Evaluator account.** nexus-eval runs via `sudo -n -u nexus-eval -- /usr/bin/bwrap`. The sudoers rule permits only bwrap. ACLs grant access to the per-run directories.
+   - **T3 harness.** Sidecar protocol (hello, prompt.submit, steer, steer.ack, turn.result, shutdown). Compactions are counted from history.committedCompactions matched against *.history.jsonl. The gates are false absence = 0, false presence = 0 and steering ≥ 95%, over 8 tasks × 5 runs.
+   - **T2 hardened checks (PR #33).**
+     - No git or any program runs on the agent workspace after the agent; changes come from a tree walk against a fresh staging.
+     - Positive allowlist: source extensions plus the manifests package.json, pyproject.toml, Cargo.toml, go.mod and go.sum.
+     - TOML sections are split at every line starting with `[`, so unknown headers fail closed.
+     - go.mod must be identical outside its require lines and blocks.
+     - New manifests and manifest deletions refuse the checks. New .py files are allowed only in directories that already contain `__init__.py`.
+     - Writes are symlink-safe, with a 2 MiB cap. The hidden directory is mounted read-only, and regression runs in a separate copy. Qualification output is redacted.
+     - The heldout-v2 manifest is bound via task_sha256 and hidden_sha256 using the custodian's algorithm, plus corpusCustody {custodian, approvedAt, reportPath, reportSha256}.
+   - **Rulesets (PR #23).** The proposal: no deletion or force-push, PR-only with 0 approvals (single shared GitHub identity), merge commits only, the five required Actions checks with strict mode off, and immutable v* tags. The owner must apply them.
+
+3. Files and Code Sections (key ones):
+   - **eval/host/provision.sh, rollback.sh, validate.mjs, container-test/** (merged in #31 at 8c0ab7b).
+     - provision.sh: pending/confirm ledger at /var/lib/nexus-qual-host/ledger (root 0600), flock, collision checks, and a marker `# Managed by nexus-code eval/host/provision.sh`.
+     - SUDOERS=/etc/sudoers.d/90-nexus-eval, rule `<op> ALL=(nexus-eval) NOPASSWD: /usr/bin/bwrap`.
+     - The mount unit is `srv-nexus\x2dqual-ws.mount`, mode 0711. The runtime is /opt/nexus-qual with the `.nexus-qual-managed` marker. File digests use `record_file` with awk ENVIRON.
+     - Known flaw: `sha()` uses `sha256sum "$1" | cut`, which yields a leading `\` for a filename containing a backslash. The fix is `sha256sum < "$1"`.
+   - **eval/validate.mjs.** `asUser(user, cmd, argv)` returns `{ cmd: "/usr/bin/sudo", argv: ["-n","-u",user,"--",cmd,...argv] }` and requires an absolute cmd (merged in #31).
+   - **Uncommitted, branch v1/plan-10-runas-access (~/nexus-wt/runas), based on 8c0ab7b:**
+     - eval/isolate.mjs:
+       - `runAsAclArgs(user, operatorUid, resolved, directory)` returns access `-R -m u:${user}:rwX,u:${operatorUid}:rwX` and defaults `-m d:u:${user}:rwx,d:u:${operatorUid}:rwx`.
+       - `grantRunAsAccess` uses it with `process.getuid()`.
+       - New `normalizeRunAsPermissions(user, dir, wrapSpec)` runs `/usr/bin/chmod -R u+rwX,g+rwX,o-rwx /workspace` via isolatedProcessArgv as the evaluator, and throws on timeout or error.
+       - `runIsolatedProcess` now throws "isolated process spec has no timeoutMs" if the timeout is missing or ≤ 0.
+     - eval/validate.mjs: new `asUserSpec(user, spec) { return { ...spec, ...asUser(user, spec.cmd, spec.argv) }; }`.
+     - eval/run.mjs:
+       - the version probe uses `asUserSpec(config.runAs, spec)`, which fixes the pre-existing bug where asUser dropped timeoutMs and made the probe time out immediately;
+       - after runAgent: `if (config.runAs) for (const dir of [ws, home]) await normalizeRunAsPermissions(config.runAs, dir, asUserSpec);`.
+     - eval/host/validate.mjs: imports asUserSpec. The cgroup check now creates `/workspace/private/f` with chmod 600 / 700, normalizes, then asserts it is readable.
+     - eval/host/provision.sh: `NEEDRESTART_SUSPEND=1` on the apt install.
+     - cli/test/eval_runas.test.ts (new, 2/2 pass): runAsAclArgs, asUserSpec keeping timeoutMs, and the runIsolatedProcess guard.
+     - docs/reviews/evidence/v1-qualification/host/: 2026-10-18-provision.log, validate-1-8c0ab7b-FAILED.json (7/9; check 6 EACCES), validate-2-runas-fix-PASS.json (9/9), ledger.txt, state.txt, mount.txt and SHA256SUMS. **Caveat:** the ledger and state snapshots are from the 13:11Z re-provision by another agent, not from my run.
+   - **PR #33 branch v1/plan-10-pr-10m-hardened (~/nexus-wt/p10m), last pushed head c72fdcd.** Files: eval/hardened_check.mjs (tree-walk design), eval/run.mjs (hardened path; baselineTree taken pre-agent), eval/validate.mjs (heldout-v2 adapter), eval/isolate.mjs (readOnlySubpaths), eval/README.md, cli/test/eval_hardened.test.ts (7/7) and eval_integrity.test.ts. Local result: 50/50 across the eval suites. Ownership was **transferred to eval-impl at 12:59Z**; eval-impl has commit 75c28fd.
+
+4. Errors and fixes:
+   - **Git execution on agent state (#33).** The first design ran `git add -A` in the agent workspace, which allowed fsmonitor or filter code execution as the operator. Redesigned as a tree walk.
+   - **Allowlist gaps found in reviews.** Golden and snapshot files, symlink write-through, Cargo autotests and [features], manifest deletions, TOML header misparse, the go.mod replace block, new manifests, src-layout shadowing. All fixed with tests.
+   - **Fixture problems in #33.**
+     - `math` was in the SHADOWED set, which dropped math.js; made the shadow rule Python-only.
+     - Nexus write_file needs `overwrite: true` to replace an existing file.
+     - Messages changed, so assertions were updated.
+   - **Missing build artifacts.** Local test failures from a missing core or cli build, and resource tests needing a dedicated tmpfs. Fixed by building first and mounting a temporary 128 MB tmpfs at /mnt/nexus-eval-ci, then unmounting.
+   - **asUser dropping timeoutMs.** This killed processes immediately. Fixed with asUserSpec plus the guard.
+   - **Normalization mode.** `go-w` set the ACL mask to r-x, which blocked deletion. Changed to `g+rwX,o-rwx`.
+   - **Process failures (mine):**
+     - merged #31 at 12:29Z despite codex-lead's 12:01Z REVIEW BLOCKER and opencode's 11:56Z CHANGES-REQUIRED, which I did not re-read in the log before merging;
+     - logged that I had integrated #30 when opencode did (corrected in the log);
+     - created CI-runner congestion with rapid pushes (cancelled superseded runs).
+   - **Test regex in qhost2.** Matched the literal `\n` in the printf; OK.
+
+5. Problem Solving:
+   - **Host provisioning.** Ran at 12:30Z from a pristine worktree at 8c0ab7b, rc=0. needrestart restarted nothing; all restarts were deferred.
+   - **First validation.** 7/9, exposing the operator ACL defect. With the runas fix, validation reached 9/9, with a discriminating demo: ACL-only gives private=EACCES; after normalization it is readable.
+   - **Re-provision by another agent.** At 13:11:29Z another agent re-provisioned the host with a modified script:
+     - /etc/sudoers.d/99-nexus-eval containing the marker, plus `mike ALL=(nexus-eval) !ALL` and the bwrap rule;
+     - no 90 file;
+     - profile_sha256 4e8d42a2…;
+     - the nexus-eval uid is 985 in passwd, while other entries reference uid 999;
+     - a docker redis-server runs under the nexus-eval UID (a UID collision; do not touch it).
+   - **Ownership changes while I was paused.** At 12:59Z PLAN-10_PR-10m-HARDENED and PLAN-10_QUAL-HOST-2 were transferred to eval-impl. At 13:06Z a user-authorized transfer moved RELEASE_PUBLISHER to codex-api-root.
+   - **Open review findings against eval-impl's 75c28fd:**
+     - stageHiddenFiles creates its parent directory with mkdirSync before the symlink-ancestor check;
+     - the hiddenOutputHasTests regex wrongly rejects mixed Go and Rust output.
+   - **Post-merge #31 findings (codex-lead):** ledger path mutations precede validation; rollback trusts unvalidated ledger metadata; the fixture's bad() doesn't force a nonzero exit.
+
+6. All user messages:
+   - **First pasted brief.** The full "You are a cladude code agent joining the ongoing Nexus Code v1.0.0 implementation…" brief, with the discovery, coordination, role, integrity and publication rules.
+   - "kiro-cli agent is inactive (dead)"
+   - **Second pasted brief.** The "Continue with qualification preparation and release coordination…" brief, with sections 1–4.
+   - "approve running provision.sh on mike-dev and T3 should also gate 'false presence'"
+   - AskUserQuestion answer: "Harden legacy tests (Recommended)".
+   - Several "continue" messages after /login and usage-limit resets, and the /usage-credits command.
+
+7. Pending Tasks:
+   - Acknowledge the ownership transfers in the log (evaluator slices to eval-impl, RELEASE_PUBLISHER to codex-api-root). Stop editing the transferred files.
+   - Hand off the uncommitted runas-access fix (operator ACL, asUserSpec/timeout bug, 0600 normalization with g+rwX, needrestart suspend, eval_runas tests, host evidence) to eval-impl and codex-api-root, rather than pushing a competing PR.
+   - Report the host-state discrepancy:
+     - the 13:11Z re-provision with 99-nexus-eval and `!ALL`, whose provenance is unknown;
+     - the profile digest differs from the integrated one;
+     - the uid 985 vs 999 mention;
+     - the redis UID collision;
+     - my ledger and state evidence snapshots reflect that later state.
+   - Acknowledge the #31 merge-despite-blocker process failure, and the outstanding post-merge #31 findings.
+   - Report to the user: completed, running, queued and blocked work, plus the transfers.
+
+8. Current Work:
+   I was investigating why the host ledger shows `/etc/sudoers.d/99-nexus-eval` and a `\`-prefixed sha. That revealed, from the claim log (read via the persisted file b491e0309.txt), that while I was rate-limited:
+   - at 12:59Z opencode transferred PLAN-10_PR-10m-HARDENED and PLAN-10_QUAL-HOST-2 to eval-impl;
+   - at 13:06Z a "USER-AUTHORIZED TRANSFER RELEASE_PUBLISHER claude-code -> codex-api-root" occurred;
+   - codex-lead had posted a #31 REVIEW BLOCKER (12:01Z) before my 12:29Z merge, plus a post-merge CHANGES-REQUIRED (12:32Z);
+   - another agent re-provisioned the host at 13:11Z.
+
+   My runas-access work on ~/nexus-wt/runas is uncommitted and overlaps transferred scope.
+
+9. Optional Next Step:
+   Do not push further evaluator or host changes. First, post a claim-log entry with three parts:
+   - acknowledge the 12:59Z and 13:06Z transfers and my #31 merge-despite-blocker error;
+   - release my remaining claims (PLAN-10_RUNAS-ACCESS, FILE_eval_* and FILE_cli_test_eval_integrity.test.ts, if still mine);
+   - hand the uncommitted runas fixes and their evidence to eval-impl and codex-api-root as a documented boundary request. The fixes: the operator default ACL, asUserSpec preserving timeoutMs (the version probe bug), chmod `u+rwX,g+rwX,o-rwx` normalization, and NEEDRESTART_SUSPEND.
+
+   Then report to the user. The relevant log line reads: "TRANSFER PLAN-10_PR-10m-HARDENED + PLAN-10_QUAL-HOST-2 (owner-authorized reassignment on usage limit) … to fresh implementation session eval-impl", and "USER-AUTHORIZED TRANSFER RELEASE_PUBLISHER claude-code -> codex-api-root; user requested takeover of rate-limited Claude duties."
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/f73ff17f-fe7b-4087-bd8d-f26ad4102ad2.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
