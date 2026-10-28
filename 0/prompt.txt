@@ -1,0 +1,1 @@
+clean up the worktree and merged branches
