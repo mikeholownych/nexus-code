@@ -1,0 +1,48 @@
+<task-notification>
+<task-id>af177777e3a67b30d</task-id>
+<tool-use-id>toolu_01VrNoAdJQS14McRKT18ajof</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/af177777e3a67b30d.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review PRs 18-20" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #18 (10h): ACCEPT
+
+Both of my earlier nits are fixed in 0a75ef2.
+- The `--shared` control now asserts the child commit is actually reachable.
+- The new `--no-local` clone with the remote removed has no alternates, and it is still detected by the "not ancestors" reachability check. That proves the detection does not depend on alternates.
+
+I found nothing remaining. I did not run the test locally.
+
+## PR #19 (10i): ACCEPT WITH NITS
+
+- **B1 (storage cap):** fixed. `storageBytes` is required and `statfs` size must be at most `storageBytes`. `--keep` is refused, and the README now says the filesystem cap is the cross-phase bound and acknowledges the reparenting.
+- **B2 (lost kill):**
+  - The harness `kill()` now writes `cgroup.kill`, SIGTERMs the supervisor, and repeats the write every 50 ms until `close`. It SIGKILLs the supervisor group after 10 s.
+  - The supervisor's `stop()` also repeats the write, and the `close` handler always empties the leaf. This closes the window where a kill reached an empty leaf before the payload joined.
+  - The new early-kill test covers that window.
+- **Other fixes:** page alignment, `memory.oom.group=1` (now read back) and `Delegate=cpu memory pids` all check out.
+
+Remaining nits, none blocking:
+1. `eval/resources.mjs` (`resourceConfigProblem`) — the tmpfs size check is declarative.
+   - **Failure scenario:** `/dev/shm` passes if `storageBytes` is set to its full size, which is half of RAM. The cap is then "half of RAM", and other tenants share it.
+   - **Fix:** the qualification config should pin the mount path and size, and the README should say shared tmpfs only counts as a cap when `storageBytes` equals its size. The README already half-says this.
+2. `eval/resources.mjs` (`kill()`) — the 50 ms interval is not unref'd. If `child.close` never fires, for example because the supervisor is gone and an escaped process holds a stdio pipe, the harness keeps writing `cgroup.kill` indefinitely. The 10 s group SIGKILL does not stop the interval. In practice repeated `cgroup.kill` empties the leaf, which closes the pipes and fires `close`, so this is low risk. **Fix:** cap the repeat at about 30 s.
+3. `memory.oom.group=1` combined with an OOM in a hidden or regression check scoring as a failed check is acceptable. See item 1 below.
+
+**Declined items:**
+1. **OOM in hidden/regression scored as a failed check: I accept.**
+   - After reparenting, a validator's cgroup carries none of the candidate's charges. An OOM there is the validator hitting its own frozen `memoryBytes` limit.
+   - Counting it as an infrastructure error would let a candidate make its own runs unscored by consuming memory. A failed check is the fail-closed outcome.
+   - The caveat is that the frozen limits must be calibrated so the reference solution passes with headroom. That is a corpus-calibration task, not a code change.
+2. **No env-gating for the host-proof test: I accept.** A hard failure on hosts without systemd delegation matches the existing real-Bubblewrap rule. The provisioning script covers CI.
+
+## PR #20 (7e): ACCEPT
+
+All three findings are fixed:
+- `record` now fails if packaging dirtied tracked files, using `status --porcelain --untracked-files=no`.
+- `compare` requires exactly the two expected builder labels and non-null image and imageVersion. It also requires the workflow ref to be `refs/tags/&lt;version&gt;` with the workflow sha equal to the commit, and a single run id and attempt.
+- The validate step enforces `GITHUB_REF` and `GITHUB_WORKFLOW_SHA` before checkout, so a branch-modified workflow cannot produce evidence.
+
+One nit: the dirty check ignores untracked files, deliberately, because build outputs exist. An untracked source file added by packaging would be bundled without being recorded. That is low risk given the tree and artifact digest comparison. **Fix:** also record `git status --porcelain --ignored=no` output into the evidence if you want it airtight.</result>
+<usage><subagent_tokens>78526</subagent_tokens><tool_uses>3</tool_uses><duration_ms>30207</duration_ms></usage>
+</task-notification>
