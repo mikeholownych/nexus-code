@@ -1,0 +1,102 @@
+<task-notification>
+<task-id>ac33671bda20e25f4</task-id>
+<tool-use-id>toolu_01NS9FWgrch9yq8c3dWfRMcn</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/ac33671bda20e25f4.output</output-file>
+<status>completed</status>
+<summary>Agent "TUI re-acceptance round 3" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdicts
+
+1. **Approval and input safety: NOT ACCEPTED.** The round-2 typing paths are fixed. But "approve all later actions" (`always:true`) can still be reached through the composer's own editing keys, without choosing on the panel. I reproduced this in a real terminal session (PTY), 2 of 2 runs each:
+   - typing across the panel, an 800 ms pause, then `→ → Enter` approved all later actions; review mode switched to auto and `second.txt` was written without asking;
+   - `Ctrl+A` (the readline "start of line" key, which the help screen lists) then `Enter` did the same.
+2. **Visual acceptance of the re-captured evidence: ACCEPTED WITH DEFECTS** (P3 only). The changed screens are correct. The cell dumps are clean (no control characters, row widths right, wide characters correctly paired).
+
+## Findings, ranked
+
+**P1-A′. Composer editing keys choose a decision, including session-wide approval.** `live_state.rs:1266-1301`.
+- **Observed:** once the panel is settled, `←`, `→` and `Tab` move a choice that starts on nothing and wraps around: `→` = Approve, `→→` = all later, `←` = Deny, `←←` = all later. An `Enter` straight after takes it. These are the composer's cursor keys (`live_state.rs:1557-1560`), and `Tab` is slash-command completion. They choose even when the panel says "typing ignored".
+- **Unit results:** after a 700 ms pause, `Left Left Enter`, `Right Right Enter` and `Home Right Right Enter` all approved all later actions; `Right Enter` approved once.
+- **PTY results:** the `cursor_keys` probe approved all later actions and switched to auto (2/2). The `tab_complete` probe (`/rev`, pause, `Tab`, `Enter`) approved once (2/2).
+- **Expected:** keys a typist uses on a draft should never reach all later actions without a confirmation that is not composer muscle memory.
+- **Fix:**
+  - Never take all later actions from an arrow-made choice with a single `Enter`. Require a second confirm (for example `Enter` again after the "confirms approving this and every later action" hint has been drawn for at least 400 ms), or require a distinct key.
+  - Once the panel has been typed into, the first arrow should only reveal the choices. An `Enter` should decide only after the shown choice has been on screen for at least 400 ms.
+  - Do not wrap from the first choice to all later actions.
+
+**P2-1. Ctrl/Alt chords are read as letter answers.** `live_state.rs:1285-1296`.
+- **Observed:** `KeyCode::Char('a'|'y'|'n')` matches whatever the modifiers. Units: `Ctrl+Y` and `Alt+Y` approve, `Ctrl+N` denies, `Ctrl+A` then `Enter` 700 ms later approves all later actions. PTY: `ctrl_a_enter` approved all later actions and switched to auto (2/2).
+- **Fix:** match the letters only with no modifiers, or Shift only. Treat Ctrl/Alt chords as typing (drop the choice and disarm the letters).
+
+**P2-2. A single `y` approves when typing stopped at least 2 s before the panel appeared.** This is by design, but it is still a way to approve without having looked.
+- **Observed:** stopping 2000 ms or 2600 ms before the panel, then `y` 600 ms after it appears, approves once; `a`, a pause and `Enter` approves all later actions. At 1999 ms nothing decides. PTY `idle_then_y` approved once (2/2).
+- **Who it hits:** a slow composer who pauses about 2.6 s or more and whose next word starts with y or a.
+- **Fix:** also disarm the letters while the composer holds a draft (a non-empty draft means the operator is mid-composition).
+
+**P3-1. A shrink and regrow re-arms letters on a panel that was typed into.** `note_approval_shown`, `live_state.rs:1156-1167`, recomputes `letters` from recent typing alone. Unit: type into the panel, shrink, regrow 2.5 s later, then `y` approves. Fix: keep `letters = false` once the panel has been typed into.
+
+**P3-2. Following the hint loses the choice.** `focus_fresh` is consumed by every key, scroll keys included (`live_state.rs:1258`).
+- **Observed:** after `→`, the hint says "enter confirms ←→ choose ↑↓ scroll". After `→`, `↓` then `Enter` does nothing, drops the choice and disarms the letters; the panel switches to "typing ignored".
+- **Fix:** do not consume `focus_fresh` on scroll keys.
+
+**P3-3. The buttons still read `y Approve / a … / n Deny` while the panel says "typing ignored"** (screen 10, `live_view.rs:528-531`). The labels advertise keys that are ignored. Fix: hide the hotkey letters when `letters` is false.
+
+**P3-4. On a too-small terminal, `Esc` cannot deny** (`shown` is false; the probe returned None). Only `Ctrl+C` or a resize gets the operator out. Fix: let `Esc` deny whenever the panel exists.
+
+**P3-5. A queued approval can overwrite the one already waiting** (`live_state.rs:869`). Unit: with a1 open, a2 then a3 arrive; a2 is lost and a3 opens next. This is latent: the sidecar has only one pending approval at a time (`sidecar.ts:472-494`). Fix: use a queue (`VecDeque`).
+
+**P3-6. Contradictory provenance in the document.** The "Result" section of `NEXUS_TUI_SURFACE_2026-10-12.md` says the current evidence is from `d09c08f` (sidecar `6dd91487…`). The committed metrics say `gitHead dda2e62`, sidecar `cc4c33af…`. Fix: update the Result text and table.
+
+**P3-7. Visual nits:**
+- Screens 06 and 07 are still identical (`n` gives no feedback when every hunk fits).
+- The PNG renderer, not the TUI, draws CJK glyphs oddly (screens 11/12 `字`, tui_diff 03/08-13 banner) and a darker block after `auto` in `14-depth-256`. The cells are correct: background 233 all the way across, the wide character followed by its empty partner cell.
+- At 40×10 the approval hint row is dropped and the composer hint is cut to "n de…".
+
+## Usability
+
+There is always a way to decide: `Esc` denies, or a pause, an arrow and `Enter`. The exception is a terminal below the minimum size, where `Esc` is ignored (P3-4). The hints are misleading in P3-2 and P3-3.
+
+## Round-2 findings
+
+| Finding | Status | Evidence |
+|---|---|---|
+| P1-A typing with pauses approved all later actions | PARTIAL | Prior probes all give no decision: the PTY REACCEPT driver (2/2: only prompt and cancel, mode stays review, nothing written), slow typist, pause before panel, `a` then more typing. But arrows, `Tab` and `Ctrl+A` still reach all later actions (P1-A′, P2-1). |
+| P2-B arrows/Tab set focus while typing | PARTIAL | Before settling they are ignored (`→`@100 ms then `Enter`, `→`@500 ms then `Enter`: None). After any 600 ms pause they choose, even with "typing ignored" (P1-A′). |
+| P3-C shrink after draw decides | RESOLVED, with a side issue | `y` while shrunk gives None; regrow re-arms letters (P3-1). |
+| P3-D second request replaced the open one | RESOLVED | Open stays a1; the waiting slot can be overwritten (P3-5, latent). |
+| P3-E1/E2 resume notice | RESOLVED | Screens 23b and 24 show a single "· Resumed session …" line. |
+| P3-E3 mode dropped at narrow width | RESOLVED | Screen 19 shows `auto`; the 40-column probe shows "review mode" and "auto". |
+| P3-E4 placeholder cut without ellipsis | RESOLVED | At 40 columns: "› type to steer the running turn · esc …". |
+| P3-E5–E7 | NOT RESOLVED | Left as layout choices; screens 06/07 still identical. |
+
+Other probes behaved as required:
+- `Esc` during typing only ever denies, and needs the 400 ms display time (399 ms gives None, 400 ms gives Deny).
+- A bracketed paste then `y` decides nothing (unit and PTY), and switches the panel to "typing ignored".
+- At exactly 600 ms: `y` decides at 600 and not at 599 (boundaries correct).
+- `→`, a typed character, then `Enter` decides nothing.
+- A double-tapped `y` answers one panel only.
+- An approval arriving behind help is not decided by keys meant for help.
+
+## Checks run
+
+- **Build:** `make build` in my worktree of `fbf77b3`: OK.
+- **Unit tests:** `cargo test --release --bin nexus-tui` on unmodified code: 233/233. With probes: 25 probe tests ran (my 13 plus the prior 12).
+- **PTY suite:** the six `cli/test/tui_*_e2e.test.ts` files, which contain 7 scenarios, run twice serially with `HOME` in a temp dir: 7/7 both times.
+- **PTY probes:** the prior REACCEPT driver ×2, and my five scenarios ×2.
+- **Checksums:** `sha256sum -c` passes in both evidence directories (32 and 20 files), and the manifest hashes match the files.
+- **Provenance:**
+  - Both metrics files say `gitHead dda2e62`.
+  - `nexus-tui` `cb11bc5a…` matches my build of `fbf77b3`.
+  - `sidecarSha256 cc4c33af…` does **not** match my build (`6dd91487…`). It equals the `cli/dist/sidecar.js` committed at `dda2e62`.
+  - Between `dda2e62` and `fbf77b3` there are non-TUI changes: the main merge and `d09c08f`, which touches `sidecar.ts` (findings persistence) and the PTY drivers. So `fbf77b3` is TUI-identical to `dda2e62`, not code-identical.
+- **Images:** read every PNG (26 surface, 16 diff) and compared screen 24 against the previous capture (`58adbd1`).
+
+## Limitations
+
+- These are synthetic timings; the PTY timings include scheduler jitter.
+- I did not probe the review overlay as the blocking panel: `Ctrl+D` had nothing to review. It goes through the same waiting-slot code as help.
+- The probe test files print results rather than assert them.
+
+The probe patch is saved at `/tmp/claude-1000/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2/scratchpad/reaccept3_probes.patch`. It contains the prior probes plus my unit probes and the PTY driver and test. My worktree is removed. `/home/mike/nexus-code` and `scratchpad/base` were not touched; the live checkout's HEAD moved to `82718e1` during the review, and that was not me.</result>
+<usage><subagent_tokens>222118</subagent_tokens><tool_uses>102</tool_uses><duration_ms>1415573</duration_ms></usage>
+</task-notification>
