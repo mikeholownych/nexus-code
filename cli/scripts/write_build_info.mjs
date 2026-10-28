@@ -15,6 +15,8 @@ const git = (...args) => {
     return null;
   }
 };
+const buildInfoPath = path.join(cli, "dist", "build-info.json");
+fs.mkdirSync(path.dirname(buildInfoPath), { recursive: true });
 const commit = git("rev-parse", "--short=12", "HEAD");
 const info = {
   commit: commit ?? "unknown",
@@ -24,4 +26,4 @@ const info = {
   // Build output is tracked in this repository; a rebuilt cli/dist alone does not make the source dirty.
   dirty: commit ? Boolean(git("status", "--porcelain", "--untracked-files=no", "--", ".", ":(exclude)cli/dist")) : false,
 };
-fs.writeFileSync(path.join(cli, "dist", "build-info.json"), JSON.stringify(info, null, 2) + "\n");
+fs.writeFileSync(buildInfoPath, JSON.stringify(info, null, 2) + "\n");
