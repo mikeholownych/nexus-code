@@ -244,6 +244,34 @@
                     "type": "string"
                   }
                 }
+              },
+              "contextBudget": {
+                "type": "number",
+                "minimum": 1
+              },
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "estimatedPromptTokens",
+                  "budgetTokens",
+                  "contextLimit",
+                  "at"
+                ],
+                "properties": {
+                  "estimatedPromptTokens": {
+                    "type": "integer"
+                  },
+                  "budgetTokens": {
+                    "type": "integer"
+                  },
+                  "contextLimit": {
+                    "type": "integer"
+                  },
+                  "at": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
@@ -544,6 +572,33 @@
             },
             "integrationWorktree": {
               "type": "string"
+            }
+          }
+        },
+        "checkpoints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "unitId",
+              "name",
+              "at",
+              "messages"
+            ],
+            "properties": {
+              "unitId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              },
+              "messages": {
+                "type": "integer"
+              }
             }
           }
         }

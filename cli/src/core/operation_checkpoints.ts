@@ -1,0 +1,199 @@
+/**
+ * Durable context checkpoints for operation units. A checkpoint is a byte-for-byte copy of the unit's task-state file
+ * and its conversation journals (the schema-2 state keeps the conversation in `.messages.jsonl`/`.history.jsonl`, so
+ * copying the task file alone would depend on the originals surviving retention). Restoring puts them back and makes
+ * the unit runnable. Restoring is fail-closed by construction: the agent's recovery path treats a resumed task as
+ * unverified, so the operator gets the context back but not the old verification standing.
+ *
+ * Files are content-addressed: a new checkpoint of the same name never overwrites an older one before the operation
+ * catalog is saved, so a failed save cannot destroy the previous snapshot.
+ */
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { writePrivateFile } from "./durable_file.js";
+import type { ContextCheckpoint, ContextCheckpointFile, DurableOperationState } from "./operation.js";
+
+export class ContextCheckpointError extends Error {}
+
+const NAME = /^[A-Za-z0-9._-]{1,64}$/;
+const TASK_ID = /^[A-Za-z0-9._-]{1,160}$/;
+
+function slug(value: string): string {
+  const clean = value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "item";
+  return `${clean}-${createHash("sha256").update(value).digest("hex").slice(0, 8)}`;
+}
+
+function digest(data: Buffer | string): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+export function checkpointDir(baseDir: string, operationId: string): string {
+  return path.join(baseDir, "context-checkpoints", slug(operationId));
+}
+
+/** The versioned bundle for one snapshot: `<unit>--<name>--<task-hash>/`. */
+export function checkpointBundleDir(
+  baseDir: string,
+  operationId: string,
+  unitId: string,
+  name: string,
+  sha256: string,
+): string {
+  return path.join(checkpointDir(baseDir, operationId), `${slug(unitId)}--${name}--${sha256.slice(0, 12)}`);
+}
+
+const BUNDLE_FILES: Array<{ name: ContextCheckpointFile["name"]; file: string; suffix: string }> = [
+  { name: "task", file: "task.json", suffix: ".json" },
+  { name: "messages", file: "messages.jsonl", suffix: ".messages.jsonl" },
+  { name: "history", file: "history.jsonl", suffix: ".history.jsonl" },
+];
+
+export function listContextCheckpoints(state: DurableOperationState): ContextCheckpoint[] {
+  return [...(state.contextCheckpoints ?? [])];
+}
+
+interface TaskStore {
+  getBaseDir(): string;
+}
+
+function taskFile(store: TaskStore, taskId: string): string {
+  if (!TASK_ID.test(taskId)) throw new ContextCheckpointError(`task id '${taskId}' is not usable as a file name`);
+  return path.join(store.getBaseDir(), `${taskId}.json`);
+}
+
+/** Snapshot a settled unit's conversation. Running or complete units are refused. */
+export function createContextCheckpoint(
+  store: TaskStore,
+  state: DurableOperationState,
+  unitId: string,
+  name: string,
+  now: number = Date.now(),
+): ContextCheckpoint {
+  if (!NAME.test(name)) {
+    throw new ContextCheckpointError(`invalid checkpoint name '${name}': use letters, digits, '.', '_' or '-' (max 64)`);
+  }
+  const unit = state.units.find((entry) => entry.id === unitId);
+  if (!unit) throw new ContextCheckpointError(`unit '${unitId}' is not part of operation ${state.id}`);
+  if (unit.status === "RUNNING") {
+    throw new ContextCheckpointError(`unit '${unitId}' is running; checkpoint it when the turn has settled`);
+  }
+  if (unit.status === "COMPLETE") {
+    throw new ContextCheckpointError(`unit '${unitId}' is complete; checkpoint it before it completes (restore refuses a complete unit)`);
+  }
+  if (!unit.agentTaskId) throw new ContextCheckpointError(`unit '${unitId}' has no durable conversation yet`);
+  const taskId = unit.agentTaskId;
+  if (!TASK_ID.test(taskId)) throw new ContextCheckpointError(`task id '${taskId}' is not usable as a file name`);
+  const base = store.getBaseDir();
+  const source = path.join(base, `${taskId}.json`);
+  if (!fs.existsSync(source)) throw new ContextCheckpointError(`unit '${unitId}' has no task state at ${source}`);
+
+  const taskData = fs.readFileSync(source);
+  let messages = 0;
+  try {
+    const parsed = JSON.parse(taskData.toString("utf8"));
+    messages = Array.isArray(parsed?.messages) ? parsed.messages.length : 0;
+  } catch {
+    throw new ContextCheckpointError(`unit '${unitId}' has unreadable task state; refusing to checkpoint it`);
+  }
+
+  const taskHash = digest(taskData);
+  const bundle = checkpointBundleDir(base, state.id, unitId, name, taskHash);
+  const files: ContextCheckpointFile[] = [];
+  for (const entry of BUNDLE_FILES) {
+    const from = path.join(base, `${taskId}${entry.suffix}`);
+    if (!fs.existsSync(from)) continue;
+    const data = fs.readFileSync(from);
+    writePrivateFile(path.join(bundle, entry.file), data, { durable: true });
+    files.push({ name: entry.name, bytes: data.length, sha256: digest(data) });
+  }
+
+  const record: ContextCheckpoint = {
+    unitId,
+    name,
+    at: new Date(now).toISOString(),
+    taskId,
+    messages,
+    bytes: taskData.length,
+    sha256: taskHash,
+    files,
+  };
+  state.contextCheckpoints = [
+    ...(state.contextCheckpoints ?? []).filter((entry) => !(entry.unitId === unitId && entry.name === name)),
+    record,
+  ];
+  return record;
+}
+
+/**
+ * Restore a checkpoint over the unit's task state and journals, keeping the pre-restore files as a backup. The unit
+ * becomes runnable and the operation runnable (or stays blocked while other decisions remain); the next resume recovers
+ * the restored conversation as unverified (fail-closed).
+ */
+export function restoreContextCheckpoint(
+  store: TaskStore,
+  state: DurableOperationState,
+  unitId: string,
+  name: string,
+  now: number = Date.now(),
+): { record: ContextCheckpoint; backupDir?: string } {
+  const record = (state.contextCheckpoints ?? []).find((entry) => entry.unitId === unitId && entry.name === name);
+  if (!record) throw new ContextCheckpointError(`no checkpoint '${name}' for unit '${unitId}'`);
+  const unit = state.units.find((entry) => entry.id === unitId);
+  if (!unit) throw new ContextCheckpointError(`unit '${unitId}' is not part of operation ${state.id}`);
+  if (state.status === "COMPLETE" || state.status === "CANCELLED") {
+    throw new ContextCheckpointError(`operation ${state.id} is ${state.status}; a checkpoint cannot revive it`);
+  }
+  if (unit.status === "RUNNING") {
+    throw new ContextCheckpointError(`unit '${unitId}' is running; restore it when the turn has settled`);
+  }
+  if (unit.status === "COMPLETE") {
+    throw new ContextCheckpointError(`unit '${unitId}' is complete; restore a checkpoint before it completes`);
+  }
+  if (unit.dropped) throw new ContextCheckpointError(`unit '${unitId}' was dropped by the operator`);
+
+  const base = store.getBaseDir();
+  const bundle = checkpointBundleDir(base, state.id, unitId, name, record.sha256);
+  if (!fs.existsSync(bundle)) throw new ContextCheckpointError(`checkpoint bundle is missing: ${bundle}`);
+  const contents = new Map<ContextCheckpointFile["name"], Buffer>();
+  for (const file of record.files) {
+    const source = path.join(bundle, BUNDLE_FILES.find((entry) => entry.name === file.name)!.file);
+    if (!fs.existsSync(source)) throw new ContextCheckpointError(`checkpoint file is missing: ${source}`);
+    const data = fs.readFileSync(source);
+    if (digest(data) !== file.sha256) {
+      throw new ContextCheckpointError(`checkpoint '${name}' does not match its recorded hash; refusing to restore it`);
+    }
+    contents.set(file.name, data);
+  }
+  if (!contents.has("task")) throw new ContextCheckpointError(`checkpoint '${name}' has no task state`);
+
+  const target = taskFile(store, record.taskId);
+  const backupDir = path.join(checkpointDir(base, state.id), "backups", `${slug(unitId)}--${name}--${now}`);
+  for (const entry of BUNDLE_FILES) {
+    const current = path.join(base, `${record.taskId}${entry.suffix}`);
+    if (fs.existsSync(current)) {
+      writePrivateFile(path.join(backupDir, entry.file), fs.readFileSync(current), { durable: true });
+    }
+    const restored = contents.get(entry.name);
+    if (restored) writePrivateFile(current, restored, { durable: true });
+  }
+
+  unit.agentTaskId = record.taskId;
+  unit.status = "RUNNABLE";
+  delete unit.blocked;
+  delete unit.parked;
+  delete unit.result;
+  delete unit.pendingDecision;
+  // Only this unit's escalation is resolved. Other decisions (for example the git or not-converging guard) are the
+  // operator's to clear, so the operation stays blocked while any remain — the same rule Scheduler.resolve follows.
+  const remaining = (state.blocked?.decisions ?? []).filter((decision) => decision.unitId !== unitId);
+  if (remaining.length) {
+    state.blocked = { since: state.blocked!.since, decisions: remaining };
+    state.status = "BLOCKED";
+  } else {
+    delete state.blocked;
+    state.status = "RUNNING";
+  }
+  delete state.wait;
+  return { record, backupDir };
+}
