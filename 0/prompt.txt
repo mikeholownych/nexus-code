@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>blzi0p1s9</task-id>
+<tool-use-id>toolu_01Q7LWArBQDYMxCngauS9Na7</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/blzi0p1s9.output</output-file>
+<status>completed</status>
+<summary>Background command "ssh -o BatchMode=yes mike@10.0.8.5 'sudo systemctl stop aihost-vllm-worker2 &amp;&amp; sleep 5 &amp;&amp; podman run -d --rm --name llama-bench --network host --ipc host --device local-ai.intel/gpu=all --group-add keep-groups -e ONEAPI_DEVICE_SELECTOR=level_zero:1 -e ZE_AFFINITY_MASK=1 -v /var/lib/local-ai/models/gguf:/models:ro ghcr.io/ggml-org/llama.cpp:server-intel -m /models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf -ngl 99 -c 32768 --port 8002 --host 127.0.0.1 --jinja -np 1 2&gt;&amp;1 | tail -1; for i in $(seq 1 40); do curl -s -m 3 http://127.0.0.1:8002/health | grep -q ok &amp;&amp; { echo ready after $((i*5))s; break; }; sleep 5; done; podman logs llama-bench 2&gt;&amp;1 | grep -iE "SYCL|device|offload|error|failed|Arc|n_ctx" | head -12 | cut -c1-180'" completed (exit code 0)</summary>
+</task-notification>
