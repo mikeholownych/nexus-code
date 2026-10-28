@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bsrg2oxqy</task-id>
+<tool-use-id>toolu_013Pd9sev8GmxXy9aCVfLgX2</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/bsrg2oxqy.output</output-file>
+<status>completed</status>
+<summary>Background command "Full suite on integration + PR-10b" completed (exit code 0)</summary>
+</task-notification>
