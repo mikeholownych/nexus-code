@@ -359,9 +359,25 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 
 ### Durable operation scheduling policy
 
-Operation defaults can be set in the operator-owned `~/.config/nexus/config.env` or the operator's shell environment:
+Operation defaults can be set in the operator-owned `~/.config/nexus/config.json`, the legacy `~/.config/nexus/config.env`, or the operator's shell environment. The initial structured config schema supports `operationPolicy`:
 
-```dotenv
+```json
+{
+  "version": 1,
+  "operationPolicy": {
+    "maxWaitMs": 43200000,
+    "unknownResumeBudget": 2,
+    "maxRunsPerUnit": 25,
+    "minWaitMs": 1000
+  }
+}
+```
+
+The file is read only from the operator's home directory; a repository-level `nexus.config.json` cannot set operator policy. Unsupported fields, invalid values, symlinks and files larger than 64 KiB are rejected. Values resolve from the shell environment first, then `config.json`, then `config.env`, then built-in defaults. Existing `config.env` installations remain supported.
+
+The equivalent environment settings are:
+
+```sh
 NEXUS_OPERATION_MAX_WAIT_MS=43200000
 NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET=2
 NEXUS_OPERATION_MAX_RUNS_PER_UNIT=25

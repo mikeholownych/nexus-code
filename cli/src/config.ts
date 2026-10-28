@@ -14,7 +14,9 @@ const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
 let credentialAuthorityRecorded = false;
 let shellEnvironment: Record<string, string | undefined> = {};
 let userConfigFile: Record<string, string> = {};
+let operatorJsonOperationPolicy: HarnessConfig["operationPolicy"];
 const SHELL_PRECEDENCE_KEYS = ["NEXUS_VERIFY_ATTESTATION"] as const;
+const OPERATOR_CONFIG_JSON_LIMIT = 64 * 1024;
 let applianceEndpointOverride: { endpoint: string; model?: string; apiKey?: string; persistModelOnSelection: boolean } | undefined;
 
 /** Session-scoped endpoint override established by the explicit local connect flow. */
@@ -59,6 +61,9 @@ export function loadEnvironment(): void {
     loadDotenv({ path: globalConfig, override: true });
     userConfigFile = parseDotenv(fs.readFileSync(globalConfig));
   }
+  // Structured operator settings are separate from the legacy dotenv file. They are read only from the
+  // operator's home; a project nexus.config.json is never trusted as operator policy.
+  operatorJsonOperationPolicy = readOperatorOperationPolicy(path.join(operatorHome, ".config/nexus/config.json"));
   // A provenance setting chosen in the operator's shell outranks config.env, which was applied with override above:
   // config.env NEXUS_VERIFY_ATTESTATION=0 must not defeat an explicit NEXUS_VERIFY_ATTESTATION=1 for this run.
   for (const key of SHELL_PRECEDENCE_KEYS) {
@@ -461,7 +466,18 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
   ] as const;
   const policy: NonNullable<HarnessConfig["operationPolicy"]> = {};
   for (const [key, property, minimum] of fields) {
-    const raw = setting(key);
+    const shellValue = shellEnvironment[key];
+    const legacyFileValue = userConfigFile[key];
+    const structuredValue = operatorJsonOperationPolicy?.[property];
+    // Shell overrides the structured file; config.json supersedes config.env; config.env remains a
+    // compatibility fallback. `setting` remains injectable and covers callers before environment loading.
+    const raw = shellValue !== undefined
+      ? shellValue
+      : structuredValue !== undefined
+        ? String(structuredValue)
+        : legacyFileValue !== undefined
+          ? legacyFileValue
+          : setting(key);
     if (raw === undefined) continue;
     if (!/^\d+$/.test(raw.trim())) {
       throw new Error(`Invalid ${key}='${raw}': expected a non-empty decimal integer.`);
@@ -474,6 +490,86 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
       throw new Error(`Invalid ${key}='${raw}': must not exceed Node's timer limit (${maxTimerDelayMs} ms).`);
     }
     policy[property] = value;
+  }
+  return Object.keys(policy).length ? policy : undefined;
+}
+
+/** Read and validate only the supported operator-owned structured configuration fields. */
+function readOperatorOperationPolicy(file: string): HarnessConfig["operationPolicy"] {
+  let pathStat: fs.Stats;
+  try {
+    pathStat = fs.lstatSync(file);
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return undefined;
+    throw new Error("Unable to inspect the operator config.json file.");
+  }
+  if (pathStat.isSymbolicLink()) throw new Error("Nexus config.json must not be a symbolic link.");
+  if (!pathStat.isFile()) throw new Error("Nexus config.json must be a regular file.");
+  if (pathStat.size > OPERATOR_CONFIG_JSON_LIMIT) throw new Error("Nexus config.json exceeds the 64 KiB size limit.");
+
+  let fd: number;
+  try {
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+    fd = fs.openSync(file, flags);
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return undefined;
+    if (error?.code === "ELOOP") throw new Error("Nexus config.json must not be a symbolic link.");
+    throw new Error("Unable to read the operator config.json file.");
+  }
+
+  let contents: string;
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error("Nexus config.json must be a regular file.");
+    if (stat.size > OPERATOR_CONFIG_JSON_LIMIT) throw new Error("Nexus config.json exceeds the 64 KiB size limit.");
+    contents = fs.readFileSync(fd, "utf8");
+    if (Buffer.byteLength(contents, "utf8") > OPERATOR_CONFIG_JSON_LIMIT) {
+      throw new Error("Nexus config.json exceeds the 64 KiB size limit.");
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch {
+    throw new Error("Nexus config.json is not valid JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Nexus config.json must contain a JSON object.");
+  }
+  const root = parsed as Record<string, unknown>;
+  if (root.version !== 1) throw new Error("Nexus config.json requires version: 1.");
+  for (const key of Object.keys(root)) {
+    if (key !== "version" && key !== "operationPolicy") throw new Error(`Unsupported Nexus config.json field '${key}'.`);
+  }
+  if (root.operationPolicy === undefined) return undefined;
+  if (!root.operationPolicy || typeof root.operationPolicy !== "object" || Array.isArray(root.operationPolicy)) {
+    throw new Error("Nexus config.json operationPolicy must be an object.");
+  }
+
+  const rawPolicy = root.operationPolicy as Record<string, unknown>;
+  const policy: NonNullable<HarnessConfig["operationPolicy"]> = {};
+  const fields = [
+    ["maxWaitMs", 1],
+    ["unknownResumeBudget", 0],
+    ["maxRunsPerUnit", 1],
+    ["minWaitMs", 1],
+  ] as const;
+  for (const key of Object.keys(rawPolicy)) {
+    if (!fields.some(([field]) => field === key)) throw new Error(`Unsupported Nexus config.json operationPolicy field '${key}'.`);
+  }
+  for (const [field, minimum] of fields) {
+    const value = rawPolicy[field];
+    if (value === undefined) continue;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+      throw new Error(`Invalid Nexus config.json operationPolicy.${field}: expected a safe integer of at least ${minimum}.`);
+    }
+    if ((field === "maxWaitMs" || field === "minWaitMs") && value > 2_147_483_647) {
+      throw new Error(`Invalid Nexus config.json operationPolicy.${field}: must not exceed Node's timer limit (2147483647 ms).`);
+    }
+    policy[field] = value;
   }
   return Object.keys(policy).length ? policy : undefined;
 }

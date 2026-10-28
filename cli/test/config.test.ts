@@ -4,8 +4,26 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildConfig, autoDetectModel, configuredOperationPolicy, mergeOperationPolicy } from "../src/config.js";
 import { startGateway } from "./helpers/fixtures.js";
+
+function runOperatorConfig(home: string, workspace: string, extraEnv: Record<string, string> = {}) {
+  const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const configModule = pathToFileURL(path.join(cliDir, "src/config.ts")).href;
+  const script = `
+    const { loadEnvironment, buildConfig } = await import(${JSON.stringify(configModule)});
+    process.chdir(${JSON.stringify(workspace)});
+    loadEnvironment();
+    const config = buildConfig({ endpoint: "http://127.0.0.1:1/v1", model: "fixture" });
+    process.stdout.write(JSON.stringify(config.operationPolicy ?? null));
+  `;
+  return spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+    cwd: cliDir,
+    env: { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), ...extraEnv },
+    encoding: "utf8",
+  });
+}
 
 describe("config", () => {
   test("a shell NEXUS_VERIFY_ATTESTATION outranks config.env for the provenance setting", () => {
@@ -106,6 +124,91 @@ describe("config", () => {
       maxRunsPerUnit: 8,
       minWaitMs: 250,
     });
+  });
+
+  test("operator config.json supplies centralized policy with explicit precedence and workspace isolation", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-operator-config-home-"));
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-operator-config-workspace-"));
+    const configDir = path.join(home, ".config", "nexus");
+    try {
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(path.join(configDir, "config.env"), [
+        "NEXUS_OPERATION_MAX_RUNS_PER_UNIT=9",
+        "NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET=3",
+        "",
+      ].join("\n"));
+      fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({
+        version: 1,
+        operationPolicy: { maxWaitMs: 60_000, maxRunsPerUnit: 4, minWaitMs: 250 },
+      }));
+      fs.writeFileSync(path.join(workspace, ".env"), "NEXUS_OPERATION_MAX_WAIT_MS=5000\n");
+      fs.writeFileSync(path.join(workspace, "nexus.config.json"), JSON.stringify({
+        version: 1,
+        operationPolicy: { maxWaitMs: 1000, maxRunsPerUnit: 6 },
+      }));
+
+      const shellOverride = runOperatorConfig(home, workspace, { NEXUS_OPERATION_MAX_WAIT_MS: "20000" });
+      assert.equal(shellOverride.status, 0, shellOverride.stderr);
+      assert.deepEqual(JSON.parse(shellOverride.stdout), {
+        maxWaitMs: 20_000,
+        unknownResumeBudget: 3,
+        maxRunsPerUnit: 4,
+        minWaitMs: 250,
+      });
+
+      const fileValues = runOperatorConfig(home, workspace);
+      assert.equal(fileValues.status, 0, fileValues.stderr);
+      assert.deepEqual(JSON.parse(fileValues.stdout), {
+        maxWaitMs: 60_000,
+        unknownResumeBudget: 3,
+        maxRunsPerUnit: 4,
+        minWaitMs: 250,
+      });
+
+      fs.rmSync(path.join(configDir, "config.json"));
+      fs.rmSync(path.join(configDir, "config.env"));
+      const workspaceOnly = runOperatorConfig(home, workspace);
+      assert.equal(workspaceOnly.status, 0, workspaceOnly.stderr);
+      assert.equal(JSON.parse(workspaceOnly.stdout), null, "workspace config must not act as operator policy");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("operator config.json rejects invalid values and symbolic links", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-invalid-operator-config-"));
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-invalid-config-workspace-"));
+    const configDir = path.join(home, ".config", "nexus");
+    const configFile = path.join(configDir, "config.json");
+    const target = path.join(home, "target.json");
+    try {
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(configFile, JSON.stringify({ version: 1, operationPolicy: { maxRunsPerUnit: 1.5 } }));
+      const invalidValue = runOperatorConfig(home, workspace);
+      assert.notEqual(invalidValue.status, 0);
+      assert.match(invalidValue.stderr, /Invalid Nexus config\.json operationPolicy\.maxRunsPerUnit/);
+
+      fs.writeFileSync(configFile, JSON.stringify({ version: 1, operationPolicy: { maxWaitMs: 2_147_483_648 } }));
+      const oversizedWait = runOperatorConfig(home, workspace);
+      assert.notEqual(oversizedWait.status, 0);
+      assert.match(oversizedWait.stderr, /must not exceed Node's timer limit/);
+
+      fs.writeFileSync(configFile, " ".repeat(65 * 1024));
+      const oversizedFile = runOperatorConfig(home, workspace);
+      assert.notEqual(oversizedFile.status, 0);
+      assert.match(oversizedFile.stderr, /exceeds the 64 KiB size limit/);
+
+      fs.writeFileSync(target, JSON.stringify({ version: 1, operationPolicy: { maxRunsPerUnit: 2 } }));
+      fs.rmSync(configFile);
+      fs.symlinkSync(target, configFile);
+      const symlink = runOperatorConfig(home, workspace);
+      assert.notEqual(symlink.status, 0);
+      assert.match(symlink.stderr, /config\.json must not be a symbolic link/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   test("operation scheduling policy rejects invalid operator values", () => {
