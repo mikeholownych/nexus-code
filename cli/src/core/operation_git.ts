@@ -42,7 +42,7 @@ function gitResult(cwd: string, args: string[]): { ok: boolean; stdout: string; 
 /** Filesystem- and ref-safe name; the hash keeps two ids that sanitise the same apart. */
 export function gitSlug(value: string): string {
   const clean = value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "unit";
-  return `${clean}-${createHash("sha1").update(value).digest("hex").slice(0, 6)}`;
+  return `${clean}-${createHash("sha256").update(value).digest("hex").slice(0, 8)}`;
 }
 
 export interface OperationGitPlan {
