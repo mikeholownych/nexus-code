@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -22,6 +22,31 @@ function withOperatorConfig(contents: string, run: (home: string) => void): void
 
 function runCli(home: string, args: string[]) {
   return spawnSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/index.ts"), ...args], {
+    cwd: cliDir,
+    env: { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") },
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+}
+
+function runDoctorWithOperatorConfigIoFailure(home: string, method: "lstatSync" | "openSync") {
+  const target = path.join(home, ".config", "nexus", "config.json");
+  const indexPath = path.join(cliDir, "src", "index.ts");
+  const script = `
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const target = ${JSON.stringify(target)};
+    const original = fs.default.${method}.bind(fs.default);
+    fs.default.${method} = (candidate, ...args) => {
+      if (path.resolve(String(candidate)) === target) {
+        throw Object.assign(new Error("synthetic operator config access failure"), { code: "EACCES" });
+      }
+      return original(candidate, ...args);
+    };
+    process.argv = [process.execPath, ${JSON.stringify(indexPath)}, "doctor", "--json", "--timeout", "50"];
+    await import(${JSON.stringify(pathToFileURL(indexPath).href)});
+  `;
+  return spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
     cwd: cliDir,
     env: { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") },
     encoding: "utf8",
@@ -49,6 +74,25 @@ test("doctor reports unsupported operator policy in JSON without treating it as 
     assert.equal(finding.status, "fail");
     assert.match(finding.evidence[0], /Unsupported Nexus config\.json operationPolicy field 'hiddenDefault'/);
     assert.match(finding.action, /~\/\.config\/nexus\/config\.json/);
+  });
+});
+
+test("doctor gives config.json repair guidance for read and inspection failures", () => {
+  withOperatorConfig("{}", (home) => {
+    for (const method of ["lstatSync", "openSync"] as const) {
+      const result = runDoctorWithOperatorConfigIoFailure(home, method);
+      assert.equal(result.status, 2, result.stderr);
+      const report = JSON.parse(result.stdout);
+      const finding = report.findings.find((item: { id: string }) => item.id === "config.valid");
+      assert.equal(finding.status, "fail");
+      assert.match(
+        finding.evidence[0],
+        method === "lstatSync"
+          ? /Unable to inspect the operator config\.json file/
+          : /Unable to read the operator config\.json file/,
+      );
+      assert.match(finding.action, /Inspect ~\/\.config\/nexus\/config\.json/);
+    }
   });
 });
 
