@@ -505,6 +505,71 @@ test("watch's multiple-operation list sanitizes persisted objectives", (t) => {
   assert.match(operationRows.join("\n"), /hostile.*forged line end<U\+009C>/);
 });
 
+test("ordinary status sanitizes blocked decision identifiers", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  const file = saveFixture(fixture, "op-cli-decision");
+  const record = JSON.parse(fs.readFileSync(file, "utf8"));
+  record.operation.blocked.decisions[0].id = "decision\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2J";
+  fs.writeFileSync(file, JSON.stringify(record));
+
+  const result = runCli(["operation", "status", "op-cli-decision"], fixture);
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+});
+
+test("rejected decisions sanitize the failing decision id", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  saveFixture(fixture, "op-cli-reject");
+
+  const result = runCli(["operation", "decide", "op-cli-reject", "decision\u001b[2J", "1"], fixture);
+  assert.equal(result.status, 2);
+  assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+});
+
+test("run sanitizes an operation id in its resume banner", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  const spec = path.join(fixture.root, "operation.json");
+  fs.writeFileSync(spec, JSON.stringify({ id: "op-run\u001b]52;c;cGF5bG9hZA==\u0007", objective: "safe", units: [{ id: "u", prompt: "p" }] }));
+
+  const result = runCli(["operation", "run", spec], fixture);
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+});
+
+test("status and watch sanitize invalid operation identifiers and event arguments", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  saveFixture(fixture, "op-cli-errors");
+  for (const args of [
+    ["operation", "status", "--dag", "missing\u001b[2J"],
+    ["operation", "status", "--dag", "--events", "bad\u001b[2J", "op-cli-errors"],
+    ["operation", "watch", "missing\u001b[2J"],
+  ]) {
+    const result = runCli(args, fixture);
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+  }
+});
+
+test("run sanitizes resource and spec validation errors", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  const cases = [
+    { id: "op-resource", objective: "safe", units: [{ id: "u", prompt: "p" }], resources: [{ id: "resource\u001b[2J", model: "m" }] },
+    { id: "op-dependency", objective: "safe", units: [{ id: "u", prompt: "p", dependsOn: ["missing\u001b[2J"] }] },
+  ];
+  for (const [index, value] of cases.entries()) {
+    const spec = path.join(fixture.root, `invalid-${index}.json`);
+    fs.writeFileSync(spec, JSON.stringify(value));
+    const result = runCli(["operation", "run", spec], fixture);
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+  }
+});
+
 test("terminal-safe rendering: operation text cannot emit control or escape sequences", () => {
   const op = state();
   const evil = "safe\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2Jafter\nforged\tline\u001b[31m";

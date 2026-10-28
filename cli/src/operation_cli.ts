@@ -70,7 +70,7 @@ function printEvent(e: OperationEvent): void {
 }
 
 function printStatus(op: DurableOperationState): void {
-  console.log(pc.bold(`Operation ${op.id}: ${op.status}`) + pc.dim(`  (${safeTerminal(op.objective)})`));
+  console.log(pc.bold(`Operation ${safeTerminal(op.id)}: ${safeTerminal(op.status)}`) + pc.dim(`  (${safeTerminal(op.objective)})`));
   for (const u of op.units) {
     const extra =
       u.status === "PARKED" ? ` — ${u.parked!.reason}; wakes ${u.parked!.wakeAt}` :
@@ -79,11 +79,11 @@ function printStatus(op: DurableOperationState): void {
       u.assignment ? ` — ${u.assignment.resourceId}` : "";
     console.log(`  ${u.status.padEnd(22)} ${safeTerminal(u.title)}${pc.dim(safeTerminal(extra))}`);
   }
-  if (op.wait) console.log(pc.yellow(`Waiting until ${op.wait.wakeAt}: ${safeTerminal(op.wait.reason)}`));
+  if (op.wait) console.log(pc.yellow(`Waiting until ${safeTerminal(op.wait.wakeAt)}: ${safeTerminal(op.wait.reason)}`));
   for (const d of op.blocked?.decisions ?? []) {
-    console.log(pc.red(`Decision ${d.id} needed: ${safeTerminal(d.question)}`));
+    console.log(pc.red(`Decision ${safeTerminal(d.id)} needed: ${safeTerminal(d.question)}`));
     for (const o of d.options) console.log(pc.red(`  [${o.id}] ${safeTerminal(o.label)}`));
-    if (d.options.length) console.log(pc.dim(`  nexus operation decide ${op.id} ${d.id} <option> [--note <text>]`));
+    if (d.options.length) console.log(pc.dim(`  nexus operation decide ${safeTerminal(op.id)} ${safeTerminal(d.id)} <option> [--note <text>]`));
   }
 }
 
@@ -106,6 +106,17 @@ async function drive(op: DurableOperationState, config: HarnessConfig, store: Op
   }
 }
 
+function operationAction<T extends unknown[]>(action: (...args: T) => void | Promise<void>): (...args: T) => Promise<void> {
+  return async (...args: T) => {
+    try {
+      await action(...args);
+    } catch (error: any) {
+      console.error(pc.red(safeTerminal(String(error?.message ?? error))));
+      process.exitCode = 1;
+    }
+  };
+}
+
 export function registerOperationCommands(program: Command): void {
   const op = program.command("operation").description("[experimental] Convergence-scheduled multi-unit operations (reroute, park, wait, resume)");
   const common = (c: Command) =>
@@ -123,7 +134,7 @@ export function registerOperationCommands(program: Command): void {
 
   common(op.command("run").argument("<spec>", "Operation spec JSON file"))
     .description("Start an operation from a work-unit spec")
-    .action(async (specPath: string, options: any) => {
+    .action(operationAction(async (specPath: string, options: any) => {
       const spec = JSON.parse(fs.readFileSync(path.resolve(specPath), "utf-8")) as OperationSpec;
       const config = buildConfig(options);
       const store = new OperationStore(config.workspace);
@@ -141,36 +152,36 @@ export function registerOperationCommands(program: Command): void {
         } catch (error: any) {
           // Leave any partially created pair in place: it is visible in `git worktree list` and may be the very state the
           // error asks the operator to repair. Deleting it could destroy work from an earlier same-id operation.
-          console.error(pc.red(`Cannot start an isolated operation: ${error?.message ?? error}`));
+          console.error(pc.red(`Cannot start an isolated operation: ${safeTerminal(String(error?.message ?? error))}`));
           process.exitCode = 2;
           return;
         }
       }
       if (!options.json) {
-        console.log(pc.bold(`Operation ${state.id}`) + pc.dim(` — resume after a restart with: nexus operation resume ${state.id}`));
+        console.log(pc.bold(`Operation ${safeTerminal(state.id)}`) + pc.dim(` — resume after a restart with: nexus operation resume ${safeTerminal(state.id)}`));
         if (state.git) {
-          console.log(pc.dim(`  isolated: units run on their own worktrees; integrations land on ${state.git.integrationBranch} (${state.git.integrationWorktree})`));
+          console.log(pc.dim(`  isolated: units run on their own worktrees; integrations land on ${safeTerminal(state.git.integrationBranch)} (${safeTerminal(state.git.integrationWorktree)})`));
         }
       }
       await drive(state, config, store, Boolean(options.discover || spec.discoverCatalog), Boolean(options.json));
-    });
+    }));
 
   common(op.command("resume").argument("[id]", "Operation id (default: latest waiting/running operation in this workspace)"))
     .description("Resume an operation from durable state (after a restart, the wait continues or re-evaluates if overdue)")
-    .action(async (id: string | undefined, options: any) => {
+    .action(operationAction(async (id: string | undefined, options: any) => {
       const config = buildConfig(options);
       const store = new OperationStore(config.workspace);
       const state = id ? store.load(id) : store.latestResumable();
       if (!state) throw new Error("No waiting or running operation in this workspace.");
       if (state.status === "CANCELLED") state.status = "RUNNING";
       await drive(state, config, store, Boolean(options.discover), Boolean(options.json));
-    });
+    }));
 
   common(op.command("decide").argument("<id>", "Operation id").argument("<decision>", "Decision id (e.g. review#1)").argument("<option>", "Option id"))
     .option("--note <text>", "Operator note (required to revise a unit)")
     .option("--no-resume", "Record the decision without resuming the operation")
     .description("Apply an operator decision to a blocked unit, then resume the operation")
-    .action(async (id: string, decisionId: string, optionId: string, options: any) => {
+    .action(operationAction(async (id: string, decisionId: string, optionId: string, options: any) => {
       const config = buildConfig(options);
       const store = new OperationStore(config.workspace);
       let state: DurableOperationState;
@@ -178,13 +189,13 @@ export function registerOperationCommands(program: Command): void {
         state = applyOperatorDecision(store, id, decisionId, optionId, options.note, { onEvent: printEvent });
       } catch (err) {
         if (!(err instanceof DecisionRejected)) throw err;
-        console.error(pc.red(`Decision rejected: ${err.message}`));
+        console.error(pc.red(`Decision rejected: ${safeTerminal(String(err.message))}`));
         process.exitCode = 2;
         return;
       }
       if (options.resume === false) return void printStatus(state);
       await drive(state, config, store, Boolean(options.discover), Boolean(options.json));
-    });
+    }));
 
   op.command("status")
     .argument("[id]", "Operation id (default: all operations in this workspace)")
@@ -193,13 +204,13 @@ export function registerOperationCommands(program: Command): void {
     .option("--dag", "Read-only view: work-unit DAG, resource eligibility and the open decision")
     .option("--events <count>", "Events to include with --dag (newest kept)", "20")
     .description("Show operation state, parked work, wake time and pending decisions")
-    .action((id: string | undefined, options: any) => {
+    .action(operationAction((id: string | undefined, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
       if (options.dag) {
         const eventsText = String(options.events);
         const eventLimit = Number(eventsText);
         if (!eventsText.trim() || !Number.isFinite(eventLimit) || eventLimit < 0) {
-          console.error(pc.red(`--events must be a non-negative number (got '${options.events}')`));
+          console.error(pc.red(`--events must be a non-negative number (got '${safeTerminal(String(options.events))}')`));
           process.exitCode = 2;
           return;
         }
@@ -209,7 +220,7 @@ export function registerOperationCommands(program: Command): void {
         try {
           ops = id ? [store.load(id)] : store.list();
         } catch (error: any) {
-          console.error(pc.red(`Cannot read operation ${id ?? "(all)"}: ${safeTerminal(String(error?.message ?? error))}`));
+          console.error(pc.red(`Cannot read operation ${safeTerminal(id ?? "(all)")}: ${safeTerminal(String(error?.message ?? error))}`));
           process.exitCode = 2;
           return;
         }
@@ -224,7 +235,7 @@ export function registerOperationCommands(program: Command): void {
       if (options.json) return void console.log(JSON.stringify(ops, null, 2));
       if (!ops.length) return void console.log("No operations in this workspace.");
       ops.forEach(printStatus);
-    });
+    }));
 
   op.command("checkpoint")
     .argument("<id>", "Operation id")
@@ -328,7 +339,7 @@ export function registerOperationCommands(program: Command): void {
     .option("--interval <seconds>", "Refresh interval (minimum 0.25)", "2")
     .option("--events <count>", "Events to include (newest kept)", "20")
     .description("Watch an operation read-only until it completes or you stop it (Ctrl-C)")
-    .action(async (id: string | undefined, options: any) => {
+    .action(operationAction(async (id: string | undefined, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
       const intervalSecs = Number(options.interval);
       const eventsText = String(options.events);
@@ -373,7 +384,7 @@ export function registerOperationCommands(program: Command): void {
         try {
           state = store.load(watchId);
         } catch (error: any) {
-          console.error(pc.red(`Cannot read operation ${watchId}: ${safeTerminal(String(error?.message ?? error))}`));
+          console.error(pc.red(`Cannot read operation ${safeTerminal(watchId)}: ${safeTerminal(String(error?.message ?? error))}`));
           process.exitCode = 2;
           return;
         }
@@ -408,5 +419,5 @@ export function registerOperationCommands(program: Command): void {
       } finally {
         process.off("SIGINT", onSignal);
       }
-    });
+    }));
 }
