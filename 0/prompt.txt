@@ -1,0 +1,153 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+<tools-used-before-summary>AskUserQuestion, Bash, Edit, ScheduleWakeup, Write</tools-used-before-summary>
+Summary:
+1. Primary Request and Intent:
+   - **The /loop directive, verbatim and still in force:** "Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker."
+   - **Original constraints, verbatim, still in force:**
+     - "Never read held-out payloads, expose credentials, weaken thresholds, or convert infrastructure failures into passes."
+     - Keep implemented, tested, accepted, RC-qualified and published statuses separate.
+     - Preserve uncommitted and unrelated work.
+     - Never take another agent's work without a handoff.
+     - Isolate HOME/XDG.
+     - Publication is authorized once every gate passes.
+   - **Owner mandates and decisions:**
+     - NO deprecated packages.
+     - "all of the dependabot PRs go into 1.1.0". This includes Dependabot-class manual updates.
+       - #245 merged anyway; owner said leave it on main.
+     - Folder trust is separate from approval-mode settings (DEC-01 amended).
+     - Attestation default is AUTO for both the installer and upgrade. Print a notice when skipped. `=1` fails closed, `=0` skips, empty or invalid values are rejected, and the shell value outranks `config.env`.
+     - #256 (local-endpoint connect feature) is KEPT in v1.0.0. This supersedes the earlier deferral, which arrived after the merge.
+     - tmux/GNOME exception: not a defect. GNOME Terminal's minimum size is 43×13, so the 40×14 cell is unreachable there.
+
+2. Key Technical Concepts:
+   - **Shared log:** `/home/mike/nexus-code/.git/nexus-claims.log`.
+   - **Claims:** `.git/nexus-claims/<NAME>/owner.json`, archived under `.git/nexus-claims/archived/`. Re-check claims after any pause.
+   - **Reviews:**
+     - An independent ACCEPT must name the exact full SHA.
+     - Carry a review forward across a rebase by comparing `git diff base head | git patch-id --stable`.
+     - The GitHub account is shared, so formal reviews fail: post reviews with `gh pr comment`.
+   - **Requirements gate:** `node scripts/check_requirements.mjs --enforce`. Run it in a clean detached worktree with isolated HOME/XDG; a dirty tree fails. Current result: 123 rows, 108 tested, 6 partial, 2 implemented, 7 open, 12 exact-RC deferrals.
+   - **Version sync:** `node scripts/sync-version.mjs --check`.
+   - **Cross-runner reproducibility:** `repro.yml` is dispatched from main. Verify that `TARGET_TAG` in the log and all four jobs (`resolve-tag`, both builds, `compare`) succeed.
+   - **Release notes freeze at the RC tag.** A notes edit after the tag must be reverted. Stable is the RC plus version-only changes.
+   - **Suite environment pitfall:** snapshots built under `/var/tmp` fail at `eval/isolate.mjs:318` with "protected candidate runtime root is forbidden". Build them under `$HOME`.
+   - **Local sandbox:** the `cli/node_modules` symlink lacks `tsx`. Use `npm ci` in the worktree. The sandbox lacks the Rust core build, so some verifier suites fail environmentally; defer to CI.
+   - **Shell quirks:**
+     - The `rtk` wrapper mangles `SHA:cli/...` paths; use `rtk proxy` or `git cat-file -p "SHA:path"`.
+     - zsh doesn't word-split `$F`.
+     - Nested heredoc `EOF` markers break the outer heredoc; write a script file instead.
+   - **Git-config execution hardening (checkpoint):** `-c core.hooksPath=/dev/null`, `-c core.fsmonitor=false`, and `--no-ext-diff --no-textconv`. Filter drivers are documented as a known limitation.
+   - **Merge command:** `gh pr merge N --merge --match-head-commit <sha>`.
+   - **Commit attribution:** `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. PR bodies end with "🤖 Generated with [Claude Code](https://claude.com/claude-code)".
+
+3. Files and Code Sections:
+   - **`install.sh`** (my #235, merged `2139635`):
+     ```
+     VERIFY_ATTESTATION=${NEXUS_VERIFY_ATTESTATION-auto}
+     case "$VERIFY_ATTESTATION" in
+       auto|0|1) ;;
+       *) fail "NEXUS_VERIFY_ATTESTATION must be auto (verify when a trusted GitHub CLI is present), 1 (require verification) or 0 (skip verification)." ;;
+     esac
+     ```
+     It prints stderr notices when no trusted gh exists or verification can't complete. The trusted gh paths are `/usr/bin/gh` and `/usr/local/bin/gh`.
+   - **`scripts/installer-smoke.sh`:** covers auto with no gh (installs with a notice), `=1` with no gh (refuses), invalid `yes`, empty value, auto with a failing gh, and `=1` with a failing gh. It passes against the published rc.5 archive.
+   - **`cli/src/upgrade.ts`:**
+     - Rejects any value other than `auto|0|1` before staging.
+     - Sets `provenanceWarning` and calls `onProgress("attestation_skipped")`.
+     - Appends the warning to `restartNotice`, before `pathWarning`.
+   - **`cli/src/config.ts`:**
+     ```
+     const SHELL_PRECEDENCE_KEYS = ["NEXUS_VERIFY_ATTESTATION"] as const;
+     ...after loadDotenv(globalConfig, override:true):
+     for (const key of SHELL_PRECEDENCE_KEYS) { const shellValue = shellEnvironment[key]; if (shellValue !== undefined) process.env[key] = shellValue; }
+     ```
+   - **Tests:**
+     - `cli/test/upgrade_acceptance.test.ts`: auto skip notice, failing gh, invalid and empty values rejected.
+     - `cli/test/config.test.ts`: subprocess test of shell vs `config.env` precedence.
+     - `cli/test/upgrade_cli.test.ts`: deterministic invalid-shell-over-valid-config case through the CLI, plus a literal `=1`/`=0` case that skips when a trusted gh exists.
+   - **`docs/v1.0.0/specs/SPEC-12-cli-and-tui-upgrade.md`:** attestation setting docs.
+   - **Release notes reviewed:**
+     - `docs/releases/v1.0.0-rc.7.md`: terminal-safety limitation line, provenance bullet reversing the rc.5/rc.6 default.
+     - `docs/releases/v1.0.0-rc.8.md`: recovery bullet, upgrade-reliability bullet.
+     - `docs/releases/v1.0.0-rc.9.md`
+     - `docs/releases/v1.0.0-rc.10.md`: monochrome TUI.
+   - **`cli/src/checkpoint.ts`** (#270 merged): all git calls hardened, filter limitation comment at line 184.
+   - **Memory:** `/home/mike/.claude/projects/-home-mike-nexus-code/memory/review-run-existing-suites.md`, plus a `MEMORY.md` index line. `no-deprecated-packages-mandate.md` was updated: Dependabot PRs go into v1.1.0, including Dependabot-class patches.
+
+4. Errors and fixes:
+   - **The owner's attestation answer arrived 10 hours late**, during a logout. #211 merged required-by-default in the meantime, and rc.5/rc.6 shipped that way. Fixed through #235 into rc.7.
+   - **rc.6 notes conflict:** I had edited the rc.6 notes after the tag, so I removed that edit from #235.
+   - **Commands that failed:**
+     - A PR comment failed silently in an `&&` chain; I re-verified and re-posted.
+     - The `$F` word-split error in zsh.
+     - The missing `tsx` in the symlinked `node_modules`; switched to `npm ci`.
+   - **#266 review miss:** I ran only the PR's own tests. Logged it and saved a lesson.
+   - **My #237 ACCEPT missed raw stdout paths.** I withdrew it publicly.
+
+5. Problem Solving:
+   - **Verified RCs:**
+
+     | RC | Tag commit | Reproducibility run | Result |
+     |---|---|---|---|
+     | rc.6 | `6dadeaf` | 40216531588 | pass |
+     | rc.7 | `431cb19` | 40248074777 | pass |
+     | rc.8 | `bbafae8` | 40286712425 | pass |
+     | rc.9 | `4cae11c` | — | pass |
+     | rc.10 | `16ee8ca` | 40433818126 | pass |
+
+   - **Diagnosed suite failures:**
+     - `/var/tmp` protected root (PR207 and c116932 runs).
+     - TUI `thinking_shown` matcher flake.
+     - /root's six PR266 "under-binding" failures, cleared by main CI run 40461301453 succeeding.
+
+6. All user messages:
+   - Repeated `/loop` invocations with the verbatim directive, plus "Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete."
+   - "why not ensure .nexus is added to .gitignore?"
+   - "suggesting is fine"
+   - "wait"
+   - "resume -- folder trust should be separate from approval mode settings"
+   - "no.. all of the dependabot PRs go into 1.1.0"
+   - "continue" (several times, including after `/login`)
+   - AskUserQuestion answers:
+     - Attestation: "Verify when possible (Recommended)"
+     - #245: "Leave it on main (Recommended)"
+     - #256 first: "Defer to v1.1.0 (Recommended)"
+     - #256 later: "Keep it in v1.0.0 (Recommended)"
+     - tmux: "the gnome terminal window size wouldn't go to 40x14.. 43x13 is the smallest it would size to."
+
+7. Pending Tasks:
+   - Continue the loop until v1.0.0 is verified and published.
+   - Review new heads, and carry ACCEPTs forward across rebases.
+   - Re-run enforce at new main heads.
+   - Review the rc.11 version/notes PR when it appears. Notes need bullets for:
+     - #266 (Python verifier binding plus discovery modelling)
+     - #267 (credential origin)
+     - #269 (retention shell injection)
+     - #270 (checkpoint git-config hardening, filter limitation)
+     - #271 (`update_plan` is not a workspace change)
+     - #273 (runtime identity), if merged
+   - Verify rc.11's tag, notes match and reproducibility when they happen.
+   - Not owned by me: the human terminal matrix (0/15; the 40×14 GNOME cell is unreachable), held-out custody, independent installed-RC acceptance.
+
+8. Current Work:
+   - Last tick, 2026-10-27 at about 14:50Z.
+   - Main is at `3b7af5d`, which includes #269, #270, #271 and #272. Enforce passes 108/6/2/7.
+   - I verified on main that #270 addressed all my findings.
+   - I posted an ACCEPT on #273 at exact head `b22e52a90dc99d14e090d4dd12d155bba37305d7`: a `NEXUS_RUNTIME_IDENTITY` block appended after the dynamic prompt sections, plus a skill host reminder. It needs an rc.11 notes bullet.
+   - #274 (test-only TUI sidecar state isolation) is open and unreviewed. #268 (docs) is open.
+   - The latest release is rc.10.
+   - A wakeup is scheduled for 15:22.
+
+9. Optional Next Step:
+   Continue the loop at the next tick:
+   - Fetch origin.
+   - Check whether #273 and #274 merged, and review #274 if it's still open.
+   - Re-run enforce at any new main head.
+   - Watch for the rc.11 version/notes PR, and review it for coverage of #266/#267/#269/#270/#271/#273.
+   - Last log entry, verbatim: "INDEPENDENT_REVIEW PR273 head=b22e52a ACCEPT (Nexus runtime identity appended after dynamic context, plus a skill host reminder; system-prompt change, needs an RC11 notes bullet). enforce on main 3b7af5d exit 0 (108/6/2/7)."
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
