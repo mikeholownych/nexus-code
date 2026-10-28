@@ -374,8 +374,9 @@ Values must be safe integers; wait values and the run limit must be positive, wh
 zero. Each wait value is capped at 2,147,483,647 ms, the maximum delay supported by Node.js timers, and the minimum
 wait may not exceed the maximum wait. Invalid settings stop operation startup with the setting named in the error.
 Project `.env` files cannot set these operator-owned values. A policy explicitly supplied in an operation
-specification overrides the configured defaults for that operation; already persisted operations keep their stored
-policy when resumed.
+specification overrides the configured defaults for that operation, subject to the same wait-interval consistency
+check. Invalid operator settings are configuration errors and prevent Nexus commands from starting until corrected;
+already persisted operations keep their stored policy when resumed.
 
 - **Workspace Symlink Boundary Confinement**: Native Rust canonicalization verifies that neither relative paths nor symlinks can escape the workspace jail directory.
 - **Configurable Security Policy (`.nexus-security.json`)**: Declare repository-specific blocked shell commands, protected files (`.git`, `.env*`, keys), and allowed outbound network domains. Protected-path checks cover case-insensitive variants, `.env*` prefixes, and canonical targets across all file read/write/edit tools; for `run_command` path protection is advisory because shell commands execute in the host shell environment.

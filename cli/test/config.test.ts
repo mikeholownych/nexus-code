@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
-import { buildConfig, autoDetectModel, configuredOperationPolicy } from "../src/config.js";
+import { buildConfig, autoDetectModel, configuredOperationPolicy, mergeOperationPolicy } from "../src/config.js";
 import { startGateway } from "./helpers/fixtures.js";
 
 describe("config", () => {
@@ -129,5 +129,12 @@ describe("config", () => {
     () => configuredOperationPolicy((key) => key === "NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET" ? "2e0" : undefined),
     /non-empty decimal integer/,
   );
+  });
+
+  test("operation spec overrides cannot invert the configured wait interval", () => {
+    assert.throws(
+      () => mergeOperationPolicy({ minWaitMs: 5_000 }, { maxWaitMs: 1_000 }),
+      /minWaitMs \(5000\) must not exceed maxWaitMs \(1000\)/,
+    );
   });
 });

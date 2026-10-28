@@ -483,6 +483,20 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
   return Object.keys(policy).length ? policy : undefined;
 }
 
+/** Merge per-operation overrides with operator defaults and reject an impossible wait interval. */
+export function mergeOperationPolicy(
+  configured: HarnessConfig["operationPolicy"],
+  override: HarnessConfig["operationPolicy"],
+): HarnessConfig["operationPolicy"] {
+  const policy = { ...configured, ...override };
+  const maxWaitMs = policy.maxWaitMs ?? DEFAULT_OPERATION_POLICY.maxWaitMs;
+  const minWaitMs = policy.minWaitMs ?? DEFAULT_OPERATION_POLICY.minWaitMs;
+  if (minWaitMs > maxWaitMs) {
+    throw new Error(`Invalid operation wait settings: minWaitMs (${minWaitMs}) must not exceed maxWaitMs (${maxWaitMs}).`);
+  }
+  return Object.keys(policy).length ? policy : undefined;
+}
+
 /**
  * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_STAGNATION_STEPS, then
  * defaults. There is no default step or time ceiling: progressing work continues until it completes, is cancelled,
