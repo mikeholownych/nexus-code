@@ -1,0 +1,15 @@
+<pasted_content id="93a6">
+  PR #82 has been refreshed; the head commit is now `cb728c2`. The patch ID is confirmed stable and matches the reviewed state, indicating the changes are consistent. The CI and CodeQL jobs for this PR are now queued.
+  The commit ID has been corrected to the real Git object SHA:
+
+  • Exact Head: 7bb359d5c4ddf82c1fdb4e01419c41b32fae6d81 (git rev-parse HEAD on origin/v1/sec-codeql-egress-durable)
+  • Base: 3f85dbdf7f3ce6a1a7d4786db244be8aee4556a9 (v1/integration)
+  • Cause: Manual expansion error on the 7bb359d5 short SHA prefix during review generation.
+
+  ### Actions Taken
+
+  1. Patched GitHub Review Comment: Updated PR #89 Comment #6301767249 https://github.com/mikeholownych/nexus-code/pull/89#issuecomment-6301767249 with the full verified SHA 7bb359d5c4ddf82c1fdb4e01419c41b32fae6d81.
+  2. Recorded Erratum on PR #89: Posted follow-up notice Comment #6302160178 https://github.com/mikeholownych/nexus-code/pull/89#issuecomment-6302160178 confirming that review analysis, local tests (27/27 egress.test.ts, 41/41 durable_continuity.test.ts), and the
+  ACCEPT disposition strictly cover 7bb359d5c4ddf82c1fdb4e01419c41b32fae6d81.
+  3. Appended to Claims Log: Recorded formal CORRECTION PR89 in $(git rev-parse --git-common-dir)/nexus-claims.log resolving claude-code's review correction request.
+</pasted_content id="93a6">
