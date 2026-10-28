@@ -79,7 +79,7 @@ export class OperationRunner {
     this.clock = opts.clock ?? realRecoveryClock;
     this.registry = new ResourceRegistry(state.resources, state.conditions, this.clock, (e) => this.onRegistryEvent(e));
     this.revalidator = new OperationRevalidator(opts.executor, this.registry, opts.onDiagnostic);
-    this.scheduler = new ConvergenceScheduler(state, this.registry, () => this.clock.now(), opts.onEvent);
+    this.scheduler = new ConvergenceScheduler(state, this.registry, () => this.clock.now(), opts.onEvent, opts.onDiagnostic);
   }
 
   async run(signal?: AbortSignal): Promise<DurableOperationState> {
@@ -252,14 +252,14 @@ export function applyOperatorDecision(
   decisionId: string,
   optionId: string,
   note?: string,
-  opts: { now?: () => number; onEvent?: (e: OperationEvent) => void } = {},
+  opts: { now?: () => number; onEvent?: (e: OperationEvent) => void; onDiagnostic?: OperationDiagnosticHandler } = {},
 ): DurableOperationState {
   const release = store.acquire(id);
   try {
     const state = store.load(id);
     const now = opts.now ?? Date.now;
     const registry = new ResourceRegistry(state.resources, state.conditions, { now, random: Math.random });
-    new ConvergenceScheduler(state, registry, now, opts.onEvent).resolve(decisionId, optionId, note);
+    new ConvergenceScheduler(state, registry, now, opts.onEvent, opts.onDiagnostic).resolve(decisionId, optionId, note);
     state.conditions = registry.snapshot();
     state.updatedAt = new Date(now()).toISOString();
     store.save(state);

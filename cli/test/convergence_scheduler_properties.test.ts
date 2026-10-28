@@ -61,3 +61,22 @@ test("generated acyclic operations schedule only after dependencies complete and
     assert.equal(scheduler.decide().kind, "complete", `seed ${seed}: operation should converge`);
   }
 });
+
+test("scheduler event callback failures produce bounded debug diagnostics", () => {
+  const now = 1_798_000_000_000;
+  const state = newOperation("scheduler-diagnostic", "objective", [{ id: "u1", prompt: "work" }], [resource()], now);
+  const diagnostics: Array<{ level: string; area: string; action: string }> = [];
+  const scheduler = new ConvergenceScheduler(
+    state,
+    new ResourceRegistry(state.resources, [], { now: () => now, random: () => 0.5 }),
+    () => now,
+    () => { throw new Error("do not log exception details"); },
+    (event) => diagnostics.push(event),
+  );
+
+  scheduler.emit("WORK_STARTED", "started", { unitId: "u1" });
+
+  assert.deepEqual(diagnostics, [{ level: "debug", area: "scheduler", action: "event_callback_failed" }]);
+  assert.equal(JSON.stringify(diagnostics).includes("do not log"), false);
+  assert.equal(state.events.at(-1)?.type, "WORK_STARTED", "observer failure must not undo the scheduler event");
+});
