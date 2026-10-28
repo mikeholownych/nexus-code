@@ -1,0 +1,40 @@
+<task-notification>
+<task-id>af177777e3a67b30d</task-id>
+<tool-use-id>toolu_01Hut4sX9vdZPw3mqaz4brhu</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/af177777e3a67b30d.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review PRs 18-20" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #31 (qual-host-2, head 9602ca1): ACCEPT
+
+I re-ran the container test at the pushed head: 23 PASS lines, no FAIL. I read the new code but did not run the provisioning on the real host.
+
+My earlier findings are closed:
+- **Stale pending:** pending directory entries are pruned at the start of each run and never adopt an existing directory. Container case 8 covers it.
+- **Runtime purge:** it needs both a confirmed ledger entry and the `.nexus-qual-managed` marker.
+- **Files:**
+  - They are recorded with a sha256 and removed only if unchanged. Case 10 covers an edited sudoers file surviving rollback.
+  - A dangling symlink at the sudoers or unit path is a collision (case 9). The unit file is removed before writing.
+  - The awk `ENVIRON` matching handles the backslash in the unit path correctly.
+- **Directories and ledger:** directories that could not be removed stay recorded (case 11). `$LEDGER_DIR` is removed after a full rollback.
+- **Interrupted `useradd`:** there is an explicit recovery message.
+
+**asUser narrowing.** The harness's `asUser` now produces exactly the `sudo -n -u &lt;user&gt; -- &lt;absolute cmd&gt; …` form the sudoers rule permits, and it throws on a relative path. Both call sites pass Bubblewrap, which is absolute. `env_reset` plus `--clearenv` still gives a clean environment. The agent payload env travels over stdin, so nothing depends on the removed `env -i`. The test also asserts that the rule in `provision.sh` names the same binary.
+
+Nits:
+1. A file edited after provisioning is now left alone. A later re-provision then treats it as a collision and refuses, with the host unchanged. This is fail-safe but the operator needs the message to say "edited since provisioning".
+2. `rollback.sh` leaves the ledger and `lock` file in place when `dir` entries are kept. This is intended.
+
+## PR #30 (t3-false-presence, head 6b33a1a): ACCEPT
+
+All three of my findings are fixed.
+- **Timeout/overflow:** `commandBaseline` now throws when the outcome has an error. A timeout, output overflow, containment problem or `status === null` is a harness error, and only a normal exit sets the precondition. The unit test asserts this, including the rejection message.
+- **Mutation:** the baseline runs on a `cpSync` copy in a throwaway directory that is removed in `finally`. The agent starts on exactly the staged tree, and `steeringBaseline` digests were already taken before.
+- **Resources:** they are recorded as `resources.t3Baseline`.
+
+Nits:
+1. The copy sits on the size-capped tmpfs. A large repository roughly doubles transient storage during the baseline, so size `storageBytes` with that in mind.
+2. Commands that embed the absolute workspace path behave differently on the copy. Say so in `eval/T3.md`.
+3. The branch history contains an unrelated rebase of `durable_continuity` tests. They are not part of this change.</result>
+<usage><subagent_tokens>226677</subagent_tokens><tool_uses>4</tool_uses><duration_ms>180578</duration_ms></usage>
+</task-notification>
