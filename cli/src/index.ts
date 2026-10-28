@@ -21,7 +21,7 @@ import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
 import { TaskStateNotFoundError } from "./core/state.js";
-import { buildConfig as buildConfigOrThrow, loadEnvironment } from "./config.js";
+import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, redactDiagnostic, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
@@ -93,6 +93,12 @@ if (invocationKind === "client") {
     process.exit(2);
   }
   loadEnvironment();
+  const doctorInvocation = startupArgs.some((arg) => arg === "doctor" || arg === "check");
+  const configLoadError = operatorConfigLoadError();
+  if (configLoadError && !doctorInvocation) {
+    console.error(pc.red(`Configuration error: ${configLoadError.message}`));
+    process.exit(2);
+  }
 }
 
 // Diagnose an interrupted packaged upgrade before launching a new CLI/TUI

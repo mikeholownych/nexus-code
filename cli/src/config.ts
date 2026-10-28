@@ -15,6 +15,7 @@ let credentialAuthorityRecorded = false;
 let shellEnvironment: Record<string, string | undefined> = {};
 let userConfigFile: Record<string, string> = {};
 let operatorJsonOperationPolicy: HarnessConfig["operationPolicy"];
+let operatorJsonOperationPolicyError: Error | undefined;
 const SHELL_PRECEDENCE_KEYS = ["NEXUS_VERIFY_ATTESTATION"] as const;
 const OPERATOR_CONFIG_JSON_LIMIT = 64 * 1024;
 
@@ -78,7 +79,15 @@ export function loadEnvironment(): void {
   }
   // Structured operator settings are separate from the legacy dotenv file. They are read only from the
   // operator's home; a project nexus.config.json is never trusted as operator policy.
-  operatorJsonOperationPolicy = readOperatorOperationPolicy(path.join(operatorHome, ".config/nexus/config.json"));
+  operatorJsonOperationPolicy = undefined;
+  operatorJsonOperationPolicyError = undefined;
+  try {
+    operatorJsonOperationPolicy = readOperatorOperationPolicy(path.join(operatorHome, ".config/nexus/config.json"));
+  } catch (error) {
+    // Preserve the invalid policy for buildConfig to reject. Deferring only the throw lets `nexus doctor`
+    // report a structured config.valid finding; no execution path may proceed with policy defaults instead.
+    operatorJsonOperationPolicyError = error instanceof Error ? error : new Error("Unable to read operator config.json.");
+  }
   // A provenance setting chosen in the operator's shell outranks config.env, which was applied with override above:
   // config.env NEXUS_VERIFY_ATTESTATION=0 must not defeat an explicit NEXUS_VERIFY_ATTESTATION=1 for this run.
   for (const key of SHELL_PRECEDENCE_KEYS) {
@@ -110,6 +119,11 @@ export function loadEnvironment(): void {
       warnOnce(`ignored in ${cwdEnv}: ${projectEnvIgnored.join(", ")} (a project .env may set only per-project settings; put operator settings in ~/.config/nexus/config.env)`);
     }
   }
+}
+
+/** A malformed operator config is deferred only so doctor can report it; execution must still fail closed. */
+export function operatorConfigLoadError(): Error | undefined {
+  return operatorJsonOperationPolicyError;
 }
 
 /**
@@ -330,6 +344,7 @@ function normalizeTrustedDeliverableFiles(workspace: string, value: unknown): st
 }
 
 export function buildConfig(options: any): HarnessConfig {
+  if (operatorJsonOperationPolicyError) throw operatorJsonOperationPolicyError;
   // `appliance: true` resolves the appliance connection regardless of any provider selection (the model picker's
   // appliance entry).
   const provider = options.appliance ? undefined : selectProvider(options.provider, "NEXUS_PROVIDER");
@@ -470,6 +485,7 @@ export function buildConfig(options: any): HarnessConfig {
  * `.env` cannot silently change how long an operation waits or how often Nexus retries work.
  */
 export function configuredOperationPolicy(setting: (key: string) => string | undefined = operatorSetting): HarnessConfig["operationPolicy"] {
+  if (operatorJsonOperationPolicyError) throw operatorJsonOperationPolicyError;
   // Node timers clamp larger delays to 1 ms. Keep operator policy inside the
   // supported timer range so long waits cannot turn into a wake/revalidate loop.
   const maxTimerDelayMs = 2_147_483_647;
