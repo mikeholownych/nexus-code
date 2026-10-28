@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b5y6098z4</task-id>
+<tool-use-id>toolu_01LnuKrbJFthaN99RiHXZnqM</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/f7a4bcb7-09e5-4c81-85ad-62b124a835f4/tasks/b5y6098z4.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR83 linux-x86_64 result" completed (exit code 0)</summary>
+</task-notification>
