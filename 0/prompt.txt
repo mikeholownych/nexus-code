@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>ac68d7d7207aa2b37</task-id>
+<tool-use-id>toolu_01U9b226SL1q9hv93CEY2ZuT</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/ac68d7d7207aa2b37.output</output-file>
+<status>failed</status>
+<summary>Agent "Author held-out T2 tasks batch 1" failed: Agent terminated early due to an API error: You've hit your session limit · resets 8pm (UTC) (error type rate_limit, HTTP 429, request id REDACTED, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Still claimed; I'll write the toml reference meanwhile (no test runs).</result>
+</task-notification>
