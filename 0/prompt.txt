@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bsj39k9pb</task-id>
+<tool-use-id>toolu_0161jGpx8Anj1zyvynw5md8x</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/f7a4bcb7-09e5-4c81-85ad-62b124a835f4/tasks/bsj39k9pb.output</output-file>
+<status>completed</status>
+<summary>Background command "Reproduce npm audit in cli directory" completed (exit code 0)</summary>
+</task-notification>
