@@ -1,0 +1,1 @@
+use a persistent loop to ensure continued progress. the goal is to ensure that v1.0.0 gets to release status.
