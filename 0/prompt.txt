@@ -1,0 +1,6 @@
+1. 4, now
+2. no
+3. include other tools
+4. aider is installed here on this host, llama.cpp workers are already installed on the inference host, sitting behind a custom gateway.
+
+what's your recommendation for the pass rate margin?
