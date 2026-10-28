@@ -209,11 +209,38 @@ export class CheckpointManager {
         }
         if (!stat.isDirectory()) break;
         const dotGit = fs.lstatSync(path.join(parent, ".git"), { throwIfNoEntry: false });
-        const bareHead = fs.statSync(path.join(parent, "HEAD"), { throwIfNoEntry: false });
-        const bareConfig = fs.statSync(path.join(parent, "config"), { throwIfNoEntry: false });
-        const bareObjects = fs.statSync(path.join(parent, "objects"), { throwIfNoEntry: false });
-        const bareRefs = fs.statSync(path.join(parent, "refs"), { throwIfNoEntry: false });
-        if (dotGit || (bareHead?.isFile() && bareConfig?.isFile() && bareObjects?.isDirectory() && bareRefs?.isDirectory())) {
+        const bareHead = fs.lstatSync(path.join(parent, "HEAD"), { throwIfNoEntry: false });
+        const bareConfigPath = path.join(parent, "config");
+        const bareConfig = fs.lstatSync(bareConfigPath, { throwIfNoEntry: false });
+        const bareObjects = fs.lstatSync(path.join(parent, "objects"), { throwIfNoEntry: false });
+        const bareRefs = fs.lstatSync(path.join(parent, "refs"), { throwIfNoEntry: false });
+        const hasBareRepositoryLayout = bareHead?.isFile()
+          && !bareHead.isSymbolicLink()
+          && bareConfig?.isFile()
+          && !bareConfig.isSymbolicLink()
+          && bareObjects?.isDirectory()
+          && !bareObjects.isSymbolicLink()
+          && bareRefs?.isDirectory()
+          && !bareRefs.isSymbolicLink();
+        let declaresBareRepository = false;
+        if (hasBareRepositoryLayout && bareConfig) {
+          if (bareConfig.size > 1024 * 1024) {
+            throw new Error("Checkpoint destination has an oversized Git configuration");
+          }
+          let inCoreSection = false;
+          for (const line of fs.readFileSync(bareConfigPath, "utf8").split(/\r?\n/)) {
+            const entry = line.replace(/[;#].*$/, "").trim();
+            if (/^\[\s*core\s*\]$/i.test(entry)) {
+              inCoreSection = true;
+            } else if (/^\[/.test(entry)) {
+              inCoreSection = false;
+            } else if (inCoreSection && /^bare\s*(?:=\s*(?:true|yes|on|1|"true"|"yes"|"on"|"1"))?$/i.test(entry)) {
+              declaresBareRepository = true;
+              break;
+            }
+          }
+        }
+        if (dotGit || declaresBareRepository) {
           throw new Error("Checkpoint destination parent is a nested Git repository");
         }
       }
