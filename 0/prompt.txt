@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bo2vetb2j</task-id>
+<tool-use-id>toolu_01GAs5aiquihoNf2docYsrBZ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/bo2vetb2j.output</output-file>
+<status>completed</status>
+<summary>Background command "cd /tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/scratchpad &amp;&amp; rm -f nx_deepplan.json &amp;&amp; PLANNER_LLM_MODEL=engineering/deep CODER_LLM_MODEL=engineering/lead python3 nxbench.py deepplan &gt; nx_deepplan.log 2&gt;&amp;1" completed (exit code 0)</summary>
+</task-notification>
