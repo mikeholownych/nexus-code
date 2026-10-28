@@ -1,0 +1,1 @@
+determine which setup is better all around. accuracy is more important than tps throughput
