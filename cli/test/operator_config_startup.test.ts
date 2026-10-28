@@ -105,6 +105,32 @@ test("ordinary CLI startup rejects invalid policy before launching a session", (
   });
 });
 
+test("non-doctor commands cannot bypass invalid config with option values or nested arguments", () => {
+  withOperatorConfig("{broken", (home) => {
+    for (const args of [
+      ["-w", "check", "skills"],
+      ["-w", "doctor", "skills"],
+      ["trust", "check"],
+      ["run", "doctor", "check"],
+    ]) {
+      const result = runCli(home, args);
+      assert.equal(result.status, 2, `${args.join(" ")}: ${result.stderr}`);
+      assert.match(result.stderr, /Configuration error: Nexus config\.json is not valid JSON/);
+    }
+  });
+});
+
+test("doctor remains available after root options when operator config is invalid", () => {
+  withOperatorConfig("{broken", (home) => {
+    const result = runCli(home, ["--provider", "openrouter", "doctor", "--json", "--timeout", "50"]);
+    assert.equal(result.status, 2, result.stderr);
+    const report = JSON.parse(result.stdout);
+    const finding = report.findings.find((item: { id: string }) => item.id === "config.valid");
+    assert.equal(finding.status, "fail");
+    assert.match(finding.evidence[0], /config\.json is not valid JSON/);
+  });
+});
+
 test("direct TUI sidecar startup rejects malformed operator policy before opening the protocol", () => {
   withOperatorConfig("not-json", (home) => {
     const result = spawnSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/sidecar.ts")], {

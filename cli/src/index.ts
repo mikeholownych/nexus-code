@@ -54,6 +54,7 @@ const startupArgs = process.argv.slice(2);
 const { acquireClientLease, releaseClientLease, clientInvocationKind } = await import("./core/client_lease.js");
 const invocationKind = clientInvocationKind(startupArgs);
 const startupReadOnly = invocationKind === "metadata" || (startupArgs[0] === "upgrade" && startupArgs.includes("--check"));
+let operatorConfigStartupError: Error | undefined;
 // `upgrade --check` is read-only, so it must not replay a transaction. It also
 // must not load configuration while a restore journal says that config may be
 // only partially applied. Refuse before loadEnvironment() and let a normal
@@ -93,17 +94,14 @@ if (invocationKind === "client") {
     process.exit(2);
   }
   loadEnvironment();
-  const doctorInvocation = startupArgs.some((arg) => arg === "doctor" || arg === "check");
-  const configLoadError = operatorConfigLoadError();
-  if (configLoadError && !doctorInvocation) {
-    console.error(pc.red(`Configuration error: ${configLoadError.message}`));
-    process.exit(2);
-  }
+  operatorConfigStartupError = operatorConfigLoadError();
 }
 
-// Diagnose an interrupted packaged upgrade before launching a new CLI/TUI
-// session. Read-only version/help/check commands never recover or write state.
-if (!startupReadOnly && startupArgs[0] !== "upgrade" && process.env.NEXUS_UPGRADE_HEALTH_CHECK !== "1" && process.env.NEXUS_HOME) {
+async function recoverInterruptedUpgrade(topLevelCommand: string): Promise<void> {
+  // Diagnose interrupted upgrades before launching a new CLI/TUI session.
+  // Read-only version/help/check commands never recover or write state.
+  if (startupReadOnly || topLevelCommand === "upgrade" || process.env.NEXUS_UPGRADE_HEALTH_CHECK === "1" || !process.env.NEXUS_HOME) return;
+
   const { getJournalPath, readJournal, recoverUpgrade } = await import("./upgrade_journal.js");
   const packagedPrefix = path.resolve(process.env.NEXUS_HOME, "../../..");
   const journal = readJournal(packagedPrefix);
@@ -1130,7 +1128,22 @@ Exit codes:
 registerOperationCommands(program);
 registerProviderCommands(program);
 
-program.parse(process.argv);
+program.hook("preAction", async (_thisCommand, actionCommand) => {
+  let topLevelCommand = actionCommand;
+  while (topLevelCommand.parent && topLevelCommand.parent !== program) {
+    topLevelCommand = topLevelCommand.parent;
+  }
+  const name = topLevelCommand === program ? program.name() : topLevelCommand.name();
+
+  if (operatorConfigStartupError && name !== "doctor" && name !== "check") {
+    console.error(pc.red(`Configuration error: ${operatorConfigStartupError.message}`));
+    process.exit(2);
+  }
+
+  await recoverInterruptedUpgrade(name);
+});
+
+await program.parseAsync(process.argv);
 
 export { ApplicationCore } from "./core/app.js";
 export type { TaskExecutionResult, RunTaskOptions, SlashCommandResult } from "./core/app.js";
