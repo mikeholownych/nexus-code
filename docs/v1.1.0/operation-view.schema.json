@@ -244,6 +244,34 @@
                     "type": "string"
                   }
                 }
+              },
+              "contextBudget": {
+                "type": "number",
+                "minimum": 1
+              },
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "estimatedPromptTokens",
+                  "budgetTokens",
+                  "contextLimit",
+                  "at"
+                ],
+                "properties": {
+                  "estimatedPromptTokens": {
+                    "type": "integer"
+                  },
+                  "budgetTokens": {
+                    "type": "integer"
+                  },
+                  "contextLimit": {
+                    "type": "integer"
+                  },
+                  "at": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }

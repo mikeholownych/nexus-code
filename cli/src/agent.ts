@@ -1871,6 +1871,31 @@ export class AutonomousAgent {
     return [...this.messages];
   }
 
+  /**
+   * The admission estimate for adding one user message, using the same budget, reserves and tool definitions the next
+   * turn will use. Compaction is not attempted here: callers use it to reject a prompt that cannot fit even before
+   * admission runs.
+   */
+  public estimateTurnAdmission(content: string): {
+    estimatedPromptTokens: number;
+    contextLimit: number;
+    completionReserve: number;
+    toolResponseReserve: number;
+    admissible: boolean;
+  } {
+    const messages = [...this.messages, { role: "user", content } as ChatMessage];
+    const contextLimit = this.contextLimit();
+    const reserves = this.getContextReserves();
+    const estimatedPromptTokens = this.scaledBudget(messages, contextLimit).totalActiveTokens;
+    return {
+      estimatedPromptTokens,
+      contextLimit,
+      completionReserve: reserves.completion,
+      toolResponseReserve: reserves.toolResponse,
+      admissible: isContextAdmissible(estimatedPromptTokens, contextLimit, reserves.completion, reserves.toolResponse),
+    };
+  }
+
   public getEvaluationToolReceipts(): EvaluationToolReceipt[] {
     return this.evaluationToolReceipts.map((receipt) => ({ ...receipt }));
   }

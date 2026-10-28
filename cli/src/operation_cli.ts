@@ -19,6 +19,7 @@ import { DecisionRejected, newOperation, type DurableOperationState, type Operat
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { buildOperationView, renderOperationView, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
+import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
 import { safeTerminal } from "./ui.js";
 import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
 import { createOperationAccountIdentity } from "./core/account_identity.js";
@@ -223,6 +224,66 @@ export function registerOperationCommands(program: Command): void {
       if (options.json) return void console.log(JSON.stringify(ops, null, 2));
       if (!ops.length) return void console.log("No operations in this workspace.");
       ops.forEach(printStatus);
+    });
+
+  op.command("checkpoint")
+    .argument("<id>", "Operation id")
+    .argument("<unit>", "Work unit id")
+    .option("--name <name>", "Checkpoint name (default: a timestamp)")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .description("Snapshot a settled unit's conversation so it can be restored later")
+    .action((id: string, unitId: string, options: any) => {
+      const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      const state = store.loadForInspection(id);
+      const name = options.name ?? `cp-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      try {
+        const record = createContextCheckpoint(store.manager, state, unitId, name);
+        store.save(state);
+        console.log(pc.bold(`Checkpoint ${record.name}`) + pc.dim(` — ${record.messages} messages, ${record.bytes} bytes`));
+        console.log(pc.dim(`  restore with: nexus operation restore ${id} ${unitId} ${record.name}`));
+      } catch (error) {
+        if (!(error instanceof ContextCheckpointError)) throw error;
+        console.error(pc.red(`Checkpoint rejected: ${error.message}`));
+        process.exitCode = 2;
+      }
+    });
+
+  op.command("checkpoints")
+    .argument("<id>", "Operation id")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .option("-j, --json", "JSON output")
+    .description("List a unit's context checkpoints")
+    .action((id: string, options: any) => {
+      const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      const state = store.loadForInspection(id);
+      const checkpoints = listContextCheckpoints(state);
+      if (options.json) return void console.log(JSON.stringify(checkpoints, null, 2));
+      if (!checkpoints.length) return void console.log("No context checkpoints for this operation.");
+      for (const checkpoint of checkpoints) {
+        console.log(`  ${checkpoint.name.padEnd(28)} ${checkpoint.unitId.padEnd(20)} ${checkpoint.at}  ${checkpoint.messages} messages`);
+      }
+    });
+
+  op.command("restore")
+    .argument("<id>", "Operation id")
+    .argument("<unit>", "Work unit id")
+    .argument("<name>", "Checkpoint name")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .description("Restore a unit's conversation from a checkpoint (verification restarts fail-closed)")
+    .action((id: string, unitId: string, name: string, options: any) => {
+      const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      const state = store.loadForInspection(id);
+      try {
+        const restored = restoreContextCheckpoint(store.manager, state, unitId, name);
+        store.save(state);
+        console.log(pc.bold(`Restored ${unitId} from ${name}`) + pc.dim(` — ${restored.record.messages} messages`));
+        if (restored.backup) console.log(pc.dim(`  previous task state kept at ${restored.backup}`));
+        console.log(pc.yellow(`The restored conversation is recovered as unverified; resume with: nexus operation resume ${id}`));
+      } catch (error) {
+        if (!(error instanceof ContextCheckpointError)) throw error;
+        console.error(pc.red(`Restore rejected: ${error.message}`));
+        process.exitCode = 2;
+      }
     });
 
   op.command("watch")

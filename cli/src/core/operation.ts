@@ -78,6 +78,7 @@ export type BlockCause =
   | "EXECUTION_FAILED"
   | "MERGE_CONFLICT"
   | "INTEGRATION_FAILED"
+  | "CONTEXT_BUDGET"
   | "EXECUTION_UNKNOWN"
   | "INTERRUPTED"
   | "NO_QUALIFIED_RESOURCE"
@@ -136,6 +137,13 @@ export interface WorkUnit {
   /** Executions started whose inference outcome was never received (process ended mid-run). */
   unknownResumes: number;
   modelsUsed: string[];
+  /**
+   * Operator cap on this unit's prompt context, in tokens. The resource's advertised capacity still applies; a unit
+   * whose start prompt cannot fit this budget is blocked before any inference.
+   */
+  contextBudget?: number;
+  /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
+  context?: { estimatedPromptTokens: number; budgetTokens: number; contextLimit: number; at: string };
 }
 
 export type OperationEventType =
@@ -205,6 +213,16 @@ export interface OperationGitState {
   units: Record<string, OperationGitUnit>;
 }
 
+/** A durable snapshot of a unit's conversation, restorable by the operator. */
+export interface ContextCheckpoint {
+  unitId: string;
+  name: string;
+  at: string;
+  taskId: string;
+  messages: number;
+  bytes: number;
+}
+
 /** What was integrated, and the evidence the merge was accepted with. */
 export interface IntegrationReceipt {
   unitId: string;
@@ -237,6 +255,8 @@ export interface DurableOperationState {
   git?: OperationGitState;
   /** Accepted unit integrations, oldest first. */
   integrations?: IntegrationReceipt[];
+  /** Operator-created conversation snapshots, oldest first. */
+  contextCheckpoints?: ContextCheckpoint[];
 }
 
 /** An option before it is numbered into a decision. */
@@ -285,6 +305,8 @@ export interface WorkUnitSpec {
   requires?: WorkRequirements;
   required?: boolean;
   taskClass?: string;
+  /** Operator cap on this unit's prompt context, in tokens. */
+  contextBudget?: number;
 }
 
 export function newOperation(
@@ -329,6 +351,7 @@ export function newOperation(
       requires: u.requires ?? {},
       ...(u.required === false ? { required: false } : {}),
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
+      ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
       status: "WAITING_ON_DEPENDENCY",
       reroutes: [],
       runs: 0,

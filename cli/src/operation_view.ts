@@ -30,6 +30,10 @@ export interface OperationViewUnit {
   result?: { summary: string; completedAt: string; resourceId: string; outcome: string };
   /** Present when the unit's work was integrated into the operation branch. */
   integration?: OperationViewIntegration;
+  /** Operator cap on the unit's prompt context, when set. */
+  contextBudget?: number;
+  /** The unit's last start-prompt estimate and the budget it was checked against. */
+  context?: { estimatedPromptTokens: number; budgetTokens: number; contextLimit: number; at: string };
 }
 
 export interface OperationViewResource {
@@ -380,6 +384,8 @@ export function buildOperationView(
           },
         }
       : {}),
+    ...(unit.contextBudget !== undefined ? { contextBudget: unit.contextBudget } : {}),
+    ...(unit.context ? { context: { ...unit.context } } : {}),
     ...(integrations.has(unit.id)
       ? {
           integration: (() => {
@@ -501,8 +507,13 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
       const runs = unit.runs > 1 ? ` · ${unit.runs} runs` : "";
       const durable = unit.durable ? " · durable" : "";
       const integrated = unit.integration ? ` · integrated ${text(unit.integration.integratedCommit.slice(0, 12), width)}` : "";
+      const budget = unit.context
+        ? ` · context ${unit.context.estimatedPromptTokens}/${unit.context.budgetTokens}`
+        : unit.contextBudget
+          ? ` · budget ${unit.contextBudget}`
+          : "";
       lines.push(
-        `${indent}${mark} ${text(unit.id, width)}${role} ${text(unit.title, width)}  ${unit.status}${runs}${durable}${integrated}`,
+        `${indent}${mark} ${text(unit.id, width)}${role} ${text(unit.title, width)}  ${unit.status}${runs}${durable}${integrated}${budget}`,
       );
       if (unit.detail) lines.push(`${indent}  ${text(unit.detail, width)}`);
       if (unit.dependsOn.length) lines.push(`${indent}  after: ${unit.dependsOn.map((id) => text(id, width)).join(", ")}`);

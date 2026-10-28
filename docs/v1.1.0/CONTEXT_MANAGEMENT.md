@@ -1,6 +1,8 @@
 # v1.1 proposal: context management for long operations
 
-Status: proposed. Owner: unclaimed. Depends on: observability. Size: medium (2–3 weeks).
+Status: per-unit budget (1) and context checkpoints (4) implemented (`v1/feature-context-management`); semantic
+retrieval (2) and cross-unit sharing (3) remain proposed. Owner: unclaimed. Depends on: observability. Size: medium
+(2–3 weeks).
 
 ## What exists today
 
@@ -13,19 +15,29 @@ Status: proposed. Owner: unclaimed. Depends on: observability. Size: medium (2�
 - There is no per-unit context budget, no cross-unit summary channel beyond `UnitRunContext.dependencies`, no semantic
   retrieval, and no arbitrary context checkpoint.
 
+## What slice 3 ships
+
+`units[].contextBudget` (tokens) with a pre-inference preflight that uses the agent's own admission estimate, records
+`unit.context`, and blocks with `CONTEXT_BUDGET` when the operator's cap is the binding limit (offering reassignment,
+revise or stop). Durable `nexus operation checkpoint|checkpoints|restore` for a unit's conversation, with a
+pre-restore backup, fail-closed resume and path-safe names. View/schema project both. Implementation and evidence:
+`docs/reviews/evidence/v1.1/CONTEXT-MANAGEMENT-20261028/README.md`.
+
+Still proposed below: semantic retrieval and cross-unit summaries.
+
 ## What to build
 
-1. **Per-unit context budget** derived from the unit's task, dependencies and role, bounded by the resource's advertised
-   limit and the operator's setting. The budget is recorded with the unit and shown in the observability view; an
-   over-budget unit parks with a decision instead of failing blind.
+1. **Per-unit context budget** (shipped as an operator cap; automatic sizing from task complexity is not) bounded by
+   the resource's advertised limit and the operator's setting. The budget is recorded with the unit and shown in the
+   observability view; an over-budget unit blocks with a decision instead of failing blind.
 2. **Semantic retrieval over the operation's own record** (unit conversations, archive, findings, receipts), behind a
    local, opt-in index. Retrieval is evidence-returning (`read_archive`, `read_findings` semantics), never a silent
    summary injection; the model must still read what it relies on.
 3. **Cross-unit context sharing**: a completed unit publishes a bounded summary plus pointers (files, receipts,
    conversation ids) that downstream units may request explicitly. Summaries are operator-visible and never substitute
    for a verification artifact.
-4. **Context checkpoints**: named, durable snapshots of a unit's message set that an operator can restore for a retry,
-   with the same candidate-identity and verification consequences as a restart (documented, tested).
+4. **Context checkpoints** (shipped): named, durable snapshots of a unit's task state that an operator can restore for
+   a retry, with the same verification consequences as a restart (fail-closed, documented and tested).
 
 ## Design constraints
 
