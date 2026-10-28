@@ -97,13 +97,26 @@ export function createContextCheckpoint(
     throw new ContextCheckpointError(`unit '${unitId}' has unreadable task state; refusing to checkpoint it`);
   }
 
-  const taskHash = digest(taskData);
-  const bundle = checkpointBundleDir(base, state.id, unitId, name, taskHash);
-  const files: ContextCheckpointFile[] = [];
+  const contents = new Map<ContextCheckpointFile["name"], Buffer>();
   for (const entry of BUNDLE_FILES) {
     const from = path.join(base, `${taskId}${entry.suffix}`);
-    if (!fs.existsSync(from)) continue;
-    const data = fs.readFileSync(from);
+    if (fs.existsSync(from)) contents.set(entry.name, fs.readFileSync(from));
+  }
+  const bundleHash = createHash("sha256");
+  for (const entry of BUNDLE_FILES) {
+    const data = contents.get(entry.name);
+    if (!data) continue;
+    bundleHash.update(entry.name);
+    bundleHash.update("\0");
+    bundleHash.update(digest(data));
+    bundleHash.update("\0");
+  }
+  const bundleSha256 = bundleHash.digest("hex");
+  const bundle = checkpointBundleDir(base, state.id, unitId, name, bundleSha256);
+  const files: ContextCheckpointFile[] = [];
+  for (const entry of BUNDLE_FILES) {
+    const data = contents.get(entry.name);
+    if (!data) continue;
     writePrivateFile(path.join(bundle, entry.file), data, { durable: true });
     files.push({ name: entry.name, bytes: data.length, sha256: digest(data) });
   }
@@ -115,7 +128,7 @@ export function createContextCheckpoint(
     taskId,
     messages,
     bytes: taskData.length,
-    sha256: taskHash,
+    sha256: bundleSha256,
     files,
   };
   state.contextCheckpoints = [

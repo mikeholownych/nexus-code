@@ -398,6 +398,52 @@ test("a checkpoint copies the conversation journals too and restores them withou
   }
 });
 
+test("changing only a journal creates a new checkpoint bundle instead of overwriting the old one", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  try {
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "first-journal\n", { durable: true });
+    const first = createContextCheckpoint(store.manager, state, "u1", "same-name");
+    const firstBundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "same-name", first.sha256);
+    writePrivateFile(journal, "second-journal\n", { durable: true });
+
+    const second = createContextCheckpoint(store.manager, state, "u1", "same-name");
+    const secondBundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "same-name", second.sha256);
+
+    assert.notEqual(second.sha256, first.sha256);
+    assert.notEqual(secondBundle, firstBundle);
+    assert.equal(fs.readFileSync(path.join(firstBundle, "messages.jsonl"), "utf8"), "first-journal\n");
+    assert.equal(fs.readFileSync(path.join(secondBundle, "messages.jsonl"), "utf8"), "second-journal\n");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("bundle hashes cannot collide across journal boundaries", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  try {
+    const messages = taskFile.replace(/\.json$/, ".messages.jsonl");
+    const history = taskFile.replace(/\.json$/, ".history.jsonl");
+    writePrivateFile(messages, "x\0history\0y", { durable: true });
+    const first = createContextCheckpoint(store.manager, state, "u1", "framing");
+    writePrivateFile(messages, "x", { durable: true });
+    writePrivateFile(history, "y", { durable: true });
+
+    const second = createContextCheckpoint(store.manager, state, "u1", "framing");
+
+    assert.notEqual(second.sha256, first.sha256);
+    const firstBundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "framing", first.sha256);
+    const secondBundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "framing", second.sha256);
+    assert.notEqual(secondBundle, firstBundle);
+    assert.equal(fs.readFileSync(path.join(firstBundle, "messages.jsonl"), "utf8"), "x\0history\0y");
+    assert.equal(fs.readFileSync(path.join(secondBundle, "history.jsonl"), "utf8"), "y");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("restore removes a journal created after the checkpoint", () => {
   const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
   try {
