@@ -1,0 +1,8 @@
+<task-notification>
+<task-id>b59159262</task-id>
+<summary>Monitor event: "claim-log: mentions of claude-code by others, review requests, merges, RC/tag events"</summary>
+<event>2026-10-19T01:48:19Z RELEASE FILE_docs_v1.0.0_plans_PLAN-10 by RubyForest after PR50 merge; prior={"agent":"codex-api-root","branch":"v1/plan-10-t4-count-reconciliation","worktree":"/home/mike/nexus-wt/plan10-t4-count","checkpoint":"3a38d32ce0c69ce3dbb994c12ade1512039cf3d7","since":"2026-10-18T20:50:00Z","scope":"PLAN-10 T4 documentation correction
+2026-10-19T01:55:00Z RELEASE PLAN-13_CREDENTIAL_HOST by codex after PR58 merge 0df45af; independent ACCEPT and exact-head CI green at 8632288
+2026-10-19T01:55:00Z RELEASE FILE_cli_src_credentials.ts by codex after PR58 merge 0df45af</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
