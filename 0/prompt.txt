@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>bhirhk82k</task-id>
+<tool-use-id>toolu_01DhpVKskXaCeEm8wynEskHW</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/bhirhk82k.output</output-file>
+<status>completed</status>
+<summary>Background command "cd ~/Projects/aihost &amp;&amp; timeout 900 .venv/bin/ansible-playbook playbooks/inference.yml --limit ai-5820-01 2&gt;&amp;1 | grep -E "PLAY RECAP|fatal|FAILED" -A1 | head -4; ssh -o BatchMode=yes mike@10.0.8.5 'systemctl is-active aihost-vllm-worker1 aihost-llama-worker2 aihost-orchestrator-gateway vllm-top-console; podman ps --format "{{.Names}}" | head; curl -s http://127.0.0.1:8010/health | python3 -c "
+import sys,json; d=json.load(sys.stdin); print(d[\"status\"])
+for k,v in d[\"workers\"].items(): print(\" \",k[-18:], v[\"status\"], v[\"pool\"], v[\"engine\"], \"stats\" if v[\"engine_stats\"] else \"no-stats\")"'" completed (exit code 0)</summary>
+</task-notification>
