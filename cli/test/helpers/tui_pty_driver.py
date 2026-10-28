@@ -244,7 +244,7 @@ def main():
     s.send("Edit notes.txt, then write the batch files f4 to f34.\r", settle=0.1)
     mark = len(s.out)
     cpu0, t0 = cpu_seconds(s.pid), time.monotonic()
-    s.pump(0.8)
+    s.wait_text("thinking · 0:0", 5)
     # 2. Steering while the agent works (Enter while busy sends steering, not a second prompt).
     snapshot_a = s.screen.text()
     s.send("keep line 1 unchanged\r", settle=0.1)
