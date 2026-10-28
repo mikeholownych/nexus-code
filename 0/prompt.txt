@@ -1,0 +1,1 @@
+build the route table first, then test both, then determine what models would be best for each.
