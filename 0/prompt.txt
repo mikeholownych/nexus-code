@@ -1,0 +1,58 @@
+<task-notification>
+<task-id>ae2e6aa10c3f1daa8</task-id>
+<tool-use-id>toolu_01MvXDRuSxcfyyJw31aBNAnG</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/ae2e6aa10c3f1daa8.output</output-file>
+<status>completed</status>
+<summary>Agent "Trust boundaries and inference review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The review is finished. The deliverable has 20 findings, a "what is solid" section, "Checks actually run" and "Limitations": `/tmp/claude-1000/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2/scratchpad/assess/trust_inference.md`.
+
+**Scope:** main (3727938) is the primary target. The code paths behind these findings are identical on feat/tui-surface and fix/context-convergence. I re-ran the key reproductions on a feat/tui-surface extract (the installed runtime) and got the same results. fix/context-convergence was compared by source diff only, not re-run.
+
+**Area 4: operator control and trust**
+- **P0, T-01:** Review mode never asks before `delete_file`. Only four tools are gated (`agent.ts:2502-2508`). `delete_file "."` deleted the whole repository, including `.git` and the checkpoint refs stored there, with no approval request.
+- **P0, T-02:** Subagents run every tool with no approval. `runSubagent` dispatches without a confirm handler (`agent.ts:3648`), so a subagent wrote a file and ran a shell command in review mode.
+- **P0, T-03:** A cloned repo can run its own code as soon as you submit a prompt. Nexus imports `&lt;repo&gt;/plugins/*.mjs` and starts the servers listed in `&lt;repo&gt;/.mcp.json`, passing them your full environment, with no trust prompt. This happened even with `--read-only` and `--approve`.
+- **P0, T-06:** `run_tests` puts its `filter` argument straight into a shell command and is never gated, so the model can run any command in review mode (reproduced with `touch INJECTED`).
+- **P1:**
+  - T-05: `batch_read` returns `.env` contents to the model, although `read_file` blocks the same file.
+  - T-07: a secret the vault had replaced with a placeholder was restored to the real key inside a `search_web` query that left the machine.
+  - T-08: URL passwords, JWTs and unquoted `PASSWORD=` lines reach the model, and are stored in plain text in the session, diff, audit, task and flight-log files.
+- **P2:**
+  - T-04: MCP and plugin tools are offered to the model but always fail with FAIL-001.
+  - T-09: the requirements ledger accepts "verified" from a filtered test run that executed nothing. The turn's own outcome was correctly UNVERIFIED.
+  - T-12: auto mode is the default, and network tools are never gated.
+- **P3:**
+  - T-10: read-only blocks of `run_tests` are reported as a test failure.
+  - T-10: `write_file` reports every new file as "overwritten".
+  - T-11: race conditions between path check and write in the Rust file code (from reading the source; not reproduced).
+
+**Area 5: inference compatibility and recovery** (run through the real agent loop against my own scripted HTTP server)
+- **P1, I-01:** The parser pulls tool calls out of `&lt;think&gt;` reasoning. The model wrote that it would not delete `important.txt`, and Nexus deleted it.
+- **P1, I-02:** The JSON repair step changes file contents. When arguments contain raw newlines, `None`/`True` become `null`/`true` and trailing commas are dropped, so Python code is written corrupted.
+- **P2:**
+  - I-03: an empty reply is reported as a completed turn.
+  - I-04: prose quoting a `package.json` is run as a tool call named `my-app`.
+  - I-05: a context-length 400 ends the turn with no compaction-and-retry, and llama.cpp's error format isn't recognised as a context-limit error.
+  - I-06: stream lines written as `data:` without the space are ignored, so the turn fails.
+  - I-07: token usage reported by plain local endpoints is ignored, and no receipts are written for them.
+- **P3, I-08:** Malformed tool-call JSON gets a misleading "missing parameter" error instead of "invalid JSON".
+
+**What held up:**
+- **Read-only mode:** an allowlist plus a read-only bwrap sandbox. A test script that writes files changed nothing under read-only.
+- **Rust path confinement:** canonicalises paths and rejects symlinks that escape the workspace.
+- **Streaming:** split multi-byte characters decode correctly, and incomplete or truncated streams are detected.
+- **No duplicate tool runs:** a stream reset after a complete tool call caused one retry and one execution. A cut mid-tool-call recovered cleanly.
+- **Provider errors:** 503 and 429 (Retry-After honoured) are waited out and recovered.
+- **Endpoints and TLS:** failover never sends data to a less-trusted endpoint, and TLS checking is never disabled.
+- **Scope changes:** dropping one of your requirements from scope still needs your explicit acceptance.
+
+All reproductions are in `/tmp/claude-1000/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2/scratchpad/assess/ti/main/cli/test/`, in `zz_trust_repro.test.ts`, `zz_infer_repro.test.ts` and `zz_parser_probe.test.ts`. The inference run log is `assess/ti/infer_run1.log`.
+
+**Limitations:**
+- No real local inference server was used; the llama.cpp error format came from memory, not a live capture.
+- The Rust core binary is the 31d6622 build, whose library source is identical to main's; it was not rebuilt from main.
+- The no-sandbox fallback, the redirect issue and the Anthropic/Responses adapters were checked in source only.
+- Nothing in the repo or `~/.nexus` was modified.</result>
+<usage><subagent_tokens>241518</subagent_tokens><tool_uses>8</tool_uses><duration_ms>259712</duration_ms></usage>
+</task-notification>
