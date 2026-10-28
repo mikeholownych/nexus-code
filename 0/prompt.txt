@@ -1,0 +1,8 @@
+<task-notification>
+<task-id>bsxhtywem</task-id>
+<summary>Monitor event: "resumed nexus session: turn end, cut-offs, errors"</summary>
+<event>✖ Tool Error:
+✖ Tool Error:
+✖ Tool Error:</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
