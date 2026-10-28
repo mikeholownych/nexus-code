@@ -20,11 +20,12 @@ function withOperatorConfig(contents: string, run: (home: string) => void): void
   }
 }
 
-function runCli(home: string, args: string[]) {
+function runCli(home: string, args: string[], input?: string) {
   return spawnSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/index.ts"), ...args], {
     cwd: cliDir,
     env: { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") },
     encoding: "utf8",
+    input,
     timeout: 15_000,
   });
 }
@@ -128,6 +129,14 @@ test("doctor remains available after root options when operator config is invali
     const finding = report.findings.find((item: { id: string }) => item.id === "config.valid");
     assert.equal(finding.status, "fail");
     assert.match(finding.evidence[0], /config\.json is not valid JSON/);
+  });
+});
+
+test("interactive REPL exits successfully when stdin reaches EOF", () => {
+  withOperatorConfig("{}", (home) => {
+    const result = runCli(home, ["--repl", "--endpoint", "http://127.0.0.1:9"], "");
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /unsettled top-level await/i);
   });
 });
 
