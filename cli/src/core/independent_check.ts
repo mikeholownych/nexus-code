@@ -28,6 +28,10 @@ export interface ChangeBaseline {
   verifier: Map<string, string> | null;
   /** Operator-declared product scope captured before candidate edits; absent scope cannot establish VERIFIED. */
   trustedDeliverables: string[];
+  /** Exact verifier definition accepted after TDD RED; it is an allowlist for GREEN, never independent evidence. */
+  tddRedVerifier?: Map<string, string>;
+  /** Exact contents of tests authored during RED; these must remain unchanged and never enter the pre-change test set. */
+  tddRedTests?: Map<string, string>;
   at: string;
 }
 
@@ -573,6 +577,49 @@ export function verifierDefinitionChangedSince(
     }
   }
   return false;
+}
+
+/** Whether the current verifier definition exactly matches the snapshot validated at the TDD RED boundary. */
+export function verifierDefinitionMatchesSnapshot(
+  workspace: string,
+  command: string,
+  expected: Map<string, string>,
+  trustedDeliverables: readonly string[] = [],
+): boolean {
+  const current = snapshotVerifierDefinition(workspace, command, trustedDeliverables);
+  if (!current) return false;
+  const stableEntries = (snapshot: Map<string, string>) =>
+    [...snapshot].filter(([relative]) => !relative.startsWith("\0runtime-product-set:")).sort(([a], [b]) => a.localeCompare(b));
+  const expectedEntries = stableEntries(expected);
+  const currentEntries = stableEntries(current);
+  if (currentEntries.length !== expectedEntries.length) return false;
+  for (let index = 0; index < expectedEntries.length; index++) {
+    const [expectedPath, expectedContent] = expectedEntries[index];
+    const [currentPath, currentContent] = currentEntries[index];
+    if (currentPath !== expectedPath || currentContent !== expectedContent) return false;
+  }
+  return true;
+}
+
+/** TDD test files are deliberately excluded from ChangeBaseline.tests, so their bytes need a separate exact check. */
+export function tddRedTestsMatchSnapshot(
+  workspace: string,
+  expected: Map<string, string>,
+): boolean {
+  const root = path.resolve(workspace);
+  for (const [relative, content] of expected) {
+    const absolute = path.resolve(root, relative);
+    if (!absolute.startsWith(`${root}${path.sep}`)) return false;
+    try {
+      const stat = fs.lstatSync(absolute);
+      const real = fs.realpathSync(absolute);
+      if (stat.isSymbolicLink() || !real.startsWith(`${root}${path.sep}`) || !stat.isFile()) return false;
+      if (fs.readFileSync(absolute, "utf8") !== content) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** A new workspace-local npm dependency tree changes executable resolution after the baseline. */

@@ -25,22 +25,23 @@ For each unit whose role is unset (implementer) or `implementer`:
    under `~/.nexus/tdd/<unit-task-id>.json`, keyed by the unit id and a hash of its task prompt. It survives conversation
    compaction and a crashed process. It is ignored (and RED reruns) after an operator revise or restart, or when a
    recorded test file was changed again.
-3. **Bounded baseline rebase.** RED legitimately changes the workspace-resolved verifier definition by adding the
-   reproduction test, so the baseline is rebased onto exactly that test set. **RED may only add tests:** every pre-RED
-   test must still be present and byte-identical, every verifier-definition entry (package manifest, Make include,
-   referenced script, runtime definition, absent-path marker) must be unchanged except for the added tests, and the
-   command must be the same. Anything else fails the unit with "the RED phase changed the verification oracle" instead
-   of letting GREEN verify against a narrowed oracle. The rebase records `failed: true`, keeps the operator's trusted
-   deliverables, and never clears a recovered unit's fail-closed verification posture. A repository with no test file
-   at all is the only case without a pre-RED definition snapshot. There the definition is adopted only for a test-set
-   runner (`node --test`, `tsx --test`, `bun test`, `deno test`) and only the reported tests and operator-declared
-   deliverables may appear in it; a manifest- or config-authored verifier (`npm test`, `make test`, `pytest`, a script)
-   must exist before RED. The RED turn can therefore never author the oracle, and a shell-written manifest that hides
-   itself from git does not help it.
+3. **Bounded RED definition validation.** RED legitimately changes the workspace-resolved verifier definition by
+   adding its reproduction test. The validator records that exact post-RED definition separately so GREEN can use it
+   only while the definition and RED test bytes remain unchanged. **RED may only add tests:** every pre-RED test must
+   still be present and byte-identical, every verifier-definition entry (package manifest, Make include, referenced
+   script, runtime definition, absent-path marker) must be unchanged except for reported RED tests, and the command
+   must be the same. Anything else fails the unit with "the RED phase changed the verification oracle" instead of
+   letting GREEN verify against a narrowed oracle. The independent-evidence baseline is never rebased: its original
+   `failed` result and test snapshot remain intact, and RED-authored tests stay in separate metadata. A repository with
+   no test file at all can use the exact validated definition for GREEN only with a test-set runner (`node --test`,
+   `tsx --test`, `bun test`, `deno test`); a manifest- or config-authored verifier (`npm test`, `make test`, `pytest`, a
+   script) must exist before RED. A shell-written manifest that hides itself from git does not help it.
 4. **GREEN.** The unit continues in the same conversation with the normal prompt plus the GREEN protocol: implement the
    smallest product/source change, keep the test intact, and run the same verifier until it passes. Completion then
    follows the ordinary `TurnResult` classification and verifier gates, including test-set stability, deliverable binding
-   and independence. Editing the RED test during GREEN therefore fails verification, as it should.
+   and independence. Editing the RED test during GREEN therefore fails verification, as it should. A passing
+   verifier that relies only on the test written during RED is `REGRESSION_FREE`, not `VERIFIED`, and the implementer
+   work unit remains incomplete until independent evidence establishes the result.
 
 `tester` and read-only roles are unchanged. Provider, interruption and capacity failures during RED take their normal
 scheduler recovery path, not the TDD failure path.
@@ -53,8 +54,9 @@ scheduler recovery path, not the TDD failure path.
   field, so unit retries after a completed RED skip straight to GREEN. A changed task prompt or an explicit restart
   invalidates the sidecar and reruns RED.
 - The only TDD-specific relaxation is the RED turn's `tddRed` boundary (a failing verifier is the expected RED result).
-  The baseline rebase moves exactly the reported RED tests into the trusted test set and nothing else. GREEN has no
-  relaxation: it can only complete through the same verifier, baseline and independence gates as any other unit.
+  RED tests are recorded separately and never become the pre-change independent test set or establish a fail-before
+  result. GREEN has no relaxation: it can only complete through the same verifier, baseline and independence gates as
+  any other unit.
 - A resumed unit never rebases: recovery treats the saved baseline as untrusted and the workspace already holds the RED
   edits, so no fresh pre-RED tree exists. A resumed unit with a workspace-bound verifier therefore cannot complete at
   all (the definition guard rejects `task_completed`), and every TDD unit uses a workspace-bound gate in practice; a
@@ -73,9 +75,9 @@ scheduler recovery path, not the TDD failure path.
   the harness makes the evidence stale and reruns RED.
 - TDD requires a Git workspace (the test-change evidence is a candidate diff against HEAD). A non-Git operation falls
   back to failing the RED phase. Automatic test generation, coverage guidance and mutation scoring are not included.
-- Tests: `cli/test/tdd_work_units.test.ts` (19 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
-  sidecar, stale sidecar after a revise, restart, role exclusion, a real-agent RED turn, a real RED→GREEN unit where the
-  first test is added to a test-less repo, RED narrowing the verifier refused, RED creating a verifier where none existed
+- Tests: `cli/test/tdd_work_units.test.ts` (20 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
+  sidecar, stale sidecar after a revise, restart, role exclusion, a real-agent RED turn, a real RED→GREEN unit confirming
+  a new RED test alone cannot establish independent completion, RED narrowing the verifier refused, RED creating a verifier where none existed
   refused, RED modifying an existing test refused, a verifier definition the baseline could not capture refused, a
   shell-authored manifest refused, a git-hidden shell-authored manifest refused, a RED-authored runner the command
   executes directly refused, a pre-existing manifest refused as the definition, and a failing `task_completed` still

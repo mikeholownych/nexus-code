@@ -189,6 +189,8 @@ export interface DurableTaskState {
     tests: Record<string, string> | null;
     verifier?: Record<string, string> | null;
     trustedDeliverables?: string[];
+    tddRedVerifier?: Record<string, string>;
+    tddRedTests?: Record<string, string>;
     at: string;
   } | null;
 }
@@ -747,7 +749,7 @@ export class DurableStateManager {
       findings?: string[];
       objective?: ObjectiveLedger | null;
       unverifiedChangesPending?: boolean;
-      changeBaseline?: { command: string; failed: boolean; tests: Record<string, string> | null; verifier?: Record<string, string> | null; trustedDeliverables?: string[]; at: string } | null;
+      changeBaseline?: { command: string; failed: boolean; tests: Record<string, string> | null; verifier?: Record<string, string> | null; trustedDeliverables?: string[]; tddRedVerifier?: Record<string, string>; tddRedTests?: Record<string, string>; at: string } | null;
     }
   ): DurableTaskState {
     return withStateStoreGuard(this.baseDir, () => {

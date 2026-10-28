@@ -14,6 +14,7 @@ import type { TurnResult } from "../src/core/turn.js";
 import { CandidateTracker } from "../src/core/candidate.js";
 import { startGateway, makeRepo, type Reply } from "./helpers/fixtures.js";
 import { AutonomousAgent } from "../src/agent.js";
+import { judgeWithoutCopy, snapshotTests, snapshotVerifierDefinition, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot } from "../src/core/independent_check.js";
 
 const resource: ResourceDescriptor = {
   id: "primary",
@@ -151,7 +152,7 @@ function fakeAgent(options: FakeOptions) {
     },
     getStateManager: () => ({ getBaseDir: () => options.tasks }),
     getChangeBaseline: () => undefined,
-    rebaseVerifierBaselineAfterTddRed: () => ({ ok: true }),
+    validateTddRedVerifierBaseline: () => ({ ok: true }),
     getCandidateTracker: () => new CandidateTracker(),
     setProviderRecoveryHooks: () => {},
     getObjective: () => undefined,
@@ -323,7 +324,7 @@ test("a stale sidecar for a different prompt does not skip RED", async () => {
   assert.match(fake.prompts[0], /TDD PROTOCOL - RED PHASE/);
 });
 
-test("a real RED then GREEN run verifies the first test added to a repo with no tests", { timeout: 90_000 }, async () => {
+test("a real RED then GREEN run is not completed without independent verification", { timeout: 90_000 }, async () => {
   const repo = makeRepo({ "src/value.js": "module.exports = 1;\n" });
   const gw = await startGateway((n): Reply => {
     if (n === 1) return { kind: "tools", calls: [{ name: "write_file", args: { path: "test/value.test.js", content: "const test = require('node:test');\nconst assert = require('node:assert');\nconst value = require('../src/value.js');\ntest('value', () => assert.equal(value, 2));\n" } }] };
@@ -354,8 +355,8 @@ test("a real RED then GREEN run verifies the first test added to a repo with no 
       context()
     );
 
-    assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
-    if (outcome.kind === "completed") assert.equal(outcome.outcome, "VERIFIED", JSON.stringify(outcome));
+    assert.equal(outcome.kind, "failed", JSON.stringify(outcome));
+    if (outcome.kind === "failed") assert.match(outcome.reason, /REGRESSION_FREE/);
   } finally {
     await gw.close();
     fs.rmSync(repo, { recursive: true, force: true });
@@ -759,6 +760,61 @@ test("tester and read-only roles never enter the TDD protocol", async () => {
   assert.doesNotMatch(fake.prompts[0], /TDD PROTOCOL/);
 });
 
+
+test("TDD RED tests remain separate from independent verifier evidence", { timeout: 60_000 }, () => {
+  const command = "env -u NODE_TEST_CONTEXT node --test test/*.test.js";
+  const repo = makeRepo({
+    "src/value.js": "module.exports = 1;\n",
+    "test/baseline.test.js": "const test = require('node:test'); test('baseline', () => {});\n",
+  });
+  const tests = snapshotTests(repo);
+  const verifier = snapshotVerifierDefinition(repo, command);
+  assert.ok(tests);
+  assert.ok(verifier);
+  const agent = new AutonomousAgent({
+    endpoint: "http://127.0.0.1:1/v1",
+    model: "m",
+    maxSteps: 2,
+    temperature: 0,
+    workspace: repo,
+    shell: "bash",
+    approvalMode: "auto",
+    fullAccess: true,
+    authoritativeVerifierCommand: command,
+  });
+  try {
+    (agent as any).changeBaseline = {
+      command,
+      failed: false,
+      tests,
+      verifier,
+      trustedDeliverables: [],
+      at: new Date().toISOString(),
+    };
+    const redTest = "test/tdd-red.test.js";
+    fs.writeFileSync(path.join(repo, redTest), "const test = require('node:test'); test('red', () => {});\n");
+
+    const validation = agent.validateTddRedVerifierBaseline([redTest]);
+    assert.deepEqual(validation, { ok: true });
+
+    const baseline = agent.getChangeBaseline()!;
+    assert.equal(baseline.failed, false, "a model-authored RED failure must not rewrite the pre-change result");
+    assert.deepEqual([...baseline.tests!.keys()], [...tests.keys()], "RED tests must stay outside the pre-change test snapshot");
+    assert.ok(baseline.tddRedVerifier, "the validated RED definition must be tracked separately for GREEN");
+    assert.ok(baseline.tddRedTests, "the exact model-authored RED test bytes must be recorded separately");
+    assert.equal(verifierDefinitionMatchesSnapshot(repo, command, baseline.tddRedVerifier!), true);
+    assert.equal(tddRedTestsMatchSnapshot(repo, baseline.tddRedTests!), true);
+    assert.deepEqual(judgeWithoutCopy(repo, command, baseline), {
+      independent: false,
+      detail: "the existing tests passed before the change too; the new behaviour is checked only by tests Nexus wrote",
+    });
+    fs.appendFileSync(path.join(repo, redTest), "// changed after RED acceptance\n");
+    assert.equal(tddRedTestsMatchSnapshot(repo, baseline.tddRedTests!), false, "GREEN must not alter the accepted RED test");
+  } finally {
+    agent.shutdown();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
 
 test("a real RED turn ends with failing verifier evidence through task_completed", { timeout: 60_000 }, async () => {
   const failingTest = "const test = require('node:test');\nconst assert = require('node:assert');\ntest('red', () => assert.equal(1, 2));\n";
