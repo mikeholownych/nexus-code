@@ -195,6 +195,29 @@ test("Git restore treats pathspec-magic filenames literally when checking ignore
   }
 });
 
+test("Git restore does not treat glob syntax in a filename as an ignore-pattern match", () => {
+  const { repo, git } = gitRepo();
+  const globName = "file[ab].txt";
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), `${globName}\n`);
+    git("add", ".gitignore");
+    git("commit", "-qm", "ignore matching glob paths");
+    assert.equal(git("check-ignore", "--no-index", "filea.txt"), "filea.txt");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("before glob-bearing staged addition");
+    fs.writeFileSync(path.join(repo, globName), "literal bracket filename\n");
+    git("add", globName);
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.existsSync(path.join(repo, globName)), false);
+    assert.equal(git("status", "--porcelain"), "");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
 test("legacy Git restore removes a path renamed after the checkpoint", () => {
   const { repo, git } = gitRepo();
   try {
@@ -296,6 +319,7 @@ test("legacy Git restore does not delete uncaptured untracked files or move HEAD
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     fs.writeFileSync(path.join(repo, "draft.txt"), "uncaptured user work\n");
 
@@ -399,6 +423,7 @@ test("legacy restore removes tracked files deleted at the checkpoint", () => {
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     fs.writeFileSync(path.join(repo, "tracked.txt"), "recreated later\n");
 
@@ -601,6 +626,7 @@ test("legacy Git restore removes staged and committed tracked additions made aft
       const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
       const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
       delete record.untrackedFiles;
+      delete record.untrackedFileModes;
       fs.writeFileSync(recordPath, JSON.stringify(record));
       fs.writeFileSync(path.join(repo, "added-after-checkpoint.txt"), "remove on restore\n");
       git("add", "added-after-checkpoint.txt");
@@ -615,6 +641,32 @@ test("legacy Git restore removes staged and committed tracked additions made aft
     } finally {
       cleanupGitRepo(repo);
     }
+  }
+});
+
+test("Git restore preserves a committed post-checkpoint addition protected by later ignore rules", () => {
+  const { repo, git } = gitRepo();
+  try {
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("committed ignored addition protection");
+    fs.writeFileSync(path.join(repo, "later.cfg"), "operator data\n");
+    git("add", "later.cfg");
+    git("commit", "-qm", "add later data");
+    fs.writeFileSync(path.join(repo, ".gitignore"), "/later.cfg\n");
+    git("add", ".gitignore");
+    git("commit", "-qm", "protect later data from cleanup");
+    const headBefore = git("rev-parse", "HEAD");
+    assert.equal(git("check-ignore", "--no-index", "later.cfg"), "later.cfg");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /ignored|collision/i);
+    assert.equal(fs.readFileSync(path.join(repo, "later.cfg"), "utf8"), "operator data\n");
+    assert.equal(fs.readFileSync(path.join(repo, ".gitignore"), "utf8"), "/later.cfg\n");
+    assert.equal(git("rev-parse", "HEAD"), headBefore);
+  } finally {
+    cleanupGitRepo(repo);
   }
 });
 
@@ -686,6 +738,7 @@ test("legacy non-Git restore never deletes entries absent from old metadata", ()
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     fs.writeFileSync(path.join(workspace, "b.txt"), "must survive legacy restore\n");
     const result = manager.restore(checkpoint.id);
@@ -760,6 +813,7 @@ test("legacy non-Git restore refuses a destination parent symlink before copying
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     fs.rmSync(path.join(workspace, "alias"), { recursive: true });
     fs.symlinkSync(external, path.join(workspace, "alias"));
@@ -944,7 +998,7 @@ test("subdirectory workspace restore preserves sibling worktree and index change
   }
 });
 
-test("tracked deletion cleanup runs before a checkpoint symlink can redirect it", () => {
+test("checkpoint fails closed when a tracked deletion sits beneath a worktree symlink", () => {
   const { repo, git } = gitRepo();
   const alias = path.join(repo, "alias");
   const data = path.join(repo, "data");
@@ -961,9 +1015,22 @@ test("tracked deletion cleanup runs before a checkpoint symlink can redirect it"
     fs.rmdirSync(alias);
     fs.symlinkSync("data", alias);
     git("add", "-A", "alias");
-    const checkpoint = manager.createCheckpoint("symlink replacement deletion");
-    git("reset", "--hard", "HEAD");
+    let checkpoint;
+    try {
+      checkpoint = manager.createCheckpoint("symlink replacement deletion");
+    } catch (error) {
+      assert.match((error as Error).message, /could not verify protected Git state/);
+      assert.equal(manager.listCheckpoints().length, 0);
+      assert.equal(fs.lstatSync(alias).isSymbolicLink(), true);
+      assert.equal(fs.readFileSync(path.join(data, "file"), "utf8"), "ignored data must survive\n");
+      assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
+      return;
+    }
 
+    // Some Git versions can capture this staged deletion/symlink replacement.
+    // Restore it after returning the worktree to the committed directory state.
+    fs.unlinkSync(alias);
+    git("reset", "--hard", "HEAD");
     const result = manager.restore(checkpoint.id);
 
     assert.equal(result.success, true, result.message);
@@ -1008,6 +1075,7 @@ test("legacy Git restore refuses an untracked checkout collision before overwrit
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     git("rm", "--cached", "-q", "tracked.txt");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "untracked canary\n");
@@ -1036,6 +1104,7 @@ test("legacy Git restore refuses an untracked tracked-deletion collision before 
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     git("rm", "--cached", "-q", "deleted.txt");
     fs.writeFileSync(path.join(repo, "deleted.txt"), "untracked canary\n");
@@ -1111,6 +1180,7 @@ test("legacy Git restore rejects an uncaptured directory replacing a checkpoint-
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     fs.mkdirSync(path.join(repo, "deleted.txt"));
     fs.writeFileSync(path.join(repo, "deleted.txt", "uncaptured.txt"), "preserve me\n");
@@ -1137,6 +1207,7 @@ test("legacy non-Git restore refuses an empty-directory destination parent symli
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     fs.mkdirSync(path.join(checkpoint.snapshotDir!, "alias", "newdir"), { recursive: true });
     fs.symlinkSync(external, path.join(workspace, "alias"));
@@ -1165,6 +1236,7 @@ test("legacy Git restore refuses an ignored untracked checkout collision", () =>
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     git("rm", "--cached", "-q", "tracked.txt");
     fs.writeFileSync(path.join(repo, ".gitignore"), "/tracked.txt\n");
@@ -1195,6 +1267,7 @@ test("legacy Git restore refuses an ignored untracked tracked-deletion collision
     const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
     const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
     delete record.untrackedFiles;
+    delete record.untrackedFileModes;
     fs.writeFileSync(recordPath, JSON.stringify(record));
     git("rm", "--cached", "-q", "deleted.txt");
     fs.writeFileSync(path.join(repo, ".gitignore"), "/deleted.txt\n");
