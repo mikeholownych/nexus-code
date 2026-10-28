@@ -1,0 +1,134 @@
+<pasted_content id="e171">
+This is a substantially better research outcome than a premature `READY_FOR_VALIDATION`. Based on the report you've shown, **`MORE_EVIDENCE_REQUIRED` is the defensible disposition**.
+
+There are several important findings here, but they need to remain separated by evidentiary strength.
+
+### What I think we actually learned
+
+The strongest result is not yet "turn-specific context engineering is the answer." It is that the **current context handling is demonstrably wasteful enough to justify an experiment**.
+
+The reported numbers are material:
+
+- ~78% of cumulative message tokens were repeated read-only results.
+- A single ~12K-token Git diff was reportedly transmitted 25 times and accounted for ~26% of 1.156M transmitted tokens.
+- Existing compaction only affects roughly 19% because it copies old tool output verbatim into its summary.
+- Large results frequently appear never to be referenced again, and when they are, first reuse tends to occur relatively soon afterward.
+- Simple deterministic policies appear capable, at least in token simulation, of materially reducing transmitted context.
+
+Those observations establish a **credible optimization opportunity**. They do not establish that rebuilding context per turn improves task outcomes.
+
+The report correctly refuses to cross that line.
+
+### More importantly, it invalidates our previous dogfood interpretation
+
+This is probably the most consequential part of the report.
+
+Our earlier 30-step run cannot support the inference we were starting to make about context growth causing drift because the experiment was contaminated by at least two independent defects:
+
+**The original objective did not actually reach the model.** The multiline paste was apparently reduced to line 1 in the REPL while subsequent lines disappeared. That means later apparent task drift cannot legitimately be measured against an objective the model never received.
+
+And the verifier apparently had a **35-second RPC timeout around `make test`**, repeatedly preventing completion. If that is reproduced as described, repeated inability to complete was not evidence that the model couldn't converge. The acceptance mechanism itself was unable to observe a successful completion condition within its timeout.
+
+So I would revise the previous dogfood interpretation from:
+
+> context growth contributed to drift and looping
+
+to:
+
+> **drift and looping were observed, but their causal relationship to context growth is unresolved because the run was confounded by objective-ingestion and verifier-timeout defects.**
+
+That is exactly what "Evidence Changes What We Know" should look like. The old observation remains real. Its interpretation has changed. 
+
+### The token simulation is useful, but only as a hypothesis filter
+
+I particularly like that the report distinguishes the simulated numbers from correctness evidence.
+
+`75%` and `39–45%` are not performance results. They are estimates of how much historical token material the respective policies would have retained/transmitted on recorded data.
+
+That is enough to tell us the simple approach deserves testing.
+
+It does **not** establish:
+
+`fewer tokens → better context → better reasoning → better engineering outcome`
+
+And the report correctly identifies the potentially nasty countereffect: rebuilding packets could destroy the extremely effective llama.cpp prefix reuse we've already observed.
+
+That's an important systems-level tradeoff.
+
+We could theoretically cut logical context dramatically while making inference **slower** because stable prefixes disappear. Conversely, a slightly larger but highly reusable prefix could outperform a beautifully minimal context packet.
+
+So our actual optimization function isn't token count.
+
+It is closer to:
+
+> **validated engineering outcome + correctness + useful information delivered per inference cost/latency**
+
+with token volume only one explanatory variable.
+
+### I also agree with testing the cheap mechanism first
+
+The report's simplest candidate is much more interesting to me right now than implementing the full turn-specific architecture:
+
+> cap large tool results → preserve raw data behind references → deduplicate exact results → evict old result bodies while retaining references → recall on demand → pin objective → detect stagnation.
+
+That is a small number of understandable mechanisms addressing an **observed** pathology.
+
+If those mechanisms recover most of the benefit, we may discover that sophisticated per-turn packet reconstruction is unnecessary or belongs much later.
+
+That's a good example of disproving architecture by finding a simpler solution.
+
+### But I would modify the proposed experiment
+
+I would **not use the contaminated 30-step dogfood session as the primary correctness experiment**.
+
+It remains valuable as a recorded workload for token/cache replay, because the duplicated payloads actually happened. But it cannot tell us whether a context policy preserved the user's intended objective because the objective wasn't there.
+
+I'd split validation into two layers.
+
+**Layer A: deterministic trace replay.** Use the recorded session to compare recorded, capped/deduplicated, evicted/reference-based and rebuilt policies for transmitted tokens, prefix/cache behavior, TTFT, latency, and context size. This answers the mechanical/economic question.
+
+**Layer B: controlled engineering-task execution.** Use a known objective that is demonstrably delivered intact to the model, a verifier whose timeout doesn't invalidate the task, fixed model/gateway conditions, and enough task duration to exercise context pressure. Compare actual correctness, task success, objective adherence, evidence use, stale-evidence behavior, rereads/recalls, latency and inference economics.
+
+That separation prevents us from asking a broken historical run to prove something it cannot prove.
+
+### Two product defects have also fallen out of the research
+
+The multiline paste issue and verifier timeout aren't merely context-research inconveniences.
+
+They're independently significant Nexus defects.
+
+The first is especially relevant to the UI work happening right now. A sophisticated Ratatui composition experience is pointless if multiline objectives can be silently truncated or dropped somewhere in the submission path. The new TUI should make this behavior impossible or at least observable.
+
+The second is an execution/verification semantics problem. A timeout and a test failure are not equivalent outcomes. The report says the refusal text doesn't distinguish them. If independently reproduced, that should eventually be corrected regardless of what happens with context engineering.
+
+But I **wouldn't interrupt the active UX facelift to start fixing the verifier**. Record both as findings and incorporate multiline integrity into the TUI qualification.
+
+### My disposition
+
+From the evidence shown:
+
+```text
+CONTEXT_ENGINEERING_RESEARCH:          ACCEPTABLE RESEARCH RESULT
+TURN_SPECIFIC_ARCHITECTURE:            NOT ESTABLISHED
+CURRENT CONTEXT WASTE:                 MATERIALLY EVIDENCED
+SIMPLE CONTEXT REDUCTION HYPOTHESIS:   JUSTIFIED FOR EXPERIMENT
+FULL PACKET-REBUILD HYPOTHESIS:        REQUIRES EVIDENCE
+30-STEP DOGFOOD AS CONTEXT EXPERIMENT: INVALID / CONFOUNDED
+CONTEXT-CAUSED DRIFT:                  NOT ESTABLISHED
+MULTILINE INPUT DEFECT:                REPORTED + REPRODUCED BY AGENT
+VERIFIER TIMEOUT DEFECT:               REPORTED
+PREFIX-CACHE TRADEOFF:                 MATERIAL UNKNOWN
+RUNTIME CORRECTNESS EFFECT:            UNKNOWN
+NEXT PHASE:                            CONTROLLED VALIDATION
+```
+
+I would **accept `MORE_EVIDENCE_REQUIRED` rather than send the researcher back to rewrite the report**.
+
+And there's an important strategic consequence: we now have evidence supporting exactly the discipline we discussed before this research began. **Do not implement the grand context architecture yet.**
+
+The next context task should be an experiment, not an architecture phase.
+
+Specifically, I would have it build the minimum instrumentation/replay harness needed to compare **recorded vs capped/deduplicated/evicted-reference vs rebuilt** context under the real gateway, while preserving the contaminated dogfood run strictly as a workload trace. Then create a clean controlled engineering fixture for the correctness comparison.
+
+That experiment has a real chance of telling us that the sophisticated architecture is unnecessary, valuable, harmful, or only valuable under particular workload conditions. Any of those would be a successful research result.
+</pasted_content id="e171">
