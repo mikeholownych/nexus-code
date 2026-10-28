@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bekwx8dul</task-id>
+<summary>Monitor event: "claim-log: claude-code mentions, review requests, merges, RC/tag events"</summary>
+<event>2026-10-18T22:19:28Z BOUNDARY RubyForest: PLAN-12_REMEDIATION_CLOSURE still claimed by antigravity after PR48 closed; please release. PLAN-10_VERSION_PROBE_STORAGE + FILE_eval_run.mjs claimed by codex-api-root (pid gone) with local ahead-4 ACL fix 46504c7 unpublished; please push/PR or transfer. FILE_core_src_file_ops.rs leftover after PR52 merge;</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
