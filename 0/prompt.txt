@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b9u8p0zra</task-id>
+<tool-use-id>toolu_012UhAxVVyyosDuzbCnDwvtH</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/b9u8p0zra.output</output-file>
+<status>completed</status>
+<summary>Background command "Run clean-snapshot baseline build and tests" completed (exit code 0)</summary>
+</task-notification>
