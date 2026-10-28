@@ -1,0 +1,48 @@
+<task-notification>
+<task-id>af177777e3a67b30d</task-id>
+<tool-use-id>toolu_01Hs8edPNq5eXQtQierSKezS</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/af177777e3a67b30d.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review PRs 18-20" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #33 (hardened checks, head 264f625): CHANGES REQUIRED
+
+The main blocker from last time is fixed: after the agent exits, nothing runs git or any other program on its workspace. The harness only walks, stats and reads bytes, and the tree hash is taken before the agent starts. I read `eval/hardened_check.mjs` in full and the `run.mjs` and `isolate.mjs` diff. I ran no tests.
+
+**Blockers**
+
+1. **`hardened_check.mjs:143-155`, modified baseline data files cross over unchecked.**
+   - Any changed baseline file crosses unless its path is in `BLOCKED`. Go `testdata/**/*.golden`, Jest `__snapshots__/*.snap`, `fixtures/`, `snapshots/` and similar are not blocked.
+   - **Failure scenario:** the agent edits a golden or snapshot file so it matches its own, wrong output. The hidden test compares against the agent's file and passes.
+   - Fix: block `testdata/`, `fixtures/`, `__snapshots__/`, `snapshots/`, `golden/`, `*.golden`, `*.snap`, `testutil*/`, `testing/`, `__mocks__/`, `mocks/`, `e2e/`, `*.setup.*` and `setupTests.*`. Prefer a rule that only source-extension files may change, plus a small manifest allowlist.
+
+2. **`hardened_check.mjs:149-153`, the copy writes through symlinks in the fresh workspace.**
+   - `walk` skips symlinked directories in the agent's tree. But the destination write follows symlinks in the fresh tree.
+   - **Failure scenario:** a baseline repository has a symlinked directory or file. The agent replaces it with a real directory or file and puts content there. `mkdirSync` and `writeFileSync` follow the fresh symlink and write outside the check workspace, as the operator.
+   - Fix: before every write or delete, `lstat` each path component under `freshWs` and refuse if any is a symlink. Also refuse any destination that is a symlink or collides with `fresh.links`.
+
+3. **A vacuous pass is still possible when tests are silently skipped.**
+   - `hardened_check.mjs:95-102` lets `Cargo.toml` `[package]` and `[features]` change. `autotests = false`, `build = …` or a changed `default` feature set can make `cargo test` run zero hidden tests and exit 0.
+   - The same class exists for deleted files (point 4). The check passes on exit status alone.
+   - Fix: reject `autotests`, `autobenches`, `build`, `links` and `[features] default` changes. Add a per-task `expectedTests` or canary requirement, so a run that executed fewer tests than the oracle ships counts as a failure.
+
+4. **`hardened_check.mjs:156-161`, deleting baseline config is allowed.**
+   - Deleting `pyproject.toml` removes `[tool.pytest…] filterwarnings = error`, `addopts` and similar, loosening the tests. Deleting `package.json` or `go.mod` has similar effects. `testConfigChange` is never called for deletions.
+   - Fix: refuse deletion of any manifest or config file the `testConfigChange` list recognises. Treat a deleted manifest as a config change.
+
+**Suggestions**
+
+5. **Python shadowing is a deny list.** Names like `packaging.py`, `iniconfig/`, `requests/`, `tomli.py` or `six.py` can shadow pytest's or the oracle's dependencies when they land on `sys.path`.
+   - Fix: allow new `.py` files only inside directories that already exist in the baseline. Alternatively, compute the set of installed top-level module names in the fresh workspace's environment and use it as the shadow list.
+
+6. **`hardened_check.mjs:149-152`, no size limit.** `readFileSync` on an agent-made multi-GiB file runs in the harness and can OOM the whole evaluation. Fix: cap carried files, for example 2 MiB, and discard the rest.
+
+7. **Documented residual.** Legitimate source files run in the same process as the oracle. An import-time monkeypatch of `pytest` or `unittest` in a changed source file cannot be detected here. State this in `eval/README.md` as an accepted limitation, as SWE-bench does.
+
+8. **`SKIP_DIRS`.** Legitimate directories named `vendor/` or `target/` in a source tree silently drop the agent's real changes. That is a fairness cost for those tasks and is worth a line in the README.
+
+9. **`package.json` dependency specs.** The spec regex misses `npm:` aliases. This is harmless because setup is not re-run after the copy, but note it.
+
+The T3 and `countCompactions` readers only parse JSON or stat files, so they do not execute anything on agent state.</result>
+<usage><subagent_tokens>263153</subagent_tokens><tool_uses>2</tool_uses><duration_ms>78705</duration_ms></usage>
+</task-notification>
