@@ -658,6 +658,43 @@ test("RED cannot author a runner the verifier command executes directly", { time
   }
 });
 
+test("a manifest that already existed is not admitted as a RED-supplied definition", { timeout: 90_000 }, async () => {
+  const repo = makeRepo({
+    "src/value.js": "module.exports = 1;\n",
+    "package.json": JSON.stringify({ name: "x" }, null, 2) + "\n",
+  });
+  const gw = await startGateway((n): Reply => {
+    if (n === 1) return { kind: "tools", calls: [{ name: "write_file", args: { path: "test/red.test.js", content: "const test = require('node:test');\nconst assert = require('node:assert');\nconst value = require('../src/value.js');\ntest('value', () => assert.equal(value, 2));\n" } }] };
+    return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "RED" } }] };
+  });
+  const executor = new AgentWorkUnitExecutor({
+    baseConfig: {
+      endpoint: gw.url,
+      model: "m",
+      workspace: repo,
+      shell: "bash",
+      maxSteps: 6,
+      temperature: 0,
+      approvalMode: "auto",
+      fullAccess: true,
+      authoritativeVerifierCommand: "env -u NODE_TEST_CONTEXT node --test test/red.test.js",
+    } as any,
+    tdd: true,
+  });
+  try {
+    const outcome = await executor.run(
+      unit({ prompt: "Make value.js export 2, test-first." }),
+      { id: "primary", endpoint: gw.url, provider: new URL(gw.url).origin, model: "m", capabilities: ["tools"], rank: 0 },
+      context()
+    );
+    assert.equal(outcome.kind, "failed", JSON.stringify(outcome));
+    if (outcome.kind === "failed") assert.match(outcome.reason, /verification oracle/i);
+  } finally {
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("a failing verifier is still rejected without the tddRed boundary", { timeout: 60_000 }, async () => {
   const repo = makeRepo({ "src/value.js": "module.exports = 1;\n" });
   const gw = await startGateway((n): Reply => {

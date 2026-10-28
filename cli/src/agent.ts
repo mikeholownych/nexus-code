@@ -1312,7 +1312,10 @@ export class AutonomousAgent {
       const trusted = new Set((baseline.trustedDeliverables ?? []).map(rel));
       for (const key of currentVerifier.keys()) {
         if (key.startsWith("\0") || reported.has(key) || trusted.has(key)) continue;
-        return { ok: false, reason: `RED supplied ${key}, which the verifier depends on` };
+        return {
+          ok: false,
+          reason: `${key} would enter the trusted verifier definition but is neither a reported test nor a declared deliverable`,
+        };
       }
     }
     const preVerifier = baseline.verifier;

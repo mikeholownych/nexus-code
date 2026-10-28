@@ -62,17 +62,24 @@ scheduler recovery path, not the TDD failure path.
 - A refusal is terminal for the unit rather than retryable: a retry or revise resumes the same task, where no fresh
   baseline can be captured, so it would loop. The RED edits stay in the workspace; the operator restores the files named
   in the decision and starts a new operation.
+- In a repository with no test file, the allowance ends as soon as any non-marker file is in the verifier definition: a
+  pre-existing manifest or config, or an undeclared helper the first test imports, refuses the rebase. Declare the
+  deliverable (or establish the verifier) before RED if the unit needs one of those.
+- The guard watches the verifier definition, never the command's extra flags: an operator who points the verifier at a
+  file the agent writes (for example `node --test --import ./test/loader.mjs`) makes the model part of the oracle. The
+  model cannot add such flags itself, but the configuration is the operator's to review.
 - The sidecar is not deleted when the unit completes; it is keyed by task id and prompt hash, so it is inert for a new
   unit and removed on restart. `testHashes` compares uncommitted candidate changes, so committing the RED test outside
   the harness makes the evidence stale and reruns RED.
 - TDD requires a Git workspace (the test-change evidence is a candidate diff against HEAD). A non-Git operation falls
   back to failing the RED phase. Automatic test generation, coverage guidance and mutation scoring are not included.
-- Tests: `cli/test/tdd_work_units.test.ts` (18 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
+- Tests: `cli/test/tdd_work_units.test.ts` (19 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
   sidecar, stale sidecar after a revise, restart, role exclusion, a real-agent RED turn, a real RED→GREEN unit where the
   first test is added to a test-less repo, RED narrowing the verifier refused, RED creating a verifier where none existed
   refused, RED modifying an existing test refused, a verifier definition the baseline could not capture refused, a
   shell-authored manifest refused, a git-hidden shell-authored manifest refused, a RED-authored runner the command
-  executes directly refused, and a failing `task_completed` still rejected without `tddRed`). The real-agent cases use the
+  executes directly refused, a pre-existing manifest refused as the definition, and a failing `task_completed` still
+  rejected without `tddRed`). The real-agent cases use the
   deterministic fixture gateway; no external inference is required. A `--tdd` CLI flag is a
   follow-up once the operation option surface is free.
 - Not included: automatic test generation from requirements, coverage-guided exploration, and mutation/regression
