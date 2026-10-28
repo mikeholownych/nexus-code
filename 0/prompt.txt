@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bv41wtdri</task-id>
+<tool-use-id>toolu_01PmBEeRCSjvVzpCEfkFQJGV</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/26300d54-a7ac-4f4a-abd6-dea8cdc072cd/tasks/bv41wtdri.output</output-file>
+<status>completed</status>
+<summary>Background command "Run related suites at #280 head and base" completed (exit code 0)</summary>
+</task-notification>
