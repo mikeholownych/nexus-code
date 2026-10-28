@@ -1,0 +1,60 @@
+<task-notification>
+<task-id>af177777e3a67b30d</task-id>
+<tool-use-id>toolu_016GyeU8LKyU64sMAUxB4ZNH</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/af177777e3a67b30d.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review PRs 18-20" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #27 (T3 long-task harness): CHANGES REQUIRED
+
+I did not run anything, including the new test. All findings are from reading the diff, `sidecar.ts`, `protocol.ts`, `session.ts`, `state.ts` and `package-linux.sh`.
+
+**Blockers**
+
+1. **`eval/t3.mjs:90-98` (driver), deferred steering corrupts the probe.**
+   - The sidecar answers a steer that arrives while the turn is finishing with `deferred`. It then starts a follow-up turn with no idle state (`sidecar.ts:387-390`), and that turn emits its own `turn.result`.
+   - The driver treats the first `turn.result` as the objective's and sends the probe immediately. The sidecar rejects it with `BUSY` (`sidecar.ts:316-320`).
+   - The follow-up's own `turn.result` then arrives in `probe` phase and is taken as the probe result. The follow-up's `assistant.delta` text becomes `probeText`.
+   - The outcome is `probeUnanswered`, a gate FAIL. This is fail-closed, but it makes a normal steering race fail the workload. Any steer sent near the end of the turn can trigger it.
+   - Fix: after `turn.result`, if any steer ack is `deferred` and not yet followed by `applied` and its `turn.result`, wait for that result. Also retry the probe on `BUSY`. Count `steps` and the objective's `turn.result` from the first turn only.
+
+2. **`eval/t3.mjs:176`, false-absence can be gamed or measured on a mutated workspace.**
+   - Answering "present" for every fact gives `falseAbsences = 0` and `falsePresence` is not gated. `eval/T3.md` says so explicitly.
+   - The probe turn has tools and `--yes`, so the agent can create or delete the fact files while answering. `exists` is read after the probe. The probe also lets the agent re-inspect the filesystem, so it tests honesty, not memory across compactions.
+   - Fix:
+     - Record `exists` for each fact, and the constraint inputs, when the objective's `turn.result` arrives, before the probe is sent.
+     - Gate `falsePresence` as well, or make every fact set include mandatory absent facts and require a minimum correct-absent rate.
+     - State plainly in `eval/T3.md` that the probe re-inspects.
+
+3. **`eval/score.mjs`, the gate does not enforce the 8×5 shape.**
+   - With a single eligible run, `ineligible === 0`, `falseAbsences === 0` and `steeringRate &gt;= 0.95` yield PASS. REQ-QUAL-109 needs 8 tasks × 5 runs.
+   - Fix: require distinct T3 task ids &gt;= 8 and &gt;= 5 runs each (or a `--expect-tasks`/`--expect-runs` parameter recorded in the manifest), otherwise `gate = FAIL`.
+   - Also, `steeringItems` excludes records with no `t3` result. That is fail-closed only because the ineligible count already fails the gate. Use the task's declared steering count, so the printed rate cannot read as more than the gate truly measures.
+
+**Suggestions**
+
+4. **`eval/t3.mjs:170`, the probe parse is greedy.** `/\{[\s\S]*\}/` spans from the first `{` to the last `}` across the whole probe turn's narration, including text between tool calls. Braces in narration or two JSON objects make the parse fail.
+   - Fix: parse the last balanced `{…}` in the final assistant message, or use `model_summary` or `turn.line`. Reject duplicate or extra keys.
+
+5. **Steering can pass by inaction.** "Applied" plus a `file-unchanged`, `file-absent` or `command` constraint needs no behaviour change, and `file-absent` has no precondition. `eval/T3.md` leaves "must not be satisfiable by doing nothing" to the author.
+   - Fix: add schema fields so the validator can check it. For `file-absent`, require a `createdBefore` condition or a baseline `exists` flag (`mustExistAtSteer`); `file-unchanged` should name a path the objective's reference diff touches. Verify at the steer point that the constraint was violable.
+
+6. **`eval/t3.mjs:129` (`countCompactions`):**
+   - The counting is sound against the real format. `sessions/&lt;id&gt;.json` and `tasks/*.json` both carry `history.committedCompactions`, and the archive is `&lt;id&gt;.history.jsonl`. The Set union does not double count.
+   - The files are in the candidate-writable HOME, so a model could forge ids. The model controls only the sidecar's tools, so this matters only in an adversarial setting. Fix: read from `.nexus/sessions` and `.nexus/tasks` only, and require `compactionId` to appear in both a session record and its own archive file.
+   - A full recursive walk of HOME can also read package caches. Restrict to those two directories.
+
+7. **`eval/run.mjs`, T3 branch (about line 417):** the T3 path bypasses the `bin/nexus` launcher.
+   - `NEXUS_HOME` is computed the same way (`dirname dirname realpath`), so that part is correct.
+   - But `/usr/bin/env` is now the runtime executable, and `sandboxRuntimePaths` no longer includes the package. It works only if the package lives under `sandboxRuntimeRoots`. The qualification host's `/opt/nexus-qual` satisfies this. Add an explicit check with a clear error.
+   - The launcher's `NODE_EXTRA_CA_CERTS` handling is skipped. That is acceptable, because the proxy is local.
+
+8. **`eval/agent_sandbox.mjs`:**
+   - Backward compatibility holds. A non-T3 payload with no newline resolves on `end`. A payload line is consumed and not forwarded. Only the protocol lines reach the agent, which is intended.
+   - Per-chunk `toString("utf8")` can split a multibyte character at a chunk boundary. Use a `StringDecoder` or buffer bytes.
+
+**Controls preserved.** The sandbox, `runAs`, resource contract, proxy token, containment checks and identity probe all remain on the same path. The 50 MB cap applies only with a driver, and the `t3.mjs` source is hashed into the harness identity.
+
+**§6.3/6.4.** I did not compare `eval/T3.md` against §6.3/6.4 line by line. It does match the code, except that the "never dropped from the denominator" claim about steering ignores the exclusion in finding 3.</result>
+<usage><subagent_tokens>183423</subagent_tokens><tool_uses>13</tool_uses><duration_ms>144417</duration_ms></usage>
+</task-notification>
