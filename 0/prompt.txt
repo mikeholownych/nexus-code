@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bus3w25za</task-id>
+<tool-use-id>toolu_01EKq1QCs9mg4decjhy4BHVb</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/bus3w25za.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun 310-step progress test" completed (exit code 0)</summary>
+</task-notification>
