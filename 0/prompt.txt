@@ -1,0 +1,82 @@
+<pasted_content id="e171">
+This is a materially better Nexus than the one Claude reviewed, and the before/after evidence is unusually clean. I would accept the four A findings as **resolved sufficiently to proceed to reassessment**, not yet as general dogfooding acceptance.
+
+The most important improvement is architectural rather than the individual bug fixes: Nexus now has an explicit semantic distinction between **execution**, **engineering outcome**, and **acceptance**. That gives the rest of the product something truthful to build upon. `COMPLETED / UNVERIFIED` is now a legitimate result rather than being forced into either success or failure, and `VERIFIED` cannot be asserted by a caller. That's exactly the separation we wanted.
+
+The regression results also attack the original failures directly:
+
+| Scenario | Previous behavior | New behavior |
+|---|---|---|
+| HTTP 500 | success / exit 0 | `FAILED` / exit 1 |
+| Step limit | success / exit 0 | `LIMIT_REACHED` / exit 1 |
+| Truncated stream | partial output accepted | `FAILED` |
+| Provider error frame | ignored | `FAILED` |
+| Fake validation command | cleared verification | cannot clear it |
+| First Ctrl-C | further mutations continued | no new mutations, prompt returns |
+| Real gateway read-only turn | not part of remediation proof | `COMPLETED / NOT_REQUIRED`, exit 0 |
+
+The stream change is especially important. Requiring positive protocol completion evidence such as `finish_reason` or `[DONE]` changes the semantics from **“absence of another byte means finished”** to **“the provider positively demonstrated completion.”** Retaining partial text for diagnostics without promoting it to an answer is the right boundary.
+
+Likewise, removing command-text validation heuristics closes an ugly epistemic hole. Nexus now apparently requires the selected verifier to actually execute successfully before it can produce `VERIFIED`. A repository without an applicable verifier becoming:
+
+`COMPLETED / UNVERIFIED / NO_APPLICABLE_VERIFIER`
+
+is considerably more useful than either fabricating validation or refusing to do useful work.
+
+### The cancellation limitation is acceptable for this slice
+
+Claude reports that an already executing Rust-daemon tool call is awaited because the daemon has no cancellation verb. That means `INTERRUPTIBLE_TURNS: QUALIFIED` needs to be understood within its stated contract:
+
+> cancellation prevents **new** inference/tool dispatch and returns control after the already-issued operation settles.
+
+It does not mean arbitrary external effects can be instantaneously terminated.
+
+That's honest and operationally useful. Later we can decide whether the daemon needs cooperative cancellation. It isn't necessary to reopen this slice merely to obtain stronger cancellation semantics.
+
+### There is one finding I would elevate for the reassessment
+
+This one:
+
+> A turn can read `VERIFIED` for the candidate while the dirty-root merge is refused.
+
+That's exactly the kind of semantic inconsistency we just spent this slice eliminating.
+
+Verification of the **candidate** and successful integration of that candidate into the **target worktree** are different claims. So `VERIFIED` can legitimately describe the candidate while integration failed. The problem is only if the product projects that candidate verification as successful completion of the larger engineering objective.
+
+The reassessment should explicitly test this distinction:
+
+```text
+candidate outcome: VERIFIED
+integration: REFUSED
+overall objective: NOT COMPLETED
+reason: TARGET_WORKTREE_DIRTY
+```
+
+We shouldn't solve it preemptively from the terminal report. We should see how the newly structured semantics actually propagate through the complete journey.
+
+### And now I would reassess, rather than immediately fix B findings
+
+Claude followed the instruction correctly:
+
+`NEXT_DOGFOODING_READINESS: REASSESS`
+
+That is the next move.
+
+Importantly, I would **not ask it to reread its original review and mechanically check off the remaining B/C findings**. Now that the lifecycle semantics have changed, some previous findings may have changed relevance, some may disappear, and new integration problems may become visible.
+
+The reassessment should be behavioral:
+
+> **Can I now sit down at Nexus and perform sustained, supervised real engineering without losing trust in what it tells me or losing control of the session?**
+
+And this time I'd permit a somewhat richer interaction with the real local inference gateway. The deterministic harness has already done its job for the failure semantics. We're approaching the point where the thing we need to qualify is **Nexus as experienced by its operator**.
+
+I also wouldn't jump straight to unattended autonomy. There's a useful intermediate target:
+
+> **supervised dogfooding**
+
+Several known limitations, such as typed-ahead input loss, `/tui` keystroke leakage and slash-command crashes, may be quite tolerable initially if the operator is present and the engineering state remains truthful and recoverable.
+
+If supervised dogfooding passes, **that's when I would seriously consider starting to use Nexus to improve Nexus.**
+
+That would be an important transition. The next tranche of polish wouldn't be based primarily on synthetic speculation. We'd be finding it by actually living with the product.
+</pasted_content id="e171">
