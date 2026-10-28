@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bu8i6223u</task-id>
+<tool-use-id>toolu_01TJ7TPJYXetbhn2BE2JAsUs</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/bu8i6223u.output</output-file>
+<status>completed</status>
+<summary>Background command "Build and test qual-host-2 with temporary tmpfs" completed (exit code 0)</summary>
+</task-notification>
