@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>af177777e3a67b30d</task-id>
+<tool-use-id>toolu_01APY5ydAKAxWF236SSeJsTK</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/af177777e3a67b30d.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review PRs 18-20" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #33 (hardened checks, latest head): ACCEPT WITH NITS
+
+I read the new `tomlSections`, `changedTomlSection`, `testConfigChange`, `applyAgentChanges` and the walk and apply code. I ran no tests.
+
+All four fixes from this round hold.
+- **TOML header misparse:**
+  - `tomlSections` splits at every line whose first non-blank character is `[`, and keys sections by the exact trimmed text. A bare `[[test]]`, a commented header, an indented header and a bracket line inside a multi-line string all produce a key that is not in the allowlist, so a changed section refuses the checks.
+  - The old attribution trick of hiding `[tool.pytest.ini_options] # x` or `[[test]]` under `[project]` or `[dependencies]` no longer works.
+  - The dependency body scan now also refuses `registry =`.
+- **`go.mod`:** with require blocks and lines stripped, everything else must be byte-identical. That covers an entry added inside an existing `replace ( … )` block. I looked for a way to hide a directive inside the stripped region and found none, because Go itself rejects a non-require line inside a require block.
+- **New manifests** refuse before any write (`:180`).
+- **New Python files** need `__init__.py` already present in the baseline directory. A new `src/packaging.py` is now discarded, because `src/` has no `__init__.py`.
+
+Remaining nits, none blocking:
+1. **`hardened_check.mjs:114-117`, the Cargo source-scan covers unchanged lines.**
+   - It scans the whole new `[dependencies*]` text for `path =`, `git =` and `registry =`. A baseline workspace that legitimately has a path dependency therefore refuses every dependency edit, even one unrelated to the path entry.
+   - Fail-closed, but a fairness cost for those tasks.
+   - Fix: scan only lines that differ from the baseline.
+2. **The `BLOCKED` list is still a pattern list for baseline files that may be modified.** Name variants it misses:
+   - `karma.conf.*`, `jest-preset.js`, `jest.preset.*`, `vitest.workspace.*`, `globalSetup*`, `setup-tests.*`, `test-setup.*`;
+   - Go helper directories named `testhelper(s)`, `testenv`, `testlib`;
+   - Python `testing.py`/`_testing.py` helper modules next to the code.
+   - **Scenario:** a modified baseline helper imported by the hidden test changes its behaviour. That is genuine source on the shared-process residual, so it is acceptable, but widen the patterns to `test` plus `setup|helper|util|env|lib|fixture` as path segments.
+3. **TOML duplicate keys.** If a file defines the same header twice, the two bodies merge in the map. Real TOML parsers reject duplicates, so the build fails and the agent hurts itself. No action needed.
+4. **Documented residuals.** These remain by design and are in the README: zero-test vacuous pass, import-time monkeypatching by changed source, and the `vendor/` and `target/` skip costs. The custodian-side expected-test count is the real fix for the first. Consider making it a pre-qualification checklist item rather than a note.
+
+Net: I found no remaining route by which agent state changes the checks other than through carried source and manifest edits.</result>
+<usage><subagent_tokens>282584</subagent_tokens><tool_uses>1</tool_uses><duration_ms>40512</duration_ms></usage>
+</task-notification>
