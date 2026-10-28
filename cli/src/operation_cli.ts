@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import pc from "picocolors";
-import { buildConfig } from "./config.js";
+import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
@@ -124,7 +124,8 @@ export function registerOperationCommands(program: Command): void {
       const id = spec.id ?? `op-${randomUUID().slice(0, 8)}`;
       const createdAt = Date.now();
       const identity = createOperationAccountIdentity(credentialStorageHome());
-      const state = newOperation(id, spec.objective, spec.units, normalizeResources(spec, config, identity), createdAt, spec.policy);
+      const policy = mergeOperationPolicy(config.operationPolicy, spec.policy);
+      const state = newOperation(id, spec.objective, spec.units, normalizeResources(spec, config, identity), createdAt, policy);
       if (!options.json) console.log(pc.bold(`Operation ${state.id}`) + pc.dim(` — resume after a restart with: nexus operation resume ${state.id}`));
       await drive(state, config, store, Boolean(options.discover || spec.discoverCatalog), Boolean(options.json));
     });

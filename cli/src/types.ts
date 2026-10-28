@@ -113,6 +113,13 @@ export interface HarnessConfig {
   surface?: "repl" | "tui" | "headless" | string;
   reasoningEffort?: string;  // OpenAI Responses reasoning effort; enables owner-scoped reasoning replay
   anthropicThinkingBudget?: number; // Anthropic extended-thinking budget tokens; enables signed thinking replay
+  /** Operator-owned defaults for durable operation scheduling; operation-spec policy values override these defaults. */
+  operationPolicy?: Partial<{
+    maxWaitMs: number;
+    unknownResumeBudget: number;
+    maxRunsPerUnit: number;
+    minWaitMs: number;
+  }>;
 }
 
 export interface ExecutionResult {

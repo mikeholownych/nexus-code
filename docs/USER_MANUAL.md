@@ -357,6 +357,44 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 
 ## 4. Safety, Compliance & Resilience
 
+### Durable operation scheduling policy
+
+Operation defaults can be set in the operator-owned `~/.config/nexus/config.json`, the legacy `~/.config/nexus/config.env`, or the operator's shell environment. The initial structured config schema supports `operationPolicy`:
+
+```json
+{
+  "version": 1,
+  "operationPolicy": {
+    "maxWaitMs": 43200000,
+    "unknownResumeBudget": 2,
+    "maxRunsPerUnit": 25,
+    "minWaitMs": 1000
+  }
+}
+```
+
+The file is read only from the operator's home directory; a repository-level `nexus.config.json` cannot set operator policy. Unsupported fields, invalid values, symlinks and files larger than 64 KiB are rejected. Values resolve from the shell environment first, then `config.json`, then `config.env`, then built-in defaults. Existing `config.env` installations remain supported.
+
+The equivalent environment settings are:
+
+```sh
+NEXUS_OPERATION_MAX_WAIT_MS=43200000
+NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET=2
+NEXUS_OPERATION_MAX_RUNS_PER_UNIT=25
+NEXUS_OPERATION_MIN_WAIT_MS=1000
+```
+
+These values configure the maximum time an operation waits without runnable work, the automatic replay budget after
+an unknown execution outcome, the per-unit run limit, and the minimum delay between wait wake-ups.
+Values must be safe integers; wait values and the run limit must be positive, while the unknown-resume budget may be
+zero. Each wait value is capped at 2,147,483,647 ms, the maximum delay supported by Node.js timers, and the minimum
+wait may not exceed the maximum wait. Invalid settings stop operation startup with the setting named in the error.
+Project `.env` files cannot set these operator-owned values. A policy explicitly supplied in an operation
+specification overrides the configured defaults for that operation, subject to the same wait-interval consistency
+check. Invalid effective settings are reported when an operation is created; a specification override can repair
+otherwise contradictory operator wait defaults for that operation. Already persisted operations keep their stored
+policy when resumed.
+
 - **Workspace Symlink Boundary Confinement**: Native Rust canonicalization verifies that neither relative paths nor symlinks can escape the workspace jail directory.
 - **Configurable Security Policy (`.nexus-security.json`)**: Declare repository-specific blocked shell commands, protected files (`.git`, `.env*`, keys), and allowed outbound network domains. Protected-path checks cover case-insensitive variants, `.env*` prefixes, and canonical targets across all file read/write/edit tools; for `run_command` path protection is advisory because shell commands execute in the host shell environment.
 - **Dry-Run & Read-Only Modes (REQ-SEC-104)**:

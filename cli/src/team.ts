@@ -13,6 +13,7 @@ import { AgentWorkUnitExecutor, driveOperation, OperationStore, resourcesFromCon
 import type { RecoveryClock } from "./core/provider_recovery.js";
 import type { ResourceDescriptor } from "./core/resources.js";
 import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, type AgentRole } from "./core/roles.js";
+import { mergeOperationPolicy } from "./config.js";
 import type { HarnessConfig } from "./types.js";
 
 export { ROLE_PROFILES, ROLE_REQUIREMENTS, type AgentRole, type RoleProfile } from "./core/roles.js";
@@ -78,7 +79,8 @@ export class TeamOrchestrator {
   plan(target: TeamTarget, objective: string): DurableOperationState {
     const now = this.opts.clock?.now() ?? Date.now();
     const resources = this.opts.resources ?? resourcesFromConfig(this.config);
-    return newOperation(this.opts.id ?? `team-${randomUUID().slice(0, 8)}`, objective, teamUnits(target, objective, this.opts), resources, now);
+    const policy = mergeOperationPolicy(this.config.operationPolicy, undefined);
+    return newOperation(this.opts.id ?? `team-${randomUUID().slice(0, 8)}`, objective, teamUnits(target, objective, this.opts), resources, now, policy);
   }
 
   async run(target: TeamTarget, objective: string): Promise<TeamOutcome> {

@@ -191,6 +191,21 @@ const sres = (id: string, o: Partial<ResourceDescriptor> = {}): ResourceDescript
 // ---------------------------------------------------------------- truthful outcome
 
 describe("/team truthful outcome", () => {
+  test("operator operation policy is persisted when planning a team operation", async () => {
+    const gw = await startGateway(byUnit);
+    await withTeam([gw], async (env) => {
+      const state = env.team([resource("only", gw)]).plan("researcher", "survey notes.txt");
+      assert.deepEqual(state.policy, {
+        maxWaitMs: 3_600_000,
+        unknownResumeBudget: 0,
+        maxRunsPerUnit: 8,
+        minWaitMs: 250,
+      });
+    }, {
+      operationPolicy: { maxWaitMs: 3_600_000, unknownResumeBudget: 0, maxRunsPerUnit: 8, minWaitMs: 250 },
+    });
+  });
+
   test("1. a role whose inference is rejected is not reported as a successful role (reproduces the old defect)", async () => {
     const gw = await startGateway(() => rejected);
     await withSlash(gw, async (config) => {
