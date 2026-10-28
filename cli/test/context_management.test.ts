@@ -444,6 +444,37 @@ test("bundle hashes cannot collide across journal boundaries", () => {
   }
 });
 
+test("an identical checkpoint reuses its existing bundle without rewriting it", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  const originalRename = fs.renameSync;
+  try {
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "original-journal\n", { durable: true });
+    const first = createContextCheckpoint(store.manager, state, "u1", "duplicate");
+    const bundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "duplicate", first.sha256);
+    let failed = false;
+    (fs as any).renameSync = (from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to) === path.join(bundle, "messages.jsonl")) {
+        failed = true;
+        throw new Error("duplicate bundle write must not happen");
+      }
+      return originalRename(from, to);
+    };
+    syncBuiltinESMExports();
+
+    const duplicate = createContextCheckpoint(store.manager, state, "u1", "duplicate");
+
+    assert.equal(duplicate.sha256, first.sha256);
+    assert.equal(failed, false);
+    assert.equal(fs.readFileSync(path.join(bundle, "messages.jsonl"), "utf8"), "original-journal\n");
+  } finally {
+    fs.renameSync = originalRename;
+    syncBuiltinESMExports();
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("restore removes a journal created after the checkpoint", () => {
   const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
   try {

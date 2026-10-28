@@ -116,9 +116,25 @@ export function createContextCheckpoint(
   const files: ContextCheckpointFile[] = [];
   for (const entry of BUNDLE_FILES) {
     const data = contents.get(entry.name);
-    if (!data) continue;
-    writePrivateFile(path.join(bundle, entry.file), data, { durable: true });
-    files.push({ name: entry.name, bytes: data.length, sha256: digest(data) });
+    if (data) files.push({ name: entry.name, bytes: data.length, sha256: digest(data) });
+  }
+  if (fs.existsSync(bundle)) {
+    for (const entry of BUNDLE_FILES) {
+      const target = path.join(bundle, entry.file);
+      const data = contents.get(entry.name);
+      if (data) {
+        if (!fs.existsSync(target) || !fs.readFileSync(target).equals(data)) {
+          throw new ContextCheckpointError(`checkpoint bundle has conflicting contents: ${bundle}`);
+        }
+      } else if (fs.existsSync(target)) {
+        throw new ContextCheckpointError(`checkpoint bundle has conflicting contents: ${bundle}`);
+      }
+    }
+  } else {
+    for (const entry of BUNDLE_FILES) {
+      const data = contents.get(entry.name);
+      if (data) writePrivateFile(path.join(bundle, entry.file), data, { durable: true });
+    }
   }
 
   const record: ContextCheckpoint = {
