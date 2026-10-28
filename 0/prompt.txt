@@ -1,0 +1,161 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - **Initial pasted directive.** The user said: "Resume your Nexus Code v1.0.0 work after an unexpected power failure. The existing objective and approvals remain in force: complete the accepted plan, remediation, integration, qualification, independent and required human acceptance, and verified public v1.0.0 publication. Publication is authorized once every required gate passes. Do not request those approvals again." It required the following:
+     - Re-establish state.
+     - Recover ownership.
+     - Coordinate with other agents.
+     - Preserve uncommitted and unrelated work.
+     - Never take another agent's work without handoff.
+     - Distinguish process-death tests from the actual power failure.
+     - Isolate HOME/XDG.
+     - Take SUITE/GATEWAY/CLOUD claims as required.
+     - Never read held-out payloads, expose credentials, weaken thresholds, or convert infrastructure failures into passes.
+     - Keep implemented, tested, accepted, RC-qualified and published statuses separate.
+   - **Persistent loop.** The user later asked for "a persistent loop to ensure continued progress. the goal is to ensure that v1.0.0 gets to release status." The /loop prompt is: "Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker."
+   - **Specific user requests (all completed):**
+     - Replace bwrap on mike-dev with the pinned 0.13.1 build.
+     - Take over PR #56.
+     - Note the Harness² review for after v1 and open an issue: issue #69.
+     - Close PR #38.
+     - Explain what's blocked on egress/durable, then the "approved" takeover.
+     - Dismiss the common.ts false positive.
+     - Perform outstanding reviews on open PRs.
+   - **User clarifications:**
+     - "no v1 should be gateway preferred.. with cloud inference models available".
+     - "contest is over".
+
+2. Key Technical Concepts:
+   - **Multi-agent coordination.** The shared log is `/home/mike/nexus-code/.git/nexus-claims.log`. Claims live in `.git/nexus-claims/<SLICE|FILE_*|SUITE>/owner.json`. Ownership changes need handoff, or an owner directive with history preserved.
+   - **Review discipline.** Independent review is bound to the exact head SHA. Verify the full SHA exists with `git cat-file`. Use stable patch-ids (`git diff … | git patch-id --stable`) for carry-forward after rebases or merges.
+   - **Requirements gates.**
+     - Pre-RC gate: `node scripts/check_requirements.mjs --enforce`, run in a clean detached worktree with isolated HOME. Current result: 123 rows, 109 tested, 5 partial, 2 implemented, 7 open; 11 rows deferred to exact-RC.
+     - Deferred rows: AGT-002, AGT-010, PRV-003, REL-005, AGT-110, PRV-111, REL-114, QUAL-101, QUAL-107, QUAL-108, QUAL-109.
+     - Exact-RC mode uses `--qualification-record`/`--rc-artifact`/`--evidence-root`. After PR #92, criterion evidence must be JSON with top-level sourceCommit/rcTag/artifactSha256.
+   - **RC lifecycle**, per `/home/mike/nexus-evidence/rc-lifecycle-preparation-k66bo3o3/CHECKLIST.md`:
+     1. Versioning slice: `scripts/sync-version.mjs` plus `docs/releases/<RC-tag>.md`.
+     2. Independent review.
+     3. Merge integration into main via PR #8. release.yml requires the tag commit to be an ancestor of main, and repro.yml exists only on integration.
+     4. Exact-source CI plus enforce on the versioned commit.
+     5. Tag the RC once, then run artifact gates (ACC-SUP-01/02/03/06/08), cross-runner repro (ubuntu-22.04 and 24.04), and installed-RC qualification.
+     6. G6 exact-RC record.
+     7. Version-only stable child, draft, then publish.
+   - **Held-out evaluation.** The corpus is in legacy hidden.dir format, but eval/validate.mjs requires blackbox-v1. The custodian must resolve this. The corpus is at /home/mike/nexus-heldout-v2 (root 0700); never read it.
+   - **Eval sandbox.**
+     - bubblewrap runs under a nexus-eval account (uid 985).
+     - Sudoers allows only bwrap.
+     - The capped tmpfs is /srv/nexus-qual/ws: 20 GiB, 0711, uid 1000.
+     - CI fixture recipe: 128 MiB 0711 tmpfs, 0711 /opt runtime root, NEXUS_EVAL_TEST_WORKSPACE_ROOT/RUNTIME_ROOT, NEXUS_EVAL_TEST_RUN_AS=nobody, plus `cargo build --release --locked` of core/harness-core.
+   - **zsh gotchas.**
+     - `$H:cli` triggers a modifier; use `${H}`.
+     - `$p[^0-9]` is an array subscript; use `${p}`.
+     - `rm -r $C/$d` is blocked by a safety check; use `"${C:?}/${d:?}"`.
+   - **rtk proxy.** The CLI wrapper truncates output; use `rtk proxy` for raw grep, tail and awk.
+   - **Inference.** Gateway-preferred local plus first-class cloud providers (DEC-06/16), and standalone must work (REQ-PRV-003).
+
+3. Files and Code Sections:
+   - **eval/host/bubblewrap.mjs** (new, PR #67, merged a337a77). It exports `MIN_BUBBLEWRAP = [0,12,0]`; `bubblewrapVersionProblem(versionOutput)` parses `/^bubblewrap\s+(\d+)\.(\d+)\.(\d+)\s*$/` and fails closed. eval/host/validate.mjs gained the check "Bubblewrap is at least the minimum patched release". Also changed: the README line, and the new test cli/test/eval_host_bubblewrap.test.ts.
+   - **Host change on mike-dev:**
+     - `dpkg-divert --local --rename --divert /usr/bin/bwrap.distrib --add /usr/bin/bwrap`.
+     - Installed 0.13.1; binary sha256 0b1c0e0b0e2213ac1cb36146666ce76260d2487bd0d512ac566eaa790a9cbdaf.
+     - Rollback: `sudo rm /usr/bin/bwrap && sudo dpkg-divert --local --rename --remove /usr/bin/bwrap`.
+     - Evidence: /var/tmp/nexus-evidence/host-preflight-a337a77-bwrap0.13.1/.
+   - **PR #56** (merged 3d6bfb0, head 804de582):
+     - eval/isolate.mjs: reverted the chown/sudo path to integration's ACL path. Added `mountSourceOverlapProblem(sources, protectedCorpusPaths)`. `isolatedProcessArgv` gained a `protectedCorpusPaths=[]` param and checks every `--bind`/`--ro-bind` source.
+     - eval/run.mjs: `fs.rmSync(probeWorkspace…)` with no sudo fallback; passes `protectedCorpusPaths: protectedCorpusPathsForRun()`.
+     - cli/test/eval_integrity.test.ts: restores mode 0711; new test "executable probes refuse bind sources that overlap protected corpus material".
+     - cli/test/eval_harness.test.ts: the fixture agent moved to a separate mkdtemp `agentDir`.
+   - **PR #88** (squash-merged 3f85dbd): cli/test/eval_integrity.test.ts probes now read `process.argv.slice(1)` instead of `JSON.stringify` interpolation. This cleared 6 js/bad-code-sanitization alerts.
+   - **PR #89** (merged 82f1666c, head 7bb359d5c4ddf82c1fdb4e01419c41b32fae6d81):
+     - cli/src/core/egress.ts: `function trimTrailingDelimiters(value){let end=value.length;while(end>0&&\`"';,\`.includes(value[end-1]))end--;return value.slice(0,end);}` replaces `.replace(/["';,]+$/,"")`. Captures are bounded {8,96}, so this was not practically exploitable.
+     - cli/test/durable_continuity.test.ts: `randomInt(i + 1)`.
+     - cli/test/egress.test.ts: new test "trailing quote, semicolon and comma delimiters are stripped from a contextual value".
+   - **CodeQL alert #34** (protocols/common.ts:112, stateDigest SHA-256 integrity digest): dismissed as a false positive.
+   - **Memory files** (/home/mike/.claude/projects/-home-mike-nexus-code/memory/):
+     - v1-plan-and-owner-constraints.md: updated for gateway-preferred inference and the contest being over.
+     - post-v1-review-harness2.md: issue #69.
+     - recheck-claims-after-pause.md: new rule to re-read owner.json and look for OWNER_DIRECTIVE_TRANSFER before any merge, push or edit after a pause.
+     - MEMORY.md index updated.
+   - **Most recent: PR #101 client_lease.ts diff** (merged 8f4504e):
+     ```
+     -      if (index + 1 >= args.length) return "client";
+     +      if (index + 1 >= args.length || (arg === "--restore-backup" && args[index + 1].startsWith("-"))) return "client";
+     ```
+     Antigravity independently accepted it at head 4baf17e55d684563dbfdb0cb3f2406a68f945236 (comment 6316808919). CI is SUCCESS.
+
+4. Errors and fixes:
+   - The rtk wrapper truncated output; I used `rtk proxy`.
+   - zsh modifier/subscript issues; I used `${H}`/`${p}`.
+   - The rm safety check blocked unguarded paths; I used `"${C:?}/${d:?}"`.
+   - npm test ran without deps or tsx; I ran `npm ci --ignore-scripts` first.
+   - Eval tests failed locally without harness-core; I built it with `cargo build --release --locked` (baseline comparison proved the cause).
+   - `gh api -f` made the request a POST and returned 404; I used query strings instead.
+   - The CodeQL dismissal comment exceeded 280 chars; I shortened it.
+   - **I wrongly claimed "R4 no test" on PR #61 0e61ad67.** My diff stat was filtered to cli/src. I posted a correction.
+   - **I wrongly said the egress ReDoS could stall seconds.** The capture is bounded at 96 chars. I corrected this to the user and in the PR.
+   - **Process violation on PR #89.** I merged after a pause without re-checking claims, and the user had transferred PR89 to codex-app-01a15488. Impact was nil because the patch-id was identical. I logged a correction, apologized on the PR, and added the memory rule.
+   - Earlier misread: "gateway-only inference". The user corrected this to gateway-preferred plus cloud; memory updated.
+
+5. Problem Solving:
+   - Root-caused the PR #56 CI failures: the eval_integrity 0700 mount reset blocked nobody's traversal. The fix was verified red/green.
+   - Identified the bwrap CVE regression on the host.
+   - Drove CodeQL from 31 alerts to 0.
+   - Corrected invalid "qualification" evidence from opencode: an alpha-checkout smoke run left in the shared checkout under `docs/reviews/evidence/v1-qualification/rc-2026-10-21/`. I left the files untouched and logged it.
+   - Reviewed the PR #83 restore barrier design: a fixed `.nexus-restore.pending` marker, `assertNoPendingRestore` in every store-guard transaction, and startup recovery. This resolved R1–R4.
+   - Audited PR #92 and PR #100 for lifecycle and deadlock correctness. Pre-RC ledger reconciliation now happens before the RC, and exact-RC dispositions are recorded in the record without mutating the RC source.
+
+6. All user messages:
+   - The long pasted power-failure recovery directive (quoted in section 1; includes the security constraints).
+   - "replace bwrap on mike-dev with the pinned 0.13.1 build"
+   - "continue" (several times)
+   - "take over PR #56"
+   - "does it make sense using the harness2"
+   - "https://github.com/google-research/harness2"
+   - "no v1 should be gateway preferred.. with cloud inference models available"
+   - "ok.. make a note to review harness2 after v1.0.0 for what we can learn from it."
+   - "yes, open the issue"
+   - "CI is complete"
+   - "use a persistent loop to ensure continued progress. the goal is to ensure that v1.0.0 gets to release status."
+   - The repeated /loop invocations (verbatim prompt in section 1).
+   - Pasted summaries from other agents (PR #61 remediation v2; PR #61 0f5eb54 plus release status).
+   - "perform any outstanding reviews on the open PRs"
+   - "contest is over." (mid-turn)
+   - "go aheaed and close PR 38 for the reasons you provided."
+   - "what specifically is blocked for egress.ts, durable_continuity.test.ts"
+   - "approved"
+   - "dismiss the common.ts false positive"
+   - Pasted Antigravity review of PR #89, then its SHA correction notice.
+   - Several "Your claude.ai usage limit has reset. Continue…" notices.
+
+7. Pending Tasks:
+   - Continue the /loop until v1.0.0 is verified and published:
+     - Review new heads independently.
+     - Re-run enforce at each new integration head.
+     - Diagnose CI failures.
+     - Never self-accept.
+     - Re-check claims after any pause.
+   - **Next expected review:** the RC versioning-slice PR (version bump to 1.0.0-rc.N plus release notes). Not yet opened.
+   - Watch for the PR #8 integration-to-main merge, the RC tag, and the subsequent RC gates.
+   - Outstanding external gates I don't own:
+     - Held-out corpus blackbox-v1 compatibility (custodian).
+     - ACC-CONT-08 SSD benchmark.
+     - Live provider runs.
+     - Human 5×3 real-terminal matrix. Evidence must be a JSON wrapper with RC identity.
+     - Independent installed-RC acceptance.
+
+8. Current Work:
+   After a ~4 h pause I rechecked state:
+   - Integration is at 7d6673f; PRs #100, #101 and #102 merged.
+   - Enforce exit 0 with unchanged counts; 0 open alerts; CodeQL success; CI on 7d6673f in progress.
+   - No RC tag. Only PR #8 is open.
+   - I hold no claims.
+   I verified independent ACCEPTs on record for #100, #102 and #101 (Antigravity, comment 6316808919, head 4baf17e5). I was doing a post-merge audit of PR #101's `cli/src/core/client_lease.ts` change: `clientInvocationKind` now returns "client" when the arg after `--restore-backup` starts with "-", so a flag can't be consumed as a backup path. I had read the source diff (shown above) but had not yet posted an audit or logged it.
+
+9. Optional Next Step:
+   Finish the PR #101 post-merge audit of the `--restore-backup` dash-prefixed-argument guard. Optionally glance at its test in cli/test/upgrade_transaction_recovery.test.ts, then log the audit in nexus-claims.log. Then confirm post-merge CI on 7d6673f completes green, and schedule the next loop wakeup while waiting for the RC versioning-slice PR. This continues the /loop mandate: "act on whatever is unblocked (review new heads independently, … re-run requirements --enforce at new integration heads, diagnose CI failures)".
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
