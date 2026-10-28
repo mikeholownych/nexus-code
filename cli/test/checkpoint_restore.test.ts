@@ -938,6 +938,41 @@ test("Git manifest restore refuses a nested-repository file-target obstruction b
   }
 });
 
+test("Git manifest restore refuses an ignored directory replacing a tracked checkpoint file before Git mutation", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), "a/ignored\n");
+    git("add", ".gitignore");
+    git("commit", "-qm", "ignore obstruction beneath tracked target");
+    fs.writeFileSync(path.join(repo, "a"), "captured file\n");
+    git("add", "a");
+    git("commit", "-qm", "track checkpoint file target");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("tracked file replaced by ignored directory");
+    fs.rmSync(path.join(repo, "a"));
+    fs.mkdirSync(path.join(repo, "a"));
+    fs.writeFileSync(path.join(repo, "a", "ignored"), "ignored canary\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "tracked canary\n");
+    fs.writeFileSync(path.join(repo, "untracked.txt"), "untracked canary\n");
+    assert.equal(git("check-ignore", "a/ignored"), "a/ignored");
+    const headBefore = git("rev-parse", "HEAD");
+    const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(repo, "a", "ignored"), "utf8"), "ignored canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "tracked canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
+    assert.equal(git("rev-parse", "HEAD"), headBefore);
+    const indexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+    assert.equal(indexAfter, indexBefore, "a rejected preflight must leave the Git index entries unchanged");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
 test("Git manifest restore refuses changed checkpoint ignore rules before Git mutation", () => {
   const { repo, git } = gitRepo();
   try {
