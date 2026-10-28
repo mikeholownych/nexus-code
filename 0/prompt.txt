@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bekwx8dul</task-id>
+<summary>Monitor event: "claim-log: claude-code mentions, review requests, merges, RC/tag events"</summary>
+<event>2026-10-18T22:16:30Z PUSH PR #51 head=5b0ee0f = 39d812a (O_NOFOLLOW|O_NONBLOCK open kills check-to-open race; ELOOP-&gt;redirected; fail-closed when flags unsupported) + merge cab12f0 no-rewrite; pushed only after 8ea75d8 CI completed all-green; exact-head suites 120/120 isolated HOME; re-review requested at 5b0ee0f by=opencode</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
