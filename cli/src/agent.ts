@@ -1292,8 +1292,6 @@ export class AutonomousAgent {
     }
     const currentVerifier = snapshotVerifierDefinition(workspace, command, this.config.trustedDeliverableFiles ?? []);
     if (!currentVerifier) return { ok: false, reason: "the current verifier definition could not be captured" };
-    // A repository with no test file yet has no pre-RED definition snapshot (the verifier references the missing file).
-    // That is only safe when the RED tests are all new: a pre-existing test or definition cannot have been narrowed.
     if (!baseline.verifier) {
       // Only a repository with no test file at all can legitimately have no pre-RED definition snapshot (the verifier
       // referenced a file that did not exist). With tests present, a null snapshot means the definition could not be
@@ -1301,31 +1299,20 @@ export class AutonomousAgent {
       if (baseline.tests.size > 0) {
         return { ok: false, reason: "no verifier definition was captured before RED" };
       }
-      // With nothing captured, the workspace's definition can only be adopted when RED changed nothing in it: the
-      // reported tests are new, and every other file the verifier depends on is unchanged by this run (a manifest or
-      // script written through a shell command does not appear in the modified-file set, so consult the candidate diff).
-      let changedPaths: Set<string>;
-      try {
-        const identity = this.candidateTracker.computeCandidateIdentitySync(workspace);
-        changedPaths = new Set([...identity.trackedChanges, ...identity.untrackedFiles].map((entry) => entry.path));
-      } catch {
-        return { ok: false, reason: "the workspace candidate diff could not be read" };
+      // With nothing captured there is no pre-RED oracle to bind. Only a test-set runner can establish one, and only
+      // the reported tests and operator-declared deliverables may appear in it: a manifest- or config-authored
+      // verifier must exist before RED, and the RED turn cannot be the author of the oracle.
+      const stripped = command.replace(/^(?:\s*(?:env(?:\s+-[A-Za-z]+(?:\s+[^\s-][^\s]*)?)*|[A-Za-z_][A-Za-z0-9_]*=[^\s]*)\s+)+/, "");
+      if (!/^(?:node|tsx)\s+--test\b|^(?:bun|deno)\s+test\b/.test(stripped)) {
+        return {
+          ok: false,
+          reason: "no verifier definition was captured before RED and the command is not a test-set runner",
+        };
       }
+      const trusted = new Set((baseline.trustedDeliverables ?? []).map(rel));
       for (const key of currentVerifier.keys()) {
-        if (key.startsWith("\0") || reported.has(key)) continue;
-        if (changedPaths.has(key)) {
-          return { ok: false, reason: `RED created or changed ${key}, which the verifier depends on` };
-        }
-      }
-      // A verifier that names a script directly only counts as a test definition when it is a test-runner invocation;
-      // otherwise RED would be authoring the oracle by writing the script the command runs.
-      const runner = /\b(?:npm|pnpm|yarn)\s+(?:(?:--prefix|--dir)(?:=|\s+)[^\s]+\s+)?(?:(?:run|run-script)\s+)?test\b|\bmake\s+test\b|\bcargo\s+test\b|\bpytest\b|\bpython\d?(?:\.\d+)?\s+-m\s+(?:pytest|unittest)\b|\bgo\s+test\b|\b(?:bun|deno)\s+test\b|\b(?:node|tsx)\s+--test\b/;
-      if (!runner.test(command)) {
-        for (const file of reported) {
-          if (command.includes(file)) {
-            return { ok: false, reason: `RED authored ${file}, which the verifier command runs directly` };
-          }
-        }
+        if (key.startsWith("\0") || reported.has(key) || trusted.has(key)) continue;
+        return { ok: false, reason: `RED supplied ${key}, which the verifier depends on` };
       }
     }
     const preVerifier = baseline.verifier;

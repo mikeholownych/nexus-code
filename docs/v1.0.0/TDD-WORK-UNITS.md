@@ -32,10 +32,11 @@ For each unit whose role is unset (implementer) or `implementer`:
    command must be the same. Anything else fails the unit with "the RED phase changed the verification oracle" instead
    of letting GREEN verify against a narrowed oracle. The rebase records `failed: true`, keeps the operator's trusted
    deliverables, and never clears a recovered unit's fail-closed verification posture. A repository with no test file
-   at all is the only case without a pre-RED definition snapshot. There the workspace definition is adopted only when
-   RED changed nothing in it beyond the reported tests (checked against the candidate diff, so a manifest or script
-   written through a shell command is caught too), and a command that names a script directly must be a test-runner
-   invocation; otherwise the RED turn would be authoring the oracle.
+   at all is the only case without a pre-RED definition snapshot. There the definition is adopted only for a test-set
+   runner (`node --test`, `tsx --test`, `bun test`, `deno test`) and only the reported tests and operator-declared
+   deliverables may appear in it; a manifest- or config-authored verifier (`npm test`, `make test`, `pytest`, a script)
+   must exist before RED. The RED turn can therefore never author the oracle, and a shell-written manifest that hides
+   itself from git does not help it.
 4. **GREEN.** The unit continues in the same conversation with the normal prompt plus the GREEN protocol: implement the
    smallest product/source change, keep the test intact, and run the same verifier until it passes. Completion then
    follows the ordinary `TurnResult` classification and verifier gates, including test-set stability, deliverable binding
@@ -66,12 +67,12 @@ scheduler recovery path, not the TDD failure path.
   the harness makes the evidence stale and reruns RED.
 - TDD requires a Git workspace (the test-change evidence is a candidate diff against HEAD). A non-Git operation falls
   back to failing the RED phase. Automatic test generation, coverage guidance and mutation scoring are not included.
-- Tests: `cli/test/tdd_work_units.test.ts` (17 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
+- Tests: `cli/test/tdd_work_units.test.ts` (18 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
   sidecar, stale sidecar after a revise, restart, role exclusion, a real-agent RED turn, a real RED→GREEN unit where the
   first test is added to a test-less repo, RED narrowing the verifier refused, RED creating a verifier where none existed
   refused, RED modifying an existing test refused, a verifier definition the baseline could not capture refused, a
-  shell-authored manifest refused, a RED-authored runner the command executes directly refused, and a failing
-  `task_completed` still rejected without `tddRed`). The real-agent cases use the
+  shell-authored manifest refused, a git-hidden shell-authored manifest refused, a RED-authored runner the command
+  executes directly refused, and a failing `task_completed` still rejected without `tddRed`). The real-agent cases use the
   deterministic fixture gateway; no external inference is required. A `--tdd` CLI flag is a
   follow-up once the operation option surface is free.
 - Not included: automatic test generation from requirements, coverage-guided exploration, and mutation/regression

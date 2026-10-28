@@ -9,7 +9,7 @@
 
 ## Behaviour verified
 
-`cli/test/tdd_work_units.test.ts` — 17 cases — covers:
+`cli/test/tdd_work_units.test.ts` — 18 cases — covers:
 
 1. **RED then GREEN** — the first turn receives the RED protocol and must return `FAILED` verifier evidence with
    `hasExecutedTests`, plus a test file whose candidate hash changed; the evidence is written to
@@ -43,11 +43,13 @@
     (so it is absent from the modified-file set) and adds a failing test: the candidate diff catches the manifest and
     the rebase refuses.
 16. **RED-authored runner refused** — the configured verifier runs `node test/verify.js` and that file did not exist; RED
-    writing it would author the oracle, so the rebase refuses because the command is not a test-runner invocation.
-17. **No `tddRed`, no failing completion** — the same failing `node --test` file submitted without the per-turn boundary
+    writing it would author the oracle, so the rebase refuses because the command is not a test-set runner.
+17. **Git-hidden manifest refused** — RED writes `package.json` and appends it (and a fake runner) to `.git/info/exclude`
+    so the candidate diff cannot see it; the test-set-runner requirement refuses it regardless.
+18. **No `tddRed`, no failing completion** — the same failing `node --test` file submitted without the per-turn boundary
     is rejected by `task_completed` and the turn is not `VERIFIED`.
 
-`tdd_work_units` + `convergence_scheduling` + `operation_runner_refactor`: **58/58 pass**, including eight real-agent turns
+`tdd_work_units` + `convergence_scheduling` + `operation_runner_refactor`: **59/59 pass**, including nine real-agent turns
 against the fixture gateway; `tsc --noEmit` and `git diff --check` clean, isolated `HOME`/`XDG_CONFIG_HOME`.
 
 ## Residuals
@@ -59,8 +61,9 @@ against the fixture gateway; `tsc --noEmit` and `git diff --check` clean, isolat
   test changes that definition. The executor then rebases the baseline onto exactly the added RED tests: RED may only add
   tests, so a modified or deleted pre-RED test, any other verifier-definition change, a changed command, or a
   RED-created definition where the baseline could not capture one refuses the rebase and fails the unit. In a repo with
-  no tests at all, the definition is adopted only when nothing but the reported tests changed in the candidate diff and
-  the command is a test-runner invocation when it names a script directly. GREEN itself has
+  no tests at all, the definition is adopted only for a test-set runner (`node/tsx --test`, `bun/deno test`) and only the
+  reported tests plus declared deliverables may appear in it, so the RED turn cannot author a manifest- or
+  config-defined oracle (that must exist before RED). GREEN itself has
   no relaxation and editing the RED test during GREEN fails test-set stability.
 - A resumed unit never rebases (recovered baseline state is untrusted and the workspace holds the RED edits), so with a
   workspace-bound verifier it cannot complete at all; a bound result needs a fresh task. A refused unit is terminal for that task because a retry or
