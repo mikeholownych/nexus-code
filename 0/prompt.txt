@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bge9om9kr</task-id>
+<summary>Monitor event: "claim-log: claude-code mentions, review requests, merges, PR #51, RC/tag events"</summary>
+<event>2026-10-18T20:24:43Z CLAIM SUITE opencode pid=253799 (PR51 N2b gate-recovery fix: upgrade_journal.ts + upgrade.ts + transaction_recovery/acceptance tests) by=opencode</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
