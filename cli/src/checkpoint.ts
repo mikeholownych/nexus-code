@@ -113,13 +113,17 @@ export class CheckpointManager {
         env: targetEnv,
       });
 
-      const targetEntries = execFileSync("git", ["ls-files", "--stage", "-z"], {
+      const workspacePathspec = prefix ? [`:(top,literal)${prefix.slice(0, -1)}`] : [];
+      const indexPaths = ["-c", "core.fsmonitor=false", "ls-files", "--stage", "-z", "--full-name", ...(workspacePathspec.length ? ["--", ...workspacePathspec] : [])];
+      const targetEntries = execFileSync("git", indexPaths, {
         cwd: repositoryRoot,
         env: targetEnv,
+        maxBuffer: 64 * 1024 * 1024,
       });
-      const currentEntries = execFileSync("git", ["ls-files", "--stage", "-z"], {
+      const currentEntries = execFileSync("git", indexPaths, {
         cwd: repositoryRoot,
         env: hookGuardEnv,
+        maxBuffer: 64 * 1024 * 1024,
       });
       const prefixBytes = Buffer.from(prefix);
       const parseEntries = (entries: Buffer): Array<{ metadata: Buffer; filePath: Buffer }> =>
@@ -1096,16 +1100,18 @@ export class CheckpointManager {
         // present. Installing checkpoint symlinks first could redirect deletion
         // through an in-workspace link into unrelated ignored data.
         this.removeTrackedDeletions(cp.gitRef, postCheckpointAdditions);
-        const checkoutArgs = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f"];
-        const workspacePrefix = this.gitWorkspacePrefix();
-        if (workspacePrefix) {
-          // The real index still contains sibling entries. Restrict checkout to
-          // this workspace so staged sibling content cannot overwrite its worktree.
-          checkoutArgs.push("--", `:(top,literal)${workspacePrefix.slice(0, -1)}`);
-        } else {
-          checkoutArgs.push("-a");
+        // Use literal index paths from the checkpoint tree. checkout-index does
+        // not accept directory pathspecs, and an all-index checkout would overwrite
+        // sibling worktree content in repositories with nested workspaces.
+        if (checkoutPaths.length > 0) {
+          const checkoutInput = Buffer.from(checkoutPaths.map((filePath) => `${filePath}\0`).join(""), "utf8");
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f", "-q", "-z", "--stdin"], {
+            cwd: this.workspace,
+            input: checkoutInput,
+            stdio: ["pipe", "ignore", "ignore"],
+            env: hookGuardEnv,
+          });
         }
-        execFileSync("git", checkoutArgs, { cwd: this.gitRoot(), stdio: "ignore", env: hookGuardEnv });
         if (cp.untrackedFiles !== undefined) {
           execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
           if (cp.untrackedFiles.length > 0) {
