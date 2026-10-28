@@ -1,0 +1,95 @@
+<task-notification>
+<task-id>a0edfd7dc649c031d</task-id>
+<tool-use-id>toolu_0122LaHrNFZgWJkMcuQZGkqJ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/a0edfd7dc649c031d.output</output-file>
+<status>completed</status>
+<summary>Agent "TUI re-acceptance round 4" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Round-4 re-acceptance of 5cab42f (code identical to 416c2bf)
+
+### Verdicts
+1. **Approval/input safety: NOT ACCEPTED.** All 32 round-2 and round-3 probes now produce no decision. But "approve all later actions" can still be reached using only composer editing keys, as long as the operator pauses at least 400 ms between keys. This reproduced in the PTY 3 of 3 times, and review mode switched to auto.
+2. **Visual acceptance of the evidence: ACCEPTED WITH DEFECTS.** Screen 10 shows no hotkey letters when the panel is disarmed, as claimed. Only the known P3 items remain.
+
+### Findings, ranked
+
+**P1-A″: approve-all is still reachable through composer editing keys.** The fix adds a 400 ms wait before Enter takes a choice and a second Enter, but no key that is unique to deciding.
+- Sequence: → → (≥400 ms) Enter (≥400 ms) Enter gives `Approve{always:true}`. Variants that also work:
+  - End → → before the two Enters.
+  - Shift+→ and Shift+Enter (`plain` only excludes Ctrl/Alt).
+  - Pauses of 600/600 and 800/1500 ms.
+  - Scroll keys between the Enters (PageDown/Home/End/Up/PageUp), because scroll keys keep the choice.
+- It works when the panel was typed into and when a draft was in the composer.
+- PTY `arrows_enter_enter` and `end_arrows_enter_enter`: 3/3 each. The session went from review to auto mode, and `second.txt` was written without an approval request.
+- The commit title "composer editing keys never choose a decision" is false: → still chooses. Pressing Enter a second time because "it didn't send" is ordinary behaviour.
+- Code: `live_state.rs` `on_approval_key`, the Left/Right arm and the `Enter if plain &amp;&amp; settled &amp;&amp; shown_long_enough` arm.
+- Fix options:
+  - Make "all later" unreachable by ←/→ on a disarmed panel (one that was typed into or opened over a draft). Offer approve-all only through `a` on an armed panel.
+  - Or confirm approve-all with a key that is never a composer key and is not Enter.
+  - Also count Shift as non-plain for ←/→/Enter.
+
+**P2-1: a single → then Enter approves once from composing.** → (≥400 ms) Enter gives `Approve{always:false}`.
+- Unit: Enter 399 ms after → does nothing, 400 ms approves.
+- PTY `draft_right_enter`: 3/3 approved with a draft in the composer.
+- 400 ms is shorter than a normal pause while editing.
+- Fix: on a disarmed panel, either require the choice to sit quietly for about 2 s (`APPROVAL_TYPING_RECENT`), or apply the two-step confirmation to every approve.
+
+**P2-2: pressing `y` twice approves two different actions.**
+- `y` approves a1. The queued a2 is drawn about 16 ms later. A second `y` 650–750 ms after the first approves a2.
+- Seen in unit and PTY (`y_then_y`, 2/2 with letters armed).
+- The panel gives no sign that it is a new request, and with queued approvals the composer line still reads "approval needed" rather than the "approval waiting" line the manual promises.
+- Fix: treat a deciding key as recent typing for the next queued panel (letters off, or a longer grace), and show "request 2 of N" on the panel.
+
+**P3 items:**
+- **Confirm-stage hint is wrong.** It says "enter again approves… · any other key cancels". In fact Esc denies, `y` approves once, `n` denies, and ← then Enter approves once (unit; PTY `confirm_then_esc` and `confirm_then_y`). `docs/USER_MANUAL.md` makes the same claim. Fix: make Esc/y/n cancel the confirm stage, or correct the text.
+- **After `a`, Enter needs 600 ms, not 400.** `a` updates `last_typed`, so the 600 ms quiet period applies. Enter 400–599 ms after `a` silently drops the choice and disarms the letters for good (unit; PTY `a_enter_450` 2/2). The hint "enter, then enter again" mentions no wait. A too-quick Enter after ← or → also silently returns the panel to "typing ignored". Usability problem only; the failure is in the safe direction.
+- **Help overlay is stale** (`live_view.rs:460-467`). "a — approve this and every later action" and "enter takes the focused one" omit the two Enters and the wait.
+- **Super/Meta/Hyper+y count as `y`** on terminals using the kitty keyboard protocol (`plain` only excludes Ctrl/Alt).
+- **Visual items, unchanged from round-3 P3-7:**
+  - Screenshots `tui_diff/06` and `07` are byte-identical.
+  - Wide glyphs are clipped in the screenshots (設定ローダー in diff 03/09/10/11/12; 字 in surface 11/12). The cells are correct, so this is the screenshot renderer, not the TUI.
+  - Stale wide-character continuation cells show up in the cell dumps (surface 03–09, 22–24, row of "✅ 字符").
+  - Surface 19 (60 cols): the wrapped notice line "R2); your next…" loses its 2-space hanging indent.
+  - `23b` and `24` are byte-identical. That is consistent (in-process /resume and `-r latest` render the same), but 24 adds no new evidence.
+
+**Checked and safe:**
+- The dwell boundaries are exact: 399 ms rejected, 400 ms accepted.
+- Enter Enter within 150 ms decides nothing (PTY 3/3).
+- Esc before the first draw or behind a closed panel denies; in the real event loop a draw always happens between events.
+- An approval arriving during the confirm stage is queued and opens fresh.
+- A resize while the panel stays drawn keeps the confirm stage (PTY `resize_in_confirm` 2/2 approved after the second Enter). Shrinking and regrowing resets it.
+- A paste during the confirm stage cancels it.
+- Queue order a1/a2/a3 is correct.
+- Mouse capture is off and focus events are ignored.
+- A draft never blocks a deliberate operator: ←/→ with Enter, and Esc, always work.
+
+### Round-3 findings
+
+| Finding | Status | Evidence |
+|---|---|---|
+| P1-A′ → → Enter / ← ← Enter / Ctrl+A Enter approves all | **PARTIAL** | The immediate sequences are fixed (r3 probes and PTY: none). Adding ≥400 ms pauses and a second Enter still approves all (P1-A″, PTY 3/3). |
+| P2-1 Ctrl/Alt chords as letters | RESOLVED (Super/Meta/Hyper still count, P3) | unit Ctrl+y/n, Alt+y: none |
+| P2-2 `y` after a pause while composing | RESOLVED | a draft disarms the letters (unit `R4 draft y`: none) |
+| P3-1 resize re-arms a typed-into panel | RESOLVED | r3 shrink probe: letters stay off |
+| P3-2 scrolling drops the choice | RESOLVED (now also carries approve-all, see P1) | |
+| P3-3 disarmed letters shown on buttons | RESOLVED | screen 10, unit hints |
+| P3-4 Esc ignored on a too-small terminal | RESOLVED | |
+| P3-5 a waiting approval overwritten | RESOLVED | queue order probe |
+| P3-6 provenance | RESOLVED | see below |
+| P3-7 glyph artefacts, 06=07, 40×10 hint row | NOT RESOLVED (declared unchanged) | |
+
+### Checks run
+- **Provenance:** `git diff 416c2bf 5cab42f` touches docs only (1 review doc + 53 evidence files). `sha256sum -c` passes in both evidence directories (32/32 and 20/20). metrics `gitHead` is 416c2bf. My build's `nexus-tui` is `329d722d…` and `sidecar.js` is `6dd91487…`, matching the metrics.
+- **Rust:** `cargo test --release --bin nexus-tui` twice: 267/267 each (the implementer's 235 plus my 32 probes).
+- **PTY:** all `cli/test/tui_*_e2e.test.ts` twice, serially, with HOME set to a temp dir: 22/22 each (official tests plus the r2/r3/r4 probes). The letter-armed scenarios were run 2 more times with `R3_DELAY=3500`.
+- **Visual:** I read all 42 PNGs and scanned the cell dumps.
+- **Cleanup:** the worktree is removed. The live checkout and `scratchpad/base` were not touched, and the live `cli/node_modules` is intact.
+
+### Limitations
+- The PTY driver for the r3 `tab_complete` scenario exits with an error because of a harness problem (the completion popup is left open). Its outcome was safe: both writes denied.
+- Super/Meta+y was tested only in units, since the PTY has no kitty keyboard protocol.
+- The timing thresholds are judged against plausible human rhythms, not measured from users.
+
+Probes are saved in `/tmp/claude-1000/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2/scratchpad/reaccept4_probes.patch`: the r2+r3+r4 unit probes in `live_view.rs`, `tui_reaccept4_driver.py` and `tui_reaccept4_e2e.test.ts`. Logs are `r4_unit.log`, `r4_prior_unit.log`, `r4_pty_{1,2,3,run2b}.log`, `r4_e2e_{1,2}.log` and `r4_cargo_{1,2}.log` in the same scratchpad.</result>
+<usage><subagent_tokens>265579</subagent_tokens><tool_uses>103</tool_uses><duration_ms>2050603</duration_ms></usage>
+</task-notification>
