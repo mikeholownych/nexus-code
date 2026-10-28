@@ -925,6 +925,8 @@ export class AutonomousAgent {
     onConfirm?: ConfirmHandler;
     /** The loop has ended: steering can no longer be applied in this turn (the host starts a follow-up turn). */
     closing?: boolean;
+    /** TDD RED boundary: task_completed may record a failing verifier as the phase result. */
+    tddRed?: boolean;
   };
   private lastTurnResult?: TurnResult;
   private completionSummary?: { summary: string; notes?: string };
@@ -1242,6 +1244,39 @@ export class AutonomousAgent {
       this.initTaskState();
     }
     this.resetConversation();
+  }
+
+  /** The current in-memory verifier baseline, if one is captured. */
+  public getChangeBaseline(): ChangeBaseline | undefined {
+    return this.changeBaseline ?? undefined;
+  }
+
+  /**
+   * Rebase the verifier baseline onto a verified TDD RED test set. RED is not verification: the reproduction test now
+   * exists and fails, and GREEN must be able to bind a stable verifier definition while it implements the fix. A
+   * recovered unit keeps its `verificationBaselineInvalidated` posture, so a resumed GREEN still cannot claim VERIFIED.
+   */
+  public rebaseVerifierBaselineAfterTddRed(): void {
+    const command = this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command;
+    if (!command) return;
+    const tests = snapshotTests(this.config.workspace);
+    const verifier = snapshotVerifierDefinition(this.config.workspace, command, this.config.trustedDeliverableFiles ?? []);
+    if (!tests || tests.size === 0 || !verifier || verifier.size === 0) return;
+    this.changeBaseline = {
+      command,
+      failed: true,
+      tests,
+      verifier,
+      trustedDeliverables: [...(this.config.trustedDeliverableFiles ?? [])],
+      at: new Date().toISOString(),
+    };
+    if (this.durable) {
+      try {
+        this.checkpointDurableState("TDD RED baseline rebased");
+      } catch (err: any) {
+        this.reportPersistenceFailure("tdd_baseline", err);
+      }
+    }
   }
 
   public getStateManager(): DurableStateManager {
@@ -3894,7 +3929,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               );
             if (
               bindsWorkspaceDefinition &&
-              (!matchingBaseline || verifierDefinitionChanged)
+              (!matchingBaseline || verifierDefinitionChanged) &&
+              !this.activeTurn?.tddRed
             ) {
               const detail = !matchingBaseline
               ? "The workspace-resolved verifier has no matching pre-change baseline. Its current output cannot establish verification; start a fresh task from an operator-reviewed trusted workspace baseline."
@@ -4027,6 +4063,23 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 success: false,
                 output: "",
                 error: `Verification Oracle: the selected verifier timed out after ${deadlineSecs}s, so the changes are NOT verified.\nCommand: ${testRes.command}\nThis is a timeout, not a test failure. The verifier's process tree was terminated, so it is safe to retry.\nPartial output:\n${partial}\nUse a faster verifier, or ask the operator to raise the verifier deadline (NEXUS_VERIFIER_TIMEOUT_SECS); do not claim completion until the verifier can finish.`,
+              };
+            }
+            if (!testRes.success && this.activeTurn?.tddRed) {
+              // The RED phase ends by recording the failing test itself; the unit executor validates this result
+              // before any implementation. Normal task_completed still requires a passing verifier.
+              this.completionSummary = {
+                summary: args.summary || "TDD RED: failing test recorded.",
+                notes: args.notes,
+              };
+              return {
+                success: true,
+                output: JSON.stringify({
+                  status: "tdd_red_recorded",
+                  verification: "FAILED",
+                  command: testRes.command,
+                  summary: this.completionSummary.summary,
+                }),
               };
             }
             if (!testRes.success) {
@@ -5046,7 +5099,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return this.activeTurn?.controller.signal;
   }
 
-  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
+  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
     // same establishment and resolution boundary as one-shot `run` tasks.
     if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
@@ -5081,7 +5134,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     for (const group of groupsTriggeredBy(promptText)) this.enabledToolGroups.add(group);
     await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
 
-    const turn: NonNullable<AutonomousAgent["activeTurn"]> = { controller: new AbortController(), phase: "idle", step: 0, onConfirm };
+    const turn: NonNullable<AutonomousAgent["activeTurn"]> = {
+      controller: new AbortController(),
+      phase: "idle",
+      step: 0,
+      onConfirm,
+      tddRed: options?.tddRed === true,
+    };
     this.activeTurn = turn;
     const signal = turn.controller.signal;
     this.bridge.setTurnSignal(signal);
