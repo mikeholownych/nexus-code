@@ -118,7 +118,7 @@ These are retained commitments from REQUIREMENTS §2 and cross-cutting checks.
 | ACC-QUAL-T3 | §6.3 + §6.4 | Thresholds met. |
 | ACC-QUAL-T4 | §6.2 + §6.4 | Thresholds met. |
 | ACC-QUAL-SMOKE | `make test` includes the T1 self-test and the T4 smoke | Present and passing. |
-| ACC-TUI-MANUAL | §5.3 on the installed RC across five required terminal environments and three required sizes | Every cell has a per-cell verdict and recorded outcomes; the release owner has waived screenshot artifacts for v1.0.0. |
+| ACC-TUI-MANUAL | §5.3 on the installed RC across five required terminal environments and three required sizes | Every cell has a per-cell verdict and recorded outcomes; screenshot artifacts are waived for v1.0.0 per DEC-18. |
 
 ## 4. Standalone and provider qualification (REQ-PRV-106, REQ-PRV-111, REQ-QUAL-107)
 
@@ -201,7 +201,7 @@ For each terminal × size, check:
 6. Ctrl-C twice (clean terminal restore: echo on, no stray escape codes).
 7. NO_COLOR.
 
-Record PASS/FAIL per cell and the observed outcomes for each check, bound to the exact installed RC artifact, terminal environment, and size. The release owner has waived screenshot artifacts for v1.0.0; this waiver does not waive any interactive check, safety gate, per-cell verdict, or evidence record.
+Record PASS/FAIL per cell and the observed outcomes for each check, bound to the exact installed RC artifact, terminal environment, and size. Screenshot artifacts are waived for v1.0.0 per [DEC-18](DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver); this does not waive any interactive check, safety gate, per-cell verdict, or evidence record.
 
 **Gate:** zero FAIL on checks 2, 5 and 6, which are safety checks. Other FAILs need a written disposition (fix, or a documented known limitation).
 
