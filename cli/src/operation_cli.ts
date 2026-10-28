@@ -77,12 +77,12 @@ function printStatus(op: DurableOperationState): void {
       u.status === "BLOCKED" ? ` — ${u.blocked!.reason}` :
       u.status === "COMPLETE" ? ` — on ${u.result!.resourceId}` :
       u.assignment ? ` — ${u.assignment.resourceId}` : "";
-    console.log(`  ${u.status.padEnd(22)} ${safeTerminal(u.title)}${pc.dim(safeTerminal(extra))}`);
+    console.log(`  ${safeTerminal(u.status).padEnd(22)} ${safeTerminal(u.title)}${pc.dim(safeTerminal(extra))}`);
   }
   if (op.wait) console.log(pc.yellow(`Waiting until ${safeTerminal(op.wait.wakeAt)}: ${safeTerminal(op.wait.reason)}`));
   for (const d of op.blocked?.decisions ?? []) {
     console.log(pc.red(`Decision ${safeTerminal(d.id)} needed: ${safeTerminal(d.question)}`));
-    for (const o of d.options) console.log(pc.red(`  [${o.id}] ${safeTerminal(o.label)}`));
+    for (const o of d.options) console.log(pc.red(`  [${safeTerminal(o.id)}] ${safeTerminal(o.label)}`));
     if (d.options.length) console.log(pc.dim(`  nexus operation decide ${safeTerminal(op.id)} ${safeTerminal(d.id)} <option> [--note <text>]`));
   }
 }
