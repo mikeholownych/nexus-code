@@ -1,0 +1,51 @@
+<task-notification>
+<task-id>a3ba40a183b32a6c6</task-id>
+<tool-use-id>toolu_01VF3hAiy36ck6wjsMKuzVo2</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/a3ba40a183b32a6c6.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent TUI acceptance review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The visuals are accepted with defects, but approval input is not accepted: I reproduced two ways an action gets approved without the operator meaning to. Both also exist on main, and the 804c5df fix doesn't cover them. The full review is in `/tmp/claude-1000/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2/scratchpad/assess/tui.md`.
+
+**Approval input (the report's "PASS at 804c5df" doesn't hold):**
+- **F1 (P1): ordinary typing approves everything.** If the operator is typing at normal speed when the approval panel appears, each `y`, `a`, `n` or Enter after the 400 ms grace is a decision. Typing "please add tests" across the panel gave "approve all later actions" from the `a` in "add". Default focus is also Approve, so Enter approves. Source: `live_state.rs:1156-1172` and `:812-822`.
+- **F2 (P2): approving a change that was never shown.** Below 40x10 the TUI only says "needs a larger terminal", but it still marks the approval as shown (`live_state.rs:1094-1096`). A single `y` then approves. At exactly 40x10 the panel shows no diff lines at all.
+- **F3 (P2): an approval replaces any open panel.** If help, diff review, the model picker or the provider-connect panel is open, the approval takes its place without notice. The key meant for the old panel then decides: Enter closing help approves, Esc going back denies. A partly typed API key in the connect panel is lost.
+- **What 804c5df does fix, as claimed:** keys queued before the panel appears are discarded, bursts of keys and bracketed pastes never decide, ctrl+c sends cancel, and a sidecar crash closes the approval.
+
+F1-F3 were reproduced with unit tests I added to my own copy of 804c5df, not through a real terminal with real keystroke timing.
+
+**Evidence and recording:**
+- All checksums verify and all three recordings have increasing timestamps.
+- My clean build of 83e7405 matches the evidence binary exactly (823fae68…), so the surface screenshots come from that commit.
+- My clean build of 804c5df matches the installed binaries (c56080de… and sidecar 55e65b28…).
+- The diff screenshots are from 35ef104, before the surface work. They still show the old raw banner and two spinners, and were never re-captured on the current build.
+
+**Tests:**
+- Rust unit tests: 220/220 pass.
+- PTY scenarios: run together (the test runner's parallel default), all three failed. Run one at a time, the approval and diff tests pass.
+- The surface test failed 2 of 8 runs at the same step: after the restart, `/resume` was typed but its Enter never went through. Both failures were during concurrent load (a parallel run, and a run while my 83e7405 build was compiling). I could not reproduce it under synthetic load, so the cause is not established and a real lost keypress can't be ruled out.
+
+**Visual defects (mostly P3):**
+- **10-approval:** about 25 empty rows between a one-line change and the buttons, and the text "Nexus wants to: creates config.json".
+- **11:** the change card is drawn before its "approved" line.
+- **Code blocks:** a wrapped code line loses the block's background.
+- **07:** command output shows the first 6 lines and hides the last, informative one.
+- **17:** the screen named "tool-detail" actually shows the diff review panel.
+- **18:** help is cut off with no scroll indicator.
+- **22, crash screen:** it still appends "(no exit code)" after naming the signal. Its only diagnostic line comes from an earlier cancelled turn and suggests a false cause.
+- **At 40 columns:** the status bar drops the review-mode indicator.
+- **Renderer artefacts, not TUI defects:** the table cross drawn as a stub and the dashed borders come from the PNG renderer.
+
+**Other items you asked about:**
+- **Open items:** the live budget, session id in the status bar, and earlier tools/outcomes in resumed history are all still missing (O1-O3).
+- **Escape sequences:** I found no way for model, tool or file text to send control sequences to the terminal. The rendering library drops control and zero-width characters. Visible placeholders for hidden characters appear on only some surfaces (prose and history yes; notices, errors, status bar and approval tool name no).
+- **Performance and idle:** a frame takes about 1.1-1.6 ms with 100k plain or 20k Markdown entries. Idle redraw is 0 bytes.
+
+**Not done:**
+- I did not open surface screens 05, 09, 12, 16, diff screens 02, 04, 07, 10, 14-256, or most baseline screens.
+- I did not audit escaping in the sidecar (`cli/src/sidecar.ts`).
+
+My added tests and a debugging change to the PTY test script exist only in my copy, `scratchpad/tuix`. The script change has been reverted.</result>
+<usage><subagent_tokens>207694</subagent_tokens><tool_uses>105</tool_uses><duration_ms>501835</duration_ms></usage>
+</task-notification>
