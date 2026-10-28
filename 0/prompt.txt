@@ -1,0 +1,1 @@
+no v1 should be gateway preferred.. with cloud inference models available
