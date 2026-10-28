@@ -147,6 +147,10 @@ function fakeAgent(options: FakeOptions) {
     setMessages: (next: ChatMessage[]) => {
       messages.splice(0, messages.length, ...next);
     },
+    restartConversation: () => {
+      const systemMessage = messages.find((message) => message.role === "system") ?? { role: "system", content: "system" };
+      messages.splice(0, messages.length, systemMessage);
+    },
     checkpointDurableState: (note?: string) => {
       if (note) checkpoints.push(note);
     },
