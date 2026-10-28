@@ -155,7 +155,7 @@ export class CheckpointManager {
   private assertNoIgnoredAddedPaths(relativePaths: string[]): void {
     for (const relativePath of relativePaths) {
       try {
-        execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `:(literal)${relativePath}`], {
+        execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `./${relativePath}`], {
           cwd: this.workspace,
           stdio: "ignore",
         });
