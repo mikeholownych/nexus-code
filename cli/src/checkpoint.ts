@@ -310,6 +310,10 @@ export class CheckpointManager {
     allowExternalSymlinkAncestors = false,
   ): void {
     const root = fs.realpathSync(targetRoot);
+    const gitProbeEnv = { ...process.env };
+    for (const key of Object.keys(gitProbeEnv)) {
+      if (key.startsWith("GIT_")) delete gitProbeEnv[key];
+    }
     for (const relativePath of relativePaths) {
       const destination = path.resolve(root, relativePath);
       const relativeDestination = path.relative(root, destination);
@@ -348,57 +352,54 @@ export class CheckpointManager {
         const bareHead = fs.lstatSync(path.join(parent, "HEAD"), { throwIfNoEntry: false });
         const bareConfigPath = path.join(parent, "config");
         const bareConfig = fs.lstatSync(bareConfigPath, { throwIfNoEntry: false });
-        const bareObjects = fs.lstatSync(path.join(parent, "objects"), { throwIfNoEntry: false });
-        const bareRefs = fs.lstatSync(path.join(parent, "refs"), { throwIfNoEntry: false });
-        const bareRepositoryMarkerCount = [bareHead, bareObjects, bareRefs].filter(Boolean).length;
-        const hasBareRepositoryMarkers = bareRepositoryMarkerCount > 0;
-        // Two names are not enough to identify a bare repository: ordinary
-        // projects commonly have directories named `objects` and `refs`.
-        // Require the full HEAD/objects/refs marker set before treating a
-        // missing config as an ambiguous repository layout.
-        const hasBareRepositoryShape = bareRepositoryMarkerCount === 3;
-        if (hasBareRepositoryMarkers && bareConfig && (
-          (bareHead && (!bareHead.isFile() || bareHead.isSymbolicLink()))
-          || (bareObjects && (!bareObjects.isDirectory() || bareObjects.isSymbolicLink()))
-          || (bareRefs && (!bareRefs.isDirectory() || bareRefs.isSymbolicLink()))
-          || !bareConfig.isFile() || bareConfig.isSymbolicLink()
-        )) {
-          throw new Error("Checkpoint destination has an ambiguous bare Git repository layout");
+        if (dotGit) {
+          throw new Error("Checkpoint destination parent is a nested Git repository");
         }
-        if (hasBareRepositoryShape && !bareConfig) {
-          throw new Error("Checkpoint destination has an ambiguous bare Git repository layout");
+
+        // A bare repository root requires HEAD. The Git probe distinguishes a
+        // real repository from ordinary project folders named `objects`/`refs`.
+        const hasGitDirectoryMarkers = !!bareHead;
+        if (hasGitDirectoryMarkers) {
+          try {
+            const discoveredGitDir = execFileSync("git", ["-C", parent, "rev-parse", "--absolute-git-dir"], {
+              cwd: root,
+              encoding: "utf8",
+              env: gitProbeEnv,
+              maxBuffer: 1024 * 1024,
+              stdio: ["ignore", "pipe", "ignore"],
+            }).trim();
+            if (fs.realpathSync(discoveredGitDir) === fs.realpathSync(parent)) {
+              throw new Error("Checkpoint destination parent is a nested Git repository");
+            }
+          } catch (error) {
+            if (error instanceof Error && error.message === "Checkpoint destination parent is a nested Git repository") throw error;
+            if ((error as NodeJS.ErrnoException & { status?: number })?.status !== 128) {
+              throw new Error("Checkpoint could not verify nested Git repository state");
+            }
+          }
         }
-        const hasBareRepositoryLayout = hasBareRepositoryMarkers && !!bareConfig && bareConfig.isFile() && !bareConfig.isSymbolicLink();
-        let declaresBareRepository = false;
-        if (hasBareRepositoryLayout && bareConfig) {
-          if (bareConfig.size > 1024 * 1024) {
+
+        const bareConfigStat = bareConfig ? fs.statSync(bareConfigPath, { throwIfNoEntry: false }) : undefined;
+        if (hasGitDirectoryMarkers && bareConfigStat?.isFile()) {
+          if (bareConfigStat.size > 1024 * 1024) {
             throw new Error("Checkpoint destination has an oversized Git configuration");
           }
-          let inCoreSection = false;
-          for (const line of fs.readFileSync(bareConfigPath, "utf8").split(/\r?\n/)) {
-            const entry = line.replace(/[;#].*$/, "").trim();
-            if (/\\\s*$/.test(entry)) {
-              // Git joins continued values across lines; this parser intentionally
-              // does not emulate that syntax, so reject it rather than miss core.bare.
-              throw new Error("Checkpoint destination Git configuration uses line continuations");
+          try {
+            const configuredBare = execFileSync("git", ["config", "--file", bareConfigPath, "--includes", "--type=bool", "--get", "core.bare"], {
+              cwd: root,
+              encoding: "utf8",
+              env: gitProbeEnv,
+              maxBuffer: 1024 * 1024,
+              stdio: ["ignore", "pipe", "ignore"],
+            }).trim();
+            if (configuredBare === "true") {
+              throw new Error("Checkpoint destination parent is a nested Git repository");
             }
-            if (/^\[\s*include(?:if)?(?:\s|\])/i.test(entry)) {
-              // An include may change core.bare after this file is parsed. Do not
-              // try to partially reproduce Git's includeIf matching here.
-              throw new Error("Checkpoint destination Git configuration uses includes");
-            }
-            if (/^\[\s*core\s*\]$/i.test(entry)) {
-              inCoreSection = true;
-            } else if (/^\[/.test(entry)) {
-              inCoreSection = false;
-            } else if (inCoreSection && /^bare\s*(?:=\s*(?:true|yes|on|1|"true"|"yes"|"on"|"1"))?$/i.test(entry)) {
-              declaresBareRepository = true;
-              break;
-            }
+          } catch (error) {
+            const status = (error as NodeJS.ErrnoException & { status?: number })?.status;
+            if (error instanceof Error && error.message === "Checkpoint destination parent is a nested Git repository") throw error;
+            if (status !== 1) throw new Error("Checkpoint destination has an invalid Git configuration");
           }
-        }
-        if (dotGit || declaresBareRepository) {
-          throw new Error("Checkpoint destination parent is a nested Git repository");
         }
       }
     }
