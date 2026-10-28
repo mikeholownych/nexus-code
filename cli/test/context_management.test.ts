@@ -398,6 +398,23 @@ test("a checkpoint copies the conversation journals too and restores them withou
   }
 });
 
+test("restore removes a journal created after the checkpoint", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  try {
+    createContextCheckpoint(store.manager, state, "u1", "before-journal");
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "post-checkpoint-message\n", { durable: true });
+    state.units[0].status = "BLOCKED";
+
+    restoreContextCheckpoint(store.manager, state, "u1", "before-journal");
+
+    assert.equal(fs.existsSync(journal), false);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("a journal write failure rolls back the task and preserves the blocked operation", () => {
   const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
   const originalRename = fs.renameSync;

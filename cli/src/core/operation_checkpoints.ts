@@ -178,8 +178,10 @@ export function restoreContextCheckpoint(
   }
   try {
     for (const entry of BUNDLE_FILES) {
+      const current = path.join(base, `${record.taskId}${entry.suffix}`);
       const restored = contents.get(entry.name);
-      if (restored) writePrivateFile(path.join(base, `${record.taskId}${entry.suffix}`), restored, { durable: true });
+      if (restored) writePrivateFile(current, restored, { durable: true });
+      else if (fs.existsSync(current)) fs.rmSync(current);
     }
   } catch (error: any) {
     const rollbackFailures: string[] = [];
