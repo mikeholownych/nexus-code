@@ -199,8 +199,17 @@ export class CheckpointManager {
         throw new Error("Checkpoint destination path escapes the workspace");
       }
       const relativeParent = path.dirname(relativeDestination);
+      const parentComponents = relativeParent === "." ? [] : relativeParent.split(path.sep);
+      const destinationStat = fs.lstatSync(destination, { throwIfNoEntry: false });
+      // A directory at the exact destination can itself be a repository, for
+      // example when an untracked checkpoint file was replaced by a bare repo.
+      // Include that leaf only when it is currently a directory; ordinary file
+      // destinations still need only their parents checked.
+      const components = destinationStat?.isDirectory()
+        ? [...parentComponents, path.basename(relativeDestination)]
+        : parentComponents;
       let parent = root;
-      for (const component of relativeParent === "." ? [] : relativeParent.split(path.sep)) {
+      for (const component of components) {
         parent = path.join(parent, component);
         const stat = fs.lstatSync(parent, { throwIfNoEntry: false });
         if (!stat) break;
@@ -216,7 +225,11 @@ export class CheckpointManager {
         const bareRefs = fs.lstatSync(path.join(parent, "refs"), { throwIfNoEntry: false });
         const bareRepositoryMarkerCount = [bareHead, bareObjects, bareRefs].filter(Boolean).length;
         const hasBareRepositoryMarkers = bareRepositoryMarkerCount > 0;
-        const hasBareRepositoryShape = bareRepositoryMarkerCount >= 2;
+        // Two names are not enough to identify a bare repository: ordinary
+        // projects commonly have directories named `objects` and `refs`.
+        // Require the full HEAD/objects/refs marker set before treating a
+        // missing config as an ambiguous repository layout.
+        const hasBareRepositoryShape = bareRepositoryMarkerCount === 3;
         if (hasBareRepositoryMarkers && bareConfig && (
           (bareHead && (!bareHead.isFile() || bareHead.isSymbolicLink()))
           || (bareObjects && (!bareObjects.isDirectory() || bareObjects.isSymbolicLink()))
@@ -338,11 +351,7 @@ export class CheckpointManager {
   }
 
   private removeTrackedDeletions(gitRef: string, addedPaths: string[] = []): void {
-    const deletedPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
-      cwd: this.workspace,
-      encoding: "buffer",
-      maxBuffer: 64 * 1024 * 1024,
-    }).toString("utf8").split("\0").filter(Boolean);
+    const deletedPaths = this.gitRefDeletedPaths(gitRef);
     const workspaceRoot = fs.realpathSync(this.workspace);
     for (const relativePath of new Set([...deletedPaths, ...addedPaths])) {
       const targetPath = path.join(workspaceRoot, relativePath);
@@ -361,6 +370,14 @@ export class CheckpointManager {
         if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
       }
     }
+  }
+
+  private gitRefDeletedPaths(gitRef: string): string[] {
+    return execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    }).toString("utf8").split("\0").filter(Boolean);
   }
 
   private trackedPathsAddedSince(gitRef: string): string[] {
@@ -897,6 +914,14 @@ export class CheckpointManager {
       if (this.isGit && cp.gitRef) {
         const hookGuardEnv = envWithoutConfiguredHooks(this.workspace, ["reference-transaction", "post-index-change"]);
         const postCheckpointAdditions = cp.untrackedFiles === undefined ? this.trackedPathsAddedSince(cp.gitRef) : [];
+        const deletedPaths = this.gitRefDeletedPaths(cp.gitRef);
+        const checkoutPaths = this.gitRefBlobPaths(cp.gitRef);
+        const mutationPaths = [...new Set([
+          ...checkoutPaths,
+          ...deletedPaths,
+          ...postCheckpointAdditions,
+          ...(cp.untrackedFiles ?? []),
+        ])];
         if (cp.untrackedFiles !== undefined && cp.untrackedFiles.length > 0) {
           if (!cp.snapshotDir) return { success: false, message: `Rollback failed: checkpoint '${cp.id}' is missing its untracked snapshot; workspace was not changed` };
           try {
@@ -906,9 +931,12 @@ export class CheckpointManager {
             return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an unsafe untracked snapshot or destination; workspace was not changed` };
           }
         }
+        // Validate every path that restore may write or remove before read-tree
+        // mutates the outer index. Tracked deletions are destructive too: they
+        // must not cross into nested repositories in the current worktree.
+        this.assertNoNestedGitRepositoryAncestors(mutationPaths, this.workspace);
         if (cp.untrackedFiles !== undefined) {
-          const replacementTargets = [...new Set([...cp.untrackedFiles, ...this.gitRefBlobPaths(cp.gitRef)])];
-          this.assertNoNestedGitRepositoryAncestors(replacementTargets, this.workspace);
+          const replacementTargets = [...new Set([...cp.untrackedFiles, ...checkoutPaths])];
           this.assertGitSnapshotTargetsReplaceable(replacementTargets, cp.gitRef);
         }
         if (cp.untrackedFiles === undefined) this.assertLegacyUntrackedRestoreSafe(cp.gitRef);
