@@ -238,6 +238,14 @@ This amendment is **narrow by design**. It applies only to corpora where the mea
 
 **Affected:** REQ-AGT-118; SPEC-11 §2.7 and ACC-VER-07; REQUIREMENTS ledger row REQ-AGT-118; `cli/test/fixtures/token_calibration.json` and `cli/test/tokens.test.ts`. No change to `cli/src/tokens.ts` behaviour.
 
+## DEC-18: v1.0.0 terminal screenshot-artifact waiver
+
+**Context.** The v1.0.0 manual terminal matrix requires real interaction in five terminal environments at three sizes. The release owner waived screenshot artifacts for this release.
+
+**Chosen (owner-confirmed 2026-10-28).** Approval-panel and post-exit screenshots are not required for v1.0.0. This waiver changes only the screenshot artifact requirement. It does not waive any interactive run, check, safety threshold, per-cell PASS/FAIL verdict, observed outcome, evidence record, exact installed-RC identity, or written disposition for non-safety failures. All 15 manual matrix cells remain mandatory; automated PTY runs cannot replace them.
+
+**Affected:** ACCEPTANCE §5.3 / ACC-TUI-MANUAL; SPEC-10 REQ-QUAL-108; `TERMINAL-MATRIX-WORKSHEET.md`; PLAN-10 task 12.
+
 ## Owner and external actions required (not performed by the audit)
 
 | # | Action | Why | When |
