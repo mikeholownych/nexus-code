@@ -1252,22 +1252,90 @@ export class AutonomousAgent {
   }
 
   /**
-   * Rebase the verifier baseline onto a verified TDD RED test set. RED is not verification: the reproduction test now
-   * exists and fails, and GREEN must be able to bind a stable verifier definition while it implements the fix. A
-   * recovered unit keeps its `verificationBaselineInvalidated` posture, so a resumed GREEN still cannot claim VERIFIED.
+   * Rebase the verifier baseline onto a verified TDD RED test set, without moving anything the RED turn was not
+   * allowed to change. Every pre-RED test must still be present and unchanged unless it is one of the reported RED
+   * tests, and every verifier-definition entry must be unchanged except for those tests (and the absent-path marker
+   * they legitimately clear). Anything else is refused so GREEN cannot verify against an oracle the model narrowed.
    */
-  public rebaseVerifierBaselineAfterTddRed(): void {
+  public rebaseVerifierBaselineAfterTddRed(
+    redTests: readonly string[],
+  ): { ok: true } | { ok: false; reason: string } {
+    const baseline = this.changeBaseline;
     const command = this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command;
-    if (!command) return;
-    const tests = snapshotTests(this.config.workspace);
-    const verifier = snapshotVerifierDefinition(this.config.workspace, command, this.config.trustedDeliverableFiles ?? []);
-    if (!tests || tests.size === 0 || !verifier || verifier.size === 0) return;
+    if (!command) return { ok: false, reason: "no verifier command is configured or discoverable" };
+    if (!baseline) return { ok: false, reason: "no verifier baseline was captured before RED" };
+    if (baseline.command !== command) {
+      return { ok: false, reason: "the verifier command changed during RED" };
+    }
+    if (!baseline.tests) {
+      return { ok: false, reason: "the verifier baseline captured before RED was incomplete" };
+    }
+    const workspace = this.config.workspace;
+    const rel = (file: string) => path.relative(path.resolve(workspace), path.resolve(workspace, file)).replace(/\\/g, "/");
+    const reported = new Set(redTests.map(rel));
+    const currentTests = snapshotTests(workspace);
+    if (!currentTests) return { ok: false, reason: "the current test set is too large to capture" };
+    for (const [file, content] of baseline.tests) {
+      const after = currentTests.get(file);
+      if (after === undefined) return { ok: false, reason: `RED removed test ${file}` };
+      if (after !== content && !reported.has(file)) {
+        return { ok: false, reason: `RED changed ${file}, which is not one of its reported tests` };
+      }
+    }
+    for (const file of currentTests.keys()) {
+      if (!baseline.tests.has(file) && !reported.has(file)) {
+        return { ok: false, reason: `RED added ${file}, which is not one of its reported tests` };
+      }
+    }
+    for (const file of reported) {
+      if (!currentTests.has(file)) return { ok: false, reason: `the reported RED test ${file} is not present` };
+    }
+    const currentVerifier = snapshotVerifierDefinition(workspace, command, this.config.trustedDeliverableFiles ?? []);
+    if (!currentVerifier) return { ok: false, reason: "the current verifier definition could not be captured" };
+    // A repository with no test file yet has no pre-RED definition snapshot (the verifier references the missing file).
+    // That is only safe when the RED tests are all new: a pre-existing test or definition cannot have been narrowed.
+    if (!baseline.verifier) {
+      for (const file of reported) {
+        if (baseline.tests.has(file)) {
+          return { ok: false, reason: `RED changed ${file} but no verifier definition was captured before RED` };
+        }
+      }
+    }
+    const preVerifier = baseline.verifier;
+    if (preVerifier) {
+      for (const key of new Set([...preVerifier.keys(), ...currentVerifier.keys()])) {
+        if (key.startsWith("\0test-file-set:")) continue;
+        const before = preVerifier.get(key);
+        const after = currentVerifier.get(key);
+        if (before === after) continue;
+        if (key.startsWith("\0must-remain-absent:") && reported.has(rel(key.slice("\0must-remain-absent:".length)))) continue;
+        if (!key.startsWith("\0") && reported.has(key)) continue;
+        return {
+          ok: false,
+          reason: key.startsWith("\0")
+            ? `RED changed the verifier's ${key.slice(1).split(":")[0]} definition`
+            : `RED changed ${key}, which the verifier depends on`,
+        };
+      }
+    }
+    const tests = new Map(baseline.tests);
+    for (const file of reported) tests.set(file, currentTests.get(file)!);
+    const verifier = new Map(baseline.verifier ?? currentVerifier);
+    for (const key of [...verifier.keys()]) {
+      if (key.startsWith("\0test-file-set:")) verifier.delete(key);
+      else if (key.startsWith("\0must-remain-absent:") && reported.has(rel(key.slice("\0must-remain-absent:".length)))) verifier.delete(key);
+    }
+    for (const file of reported) {
+      const content = currentVerifier.get(file);
+      if (content !== undefined) verifier.set(file, content);
+    }
+    verifier.set("\0test-file-set:" + JSON.stringify([...tests.keys()].sort()), "");
     this.changeBaseline = {
       command,
       failed: true,
       tests,
       verifier,
-      trustedDeliverables: [...(this.config.trustedDeliverableFiles ?? [])],
+      trustedDeliverables: [...(baseline.trustedDeliverables ?? [])],
       at: new Date().toISOString(),
     };
     if (this.durable) {
@@ -1277,6 +1345,7 @@ export class AutonomousAgent {
         this.reportPersistenceFailure("tdd_baseline", err);
       }
     }
+    return { ok: true };
   }
 
   public getStateManager(): DurableStateManager {

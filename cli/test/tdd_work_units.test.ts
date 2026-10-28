@@ -151,7 +151,7 @@ function fakeAgent(options: FakeOptions) {
     },
     getStateManager: () => ({ getBaseDir: () => options.tasks }),
     getChangeBaseline: () => undefined,
-    rebaseVerifierBaselineAfterTddRed: () => {},
+    rebaseVerifierBaselineAfterTddRed: () => ({ ok: true }),
     getCandidateTracker: () => new CandidateTracker(),
     setProviderRecoveryHooks: () => {},
     getObjective: () => undefined,
@@ -355,6 +355,110 @@ test("a real RED then GREEN run verifies the first test added to a repo with no 
     );
 
     assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+    if (outcome.kind === "completed") assert.equal(outcome.outcome, "VERIFIED", JSON.stringify(outcome));
+  } finally {
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("RED that narrows the verifier or test set cannot reach a verified GREEN", { timeout: 90_000 }, async () => {
+  const repo = makeRepo({
+    "src/value.js": "module.exports = 1;\n",
+    "test/a.test.js": "require('node:test')('a', () => {});\n",
+    "test/b.test.js": "require('node:test')('b', () => {});\n",
+    "package.json": JSON.stringify({ name: "x", scripts: { test: "node --test test/a.test.js test/b.test.js" } }, null, 2) + "\n",
+  });
+  const gw = await startGateway((n): Reply => {
+    if (n === 1)
+      return {
+        kind: "tools",
+        calls: [
+          {
+            name: "write_file",
+            args: {
+              path: "package.json",
+              overwrite: true,
+              content: JSON.stringify({ name: "x", scripts: { test: "env -u NODE_TEST_CONTEXT node --test test/red.test.js" } }, null, 2) + "\n",
+            },
+          },
+        ],
+      };
+    if (n === 2) return { kind: "tools", calls: [{ name: "write_file", args: { path: "test/red.test.js", content: "const test = require('node:test');\nconst assert = require('node:assert');\nconst value = require('../src/value.js');\ntest('value', () => assert.equal(value, 2));\n" } }] };
+    if (n === 3) return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "RED: red test fails" } }] };
+    if (n === 4) return { kind: "tools", calls: [{ name: "write_file", args: { path: "src/value.js", content: "module.exports = 2;\n", overwrite: true } }] };
+    return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "GREEN" } }] };
+  });
+  const executor = new AgentWorkUnitExecutor({
+    baseConfig: {
+      endpoint: gw.url,
+      model: "m",
+      workspace: repo,
+      shell: "bash",
+      maxSteps: 8,
+      temperature: 0,
+      approvalMode: "auto",
+      fullAccess: true,
+      authoritativeVerifierCommand: "env -u NODE_TEST_CONTEXT npm test",
+      trustedDeliverableFiles: ["src/value.js"],
+    } as any,
+    tdd: true,
+  });
+  try {
+    const outcome = await executor.run(
+      unit({ prompt: "Make value.js export 2, test-first." }),
+      { id: "primary", endpoint: gw.url, provider: new URL(gw.url).origin, model: "m", capabilities: ["tools"], rank: 0 },
+      context()
+    );
+    assert.equal(outcome.kind, "failed");
+    if (outcome.kind === "failed") assert.match(outcome.reason, /verification oracle/i);
+  } finally {
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("RED cannot create the verifier when none existed before it", { timeout: 90_000 }, async () => {
+  const repo = makeRepo({ "src/value.js": "module.exports = 1;\n" });
+  const gw = await startGateway((n): Reply => {
+    if (n === 1)
+      return {
+        kind: "tools",
+        calls: [
+          {
+            name: "write_file",
+            args: {
+              path: "package.json",
+              content: JSON.stringify({ name: "x", scripts: { test: "env -u NODE_TEST_CONTEXT node --test test/red.test.js" } }, null, 2) + "\n",
+            },
+          },
+        ],
+      };
+    if (n === 2) return { kind: "tools", calls: [{ name: "write_file", args: { path: "test/red.test.js", content: "const test = require('node:test');\nconst assert = require('node:assert');\nconst value = require('../src/value.js');\ntest('value', () => assert.equal(value, 2));\n" } }] };
+    if (n === 3) return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "RED" } }] };
+    return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "GREEN" } }] };
+  });
+  const executor = new AgentWorkUnitExecutor({
+    baseConfig: {
+      endpoint: gw.url,
+      model: "m",
+      workspace: repo,
+      shell: "bash",
+      maxSteps: 8,
+      temperature: 0,
+      approvalMode: "auto",
+      fullAccess: true,
+    } as any,
+    tdd: true,
+  });
+  try {
+    const outcome = await executor.run(
+      unit({ prompt: "Make value.js export 2, test-first." }),
+      { id: "primary", endpoint: gw.url, provider: new URL(gw.url).origin, model: "m", capabilities: ["tools"], rank: 0 },
+      context()
+    );
+    assert.equal(outcome.kind, "failed", JSON.stringify(outcome));
+    if (outcome.kind === "failed") assert.match(outcome.reason, /verification oracle/i);
   } finally {
     await gw.close();
     fs.rmSync(repo, { recursive: true, force: true });

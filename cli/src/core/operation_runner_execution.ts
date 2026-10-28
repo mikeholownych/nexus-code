@@ -362,10 +362,27 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_red_checkpoint_failed");
         }
       }
-      if (tdd && redEvidence && (redVerifiedNow || agent.getChangeBaseline() == null)) {
-        // RED changed the verifier definition by adding the reproduction test. Rebase the baseline onto that test set
-        // so GREEN can bind it; a recovered unit keeps its fail-closed verification posture.
-        agent.rebaseVerifierBaselineAfterTddRed();
+      if (tdd && redEvidence && redVerifiedNow && !ctx.operatorDecision?.restart) {
+        // RED legitimately changes the verifier definition by adding the reproduction test. Rebase the baseline onto
+        // that exact test set so GREEN can bind it; any other test or verifier change RED made is refused, and GREEN
+        // then cannot verify against a narrowed oracle.
+        const rebase = agent.rebaseVerifierBaselineAfterTddRed(redEvidence.tests);
+        if (!rebase.ok) {
+          // The evidence is not usable for a verified GREEN; a retry must rerun RED against the oracle.
+          this.clearTddEvidence(agent);
+          return {
+            kind: "failed",
+            cause: "EXECUTION_FAILED",
+            reason: `TDD RED changed the verification oracle: ${rebase.reason}`,
+            question:
+              `${unit.title}: the RED phase also changed the test or verifier set up (${rebase.reason}). ` +
+              `GREEN cannot be verified against a narrowed oracle. Retry RED on the unchanged oracle, or revise the unit?`,
+            options: [
+              { label: "retry the RED phase", action: { kind: "retry" } },
+              { label: "revise the unit (note required)", action: { kind: "revise" } },
+            ],
+          };
+        }
       }
       const greenPrompt = tdd && redEvidence ? `${prompt}\n\n${tddGreenProtocol(redEvidence)}` : prompt;
       const turn = await agent.runTurn(greenPrompt, undefined, { signal: ctx.signal, resume: isResume || (tdd && redEvidence !== undefined) });
