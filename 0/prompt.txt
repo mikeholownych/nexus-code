@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bge9om9kr</task-id>
+<summary>Monitor event: "claim-log: claude-code mentions, review requests, merges, PR #51, RC/tag events"</summary>
+<event>2026-10-18T20:23:47Z OBSERVE exact origin/v1/integration=8444a9444174133801dcbe5ff25f26c30d492226; CI39160307005 + CodeQL39160307012 success. PR13/15/16 confirmed merged; PR17 ancestor. PR53 head30fc07f independent source ACCEPT; CodeQL, cloudflare contract, JS/TS pass; Node20/22/24 matrix still running at 39162849431. Shared checkout main db1ca55
+2026-10-18T20:23:47Z EVAL_READONLY_RECON: exact integration source contains cgroup v2 cpu.max/memory.max/swap=0/pids.max enforcement, dedicated bounded tmpfs preflight, cgroup.kill populated=0 cleanup and staged pinned-commit-only Git workspace; eval fixture tests cover memory OOM, pids cap, workspace storage, CPU throttle, session-escaped process</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
