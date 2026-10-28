@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bv106fota</task-id>
+<tool-use-id>toolu_0176PY1S3STeNAfenCcDDJ2i</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/bv106fota.output</output-file>
+<status>completed</status>
+<summary>Background command "ssh -o BatchMode=yes mike@10.0.8.5 'cd /tmp/evalx &amp;&amp; rm -f eng-lead-vllm.log eng-lead-vllm-awq.json; nohup python3 engx.py run lead-vllm-awq http://127.0.0.1:8000 /etc/local-ai/vllm/worker1/worker-api-key cyankiwi/Qwen3-Coder-30B-A3B-Instruct-AWQ-4bit 3 &gt; eng-lead-vllm.log 2&gt;&amp;1 &amp; sleep 1; echo relaunched'; timeout 3000 ssh -o BatchMode=yes -o ServerAliveInterval=30 mike@10.0.8.5 'until grep -q "^RESULT" /tmp/evalx/eng-lead-vllm.log 2&gt;/dev/null; do sleep 15; done; cat /tmp/evalx/eng-lead-vllm.log | cut -c1-260'" completed (exit code 0)</summary>
+</task-notification>
