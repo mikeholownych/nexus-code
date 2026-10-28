@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bykmsw0e7</task-id>
+<summary>Monitor event: "Integration CI at final head a7126aa"</summary>
+<event>run 39108774170</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
