@@ -1,0 +1,96 @@
+<task-notification>
+<task-id>a73ef7780723acad1</task-id>
+<tool-use-id>toolu_0179WAFnSXThJjXuLwMkUwZz</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/a73ef7780723acad1.output</output-file>
+<status>completed</status>
+<summary>Agent "TUI re-acceptance round 5" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Round-5 re-acceptance of `7503b23` (approval redesign `b50ae9a`)
+
+### Verdicts
+1. **Approval/input safety: ACCEPTED WITH DEFECTS.** The round-4 hole is closed. "Approve all later actions" (`always:true`) is now reached only by `a` or Shift+A on an armed panel, then Enter at least 400 ms later, then Enter again at least 400 ms after that. Moving the cursor while editing a draft can no longer reach it. Approving one action is still reachable from ordinary draft editing (P2-1 below).
+2. **Visual acceptance: ACCEPTED WITH DEFECTS.** The only real change is the screen 10 hint, which is correct. The P3 defects carried over from round 4 are unchanged, and the evidence has a coverage gap (P3-1).
+3. **Provenance: VERIFIED.** Details are under Checks run.
+
+### Ranked findings
+**P2-1 Approving one action is still reachable from ordinary draft editing.** Code: `live_state.rs:1296` (the 2 s wait) and `:1337` (Enter takes the choice).
+- **Observed:** with a panel that was typed into or opened over a draft, pressing → (moving the cursor to the end), pausing 2 s or more (re-reading), then Enter sends `approve always:false`.
+  - Unit runs: → then 2000 ms then Enter approves; → End then 2.1 s then Enter approves; 1999 ms decides nothing.
+  - PTY: scenario `draft_typed_right_pause2_enter` approved first.txt in 3 of 3 runs.
+  - The exhaustive search found 342 key patterns that approve once on non-armed panels. Every one is → followed by optional End and then Enter.
+- **Expected:** a decision on a panel the person was typing into should need at least one key that nobody uses when editing.
+- **Fix:** on non-armed panels, treat → plus Enter like approve-all: the first Enter asks "enter again approves", the second decides. Alternatively, re-arm `y` after a sustained quiet period (for example 3 s with no key), make the change visible, and let Enter after arrows take only Deny.
+
+**P3-1 A message of just "a" followed by a second Enter approves all later actions.** Code: `:1332`, `:1308`.
+- **Observed:** nothing typed for 2 s or more and an empty composer, then `a`, Enter, Enter with gaps of 400 ms or more, gives `always:true`. The PTY run with R3_DELAY=3500 switched the session's mode to `auto`. The same sequence at 150 ms gaps decides nothing.
+- This is the intended deliberate path. It also matches a person sending the one-letter message "a" and pressing Enter again because it "did not send", although the panel does show "enter again approves this and every later action" in between.
+- **Fix (optional):** make the confirmation a different key from Enter (for example `a` again).
+
+**P3-2 A first word starting with y or n answers an armed panel.** Typing "yes…", "Yes…" or "ay…" more than 600 ms after the panel appears approves once; "and" denies. This is inherent to letter shortcuts and only applies when there was no draft and no typing in the 2 s before the panel. Noted as residual, no fix required.
+
+**P3-3 Delete and other navigation keys do not count as typing.** Code: `on_key_at` `:1472`.
+- **Observed:** emptying the composer with Home+Delete 50 ms before the panel appears leaves the panel armed, and `y` 650 ms later approves.
+- **Fix:** include Delete (and any key that changes the composer) in `last_typed`.
+
+**P3-4 Esc skips the 1.5 s settle.** Code: `:1351`. Esc then Esc 466 ms later denies two requests (unit test; the PTY run agrees). This is the safe direction, but the manual says "a moment has passed" applies to every key.
+- **Fix:** gate Esc on `last_decided` as well, or correct the manual.
+
+**P3-5 Some hints are wrong or truncated.** Code: `live_view.rs:536-543, 533, 1712`.
+- During the settle window the hint still says "y or n", but a `y` there silently disarms the panel. Recovery then takes → plus a 2 s wait plus Enter: the earliest decision lands 3.8 s after the first `y`.
+- A draft panel the person never typed into says "typing ignored".
+- On a non-armed panel the "Approve all later actions" button looks active but no key reaches it.
+- At 40–50 columns the confirmation hint is cut off ("…every la"), losing "esc denies".
+- The status line never mentions `a`.
+- **Fix:** add a settle-state hint, wrap the hint row, and dim the button with a note when it is unreachable.
+
+**P3-6 Panels disarmed by recent typing re-arm only on resize.** A panel disarmed because of recent typing (with an empty composer) re-arms after shrinking and regrowing the terminal 3 s later, but never re-arms if the terminal stays the same size. This is inconsistent; it is not a safety risk.
+
+**P3-7 Evidence does not show the new states.** There is no screen of an armed panel, the `a` selection, the confirmation stage, or the "N more waiting" title. Only the disarmed screen 10 exists.
+
+**P3-8 Round-4 visual defects carried over unchanged:**
+- CJK glyphs clipped in the paste block (surface 11/12) and in the diff panel (diff 11).
+- Table separator glyphs.
+- Hanging indent at 60 columns (surface 19).
+- Identical screens: surface 23b = 24 and diff 06 = 07.
+
+### Round-4 findings
+| Finding | Status | Evidence |
+|---|---|---|
+| P1-A″ arrows + pauses + two Enters reach approve-all | **RESOLVED** | Exhaustive search, about 2.3M runs across 4 start states: `always:true` occurs only on armed panels and only with `a`/Shift+A ⏎ ⏎ (36 patterns, all of that form). It never occurs on panels that were typed into, opened over a draft, or opened during recent typing. All round-4 PTY scenarios decide nothing. |
+| P2-1 → (400 ms) Enter approves once from composing | **PARTIAL** | The wait is now 2 s (1999 ms decides nothing, 2000 ms approves). It is still reachable in the PTY (3/3), see P2-1 above. |
+| P2-2 a repeated `y` answers the next queued request | **RESOLVED** | `y` at +1499 ms disarms the next panel; at +1500 ms it approves (deliberate). The title shows the queue count. Esc bypasses the settle (P3-4). |
+| P3 confirmation hint wrong | **RESOLVED** (truncated when narrow, P3-5) | The hint text matches behaviour. Scroll keys keep the confirmation; → and Tab cancel it; a paste disarms. |
+| P3 `a` then Enter needed 600 ms | **RESOLVED** | Enter is taken 400 ms after `a`; 399 ms disarms. |
+| P3 help overlay stale | **RESOLVED** | Screen 18 and the manual describe the current rules. Manual wording about Esc in the settle period is inaccurate (P3-4). |
+| P3 Super/Meta/Hyper + y | **RESOLVED** | Super, Hyper, Meta, Ctrl and Alt chords on y, a and Enter never answer. Shift+y/A answer. Caps-lock, num-lock and keypad flags don't affect answers. |
+| P3 renderer glyphs, identical screens, 60-column indent | **NOT RESOLVED** (not changed) | Screens 11/12/19/23b/24 and diff 06/07/11. |
+
+### Checks run
+- **Unit, release build, explicit timestamps passed to `on_key_at`:** all 32 earlier probes (rounds 1–4) still decide nothing except the deliberate sequences. 6 new round-5 probe tests cover:
+  - the exhaustive search;
+  - boundaries at 399/400 ms, 1999/2000 ms and 1499/1500 ms;
+  - the 2 s typing window: 1999 ms keeps the panel disarmed, 2000 ms arms it;
+  - slow typists idling 2/2.5/3/10 s with a draft: no decision;
+  - queue and settle, the confirmation stage, resize, paste;
+  - kitty-protocol variants (lock-key flags, Super/Hyper/Meta, key-release events).
+- **`cargo test --release --bin nexus-tui`:** 238/238, run twice.
+- **All six `cli/test/tui_*_e2e.test.ts` files, serial:** 7/7 tests, run twice. Load average was 0.9–2.8.
+- **PTY probes, serial:** rounds 1, 3 and 4: 15/15 passed and none approved anything. Round 5: 3 runs.
+- **Provenance:** `git diff 9792d03 7503b23` touches only `docs/`. Both evidence metrics files record gitHead 9792d03. The recorded binary hashes (`b366340b…` for nexus-tui, `6dd91487…` for sidecar.js) equal my build of 7503b23. `sha256sum -c` passes in both directories (32 and 20 files), and the manifest hashes match.
+- **Visuals:**
+  - Cell dumps of all 42 screens were compared with the round-4-accepted evidence (5cab42f). The only differences are spinner and timing text, the help page count (90→92), and the screen 10 hint.
+  - I viewed 21 of the 26 surface PNGs (all except 13, 14, 15, 16 and 23b; 23b is byte-identical to 24) and 4 of the 16 diff PNGs (01, 06, 11, 14-depth-16).
+
+### Limitations
+- The remaining 5 surface and 12 diff PNGs were checked through cell dumps, not opened.
+- The PTY fixture sends approval requests one after another, so the queue cases were tested in units only. The PTY `y_y1200_recover` and `esc_esc` scenarios therefore did not exercise a queue.
+- `draft_typed_right_pause2_enter` and the round-3 `tab_complete` scenario timed out or failed at exit because the leftover draft or slash menu kept the TUI from quitting. That is a test-harness problem; the decisions were recorded first.
+
+### Residual risk
+I judge the residual risk **acceptable for a review-mode safety gate**, with P2-1 to be fixed soon:
+- The session-wide escalation now needs a specific letter on a panel shown while the person was not typing, plus two slow Enters with an on-screen warning between them. No editing habit, timing or modifier reaches it.
+- What remains (P2-1, P3-2, P3-3) is approval of **one** action whose diff is on screen, with a "✓ approved" entry in the transcript. In review mode that is a bounded, visible, single-step error, not a switch to auto mode.
+
+The probes are saved at `/tmp/claude-1000/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2/scratchpad/reaccept5_probes.patch`: the round-1–5 unit probes plus the PTY drivers and tests, with round 5 adding `tui_reaccept5_driver.py` and `tui_reaccept5_e2e.test.ts`. Logs (`r5_*.log`) are in the same scratchpad directory. The worktree is removed. The live checkout and `scratchpad/base` were not touched, and nothing was committed or pushed.</result>
+<usage><subagent_tokens>209234</subagent_tokens><tool_uses>39</tool_uses><duration_ms>849866</duration_ms></usage>
+</task-notification>
