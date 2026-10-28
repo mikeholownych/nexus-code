@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bx5lpbrgo</task-id>
+<tool-use-id>toolu_01DYvtzw9oTm6QYr5zRmQ52b</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/bx5lpbrgo.output</output-file>
+<status>failed</status>
+<summary>Background command "timeout 7100 ssh -o BatchMode=yes -o ServerAliveInterval=30 mike@10.0.8.5 'until grep -q ALLDONE /tmp/evalx/cand.log 2&gt;/dev/null; do sleep 30; done; cat /tmp/evalx/cand.log; grep -h "^RESULT" /tmp/evalx/cand-*.log | cut -c1-600'" failed with exit code 124</summary>
+</task-notification>
