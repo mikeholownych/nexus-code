@@ -319,8 +319,8 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           agent.restartConversation(!recovered?.obligationRecordPresent);
           prompt =
             `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
-            "Note: this unit was explicitly restarted. Its earlier conversation is not being continued; inspect any " +
-            "workspace changes that remain, because they are still unverified.";
+            "Note: this unit was explicitly restarted after recovery. Its earlier conversation was not continued. " +
+            "Earlier workspace history may be incomplete; inspect any changes that remain, because they remain unverified.";
         } else if (unusable) {
           // A partial record is never continued or taken as evidence; only the operator can start the unit over.
           if (!ctx.operatorDecision?.restart) {
