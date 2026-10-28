@@ -1,0 +1,14 @@
+<task-notification>
+<task-id>b6r43s1w1</task-id>
+<tool-use-id>toolu_01BLgK3TLbXqJeWgqHZk4XMp</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/b6r43s1w1.output</output-file>
+<status>completed</status>
+<summary>Background command "cd ~/Projects/aihost &amp;&amp; source .venv/bin/activate &amp;&amp; timeout 900 python -m pytest tests -q -x -p no:cacheprovider 2&gt;&amp;1 | tail -5; ssh 10.0.8.5 'sudo cat /dev/vcs1 | python3 -c "
+import sys,re
+t=sys.stdin.buffer.read().decode(\"latin1\")
+lines=[t[i:i+160] for i in range(0,len(t),160)]
+for l in lines:
+    l2=re.sub(r\"[^\\x20-\\x7e]\",\" \",l)
+    if re.search(r\"MODEL|vllm-top |e2e  |done|dispatch|kv cache|prefix hit|util \",l2): print(re.sub(r\"\\s{3,}\",\"  |  \",l2.strip())[:150])
+" | head -12'" completed (exit code 0)</summary>
+</task-notification>
