@@ -1,0 +1,1 @@
+the manually vllm-top command needs to be updated with the same version used in TTY1. This is used in SSH sessions
