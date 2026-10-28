@@ -1,0 +1,365 @@
+<pasted_content id="7cf0">
+# CLAUDE ENGINEERING TASK
+## Nexus v1.0.0: Independent Review of PLAN-10 PR-10d
+
+### Mission
+
+Perform an independent, evidence-based review of the outstanding **PLAN-10 PR-10d** change against its original approved requirements and the Nexus v1.0.0 acceptance criteria.
+
+You are acting as an independent reviewer, not an implementing agent.
+
+Your objective is to determine whether PR-10d is correct, complete, adequately tested, compatible with the integrated Nexus architecture, and safe to accept.
+
+**Do not assume the implementation is correct because its author reports success, tests pass, or the change has already landed.**
+
+### 1. Operating context
+
+Repository: `~/nexus-code`
+
+Integration branch: `v1/integration`
+
+Known coordination state:
+
+- Eleven implementation workstreams have reportedly landed.
+- Claude, Codex, and OpenCode have been coordinating through the claims protocol.
+- Codex currently owns portions of the evaluation harness and acceptance work.
+- OpenCode owns other active implementation or qualification work.
+- SUITE execution has an active claim.
+- An earlier integrated revision passed 1,089 tests.
+- A later Codex snapshot reported 28 failures out of 1,148.
+- An OpenCode suite execution also ended in error.
+- Those later results must be reconciled against their exact revisions.
+- The held-out acceptance corpus is now independently authored and held in `~/nexus-heldout-v2`.
+- Claude's earlier 28-task corpus is development/pilot material only.
+
+Do not treat historical test passes as proof that the current integration tip is healthy.
+
+### 2. Authority and coordination
+
+Before doing any review work:
+
+1. Inspect the current claims protocol.
+2. Locate the outstanding PLAN-10 PR-10d review request.
+3. Verify that its review claim is available.
+4. Record your reviewer claim using the established protocol.
+5. Identify the exact source and target commits.
+6. Confirm that the chosen review snapshot is stable.
+
+If another agent owns the review, do not take over.
+
+If the branch is moving, use an immutable commit reference or existing snapshot without altering another agent's working tree.
+
+Do not claim SUITE or any implementation lane.
+
+#### Permitted
+
+- Read repository source and documentation.
+- Inspect commit history and diffs.
+- Read acceptance criteria and requirements records.
+- Inspect existing test artifacts and execution logs.
+- Perform static analysis.
+- Run narrowly scoped, nonconflicting checks only if permitted by the claims protocol.
+- Record independent review findings.
+- Update the review claim and associated disposition records.
+
+#### Prohibited
+
+- Modify implementation source.
+- Apply patches.
+- Merge branches.
+- Rebase or reset branches.
+- Push or publish.
+- Modify Nexus's production or development runtime configuration.
+- Modify held-out acceptance tasks or custody records.
+- Run the full test suite while SUITE is claimed.
+- Start uncontrolled inference workloads.
+- Modify files claimed by Codex or OpenCode.
+- Override another agent's decisions or ownership.
+
+If resolving a finding requires implementation, submit a precise boundary request to the responsible owner.
+
+### 3. Recover the original approved PR-10d scope
+
+Do not accept the PR title or implementation description as the authoritative specification.
+
+Locate:
+
+- PLAN-10 scope and dependencies.
+- PR-10d's original task definition.
+- Requirements mapped to PR-10d.
+- Approved architecture and invariants.
+- Relevant acceptance gates.
+- Expected deliverables.
+- Explicit exclusions.
+- Dependency workstreams.
+- Earlier review findings.
+- Any changed scope or approved amendments.
+
+Build a requirement-to-implementation traceability matrix.
+
+For each requirement identify:
+
+- Original requirement.
+- Source of authority.
+- Implementation location.
+- Test or evidence.
+- Current status.
+- Remaining gap.
+
+Use these statuses:
+
+- `SATISFIED_WITH_EVIDENCE`
+- `PARTIALLY_SATISFIED`
+- `NOT_SATISFIED`
+- `NOT_VERIFIED`
+- `OUT_OF_SCOPE`
+
+Do not silently narrow a requirement to match the implemented behaviour.
+
+If the original authorization cannot be found, identify that as a review limitation rather than inventing the intended scope.
+
+### 4. Inspect the exact implementation
+
+Review the complete PR-10d change, including interactions with earlier and later integration commits where relevant.
+
+Determine:
+
+1. What behaviour changed.
+2. Why the change was required.
+3. Which existing contracts it affects.
+4. Whether the implementation matches the approved design.
+5. Whether the public API remains compatible.
+6. Whether errors propagate correctly.
+7. Whether failure states are observable.
+8. Whether concurrency and cancellation behaviour remain correct.
+9. Whether context and session state remain durable.
+10. Whether deterministic validation boundaries remain external to model output.
+11. Whether security and authority invariants remain intact.
+12. Whether later integration changes invalidate assumptions established by PR-10d.
+
+Focus on material correctness issues rather than cosmetic preferences.
+
+Identify affected call paths and consumers, not just changed files.
+
+### 5. Nexus acceptance invariants
+
+Evaluate PR-10d against the relevant system-level expectations.
+
+#### Autonomous task completion
+
+Nexus must distinguish:
+
+- Model response received.
+- Tool action completed.
+- Validation passed.
+- Engineering objective achieved.
+
+A successful inference response is not sufficient evidence of task completion.
+
+#### Context integrity
+
+Check any relevant:
+
+- Context window handling.
+- Context discovery.
+- Compaction.
+- Durable session state.
+- Tool-result preservation.
+- Continuation.
+- Repeated-work prevention.
+
+Nexus must not silently lose information needed to complete a task.
+
+#### Failure handling
+
+Where affected, verify:
+
+- Rate-limit backoff.
+- Provider unavailability.
+- Retries.
+- Timeout handling.
+- Cancellation.
+- Recovery and resume.
+- Context restoration.
+- Terminal failure reporting.
+
+Do not require PR-10d to implement unrelated capabilities, but identify regressions or dependencies that affect its actual scope.
+
+#### Authority and validation
+
+Verify that:
+
+- Model assertions are not accepted as proof.
+- External test and validation results remain authoritative.
+- Tests and lint are not bypassed to obtain apparent success.
+- Agent authority boundaries remain explicit.
+- Evidence remains attributable and reproducible.
+
+### 6. Test-evidence assessment
+
+Inspect the tests relevant to PR-10d.
+
+Distinguish:
+
+- Tests added by PR-10d.
+- Tests inherited from earlier work.
+- Integration tests affected by PR-10d.
+- Tests executed against the exact reviewed commit.
+- Tests executed only against earlier or later snapshots.
+- Tests claimed but lacking execution evidence.
+
+Evaluate whether the tests exercise the actual failure mechanisms.
+
+Look for:
+
+- False-positive fixtures.
+- Assertions that merely duplicate implementation assumptions.
+- Untested boundary conditions.
+- Missing negative cases.
+- Mock behaviour inconsistent with production.
+- Nondeterministic success criteria.
+- Unverified integration dependencies.
+
+Do not run SUITE while another agent holds its claim.
+
+If a targeted test is essential and permissible, claim the required test scope first.
+
+Otherwise inspect existing evidence and report the verification gap.
+
+### 7. Reconcile known integration instability
+
+The reported development state includes:
+
+- Historical integrated suite: 1,089/1,089 passed.
+- Later Codex snapshot: 28 failures out of 1,148.
+- OpenCode suite: error exit.
+- Subsequent Codex rerun following `make build`: status not yet established.
+
+Do not assign these failures to PR-10d without evidence.
+
+Instead:
+
+1. Identify the exact commits involved.
+2. Determine whether PR-10d's changed code is implicated.
+3. Examine available failure signatures.
+4. Distinguish build-artifact failures from behavioural regressions.
+5. Record whether current evidence resolves or leaves the issue open.
+6. Avoid duplicating ongoing SUITE execution.
+
+If integration failures remain unresolved, explain their effect on PR-10d acceptance.
+
+A PR can pass focused review while the overall v1.0.0 release remains blocked.
+
+Do not conflate those decisions.
+
+### 8. Independent review methodology
+
+For each potential defect:
+
+1. State the relevant requirement or invariant.
+2. Identify the exact implementation behaviour.
+3. Present supporting file, line, commit, or execution evidence.
+4. Describe the reproducible failure path.
+5. Explain the user-visible or system-level impact.
+6. Classify severity.
+7. Identify the responsible implementation owner.
+8. Propose an acceptance criterion for remediation.
+
+Severity:
+
+- `P0`: Violates task correctness, authority, security, or a release-critical invariant.
+- `P1`: Significant functional or integration defect.
+- `P2`: Noncritical correctness gap or maintainability issue.
+- `P3`: Optional enhancement or presentation improvement.
+
+Do not elevate speculative risks to P0 without a concrete failure mechanism.
+
+Do not dismiss confirmed requirements merely because a workaround exists.
+
+### 9. Review disposition
+
+Issue exactly one PR-10d disposition:
+
+- `PLAN10_PR10D_REVIEW_ACCEPTED`
+- `PLAN10_PR10D_REVIEW_ACCEPTED_WITH_LIMITATIONS`
+- `PLAN10_PR10D_REVIEW_CHANGES_REQUIRED`
+- `PLAN10_PR10D_REVIEW_BLOCKED`
+
+#### ACCEPTED
+
+All approved PR-10d requirements are satisfied with adequate evidence and no unresolved acceptance-blocking defects.
+
+#### ACCEPTED_WITH_LIMITATIONS
+
+The change meets its functional acceptance requirements, with documented nonblocking limitations.
+
+#### CHANGES_REQUIRED
+
+One or more confirmed requirements, correctness conditions, or critical integration invariants are unmet.
+
+#### BLOCKED
+
+The review cannot be completed because the authoritative scope, review snapshot, or necessary evidence is unavailable.
+
+Do not use the overall Nexus v1.0.0 readiness disposition as a substitute for the PR-level review.
+
+### 10. Coordination and handoff
+
+After review:
+
+1. Record findings under the existing claims protocol.
+2. Notify the appropriate implementation owner through the established coordination mechanism.
+3. Attach exact evidence and acceptance conditions.
+4. Release the reviewer claim.
+5. Avoid modifying claimed implementation files.
+6. Do not automatically begin remediation.
+7. Do not claim a new task without explicit assignment.
+
+If no defects are found, record the positive disposition and evidence rather than inventing additional work.
+
+### 11. Required report
+
+Use the established review artifact location and naming convention already defined for PLAN-10 PR-10d.
+
+Do not create a competing review system.
+
+Report:
+
+**A. Review identity and exact commits**
+
+**B. Claims protocol compliance**
+
+**C. Original approved scope**
+
+**D. Requirement traceability matrix**
+
+**E. Implementation and integration analysis**
+
+**F. Relevant test evidence**
+
+**G. Review of existing failure reports**
+
+**H. Confirmed findings ordered by severity**
+
+**I. Unverified assumptions and evidence gaps**
+
+**J. Nexus v1.0.0 acceptance implications**
+
+**K. Required remediation ownership, if any**
+
+**L. Final PR-10d disposition**
+
+**M. Claim release and final repository state**
+
+### Execution instruction
+
+Start by inspecting the claims ledger and recovering the exact outstanding PLAN-10 PR-10d review request.
+
+Claim only the independent review lane, identify an immutable review snapshot, and assess the implementation against its original approved requirements.
+
+Use existing evidence wherever possible. Do not interfere with Codex or OpenCode's active SUITE, implementation, or qualification claims.
+
+Produce a requirement-traceable review with concrete findings and a defensible disposition.
+
+**Do not implement fixes, run conflicting tests, or begin another task after submitting the review.**
+</pasted_content id="7cf0">
