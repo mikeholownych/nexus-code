@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>biu3b4fhb</task-id>
+<tool-use-id>toolu_01LPSiEKPC1pL95psVP8qqMi</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/biu3b4fhb.output</output-file>
+<status>completed</status>
+<summary>Background command "Full suite on integration 6151a23" completed (exit code 0)</summary>
+</task-notification>
