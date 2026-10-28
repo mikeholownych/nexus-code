@@ -1,6 +1,20 @@
 # v1.0.0 release readiness checkpoint
 
-## Current release checkpoint (observed 2026-10-28 03:50 UTC)
+## Current release checkpoint (observed 2026-10-28 07:21 UTC)
+
+**Authoritative source and source checks:** `origin/main` is `ceaf60072b7c364edac523d2517fb12df8f5f6cd`. Exact-head CI [40647479745](https://github.com/mikeholownych/nexus-code/actions/runs/40647479745) has passed Node 22 and Node 24; Linux packaging/reproducibility is still running. CodeQL [40647479677](https://github.com/mikeholownych/nexus-code/actions/runs/40647479677) passed. The exact-head requirements gate passed (123 rows: 108 tested, 6 partial, 2 implemented, 7 open; the 12 applicable release-qualification rows remain deferred to their documented exact-RC stages). Source checks do not establish installed-RC acceptance.
+
+**Requested codebase-review findings are part of the v1.0.0 scope:** The large capability registry is split into category modules (`cli/src/core/capabilities.ts`, 10,046 bytes, plus `capability_definitions/`); scheduler logic is in `cli/src/core/scheduler.ts` (23,696 bytes), with `operation.ts` reduced to 12,818 bytes; runner revalidation, execution, and persistence are separated from `operation_runner.ts` (14,931 bytes). The former silent runner catches now emit bounded diagnostics; PR [#295](https://github.com/mikeholownych/nexus-code/pull/295) integrated the source changes. PR [#293](https://github.com/mikeholownych/nexus-code/pull/293) added operator guidance for `DecisionRejected` and is merged with its Node 22/24, Linux, and CodeQL checks successful. These items are implemented on current `main`.
+
+**Lifecycle, scheduler, and evaluation evidence:** `cli/test/convergence_integration.test.ts` covers end-to-end scheduling and execution scenarios. `cli/test/convergence_scheduler_properties.test.ts` runs generated DAG invariants over 100 fixed seeds; this is reproducible generated coverage, not a claim that every scheduler property or arbitrary graph has been proven. PR [#297](https://github.com/mikeholownych/nexus-code/pull/297) adds regression tests for the diagnostic paths; at this checkpoint its Node 22/24 jobs and Entire gate are still running, while JavaScript/TypeScript and CodeQL checks passed. The `eval/` pilot suite does not satisfy held-out acceptance: the independent 40-task corpus, custody acceptance, and exact-RC qualification remain required and open.
+
+**Operator configuration scope:** `~/.config/nexus/config.json` is the operator-owned structured configuration entry point for `operationPolicy`, with schema validation, bounded file size, symlink rejection, and environment/config/default precedence documented in `docs/USER_MANUAL.md`. The schema is intentionally limited to that policy today; this record does not claim every runtime default is configurable or that a repository-level config can override operator policy.
+
+**Qualification and publication:** Public `v1.0.0-rc.10` remains the latest prerelease; no stable `v1.0.0` release exists. Held-out T2/T3/T4, remaining live-provider and standalone gates, successor-RC artifact qualification, cross-runner evidence, the 15-cell human terminal matrix, and independent exact-RC acceptance remain incomplete. Acceptance remains `IN_PROGRESS`; stable publication remains gated on these mandatory checks.
+
+The 03:50 checkpoint below is retained as historical evidence; its source, PR, CI, and qualification statements are superseded by this checkpoint.
+
+## Historical checkpoint (observed 2026-10-28 03:50 UTC)
 
 **Authoritative source and source checks:** `main` is now `d3b7af3ca3d216841f8ff8a0e7b4cefbd637ef9f`, the merge commit for PR [#285](https://github.com/mikeholownych/nexus-code/pull/285) (merged 2026-10-28 03:38:26 UTC). The exact PR-head Linux retry and required CI passed before merge. Post-merge CI [40627840511](https://github.com/mikeholownych/nexus-code/actions/runs/40627840511) is running the Node 22/24 matrix; CodeQL [40627840517](https://github.com/mikeholownych/nexus-code/actions/runs/40627840517) passed. This is source validation, not installed-RC acceptance. The prior main CI [40621815585](https://github.com/mikeholownych/nexus-code/actions/runs/40621815585) passed on `59f07c4` and does not establish post-merge `d3b7af3` status.
 
