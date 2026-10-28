@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
 import { CheckpointManager } from "./checkpoint.js";
-import { autoDetectModel, buildConfig, loadEnvironment } from "./config.js";
+import { autoDetectModel, buildConfig, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
 import { isNexusDirPermissive } from "./doctor.js";
 import { ApplicationCore } from "./core/app.js";
@@ -1128,6 +1128,8 @@ async function main(argv: string[]): Promise<void> {
   const lease = acquireClientLease(home);
   process.once("exit", () => releaseClientLease(lease));
   loadEnvironment();
+  const configLoadError = operatorConfigLoadError();
+  if (configLoadError) throw new Error(`Configuration error: ${configLoadError.message}`);
   const options = program.opts();
   const config = await autoDetectModel(buildConfig(options));
   config.surface = "tui";

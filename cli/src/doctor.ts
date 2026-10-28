@@ -369,7 +369,11 @@ const launcherCheck: Check = async () => {
 const configCheck: Check = async (ctx) => {
   if (ctx.configError) {
     const message = ctx.configError instanceof Error ? ctx.configError.message : String(ctx.configError);
-    return f("config.valid", "config", "fail", "The configuration could not be built, so Nexus would not start a session.", [message], "Correct the setting named above (flag, ~/.config/nexus/config.env, or the working-directory .env) and run doctor again.");
+    const isOperatorConfigJsonError = /(?:Nexus config\.json|operator config\.json)/i.test(message);
+    const action = isOperatorConfigJsonError
+      ? "Inspect ~/.config/nexus/config.json: make it a regular, non-symlink file under 64 KiB with valid JSON and only supported version 1 fields; then run doctor again."
+      : "Correct the setting named above (flag, ~/.config/nexus/config.env, or the working-directory .env) and run doctor again.";
+    return f("config.valid", "config", "fail", "The configuration could not be built, so Nexus would not start a session.", [message], action);
   }
   if (!ctx.config) return f("config.valid", "config", "skip", "No configuration was supplied.");
   const evidence = [`provider ${ctx.config.provider ?? "(appliance / OpenAI-compatible endpoint)"}`, `model ${ctx.config.model || "(none)"}`];

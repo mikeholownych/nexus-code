@@ -606,6 +606,7 @@ export class InteractiveRepl {
   }
 
   async start(): Promise<void> {
+    const exitRequested = new Promise<void>((resolve) => { this.exitResolve = resolve; });
     this.printWelcome();
     const startupWarning = await this.agent.probeStartupEndpoint();
     if (startupWarning) {
@@ -681,6 +682,9 @@ export class InteractiveRepl {
         return [[], lastToken] as [string[], string];
       },
     });
+    // EOF closes readline but does not settle an outstanding promises.question().
+    // Resolve the same signal used by deliberate exit so the prompt loop can finish.
+    this.rl.once("close", () => this.exitResolve?.());
 
     // Ctrl-C is an operator authority event, not just a keystroke. While a turn is active it requests
     // cancellation (no new inference or tool dispatch is admitted); a second press terminates the process.
@@ -714,8 +718,6 @@ export class InteractiveRepl {
     this.agent.getSkillManager().startWatcher((skills) => {
       console.log(pc.dim(`\n🔄 [Hot-Reload] Skills library updated (${skills.length} available).`));
     });
-
-    const exitRequested = new Promise<void>((resolve) => { this.exitResolve = resolve; });
 
     // readline emits `line` only for input that no pending `question()` consumed: pasted/piped lines that arrive in the same
     // chunk as a prompt, or typed while a turn is running. This REPL reads one line at a time, so those lines cannot become
