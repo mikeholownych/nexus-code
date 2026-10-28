@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bkiwmgjmp</task-id>
+<tool-use-id>toolu_011QigYWFjjUzXZkG5BwDRmb</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/bkiwmgjmp.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full make test on a snapshot copy" completed (exit code 0)</summary>
+</task-notification>
