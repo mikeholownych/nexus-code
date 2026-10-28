@@ -1,0 +1,1 @@
+now for the Nexus client, you added the optional header.. review that codebase to determine how to make that application actually work properly. Specifically, I know the REPL client only partially works.
