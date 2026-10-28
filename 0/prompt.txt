@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>bafp8wk40</task-id>
+<tool-use-id>toolu_01WkAFxBmkmnj4WDW7mur75V</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/bafp8wk40.output</output-file>
+<status>completed</status>
+<summary>Background command "ssh -o BatchMode=yes mike@10.0.8.5 'cd /tmp/evalx &amp;&amp; rm -f out-*.log; nohup python3 evalx.py vllm-awq4 http://127.0.0.1:8000 /etc/local-ai/vllm/worker1/worker-api-key cyankiwi/Qwen3-Coder-30B-A3B-Instruct-AWQ-4bit &gt; out-vllm.log 2&gt;&amp;1 &amp;
+nohup python3 evalx.py llama-q4km http://127.0.0.1:8001 /etc/local-ai/llama/worker2/worker-api-key Qwen3-Coder-30B-A3B-Instruct-Q4_K_M &gt; out-llama.log 2&gt;&amp;1 &amp;
+sleep 2; pgrep -f evalx.py | wc -l'; timeout 3000 ssh -o BatchMode=yes mike@10.0.8.5 'until [ "$(grep -c "^RESULT" /tmp/evalx/out-vllm.log /tmp/evalx/out-llama.log | awk -F: "{s+=\$2} END{print s}")" -ge 2 ]; do sleep 20; done; tail -n 6 /tmp/evalx/out-vllm.log /tmp/evalx/out-llama.log | cut -c1-300'" completed (exit code 0)</summary>
+</task-notification>
