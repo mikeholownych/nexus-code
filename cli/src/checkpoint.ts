@@ -208,7 +208,12 @@ export class CheckpointManager {
           throw new Error("Checkpoint destination parent is a symbolic link");
         }
         if (!stat.isDirectory()) break;
-        if (fs.lstatSync(path.join(parent, ".git"), { throwIfNoEntry: false })) {
+        const dotGit = fs.lstatSync(path.join(parent, ".git"), { throwIfNoEntry: false });
+        const bareHead = fs.statSync(path.join(parent, "HEAD"), { throwIfNoEntry: false });
+        const bareConfig = fs.statSync(path.join(parent, "config"), { throwIfNoEntry: false });
+        const bareObjects = fs.statSync(path.join(parent, "objects"), { throwIfNoEntry: false });
+        const bareRefs = fs.statSync(path.join(parent, "refs"), { throwIfNoEntry: false });
+        if (dotGit || (bareHead?.isFile() && bareConfig?.isFile() && bareObjects?.isDirectory() && bareRefs?.isDirectory())) {
           throw new Error("Checkpoint destination parent is a nested Git repository");
         }
       }
