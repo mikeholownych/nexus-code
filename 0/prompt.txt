@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bzwa2pfgi</task-id>
+<tool-use-id>toolu_01AbzHG8JWe5NeBiZpY8sj5V</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/bzwa2pfgi.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full make test on final snapshot" completed (exit code 0)</summary>
+</task-notification>
