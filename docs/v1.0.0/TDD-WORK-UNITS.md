@@ -17,7 +17,7 @@ For each unit whose role is unset (implementer) or `implementer`:
 1. **RED.** The unit agent gets the normal unit prompt plus a RED protocol: add a test that reproduces the
    task, run the project's verifier, and do not implement the fix yet. `task_completed` is allowed to record the failing
    verifier for this turn only (`runTurn(..., { tddRed: true })`); normal completion still requires a passing verifier.
-   The RED turn is accepted only when the turn's verification evidence is `FAILED`, executed at least one test, and a
+   The RED turn is accepted only when the turn's verification evidence is `FAILED`, executed at least one test, and
    at least one reported test file was newly added (candidate diff against HEAD, using the tester's path rule). For this
    turn only, the workspace-resolved verifier definition binding is skipped: adding the reproduction test legitimately
    changes that definition, and RED does not claim verification.
