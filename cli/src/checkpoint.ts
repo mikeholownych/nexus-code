@@ -207,6 +207,9 @@ export class CheckpointManager {
         if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) {
           throw new Error("Checkpoint destination parent is not a real directory");
         }
+        if (stat && fs.lstatSync(path.join(parent, ".git"), { throwIfNoEntry: false })) {
+          throw new Error("Checkpoint destination parent is a nested Git repository");
+        }
       }
     }
   }
