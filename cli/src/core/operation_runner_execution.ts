@@ -374,13 +374,14 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
             kind: "failed",
             cause: "EXECUTION_FAILED",
             reason: `TDD RED changed the verification oracle: ${rebase.reason}`,
+            // Retrying or resuming cannot capture a fresh pre-RED baseline (recovered state is untrusted and the
+            // workspace already holds the RED edits), so the unit stops instead of looping. The workspace keeps the
+            // RED changes: restore the named paths and start a new operation to run this unit test-first again.
             question:
-              `${unit.title}: the RED phase also changed the test or verifier set up (${rebase.reason}). ` +
-              `GREEN cannot be verified against a narrowed oracle. Retry RED on the unchanged oracle, or revise the unit?`,
-            options: [
-              { label: "retry the RED phase", action: { kind: "retry" } },
-              { label: "revise the unit (note required)", action: { kind: "revise" } },
-            ],
+              `${unit.title}: the RED phase changed the verification oracle (${rebase.reason}), so GREEN cannot be ` +
+              `verified against it. The RED changes are still in the workspace; restore the affected test/verifier ` +
+              `files and start a new operation to run this unit test-first again.`,
+            options: [{ label: "stop the operation", action: { kind: "cancel_operation" } }],
           };
         }
       }

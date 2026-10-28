@@ -465,6 +465,87 @@ test("RED cannot create the verifier when none existed before it", { timeout: 90
   }
 });
 
+test("RED cannot modify an existing test and call it the baseline", { timeout: 90_000 }, async () => {
+  const repo = makeRepo({
+    "src/value.js": "module.exports = 1;\n",
+    "test/a.test.js": "require('node:test')('a', () => {});\n",
+    "test/b.test.js": "require('node:test')('b', () => {});\n",
+    "package.json": JSON.stringify({ name: "x", scripts: { test: "env -u NODE_TEST_CONTEXT node --test test/a.test.js test/b.test.js" } }, null, 2) + "\n",
+  });
+  const gw = await startGateway((n): Reply => {
+    if (n === 1) return { kind: "tools", calls: [{ name: "write_file", args: { path: "test/b.test.js", overwrite: true, content: "require('node:test')('b', () => { throw new Error('red'); });\n" } }] };
+    if (n === 2) return { kind: "tools", calls: [{ name: "write_file", args: { path: "test/red.test.js", content: "const test = require('node:test');\nconst assert = require('node:assert');\ntest('red', () => assert.fail('red'));\n" } }] };
+    return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "RED" } }] };
+  });
+  const executor = new AgentWorkUnitExecutor({
+    baseConfig: {
+      endpoint: gw.url,
+      model: "m",
+      workspace: repo,
+      shell: "bash",
+      maxSteps: 6,
+      temperature: 0,
+      approvalMode: "auto",
+      fullAccess: true,
+      authoritativeVerifierCommand: "env -u NODE_TEST_CONTEXT npm test",
+    } as any,
+    tdd: true,
+  });
+  try {
+    const outcome = await executor.run(
+      unit({ prompt: "Make value.js export 2, test-first." }),
+      { id: "primary", endpoint: gw.url, provider: new URL(gw.url).origin, model: "m", capabilities: ["tools"], rank: 0 },
+      context()
+    );
+    assert.equal(outcome.kind, "failed", JSON.stringify(outcome));
+    if (outcome.kind === "failed") {
+      assert.match(outcome.reason, /verification oracle/i);
+      assert.equal(outcome.options?.some((option) => option.action.kind === "retry"), false, "a retry cannot capture a fresh baseline");
+      assert.equal(outcome.options?.some((option) => option.action.kind === "revise"), false);
+    }
+  } finally {
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("RED cannot supply a verifier definition the baseline could not capture", { timeout: 90_000 }, async () => {
+  const repo = makeRepo({
+    "src/value.js": "module.exports = 1;\n",
+    "test/old.test.js": "require('node:test')('old', () => {});\n",
+  });
+  const gw = await startGateway((n): Reply => {
+    if (n === 1) return { kind: "tools", calls: [{ name: "write_file", args: { path: "test/red.test.js", content: "const test = require('node:test');\nconst assert = require('node:assert');\nconst value = require('../src/value.js');\ntest('value', () => assert.equal(value, 2));\n" } }] };
+    return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "RED" } }] };
+  });
+  const executor = new AgentWorkUnitExecutor({
+    baseConfig: {
+      endpoint: gw.url,
+      model: "m",
+      workspace: repo,
+      shell: "bash",
+      maxSteps: 6,
+      temperature: 0,
+      approvalMode: "auto",
+      fullAccess: true,
+      authoritativeVerifierCommand: "env -u NODE_TEST_CONTEXT node --test test/red.test.js",
+    } as any,
+    tdd: true,
+  });
+  try {
+    const outcome = await executor.run(
+      unit({ prompt: "Make value.js export 2, test-first." }),
+      { id: "primary", endpoint: gw.url, provider: new URL(gw.url).origin, model: "m", capabilities: ["tools"], rank: 0 },
+      context()
+    );
+    assert.equal(outcome.kind, "failed", JSON.stringify(outcome));
+    if (outcome.kind === "failed") assert.match(outcome.reason, /verification oracle/i);
+  } finally {
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("a failing verifier is still rejected without the tddRed boundary", { timeout: 60_000 }, async () => {
   const repo = makeRepo({ "src/value.js": "module.exports = 1;\n" });
   const gw = await startGateway((n): Reply => {

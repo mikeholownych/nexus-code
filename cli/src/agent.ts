@@ -1252,10 +1252,10 @@ export class AutonomousAgent {
   }
 
   /**
-   * Rebase the verifier baseline onto a verified TDD RED test set, without moving anything the RED turn was not
-   * allowed to change. Every pre-RED test must still be present and unchanged unless it is one of the reported RED
-   * tests, and every verifier-definition entry must be unchanged except for those tests (and the absent-path marker
-   * they legitimately clear). Anything else is refused so GREEN cannot verify against an oracle the model narrowed.
+   * Rebase the verifier baseline onto a verified TDD RED test set, without moving anything RED was not allowed to
+   * change. RED may only add tests: every pre-RED test must still be present and byte-identical, and every
+   * verifier-definition entry must be unchanged except for the added tests (and the absent-path marker they
+   * legitimately clear). Anything else is refused so GREEN cannot verify against an oracle the model narrowed.
    */
   public rebaseVerifierBaselineAfterTddRed(
     redTests: readonly string[],
@@ -1278,9 +1278,9 @@ export class AutonomousAgent {
     for (const [file, content] of baseline.tests) {
       const after = currentTests.get(file);
       if (after === undefined) return { ok: false, reason: `RED removed test ${file}` };
-      if (after !== content && !reported.has(file)) {
-        return { ok: false, reason: `RED changed ${file}, which is not one of its reported tests` };
-      }
+      // RED may add tests; changing or weakening one of the operator's existing tests re-anchors the oracle, and the
+      // model controls which paths are "reported", so an edit cannot be self-authorizing.
+      if (after !== content) return { ok: false, reason: `RED modified the existing test ${file}` };
     }
     for (const file of currentTests.keys()) {
       if (!baseline.tests.has(file) && !reported.has(file)) {
@@ -1295,10 +1295,11 @@ export class AutonomousAgent {
     // A repository with no test file yet has no pre-RED definition snapshot (the verifier references the missing file).
     // That is only safe when the RED tests are all new: a pre-existing test or definition cannot have been narrowed.
     if (!baseline.verifier) {
-      for (const file of reported) {
-        if (baseline.tests.has(file)) {
-          return { ok: false, reason: `RED changed ${file} but no verifier definition was captured before RED` };
-        }
+      // Only a repository with no test file at all can legitimately have no pre-RED definition snapshot (the verifier
+      // referenced a file that did not exist). With tests present, a null snapshot means the definition could not be
+      // captured, so a RED-created one must not become the trusted oracle.
+      if (baseline.tests.size > 0) {
+        return { ok: false, reason: "no verifier definition was captured before RED" };
       }
     }
     const preVerifier = baseline.verifier;
