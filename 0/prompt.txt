@@ -1,0 +1,80 @@
+<pasted_content id="93a6">
+mike@mike-dev:~/nexus-code (main) % nexus doctor --deep --fix
+Nexus doctor 1.0.0-rc.1 — fresh CLI configuration (deep)
+mode: review · sandbox: off · workspace: untrusted (nexus trust .)
+14 pass · 4 warn · 1 fail · 4 skipped · 31673 ms
+
+FAIL endpoint.reachable: The endpoint did not answer.
+       · https://10.0.8.5:8443/v1
+       · The operation was aborted due to timeout
+       → Start the local model server (LM Studio / vLLM) or point LOCAL_LLM_ENDPOINT / -e at a running one.
+WARN tui.check: The tui check did not finish within 5000 ms.
+WARN shell.check: The shell check did not finish within 5000 ms.
+WARN engine.check: The engine check did not finish within 5000 ms.
+WARN state.integrity: 5 saved record(s) cannot be read and 1 interrupted write(s) were left behind; they are skipped when listing or resuming.
+       · 6284 record(s) checked
+       · /home/mike/.nexus/sessions/index.json
+       · /home/mike/.nexus/tasks/task-c8ad7497.json
+       · /home/mike/.nexus/tasks/task-4aac7853.json
+       · /home/mike/.nexus/tasks/task-81fabfa9.json
+       · /home/mike/.nexus/tasks/task-890a0a68.json
+       → Inspect and move the listed files aside manually; doctor never deletes sessions or checkpoints.
+PASS install.build: The CLI build is present and not older than its source.
+       · version 1.0.0-rc.1
+       · built from cb364c386c42
+       · install root /home/mike/.local/lib/nexus/v1.0.0-rc.1
+PASS runtime.node: Node.js 24.11.1 (supported).
+       · /home/mike/.local/node-v24.11.1-linux-x64/bin/node
+PASS runtime.launcher: The `nexus` launcher on PATH is this packaged installation.
+       · The nexus launcher resolves to this packaged installation.
+PASS config.valid: The configuration builds with the same rules a session uses.
+       · provider (appliance / OpenAI-compatible endpoint)
+       · model engineering/auto
+PASS endpoint.configured: An inference endpoint is configured.
+       · https://10.0.8.5:8443/v1
+       · locality LOCAL_APPLIANCE (private_ip)
+       · credential present (bound to its own origin; not shown)
+PASS workspace.access: The workspace is readable and writable and is a git repository (checkpoints and /undo available).
+       · /home/mike/nexus-code
+PASS state.sessions: The saved sessions directory is writable (a probe file was written and removed).
+       · /home/mike/.nexus/sessions
+       · mode 700
+PASS state.tasks: The durable task state directory is writable (a probe file was written and removed).
+       · /home/mike/.nexus/tasks
+       · mode 700
+PASS state.permissions: Nexus state directories and files are private (0700/0600).
+       · /home/mike/.nexus
+PASS credentials.store: Nexus's own credential store is not in use (credentials come from the environment or other clients).
+       · /home/mike/.config/nexus/credentials.json
+PASS config.env: The configuration file is private to this user.
+       · /home/mike/.config/nexus/config.env
+       · mode 600
+PASS config.custom_ca: The custom CA bundle (/home/mike/.config/nexus/t5820-gateway-ca.crt) exists and contains 1 valid X.509 certificate(s).
+       · /home/mike/.config/nexus/t5820-gateway-ca.crt
+PASS mcp.config: 1 MCP server(s) are configured with resolvable commands or valid URLs. Servers were inspected from configuration only; none was started.
+       · sysinfo: node -> /home/mike/.local/bin/node
+PASS plugins.config: 1 plugin module(s) found. Plugin modules were listed, not loaded (loading runs their code).
+       · /home/mike/.nexus/plugins/sample-logger.js
+SKIP config.project_env_ignored: The workspace has no .env.
+       · /home/mike/nexus-code/.env
+SKIP endpoint.authenticated: Skipped: the endpoint was not reachable.
+SKIP model.available: Skipped: the endpoint was not reachable.
+SKIP inference.verified: Skipped: the endpoint is not reachable and authenticated.
+
+Effective configuration (value ← source):
+  NEXUS_PROVIDER               (not set)  ← default
+  LOCAL_LLM_ENDPOINT           https://10.0.8.5:8443/v1  ← ~/.config/nexus/config.env
+  LOCAL_LLM_MODEL              engineering/auto  ← ~/.config/nexus/config.env
+  LOCAL_LLM_API_KEY            set (not shown)  ← ~/.config/nexus/config.env
+  LOCAL_HARNESS_SHELL          bash  ← command-line flag
+  workspace                    /home/mike/nexus-code  ← current directory
+  max steps per segment        30 (checkpoint interval, not a limit)  ← derived
+  NEXUS_MAX_TOTAL_STEPS        none  ← default
+  NEXUS_MAX_TURN_MINUTES       none  ← default
+  NEXUS_STAGNATION_STEPS       12  ← default
+  NEXUS_VERIFIER_TIMEOUT_SECS  300  ← default
+  PLANNER_LLM_MODEL            (not set)  ← default
+  CODER_LLM_MODEL              (not set)  ← default
+
+Repairs: none needed.
+</pasted_content id="93a6">
