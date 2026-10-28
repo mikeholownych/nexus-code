@@ -114,17 +114,13 @@ export class OperationRunner {
             Object.values(this.state.git!.units).some((entry) => entry.integratedCommit !== undefined),
         });
       } catch (error: any) {
-        this.scheduler.finish({
-          kind: "blocked",
-          decisions: [{
-            id: "operation#git",
-            unitId: "*",
-            cause: "INTEGRATION_FAILED",
-            question: `The isolation worktree is unusable (${error?.message ?? error}). Restore or remove it, then resume.`,
-            options: [{ id: "1", label: "resume after fixing the worktree", action: { kind: "keep_waiting" } }],
-          }],
-        });
-        this.save();
+        this.blockOnGit(`The isolation worktree is unusable (${error?.message ?? error}).`);
+        return this.state;
+      }
+      const rewound = this.git.historyProblems(this.state.integrations ?? []);
+      if (rewound.length) {
+        const names = rewound.map((entry) => `${entry.unitId}@${entry.integratedCommit.slice(0, 12)}`).join(", ");
+        this.blockOnGit(`The integration branch no longer contains accepted work (${names}); it was reset or rewritten.`);
         return this.state;
       }
     }
@@ -353,6 +349,20 @@ export class OperationRunner {
         detail: { integration: receipt },
       });
     }
+  }
+
+  private blockOnGit(reason: string): void {
+    this.scheduler.finish({
+      kind: "blocked",
+      decisions: [{
+        id: "operation#git",
+        unitId: "*",
+        cause: "INTEGRATION_FAILED",
+        question: `${reason} Restore the integration branch/worktree, then resume.`,
+        options: [{ id: "1", label: "resume after fixing the integration state", action: { kind: "keep_waiting" } }],
+      }],
+    });
+    this.save();
   }
 
   private cancelled(): DurableOperationState {

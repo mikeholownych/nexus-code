@@ -160,6 +160,20 @@ export class OperationGit {
   }
 
   /**
+   * Receipts whose integrated commit is no longer an ancestor of the integration tip: the branch was rewritten or
+   * rewound in place. The operation must stop rather than continue on a tree that silently lost accepted work.
+   */
+  historyProblems(receipts: readonly IntegrationReceipt[]): Array<{ unitId: string; integratedCommit: string }> {
+    const problems: Array<{ unitId: string; integratedCommit: string }> = [];
+    for (const receipt of receipts) {
+      const reachable = receipt.integratedCommit &&
+        gitResult(this.plan.integrationWorktree, ["merge-base", "--is-ancestor", receipt.integratedCommit, "HEAD"]).ok;
+      if (!reachable) problems.push({ unitId: receipt.unitId, integratedCommit: receipt.integratedCommit });
+    }
+    return problems;
+  }
+
+  /**
    * Give the unit a worktree branched from the integration tip. A recorded worktree is reused so a retry or a resume
    * continues on the same files; an operator restart throws the old worktree and branch away first.
    */

@@ -38,17 +38,21 @@ reset and blocks with `INTEGRATION_FAILED`.
 - If the integration branch and worktree are both gone while the operation already integrated work, resume fails closed
   with an operation-level decision instead of recreating the branch from the base commit and silently dropping history.
   A worktree whose branch is gone is likewise unrepairable and raises that decision.
+- Every receipt's integrated commit must still be an ancestor of the integration tip at resume; a branch reset or rewound
+  in place stops the operation with the same decision instead of continuing on a tree that lost accepted work.
 - A failed post-hoc check of an already-merged branch is not recorded as integrated: a retry re-checks the merged tree
   and merges any new work; a success records `PASSED_POSTHOC`.
 - Integration is idempotent: an already-merged branch is recognised with `merge-base --is-ancestor` and recorded as
   `ALREADY_MERGED`; a stale `MERGE_HEAD` is aborted before the next merge.
 - A recorded worktree that vanished is reported, not silently recreated: the unit is blocked with a decision offering a
   restart from the integration tip (which discards the old branch) or stop.
-- An operator restart discards the unit's worktree and branch and recreates it from the current tip.
+- An operator restart discards the unit's worktree and branch and recreates both from the current tip. If Git still
+  refuses to delete the old branch (for example it is checked out in another worktree), a fresh branch name is used; the
+  old branch is then left untouched rather than pointing the unit at it.
 
 ## Tests
 
-`cli/test/operation_git.test.ts` (19 cases, real temporary Git repositories):
+`cli/test/operation_git.test.ts` (20 cases, real temporary Git repositories):
 
 1. planning/creating the integration worktree is idempotent and refuses a non-Git workspace;
 2. a unit runs on its own worktree, integrates, the operator checkout stays untouched, and `disposeUnit` keeps the branch;
@@ -71,11 +75,13 @@ reset and blocks with `INTEGRATION_FAILED`.
 16. the post-hoc path cleans its own verifier artifacts;
 17. restart after an externally removed worktree (stale registration) really starts from the integration tip;
 18. an operation with integrated history fails closed when its branch and worktree are both gone;
-19. an unrepairable pair (worktree without branch) becomes an operation-level decision.
+19. an unrepairable pair (worktree without branch) becomes an operation-level decision;
+20. a rewound integration branch stops the operation before running more work, and the same decision resumes after the
+    operator restores the branch (also covering unit-level history without a receipt).
 
 The operation view projects `git` and per-unit `integration` receipts (schema updated and validated). Focused run:
 `operation_git` + `operation_view` + `tdd_work_units` + `convergence_scheduling` + `operation_runner_refactor` +
-`operation_account_identity` → **117/117 pass**; `tsc --noEmit` and `git diff --check` clean, isolated HOME/XDG.
+`operation_account_identity` → **118/118 pass**; `tsc --noEmit` and `git diff --check` clean, isolated HOME/XDG.
 
 ## Residuals / not in this slice
 
@@ -87,10 +93,11 @@ The operation view projects `git` and per-unit `integration` receipts (schema up
 - The integration re-check uses the unit's own passing verifier command with `bash -c` and the harness verifier deadline
   (`NEXUS_VERIFIER_TIMEOUT_SECS`). It is skipped (`NOT_RUN` in the receipt) when the unit completed without a passing,
   executed verifier, matching the existing unverified-completion semantics.
-- Integration commits and merges are mechanical: a fixed Nexus author, `commit.gpgsign=false` and `core.hooksPath` pointed
-  at an empty directory, so no repository hook (pre or post) and no signing prompt can hang or rewrite a headless
-  integration. The merged tree is re-verified instead. A verifier that writes artifacts is cleaned
-  (`reset --hard HEAD`, `clean -fd`) before the next integration.
+- Integration commits and merges are mechanical: a fixed Nexus author, `commit.gpgsign=false`, `--no-verify` and
+  `core.hooksPath` pointed at an empty directory, so no repository hook or signing prompt can hang a headless
+  integration. If that directory cannot be created (read-only `.nexus`), `--no-verify` still skips pre-commit and
+  commit-msg, but a post-commit/post-merge hook could run. The merged tree is re-verified instead. A verifier that writes
+  artifacts is cleaned (`reset --hard HEAD`, `clean -fd`) before the next integration.
 - `git add -A` respects `.gitignore`, so ignored build output in a unit worktree is not integrated. A deliverable the
   repository ignores must be committed by the unit (or un-ignored) explicitly.
 - Unit branches and the integration worktree are kept after completion/cancellation for review; unit worktrees are

@@ -553,6 +553,54 @@ test("operations with integrated history fail closed when both the branch and wo
   assert.equal(state.blocked?.decisions[0].id, "operation#git");
   assert.match(state.blocked!.decisions[0].question, /already integrated work/);
   assert.equal(fs.existsSync(p.integrationWorktree), false);
+
+  // Unit-level integration without a receipt still counts as history.
+  state.integrations = [];
+  state.git!.units.u1 = {
+    branch: "nexus/op-old/u1",
+    worktree: path.join(p.baseDir, "units", "u1-old"),
+    baseCommit: p.baseCommit,
+    integratedCommit: "c".repeat(40),
+  };
+  const again = new OperationRunner(state, { executor, clock: clock(), persist: () => {} });
+  await again.run();
+  assert.equal(state.status, "BLOCKED");
+  assert.equal(runs.length, 0);
+
+  // After the operator restores the branch, the decision resumes the operation.
+  git(root, ["branch", p.integrationBranch, p.baseCommit]);
+  again.scheduler.resolve("operation#git", "1");
+  await again.run();
+  assert.equal(state.status, "COMPLETE", JSON.stringify(state.blocked));
+  assert.equal(runs.length, 1);
+});
+
+test("a rewound integration branch stops the operation instead of losing accepted work", async () => {
+  const root = repo();
+  const state = isolatedState([{ id: "u1" }, { id: "u2" }], root);
+  const ops = new OperationGit(plan(root, state.id), state.git!);
+  ops.prepareUnit(unit("u2"));
+  fs.writeFileSync(path.join(state.git!.units.u2.worktree, "file.txt"), "u2\n");
+
+  const first = runnableExecutor({
+    onU1: (workspace) => fs.writeFileSync(path.join(workspace, "file.txt"), "u1\n"),
+    onU2: (workspace) => fs.writeFileSync(path.join(workspace, "file.txt"), "u2\n"),
+  });
+  const runner = new OperationRunner(state, { executor: first.executor, clock: clock(), persist: () => {} });
+  await runner.run();
+  assert.equal(state.status, "BLOCKED", "the second unit conflicts");
+
+  // The operator rewinds the integration branch in place after u1 was accepted.
+  const base = state.git!.baseCommit;
+  git(state.git!.integrationWorktree, ["reset", "--hard", base]);
+
+  const second = runnableExecutor();
+  const resumed = new OperationRunner(state, { executor: second.executor, clock: clock(), persist: () => {} });
+  await resumed.run();
+
+  assert.equal(state.status, "BLOCKED");
+  assert.equal(second.runs.length, 0);
+  assert.match(state.blocked!.decisions[0].question, /no longer contains accepted work/);
 });
 
 test("an unrepairable integration pair becomes an operation decision", async () => {
