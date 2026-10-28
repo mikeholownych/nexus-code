@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bmbf0wnz0</task-id>
+<tool-use-id>toolu_01HJqFXR6sk2eLQ6wjE37zxx</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/bmbf0wnz0.output</output-file>
+<status>completed</status>
+<summary>Background command "Log SUITE claim and wait for PR CI runs" completed (exit code 0)</summary>
+</task-notification>
