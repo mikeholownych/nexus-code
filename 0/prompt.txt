@@ -1,0 +1,14 @@
+<task-notification>
+<task-id>bih8sthm6</task-id>
+<tool-use-id>toolu_01TNLGdq4LNMzwoKEL4pzed8</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/bih8sthm6.output</output-file>
+<status>completed</status>
+<summary>Background command "cd ~/Projects/aihost &amp;&amp; python3 - &lt;&lt;'EOF'
+p="inventory/production/host_vars/ai-5820-01.yml"; s=open(p).read()
+old="    gpu: 1\n    port: 8001\n"
+assert s.count(old)==1
+s=s.replace(old,old+"    extra_config:\n      async-scheduling: true\n")
+open(p,"w").write(s)
+EOF
+git diff --stat | tail -2; timeout 900 .venv/bin/ansible-playbook playbooks/inference.yml --limit ai-5820-01 --tags vllm 2&gt;&amp;1 | grep -E "Restart|Wait for|PLAY RECAP|fatal|FAILED|ERROR" -A1 | cut -c1-160 | head -20; ssh -o BatchMode=yes mike@10.0.8.5 'systemctl is-active aihost-vllm-worker1 aihost-vllm-worker2; systemctl show aihost-vllm-worker1 aihost-vllm-worker2 -p NRestarts -p ActiveEnterTimestamp | paste - -; curl -s "http://127.0.0.1:8010/health?strict=true" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[\"status\"], {k[-7:]:v[\"status\"] for k,v in d[\"workers\"].items()})"'" completed (exit code 0)</summary>
+</task-notification>
