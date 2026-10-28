@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bgmk4ku8u</task-id>
+<tool-use-id>toolu_01LiX2xfcDjUFKipRHSrCdDJ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/bgmk4ku8u.output</output-file>
+<status>completed</status>
+<summary>Background command "timeout 6900 ssh -o BatchMode=yes -o ServerAliveInterval=30 mike@10.0.8.5 'until grep -q ALLDONE2 /tmp/evalx/cand.log 2&gt;/dev/null; do sleep 30; done; echo finished'; " completed (exit code 0)</summary>
+</task-notification>
