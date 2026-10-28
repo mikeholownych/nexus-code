@@ -1,0 +1,21 @@
+<pasted_content id="bd2e">
+Authorized.
+Allow the currently running diagnostic rerun to complete first. Preserve its outputs separately and do not score them as B2 results.
+Then:
+1. Freeze and hash the completed diagnostic evidence.
+2. Preserve B1-run-1 and B2-run-1 unchanged as historical evidence. Do not replace, rescore, or rewrite either result.
+3. Rebuild Nexus with the locally committed tool-call fixes and verify the intended commits/fixes are present in the actual dist used by the experiment.
+4. Deploy the gateway fix and verify the running gateway identity/build before benchmarking.
+5. Qualify the corrected parallel-tool-call path before starting the paired benchmark. Demonstrate that two streamed parallel calls retain distinct indices, Nexus reconstructs two independent calls, each arguments value parses as one valid JSON document, and the resulting history is accepted by llama.cpp. Also verify malformed-history handling and the intended worker-health behavior.
+6. Once qualified, freeze that exact software/configuration state. Make no changes between experimental arms.
+7. Run clean B1-run-2 and B2-run-2 over the same comparable task population, same task order/fixtures, same validators, same starting repository state, same limits/timeouts, same benchmark harness, and same rebuilt Nexus/gateway. The intended independent variable is routing/specialization only.
+8. Save complete per-task transcripts and routing/model identity evidence for both arms. Preserve elapsed time, steps, validation outcome, failure classification, planner/coder routing, and relevant inference errors.
+9. Do not change expectations or acceptance criteria based on observed outputs. T11 remains excluded from the paired comparison for the same previously established reason.
+10. Compare paired task outcomes, not just aggregate pass rate. Explicitly examine the two B1 false-completion cases and whether B2 changes their outcomes.
+Distinguish the fixes in the final evidence:
+- gateway tool-call index propagation: protocol/root-cause correction;
+- Nexus stream assembly/history sanitization: client-side correctness/defense;
+- parse-error worker-health handling: recovery/failure-containment behavior.
+If qualification fails or another material confound appears, stop rather than beginning the paired benchmark.
+No push, publication, unrelated changes, Cloudflare contest work, or further tuning. Return the diagnostic result, qualification evidence, exact frozen experiment identities, B1-run-2/B2-run-2 per-task results, aggregate comparison, failure classifications, and any remaining limitations.
+</pasted_content id="bd2e">
