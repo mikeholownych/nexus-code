@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>by9qp6nbb</task-id>
+<tool-use-id>toolu_016rwJVvsakrhuddXB19gkEN</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/by9qp6nbb.output</output-file>
+<status>completed</status>
+<summary>Background command "Live acceptance run 3 (32k window)" completed (exit code 0)</summary>
+</task-notification>
