@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>a73ef7780723acad1</task-id>
+<tool-use-id>toolu_01SKjymRXUC5ezxF6ZY7uj1n</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/a73ef7780723acad1.output</output-file>
+<status>failed</status>
+<summary>Agent "TUI re-acceptance round 5" failed: Agent terminated early due to an API error: You've hit your session limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011CfyjQvBvWBaAkqD3bvLdk, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now the visual review. Screen 10 first.</result>
+</task-notification>
