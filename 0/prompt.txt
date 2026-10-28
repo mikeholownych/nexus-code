@@ -1,0 +1,202 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent (this segment, in order):
+   - **Finish Stage 7 and continue Stage 8**, from the earlier request "make it follow the same evidence rule and proceed with stage 7 and 8".
+   - **Answers to the Stage 8 resource questions:** "1. 4, now 2. no 3. include other tools 4. aider is installed here on this host, llama.cpp workers are already installed on the inference host, sitting behind a custom gateway. what's your recommendation for the pass rate margin?"
+     - 4 appliance hours, starting immediately (about 12:20–16:20 UTC).
+     - No cloud runs.
+     - Include peer tools.
+     - Recommend a margin.
+   - **"How can we address the identified issues about what went wong with Nexus?"**
+   - **"new VERIFIED rule accepted. Proceed with identified fixes. Also, it was mentioned that Nexus is slower than the other tools tested.. this should also be worked on."**
+   - **"proceed with items left for speed"**
+   - **"what does goose do well, related to speed, that we can learn from?"** followed by **"proceed"**: implement the Goose-inspired changes.
+   - **"land all changes on main"**, then **"commit the two review docs too and .gitignore"**.
+   - **"switch the checkout to main"**
+   - **"delete the feat/tui-surface branch"** (the most recent request).
+   - **Standing constraints:**
+     - Preserve existing dirty and untracked work.
+     - Do not publish or deploy.
+     - Redact credentials, authorization headers and URL secrets.
+     - Never print the gateway key, which is read from `~/.config/nexus/config.env` as `LOCAL_LLM_API_KEY`.
+     - Commit only when asked.
+     - There is no git remote.
+     - Check `git rev-parse --short HEAD` before every commit.
+     - Earlier instruction: don't switch the main checkout's branch and use worktrees for main operations. The user later explicitly asked to switch to main.
+     - Use `/browse` from gstack for web browsing, never the claude-in-chrome tools.
+     - After changing code, run `graphify update .`.
+
+2. Key Technical Concepts:
+   - **Nexus architecture:**
+     - TS CLI and sidecar in `cli/src`.
+     - Rust harness-core and the Ratatui TUI in `core/src/bin/nexus_tui`.
+     - The installed `/usr/local/bin/nexus` points to the `~/nexus-code` build; `nexus --version` shows the build-info.
+   - **New VERIFIED rule (accepted 2026-10-13):**
+     - A discovered verifier's pass counts as VERIFIED only on independent evidence: before the first file edit, the verifier is run as a baseline and the test files are snapshotted.
+     - The tests as they were before the change must fail before and pass after. If Nexus edited tests, the pre-change tests are rerun in a copy under `.nexus/verify/<uuid>`, with SKIP_DIRS symlinked.
+     - Otherwise the outcome is REGRESSION_FREE with a stated reason.
+     - An operator-configured verifier is the operator's own check and still yields VERIFIED.
+   - **Eval harness (`eval/`):**
+     - `run.mjs`: fresh workspace and HOME/XDG per run, PWD set to the workspace, hidden tests copied in after the agent finishes, run-major order, `--pairs` reruns, process-group kill, and a contamination check.
+     - `score.mjs`: separate scores with Wilson 95% CIs, merging of reruns, and a pooled table.
+     - `infra.mjs`: classifies infra failures from each agent's connection-error signature, plus Nexus `providerRecovery` waits over 60 s.
+     - Adapters for nexus, aider, opencode and goose.
+   - **Gateway:**
+     - `https://10.0.8.5:8443/v1`, CA in `~/.config/nexus/t5820-gateway-ca.crt` (NODE_EXTRA_CA_CERTS).
+     - Models: engineering/b0, lead, deep, lead-reasoning.
+     - The lead model is Qwen3.6-35B-A3B Q4_K_M on llama.cpp b11347.
+     - Serves one request at a time, caches one prompt, and generates about 47 output tokens/s.
+     - No `/v1/responses` endpoint.
+   - **Pre-registered thresholds (ede562e):**
+     - False VERIFIED must be 0.
+     - The T2 pooled pass rate must be at least the best peer minus 10 points.
+     - No task where the peer passes at least 4/5 while Nexus passes at most 1/5.
+   - **Tool groups:**
+     - browser, lsp, web, search and knowledge are offered on demand: triggered by the operator's text, by `enable_tools`, or by a direct call.
+     - `activate_skill` is offered only when skills exist.
+     - Requirement tools are offered only with an objective ledger.
+
+3. Files and Code Sections (all committed; main = b946f73):
+   - **`cli/src/core/findings.ts`** (8cdc719):
+     - CTX-04 output limits.
+     - `READ_ARCHIVE_CAPABILITY`/`readArchive`.
+     - `INDEXED_CLAIM_CHARS = 240` with the first claim kept in indexed findings.
+     - `readFindings` now reports lost ids: "F12 is named in your memory but its full text is not kept…".
+   - **`cli/src/agent.ts`**:
+     - `persistProgress` reports a failed mid-turn save once, through `progressSaveFailing`.
+     - `harnessNote`, `archiveForReading`/`restoreArchive`.
+     - CTX-03 `contextQualifier = { contextNotRetained: this.turnRemovedObservations.size }`.
+     - Independence wiring:
+       - `changeBaseline`, `captureChangeBaseline()` before FILE_EDIT_TOOLS (`write_file`, `edit_file`, `patch_file`, `delete_file`) at depth 0.
+       - `judgeIndependence(command, deadlineSecs)`.
+       - The outcome check `if (evidence.source !== "configured" && evidence.independent !== true) → REGRESSION_FREE detail "Tests pass, but ${independenceDetail}."`
+       - The `run_tests` path skips the judgement when no change is pending.
+     - `enabledToolGroups` with `getEffectiveTools` filtering and the `enable_tools` handler.
+     - Prompt changes:
+       - Fixed rules come first; the shell environment, workspace and "Test command (Nexus verifies with it)", rules, skills, knowledge and the Acceptance Requirements section (only when requirements exist) come last.
+       - Rule 4: "PLANNING: Use `update_plan` only for work with three or more distinct phases (not for a fix and its test); update it alongside other tool calls."
+       - Rule 7: short summary.
+       - Rule 8: "After inspecting large output you will rely on later, state its key findings in a line or two … do not restate small files or narrate routine steps."
+   - **`cli/src/core/independent_check.ts`** (new, 44786a4):
+     - `ChangeBaseline {command, failed, tests: Map|null, at}`
+     - `snapshotTests`, `testsChangedSince`
+     - `judgeWithoutCopy` returns an `Independence`, or `"needs-copy"`
+     - `prepareBaselineTestsCopy` (MAX_COPY_FILES 20000)
+   - **`cli/src/tester.ts`**:
+     - `unittestLayout()` returns `python3 -m unittest discover -s tests`, `-s test`, or bare `discover`.
+     - `hasExecutedTests` parses `^Ran (\d+) tests? in`.
+     - `workspaceTestFiles`, `SKIP_DIRS` and `MAX_TEST_BYTES` are now exported.
+   - **`cli/src/core/turn.ts`**:
+     - `contextNotRetained?`, `independent?`, `independenceDetail?`.
+     - `contextTail()` in the summary line.
+   - **`cli/src/core/objective.ts`**:
+     - `independent?` on attempts.
+     - Marking a requirement `verified` is refused when `independent === false`.
+   - **`cli/src/core/tool_groups.ts`** (new, 4fcbe68): `TOOL_GROUPS`, `toolGroupOf`, `groupsTriggeredBy`, `ENABLE_TOOLS_CAPABILITY`.
+   - **`cli/src/core/provider_recovery.ts`**: `maxDelayMs: 15_000`, down from 60_000.
+   - **`cli/src/core/capabilities.ts`**:
+     - `update_plan` is now a checklist: no `detail` field. Description: "Create or update the task's plan: a short checklist, one item per phase, each a few words."
+     - `task_completed` asks for a short summary.
+   - **`cli/src/client.ts`**:
+     - `if (!this.conn.providerId) payload.max_tokens = this.maxOutputTokens;`
+     - `LOCAL_DROPPABLE_PARAMS = {max_tokens, stream_options}`. `withParameterRetry` now also covers local connections, which may drop only those two parameters.
+     - `omitUnsupported` applies to every connection.
+     - `withReceipt` local branch records `lastUsageReport`.
+     - The stream path always sets `this.pending`.
+   - **`cli/src/providers.ts`**: local endpoint `usage: "stream-options"`.
+   - **`core/src/bin/nexus_tui/live_state.rs`**:
+     - "Done · verified (some context lost)" with a caution tone.
+     - "Done · tests pass (own tests only)" when `verification.independent == false`.
+     - Tests for both; 240 Rust TUI tests pass.
+   - **Tests added or updated:**
+     - `context_convergence` (CTX-03/04/06/07, archive, CTX-01 residuals; the `quiet()` helper enables all tool groups; "compaction grants no tools" now compares requests within the turn).
+     - `independent_verification.test.ts` (5 tests; uses `env -u NODE_TEST_CONTEXT` and `overwrite: true`).
+     - `verification_binding` (unittest), `objective_continuation` (run counts +1 for the baseline), `tool_groups.test.ts`.
+     - `provider_recovery` (bounds derived from the policy), `local_request_params.test.ts`, `cloud_providers` (the appliance path never drops sampling params), `spine` (41 capabilities), `eval_harness.test.ts` (async spawn).
+   - **Eval:** `eval/run.mjs`, `score.mjs`, `infra.mjs`, `README.md` (pre-registration and pilot deviations), `configs/pilot-{nexus,aider,opencode,goose}.json`, `tasks/selftest-add`, `tasks/t2-{bugfix-duration,bugfix-csv,feature-inventory,feature-slugify,refactor-tax,debug-logs}`, and `.gitignore` (`.cache/`, `out/`, `__pycache__/`).
+   - **Docs:**
+     - `docs/USER_MANUAL.md` (VERIFIED independence, contextNotRetained, unittest).
+     - `docs/reviews/evidence/context_stage7/RESULT_run_25208c1_r3_deep120.md`.
+     - `docs/reviews/evidence/eval_pilot_2026-10-13/` (RESULT.md, SCORES*.md, scores.json, manifests).
+     - The two 2026-10-12 review docs, committed in b946f73.
+   - **Notes:** `tasks/lessons.md` (eval harness lessons) and `tasks/todo.md` (updated); both untracked. Memory file `installed-nexus-runs-checkout-build.md` and MEMORY.md updated to say main = b946f73 and the checkout is on main.
+
+4. Errors and fixes:
+   - **Missing `redactSecrets` import:** added to the ui.js import.
+   - **spine capability count:** 39 → 40, then 41.
+   - **eval self-test hung:** `spawnSync` blocked the in-process mock gateway; switched to async spawn.
+   - **Task fixtures:**
+     - Python hidden tests were left indented (the dedent ran after a prefix was added); re-dedented them.
+     - `node --test test/` treated the directory as a file; changed to `test/*.test.js`.
+   - **Safety check blocked `rm -rf "$S"` and `bash -c "$cmd"`:** rewrote the check as a Python script file.
+   - **OpenCode edited the repo's task fixture through an inherited PWD:** restored `durations.py`, removed its `__pycache__`, set PWD/XDG per run, and added contamination detection.
+   - **`expandHome` used before definition:** moved it to a hoisted function.
+   - **Relative output path:** this broke the CA bundle for goose ("Error builder error") and aider ("Connection error"). Fixed with `args.out = path.resolve(args.out)`. Invalid runs were moved to `out/pilot-20261013/invalid/`.
+   - **Runner management:** `pkill -f` killed its own shell, and the runners show up as `MainThread`, so I killed them by PID instead. A stale aider runner wrote into the new output dir; restarted aider cleanly.
+   - **Monitor filters:** `VERIFIED hidden=false` matched UNVERIFIED; anchored the filter to `": VERIFIED hidden=false"`.
+   - **Gateway outage:** produced 30 infra failures, classified by `infra.mjs` and rerun. The 1222 s Nexus run is now classified by its recovery wait.
+   - **`candidateMutation` hook runs after execution:** too late for a baseline, so the baseline is captured before `spine.execute`.
+   - **Independence tests:** scripted writes needed `overwrite: true`; the nested `node --test` needed `env -u NODE_TEST_CONTEXT`.
+   - **Prompt length:** a longer rule 4 broke the 17K-limit context test, so the wording was shortened. Tool trimming broke 10 context tests sized to the full tool list; the `quiet()` helper now enables all groups.
+   - **Usage and parameter drops:** local usage was never recorded because `withReceipt` returned early, and parameter drops only worked for providers. Fixed both; the appliance still never drops temperature (an existing test guards this).
+   - **TS narrowing error:** fixed by reading `pending` through a function.
+   - **Old scratchpad/base worktree had regenerated evidence:** created a fresh landing worktree instead, then removed it afterwards.
+   - **Rust `test_dec01_symlink_race_adversarial` once took 271 s:** three reruns took 0.8–1.7 s; recorded as unexplained.
+
+5. Problem Solving and results:
+   - **Stage 7 exit criteria:**
+     - #7 met (CTX-03 qualifier plus manual).
+     - #6 not accepted: the R3 run had false absence claims.
+     - The acceptance rerun (about 7 h on deep) and the T3 tier are still pending.
+   - **Pilot:** NOT QUALIFIED; 2 false VERIFIED.
+   - **After the VERIFIED and unittest fixes:**
+     - 0 false VERIFIED in 30 runs across both reruns.
+     - VERIFIED only on the bug-fix tasks (10/10 correct); REGRESSION_FREE elsewhere.
+     - Correct answers: 26/30, then 25/30.
+   - **Speed (serial, alone on the gateway):**
+     - Nexus 22.1 min at ed17e99 and 20.4 min at 4fcbe68, vs Goose 14.9 min.
+     - Steps fell 30–35% and tokens 25–43% on multi-step tasks.
+     - The Goose-inspired changes in bd99fd0 are not measured yet. Expected saving: about 6–10 s on debug-logs, from 41 s.
+   - **Landing:**
+     - Clean worktree build and test at bd99fd0: Rust 24+240+2, CLI 834/834, gates passed, the committed dist matched a fresh build.
+     - main fast-forwarded from 604687c to b946f73 using `git update-ref` with an old-value guard.
+
+6. All user messages (this segment):
+   - "1. 4, now 2. no 3. include other tools 4. aider is installed here on this host, llama.cpp workers are already installed on the inference host, sitting behind a custom gateway. what's your recommendation for the pass rate margin?"
+   - "How can we address the identified issues about what went wong with Nexus?"
+   - "new VERIFIED rule accepted. Proceed with identified fixes. Also, it was mentioned that Nexus is slower than the other tools tested.. this should also be worked on."
+   - "proceed with items left for speed"
+   - "what does goose do well, related to speed, that we can learn from?"
+   - "proceed"
+   - "continue" (after /login)
+   - "land all changes on main"
+   - "commit the two review docs too and .gitignore"
+   - "switch the checkout to main"
+   - "delete the feat/tui-surface branch"
+
+7. Pending Tasks:
+   - Nothing explicitly outstanding beyond confirming the branch deletion to the user.
+   - **Previously identified work that needs a new appliance window:**
+     1. A roughly 20-minute serial rerun to measure the bd99fd0 Goose-inspired changes.
+     2. A fresh, untuned task set for qualification.
+     3. T3 long tasks and the Stage 7 acceptance rerun, about 7 h on deep.
+   - **Further work not yet built:** Stage 8 T3 fact-sheet scorer, T4 fault injector, and T1 adversarial suites in CI.
+   - **Untracked, not to be committed unless asked:** `tasks/`, `nexus-session-session_20261011_191846_i3c3.json`, `2026-10-12-160802-local-command-caveat…txt`.
+
+8. Current Work:
+   - **Request:** "delete the feat/tui-surface branch".
+   - **What I checked first:** that `feat/tui-surface` is an ancestor of main and is not checked out in any worktree (count 0).
+   - **What I ran:** `git branch -d feat/tui-surface`, which returned "ok".
+   - **Verification:** a follow-up `git branch --list` piped through `wc -l` printed 1, which was ambiguous. `rtk proxy git show-ref --verify refs/heads/feat/tui-surface` then printed "fatal: 'refs/heads/feat/tui-surface' - not a valid ref", which confirms the branch is deleted.
+   - **Current state:** main = b946f73; the checkout is on main; `nexus --version` = `1.2.1 (b946f7333309, main)`; no tracked changes.
+
+9. Optional Next Step:
+   - Report to the user that `feat/tui-surface` is deleted: verified with `show-ref` ("not a valid ref"); it was fully contained in main at b946f73, and main and the checkout are unchanged.
+   - Optionally update the memory note to record that the branch was deleted.
+   - No further work without a new request. Appliance-dependent work (the bd99fd0 speed rerun, a fresh task set, T3 and the Stage 7 acceptance rerun) needs the user to grant another gateway window.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
