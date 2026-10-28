@@ -1,0 +1,35 @@
+<task-notification>
+<task-id>ac9638dc923f0a164</task-id>
+<tool-use-id>toolu_015rb5JZ4dfEV2fBGXb1E9jK</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/ac9638dc923f0a164.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit providers and inference" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I finished the Scope B audit and wrote it up. The four S2 findings below are the main ones: I reproduced PRV-01 and PRV-02 against local mock servers, and PRV-06 is from source plus inference. The other targeted tests pass (125/125), but they only use fixtures and mocks.
+
+**Findings:**
+- **PRV-01 (S2):** a repo's own `.env` can turn off TLS certificate checking for the whole process. `cli/src/config.ts:36-39` loads it with `override:true` and no key filter. In the repro, a `.env` with `NODE_TLS_REJECT_UNAUTHORIZED=0` turned a rejected self-signed cert into HTTP 200, and the server saw the Authorization header. Opening an untrusted repo therefore exposes cloud API keys and tokens to interception. The same path can set timeouts, fallback endpoints and provider key variables.
+- **PRV-02 (S2):** `cli/src/core/egress.ts:134-139` decides "local" by string prefix, so a DNS name like `10.attacker.example` or `192.168.evil.com` counts as local. That gets past the documented promise that a cloud endpoint chosen only by a project `.env` is refused (reproduced).
+- **PRV-06 (S2, standalone):** context size is only discovered from the gateway or vLLM (`max_model_len`). On LM Studio or llama.cpp it falls back to a 65536 default. If the loaded model's window is smaller, the turn fails with no compaction or retry, and the user has to know about `--context-limit`. This one comes from reading the code plus inference about how those servers report models.
+- **S3, all reproduced:**
+  - PRV-03: error bodies from local endpoints are not size-limited or redacted (a 200 KB body with a key string came through intact).
+  - PRV-04: if a server repeats the tool name in later chunks, the name comes out as `read_fileread_file`.
+  - PRV-05: model listing and embeddings have no timeout, so a silent server hangs them indefinitely.
+  - PRV-07: llama.cpp's context-overflow error is classified as an ordinary rejected request.
+  - PRV-08: LAN hostnames, Tailscale addresses and `127.0.0.2` are treated as cloud.
+  - PRV-09: an empty stream triggers a second, uncapped request.
+- **Other S3 items, from reading the code:** PRV-10 (one 15-minute whole-request timeout, no idle timeout) and PRV-15 (web search defaults to DuckDuckGo and returns a made-up "result" marked as success when nothing comes back). The remaining items are S4 notes, including homelab-specific names in code and docs and docs that overstate behaviour.
+
+**Can Nexus run standalone?** Yes, by design. The default endpoint is LM Studio's (`localhost:1234`), and gateway features (token counting, capacity headers) are optional and handled when absent. There is no live evidence of a standalone run, though, because local requests are never written to `inference_receipts.jsonl`. The receipts there (2026-10-11 to 10-14, chatgpt and openrouter only) and the 10-11 live qualification note are both historical. OpenAI, Anthropic, Copilot and the generic compatible provider have only been tested against mocks.
+
+**Strengths:** tool calls only run after a complete response, the stream parser handles split chunks correctly, cancellation works (aborted in 327 ms), and the retry/backoff logic is well bounded. Credentials are scoped to their own origin and the credentials file is written owner-only.
+
+I sent nothing to 10.0.8.5 or any cloud provider, and changed nothing in the repo. The report has 18 findings, reproductions, qualification gaps and 11 proposed v1 requirements; PRV-R1, R2 and R5 are marked as blockers.
+
+Files are in `/tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/`:
+- `audit/B_providers.md` (the report)
+- `prv/probe.mts`
+- `prv/tls.mts`
+- `prv/err.mts`</result>
+<usage><subagent_tokens>223784</subagent_tokens><tool_uses>16</tool_uses><duration_ms>424018</duration_ms></usage>
+</task-notification>
