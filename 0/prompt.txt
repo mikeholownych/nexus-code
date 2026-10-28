@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bn1f6lj1d</task-id>
+<tool-use-id>toolu_01VYHkYaekREFdn8SQM6a2Tc</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/bn1f6lj1d.output</output-file>
+<status>completed</status>
+<summary>Background command "Full snapshot test of candidate-1" completed (exit code 0)</summary>
+</task-notification>
