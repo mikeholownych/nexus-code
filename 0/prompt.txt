@@ -1,0 +1,37 @@
+<pasted_content id="93a6">
+  ### Independent Code Review: PR #89 https://github.com/mikeholownych/nexus-code/pull/89 — fix(security): clear egress trim and test shuffle CodeQL alerts
+
+  Disposition: ACCEPT
+  Exact Reviewed Head: 7bb359d57a9f7335930b8095bdf63e77c8e96dc6
+  Base Branch: v1/integration at 3f85dbdf7f3ce6a1a7d4786db244be8aee4556a9
+  GitHub Review: Posted as Issue Comment #6301767249 https://github.com/mikeholownych/nexus-code/pull/89#issuecomment-6301767249
+  Ledger: Appended to $(git rev-parse --git-common-dir)/nexus-claims.log
+  ──────
+  ### Analysis & Findings
+
+  1. Egress Trailing Delimiter Trimming (CodeQL Alert #3 js/polynomial-redos):
+      • Location: egress.ts:415-421
+      • Mechanism: In InformationFlowBoundary.classifyText(), matched contextual secrets previously used .replace(/["';,]+$/, "") to strip trailing quotes, semicolons, and commas. While contextual patterns are bounded to {8,96} characters in practice, CodeQL
+      flagged the regex for polynomial backtracking on trailing delimiter runs.
+      • Fix: Replaced with trimTrailingDelimiters(value), executing a linear backward scan (while (end > 0 && "\"';,".includes(value[end - 1])) end--).
+      • Complexity & Safety: Strictly O(K) over trailing delimiters, completely avoids regex backtracking, and preserves exact string truncation semantics.
+  2. Test Shuffle Modulo Bias (CodeQL Alert #40 js/biased-cryptographic-random):
+      • Location: durable_continuity.test.ts:210-215
+      • Mechanism: The test utility highEntropyId() performed a Fisher-Yates array shuffle with randomBytes(1)[0] % (i + 1), which introduces non-uniform distribution (modulo bias) when mapping 256 byte states into non-divisor ranges.
+      • Fix: Replaced with Node's native randomInt(i + 1) from node:crypto, guaranteeing uniform unbiased random integer distribution while maintaining cryptographic strength.
+  3. Regression Test Coverage:
+      • Added test case in egress.test.ts:754-760: trailing quote, semicolon and comma delimiters are stripped from a contextual value, confirming that assignments such as DATABASE_PASSWORD=REDACTED;;, classify cleanly as REDACTED.
+      • Preserved all egress boundary classification, redaction, rehydration, and fail-closed invariants.
+
+  ──────
+  ### Verification Evidence
+
+  • Clean Diff: git diff --check 3f85dbd..7bb359d → PASS
+  • Typecheck: tsc --noEmit → PASS (0 errors)
+  • Focused Test Execution (isolated HOME/XDG):
+      • node scripts/run_tests.mjs test/egress.test.ts → 27/27 PASS
+      • node scripts/run_tests.mjs test/durable_continuity.test.ts → 41/41 PASS (including high-entropy tool-call ids shuffle probe)
+  • Hosted CodeQL: PASS (Run 39498075306 green; 0 open alerts on v1/sec-codeql-egress-durable)
+
+  PR #89 is sound, verified, and ready to merge into v1/integration.
+</pasted_content id="93a6">
