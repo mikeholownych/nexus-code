@@ -203,7 +203,11 @@ export class CheckpointManager {
       for (const component of relativeParent === "." ? [] : relativeParent.split(path.sep)) {
         parent = path.join(parent, component);
         const stat = fs.lstatSync(parent, { throwIfNoEntry: false });
-        if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) break;
+        if (!stat) break;
+        if (stat.isSymbolicLink()) {
+          throw new Error("Checkpoint destination parent is a symbolic link");
+        }
+        if (!stat.isDirectory()) break;
         if (fs.lstatSync(path.join(parent, ".git"), { throwIfNoEntry: false })) {
           throw new Error("Checkpoint destination parent is a nested Git repository");
         }
