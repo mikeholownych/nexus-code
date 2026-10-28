@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b37jpfa2r</task-id>
+<summary>Monitor event: "PR 21 CI run on rebased head"</summary>
+<event>exit=0</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
