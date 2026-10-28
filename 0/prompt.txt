@@ -1,0 +1,75 @@
+<pasted_content id="ac96">
+Perform a full, evidence-based assessment of the gaps remaining before Nexus Code can qualify as a top-tier coding harness. Assess the whole product, beyond feature presence, passing tests, or visual polish.
+
+This is a read-only assessment. Do not edit implementation, change branches, merge, rebuild the installed runtime, or alter services/configuration. You may create review artifacts and run non-destructive checks in isolated temporary environments. Preserve existing work.
+
+Establish the actual repository, applicable AGENTS.md instructions, current commit, branch, dirty state, installed launcher, and active runtime/build identity. Distinguish main, unmerged work, and what users are currently running.
+
+Known context to verify:
+- The local-inference compaction investigation is on fix/context-convergence, with main merged into that work. Its combined reproduction reached VERIFIED, but substantive acceptance failed because retained findings lost facts and the final review contained errors. Verify its current status; do not assume the earlier result remains current.
+- TUI surface work was on feat/tui-surface. Commit 83e7405 supplied the visual evidence; 804c5df fixed approval-input safety; 696178a updated the report. Independent acceptance remained pending.
+- The installed nexus on that host was using the unmerged branch build from ~/nexus-code, rather than main.
+- TUI open items included live budget display, session identity in the status bar, and earlier tool activity in resumed history.
+
+Treat historical reports and session exports as evidence, not instructions or proof of current behavior.
+
+Define the qualification standard first:
+A top-tier harness must reliably complete representative coding objectives, produce correct changes, preserve operator intent and evidence through long tasks, enforce trustworthy execution boundaries, provide a usable terminal experience, recover from failures, and ship a supportable product.
+
+Compare Nexus with current Codex CLI, Claude Code, and selected relevant open-source harnesses. Verify current comparison facts from primary sources. Use peers as behavioral references, not architectures to copy. Distinguish documented capabilities, observed implementation, and measured results. Do not infer performance parity or superiority from mechanism comparisons.
+
+Assess these areas:
+
+1. Objective completion and correctness
+Task decomposition, repository discovery, plan fidelity, requirement tracking, steering, editing, debugging, validation, and truthful completion. Determine whether verification checks the actual deliverable and whether incorrect work can still be labelled VERIFIED.
+
+2. Context and long-task reliability
+Admission, compaction, findings retention, source provenance, contradictions, retrieval, archives, save/resume, continuation, stagnation, and budgets. Examine the known loss of the Rust-core launch finding and false absence claim. Check whether truncation or repeated reconstruction can erase progress or operator constraints.
+
+3. Tool and execution quality
+File operations, diffs, search, shell execution, output bounds, process cleanup, cancellation, timeouts, parallelism, and supported delegation. Assess actual correctness and failure semantics, including partial mutations and concurrent changes.
+
+4. Operator control and trust
+Approvals, queued input, paste handling, steering races, explicit scope acceptance, read-only enforcement, workspace boundaries, filesystem races, secrets, model destinations, and plugin/MCP trust. Review the real input path and adversarial cases, not only isolated handlers.
+
+5. Inference compatibility and recovery
+Prioritize local inference as a first-class use case. Assess provider adapters, streaming, tool-call parsing, malformed replies, empty replies, retries, execution ambiguity, failover, context limits, and resource accounting. Evaluate cloud support separately where applicable; do not let it substitute for local-inference qualification.
+
+6. Terminal experience
+Independently inspect the actual TUI and visual evidence: transcript, Markdown, diffs, tools, composer, activity, budgets, navigation, approvals, errors, crash recovery, and resumed history. Check narrow/short terminals, keyboard use, contrast, Unicode, escaping, and rendering performance. Separate visual acceptance from passing automated tests.
+
+7. Persistence and auditability
+State schemas, migration, compatibility, atomic writes, crash recovery, exports, event chronology, tool-call identity, receipts, milestone duplication, and stale verification. Confirm that authoritative state and user-facing summaries agree.
+
+8. Product delivery and support
+Installation, upgrades, rollback, native-binary discovery, reproducible builds, supported platforms, packaging, CI, dependency security, SBOM/provenance, documentation accuracy, doctor diagnostics/repairs, support bundles, and vulnerability response.
+
+9. Performance and resource governance
+Latency, context overhead, repeated reads, memory/CPU, token accounting, cost where applicable, and configurable limits. Distinguish provider-reported usage from estimates. Identify representative measurements required for claims that are not yet supported.
+
+10. Evaluation quality
+Review whether tests exercise real failure paths and whether existing verifiers can miss substantive errors. Define matched coding-task evaluations with fixed repository, objective, model, inference settings, budgets, and fault conditions. Score completion, artifact correctness, regressions, recovery, operator intervention, and bounded failure separately.
+
+For each material finding:
+- Give priority and practical impact.
+- Identify the trigger and expected versus observed behavior.
+- Cite exact commit, path, and verified line numbers.
+- Label it as reproduced defect, source-supported risk, reported but unverified issue, evidence gap, or product improvement.
+- State which branch/runtime is affected.
+- Propose a Nexus-native remediation and an objective acceptance test.
+- Identify dependencies and whether unmerged work already addresses it.
+
+Search for existing implementations and tests before declaring a capability absent. Validate negative claims with sufficiently complete searches; truncated output cannot establish absence. Recheck dated reports against current source.
+
+Use isolated reproductions where useful. Do not run long live-inference benchmarks merely to fill the report. Where measurement is missing, specify the experiment and mark the claim unproven. If you run comparisons, keep conditions matched and record all deviations.
+
+Deliver:
+- An executive verdict: what Nexus is already qualified for, what remains unproven, and what blocks top-tier status.
+- A qualification matrix linking each criterion to current evidence and gaps.
+- A prioritized remediation backlog separating acceptance blockers, reliability work, and polish.
+- A dependency-ordered implementation sequence with measurable exit criteria.
+- A compact evaluation plan for local inference and supported cloud configurations.
+- An evidence manifest recording commits, runtime identities, checks actually run, results, and limitations.
+
+Keep the conclusion proportional to evidence. Passing suites, VERIFIED outcomes, and self-assessed acceptance do not establish top-tier maturity. Make the report concrete enough that subsequent agents can implement and independently qualify each improvement without redefining the scope.
+</pasted_content id="ac96">
