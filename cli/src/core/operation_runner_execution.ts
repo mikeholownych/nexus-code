@@ -150,6 +150,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       ensurePrivateDir(dir);
       return path.join(dir, `${taskId}.json`);
     } catch {
+      reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_state_path_unavailable");
       return undefined;
     }
   }
@@ -174,7 +175,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         if (typeof parsed.testHashes[test] !== "string" || current.get(test) !== parsed.testHashes[test]) return undefined;
       }
       return { command: parsed.command, tests: parsed.tests, testHashes: parsed.testHashes };
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_evidence_read_failed");
+      }
       return undefined;
     }
   }
@@ -194,6 +198,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       }), { durable: true });
     } catch {
       // The RED gate still held for this run; without the sidecar a later resume reruns RED rather than skipping it.
+      reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_evidence_write_failed");
     }
   }
 
@@ -202,7 +207,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     if (!file) return;
     try {
       fs.rmSync(file, { force: true });
-    } catch {}
+    } catch {
+      reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_evidence_cleanup_failed");
+    }
   }
 
   /** Content hashes of test files currently changed against HEAD. */
@@ -215,6 +222,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       }
     } catch {
       // No candidate diff (for example a non-Git workspace): the RED phase cannot prove a test change.
+      reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_test_snapshot_failed");
     }
     return snapshot;
   }
@@ -363,22 +371,22 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         }
       }
       if (tdd && redEvidence && redVerifiedNow && !ctx.operatorDecision?.restart) {
-        // RED legitimately changes the verifier definition by adding the reproduction test. Rebase the baseline onto
-        // that exact test set so GREEN can bind it; any other test or verifier change RED made is refused, and GREEN
-        // then cannot verify against a narrowed oracle.
-        const rebase = agent.rebaseVerifierBaselineAfterTddRed(redEvidence.tests);
-        if (!rebase.ok) {
+        // RED legitimately changes the verifier definition by adding the reproduction test. Record that exact
+        // definition as a GREEN allowlist without changing the pre-change evidence baseline; any other test or
+        // verifier change RED made is refused, and GREEN cannot verify against a narrowed oracle.
+        const validation = agent.validateTddRedVerifierBaseline(redEvidence.tests);
+        if (!validation.ok) {
           // The evidence is not usable for a verified GREEN; a retry must rerun RED against the oracle.
           this.clearTddEvidence(agent);
           return {
             kind: "failed",
             cause: "EXECUTION_FAILED",
-            reason: `TDD RED changed the verification oracle: ${rebase.reason}`,
+            reason: `TDD RED changed the verification oracle: ${validation.reason}`,
             // Retrying or resuming cannot capture a fresh pre-RED baseline (recovered state is untrusted and the
             // workspace already holds the RED edits), so the unit stops instead of looping. The workspace keeps the
             // RED changes: restore the named paths and start a new operation to run this unit test-first again.
             question:
-              `${unit.title}: the RED phase changed the verification oracle (${rebase.reason}), so GREEN cannot be ` +
+              `${unit.title}: the RED phase changed the verification oracle (${validation.reason}), so GREEN cannot be ` +
               `verified against it. The RED changes are still in the workspace; restore the affected test/verifier ` +
               `files and start a new operation to run this unit test-first again.`,
             options: [{ label: "stop the operation", action: { kind: "cancel_operation" } }],
