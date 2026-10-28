@@ -1,0 +1,23 @@
+<task-notification>
+<task-id>b2i0j067r</task-id>
+<tool-use-id>toolu_01Nc6SJG1sEXc8d7jb9Nob3V</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/b2i0j067r.output</output-file>
+<status>completed</status>
+<summary>Background command "cat &gt; /tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/scratchpad/bench.py &lt;&lt;'EOF'
+import json,sys,time,urllib.request,subprocess
+tok=subprocess.run(["sudo","cat","/etc/local-ai/orchestrator/client-token"],capture_output=True,text=True).stdout.strip()
+code="\n".join(f"def handler_{i}(request, session):\n    value = session.get('key_{i}')\n    if value is None:\n        raise KeyError('missing key_{i}')\n    return {{'id': {i}, 'value': value}}\n" for i in range(40))
+tests={
+ "generic-350tok":("Write a detailed explanation of how a B-tree works, with a Python implementation.",350),
+ "code-edit-copy":("Here is a Python module:\n```python\n"+code+"```\nRewrite the whole module, changing only the KeyError message in every handler to include the word 'session'. Output the full module.",900),
+}
+def run(worker,label,prompt,mt):
+    body={"model":"engineering/b0","messages":[{"role":"user","content":prompt}],"max_tokens":mt,"temperature":0}
+    h={"Authorization":"Bearer "+tok,"Content-Type":"application/json","X-AIHost-Worker":worker}
+    t=time.time(); r=json.load(urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8010/v1/chat/completions",json.dumps(body).encode(),h),timeout=600)); dt=time.time()-t
+    u=r.get("usage",{}); n=u.get("completion_tokens"); print(f"{worker[-7:]} {label:15s} prompt={u.get('prompt_tokens')} gen={n} wall={dt:5.1f}s  {n/dt:5.1f} tok/s")
+for w in sys.argv[1:]:
+    for l,(p,m) in tests.items(): run(w,l,p,m)
+EOF
+timeout 500 ssh -o BatchMode=yes mike@10.0.8.5 'python3 - b0-live-tp1-worker1 b0-live-tp1-worker2' &lt; /tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/scratchpad/bench.py 2&gt;&amp;1 | tail -6" completed (exit code 0)</summary>
+</task-notification>
