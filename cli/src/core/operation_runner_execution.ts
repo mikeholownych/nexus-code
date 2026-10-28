@@ -150,6 +150,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       ensurePrivateDir(dir);
       return path.join(dir, `${taskId}.json`);
     } catch {
+      reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_state_path_unavailable");
       return undefined;
     }
   }
@@ -174,7 +175,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         if (typeof parsed.testHashes[test] !== "string" || current.get(test) !== parsed.testHashes[test]) return undefined;
       }
       return { command: parsed.command, tests: parsed.tests, testHashes: parsed.testHashes };
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_evidence_read_failed");
+      }
       return undefined;
     }
   }
@@ -194,6 +198,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       }), { durable: true });
     } catch {
       // The RED gate still held for this run; without the sidecar a later resume reruns RED rather than skipping it.
+      reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_evidence_write_failed");
     }
   }
 
@@ -202,7 +207,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     if (!file) return;
     try {
       fs.rmSync(file, { force: true });
-    } catch {}
+    } catch {
+      reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_evidence_cleanup_failed");
+    }
   }
 
   /** Content hashes of test files currently changed against HEAD. */
@@ -215,6 +222,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       }
     } catch {
       // No candidate diff (for example a non-Git workspace): the RED phase cannot prove a test change.
+      reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "tdd_test_snapshot_failed");
     }
     return snapshot;
   }

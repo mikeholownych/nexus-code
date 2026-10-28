@@ -816,6 +816,39 @@ test("TDD RED tests remain separate from independent verifier evidence", { timeo
   }
 });
 
+test("TDD sidecar and snapshot failures emit bounded debug diagnostics", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tdd-diagnostics-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stateBase = path.join(root, "tasks", "task-diagnostic");
+  fs.mkdirSync(path.dirname(stateBase), { recursive: true });
+  const events: Array<{ level: string; area: string; action: string }> = [];
+  const executor = new AgentWorkUnitExecutor({
+    baseConfig: { workspace: root } as any,
+    onDiagnostic: (event) => events.push(event),
+  });
+  const agent = {
+    getTaskId: () => "task-diagnostic",
+    getStateManager: () => ({ getBaseDir: () => stateBase }),
+    getCandidateTracker: () => ({ computeCandidateIdentitySync: () => { throw new Error("private path must not be logged"); } }),
+  } as unknown as AutonomousAgent;
+  const file = (executor as any).tddStateFile(agent) as string;
+  const unit = { id: "unit", prompt: "task" } as WorkUnit;
+
+  fs.mkdirSync(file);
+  (executor as any).readTddEvidence(agent, unit);
+  (executor as any).writeTddEvidence(agent, unit, { command: "npm test", tests: ["test.spec.ts"], testHashes: {} });
+  (executor as any).clearTddEvidence(agent);
+  (executor as any).tddTestSnapshot(agent);
+
+  assert.deepEqual(events, [
+    { level: "debug", area: "executor", action: "tdd_evidence_read_failed" },
+    { level: "debug", area: "executor", action: "tdd_evidence_write_failed" },
+    { level: "debug", area: "executor", action: "tdd_evidence_cleanup_failed" },
+    { level: "debug", area: "executor", action: "tdd_test_snapshot_failed" },
+  ]);
+  assert.equal(JSON.stringify(events).includes("private path"), false);
+});
+
 test("a real RED turn ends with failing verifier evidence through task_completed", { timeout: 60_000 }, async () => {
   const failingTest = "const test = require('node:test');\nconst assert = require('node:assert');\ntest('red', () => assert.equal(1, 2));\n";
   const gw = await startGateway((n): Reply => {
