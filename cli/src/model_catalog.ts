@@ -80,7 +80,7 @@ export function recordRecent(ref: ModelRef): void {
 
 /** Chat-capable entries of a provider's list (OpenAI and Copilot lists also carry embedding/audio/image models). */
 export function chatModel(providerId: string, id: string): boolean {
-  if (/(embedding|tts|whisper|dall-e|gpt-image|audio|realtime|transcribe|moderation|davinci|babbage)/i.test(id)) return false;
+  if (/(embedding|rerank|tts|whisper|dall-e|gpt-image|audio|realtime|transcribe|moderation|davinci|babbage)/i.test(id)) return false;
   if (providerId === "openai") return /^(gpt-|o\d|chatgpt-|codex)/i.test(id);
   return true;
 }

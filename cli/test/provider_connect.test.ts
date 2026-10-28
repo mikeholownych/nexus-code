@@ -361,7 +361,7 @@ describe("connecting from the picker", () => {
   });
 
   test("local discovery excludes non-chat model entries in both setup paths", async () => {
-    const local = await mock((_s, res) => json(res, 200, { data: [{ id: "safe-model" }, { id: "text-embedding-3-large" }, { id: "whisper-1" }] }));
+    const local = await mock((_s, res) => json(res, 200, { data: [{ id: "safe-model" }, { id: "text-embedding-3-large" }, { id: "whisper-1" }, { id: "BAAI/bge-reranker-v2-m3" }] }));
     try {
       const discovered = await connectLocalEndpoint(cfg(), `${local.url}/v1`);
       assert.deepEqual(discovered.models, ["safe-model"]);
