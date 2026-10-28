@@ -1301,6 +1301,32 @@ export class AutonomousAgent {
       if (baseline.tests.size > 0) {
         return { ok: false, reason: "no verifier definition was captured before RED" };
       }
+      // With nothing captured, the workspace's definition can only be adopted when RED changed nothing in it: the
+      // reported tests are new, and every other file the verifier depends on is unchanged by this run (a manifest or
+      // script written through a shell command does not appear in the modified-file set, so consult the candidate diff).
+      let changedPaths: Set<string>;
+      try {
+        const identity = this.candidateTracker.computeCandidateIdentitySync(workspace);
+        changedPaths = new Set([...identity.trackedChanges, ...identity.untrackedFiles].map((entry) => entry.path));
+      } catch {
+        return { ok: false, reason: "the workspace candidate diff could not be read" };
+      }
+      for (const key of currentVerifier.keys()) {
+        if (key.startsWith("\0") || reported.has(key)) continue;
+        if (changedPaths.has(key)) {
+          return { ok: false, reason: `RED created or changed ${key}, which the verifier depends on` };
+        }
+      }
+      // A verifier that names a script directly only counts as a test definition when it is a test-runner invocation;
+      // otherwise RED would be authoring the oracle by writing the script the command runs.
+      const runner = /\b(?:npm|pnpm|yarn)\s+(?:(?:--prefix|--dir)(?:=|\s+)[^\s]+\s+)?(?:(?:run|run-script)\s+)?test\b|\bmake\s+test\b|\bcargo\s+test\b|\bpytest\b|\bpython\d?(?:\.\d+)?\s+-m\s+(?:pytest|unittest)\b|\bgo\s+test\b|\b(?:bun|deno)\s+test\b|\b(?:node|tsx)\s+--test\b/;
+      if (!runner.test(command)) {
+        for (const file of reported) {
+          if (command.includes(file)) {
+            return { ok: false, reason: `RED authored ${file}, which the verifier command runs directly` };
+          }
+        }
+      }
     }
     const preVerifier = baseline.verifier;
     if (preVerifier) {

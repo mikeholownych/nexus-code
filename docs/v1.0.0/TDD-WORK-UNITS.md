@@ -32,8 +32,10 @@ For each unit whose role is unset (implementer) or `implementer`:
    command must be the same. Anything else fails the unit with "the RED phase changed the verification oracle" instead
    of letting GREEN verify against a narrowed oracle. The rebase records `failed: true`, keeps the operator's trusted
    deliverables, and never clears a recovered unit's fail-closed verification posture. A repository with no test file
-   at all is the only case without a pre-RED definition snapshot; the rebase is allowed there only because there is no
-   pre-existing test or definition to narrow.
+   at all is the only case without a pre-RED definition snapshot. There the workspace definition is adopted only when
+   RED changed nothing in it beyond the reported tests (checked against the candidate diff, so a manifest or script
+   written through a shell command is caught too), and a command that names a script directly must be a test-runner
+   invocation; otherwise the RED turn would be authoring the oracle.
 4. **GREEN.** The unit continues in the same conversation with the normal prompt plus the GREEN protocol: implement the
    smallest product/source change, keep the test intact, and run the same verifier until it passes. Completion then
    follows the ordinary `TurnResult` classification and verifier gates, including test-set stability, deliverable binding
@@ -53,8 +55,9 @@ scheduler recovery path, not the TDD failure path.
   The baseline rebase moves exactly the reported RED tests into the trusted test set and nothing else. GREEN has no
   relaxation: it can only complete through the same verifier, baseline and independence gates as any other unit.
 - A resumed unit never rebases: recovery treats the saved baseline as untrusted and the workspace already holds the RED
-  edits, so no fresh pre-RED tree exists. Resumed units stay capped by the existing fail-closed verification posture
-  and cannot end `VERIFIED`; a bound result needs a fresh task.
+  edits, so no fresh pre-RED tree exists. A resumed unit with a workspace-bound verifier therefore cannot complete at
+  all (the definition guard rejects `task_completed`), and every TDD unit uses a workspace-bound gate in practice; a
+  bound result needs a fresh task.
 - A refusal is terminal for the unit rather than retryable: a retry or revise resumes the same task, where no fresh
   baseline can be captured, so it would loop. The RED edits stay in the workspace; the operator restores the files named
   in the decision and starts a new operation.
@@ -63,11 +66,12 @@ scheduler recovery path, not the TDD failure path.
   the harness makes the evidence stale and reruns RED.
 - TDD requires a Git workspace (the test-change evidence is a candidate diff against HEAD). A non-Git operation falls
   back to failing the RED phase. Automatic test generation, coverage guidance and mutation scoring are not included.
-- Tests: `cli/test/tdd_work_units.test.ts` (15 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
+- Tests: `cli/test/tdd_work_units.test.ts` (17 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
   sidecar, stale sidecar after a revise, restart, role exclusion, a real-agent RED turn, a real RED→GREEN unit where the
   first test is added to a test-less repo, RED narrowing the verifier refused, RED creating a verifier where none existed
-  refused, RED modifying an existing test refused, a verifier definition the baseline could not capture refused, and a
-  failing `task_completed` still rejected without `tddRed`). The real-agent cases use the
+  refused, RED modifying an existing test refused, a verifier definition the baseline could not capture refused, a
+  shell-authored manifest refused, a RED-authored runner the command executes directly refused, and a failing
+  `task_completed` still rejected without `tddRed`). The real-agent cases use the
   deterministic fixture gateway; no external inference is required. A `--tdd` CLI flag is a
   follow-up once the operation option surface is free.
 - Not included: automatic test generation from requirements, coverage-guided exploration, and mutation/regression
