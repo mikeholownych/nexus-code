@@ -1,0 +1,40 @@
+<pasted_content id="ac96">
+Improve Nexus’s live TUI diff output to a polished, readable standard. Implement and validate the actual terminal experience.
+
+The visual references were reviewed separately and are unavailable on this development server. Their relevant qualities are specified below; no screenshot files are needed.
+
+Read applicable AGENTS.md instructions, inspect the existing diff pipeline and TUI renderer, and preserve unrelated work. Reuse the current architecture.
+
+Target presentation:
+- A compact header such as `Edited cli/src/doctor.ts +4 −2`, with an identifiable path and accurate change counts.
+- Consistent spacing between file operations and a subtle gutter defining each diff block.
+- Muted green backgrounds spanning the visible width of added rows; muted red backgrounds for deleted rows; neutral unchanged context.
+- Readable syntax highlighting within those backgrounds, with sufficient contrast.
+- Explicit +/− markers so changes remain understandable without color.
+- Aligned old/new line-number gutters, blank where a number does not apply.
+- Preserved indentation, tabs, blank lines, and Unicode alignment.
+- Clearly separated hunks with enough context to understand each edit.
+- A bounded inline preview ending with an accurate omission message and discoverable review control, such as `… 48 more lines · <actual shortcut> to review`.
+
+Behavior requirements:
+1. Show each successful edit’s actual before/after diff in the transcript. Exclude unrelated pre-existing changes. Failed edits show an error and never appear successful.
+2. Support additions, modifications, deletions, multiple hunks, repeated edits, and supported renames. Explain binary, oversized, unreadable, or unsupported changes accurately.
+3. Provide a focused complete-diff view with file/hunk navigation and vertical/horizontal scrolling. Returning must preserve transcript position and composer text. Distinguish operation diffs from cumulative workspace/session diffs.
+4. Handle narrow terminals, long paths and lines, resizing, and files without a final newline. Clipped content must remain inspectable. If the full diff cannot be retained, disclose the limit and provide a reliable retrieval path.
+5. Escape terminal control sequences in file content without losing the represented meaning.
+6. Keep activity indicators, steering, approvals, cancellation, and input usable while diffs arrive. Avoid flicker, duplicate entries, corrupted rows, unwanted scroll jumps, and unnecessary idle redraws.
+7. Provide limited-color and monochrome fallbacks. State whether shell-command edits receive diff coverage.
+
+Use shared rendering components and theme tokens. Resolve routine design decisions yourself and continue through implementation and validation.
+
+Validate through the real TUI and sidecar in a pseudo-terminal:
+- Mixed additions/deletions, multiple hunks, large diffs, long paths/lines, Unicode, tabs, blank lines, and missing final newlines.
+- Failed edits and pre-existing dirty files.
+- Wide and narrow layouts, including resizing during active editing.
+- Complete-diff navigation, draft preservation, and return to the transcript.
+- Meaningful regression checks for accuracy, alignment, clipping, terminal escaping, and duplicate events.
+
+Run required builds and relevant tests. Capture representative terminal screenshots and a recording with monotonic timestamps, tied to the tested commit/build. Inspect the rendered output independently for hierarchy, readability, alignment, contrast, density, and navigation; correct visible shortcomings before declaring completion.
+
+Deliver the changes, tested commit/build identity, screenshots, tests actually run, supported cases, remaining limitations, and a clear visual acceptance verdict. Do not publish or deploy.
+</pasted_content id="ac96">
