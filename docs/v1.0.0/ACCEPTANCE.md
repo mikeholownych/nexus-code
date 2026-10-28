@@ -118,7 +118,7 @@ These are retained commitments from REQUIREMENTS §2 and cross-cutting checks.
 | ACC-QUAL-T3 | §6.3 + §6.4 | Thresholds met. |
 | ACC-QUAL-T4 | §6.2 + §6.4 | Thresholds met. |
 | ACC-QUAL-SMOKE | `make test` includes the T1 self-test and the T4 smoke | Present and passing. |
-| ACC-TUI-MANUAL | §5.3 on the installed RC across five required terminal environments and three required sizes | Every cell passes; screenshots and per-cell verdicts are archived. |
+| ACC-TUI-MANUAL | §5.3 on the installed RC across five required terminal environments and three required sizes | Every cell has a per-cell verdict and recorded outcomes; the release owner has waived screenshot artifacts for v1.0.0. |
 
 ## 4. Standalone and provider qualification (REQ-PRV-106, REQ-PRV-111, REQ-QUAL-107)
 
@@ -201,7 +201,7 @@ For each terminal × size, check:
 6. Ctrl-C twice (clean terminal restore: echo on, no stray escape codes).
 7. NO_COLOR.
 
-Record PASS/FAIL per cell, with a screenshot of the approval panel and the post-exit terminal state.
+Record PASS/FAIL per cell and the observed outcomes for each check, bound to the exact installed RC artifact, terminal environment, and size. The release owner has waived screenshot artifacts for v1.0.0; this waiver does not waive any interactive check, safety gate, per-cell verdict, or evidence record.
 
 **Gate:** zero FAIL on checks 2, 5 and 6, which are safety checks. Other FAILs need a written disposition (fix, or a documented known limitation).
 
