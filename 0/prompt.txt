@@ -1,0 +1,1 @@
+different providers should be selectable via the model slash command.. the ability to add API keys or connect to subscriptions should be selectable from that modal. ie CTRL-P to connect a provider. Review opencode and crush for inspiration.
