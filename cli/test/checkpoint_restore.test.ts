@@ -8,6 +8,21 @@ import { execFileSync } from "node:child_process";
 import { CheckpointManager } from "../src/checkpoint.js";
 import { SensitivePersistenceError } from "../src/core/persistence_protection.js";
 
+let previousHome: string | undefined;
+let isolatedHome: string;
+
+test.beforeEach(() => {
+  previousHome = process.env.HOME;
+  isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-restore-home-"));
+  process.env.HOME = isolatedHome;
+});
+
+test.afterEach(() => {
+  if (previousHome === undefined) delete process.env.HOME;
+  else process.env.HOME = previousHome;
+  fs.rmSync(isolatedHome, { recursive: true, force: true });
+});
+
 function gitRepo(): { repo: string; git: (...args: string[]) => string } {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-restore-"));
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
@@ -621,6 +636,121 @@ test("Git checkpoint rejects sensitive worktree symlink-target components withou
     assert.throws(() => manager.createCheckpoint("sensitive worktree link"), SensitivePersistenceError);
     assert.equal(manager.listCheckpoints().length, 0);
     assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git checkpoint rejects a staged symlink containing a credentialed database URL", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.symlinkSync("ordinary-target", path.join(repo, "link.txt"));
+    git("add", "link.txt");
+    fs.unlinkSync(path.join(repo, "link.txt"));
+    fs.symlinkSync("postgres://alice:violetsecret@db.example.invalid/app", path.join(repo, "link.txt"));
+    const manager = new CheckpointManager(repo);
+
+    assert.throws(() => manager.createCheckpoint("credentialed URL symlink"), SensitivePersistenceError);
+    assert.equal(manager.listCheckpoints().length, 0);
+    assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git checkpoint checks staged content at the repository root for a subdirectory workspace", () => {
+  const { repo, git } = gitRepo();
+  const workspace = path.join(repo, "sub");
+  fs.mkdirSync(workspace);
+  try {
+    fs.writeFileSync(path.join(workspace, "settings.txt"), "DATABASE_URL=postgres://alice:violetsecret@db.example.invalid/app\n");
+    git("add", "sub/settings.txt");
+    const manager = new CheckpointManager(workspace);
+
+    assert.throws(() => manager.createCheckpoint("sensitive subdirectory workspace"), SensitivePersistenceError);
+    assert.equal(manager.listCheckpoints().length, 0);
+    assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git-backed checkpoint refuses non-Git fallback after repository metadata disappears", () => {
+  const { repo } = gitRepo();
+  const manager = new CheckpointManager(repo);
+  const gitDir = path.join(repo, ".git");
+  const movedGitDir = path.join(repo, ".git-moved-for-test");
+  try {
+    fs.writeFileSync(path.join(repo, "draft.txt"), "captured untracked work\n");
+    const checkpoint = manager.createCheckpoint("Git metadata removal");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "must remain after refusal\n");
+    fs.renameSync(gitDir, movedGitDir);
+
+    const noGitManager = new CheckpointManager(repo);
+    const result = noGitManager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /requires its Git repository metadata/);
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "must remain after refusal\n");
+    assert.equal(fs.readFileSync(path.join(repo, "draft.txt"), "utf8"), "captured untracked work\n");
+  } finally {
+    if (fs.existsSync(movedGitDir)) fs.renameSync(movedGitDir, gitDir);
+    cleanupGitRepo(repo);
+  }
+});
+
+test("subdirectory workspace restore removes checkpoint-deleted paths relative to that workspace", () => {
+  const { repo, git } = gitRepo();
+  const workspace = path.join(repo, "sub");
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(workspace, "tracked.txt"), "base\n");
+  git("add", "sub/tracked.txt");
+  git("commit", "-qm", "subdirectory base");
+  const manager = new CheckpointManager(workspace);
+  try {
+    fs.rmSync(path.join(workspace, "tracked.txt"));
+    fs.writeFileSync(path.join(workspace, "draft.txt"), "subdirectory untracked draft\n");
+    git("add", "-u", "sub/tracked.txt");
+    const checkpoint = manager.createCheckpoint("subdirectory deletion");
+    git("reset", "--hard", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.existsSync(path.join(workspace, "tracked.txt")), false);
+    assert.equal(fs.readFileSync(path.join(workspace, "draft.txt"), "utf8"), "subdirectory untracked draft\n");
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    cleanupGitRepo(repo);
+  }
+});
+
+test("tracked deletion cleanup runs before a checkpoint symlink can redirect it", () => {
+  const { repo, git } = gitRepo();
+  const alias = path.join(repo, "alias");
+  const data = path.join(repo, "data");
+  fs.mkdirSync(alias);
+  fs.writeFileSync(path.join(alias, "file"), "tracked alias file\n");
+  fs.mkdirSync(data);
+  fs.writeFileSync(path.join(data, "file"), "ignored data must survive\n");
+  fs.writeFileSync(path.join(repo, ".gitignore"), "data/\n");
+  git("add", "alias/file", ".gitignore");
+  git("commit", "-qm", "tracked alias and ignored data");
+  const manager = new CheckpointManager(repo);
+  try {
+    fs.rmSync(path.join(alias, "file"));
+    fs.rmdirSync(alias);
+    fs.symlinkSync("data", alias);
+    git("add", "-A", "alias");
+    const checkpoint = manager.createCheckpoint("symlink replacement deletion");
+    git("reset", "--hard", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.lstatSync(alias).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(path.join(data, "file"), "utf8"), "ignored data must survive\n");
   } finally {
     cleanupGitRepo(repo);
   }
