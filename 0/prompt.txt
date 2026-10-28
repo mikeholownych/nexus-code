@@ -1,0 +1,39 @@
+<task-notification>
+<task-id>a7a0d4263e67fa615</task-id>
+<tool-use-id>toolu_01XUhhynGXvo2v2VLuHRsatY</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/a7a0d4263e67fa615.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit distribution, release, diagnostics" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Scope E is finished. I found 3 likely v1.0.0 blockers, all in how the shipped package behaves compared with what's documented and tested. They are rated S2 in the findings table and marked BLOCKER in the requirements. All checks ran in scratch HOMEs and a docker container; the real `~/.local` and the repo were not touched.
+
+**Likely blockers**
+- **REL-01: the installed package can't open the live TUI.** On the published alpha.2, running `nexus` with no arguments opens the plain REPL, and `nexus --live` fails with "unknown option". Only the checkout launcher (`harness.sh`) starts the TUI. `nexus doctor` still reports PASS for `tui.build`.
+- **REL-02: documented commands fail.** `docs/USER_MANUAL.md` tells users to run `nexus --approve` and `nexus -r`; both give "unknown option" on the installed package and also fail through `harness.sh`. The quickstart's `nexus repl --approve` is correct.
+- **REL-04: version mismatch on every fresh install.** `core/Cargo.toml` says 1.2.1 while the CLI says 0.1.0-alpha.2. As a result, `nexus doctor` on a clean install always warns about the engine version and says to run `make build`, which doesn't exist in a packaged install.
+
+**Other S2 findings**
+- **REL-03: `harness.sh` turns unknown words into agent tasks.** Its hand-written list of subcommands is missing about 13 real ones (trust, flights, replay, worktrees, stage, eval, knowledge, browse, operation, status, decide, resume, verify). Any of them starts an agent task that can edit files in the current directory. This is the launcher on your own PATH via `/usr/local/bin/nexus`. Found by reading the source, not run.
+- **REL-05: no third-party notices or SBOM.** The release ships only the project LICENSE, with no notices for the 152 Rust packages compiled into the binaries and no SBOM. `make sbom` lists only direct dependencies and gets their versions from the declared ranges rather than the lockfiles.
+
+**S3 findings**
+- **REL-07:** the fallback Rust vulnerability scanner (`scripts/audit_rust_deps.py`) is a hard-coded list of 9 old advisories. GitHub CI actually runs the real `cargo audit` (1,310 advisories loaded), but that's only because the runner image happens to include it.
+- **REL-08:** running the installer without `NEXUS_VERSION` fails with an opaque "could not find latest stable release". That's expected while only prereleases exist, but the message doesn't suggest pinning a version.
+- **REL-09:** releases have no signatures or build attestation.
+- **REL-13:** CI tests only Node 20; Rust and Node versions aren't pinned; nothing checks that the committed `cli/dist` matches a fresh build. Right now it does match exactly.
+- **Doctor problems:**
+  - Every run prints a `MaxListenersExceededWarning` to stderr.
+  - Several fix suggestions point to `harness.sh` or `make`, neither of which a packaged install has.
+  - It hides the workspace path if the path looks random.
+  - It doesn't warn when `config.env` holding an API key is readable by other users.
+
+**What works well**
+- **Installer:** it never needs root, refuses to overwrite a `nexus` it doesn't own, and swaps the symlink atomically. A failed install leaves HOME untouched. Upgrade alpha.1 → alpha.2 and rollback both work.
+- **Release workflow:** it builds the package twice and confirms the bytes match. It runs all 905 tests (PTY tests included, none skipped) plus package and installer smoke tests. The published assets match the release docs.
+- **Doctor fixes:** they are narrow, ask for confirmation, record a backup of the old file permissions, and give the same result when run twice. No test secrets leaked into doctor output.
+
+The report also has the full coverage ledger, exact reproductions, proposed v1.0.0 requirements with acceptance tests, and the list of things I couldn't verify (builds on two separate machines producing identical output, other distros and Node versions, `doctor --deep`).
+
+Output: `/tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/audit/E_distribution.md`</result>
+<usage><subagent_tokens>161194</subagent_tokens><tool_uses>25</tool_uses><duration_ms>467253</duration_ms></usage>
+</task-notification>
