@@ -1,0 +1,50 @@
+<task-notification>
+<task-id>af177777e3a67b30d</task-id>
+<tool-use-id>toolu_01Dz2T24vmXcP44wjRzbp4PG</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/af177777e3a67b30d.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review PRs 18-20" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #33 (hardened legacy hidden tests): CHANGES REQUIRED
+
+The stale-base problem, noted on earlier PRs, appears again here. A raw `integration..branch` diff shows the T3 custody files as deleted. I reviewed the diff against the merge-base. Rebase before merge, or the merge will drop the T3 files.
+
+I read the code and ran one small local experiment on git behaviour. I ran no tests.
+
+**Blockers**
+
+1. **`eval/hardened_check.mjs:62-63` (`agentChanges`), arbitrary code runs on the harness host.**
+   - It runs `git add -A` and `git diff --cached` inside the agent's workspace, so the agent's `.git/config` and `.gitattributes` apply. The agent can write both, because `.git` is inside its bound `/workspace`.
+   - **Failure scenario:** the agent writes `[core] fsmonitor = &lt;cmd&gt;` into `.git/config`, or `[filter "x"] clean = &lt;cmd&gt;` plus `* filter=x` in `.gitattributes`. `git add -A` then executes `&lt;cmd&gt;` as the operator, outside the sandbox. I confirmed both vectors in a scratch repo, using the same `env` the harness uses.
+   - The command can read the held-out store, since the operator can, and it can write evidence.
+   - Fix: never run git against an agent-writable `.git`. Compute the change set by walking the file tree and comparing it with the baseline tree objects from a harness-owned copy. Alternatively, give git a harness-owned `--git-dir` plus `--work-tree`, with config forced off: `-c core.fsmonitor=false -c core.hooksPath=/dev/null` and `GIT_ATTR_NOSYSTEM`, `--no-ext-diff`, and an empty `info/attributes`. A walk is simpler.
+
+2. **`eval/hardened_check.mjs:11-19` (`TEST_INFRA`), the list is a deny list, and the gaps include load-bearing ones.**
+   - **Dependency trees.** There is no `node_modules/`, `.venv/`, `venv/`, `site-packages/`, `vendor/`, `target/`, `.yarn/`, `.pnp.*` or `__pycache__/`.
+     - **Failure scenario:** the agent deletes the `node_modules` line from `.gitignore`. `git add -A` now includes `node_modules/jest/...`, which is then copied into the check workspace over the setup-installed copy.
+     - Ignored files are dropped only because of the agent-editable `.gitignore`.
+   - **Tool configuration.** `.npmrc` (`script-shell`), `.yarnrc*` (`yarnPath`), `.pnpmfile.cjs`, `bunfig.toml`, `go.work`, `rust-toolchain*`, `tsconfig.json` paths and `.coveragerc` are not covered.
+     - **Failure scenario:** `.npmrc` with `script-shell=./x.sh` lets an agent source file run in place of the test command.
+   - **Shadowing.** Files named `pytest.py`, `_pytest/`, `pluggy/`, `unittest.py` or `json.py` at the repository root come first on `sys.path` for `python -m pytest`.
+   - **The hidden path itself.** Agent files under `hidden.into` that are not infrastructure (a helper module, say) survive the merge copy. The read-only bind then makes them look trusted.
+   - Fix: make the allowlist positive. Carry across only files that were tracked in the baseline or that have a source extension for the task's language. Block the dependency, tool-config and shadowing paths above outright. Delete `hidden.into` in the check workspace before the oracle copy.
+
+3. **`eval/hardened_check.mjs:45`, the `Cargo.toml` filter misses `[patch]`, `[replace]`, `[workspace]`, and `[profile.*]` other than test.**
+   - **Failure scenario:** `[patch.crates-io]` redirects a dev-dependency to an agent-supplied crate.
+   - Fix: diff `Cargo.toml` against the baseline and allow only `[package]`, `[features]`, `[dependencies]` and `[dependencies.*]` changes that name registry versions.
+
+**Suggestions**
+
+4. **`eval/validate.mjs`, `heldoutV2ManifestProblem` custody checks.** `reportSha256` only has to look like a hash. Nothing verifies it against the committed report, and `approvedAt` is not parsed. The manifest's own SHA pin stays strong. Fix: check the report file's digest at preflight.
+
+5. **The manifest binds only `task.json` and the hidden directory.** The older tree digest covered everything under the task directory. Fixtures, `regression.dir` and setup assets outside `hidden.dir` are not pinned. Fix: hash the whole task directory, or list the extra paths.
+
+6. **Task count.** `task_count: 0` with an empty `tasks` list and an empty id set passes. Fix: require a count of at least 1, ideally exactly the corpus's 40.
+
+7. **`eval/run.mjs`, setup artifacts.** Setup commands run in the staged workspace after the baseline commit is taken, so unignored setup output (such as `.venv`) is treated as agent changes and copied. Fix: take the baseline snapshot after setup, or ignore setup outputs explicitly.
+
+8. **Redaction holds.** In qualification, hidden check output is reduced to a status, a byte count and a digest, and the logs written by `saveLogs` use that same reduced value. Regression output is still raw, which is acceptable because the regression tests are not hidden. Symlinks, `.git` parts and absolute paths are skipped, and file modes are masked to `0o755`.
+
+The read-only bind is correct for the hidden directory. Separate hidden and regression copies hold, because the regression copy is cloned before the hidden files arrive.</result>
+<usage><subagent_tokens>248507</subagent_tokens><tool_uses>6</tool_uses><duration_ms>107068</duration_ms></usage>
+</task-notification>
