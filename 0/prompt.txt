@@ -1,0 +1,14 @@
+<pasted_content id="bd2e">
+I would not change the VRAM alert threshold yet
+You are right not to simply make 85/95 the new thresholds because the kernel reports 105°C.
+The current 75°C warning firing at 78°C isn't necessarily a defect. A warning is supposed to give operational headroom. Before changing it, I would want to know what the existing benchmark/qualification guardrail actually means, especially the referenced 90°C abort point.
+More importantly, we now need to distinguish:
+GPU package temperature from VRAM temperature.
+They have different thermal characteristics and potentially different operational limits. Using one 75/85 policy for both because both happen to be measured in °C isn't necessarily justified.
+So I'd authorize the proposed read-only investigation of the existing 90°C benchmark guardrail, but not threshold changes yet. Establish where 90 came from, what sensor(s) it applies to, and whether there's existing Intel/device evidence or previous qualification behind it. Then decide package and VRAM thresholds separately.
+I would also resist the remaining scope creep
+Of the three things on the your remaining list:
+Streaming from workers through the gateway may be worthwhile if this is an existing functional deficiency with demonstrated user/workload impact. But it isn't inherently an observability task.
+Standing up Prometheus on another machine is reasonable eventually, but the current work has already established that the metrics/rules/dashboard artifacts can operate with Prometheus. I wouldn't let permanent monitoring infrastructure become a prerequisite for declaring this observability work successful.
+Evidence-gated queue enforcement is a control-plane feature. That's significantly different from observability and should not quietly become part of this task just because queue telemetry now exists. We should first accumulate evidence about real queue behavior before allowing measurements to drive enforcement.
+</pasted_content id="bd2e">
