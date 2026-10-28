@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bhiti7sbr</task-id>
+<summary>Monitor event: "claim-log: mentions of claude-code by others, review requests, merges, RC/tag events"</summary>
+<event>2026-10-18T22:50:38Z BOUNDARY PLAN-10_VERSION_PROBE_STORAGE: RubyForest pushed unpublished ACL tip 8e2e4b8 and opened follow-up PR; original claim holder pid dead; FILE claims not broken (&lt;24h). Awaiting CI+review.</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
