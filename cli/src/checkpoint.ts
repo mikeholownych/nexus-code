@@ -382,6 +382,24 @@ export class CheckpointManager {
     }
   }
 
+  /** Tracked file entries that checkout-index may recreate from this checkpoint tree. Gitlinks are not blobs. */
+  private gitRefBlobPaths(gitRef: string): string[] {
+    const entries = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-tree", "-r", "-z", "--full-tree", gitRef], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    }).toString("utf8").split("\0").filter(Boolean);
+
+    const paths: string[] = [];
+    for (const entry of entries) {
+      const separator = entry.indexOf("\t");
+      if (separator < 0) throw new Error("Could not parse checkpoint Git tree entry");
+      const objectType = entry.slice(0, separator).split(" ")[1];
+      if (objectType === "blob") paths.push(entry.slice(separator + 1));
+    }
+    return paths;
+  }
+
   private directoryContainsOnlyTrackedRemovableEntries(relativePath: string): boolean {
     const root = path.join(this.workspace, relativePath);
     const diskEntries: string[] = [];
@@ -771,7 +789,10 @@ export class CheckpointManager {
             return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an unsafe untracked snapshot or destination; workspace was not changed` };
           }
         }
-        if (cp.untrackedFiles !== undefined) this.assertGitSnapshotTargetsReplaceable(cp.untrackedFiles, cp.gitRef);
+        if (cp.untrackedFiles !== undefined) {
+          const replacementTargets = [...new Set([...cp.untrackedFiles, ...this.gitRefBlobPaths(cp.gitRef)])];
+          this.assertGitSnapshotTargetsReplaceable(replacementTargets, cp.gitRef);
+        }
         if (cp.untrackedFiles === undefined) this.assertLegacyUntrackedRestoreSafe(cp.gitRef);
         execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
         execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f", "-a"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
