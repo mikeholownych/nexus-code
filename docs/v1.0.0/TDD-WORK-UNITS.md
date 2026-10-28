@@ -75,7 +75,7 @@ scheduler recovery path, not the TDD failure path.
   the harness makes the evidence stale and reruns RED.
 - TDD requires a Git workspace (the test-change evidence is a candidate diff against HEAD). A non-Git operation falls
   back to failing the RED phase. Automatic test generation, coverage guidance and mutation scoring are not included.
-- Tests: `cli/test/tdd_work_units.test.ts` (20 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
+- Tests: `cli/test/tdd_work_units.test.ts` (21 cases: RED→GREEN, no switch, invalid RED, no test change, resume via
   sidecar, stale sidecar after a revise, restart, role exclusion, a real-agent RED turn, a real RED→GREEN unit confirming
   a new RED test alone cannot establish independent completion, RED narrowing the verifier refused, RED creating a verifier where none existed
   refused, RED modifying an existing test refused, a verifier definition the baseline could not capture refused, a
