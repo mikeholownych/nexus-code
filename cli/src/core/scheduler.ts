@@ -17,6 +17,7 @@ import type {
   WorkUnitStatus,
 } from "./operation.js";
 import type { ResourceDescriptor, ResourceRegistry } from "./resources.js";
+import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 
 /** Separates a unit's original task from operator revisions appended to it. */
 export const REVISION_MARKER = "\n\nOperator revision: ";
@@ -38,6 +39,7 @@ export class ConvergenceScheduler {
     readonly registry: ResourceRegistry,
     private readonly now: () => number,
     private readonly onEvent?: (e: OperationEvent) => void,
+    private readonly onDiagnostic?: OperationDiagnosticHandler,
   ) {}
 
   unit(id: string): WorkUnit {
@@ -52,7 +54,9 @@ export class ConvergenceScheduler {
     if (this.state.events.length > MAX_EVENTS) this.state.events.splice(0, this.state.events.length - MAX_EVENTS);
     try {
       this.onEvent?.(event);
-    } catch {}
+    } catch {
+      reportOperationDiagnostic(this.onDiagnostic, "scheduler", "event_callback_failed");
+    }
   }
 
   private excludedModels(u: WorkUnit): Set<string> {
