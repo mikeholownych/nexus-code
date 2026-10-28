@@ -602,6 +602,9 @@ test("the --json document satisfies the checked-in JSON schema", () => {
   op.units[2].status = "RUNNABLE";
   op.units[0].contextBudget = 120_000;
   op.units[0].context = { estimatedPromptTokens: 42_000, budgetTokens: 120_000, contextLimit: 200_000, at: "2026-10-28T11:30:00.000Z" };
+  op.contextCheckpoints = [
+    { unitId: "u1", name: "before-refactor", at: "2026-10-28T11:30:00.000Z", taskId: "task-u1", messages: 12, bytes: 4096, sha256: "a".repeat(64) },
+  ];
   op.git = {
     isolate: true,
     repoRoot: "/repo",
@@ -716,6 +719,19 @@ test("projects the operation's git isolation and unit integration receipts", () 
     at: "2026-10-28T11:30:00.000Z",
   });
   assert.match(renderOperationView(withContext, { width: 120 }), /context 42000\/120000/);
+
+  // The effective cap is the smaller of the operator's budget and the resource's advertised limit.
+  op.units[0].context = { estimatedPromptTokens: 42_000, budgetTokens: 500_000, contextLimit: 200_000, at: "2026-10-28T11:30:00.000Z" };
+  assert.match(renderOperationView(buildOperationView(op, { now: NOW }), { width: 120 }), /context 42000\/200000/);
+
+  op.contextCheckpoints = [
+    { unitId: "u1", name: "before-refactor", at: "2026-10-28T11:30:00.000Z", taskId: "task-u1", messages: 12, bytes: 4096, sha256: "a".repeat(64) },
+  ];
+  const withCheckpoints = buildOperationView(op, { now: NOW });
+  assert.deepEqual(withCheckpoints.checkpoints, [
+    { unitId: "u1", name: "before-refactor", at: "2026-10-28T11:30:00.000Z", messages: 12 },
+  ]);
+  assert.match(renderOperationView(withCheckpoints, { width: 120 }), /Checkpoints\n  u1\/before-refactor · 12 messages/);
   const rendered = renderOperationView(view, { width: 120 });
   assert.match(rendered, /isolated: nexus\/op-op-view-123456\/integration/);
   assert.match(rendered, /u1 \[implementer\] Implement the projector\s+COMPLETE.*integrated cccccccccccc/);

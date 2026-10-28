@@ -152,6 +152,33 @@ test("a budget at or above the resource capacity leaves resource pressure to con
   assert.equal(work.context?.budgetTokens, 200_000);
 });
 
+test("a prompt over the resource limit is left to admission even when a budget is set", async () => {
+  const fake = fakeAgent({ estimatedPromptTokens: 150_000, contextLimit: 100_000, completionReserve: 8_192, toolResponseReserve: 4_096, admissible: false });
+  const executor = new AgentWorkUnitExecutor({ baseConfig: { endpoint: "https://api.test/v1", model: "m", workspace: "/tmp" } as any, createAgent: () => fake.agent });
+  const work = unit({ contextBudget: 120_000 });
+
+  const outcome = await executor.run(work, resource, context());
+
+  assert.equal(outcome.kind, "completed", "resource-limit pressure is admission/compaction's job");
+  assert.equal(fake.prompts.length, 1);
+  assert.equal(work.context?.estimatedPromptTokens, 150_000);
+});
+
+test("a unit budget must be a positive integer", () => {
+  const make = (contextBudget: number) =>
+    newOperation(
+      `op-${contextBudget}`,
+      "validate",
+      [{ id: "u1", prompt: "p", contextBudget }],
+      [{ id: "r", provider: "p", endpoint: "http://p/v1", model: "m", capabilities: ["tools"] }],
+      Date.now(),
+    );
+  assert.throws(() => make(0), /positive integer/);
+  assert.throws(() => make(-5), /positive integer/);
+  assert.throws(() => make(1.5), /positive integer/);
+  assert.equal(make(1_000).units[0].contextBudget, 1_000);
+});
+
 test("no budget means no preflight and no recorded estimate", async () => {
   const fake = fakeAgent({ estimatedPromptTokens: 90_000, contextLimit: 100_000, completionReserve: 8_192, toolResponseReserve: 4_096, admissible: true });
   const executor = new AgentWorkUnitExecutor({ baseConfig: { endpoint: "https://api.test/v1", model: "m", workspace: "/tmp" } as any, createAgent: () => fake.agent });
@@ -188,9 +215,18 @@ test("a real agent estimates the next turn with its own budget and tools", () =>
   }
 });
 
-function checkpointFixture(): { store: OperationStore; state: DurableOperationState; taskFile: string; workspace: string } {
+function checkpointFixture(): {
+  store: OperationStore;
+  state: DurableOperationState;
+  taskFile: string;
+  workspace: string;
+  stateRoot: string;
+} {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cp-ws-"));
-  const store = new OperationStore(workspace);
+  // Isolate the task store too: the default lives under HOME and would leak fixtures into other tests. The CLI child
+  // gets the same root through NEXUS_STATE_DIR.
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cp-state-"));
+  const store = new OperationStore(workspace, path.join(stateRoot, "tasks"));
   const state = newOperation(
     `op-cp-${randomUUID().slice(0, 8)}`,
     "checkpoint the unit",
@@ -204,7 +240,7 @@ function checkpointFixture(): { store: OperationStore; state: DurableOperationSt
   store.save(state);
   const taskFile = path.join(store.manager.getBaseDir(), "task-u1.json");
   writePrivateFile(taskFile, JSON.stringify({ taskId: "task-u1", messages: [{ role: "system", content: "s" }, { role: "user", content: "hi" }] }), { durable: true });
-  return { store, state, taskFile, workspace };
+  return { store, state, taskFile, workspace, stateRoot };
 }
 
 test("a checkpoint copies the conversation and restore brings it back with a backup", () => {
@@ -230,7 +266,7 @@ test("a checkpoint copies the conversation and restore brings it back with a bac
 
     const restored = restoreContextCheckpoint(store.manager, state, "u1", "before-refactor", 1_800_000_001_000);
     assert.equal(restored.record.name, "before-refactor");
-    assert.equal(restored.backup, `${taskFile}.before-restore-1800000001000.json`);
+    assert.match(restored.backup!, /context-checkpoints\/.*\/backups\//, "backups live with the checkpoints, not the live tasks");
     assert.equal(JSON.parse(fs.readFileSync(taskFile, "utf8")).messages.length, 2);
     assert.equal(JSON.parse(fs.readFileSync(restored.backup!, "utf8")).messages.length, 1, "the pre-restore state is kept");
     assert.equal(state.units[0].status, "RUNNABLE");
@@ -238,6 +274,58 @@ test("a checkpoint copies the conversation and restore brings it back with a bac
     assert.equal(state.units[0].result, undefined);
     assert.equal(state.status, "RUNNING");
     assert.equal(state.blocked, undefined);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("restore refuses tampered checkpoints and lifecycle states it does not own", () => {
+  const { store, state, workspace } = checkpointFixture();
+  try {
+    state.units[0].status = "RUNNABLE";
+    createContextCheckpoint(store.manager, state, "u1", "cp");
+    const file = checkpointFile(store.manager.getBaseDir(), state.id, "u1", "cp");
+    writePrivateFile(file, JSON.stringify({ taskId: "task-u1", messages: [{ role: "system", content: "tampered" }] }), { durable: true });
+    assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "cp"), /does not match its recorded hash/);
+
+    createContextCheckpoint(store.manager, state, "u1", "cp2");
+    state.status = "COMPLETE";
+    assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "cp2"), /cannot revive it/);
+    state.status = "RUNNING";
+    state.units[0].status = "COMPLETE";
+    assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "cp2"), /is complete/);
+    state.units[0].status = "RUNNABLE";
+    state.units[0].dropped = true;
+    assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "cp2"), /was dropped/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("restoring one unit keeps an operation-level decision intact", () => {
+  const { store, state, workspace } = checkpointFixture();
+  try {
+    createContextCheckpoint(store.manager, state, "u1", "cp");
+    state.status = "BLOCKED";
+    state.units[0].status = "BLOCKED";
+    state.units[0].blocked = {
+      since: new Date().toISOString(),
+      reason: "stuck",
+      decision: { id: "u1#1", unitId: "u1", cause: "EXECUTION_FAILED", question: "?", options: [] },
+    };
+    const operationDecision = {
+      id: "operation#git",
+      unitId: "*",
+      cause: "INTEGRATION_FAILED" as const,
+      question: "integration state is broken",
+      options: [{ id: "1", label: "resume", action: { kind: "keep_waiting" as const } }],
+    };
+    state.blocked = { since: new Date().toISOString(), decisions: [state.units[0].blocked.decision, operationDecision] };
+
+    restoreContextCheckpoint(store.manager, state, "u1", "cp");
+    assert.equal(state.units[0].blocked, undefined);
+    assert.deepEqual(state.blocked?.decisions.map((decision) => decision.id), ["operation#git"], "the operation-level guard stays");
+    assert.equal(state.status, "RUNNING");
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
@@ -264,10 +352,11 @@ test("checkpoints refuse traversal, running units, missing conversations and unk
 
 const cliDir = fileURLToPath(new URL("..", import.meta.url));
 
-function runCli(args: string[]): { status: number; stdout: string; stderr: string } {
+function runCli(args: string[], env: Record<string, string> = {}): { status: number; stdout: string; stderr: string } {
   try {
     const stdout = execFileSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/index.ts"), ...args], {
       cwd: cliDir,
+      env: { ...process.env, ...env },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 60_000,
@@ -279,28 +368,50 @@ function runCli(args: string[]): { status: number; stdout: string; stderr: strin
 }
 
 test("the CLI checkpoints, lists and restores a unit conversation", () => {
-  const { store, state, taskFile, workspace } = checkpointFixture();
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  const env = { NEXUS_STATE_DIR: stateRoot };
   try {
-    const created = runCli(["operation", "checkpoint", state.id, "u1", "--name", "cli-cp", "-w", workspace]);
+    const created = runCli(["operation", "checkpoint", state.id, "u1", "--name", "cli-cp", "-w", workspace], env);
     assert.equal(created.status, 0, created.stderr);
     assert.match(created.stdout, /Checkpoint cli-cp/);
     assert.match(created.stdout, /2 messages/);
 
-    const listed = runCli(["operation", "checkpoints", state.id, "--json", "-w", workspace]);
+    const listed = runCli(["operation", "checkpoints", state.id, "--json", "-w", workspace], env);
     assert.equal(listed.status, 0, listed.stderr);
     const rows = JSON.parse(listed.stdout);
     assert.deepEqual(rows.map((row: any) => row.name), ["cli-cp"]);
 
     writePrivateFile(taskFile, JSON.stringify({ taskId: "task-u1", messages: [] }), { durable: true });
-    const restored = runCli(["operation", "restore", state.id, "u1", "cli-cp", "-w", workspace]);
+    // The child wrote the checkpoint to disk; reload so this save does not drop the record.
+    const latest = store.load(state.id);
+    latest.units[0].status = "BLOCKED";
+    latest.units[0].blocked = {
+      since: new Date().toISOString(),
+      reason: "stuck",
+      decision: { id: "u1#1", unitId: "u1", cause: "EXECUTION_FAILED", question: "?", options: [{ id: "1", label: "retry", action: { kind: "retry" } }] },
+    };
+    latest.status = "BLOCKED";
+    latest.blocked = { since: new Date().toISOString(), decisions: [latest.units[0].blocked.decision] };
+    store.save(latest);
+    const restored = runCli(["operation", "restore", state.id, "u1", "cli-cp", "-w", workspace], env);
     assert.equal(restored.status, 0, restored.stderr);
     assert.match(restored.stdout, /Restored u1 from cli-cp/);
     assert.match(restored.stdout, /recovered as unverified/);
     assert.equal(JSON.parse(fs.readFileSync(taskFile, "utf8")).messages.length, 2);
 
-    const rejected = runCli(["operation", "checkpoint", state.id, "u1", "--name", "../escape", "-w", workspace]);
+    const rejected = runCli(["operation", "checkpoint", state.id, "u1", "--name", "../escape", "-w", workspace], env);
     assert.equal(rejected.status, 2);
     assert.match(rejected.stderr, /invalid checkpoint name/);
+
+    // A live driver holds the lock: the CLI must refuse rather than write a stale operation document.
+    const release = store.acquire(state.id);
+    try {
+      const locked = runCli(["operation", "restore", state.id, "u1", "cli-cp", "-w", workspace], env);
+      assert.equal(locked.status, 2);
+      assert.match(locked.stderr, /being driven by another process/);
+    } finally {
+      release();
+    }
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

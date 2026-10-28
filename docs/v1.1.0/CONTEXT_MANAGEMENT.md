@@ -19,8 +19,10 @@ retrieval (2) and cross-unit sharing (3) remain proposed. Owner: unclaimed. Depe
 
 `units[].contextBudget` (tokens) with a pre-inference preflight that uses the agent's own admission estimate, records
 `unit.context`, and blocks with `CONTEXT_BUDGET` when the operator's cap is the binding limit (offering reassignment,
-revise or stop). Durable `nexus operation checkpoint|checkpoints|restore` for a unit's conversation, with a
-pre-restore backup, fail-closed resume and path-safe names. View/schema project both. Implementation and evidence:
+revise or stop). The estimate is a start-of-turn lower bound and the cap does not bound mid-turn growth (the resource
+limit does). Durable `nexus operation checkpoint|checkpoints|restore` for a unit's conversation, with a hash-checked
+checkpoint, a pre-restore backup kept with the checkpoints, the operation lock held across the write, fail-closed resume
+and path-safe names. View/schema project both. Implementation and evidence:
 `docs/reviews/evidence/v1.1/CONTEXT-MANAGEMENT-20261028/README.md`.
 
 Still proposed below: semantic retrieval and cross-unit summaries.

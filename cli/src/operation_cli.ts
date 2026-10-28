@@ -16,7 +16,7 @@ import type { Command } from "commander";
 import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
-import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
+import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { buildOperationView, renderOperationView, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
 import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
@@ -234,15 +234,30 @@ export function registerOperationCommands(program: Command): void {
     .description("Snapshot a settled unit's conversation so it can be restored later")
     .action((id: string, unitId: string, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
-      const state = store.loadForInspection(id);
       const name = options.name ?? `cp-${new Date().toISOString().replace(/[:.]/g, "-")}`;
       try {
-        const record = createContextCheckpoint(store.manager, state, unitId, name);
-        store.save(state);
-        console.log(pc.bold(`Checkpoint ${record.name}`) + pc.dim(` — ${record.messages} messages, ${record.bytes} bytes`));
-        console.log(pc.dim(`  restore with: nexus operation restore ${id} ${unitId} ${record.name}`));
-      } catch (error) {
-        if (!(error instanceof ContextCheckpointError)) throw error;
+        // Checkpointing mutates the operation document; hold the driver lock for the whole read-modify-write.
+        const release = store.acquire(id);
+        try {
+          const state = store.load(id);
+          const record = createContextCheckpoint(store.manager, state, unitId, name);
+          store.save(state);
+          console.log(pc.bold(`Checkpoint ${record.name}`) + pc.dim(` — ${record.messages} messages, ${record.bytes} bytes`));
+          console.log(pc.dim(`  restore with: nexus operation restore ${id} ${unitId} ${record.name}`));
+        } finally {
+          release();
+        }
+      } catch (error: any) {
+        if (error instanceof OperationLockedError) {
+          console.error(pc.red(`Operation ${id} is being driven by another process; checkpoint it when the driver is stopped.`));
+          process.exitCode = 2;
+          return;
+        }
+        if (!(error instanceof ContextCheckpointError)) {
+          console.error(pc.red(`Cannot checkpoint ${id}: ${safeTerminal(String(error?.message ?? error))}`));
+          process.exitCode = 2;
+          return;
+        }
         console.error(pc.red(`Checkpoint rejected: ${error.message}`));
         process.exitCode = 2;
       }
@@ -252,10 +267,17 @@ export function registerOperationCommands(program: Command): void {
     .argument("<id>", "Operation id")
     .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
     .option("-j, --json", "JSON output")
-    .description("List a unit's context checkpoints")
+    .description("List the operation's context checkpoints")
     .action((id: string, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
-      const state = store.loadForInspection(id);
+      let state: DurableOperationState;
+      try {
+        state = store.load(id);
+      } catch (error: any) {
+        console.error(pc.red(`Cannot read operation ${id}: ${safeTerminal(String(error?.message ?? error))}`));
+        process.exitCode = 2;
+        return;
+      }
       const checkpoints = listContextCheckpoints(state);
       if (options.json) return void console.log(JSON.stringify(checkpoints, null, 2));
       if (!checkpoints.length) return void console.log("No context checkpoints for this operation.");
@@ -272,15 +294,29 @@ export function registerOperationCommands(program: Command): void {
     .description("Restore a unit's conversation from a checkpoint (verification restarts fail-closed)")
     .action((id: string, unitId: string, name: string, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
-      const state = store.loadForInspection(id);
       try {
-        const restored = restoreContextCheckpoint(store.manager, state, unitId, name);
-        store.save(state);
-        console.log(pc.bold(`Restored ${unitId} from ${name}`) + pc.dim(` — ${restored.record.messages} messages`));
-        if (restored.backup) console.log(pc.dim(`  previous task state kept at ${restored.backup}`));
-        console.log(pc.yellow(`The restored conversation is recovered as unverified; resume with: nexus operation resume ${id}`));
-      } catch (error) {
-        if (!(error instanceof ContextCheckpointError)) throw error;
+        const release = store.acquire(id);
+        try {
+          const state = store.load(id);
+          const restored = restoreContextCheckpoint(store.manager, state, unitId, name);
+          store.save(state);
+          console.log(pc.bold(`Restored ${unitId} from ${name}`) + pc.dim(` — ${restored.record.messages} messages`));
+          if (restored.backup) console.log(pc.dim(`  previous task state kept at ${restored.backup}`));
+          console.log(pc.yellow(`The restored conversation is recovered as unverified; resume with: nexus operation resume ${id}`));
+        } finally {
+          release();
+        }
+      } catch (error: any) {
+        if (error instanceof OperationLockedError) {
+          console.error(pc.red(`Operation ${id} is being driven by another process; restore it when the driver is stopped.`));
+          process.exitCode = 2;
+          return;
+        }
+        if (!(error instanceof ContextCheckpointError)) {
+          console.error(pc.red(`Cannot restore ${id}: ${safeTerminal(String(error?.message ?? error))}`));
+          process.exitCode = 2;
+          return;
+        }
         console.error(pc.red(`Restore rejected: ${error.message}`));
         process.exitCode = 2;
       }

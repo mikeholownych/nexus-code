@@ -158,6 +158,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       contextLimit: estimate.contextLimit,
       at: new Date().toISOString(),
     };
+    // If the prompt does not fit the resource, admission/compaction owns it (it may compact and continue): the
+    // operator's cap is only the binding constraint when the prompt would otherwise be admitted.
+    if (!estimate.admissible) return undefined;
     if (unit.contextBudget >= estimate.contextLimit) return undefined;
     const fitsBudget = isContextAdmissible(
       estimate.estimatedPromptTokens,

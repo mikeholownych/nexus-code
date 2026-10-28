@@ -79,6 +79,7 @@ export function createContextCheckpoint(
     taskId: unit.agentTaskId,
     messages,
     bytes: data.length,
+    sha256: createHash("sha256").update(data).digest("hex"),
   };
   state.contextCheckpoints = [
     ...(state.contextCheckpoints ?? []).filter((entry) => !(entry.unitId === unitId && entry.name === name)),
@@ -102,19 +103,32 @@ export function restoreContextCheckpoint(
   if (!record) throw new ContextCheckpointError(`no checkpoint '${name}' for unit '${unitId}'`);
   const unit = state.units.find((entry) => entry.id === unitId);
   if (!unit) throw new ContextCheckpointError(`unit '${unitId}' is not part of operation ${state.id}`);
+  if (state.status === "COMPLETE" || state.status === "CANCELLED") {
+    throw new ContextCheckpointError(`operation ${state.id} is ${state.status}; a checkpoint cannot revive it`);
+  }
   if (unit.status === "RUNNING") {
     throw new ContextCheckpointError(`unit '${unitId}' is running; restore it when the turn has settled`);
   }
+  if (unit.status === "COMPLETE") {
+    throw new ContextCheckpointError(`unit '${unitId}' is complete; restore a checkpoint before it completes`);
+  }
+  if (unit.dropped) throw new ContextCheckpointError(`unit '${unitId}' was dropped by the operator`);
   const source = checkpointFile(store.getBaseDir(), state.id, unitId, name);
   if (!fs.existsSync(source)) throw new ContextCheckpointError(`checkpoint file is missing: ${source}`);
+  const data = fs.readFileSync(source);
+  if (createHash("sha256").update(data).digest("hex") !== record.sha256) {
+    throw new ContextCheckpointError(`checkpoint '${name}' does not match its recorded hash; refusing to restore it`);
+  }
   const target = taskFile(store, record.taskId);
 
   let backup: string | undefined;
   if (fs.existsSync(target)) {
-    backup = `${target}.before-restore-${now}.json`;
+    // Backups live with the checkpoints, not beside the live task files: a stray `*.json` there would appear as a
+    // duplicate task and be eligible for retention pruning.
+    backup = path.join(checkpointDir(store.getBaseDir(), state.id), "backups", `${slug(unitId)}--${name}--${now}.json`);
     writePrivateFile(backup, fs.readFileSync(target), { durable: true });
   }
-  writePrivateFile(target, fs.readFileSync(source), { durable: true });
+  writePrivateFile(target, data, { durable: true });
 
   unit.agentTaskId = record.taskId;
   unit.status = "RUNNABLE";
@@ -122,7 +136,12 @@ export function restoreContextCheckpoint(
   delete unit.parked;
   delete unit.result;
   delete unit.pendingDecision;
-  delete state.blocked;
+  // Only this unit's escalation is resolved; an operation-level decision (for example the git or not-converging guard)
+  // is not the operator's consent to clear it.
+  const remaining = (state.blocked?.decisions ?? []).filter((decision) => decision.unitId !== unitId);
+  if (remaining.length) state.blocked = { since: state.blocked!.since, decisions: remaining };
+  else delete state.blocked;
+  delete state.wait;
   state.status = "RUNNING";
   return { record, ...(backup ? { backup } : {}) };
 }

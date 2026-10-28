@@ -221,6 +221,8 @@ export interface ContextCheckpoint {
   taskId: string;
   messages: number;
   bytes: number;
+  /** SHA-256 of the checkpoint file; restore refuses a checkpoint that no longer matches. */
+  sha256: string;
 }
 
 /** What was integrated, and the evidence the merge was accepted with. */
@@ -324,6 +326,9 @@ export function newOperation(
   }
   const byId = new Map(units.map((u) => [u.id, u]));
   for (const u of units) {
+    if (u.contextBudget !== undefined && (!Number.isInteger(u.contextBudget) || u.contextBudget <= 0)) {
+      throw new Error(`Work unit '${u.id}': contextBudget must be a positive integer number of tokens`);
+    }
     for (const d of u.dependsOn ?? []) {
       if (!ids.has(d)) throw new Error(`Work unit '${u.id}' depends on unknown unit '${d}'`);
       if (u.required !== false && byId.get(d)!.required === false) {

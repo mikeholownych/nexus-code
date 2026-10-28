@@ -574,6 +574,33 @@
               "type": "string"
             }
           }
+        },
+        "checkpoints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "unitId",
+              "name",
+              "at",
+              "messages"
+            ],
+            "properties": {
+              "unitId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              },
+              "messages": {
+                "type": "integer"
+              }
+            }
+          }
         }
       }
     }

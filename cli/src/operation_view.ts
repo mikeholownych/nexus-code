@@ -121,6 +121,8 @@ export interface OperationView {
   resources: OperationViewResource[];
   /** Present only for an isolated operation. */
   git?: OperationViewGit;
+  /** Operator-created conversation snapshots, oldest first. */
+  checkpoints?: Array<{ unitId: string; name: string; at: string; messages: number }>;
   wait?: { since: string; wakeAt: string; reason: string; parkedUnits: string[] };
   decisions: OperationViewDecision[];
   dag: OperationViewDag;
@@ -431,6 +433,16 @@ export function buildOperationView(
           },
         }
       : {}),
+    ...(state.contextCheckpoints?.length
+      ? {
+          checkpoints: state.contextCheckpoints.map((checkpoint) => ({
+            unitId: checkpoint.unitId,
+            name: checkpoint.name,
+            at: checkpoint.at,
+            messages: checkpoint.messages,
+          })),
+        }
+      : {}),
     ...(state.wait ? { wait: { ...state.wait, parkedUnits: [...state.wait.parkedUnits] } } : {}),
     decisions: openDecisions.map((decision) => ({
       id: decision.id,
@@ -508,7 +520,7 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
       const durable = unit.durable ? " · durable" : "";
       const integrated = unit.integration ? ` · integrated ${text(unit.integration.integratedCommit.slice(0, 12), width)}` : "";
       const budget = unit.context
-        ? ` · context ${unit.context.estimatedPromptTokens}/${unit.context.budgetTokens}`
+        ? ` · context ${unit.context.estimatedPromptTokens}/${Math.min(unit.context.budgetTokens, unit.context.contextLimit)}`
         : unit.contextBudget
           ? ` · budget ${unit.contextBudget}`
           : "";
@@ -540,6 +552,13 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
           `    ${blocking.condition} (${blocking.scope}): ${text(blocking.reason, width)}`,
         );
       }
+    }
+  }
+
+  if (view.checkpoints?.length) {
+    lines.push("", "Checkpoints");
+    for (const checkpoint of view.checkpoints) {
+      lines.push(`  ${text(checkpoint.unitId, width)}/${text(checkpoint.name, width)} · ${checkpoint.messages} messages · ${text(checkpoint.at, width)}`);
     }
   }
 
