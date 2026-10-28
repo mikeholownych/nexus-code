@@ -419,7 +419,7 @@ test("status --dag rejects a malformed --events instead of guessing", () => {
 
 test("terminal-safe rendering: operation text cannot emit control or escape sequences", () => {
   const op = state();
-  const evil = "safe\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2Jafter\u001b[31m";
+  const evil = "safe\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2Jafter\nforged\tline\u001b[31m";
   op.objective = evil;
   op.units[1].title = evil;
   op.units[1].blocked!.reason = evil;
@@ -432,8 +432,9 @@ test("terminal-safe rendering: operation text cannot emit control or escape sequ
   assert.match(rendered, /safe/);
   // A newline in operation text is folded, so it cannot start a line that imitates an operation status line.
   const lines = rendered.split("\n");
-  assert.equal(lines.some((line) => line.startsWith("after")), false);
+  assert.equal(lines.some((line) => line.startsWith("forged")), false, "a folded newline must not start a line");
   for (const line of lines) assert.doesNotMatch(line, /[\r\t]/);
+  assert.match(rendered, /after forged line/);
 });
 
 test("events are copied without their free-form detail", () => {

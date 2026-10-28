@@ -56,8 +56,9 @@ test suite validates a view against it (including rejecting unexpected propertie
     event property;
 18. the default sleep wakes promptly on abort (not an injected sleep), so Ctrl-C ends `watch` immediately at any interval;
 19. `watch` on a pipe exits 0 for COMPLETE and 130 for CANCELLED;
-20. newline/tab in operation text is folded so it cannot forge an extra line (asserted per rendered line), and a
-    throwing loader's message cannot emit controls or a second line in the watch read-failure notice.
+20. newline/tab in operation text is folded to spaces before truncation, so a forged line cannot start a line (asserted
+    with a payload that contains real newline/tab characters), and a throwing loader's message cannot emit controls or a
+    second line in the watch read-failure notice.
 
 Focused run: `operation_view` + `convergence_scheduling` + `operation_runner_refactor` + `operation_account_identity`
 → **76/76 pass**; `tsc --noEmit` and `git diff --check` clean, isolated `HOME`/`XDG_CONFIG_HOME`.
