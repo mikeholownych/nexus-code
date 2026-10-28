@@ -45,10 +45,15 @@ path, resource eligibility from the scheduler's own rules, and the bounded watch
 ## Acceptance
 
 - A recorded operation (the v1.0.0 E2 lifecycle fixture is enough) renders the DAG, resources and events, and
-  `--json` output validates against a checked-in schema.
+  `--json` output validates against the checked-in `operation-view.schema.json`.
 - Killing and restarting the view mid-operation loses nothing: it resumes from the store.
 - A decision taken in the view is byte-identical in the store to one taken with `nexus operation decide`.
-- No operation state file is written by the view path (asserted by a test that snapshots the store directory).
+- The view path writes no operation transition: it never takes the operation lock and a current-schema record is
+  byte-identical after `status --dag` and `watch` (asserted by sha256 + mtime). The shared state loader may still migrate
+  a legacy record (with its `.pre-migration-*` backup) or quarantine a corrupt one (`.corrupt-*`), exactly as `status`
+  does; the view does not add a write path of its own.
+- Operation text is rendered through the same terminal sanitiser as agent output (`safeTerminal`), so a provider error
+  echoed into a block reason cannot emit control or OSC sequences.
 
 ## Qualification impact
 

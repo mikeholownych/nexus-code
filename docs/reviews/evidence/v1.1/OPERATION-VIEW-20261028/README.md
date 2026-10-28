@@ -22,12 +22,19 @@ a `load` callback, so it cannot drive, resume or mutate an operation. Transient 
 repeated failures stop the watch with `unreadable` instead of pretending the operation vanished.
 
 `nexus operation status --dag` and `nexus operation watch` read through `OperationStore.load`/`list`, which never take the
-operation lock and never persist a migration, so an operation another process is driving can be inspected safely. On a
-pipe, `watch` renders one snapshot and exits (complete 0, cancelled/aborted 130, otherwise 2) rather than hanging.
+operation lock, so an operation another process is driving can be inspected safely. The shared state loader may still
+migrate a legacy record (with its `.pre-migration-*` backup) or quarantine a corrupt one (`.corrupt-*`), exactly as
+`status` does; the view adds no write path. On a pipe, `watch` renders one snapshot and exits (complete 0,
+cancelled/aborted 130, otherwise 2) rather than hanging.
+
+Rendering passes every operation-supplied field (`objective`, titles, block reasons, decision questions, event messages)
+through `safeTerminal`, so provider-controlled error text cannot emit control or OSC sequences into a persistent,
+periodically refreshed terminal. The `--json` document is described by `docs/v1.1.0/operation-view.schema.json` and the
+test suite validates a view against it (including rejecting unexpected properties such as an event's free-form `detail`).
 
 ## Evidence
 
-`cli/test/operation_view.test.ts` (14 cases):
+`cli/test/operation_view.test.ts` (19 cases):
 
 1. units/depth/durable/result/blocked detail, DAG edges, critical path, decision options and command;
 2. resource eligibility from a real condition record, temporary block with `eligibleAt`, recovery after the window;
@@ -39,10 +46,16 @@ pipe, `watch` renders one snapshot and exits (complete 0, cancelled/aborted 130,
 8. watch until terminal, abort during sleep, render cap, repeated read failures, clear-screen behaviour;
 9. CLI: `status --dag` and `--dag --json` on a stored operation, byte-for-byte unchanged store file (sha256 + mtime);
 10. CLI: `watch` on a pipe renders one snapshot and exits 2 while blocked, store unchanged;
-11. CLI: malformed `--events` exits 2 with no stdout.
+11. CLI: malformed `--events` exits 2 with no stdout;
+12. terminal-safe rendering (ESC/OSC payloads in objective, title, block reason, question, option and event message);
+13. events are copied without free-form `detail` and do not alias the operation;
+14. a blocked unit's decision is shown while other units are running;
+15. counts split `ready` (RUNNABLE) from `waiting` (dependency), and a three-unit cycle reports all three;
+16. corrupt record: clean error, exit 2, quarantined by the shared loader;
+17. the `--json` document validates against the checked-in schema, which rejects an unexpected event property.
 
 Focused run: `operation_view` + `convergence_scheduling` + `operation_runner_refactor` + `operation_account_identity`
-→ **69/69 pass**; `tsc --noEmit` and `git diff --check` clean, isolated `HOME`/`XDG_CONFIG_HOME`.
+→ **74/74 pass**; `tsc --noEmit` and `git diff --check` clean, isolated `HOME`/`XDG_CONFIG_HOME`.
 
 `team_convergence`, `convergence_integration` and `convergence_invariants` have 20 failures on this branch **and on a
 pristine `origin/main` worktree** (`ceaf6007`, same command); they are pre-existing and not caused by this slice.

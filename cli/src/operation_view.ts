@@ -6,6 +6,7 @@
  */
 import type { DurableOperationState, OperationEvent, WorkUnit } from "./core/operation.js";
 import { ResourceRegistry, type Eligibility, type ResourceConditionRecord, type ResourceDescriptor } from "./core/resources.js";
+import { safeTerminal } from "./ui.js";
 
 export const OPERATION_VIEW_SCHEMA_VERSION = 1;
 
@@ -87,7 +88,16 @@ export interface OperationView {
   updatedAt: string;
   /** True when no further transition is expected without an operator decision. */
   terminal: boolean;
-  counts: { total: number; complete: number; running: number; blocked: number; parked: number; waiting: number };
+  counts: {
+    total: number;
+    complete: number;
+    running: number;
+    ready: number;
+    blocked: number;
+    parked: number;
+    /** Units that cannot run yet because a dependency has not completed. */
+    waiting: number;
+  };
   units: OperationViewUnit[];
   resources: OperationViewResource[];
   wait?: { since: string; wakeAt: string; reason: string; parkedUnits: string[] };
@@ -120,14 +130,11 @@ export interface WatchResult {
   stopped: "terminal" | "aborted" | "limit" | "unreadable";
 }
 
+/** A sleep that resolves early on abort. `setTimeout(…, { signal })` avoids one listener per poll. */
 const defaultSleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve) => {
     if (signal?.aborted) return resolve();
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
+    setTimeout(resolve, ms, { signal } as any);
   });
 
 /**
@@ -195,7 +202,7 @@ function detailFor(unit: WorkUnit): string | undefined {
 function unitDepths(units: WorkUnit[]): { depth: Map<string, number>; missing: string[]; cycles: string[] } {
   const byId = new Map(units.map((unit) => [unit.id, unit]));
   const depth = new Map<string, number>();
-  const visiting = new Set<string>();
+  const stack: string[] = [];
   const cycles = new Set<string>();
   const missing = new Set<string>();
 
@@ -207,14 +214,16 @@ function unitDepths(units: WorkUnit[]): { depth: Map<string, number>; missing: s
       missing.add(id);
       return 0;
     }
-    if (visiting.has(id)) {
-      cycles.add(id);
+    const at = stack.indexOf(id);
+    if (at !== -1) {
+      // Every unit on the cycle participates, not only the one the recursion re-entered.
+      for (const member of stack.slice(at)) cycles.add(member);
       return 0;
     }
-    visiting.add(id);
+    stack.push(id);
     let value = 0;
     for (const dep of unit.dependsOn) value = Math.max(value, visit(dep) + 1);
-    visiting.delete(id);
+    stack.pop();
     depth.set(id, value);
     return value;
   };
@@ -299,7 +308,23 @@ export function buildOperationView(
   const { depth, missing, cycles } = unitDepths(state.units);
   const edges = state.units.flatMap((unit) => unit.dependsOn.map((from) => ({ from, to: unit.id })));
   const eventLimit = Math.max(0, options.events ?? 20);
-  const events = eventLimit === 0 ? [] : state.events.slice(-eventLimit);
+  const events: OperationViewEvent[] = (eventLimit === 0 ? [] : state.events.slice(-eventLimit)).map((event) => ({
+    type: event.type,
+    at: event.at,
+    message: event.message,
+    ...(event.unitId ? { unitId: event.unitId } : {}),
+    ...(event.resourceId ? { resourceId: event.resourceId } : {}),
+  }));
+
+  const decisionIds = new Set<string>();
+  const openDecisions = [
+    ...(state.blocked?.decisions ?? []),
+    ...state.units.flatMap((unit) => (unit.blocked ? [unit.blocked.decision] : [])),
+  ].filter((decision) => {
+    if (decisionIds.has(decision.id)) return false;
+    decisionIds.add(decision.id);
+    return true;
+  });
 
   const units: OperationViewUnit[] = state.units.map((unit) => ({
     id: unit.id,
@@ -343,12 +368,13 @@ export function buildOperationView(
       running: count("RUNNING"),
       blocked: count("BLOCKED"),
       parked: count("PARKED"),
-      waiting: count("WAITING_ON_DEPENDENCY") + count("RUNNABLE"),
+      ready: count("RUNNABLE"),
+      waiting: count("WAITING_ON_DEPENDENCY"),
     },
     units,
     resources: state.resources.map((resource) => resourceView(resource, registry.eligibility(resource, now), state.conditions)),
     ...(state.wait ? { wait: { ...state.wait, parkedUnits: [...state.wait.parkedUnits] } } : {}),
-    decisions: (state.blocked?.decisions ?? []).map((decision) => ({
+    decisions: openDecisions.map((decision) => ({
       id: decision.id,
       unitId: decision.unitId,
       cause: decision.cause,
@@ -386,75 +412,84 @@ export interface RenderOptions {
   width?: number;
 }
 
-function truncate(text: string, width: number): string {
-  if (width <= 0 || text.length <= width) return text;
-  return `${text.slice(0, Math.max(0, width - 1))}…`;
+/** Untrusted operation text is made terminal-safe before it is measured or printed. */
+function text(value: string, width: number): string {
+  const safe = safeTerminal(String(value));
+  if (width <= 0 || safe.length <= width) return safe;
+  return `${safe.slice(0, Math.max(0, width - 1))}…`;
 }
 
-/** Human-readable rendering of a view. Deterministic: same view, same text. */
+/** Human-readable rendering of a view. Deterministic: same view, same text, no live terminal control characters. */
 export function renderOperationView(view: OperationView, options: RenderOptions = {}): string {
   const width = options.width ?? 0;
   const lines: string[] = [];
   const counts = view.counts;
   lines.push(
-    `Operation ${view.id}: ${view.status} (${counts.complete}/${counts.total} complete` +
+    `Operation ${text(view.id, width)}: ${view.status} (${counts.complete}/${counts.total} complete` +
       `${counts.running ? `, ${counts.running} running` : ""}` +
+      `${counts.ready ? `, ${counts.ready} ready` : ""}` +
       `${counts.blocked ? `, ${counts.blocked} blocked` : ""}` +
       `${counts.parked ? `, ${counts.parked} parked` : ""})`,
   );
-  lines.push(`  ${truncate(view.objective, width)}`);
-  lines.push(`  updated ${view.updatedAt}`);
+  lines.push(`  ${text(view.objective, width)}`);
+  lines.push(`  updated ${text(view.updatedAt, width)}`);
 
   if (view.units.length) {
     lines.push("", "Units");
     const ordered = [...view.units].sort((a, b) => a.depth - b.depth || a.id.localeCompare(b.id));
     for (const unit of ordered) {
-      const indent = "  ".repeat(unit.depth);
+      const indent = "  ".repeat(Math.min(unit.depth, 8));
       const mark = STATUS_MARK[unit.status] ?? "·";
-      const role = unit.role ? ` [${unit.role}]` : "";
+      const role = unit.role ? ` [${text(unit.role, width)}]` : "";
       const runs = unit.runs > 1 ? ` · ${unit.runs} runs` : "";
       const durable = unit.durable ? " · durable" : "";
-      lines.push(`${indent}${mark} ${unit.id}${role} ${truncate(unit.title, width)}  ${unit.status}${runs}${durable}`);
-      if (unit.detail) lines.push(`${indent}  ${truncate(unit.detail, width)}`);
-      if (unit.dependsOn.length) lines.push(`${indent}  after: ${unit.dependsOn.join(", ")}`);
+      lines.push(
+        `${indent}${mark} ${text(unit.id, width)}${role} ${text(unit.title, width)}  ${unit.status}${runs}${durable}`,
+      );
+      if (unit.detail) lines.push(`${indent}  ${text(unit.detail, width)}`);
+      if (unit.dependsOn.length) lines.push(`${indent}  after: ${unit.dependsOn.map((id) => text(id, width)).join(", ")}`);
     }
   }
 
-  if (view.dag.criticalPath.length > 1) lines.push("", `Critical path: ${view.dag.criticalPath.join(" → ")}`);
-  if (view.dag.missingDependencies.length) {
-    lines.push(`Missing dependencies: ${view.dag.missingDependencies.join(", ")}`);
+  if (view.dag.criticalPath.length > 1) {
+    lines.push("", `Critical path: ${view.dag.criticalPath.map((id) => text(id, width)).join(" → ")}`);
   }
-  if (view.dag.cycles.length) lines.push(`Dependency cycle at: ${view.dag.cycles.join(", ")}`);
+  if (view.dag.missingDependencies.length) {
+    lines.push(`Missing dependencies: ${view.dag.missingDependencies.map((id) => text(id, width)).join(", ")}`);
+  }
+  if (view.dag.cycles.length) lines.push(`Dependency cycle at: ${view.dag.cycles.map((id) => text(id, width)).join(", ")}`);
 
   if (view.resources.length) {
     lines.push("", "Resources");
     for (const resource of view.resources) {
       const state = resource.eligible
         ? "eligible"
-        : `ineligible${resource.eligibleAt ? ` until ${resource.eligibleAt}` : ""}`;
-      lines.push(`  ${resource.id} · ${resource.model} · ${state}`);
+        : `ineligible${resource.eligibleAt ? ` until ${text(resource.eligibleAt, width)}` : ""}`;
+      lines.push(`  ${text(resource.id, width)} · ${text(resource.model, width)} · ${state}`);
       for (const blocking of resource.blocking ?? []) {
-        lines.push(`    ${blocking.condition} (${blocking.scope}): ${truncate(blocking.reason, width)}`);
+        lines.push(
+          `    ${blocking.condition} (${blocking.scope}): ${text(blocking.reason, width)}`,
+        );
       }
     }
   }
 
-  if (view.wait) lines.push("", `Waiting until ${view.wait.wakeAt}: ${view.wait.reason}`);
+  if (view.wait) lines.push("", `Waiting until ${text(view.wait.wakeAt, width)}: ${text(view.wait.reason, width)}`);
 
   if (view.decisions.length) {
     for (const decision of view.decisions) {
-      lines.push("", `Decision needed: ${decision.question}`);
-      lines.push(`  unit ${decision.unitId} · ${decision.cause}`);
-      for (const option of decision.options) lines.push(`  [${option.id}] ${option.label}`);
-      lines.push(`  ${decision.command}`);
+      lines.push("", `Decision needed: ${text(decision.question, width)}`);
+      lines.push(`  unit ${text(decision.unitId, width)} · ${text(decision.cause, width)}`);
+      for (const option of decision.options) lines.push(`  [${text(option.id, width)}] ${text(option.label, width)}`);
+      lines.push(`  ${text(decision.command, width)}`);
     }
   }
 
   if (view.events.length) {
     lines.push("", `Events (last ${view.events.length})`);
     for (const event of view.events) {
-      const target = event.unitId ? ` ${event.unitId}` : event.resourceId ? ` ${event.resourceId}` : "";
-      lines.push(`  ${event.at} ${event.type}${target}: ${truncate(event.message, width)}`);
+      const target = event.unitId ? ` ${text(event.unitId, width)}` : event.resourceId ? ` ${text(event.resourceId, width)}` : "";
+      lines.push(`  ${text(event.at, width)} ${text(event.type, width)}${target}: ${text(event.message, width)}`);
     }
   }
 

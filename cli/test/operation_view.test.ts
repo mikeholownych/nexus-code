@@ -78,7 +78,7 @@ test("projects units, depth, durable state and the open decision", () => {
   assert.equal(view.id, "op-view");
   assert.equal(view.status, "BLOCKED");
   assert.equal(view.terminal, false);
-  assert.deepEqual(view.counts, { total: 3, complete: 1, running: 0, blocked: 1, parked: 0, waiting: 1 });
+  assert.deepEqual(view.counts, { total: 3, complete: 1, running: 0, ready: 0, blocked: 1, parked: 0, waiting: 1 });
 
   const [u1, u2, u3] = view.units;
   assert.equal(u1.depth, 0);
@@ -141,16 +141,28 @@ test("reports resource eligibility with the scheduler's own rules", () => {
   assert.equal(after.resources[0].eligibleAt, undefined);
 });
 
-test("shows a missing dependency and a cycle instead of hiding them", () => {
+test("shows a missing dependency and every unit on a cycle", () => {
   const op = state();
   op.units[2].dependsOn = ["u2", "u404"];
   const missing = buildOperationView(op, { now: NOW });
   assert.deepEqual(missing.dag.missingDependencies, ["u404"]);
 
   const cyclic = state();
-  cyclic.units[0].dependsOn = ["u2"];
+  cyclic.units[0].dependsOn = ["u3"];
   const view = buildOperationView(cyclic, { now: NOW });
-  assert.ok(view.dag.cycles.includes("u1") || view.dag.cycles.includes("u2"));
+  assert.deepEqual(view.dag.cycles, ["u1", "u2", "u3"]);
+});
+
+test("shows a blocked unit's decision even while other work is running", () => {
+  const op = state();
+  op.status = "RUNNING";
+  op.blocked = undefined;
+  op.units[0].status = "RUNNING";
+  op.units[2].status = "RUNNING";
+  const view = buildOperationView(op, { now: NOW });
+  assert.equal(view.decisions.length, 1);
+  assert.equal(view.decisions[0].id, "d1");
+  assert.equal(view.decisions[0].command, "nexus operation decide op-view d1 <option> [--note <text>]");
 });
 
 test("keeps only the newest events and honours an explicit limit", () => {
@@ -350,4 +362,104 @@ test("status --dag rejects a malformed --events instead of guessing", () => {
   assert.equal(result.status, 2);
   assert.match(result.stderr, /--events must be a non-negative number/);
   assert.equal(result.stdout, "");
+});
+
+test("terminal-safe rendering: operation text cannot emit control or escape sequences", () => {
+  const op = state();
+  const evil = "safe\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2Jafter\u001b[31m";
+  op.objective = evil;
+  op.units[1].title = evil;
+  op.units[1].blocked!.reason = evil;
+  op.units[1].blocked!.decision.question = evil;
+  op.units[1].blocked!.decision.options[0].label = evil;
+  op.events[2].message = evil;
+  const view = buildOperationView(op, { now: NOW });
+  const rendered = renderOperationView(view, { width: 120 });
+  assert.doesNotMatch(rendered, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+  assert.match(rendered, /safe/);
+});
+
+test("events are copied without their free-form detail", () => {
+  const op = state();
+  op.events[0].detail = { parked: { reason: "secret payload" } };
+  const view = buildOperationView(op, { now: NOW });
+  assert.deepEqual(Object.keys(view.events[0]).sort(), ["at", "message", "resourceId", "type", "unitId"]);
+  assert.equal(JSON.stringify(view).includes("secret payload"), false);
+  view.events[0].message = "changed";
+  assert.equal(op.events[0].message.includes("u1 started"), true, "the view must not alias the operation");
+});
+
+type JsonSchema = {
+  type?: string;
+  const?: unknown;
+  enum?: unknown[];
+  required?: string[];
+  additionalProperties?: boolean;
+  properties?: Record<string, JsonSchema>;
+  items?: JsonSchema;
+};
+
+/** Minimal draft-2020-12 checker for the keywords the checked-in schema uses. */
+function validate(value: unknown, schema: JsonSchema, at: string): string[] {
+  const errors: string[] = [];
+  const typeOf = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
+  if (schema.const !== undefined && value !== schema.const) errors.push(`${at}: expected const ${JSON.stringify(schema.const)}`);
+  if (schema.enum && !schema.enum.some((option) => option === value)) errors.push(`${at}: ${JSON.stringify(value)} is not in the enum`);
+  if (schema.type) {
+    const ok =
+      schema.type === "integer" ? Number.isInteger(value) :
+      schema.type === "number" ? typeof value === "number" :
+      typeOf === schema.type;
+    if (!ok) errors.push(`${at}: expected ${schema.type}, got ${typeOf}`);
+  }
+  if (schema.type === "object" && value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of schema.required ?? []) if (!(key in record)) errors.push(`${at}: missing required '${key}'`);
+    for (const [key, child] of Object.entries(record)) {
+      const property = schema.properties?.[key];
+      if (!property) {
+        if (schema.additionalProperties === false) errors.push(`${at}: unexpected property '${key}'`);
+        continue;
+      }
+      errors.push(...validate(child, property, `${at}.${key}`));
+    }
+  }
+  if (schema.type === "array" && Array.isArray(value) && schema.items) {
+    value.forEach((item, index) => errors.push(...validate(item, schema.items!, `${at}[${index}]`)));
+  }
+  return errors;
+}
+
+test("the --json document satisfies the checked-in JSON schema", () => {
+  const schemaPath = fileURLToPath(new URL("../../docs/v1.1.0/operation-view.schema.json", import.meta.url));
+  const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8")) as JsonSchema;
+  assert.equal(schema.required?.includes("schemaVersion"), true);
+
+  const op = state();
+  op.units[0].agentTaskId = "task-u1";
+  op.units[0].assignment = { resourceId: "primary", model: "model-primary", since: "2026-10-28T10:59:00.000Z" };
+  op.units[0].status = "COMPLETE";
+  op.units[0].blocked = undefined;
+  op.units[1].parked = { since: "2026-10-28T11:00:00.000Z", reason: "rate limited", resourceIds: ["primary"], wakeAt: "2026-10-28T11:05:00.000Z" };
+  op.wait = { since: "2026-10-28T11:00:00.000Z", wakeAt: "2026-10-28T11:05:00.000Z", reason: "rate limited", parkedUnits: ["u2"] };
+  op.resources[1].contextLength = 200_000;
+  op.resources[1].taskClass = "review";
+
+  const view = buildOperationView(op, { now: NOW });
+  assert.deepEqual(validate(JSON.parse(JSON.stringify(view)), schema, "view"), []);
+
+  // The schema must reject the shapes the projection deliberately removed.
+  const withDetail = { ...view, events: [{ ...view.events[0], detail: { secret: true } }] } as unknown;
+  assert.notDeepEqual(validate(JSON.parse(JSON.stringify(withDetail)), schema, "view"), []);
+});
+
+test("a corrupt record is reported cleanly and quarantined by the shared loader", () => {
+  const { workspace, file } = saveFixture("op-cli-corrupt");
+  fs.writeFileSync(file, "{ not json");
+  const result = runCli(["operation", "status", "--dag", "op-cli-corrupt"], workspace);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Cannot read operation op-cli-corrupt: Corrupt state/);
+  assert.doesNotMatch(result.stderr, /\n\s+at .*node:internal/);
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readdirSync(path.dirname(file)).some((name) => name.startsWith("op-cli-corrupt.json.corrupt-")), true);
 });
