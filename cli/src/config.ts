@@ -489,8 +489,23 @@ export function mergeOperationPolicy(
   override: HarnessConfig["operationPolicy"],
 ): HarnessConfig["operationPolicy"] {
   const policy = { ...configured, ...override };
-  const maxWaitMs = policy.maxWaitMs ?? DEFAULT_OPERATION_POLICY.maxWaitMs;
-  const minWaitMs = policy.minWaitMs ?? DEFAULT_OPERATION_POLICY.minWaitMs;
+  const effective = { ...DEFAULT_OPERATION_POLICY, ...policy };
+  const maxTimerDelayMs = 2_147_483_647;
+  const fields = [
+    ["maxWaitMs", effective.maxWaitMs, 1],
+    ["unknownResumeBudget", effective.unknownResumeBudget, 0],
+    ["maxRunsPerUnit", effective.maxRunsPerUnit, 1],
+    ["minWaitMs", effective.minWaitMs, 1],
+  ] as const;
+  for (const [field, value, minimum] of fields) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+      throw new Error(`Invalid operation policy ${field}: expected a safe integer of at least ${minimum}.`);
+    }
+    if ((field === "maxWaitMs" || field === "minWaitMs") && value > maxTimerDelayMs) {
+      throw new Error(`Invalid operation policy ${field}: must not exceed Node's timer limit (${maxTimerDelayMs} ms).`);
+    }
+  }
+  const { maxWaitMs, minWaitMs } = effective;
   if (minWaitMs > maxWaitMs) {
     throw new Error(`Invalid operation wait settings: minWaitMs (${minWaitMs}) must not exceed maxWaitMs (${maxWaitMs}).`);
   }

@@ -137,4 +137,27 @@ describe("config", () => {
       /minWaitMs \(5000\) must not exceed maxWaitMs \(1000\)/,
     );
   });
+
+  test("operation spec overrides are validated after merging with operator policy", () => {
+    const invalidOverrides: Array<[string, unknown]> = [
+      ["string replay budget", { unknownResumeBudget: "invalid" }],
+      ["negative replay budget", { unknownResumeBudget: -1 }],
+      ["fractional run limit", { maxRunsPerUnit: 1.5 }],
+      ["zero run limit", { maxRunsPerUnit: 0 }],
+      ["string wait", { maxWaitMs: "1000" }],
+      ["oversized max wait", { maxWaitMs: 2_147_483_648 }],
+      ["oversized minimum wait", { minWaitMs: 2_147_483_648 }],
+    ];
+    for (const [label, value] of invalidOverrides) {
+      assert.throws(
+        () => mergeOperationPolicy(undefined, value as Parameters<typeof mergeOperationPolicy>[1]),
+        /Invalid operation policy/,
+        label,
+      );
+    }
+    assert.throws(
+      () => mergeOperationPolicy({ unknownResumeBudget: 2 }, { unknownResumeBudget: Number.NaN }),
+      /Invalid operation policy unknownResumeBudget/,
+    );
+  });
 });
