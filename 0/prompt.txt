@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>af177777e3a67b30d</task-id>
+<tool-use-id>toolu_01VT4QSgMNciAAoqTUhgB1Ey</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/af177777e3a67b30d.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review PRs 18-20" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #21 (7f, stable-draft): ACCEPT WITH NITS
+
+I read the checker, the workflow diff and `install.sh`. I also ran a small local experiment on the shallow fetch. I did not run the unit test.
+
+**Findings, ranked**
+
+1. **`.github/workflows/release.yml:70`, redundant `git fetch --depth=2` makes the repo shallow.**
+   - The checkout earlier in the job already uses `fetch-depth: 0`, which brings the full history and all tags.
+   - In a scratch clone, `git fetch --no-tags --depth=2 origin &lt;sha&gt; ...` flipped `is-shallow-repository` from false to true, and `git log` dropped to 2 commits.
+   - **Failure scenario:** any later step that needs history (a changelog, `merge-base`, `git describe`) silently sees truncated history. The "tag is on main" ancestry check currently runs before this step, so it is unaffected today, but the ordering is fragile.
+   - **Fix:** delete the fetch. All objects and `-rc.*` tags are already present. If you keep it, use `--no-tags origin '+refs/tags/…'` without `--depth`.
+
+2. **The checker is self-attesting.**
+   - **`.github/workflows/release.yml:68-72`:** the workflow runs `scripts/check-version-only-diff.mjs` and `release.yml` from the stable commit. A stable commit that edits the checker, or removes the step, passes trivially.
+   - The RC-tree equality check does catch edits to the checker, but only because the checker is already under test. A malicious editor controls both the checker and the workflow.
+   - **Fix (cheap):** run the checker from the RC worktree, `node "$work/scripts/check-version-only-diff.mjs"`. Or add the checker and `release.yml` to an explicit allowlist that must be byte-identical to the RC's. Document that a trusted-ref or ruleset guard is the real control.
+
+3. **`scripts/check-version-only-diff.mjs:23-25`, root `package.json` text is not constrained.**
+   - The comparison is a parsed deep-equal, and the stable text is written verbatim.
+   - **Failure scenario:** key reordering, whitespace changes, or a duplicate key (JSON.parse takes the last) in the root `package.json` all pass. The duplicate-key case is the only one with potential for mischief: a tool that reads the first key sees a different value.
+   - **Fix:** require `JSON.stringify` of the stable object with the version set to the RC's version to equal the RC text, or equal the RC text with only the version line replaced.
+
+4. **The check does not verify that the RC tag was accepted.** `release.yml:71` takes any `${tag}-rc.*` tag on the parent, so any person who can push tags can mark an unqualified commit as its "RC". The glob also matches `-rc.1.anything`. **Fix:** use `-rc.[0-9]*` and a regex check (`^v…-rc\.[0-9]+$`). Optionally require that a release for that RC tag exists in the prerelease state.
+
+**Your four questions**
+
+1. **Can a stable commit change anything beyond synchronized version metadata?**
+   - For tracked files: no. The expected tree is the RC tree plus the stable root `package.json` plus sync output, then `git diff --name-only &lt;stable&gt;`. That covers unmanaged files and `Cargo.lock` entries other than `harness-core`, and I expect it to catch added files, deletions and mode changes. The test exercises only a README edit, so adding cases for a new file and a mode change would be worthwhile.
+   - Several RC tags on the parent are fine, since they all point at the same commit. `sort -V | tail -n 1` is deterministic.
+2. **Does the shallow fetch provide every object the checker needs?** Yes. A depth-2 fetch brings the stable commit, its parent and both full trees, and the repo already had everything anyway (finding 1).
+3. **Draft creation and the installer.**
+   - A draft release's assets are not publicly downloadable.
+   - `install.sh` resolves `latest` through `/releases/latest`, which excludes drafts and prereleases. A pinned `NEXUS_VERSION=vX` would 404 on the download URL.
+   - Nit: rerunning the workflow on the same stable tag can create a second draft, so publishing should check there is only one.
+4. **Script injection and tag abuse.**
+   - Safe. The step runs after `sync-version --tag` has pinned `GITHUB_REF_NAME` to `v&lt;SemVer&gt;`, the variable is only used quoted, and the `-rc.*` refspec glob only matches that prefix.
+   - `contains(ref_name,'-')` correctly separates stable tags from RC tags. The `draft` expression yields a boolean string, which is fine.</result>
+<usage><subagent_tokens>91938</subagent_tokens><tool_uses>3</tool_uses><duration_ms>65251</duration_ms></usage>
+</task-notification>
