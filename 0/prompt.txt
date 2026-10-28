@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bko46vxw8</task-id>
+<tool-use-id>toolu_01RDzU3R6YxZfdmdLSDkoBWY</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/f7a4bcb7-09e5-4c81-85ad-62b124a835f4/tasks/bko46vxw8.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for post-merge CI; recount alerts" completed (exit code 0)</summary>
+</task-notification>
