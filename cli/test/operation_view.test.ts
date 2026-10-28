@@ -600,6 +600,29 @@ test("the --json document satisfies the checked-in JSON schema", () => {
   op.resources[1].taskClass = "review";
 
   op.units[2].status = "RUNNABLE";
+  op.git = {
+    isolate: true,
+    repoRoot: "/repo",
+    baseRef: "HEAD",
+    baseCommit: "a".repeat(40),
+    integrationBranch: "nexus/op-op-view/integration",
+    integrationWorktree: "/repo/.nexus/worktrees/op-op-view/integration",
+    baseDir: "/repo/.nexus/worktrees/op-op-view",
+    units: {},
+  };
+  op.integrations = [
+    {
+      unitId: "u1",
+      branch: "nexus/op-op-view/u1",
+      commit: "b".repeat(40),
+      integratedCommit: "c".repeat(40),
+      mergedAt: "2026-10-28T11:20:00.000Z",
+      files: ["src/value.ts"],
+      outcome: "VERIFIED",
+      summary: "done",
+      verification: "PASSED",
+    },
+  ];
   const key = scopeKey(op.resources[0], "model");
   op.conditions = [
     {
@@ -639,4 +662,47 @@ test("a corrupt record is reported cleanly and quarantined by the shared loader"
   assert.doesNotMatch(result.stderr, /\n\s+at .*node:internal/);
   assert.equal(fs.existsSync(file), false);
   assert.equal(fs.readdirSync(path.dirname(file)).some((name) => name.startsWith("op-cli-corrupt.json.corrupt-")), true);
+});
+
+test("projects the operation's git isolation and unit integration receipts", () => {
+  const op = state();
+  op.git = {
+    isolate: true,
+    repoRoot: "/repo",
+    baseRef: "HEAD",
+    baseCommit: "a".repeat(40),
+    integrationBranch: "nexus/op-op-view-123456/integration",
+    integrationWorktree: "/repo/.nexus/worktrees/op-op-view-123456/integration",
+    baseDir: "/repo/.nexus/worktrees/op-op-view-123456",
+    units: {},
+  };
+  op.integrations = [
+    {
+      unitId: "u1",
+      branch: "nexus/op-op-view-123456/u1-abcdef",
+      commit: "b".repeat(40),
+      integratedCommit: "c".repeat(40),
+      mergedAt: "2026-10-28T11:20:00.000Z",
+      files: ["src/value.ts"],
+      outcome: "VERIFIED",
+      summary: "done",
+      verification: "PASSED",
+    },
+  ];
+  const view = buildOperationView(op, { now: NOW });
+  assert.deepEqual(view.git, {
+    integrationBranch: "nexus/op-op-view-123456/integration",
+    integrationWorktree: "/repo/.nexus/worktrees/op-op-view-123456/integration",
+  });
+  assert.deepEqual(view.units[0].integration, {
+    commit: "b".repeat(40),
+    integratedCommit: "c".repeat(40),
+    mergedAt: "2026-10-28T11:20:00.000Z",
+    files: ["src/value.ts"],
+    verification: "PASSED",
+  });
+  assert.equal(view.units[1].integration, undefined);
+  const rendered = renderOperationView(view, { width: 120 });
+  assert.match(rendered, /isolated: nexus\/op-op-view-123456\/integration/);
+  assert.match(rendered, /u1 \[implementer\] Implement the projector\s+COMPLETE.*integrated cccccccccccc/);
 });

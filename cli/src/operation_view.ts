@@ -28,6 +28,8 @@ export interface OperationViewUnit {
   parkedUntil?: string;
   blocked?: { reason: string; decisionId: string };
   result?: { summary: string; completedAt: string; resourceId: string; outcome: string };
+  /** Present when the unit's work was integrated into the operation branch. */
+  integration?: OperationViewIntegration;
 }
 
 export interface OperationViewResource {
@@ -43,6 +45,19 @@ export interface OperationViewResource {
   blocking?: Array<{ condition: string; reason: string; scope: string; eligibleAt?: string }>;
   /** Earliest time the resource is expected back, when the block is temporary. */
   eligibleAt?: string;
+}
+
+export interface OperationViewIntegration {
+  commit: string;
+  integratedCommit: string;
+  mergedAt: string;
+  files: string[];
+  verification: string;
+}
+
+export interface OperationViewGit {
+  integrationBranch: string;
+  integrationWorktree: string;
 }
 
 export interface OperationViewDecisionOption {
@@ -100,6 +115,8 @@ export interface OperationView {
   };
   units: OperationViewUnit[];
   resources: OperationViewResource[];
+  /** Present only for an isolated operation. */
+  git?: OperationViewGit;
   wait?: { since: string; wakeAt: string; reason: string; parkedUnits: string[] };
   decisions: OperationViewDecision[];
   dag: OperationViewDag;
@@ -338,6 +355,7 @@ export function buildOperationView(
     return true;
   });
 
+  const integrations = new Map((state.integrations ?? []).map((receipt) => [receipt.unitId, receipt]));
   const units: OperationViewUnit[] = state.units.map((unit) => ({
     id: unit.id,
     title: unit.title,
@@ -360,6 +378,20 @@ export function buildOperationView(
             resourceId: unit.result.resourceId,
             outcome: unit.result.outcome,
           },
+        }
+      : {}),
+    ...(integrations.has(unit.id)
+      ? {
+          integration: (() => {
+            const receipt = integrations.get(unit.id)!;
+            return {
+              commit: receipt.commit,
+              integratedCommit: receipt.integratedCommit,
+              mergedAt: receipt.mergedAt,
+              files: [...receipt.files],
+              verification: receipt.verification,
+            };
+          })(),
         }
       : {}),
   }));
@@ -385,6 +417,14 @@ export function buildOperationView(
     },
     units,
     resources: state.resources.map((resource) => resourceView(resource, registry.eligibility(resource, now), state.conditions)),
+    ...(state.git
+      ? {
+          git: {
+            integrationBranch: state.git.integrationBranch,
+            integrationWorktree: state.git.integrationWorktree,
+          },
+        }
+      : {}),
     ...(state.wait ? { wait: { ...state.wait, parkedUnits: [...state.wait.parkedUnits] } } : {}),
     decisions: openDecisions.map((decision) => ({
       id: decision.id,
@@ -447,6 +487,9 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
   );
   lines.push(`  ${text(view.objective, width)}`);
   lines.push(`  updated ${text(view.updatedAt, width)}`);
+  if (view.git) {
+    lines.push(`  isolated: ${text(view.git.integrationBranch, width)} (${text(view.git.integrationWorktree, width)})`);
+  }
 
   if (view.units.length) {
     lines.push("", "Units");
@@ -457,8 +500,9 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
       const role = unit.role ? ` [${text(unit.role, width)}]` : "";
       const runs = unit.runs > 1 ? ` · ${unit.runs} runs` : "";
       const durable = unit.durable ? " · durable" : "";
+      const integrated = unit.integration ? ` · integrated ${text(unit.integration.integratedCommit.slice(0, 12), width)}` : "";
       lines.push(
-        `${indent}${mark} ${text(unit.id, width)}${role} ${text(unit.title, width)}  ${unit.status}${runs}${durable}`,
+        `${indent}${mark} ${text(unit.id, width)}${role} ${text(unit.title, width)}  ${unit.status}${runs}${durable}${integrated}`,
       );
       if (unit.detail) lines.push(`${indent}  ${text(unit.detail, width)}`);
       if (unit.dependsOn.length) lines.push(`${indent}  after: ${unit.dependsOn.map((id) => text(id, width)).join(", ")}`);

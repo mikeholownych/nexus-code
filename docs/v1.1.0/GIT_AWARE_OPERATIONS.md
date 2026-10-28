@@ -1,6 +1,7 @@
 # v1.1 proposal: git-aware operations
 
-Status: proposed. Owner: unclaimed. Depends on: observability (for integration visibility). Size: medium (2–3 weeks).
+Status: slices 1–3 and recovery implemented (`v1/feature-git-aware-operations`); PR publication (4) remains proposed.
+Owner: unclaimed. Depends on: observability (for integration visibility). Size: medium (2–3 weeks).
 
 ## What exists today
 
@@ -11,6 +12,16 @@ Status: proposed. Owner: unclaimed. Depends on: observability (for integration v
   integration step, and no conflict policy.
 - `CandidateIdentity` already computes a content-addressed view of the working tree, which is the natural unit boundary
   for a branch.
+
+## What slice 2 ships
+
+`spec.git = { isolate: true, baseRef? }`: an integration worktree/branch per operation, a worktree/branch per unit, a
+deterministic integration queue at unit completion, receipts persisted in the operation state, a `MERGE_CONFLICT`
+decision when a merge conflicts, an `INTEGRATION_FAILED` decision when the merged tree fails the unit's verifier, and
+recovery (idempotent integration, receipt reconciliation, missing-worktree fail-closed, restart). Implementation and
+evidence: `docs/reviews/evidence/v1.1/GIT-AWARE-OPERATIONS-20261028/README.md`.
+
+Still proposed below: PR publication, and conflict policies beyond "stop and ask".
 
 ## What to build
 
@@ -23,9 +34,9 @@ Status: proposed. Owner: unclaimed. Depends on: observability (for integration v
 3. **Conflict policy**: a textual conflict parks the operation with an escalation decision whose options are exactly the
    existing kinds (`retry`, `revise`, `assign`, `drop`, `cancel`). There is no automatic model-driven conflict
    resolution in this slice; "resolve in the workspace and retry" is the operator path.
-4. **PR publication**: an opt-in `git: { publish: "pr" }` creates one branch for the operation and a PR whose body is
-   generated from unit summaries, verification evidence, and the requirement ledger. Creating a PR is an egress action:
-   it requires explicit operator authorization and is recorded as such.
+4. **PR publication** (not in slice 2): an opt-in `git: { publish: "pr" }` creates one branch for the operation and a PR
+   whose body is generated from unit summaries, verification evidence, and the requirement ledger. Creating a PR is an
+   egress action: it requires explicit operator authorization and is recorded as such.
 5. **Recovery**: the operation records the integration state (branch tip per unit, integrated commits) so a restart can
    resume integration without re-merging.
 
