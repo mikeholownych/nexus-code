@@ -1,0 +1,1 @@
+update the installer docs once it publishes
