@@ -207,10 +207,13 @@ test("a crash after the merge is recognised instead of merging twice", async () 
   git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
   const tip = ops.currentTip();
 
-  const result = await ops.integrate(unit("u1"), completed());
+  const result = await ops.integrate(
+    unit("u1"),
+    completed({ verification: { command: "test -f u1.txt", status: "PASSED", hasExecutedTests: true } }),
+  );
   assert.equal(result.kind, "nothing");
   if (result.kind === "nothing") {
-    assert.equal(result.receipt.verification, "ALREADY_MERGED");
+    assert.equal(result.receipt.verification, "PASSED_POSTHOC");
     assert.equal(result.receipt.commit, commit);
     assert.equal(result.receipt.integratedCommit, tip);
   }
@@ -316,4 +319,123 @@ test("a conflicting unit stops the operation with a MERGE_CONFLICT decision", as
   assert.match(blocked!.blocked!.decision.question, /conflicts/);
   assert.deepEqual(blocked!.blocked!.decision.options.map((option) => option.action.kind), ["retry", "revise", "cancel_operation"]);
   assert.equal(git(state.git!.integrationWorktree, ["status", "--porcelain"]), "", "the conflicting merge is aborted");
+});
+
+test("a passing verifier that writes an artifact does not block the next integration", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state, { verifyTimeoutSecs: 30 });
+
+  const a = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(a.workspace, "u1.txt"), "one\n");
+  const first = await ops.integrate(
+    unit("u1"),
+    completed({ verification: { command: "touch generated.txt && test -f u1.txt", status: "PASSED", hasExecutedTests: true } }),
+  );
+  assert.equal(first.kind, "integrated");
+  assert.equal(git(p.integrationWorktree, ["status", "--porcelain"]), "", "verifier artifacts are cleaned after the check");
+
+  const b = ops.prepareUnit(unit("u2"));
+  fs.writeFileSync(path.join(b.workspace, "u2.txt"), "two\n");
+  const second = await ops.integrate(unit("u2"), completed());
+  assert.equal(second.kind, "integrated");
+  assert.equal(fs.existsSync(path.join(p.integrationWorktree, "generated.txt")), false);
+});
+
+function runnableExecutor(
+  overrides: { onU1?: (workspace: string) => void; onU2?: (workspace: string) => void } = {},
+): { executor: WorkUnitExecutor; runs: string[] } {
+  const runs: string[] = [];
+  const executor: WorkUnitExecutor = {
+    async run(current, _resource, ctx) {
+      runs.push(current.id);
+      const handler = current.id === "u1" ? overrides.onU1 : current.id === "u2" ? overrides.onU2 : undefined;
+      if (handler) handler(ctx.workspace!);
+      else fs.writeFileSync(path.join(ctx.workspace!, `${current.id}.txt`), `${current.id}\n`);
+      return completed();
+    },
+  };
+  return { executor, runs };
+}
+
+test("a blocked unit keeps its worktree, and resolving the conflict runs it there and completes", async () => {
+  const root = repo();
+  const state = isolatedState([{ id: "u1" }, { id: "u2" }], root);
+  const ops = new OperationGit(plan(root, state.id), state.git!);
+  ops.prepareUnit(unit("u2"));
+  fs.writeFileSync(path.join(state.git!.units.u2.worktree, "file.txt"), "u2\n");
+
+  const first = runnableExecutor({
+    onU1: (workspace) => fs.writeFileSync(path.join(workspace, "file.txt"), "u1\n"),
+    onU2: (workspace) => fs.writeFileSync(path.join(workspace, "file.txt"), "u2\n"),
+  });
+  const runner = new OperationRunner(state, { executor: first.executor, clock: clock(), persist: () => {} });
+  await runner.run();
+
+  assert.equal(state.status, "BLOCKED");
+  const blocked = state.units.find((entry) => entry.status === "BLOCKED")!;
+  assert.equal(blocked.id, "u2");
+  assert.equal(fs.existsSync(state.git!.units.u2.worktree), true, "a blocked unit keeps its worktree for the retry");
+
+  // The operator resolves the conflict by bringing the unit's branch to the integrated content, then retries.
+  const decision = blocked.blocked!.decision;
+  const retry = decision.options.find((option) => option.action.kind === "retry")!;
+  runner.scheduler.resolve(decision.id, retry.id);
+
+  const second = runnableExecutor({ onU2: (workspace) => fs.writeFileSync(path.join(workspace, "file.txt"), "u1\n") });
+  const resumed = new OperationRunner(state, { executor: second.executor, clock: clock(), persist: () => {} });
+  await resumed.run();
+
+  assert.equal(state.status, "COMPLETE", JSON.stringify(state.blocked));
+  assert.deepEqual(second.runs, ["u2"]);
+  assert.deepEqual((state.integrations ?? []).map((receipt) => receipt.unitId), ["u1", "u2"]);
+  assert.equal(fs.existsSync(state.git!.units.u2.worktree), false, "a completed unit's worktree is removed");
+});
+
+test("a worktree removed outside Nexus offers a restart that actually recreates it", async () => {
+  const root = repo();
+  const state = isolatedState([{ id: "u1" }, { id: "u2" }], root);
+  const ops = new OperationGit(plan(root, state.id), state.git!);
+  ops.prepareUnit(unit("u2"));
+  git(root, ["worktree", "remove", "--force", state.git!.units.u2.worktree]);
+  assert.equal(fs.existsSync(state.git!.units.u2.worktree), false);
+
+  const first = runnableExecutor();
+  const runner = new OperationRunner(state, { executor: first.executor, clock: clock(), persist: () => {} });
+  await runner.run();
+
+  assert.equal(state.status, "BLOCKED");
+  const blocked = state.units.find((entry) => entry.status === "BLOCKED")!;
+  assert.equal(blocked.id, "u2");
+  assert.match(blocked.blocked!.decision.question, /worktree was removed outside Nexus/);
+  assert.deepEqual(blocked.blocked!.decision.options.map((option) => option.action.kind), ["retry", "cancel_operation"]);
+
+  const restart = blocked.blocked!.decision.options[0];
+  assert.equal((restart.action as { restart?: boolean }).restart, true);
+  runner.scheduler.resolve(blocked.blocked!.decision.id, restart.id);
+
+  const second = runnableExecutor();
+  const resumed = new OperationRunner(state, { executor: second.executor, clock: clock(), persist: () => {} });
+  await resumed.run();
+
+  assert.equal(state.status, "COMPLETE", JSON.stringify(state.blocked));
+  assert.deepEqual(second.runs, ["u2"]);
+  assert.equal(fs.existsSync(state.git!.units.u2.worktree), false);
+});
+
+test("a missing integration worktree is repaired on resume", async () => {
+  const root = repo();
+  const state = isolatedState([{ id: "u1" }], root);
+  git(root, ["worktree", "remove", "--force", state.git!.integrationWorktree]);
+  assert.equal(fs.existsSync(state.git!.integrationWorktree), false);
+
+  const { executor } = runnableExecutor();
+  const runner = new OperationRunner(state, { executor, clock: clock(), persist: () => {} });
+  await runner.run();
+
+  assert.equal(state.status, "COMPLETE", JSON.stringify(state.blocked));
+  assert.equal(fs.existsSync(state.git!.integrationWorktree), true);
+  assert.equal(fs.readFileSync(path.join(state.git!.integrationWorktree, "u1.txt"), "utf8"), "u1\n");
 });

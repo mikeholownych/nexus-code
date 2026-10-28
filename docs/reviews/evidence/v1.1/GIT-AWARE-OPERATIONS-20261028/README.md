@@ -29,7 +29,11 @@ reset and blocks with `INTEGRATION_FAILED`.
 ## Recovery
 
 - `integratedCommit` is persisted with the receipt. A crash between the merge and the scheduler transition is reconciled
-  at runner start from the receipt, so the unit is not run again on an already-merged branch.
+  at runner start from the receipt, so the unit is not run again on an already-merged branch; the merged tree is still
+  re-verified post hoc (`PASSED_POSTHOC`) and a failure is reported rather than recorded as verified.
+- A blocked unit keeps its worktree. Retry resumes in it; restart prunes the stale Git registration and recreates the
+  worktree/branch from the integration tip. An integration worktree that was deleted outside Nexus is repaired on
+  resume (`worktree add <branch>`), because the branch is the source of truth.
 - Integration is idempotent: an already-merged branch is recognised with `merge-base --is-ancestor` and recorded as
   `ALREADY_MERGED`; a stale `MERGE_HEAD` is aborted before the next merge.
 - A recorded worktree that vanished is reported, not silently recreated: the unit is blocked with a decision offering a
@@ -38,7 +42,7 @@ reset and blocks with `INTEGRATION_FAILED`.
 
 ## Tests
 
-`cli/test/operation_git.test.ts` (10 cases, real temporary Git repositories):
+`cli/test/operation_git.test.ts` (14 cases, real temporary Git repositories):
 
 1. planning/creating the integration worktree is idempotent and refuses a non-Git workspace;
 2. a unit runs on its own worktree, integrates, the operator checkout stays untouched, and `disposeUnit` keeps the branch;
@@ -50,11 +54,17 @@ reset and blocks with `INTEGRATION_FAILED`.
 8. a vanished worktree is reported by `missingWorktrees`;
 9. the runner isolates each unit, integrates both completions (`VERIFIED`), records receipts and completes;
 10. a resumed/parked unit whose branch point predates an integration conflicts and stops the operation with a
-    `MERGE_CONFLICT` decision (retry/revise/stop).
+    `MERGE_CONFLICT` decision (retry/revise/stop);
+11. a blocked unit keeps its worktree, and resolving the conflict then retrying runs that unit in the same worktree and
+    completes the operation;
+12. a worktree removed outside Nexus blocks with a restart-only decision, and the restart actually prunes and recreates
+    it, then completes;
+13. a deleted integration worktree is repaired on resume and integration proceeds;
+14. a passing verifier that writes an artifact does not block the next integration (artifact cleaned).
 
 The operation view projects `git` and per-unit `integration` receipts (schema updated and validated). Focused run:
 `operation_git` + `operation_view` + `tdd_work_units` + `convergence_scheduling` + `operation_runner_refactor` +
-`operation_account_identity` → **108/108 pass**; `tsc --noEmit` and `git diff --check` clean, isolated HOME/XDG.
+`operation_account_identity` → **112/112 pass**; `tsc --noEmit` and `git diff --check` clean, isolated HOME/XDG.
 
 ## Residuals / not in this slice
 
@@ -66,13 +76,17 @@ The operation view projects `git` and per-unit `integration` receipts (schema up
 - The integration re-check uses the unit's own passing verifier command with `bash -c` and the harness verifier deadline
   (`NEXUS_VERIFIER_TIMEOUT_SECS`). It is skipped (`NOT_RUN` in the receipt) when the unit completed without a passing,
   executed verifier, matching the existing unverified-completion semantics.
-- Integration commits and merges are mechanical: `--no-verify`, `commit.gpgsign=false`, and a fixed Nexus author, so an
-  operator's commit hook or signing prompt cannot hang or rewrite a headless integration. The merged tree is re-verified
-  instead; repository pre-commit checks do not run on integration.
+- Integration commits and merges are mechanical: a fixed Nexus author, `commit.gpgsign=false` and `core.hooksPath` pointed
+  at an empty directory, so no repository hook (pre or post) and no signing prompt can hang or rewrite a headless
+  integration. The merged tree is re-verified instead. A verifier that writes artifacts is cleaned
+  (`reset --hard HEAD`, `clean -fd`) before the next integration.
 - `git add -A` respects `.gitignore`, so ignored build output in a unit worktree is not integrated. A deliverable the
   repository ignores must be committed by the unit (or un-ignored) explicitly.
-- Unit branches and the integration worktree are kept after completion/cancellation for review; removing them is an
-  operator action (`git worktree remove`, `git branch -d`). `.nexus/` is excluded from Git.
+- Unit branches and the integration worktree are kept after completion/cancellation for review; unit worktrees are
+  removed on completion/cancellation (kept while blocked). Removing branches/checkout is an operator action.
+  `.nexus/` is excluded from Git.
+- A post-hoc check of an already-merged branch cannot reset it (other units may have integrated on top); a failure is
+  returned as an integration failure for the operator to inspect, not silently recorded as verified.
 - Uncommitted operator changes are not part of an isolated operation: `baseRef` defaults to `HEAD`, so commit or stash
   first.
 - No per-unit branch naming override and no reuse of the interactive `/merge` receipts; operations keep their own

@@ -18,7 +18,7 @@ import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { buildOperationView, renderOperationView, watchOperation } from "./operation_view.js";
-import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
+import { discardIntegrationWorktree, ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
 import { safeTerminal } from "./ui.js";
 import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
 import { createOperationAccountIdentity } from "./core/account_identity.js";
@@ -138,6 +138,10 @@ export function registerOperationCommands(program: Command): void {
           ensureIntegrationWorktree(plan, gitState);
           state.git = gitState;
         } catch (error: any) {
+          // A partially created pair must not outlive a failed start with no operation record.
+          try {
+            discardIntegrationWorktree(planOperationGit(config.workspace, state.id, spec.git.baseRef));
+          } catch {}
           console.error(pc.red(`Cannot start an isolated operation: ${error?.message ?? error}`));
           process.exitCode = 2;
           return;

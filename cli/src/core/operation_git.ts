@@ -28,9 +28,11 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+const GIT_TIMEOUT_MS = 300_000;
+
 function gitResult(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
   try {
-    const stdout = execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS });
     return { ok: true, stdout, stderr: "" };
   } catch (error: any) {
     return { ok: false, stdout: String(error?.stdout ?? ""), stderr: String(error?.stderr ?? error?.message ?? "") };
@@ -107,15 +109,16 @@ export function ensureIntegrationWorktree(plan: OperationGitPlan, state: Operati
   const branchExists = gitResult(plan.repoRoot, ["rev-parse", "--verify", `refs/heads/${plan.integrationBranch}`]).ok;
   const worktreeExists = fs.existsSync(plan.integrationWorktree);
   if (branchExists && worktreeExists) return;
-  if (branchExists !== worktreeExists) {
-    throw new Error(
-      `integration branch/worktree disagree (branch=${branchExists ? "yes" : "no"}, worktree=${worktreeExists ? "yes" : "no"}); ` +
-        `restore or remove both before resuming`,
-    );
+  if (!branchExists && worktreeExists) {
+    throw new Error("the integration worktree exists but its branch is gone; restore the branch or remove the worktree");
   }
-  fs.mkdirSync(plan.baseDir, { recursive: true });
   ensureGitExclude(plan.repoRoot);
-  const added = gitResult(plan.repoRoot, ["worktree", "add", "-b", plan.integrationBranch, plan.integrationWorktree, plan.baseCommit]);
+  fs.mkdirSync(plan.baseDir, { recursive: true });
+  // A missing worktree with the branch still present is repaired in place (the branch is the source of truth).
+  gitResult(plan.repoRoot, ["worktree", "prune", "--expire", "now"]);
+  const added = branchExists
+    ? gitResult(plan.repoRoot, ["worktree", "add", plan.integrationWorktree, plan.integrationBranch])
+    : gitResult(plan.repoRoot, ["worktree", "add", "-b", plan.integrationBranch, plan.integrationWorktree, plan.baseCommit]);
   if (!added.ok) throw new Error(`cannot create the integration worktree: ${added.stderr.trim() || "git worktree add failed"}`);
 }
 
@@ -135,11 +138,17 @@ export interface UnitGitPreparation {
 }
 
 export class OperationGit {
+  /** Empty directory used as `core.hooksPath` for mechanical integration commits/merges. */
+  private readonly hooksDir: string;
+
   constructor(
     private readonly plan: OperationGitPlan,
     private readonly state: OperationGitState,
     private readonly options: { verifyTimeoutSecs?: number } = {},
-  ) {}
+  ) {
+    this.hooksDir = path.join(plan.baseDir, "no-hooks");
+    fs.mkdirSync(this.hooksDir, { recursive: true });
+  }
 
   currentTip(): string {
     return git(this.plan.integrationWorktree, ["rev-parse", "HEAD"]);
@@ -169,10 +178,17 @@ export class OperationGit {
     }
 
     const branchExists = gitResult(this.plan.repoRoot, ["rev-parse", "--verify", `refs/heads/${branch}`]).ok;
-    // Created here and recorded below; on a crash between the two, reuse the branch and recover its fork point.
-    const added = branchExists
+    const add = () => branchExists
       ? gitResult(this.plan.repoRoot, ["worktree", "add", worktree, branch])
       : gitResult(this.plan.repoRoot, ["worktree", "add", "-b", branch, worktree, this.currentTip()]);
+    // A worktree directory that disappeared outside Nexus leaves a registration behind; prune it, then add.
+    gitResult(this.plan.repoRoot, ["worktree", "prune", "--expire", "now"]);
+    let added = add();
+    if (!added.ok && /already registered|missing but already registered/i.test(added.stderr)) {
+      gitResult(this.plan.repoRoot, ["worktree", "remove", "--force", worktree]);
+      gitResult(this.plan.repoRoot, ["worktree", "prune", "--expire", "now"]);
+      added = add();
+    }
     if (!added.ok) throw new Error(`cannot create a worktree for ${unit.id}: ${added.stderr.trim() || "git worktree add failed"}`);
 
     const baseCommit = branchExists
@@ -215,8 +231,7 @@ export class OperationGit {
       const added = gitResult(entry.worktree, ["add", "-A"]);
       if (!added.ok) return { kind: "failed", reason: `cannot stage ${unit.id}: ${added.stderr.trim()}` };
       const committed = gitResult(entry.worktree, [
-        "-c", "user.name=Nexus", "-c", "user.email=nexus@localhost", "-c", "commit.gpgsign=false",
-        "commit", "--no-verify", "-q", "-m", `nexus: ${unit.title}`,
+        ...this.mechanicalGitConfig(), "commit", "--no-verify", "-q", "-m", `nexus: ${unit.title}`,
       ]);
       if (!committed.ok) {
         return { kind: "failed", reason: `cannot commit ${unit.id}: ${committed.stderr.trim() || "git commit failed"}` };
@@ -224,25 +239,7 @@ export class OperationGit {
     }
     const commit = git(entry.worktree, ["rev-parse", "HEAD"]);
     if (commit === entry.baseCommit) {
-      return {
-        kind: "nothing",
-        receipt: {
-          unitId: unit.id,
-          branch: entry.branch,
-          commit,
-          integratedCommit: this.currentTip(),
-          mergedAt: new Date().toISOString(),
-          files: [],
-          outcome: result.outcome,
-          summary: result.summary,
-          verification: "NO_CHANGES",
-        },
-      };
-    }
-
-    const tip = this.currentTip();
-    // A branch already contained in the integration tip (crash after the merge) is recorded, not merged twice.
-    if (gitResult(this.plan.integrationWorktree, ["merge-base", "--is-ancestor", commit, "HEAD"]).ok) {
+      const tip = this.currentTip();
       this.state.units[unit.id] = { ...entry, integratedCommit: tip };
       return {
         kind: "nothing",
@@ -255,7 +252,35 @@ export class OperationGit {
           files: [],
           outcome: result.outcome,
           summary: result.summary,
-          verification: "ALREADY_MERGED",
+          verification: "NO_CHANGES",
+        },
+      };
+    }
+
+    const tip = this.currentTip();
+    // A branch already contained in the integration tip (crash after the merge) is recorded, not merged twice.
+    if (gitResult(this.plan.integrationWorktree, ["merge-base", "--is-ancestor", commit, "HEAD"]).ok) {
+      // The merge happened before a crash. The merged tree can no longer be reset safely, so the verifier is a
+      // post-hoc check: a failure is reported for the operator, not silently recorded as verified.
+      const posthoc = result.verification?.command && result.verification.status === "PASSED" && result.verification.hasExecutedTests
+        ? this.verifyMerged(result.verification.command)
+        : undefined;
+      this.state.units[unit.id] = { ...entry, integratedCommit: tip };
+      if (posthoc && !posthoc.ok) {
+        return { kind: "failed", reason: `${posthoc.reason ?? "integration verification failed"} (the merge is already in place; inspect and retry or stop)` };
+      }
+      return {
+        kind: "nothing",
+        receipt: {
+          unitId: unit.id,
+          branch: entry.branch,
+          commit,
+          integratedCommit: tip,
+          mergedAt: new Date().toISOString(),
+          files: [],
+          outcome: result.outcome,
+          summary: result.summary,
+          verification: posthoc ? "PASSED_POSTHOC" : "ALREADY_MERGED",
         },
       };
     }
@@ -268,7 +293,7 @@ export class OperationGit {
     // Integration is mechanical: no commit hooks or signing, because the merged tree is re-verified instead. The unit's
     // own commit uses the same settings so a signing prompt cannot hang a headless operation.
     const merged = gitResult(this.plan.integrationWorktree, [
-      "-c", "user.name=Nexus", "-c", "user.email=nexus@localhost", "-c", "commit.gpgsign=false",
+      ...this.mechanicalGitConfig(),
       "merge", "--no-ff", "--no-verify", "-m", `nexus: integrate ${unit.id} — ${unit.title}`, entry.branch,
     ]);
     if (!merged.ok) {
@@ -284,8 +309,10 @@ export class OperationGit {
     if (verification && !verification.ok) {
       // The merge is mechanically clean but the merged tree does not pass the unit's verifier: undo it.
       gitResult(this.plan.integrationWorktree, ["reset", "--hard", tip]);
+      this.cleanIntegrationWorktree();
       return { kind: "failed", reason: verification.reason ?? "integration verification failed" };
     }
+    if (verification) this.cleanIntegrationWorktree();
 
     const integratedCommit = this.currentTip();
     const files = gitResult(this.plan.repoRoot, ["diff", "--name-only", tip, integratedCommit]).stdout
@@ -327,6 +354,14 @@ export class OperationGit {
     return this.state.units[unitId];
   }
 
+  /** Fixed author, no signing and no hooks (pre or post): integration must not depend on the operator's Git config. */
+  private mechanicalGitConfig(): string[] {
+    return [
+      "-c", "user.name=Nexus", "-c", "user.email=nexus@localhost",
+      "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${this.hooksDir}`,
+    ];
+  }
+
   private abortStaleMerge(): void {
     try {
       const gitDirPath = git(this.plan.integrationWorktree, ["rev-parse", "--git-dir"]);
@@ -337,6 +372,12 @@ export class OperationGit {
     } catch {
       // No readable git dir: the merge command below reports the real problem.
     }
+  }
+
+  /** Remove what a verifier may have written on top of the merge; the merge commit itself is untouched. */
+  private cleanIntegrationWorktree(): void {
+    gitResult(this.plan.integrationWorktree, ["reset", "--hard", "HEAD"]);
+    gitResult(this.plan.integrationWorktree, ["clean", "-fd"]);
   }
 
   private removeWorktree(worktree: string): void {

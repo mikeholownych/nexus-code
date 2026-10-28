@@ -215,7 +215,7 @@ export interface IntegrationReceipt {
   files: string[];
   outcome: string;
   summary: string;
-  verification: "PASSED" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
+  verification: "PASSED" | "PASSED_POSTHOC" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
 }
 
 export interface DurableOperationState {

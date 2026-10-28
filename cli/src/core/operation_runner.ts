@@ -7,7 +7,7 @@ import { credentialStorageHome, storedCredentialFor } from "../client.js";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
-import { OperationGit, type OperationGitPlan } from "./operation_git.js";
+import { OperationGit, ensureIntegrationWorktree, type OperationGitPlan } from "./operation_git.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
 import {
   credentialFingerprint,
@@ -106,6 +106,24 @@ export class OperationRunner {
       this.git?.disposeAllUnits();
       return this.state;
     }
+    if (this.git) {
+      try {
+        ensureIntegrationWorktree(planFromState(this.state), this.state.git!);
+      } catch (error: any) {
+        this.scheduler.finish({
+          kind: "blocked",
+          decisions: [{
+            id: "operation#git",
+            unitId: "*",
+            cause: "INTEGRATION_FAILED",
+            question: `The isolation worktree is unusable (${error?.message ?? error}). Restore or remove it, then resume.`,
+            options: [{ id: "1", label: "resume after fixing the worktree", action: { kind: "keep_waiting" } }],
+          }],
+        });
+        this.save();
+        return this.state;
+      }
+    }
     this.reconcileIntegrated();
     this.scheduler.reconcileInterruptedRuns();
     if (this.state.status === "WAITING" && this.state.wait && Date.parse(this.state.wait.wakeAt) <= this.clock.now()) {
@@ -118,7 +136,9 @@ export class OperationRunner {
       const d = this.scheduler.decide();
       if (d.kind === "run") {
         if (this.git) {
-          const missing = this.git.missingWorktrees().find((entry) => entry.unitId === d.unit.id);
+          // An authorized restart recreates the worktree; only a unit without that authorization fails closed here.
+          const restart = Boolean(d.unit.pendingDecision?.restart);
+          const missing = restart ? undefined : this.git.missingWorktrees().find((entry) => entry.unitId === d.unit.id);
           if (missing) {
             this.scheduler.start(d);
             this.scheduler.apply(d.unit.id, {
@@ -126,10 +146,7 @@ export class OperationRunner {
               cause: "EXECUTION_FAILED",
               reason: `isolated worktree is missing (${missing.worktree})`,
               question: `${d.unit.title}'s isolated worktree was removed outside Nexus. Restart it from the integration tip, or stop?`,
-              options: [
-                { label: "restart the unit from the integration tip", action: { kind: "retry", restart: true } },
-                { label: "stop the operation", action: { kind: "cancel_operation" } },
-              ],
+              options: [{ label: "restart the unit from the integration tip", action: { kind: "retry", restart: true } }],
             });
             this.save();
             continue;
@@ -160,7 +177,8 @@ export class OperationRunner {
         continue;
       }
       this.scheduler.finish(d);
-      this.git?.disposeAllUnits();
+      // A blocked operation keeps its unit worktrees: the retry/restart remedies run the unit again in them.
+      if (d.kind === "complete") this.git?.disposeAllUnits();
       this.save();
       return this.state;
     }
@@ -236,8 +254,9 @@ export class OperationRunner {
           cause: "MERGE_CONFLICT",
           reason: `merging ${unit.id} into the operation branch conflicts${files}`,
           question:
-            `${unit.title} completed, but its branch conflicts with the integrated work${files}. Resolve it in ` +
-            `${this.state.git?.integrationWorktree} and retry (the unit runs again on its branch), revise it, or stop?`,
+            `${unit.title} completed, but its branch conflicts with the integrated work${files}. Merge ` +
+            `${this.state.git?.integrationBranch} into the unit's branch (${this.git.unitState(unit.id)?.worktree}), ` +
+            `resolve and commit it there, then retry; or revise the unit, or stop?`,
           options: [
             { label: "retry after resolving the conflict", action: { kind: "retry" } },
             { label: "revise the unit (note required)", action: { kind: "revise" } },
