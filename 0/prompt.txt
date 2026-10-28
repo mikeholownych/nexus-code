@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b0knp3ff3</task-id>
+<tool-use-id>toolu_014Uv39BMqE549vPxP8HbMT6</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/b0knp3ff3.output</output-file>
+<status>completed</status>
+<summary>Background command "PTY repetition runs on 7061b06" completed (exit code 0)</summary>
+</task-notification>
