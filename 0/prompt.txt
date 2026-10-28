@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bbah92h8m</task-id>
+<tool-use-id>toolu_0181kDJA5k9NKvZ4KHZKyzJN</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/bbah92h8m.output</output-file>
+<status>completed</status>
+<summary>Background command "ssh 10.0.8.5 'sudo bash /tmp/soak_launch.sh'" completed (exit code 0)</summary>
+</task-notification>
