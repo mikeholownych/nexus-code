@@ -300,6 +300,7 @@ export class CheckpointManager {
     const gitRoot = this.gitRoot();
     for (const relativePath of changedPaths) {
       if (!allowSensitive) this.assertSnapshotTextSafe(relativePath);
+      let indexedEntryFound = false;
       try {
         const indexEntry = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--stage", "--full-name", "-z", "--", `:(top,literal)${relativePath}`], {
           cwd: this.workspace,
@@ -308,6 +309,7 @@ export class CheckpointManager {
         }).toString("utf8");
         const entry = indexEntry.split("\0").find(Boolean);
         if (!entry) throw new Error("Checkpoint could not verify protected Git index state");
+        indexedEntryFound = true;
         const tab = entry.indexOf("\t");
         const [mode, objectId, stage] = entry.slice(0, tab).split(" ");
         if (stage !== "0") throw new Error("Checkpoint could not verify protected Git index state");
@@ -343,6 +345,11 @@ export class CheckpointManager {
           // checkpoint operation will not persist any untracked replacement.
         }
       }
+
+      // A staged deletion's worktree path may resolve through a changed
+      // symlink parent to unrelated content. Its bytes are not part of the
+      // indexed checkpoint; untracked replacements are checked separately.
+      if (!indexedEntryFound) continue;
 
       const worktreePath = path.join(gitRoot, relativePath);
       const stat = lstatOrAbsent(worktreePath);
