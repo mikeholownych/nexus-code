@@ -17,7 +17,7 @@ export function reportOperationDiagnostic(
   const diagnostic = { level: "debug", area, action } satisfies OperationDiagnostic;
   try {
     if (handler) handler(diagnostic);
-    else console.debug(`[operation:${area}] ${action}`);
+    else process.stderr.write(`[operation:debug:${area}] ${action}\n`);
   } catch {
     // Diagnostics are best effort and must not change operation behavior.
   }

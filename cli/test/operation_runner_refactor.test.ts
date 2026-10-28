@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { newOperation } from "../src/core/operation.js";
 import { OperationRunner } from "../src/core/operation_runner.js";
+import { reportOperationDiagnostic } from "../src/core/operation_runner_diagnostics.js";
 import { OperationStore } from "../src/core/operation_runner_persistence.js";
 import type { RecoveryClock } from "../src/core/provider_recovery.js";
 
@@ -16,6 +17,30 @@ const resource = {
   capabilities: ["tools"],
   rank: 0,
 };
+
+test("default operation diagnostics keep machine-readable stdout clean", () => {
+  const stdoutWrites: string[] = [];
+  const stderrWrites: string[] = [];
+  const originalStdoutWrite = process.stdout.write;
+  const originalStderrWrite = process.stderr.write;
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdoutWrites.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderrWrites.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    reportOperationDiagnostic(undefined, "revalidation", "catalog_refresh_failed");
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+    process.stderr.write = originalStderrWrite;
+  }
+
+  assert.deepEqual(stdoutWrites, []);
+  assert.deepEqual(stderrWrites, ["[operation:debug:revalidation] catalog_refresh_failed\n"]);
+});
 
 test("operation revalidation logs bounded diagnostics and continues after catalog refresh errors", async () => {
   const now = Date.now();
