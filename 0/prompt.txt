@@ -1,0 +1,33 @@
+<pasted_content id="e171">
+This is a materially stronger result than the earlier context research, and it changes the architectural recommendation.
+
+The central result is not merely “smaller contexts didn't help.” It is that **logical-token reduction and inference-cost reduction diverge sharply on the actual Nexus/llama.cpp gateway stack because prefix-cache preservation dominates**. The most striking comparison is the prefix-stable rebuilt packet: 37% of the logical tokens, but 257% of uncached prefill and 203% of wall time. The reordered packet is substantially worse at 1194% prefill and 952% wall time. That is strong evidence against rebuilding a turn-specific packet every inference on this architecture.
+
+Layer B is also important because it removes the two major confounds from the earlier dogfood run. With an intact objective and functioning verifier, plain Nexus at 65K completed 4/4 in 11.8 requests and 351 seconds mean. The context-reduction policy also completed 4/4 under 32K, but required 50 requests and 960 seconds. That demonstrates something useful but different: **context reduction is an emergency capacity mechanism, not presently an optimization mechanism.** 
+
+I would update our engineering disposition to:
+
+> **TURN-SPECIFIC CONTEXT PLANNER: REJECTED FOR CURRENT NEXUS ARCHITECTURE**  
+> **PER-TURN HISTORY REBUILD/EVICTION: REJECTED AS DEFAULT POLICY**  
+> **PREFIX STABILITY: MATERIAL INFERENCE OPTIMIZATION PROPERTY**  
+> **CONTEXT LENGTH DEGRADATION ≤49K: NOT DEMONSTRATED IN TESTED B0 STUDY**  
+> **PLAIN 65K CONTEXT: PREFERRED DEFAULT FOR TESTED CONTROLLED TASK**  
+> **32K CONTEXT-REDUCTION POLICY: FUNCTIONALLY EFFECTIVE BUT EXPENSIVE FALLBACK**  
+> **BOUNDED INGESTION + RAW REFERENCE: RETAIN AS CANDIDATE**  
+> **EXACT-DUPLICATE BACK-REFERENCES: RETAIN AS CANDIDATE**  
+> **PINNED OBJECTIVE: RETAIN**  
+> **STAGNATION DETECTION: RETAIN AS CANDIDATE**  
+> **EVICTION: CONDITIONAL CAPACITY CONTROL, NOT ROUTINE OPTIMIZATION**
+
+One qualification matters. I would use **“rejected for the current architecture/evidence envelope,” not “disproven.”** The experiment has one recorded trace, one controlled fixture family, four Layer-B seeds per condition, and B0 rather than deep for the length-sensitivity study. More importantly, future changes to the inference runtime, cache implementation, model, or workload distribution could alter the economics. That fits our evidence-validity model precisely: the architectural hypothesis lost this experiment and should stop consuming engineering effort, without becoming a timeless claim.
+
+The 10K–49K B0 result is useful but should remain narrowly stated. Thirty trials at each of five lengths with 0.93–1.00 accuracy and no observed length trend is evidence **against degradation in that experiment**. It does not establish that large contexts never degrade reasoning. There is no reason to run more experiments merely to obtain a stronger philosophical conclusion. The evidence already discriminates the current architectural decision.
+
+The three newly surfaced defects should also remain separate from context architecture. The `harness run -j` ~64KB pipe-output truncation is an output-lifecycle defect; the 32K `context budget exceeded` behavior is a context-capacity/recovery defect; multiline paste and the 35-second verifier timeout remain known execution-path defects. None justifies resurrecting the planner.
+
+Most importantly, I would **not start implementing the retained context mechanisms now**. Phase 3 is already running, and this experiment has answered the question that was blocking the context direction. Bank the result. The correct immediate action is to leave Phase 3 undisturbed.
+
+Once Phase 3 is complete, the context work should become a much smaller engineering problem: preserve the stable conversational prefix, prevent pathological individual observations from consuming it, retain full evidence outside the inference packet, and introduce destructive history manipulation only when the available context window actually requires it.
+
+That is substantially simpler than the architecture we were considering, and importantly, the experiment earned that simplification.
+</pasted_content id="e171">
