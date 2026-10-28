@@ -1,0 +1,554 @@
+<pasted_content id="e171">
+NEXUS PARALLEL DEFECT INVESTIGATION
+Evidence, reproduction, contracts and remediation specifications
+
+ROLE
+
+You are the independent investigation/review agent.
+
+A separate Cursor Agent is actively implementing Nexus TUI Phase 3.
+
+Cursor owns Phase 3 implementation.
+
+You MUST NOT:
+- modify Cursor's Phase 3 worktree or branch;
+- modify Phase 3 implementation;
+- redirect Phase 3;
+- implement the Phase 3 multiline acceptance test;
+- merge/rebase/cherry-pick Cursor's work;
+- modify shared product code;
+- push, publish, tag or deploy;
+- alter Cloudflare contest artifacts;
+- alter Issue #12 work;
+- implement context-planner/rebuilding/eviction architecture;
+- read or expose cli/.env.
+
+Your work must be safely parallelizable with Phase 3.
+
+OBJECTIVE
+
+Use the time while Cursor executes Phase 3 to reduce uncertainty around the
+independent defects identified by the defect-reconciliation review.
+
+Review authority:
+
+  commit 0024449
+  docs/reviews/NEXUS_DEFECT_RECONCILIATION_PHASE3_2026-10-04.md
+
+Current classifications:
+
+  D1 legacy multiline REPL:
+    Phase 3 supersedes the path for TUI operation.
+    Legacy REPL remains defective/reachable.
+
+  D2 harness run -j truncation:
+    CLI_ONLY.
+    Root cause not established.
+
+  D3 verifier timeout:
+    INDEPENDENT.
+    Approximate 35-second limit inherited from tool bridge rather than an
+    established verifier contract.
+
+  D4 ContextBudgetError:
+    INDEPENDENT.
+    Admission correctly refuses an over-budget inference request, but the
+    condition is surfaced as UNHANDLED_ERROR and recovery semantics are
+    incomplete/unclear.
+
+PHASE 3 MUST CONTINUE UNDISTURBED.
+
+This task is investigation and remediation design, not remediation.
+
+PRIMARY GOAL
+
+For each independent defect, establish enough evidence that a later
+implementation task can begin with:
+
+  reproduced behavior
+  established or bounded cause
+  ownership
+  intended behavioral contract
+  regression test design
+  remediation options
+  recovery expectations
+  explicit acceptance criteria
+
+Do not optimize for producing fixes.
+
+Optimize for making the eventual fix small, discriminating and difficult to
+misinterpret.
+
+PRIORITY ORDER
+
+Investigate in this order unless evidence establishes a better reason to
+change it:
+
+  1. D3 verifier timeout / verification contract
+  2. D4 context-capacity error semantics and recovery
+  3. D1 legacy REPL multiline behavior
+  4. D2 run -j stdout truncation
+
+This ordering is investigative priority only.
+
+It is NOT authorization to remediate.
+
+============================================================
+D3 — VERIFIER TIMEOUT / VERIFICATION CONTRACT
+============================================================
+
+Current evidence indicates:
+
+- RustCoreBridge.executeTool defaults to approximately 35 seconds when
+  timeout_secs is absent;
+- the task_completed oracle invokes run_command without an explicit verifier
+  timeout;
+- therefore the completion verifier inherits an incidental bridge default;
+- timeout and ordinary verifier failure are not clearly distinguished to the
+  agent/operator.
+
+Investigate this first.
+
+ESTABLISH
+
+1. Exact timeout path from:
+     task completion request
+       -> oracle
+       -> tool bridge
+       -> Rust runner
+       -> process
+       -> returned/refused result.
+
+2. Every timeout participating in that path:
+   - JS bridge
+   - Rust runner
+   - subprocess
+   - gateway/RPC if applicable
+   - caller-level timeout
+   - any cancellation deadline.
+
+3. Which timeout wins under each relevant combination.
+
+4. Whether timeout is currently distinguishable from:
+   - command exits non-zero;
+   - command cannot start;
+   - command is killed;
+   - RPC transport failure;
+   - cancellation;
+   - verifier genuinely reports failure.
+
+5. Whether the verifier command continues running after the caller reports
+   timeout.
+
+6. Whether descendants are cleaned up.
+
+7. Whether partial stdout/stderr/evidence survives.
+
+8. Whether retry is safe.
+
+9. Whether the session remains usable.
+
+DO NOT begin by asking "what should the timeout number be?"
+
+First establish the behavioral contract.
+
+DESIGN A PROPOSED CONTRACT
+
+A verifier timeout should be a first-class, truthful state distinct from:
+
+  VERIFIED
+  VERIFICATION_FAILED
+  EXECUTION_FAILED
+  CANCELLED
+  TRANSPORT_FAILURE
+
+Determine whether the existing architecture already has an appropriate
+reason/status representation.
+
+Prefer reuse over inventing a parallel status system.
+
+PROPOSE TESTS
+
+Design deterministic tests such as controlled verifier commands with known
+durations around the relevant boundary.
+
+Do not introduce a 45-second sleep into the normal test suite if a shorter
+test can exercise configurable deadlines deterministically.
+
+Acceptance must establish:
+- correct timeout owner;
+- correct process cleanup;
+- distinct reason;
+- preserved useful evidence;
+- session remains recoverable;
+- no false VERIFIED;
+- no false ordinary verification failure.
+
+Do NOT implement the fix.
+
+============================================================
+D4 — CONTEXT CAPACITY / ContextBudgetError
+============================================================
+
+Do not reopen context-planner research.
+
+The previous experiment rejected routine turn-specific rebuilding/eviction
+for the current architecture and evidence envelope.
+
+This investigation concerns ERROR AND RECOVERY SEMANTICS only.
+
+ESTABLISH
+
+1. Exact mutation sequence around admission:
+   - when the user message enters history;
+   - when context admission runs;
+   - when deterministic compaction runs;
+   - when ContextBudgetError is thrown;
+   - which state has already changed;
+   - which state is rolled back, if any.
+
+2. Resolve the important unknown:
+
+     After ContextBudgetError, is the submitted user message left dangling in
+     conversation/session history?
+
+Prove this behavior with a minimal deterministic fixture.
+
+3. Determine what survives:
+   - objective;
+   - messages;
+   - plan;
+   - evidence references;
+   - pending tool state;
+   - current turn;
+   - session state.
+
+4. Determine current recovery behavior:
+   - retry;
+   - /compact;
+   - /clear;
+   - new prompt;
+   - session restart.
+
+5. Determine whether repeated retry can create:
+   - duplicate user messages;
+   - duplicated state;
+   - an unrecoverable loop;
+   - misleading transcript state.
+
+6. Establish why ContextBudgetError becomes UNHANDLED_ERROR.
+
+Do not change that mapping.
+
+DESIGN A PROPOSED CONTRACT
+
+Treat capacity exhaustion as a known operational condition if the evidence
+supports doing so.
+
+The desired contract should answer:
+
+- what happened;
+- what was preserved;
+- whether the turn executed;
+- whether retry is safe;
+- what recovery actions are available;
+- whether operator intervention is required.
+
+Do not prescribe context reduction as the recovery.
+
+Recovery may simply require changing conditions or explicit user action.
+
+PROPOSE A DETERMINISTIC REGRESSION TEST
+
+Use a deliberately small context limit and deterministic large input/results.
+
+Acceptance should demonstrate:
+- no over-budget inference request is sent;
+- reason is distinguishable from an unknown crash;
+- session remains internally consistent;
+- submitted message state is well-defined;
+- documented recovery behaves as claimed.
+
+Do NOT implement the fix.
+
+============================================================
+D1 — LEGACY REPL MULTILINE DEFECT
+============================================================
+
+Phase 3 owns the new TUI path.
+
+Do not touch it.
+
+This investigation is ONLY for:
+
+  harness --repl
+
+and any fallback/piped behavior that reaches the legacy readline REPL.
+
+The defect has already been reproduced.
+
+Do not spend time merely proving again that readline loses pasted lines.
+
+Instead establish:
+
+1. Exact lifecycle causing loss:
+   - rl.question installation;
+   - line event arrival;
+   - listener state;
+   - what happens to lines arriving between questions.
+
+2. Which modes are affected:
+   - interactive paste;
+   - piped stdin;
+   - bracketed paste if applicable;
+   - existing explicit multiline conventions;
+   - TTY vs non-TTY fallback.
+
+3. Whether input can be silently lost versus accidentally executed as a later
+   command.
+
+4. Whether any reasonable repair can preserve current REPL semantics without
+   creating a second multiline-editor architecture.
+
+5. Whether the better long-term disposition might instead be:
+   - explicitly bounded legacy behavior;
+   - deprecation;
+   - or reuse of a shared input-normalization primitive.
+
+Do not decide product deprecation policy.
+
+PROPOSE TESTS AND OPTIONS ONLY.
+
+Keep this independent from Cursor's TUI implementation.
+
+============================================================
+D2 — `harness run -j` STDOUT TRUNCATION
+============================================================
+
+Current observation:
+
+- large JSON output piped from `harness run -j` can truncate around 64 KB;
+- index.ts writes JSON and then invokes process.exit;
+- premature exit before pipe drain is a hypothesis, NOT established cause.
+
+Establish the cause experimentally.
+
+Use an isolated test/reproduction that does not require product modification.
+
+Compare, as appropriate:
+
+- stdout attached to terminal;
+- stdout redirected to regular file;
+- stdout piped to fast consumer;
+- stdout piped to deliberately slow consumer;
+- small payload;
+- >64 KB payload;
+- >1 MB payload.
+
+If practical, construct a minimal Node reproduction outside product code to
+test the process.exit/pending-write hypothesis.
+
+Distinguish:
+
+  OBSERVED IN NEXUS
+
+from
+
+  REPRODUCED IN MINIMAL NODE CASE
+
+from
+
+  ESTABLISHED NEXUS CAUSE.
+
+Also inspect whether the sidecar's process.exit paths share the same primitive.
+
+Do not infer that because the source contains process.exit, it is necessarily
+the cause.
+
+PROPOSE ACCEPTANCE
+
+A future fix should demonstrate byte-exact valid JSON for a large result
+through a slow pipe and preserve the intended process exit code.
+
+Do NOT implement the fix.
+
+============================================================
+PARALLEL-SAFETY RULES
+============================================================
+
+Prefer a separate isolated worktree if repository operations are needed.
+
+Before doing anything:
+- record HEAD;
+- record worktree list;
+- record status;
+- identify Cursor's Phase 3 worktree;
+- treat it as read-only.
+
+Do not stage unrelated files.
+
+Do not clean/reset/stash files you do not own.
+
+If another agent changes main during this investigation:
+- treat that as normal concurrent activity unless evidence says otherwise;
+- refresh observations as necessary;
+- do not overwrite or revert it.
+
+If an unexplained staged file appears:
+- record path/status without reading sensitive content unnecessarily;
+- do not include it in your commit;
+- do not reset another agent's work;
+- report it if it affects trust in your own worktree.
+
+Never read/print cli/.env.
+
+============================================================
+EVIDENCE DISCIPLINE
+============================================================
+
+Use:
+
+  OBSERVED
+  REPRODUCED
+  ESTABLISHED
+  HYPOTHESIS
+  UNKNOWN
+
+precisely.
+
+Detection point is not automatically defect origin.
+
+Error-emitting component is not automatically remediation owner.
+
+A successful reproduction establishes behavior under those conditions, not a
+universal cause.
+
+Do not turn incidental implementation behavior into a product requirement.
+
+Do not change an expectation because a test fails.
+
+If a proposed expectation is new, state why it follows from product purpose,
+existing architecture, recovery semantics or an established contract.
+
+Preserve failed/discarded attempts where useful.
+
+Do not investigate an unknown merely because it exists.
+
+Ask:
+
+  Will resolving this uncertainty materially change the eventual remediation
+  or acceptance test?
+
+If not, stop.
+
+============================================================
+DELIVERABLE
+============================================================
+
+Create one investigation report, preferably:
+
+  docs/reviews/NEXUS_PARALLEL_DEFECT_INVESTIGATION_2026-10-04.md
+
+Include for each D1-D4:
+
+  OBSERVED BEHAVIOR
+  REPRODUCTION
+  ESTABLISHED CAUSE
+  OWNER
+  USER/AGENT CONSEQUENCE
+  RECOVERY TODAY
+  PROPOSED BEHAVIORAL CONTRACT
+  PROPOSED REMEDIATION OPTIONS
+  REGRESSION TEST DESIGN
+  ACCEPTANCE CRITERIA
+  MATERIAL UNKNOWNS
+  NON-MATERIAL UNKNOWNS
+  PHASE 3 INTERACTION
+
+For remediation options, compare alternatives rather than prematurely choosing
+one when evidence does not discriminate.
+
+Then provide a recommended post-Phase-3 execution order based on:
+
+  severity
+  frequency/reachability
+  autonomy impact
+  recoverability
+  implementation risk
+  evidence quality
+  dependency on Phase 3
+
+Do not use arbitrary numeric scoring unless the inputs genuinely support it.
+
+============================================================
+OPTIONAL ARTIFACTS
+============================================================
+
+You MAY add investigation-only fixtures/scripts under a clearly isolated
+review/evidence directory if required to reproduce behavior.
+
+Do not modify product/runtime code.
+
+Do not modify production tests.
+
+Do not modify Phase 3 tests.
+
+If investigation scripts are committed, they must be obviously non-runtime
+artifacts and must not alter package/runtime behavior.
+
+Commit only files owned by this investigation.
+
+============================================================
+FINAL STATUSES
+============================================================
+
+Report:
+
+D1_LEGACY_REPL_CAUSE:
+  ESTABLISHED | BOUNDED | UNKNOWN
+
+D1_REMEDIATION_READY:
+  YES | NO
+
+D2_JSON_TRUNCATION_CAUSE:
+  ESTABLISHED | BOUNDED | UNKNOWN
+
+D2_REMEDIATION_READY:
+  YES | NO
+
+D3_VERIFIER_TIMEOUT_CONTRACT:
+  ESTABLISHED | PROPOSED | INSUFFICIENT_EVIDENCE
+
+D3_REMEDIATION_READY:
+  YES | NO
+
+D4_CONTEXT_CAPACITY_STATE:
+  ESTABLISHED | BOUNDED | UNKNOWN
+
+D4_RECOVERY_CONTRACT:
+  ESTABLISHED | PROPOSED | INSUFFICIENT_EVIDENCE
+
+D4_REMEDIATION_READY:
+  YES | NO
+
+PHASE3_INTERFERENCE:
+  NONE | FOUND
+
+PHASE3_CHANGE_REQUIRED:
+  NO | YES | UNKNOWN
+
+PRODUCT_CODE_CHANGED:
+  NO
+
+PHASE3_CODE_CHANGED:
+  NO
+
+REMEDIATION_AUTHORIZED:
+  NO
+
+The goal is that when Phase 3 finishes, we do not need another broad
+investigation before addressing these defects.
+
+We should have bounded, evidence-backed implementation tasks ready to execute,
+while Cursor's current work remains completely undisturbed.
+</pasted_content id="e171">
