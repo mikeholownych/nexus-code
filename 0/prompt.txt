@@ -1,0 +1,5 @@
+<task-notification>
+<task-id>buald73q7</task-id>
+<summary>Monitor event: "reruns: false VERIFIED or errors"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
