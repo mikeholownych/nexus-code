@@ -1,0 +1,68 @@
+<pasted_content id="ac96">
+Bring the rest of Nexus’s live TUI to the same visual maturity standard as the improved diff presentation. Implement and validate the interface beyond diffs: transcript, composer, activity/status, tools, commands, navigation, panels, approvals, errors, and session recovery.
+
+Read applicable AGENTS.md instructions and inspect the actual checkout. Preserve unrelated work and integrate with the existing diff components and theme. No reference screenshots are available on this server; use the criteria below.
+
+Start by running the TUI and identifying concrete visual and interaction defects. Save a concise acceptance matrix, then implement the improvements. Do not stop at an audit, proposal, or theme change.
+
+1. Consistent hierarchy and layout
+Use coherent spacing, alignment, typography emphasis, gutters, colors, and panel boundaries. Clearly distinguish user messages, assistant responses, tool activity, notices, and terminal outcomes. Keep file paths, commands, and technical details readable without overwhelming the conversation. Avoid redundant banners and repeated status information.
+
+2. Readable transcript
+Render paragraphs, lists, headings, code blocks, and supported tables consistently. Preserve code indentation and provide inspectable handling for long lines. Bound large tool output with explicit omission counts and access to complete evidence. Keep streaming text stable without duplicating content or exposing partial formatting artifacts.
+
+Preserve the reader’s scroll position when new output arrives. Follow live output when already at the bottom; otherwise show a clear new-output indicator and a discoverable way to return.
+
+3. Polished composer
+Make focus, cursor position, multiline editing, paste buffers, and submission behavior clear. Support long drafts without consuming the whole screen. Keep editing usable during active work, and distinguish ordinary submission from steering.
+
+Provide discoverable controls for newline insertion, paste inspection/editing/removal, history, and cancellation. Preserve drafts when opening panels or recovering from errors. Show queued, applied, rejected, and undelivered steering accurately.
+
+4. Activity and status
+Present a compact animated activity indicator with useful phase and elapsed time. Distinguish inference, tool execution, compaction, verification, provider wait, approval wait, and cancellation.
+
+Keep model, workspace, branch, and session information identifiable without crowding narrow terminals. Display continuation/budget information when relevant. Never leave an active-looking indicator after completion or failure, or imply progress when the process is disconnected.
+
+5. Tool presentation
+Use concise tool headers with meaningful subjects, accurate running/succeeded/failed/cancelled states, and appropriate duration information. Separate explanation from command output and evidence.
+
+Provide consistent expandable details and scrolling. Do not present empty output, failed operations, or unavailable evidence as success. Preserve the improved diff presentation for edits.
+
+6. Commands and navigation
+Make slash-command completion, filtering, selection, descriptions, and argument hints usable by keyboard. Keep help and completion synchronized with supported commands; obsolete commands must not reappear.
+
+Use predictable focus and escape behavior across menus and panels. Provide visible shortcuts appropriate to the current context. Opening and closing views must preserve transcript position and composer state.
+
+7. Approvals and consequential actions
+Show what is proposed, the affected target, and the available decisions clearly. Keep approval controls distinct from ordinary composer submission. Make keyboard focus and the selected decision unambiguous.
+
+Prevent accidental acceptance from buffered input or paste. Explain pending approvals and repair busy-state limitations without burying them in tool output.
+
+8. Errors, outcomes, and recovery
+Present concise errors with the useful cause, current state, and next action. Make detailed diagnostics accessible separately.
+
+Clearly distinguish execution completion, verification success/failure, incomplete requirements, bounded termination, interruption, and disconnection. Avoid conflicting success banners and failure messages.
+
+Provide understandable startup, empty-session, resume, crash, reconnect, and recovery states. Preserve user text and identify undelivered input. Recovery controls must reflect actions the runtime actually supports.
+
+9. Terminal robustness and accessibility
+Test wide, narrow, and short windows, resizing during streaming, Unicode display width, combining characters, emoji, tabs, and long paths. Layout must degrade gracefully without overlapping controls or hiding essential input/status.
+
+Use readable contrast, limited-color and monochrome fallbacks, and text/symbol cues beyond color. Escape untrusted terminal control sequences. Maintain compatibility with supported terminal environments and keyboard behavior.
+
+10. Rendering performance
+Avoid flicker, excessive full-screen redraws, stale rows, scroll jumps, and input latency. Idle state should not redraw unnecessarily. Keep large transcripts and output panels bounded or virtualized without losing access to evidence.
+
+Use shared components and theme tokens. Preserve runtime semantics; identify any backend change required for truthful presentation and test it explicitly. Do not expand this work into unrelated inference or compaction redesign.
+
+Validation:
+- Exercise the real TUI and sidecar through a pseudo-terminal.
+- Cover startup, streaming, slow inference, tool success/failure, edits, steering, multiline paste, approvals, cancellation, compaction, verification failure, incomplete requirements, disconnection, and resume.
+- Test keyboard-only navigation, drafts, scroll preservation, narrow layouts, and resizing during active work.
+- Add meaningful regression checks for layout, focus, escaping, state transitions, and duplicate output.
+- Run required builds and relevant tests.
+- Capture representative terminal screenshots and a recording with monotonic timestamps, tied to the tested commit/build.
+- Independently inspect the rendered artifacts. Correct visible defects rather than relying solely on passing tests.
+
+Finish with the acceptance matrix, changes, tested commit/build identity, tests actually run, representative visual evidence, remaining limitations, and a clear accepted/blocked verdict. Do not publish or deploy.
+</pasted_content id="ac96">
