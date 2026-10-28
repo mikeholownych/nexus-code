@@ -1,0 +1,47 @@
+<pasted_content id="93a6">
+Resume your Nexus Code v1.0.0 work after an unexpected power failure.
+
+The existing objective and approvals remain in force: complete the accepted plan, remediation, integration, qualification, independent and required human acceptance, and verified public v1.0.0 publication. Publication is authorized once every required gate passes. Do not request those approvals again.
+
+Recover your own work and coordinate with the other agents before starting new activity.
+
+1. Re-establish current state
+- Locate your repository, worktree, branch, and applicable AGENTS.md and CONCURRENCY.md.
+- Inspect HEAD, working changes, untracked files, interrupted Git operations, upstream branches, PRs, CI, and retained evidence.
+- Treat previous conversation checkpoints as leads. Verify their claims against current files and external state.
+- Preserve all uncommitted and unrelated work. Do not reset, clean, stash, recreate, or overwrite a checkout to make recovery easier.
+- Do not edit the shared dirty checkout at /home/mike/nexus-code or synced ChatGPT reference files.
+
+2. Recover ownership and interrupted work
+- Identify your previous slice and file claims in the shared Git directory on mike-dev.
+- A recorded PID or claim does not prove work is running after a reboot. Verify host identity, boot identity where available, process start time, command, and working directory before trusting a process or taking action.
+- Reconcile stale claims under CONCURRENCY.md and record ownership changes. Do not take another agent’s work without the required handoff.
+- Check for interrupted child processes, mounts, namespaces, temporary runtime installations, and partially written artifacts. Preserve diagnostic evidence and clean up only resources you can establish ownership of.
+- Distinguish application process-death tests from this actual power failure. Do not claim power-loss recovery passed without examining the resulting durable state.
+
+3. Resume the appropriate lane
+- Continue your existing claimed slice rather than duplicating another agent’s implementation.
+- Coordinate through existing authorized channels and shared claims. If another agent already completed your work, verify its implementation and evidence before selecting another unclaimed blocker.
+- Record your recovered worktree, branch, HEAD, PR, claims, interrupted activity, and next concrete action in the shared coordination record.
+
+Recovery leads from the last observed state—verify before relying on them:
+- Release coordinator chat: “Converge Nexus v1.0.0 release,” thread 01a14cb3-25b0-7883-b3a1-0fa7cc559f92 on mike-dev.
+- Last observed integration included PR #59 at merge commit 4fee040164522946e33814b94c61f53e4b711715.
+- Evaluator work was associated with PR #56 and RubyForest. Sandbox/resource enforcement and qualification-host readiness still required reconciliation. Preserve evaluator ownership and held-out isolation.
+- PR #60 concerned exact-RC qualification evidence enforcement. Independent review had raised a release-lifecycle deadlock; verify its current resolution.
+- Persistence work is draft PR #61, branch v1/plan-04-persistence-cost-split, local WSL worktree /var/tmp/nexus-persistence-split-9zuqphkl/source. Its last locally observed HEAD was c7e4f9b56057ef37ae78a2e6d000fa2a9c4b5ce3, which incorporated integration. Verify whether those latest commits reached the remote.
+- That persistence lane had implemented schema-2 message journals, guarded publication/retention/rollback, session integration, and process-recovery tests. A pre-reconciliation run passed 158 targeted tests. A prior benchmark measured p95 78.13 ms against the unchanged 100 ms limit; this is historical evidence requiring validation on the final source.
+- A full snapshot at 1f5d7c3 passed 281 Rust tests but failed 51 of 1,364 CLI tests. Identified causes included obsolete inline-message fixtures and missing local sandbox, scanner, SBOM, and release-TUI prerequisites. Some fixtures were subsequently corrected. This was not a passing full-suite result.
+- Relevant persistence evidence and logs were under docs/reviews/evidence/v1/ and /var/tmp/nexus-schema2-*; /tmp artifacts may have disappeared during reboot.
+- No accepted RC or published v1.0.0 had been established at the last checkpoint.
+
+4. Revalidate and continue
+- Resume an interrupted activity only if its actual process/job handle is still live. If it ended, retain its partial output, classify the result as incomplete, and rerun after restoring prerequisites.
+- Verify the required toolchain, runtime identity, build artifacts, sandbox/resource controls, and filesystem before testing.
+- Isolate HOME/XDG for builds, tests, and probes. Take SUITE, GATEWAY, and CLOUD claims as required. Run full suites against immutable snapshots.
+- Never read held-out task payloads in an implementation role, expose credentials, weaken thresholds, or convert infrastructure failures into passes.
+- Keep implemented, tested, independently accepted, installed-RC qualified, and published statuses separate.
+- Revalidate final source and artifact identities after reconciliation. Complete all required live, standalone, recovery, terminal, and frozen-workload acceptance gates before release.
+
+Start with a brief factual recovery update, then take the next safe implementation or validation action. Continue the agent loop through implementation, testing, review, integration, and qualification. Stop only for verified completion, user cancellation, or a concrete external blocker; identify any blocker precisely without abandoning independent work that can still proceed.
+</pasted_content id="93a6">
