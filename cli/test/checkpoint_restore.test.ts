@@ -3,6 +3,7 @@ import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { CheckpointManager } from "../src/checkpoint.js";
 import { SensitivePersistenceError } from "../src/core/persistence_protection.js";
@@ -17,6 +18,12 @@ function gitRepo(): { repo: string; git: (...args: string[]) => string } {
   git("add", "tracked.txt");
   git("commit", "-qm", "base");
   return { repo, git };
+}
+
+function cleanupGitRepo(repo: string): void {
+  const checkpointKey = createHash("sha256").update(path.resolve(repo)).digest("hex").slice(0, 12);
+  fs.rmSync(path.join(os.homedir(), ".nexus", "checkpoints", checkpointKey), { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
 }
 
 test("Git restore preserves untracked work and HEAD while removing post-checkpoint files", () => {
@@ -38,7 +45,7 @@ test("Git restore preserves untracked work and HEAD while removing post-checkpoi
     assert.equal(fs.readFileSync(path.join(repo, "draft.txt"), "utf8"), "pre-existing user work\n");
     assert.equal(fs.existsSync(path.join(repo, "created-later.txt")), false);
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -52,7 +59,7 @@ test("Git checkpoint refuses sensitive untracked content before writing a ref", 
     assert.equal(manager.listCheckpoints().length, 0);
     assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -71,7 +78,7 @@ test("restore refuses to clean when the untracked snapshot is missing", () => {
     assert.match(result.message, /untracked snapshot/i);
     assert.equal(fs.readFileSync(path.join(repo, "draft.txt"), "utf8"), "work that must not be deleted\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -95,7 +102,7 @@ test("legacy Git restore does not delete uncaptured untracked files or move HEAD
     assert.equal(git("rev-parse", "HEAD"), head);
     assert.equal(fs.readFileSync(path.join(repo, "draft.txt"), "utf8"), "uncaptured user work\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -113,7 +120,7 @@ test("explicitly allowed sensitive untracked content can be restored", () => {
     assert.equal(result.success, true, result.message);
     assert.equal(fs.readFileSync(path.join(repo, "draft.txt"), "utf8"), `${marker}\n`);
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -131,7 +138,7 @@ test("restore captures untracked files even under conventional build directory n
     assert.equal(result.success, true, result.message);
     assert.equal(fs.readFileSync(path.join(repo, "node_modules", "local-draft.txt"), "utf8"), "not Git-ignored\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -150,7 +157,7 @@ test("restore validates every captured file before changing the workspace", () =
     assert.match(result.message, /untracked snapshot/i);
     assert.equal(fs.readFileSync(path.join(repo, "draft.txt"), "utf8"), "current work must survive\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -173,7 +180,7 @@ test("restore preserves untracked symlinks without copying their external target
     assert.equal(fs.lstatSync(path.join(checkpoint.snapshotDir!, "draft-link.txt")).isSymbolicLink(), true);
   } finally {
     fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
     fs.rmSync(external, { force: true });
   }
 });
@@ -197,7 +204,7 @@ test("legacy restore removes tracked files deleted at the checkpoint", () => {
     assert.equal(git("rev-parse", "HEAD"), head);
     assert.equal(fs.existsSync(path.join(repo, "tracked.txt")), false);
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -221,7 +228,7 @@ test("a checkpoint manifest cannot write into Git metadata", () => {
     assert.equal(git("rev-parse", "HEAD"), head);
     assert.notEqual(fs.readFileSync(path.join(repo, ".git", "HEAD"), "utf8"), "malicious replacement\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -244,7 +251,7 @@ test("tracked deletion cleanup never follows a parent symlink outside the worksp
     assert.equal(result.success, true, result.message);
     assert.equal(fs.readFileSync(path.join(external, "file.txt"), "utf8"), "external canary\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
     fs.rmSync(external, { recursive: true, force: true });
   }
 });
@@ -268,8 +275,89 @@ test("untracked restore refuses an ignored destination parent symlink", () => {
     assert.match(result.message, /destination|unsafe/i);
     assert.equal(fs.readFileSync(path.join(external, "file.txt"), "utf8"), "external canary\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
     fs.rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("untracked restore refuses dangling and in-workspace symlink ancestors before mutation", () => {
+  for (const kind of ["dangling", "internal"] as const) {
+    const { repo } = gitRepo();
+    try {
+      fs.mkdirSync(path.join(repo, "dir", "sub"), { recursive: true });
+      fs.writeFileSync(path.join(repo, "dir", "sub", "captured.txt"), "checkpoint data\n");
+      const manager = new CheckpointManager(repo);
+      const checkpoint = manager.createCheckpoint(`${kind} symlink ancestor`);
+      fs.rmSync(path.join(repo, "dir"), { recursive: true, force: true });
+      if (kind === "dangling") {
+        fs.symlinkSync(path.join(repo, "does-not-exist"), path.join(repo, "dir"));
+      } else {
+        fs.mkdirSync(path.join(repo, "real", "sub"), { recursive: true });
+        fs.symlinkSync(path.join(repo, "real"), path.join(repo, "dir"));
+      }
+      fs.writeFileSync(path.join(repo, "tracked.txt"), "must remain unchanged\n");
+
+      const result = manager.restore(checkpoint.id);
+
+      assert.equal(result.success, false, `${kind}: ${result.message}`);
+      assert.match(result.message, /destination|unsafe/i);
+      assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "must remain unchanged\n");
+      assert.equal(fs.existsSync(path.join(repo, "real", "sub", "captured.txt")), false);
+    } finally {
+      cleanupGitRepo(repo);
+    }
+  }
+});
+
+test("Git manifest restore replaces a checkpoint file when post-checkpoint tracked children occupy its path", () => {
+  for (const committed of [false, true]) {
+    const { repo, git } = gitRepo();
+    try {
+      fs.writeFileSync(path.join(repo, "a"), "captured file\n");
+      const manager = new CheckpointManager(repo);
+      const checkpoint = manager.createCheckpoint(`tracked child replacement ${committed ? "committed" : "staged"}`);
+      fs.rmSync(path.join(repo, "a"));
+      fs.mkdirSync(path.join(repo, "a"));
+      fs.writeFileSync(path.join(repo, "a", "child.txt"), "post-checkpoint tracked data\n");
+      git("add", "a/child.txt");
+      if (committed) git("commit", "-qm", "post-checkpoint child");
+      const head = git("rev-parse", "HEAD");
+
+      const result = manager.restore(checkpoint.id);
+
+      assert.equal(result.success, true, result.message);
+      assert.equal(fs.readFileSync(path.join(repo, "a"), "utf8"), "captured file\n");
+      assert.equal(fs.existsSync(path.join(repo, "a", "child.txt")), false);
+      assert.equal(git("rev-parse", "HEAD"), head);
+    } finally {
+      cleanupGitRepo(repo);
+    }
+  }
+});
+
+test("legacy Git restore removes staged and committed tracked additions made after the checkpoint", () => {
+  for (const committed of [false, true]) {
+    const { repo, git } = gitRepo();
+    try {
+      const manager = new CheckpointManager(repo);
+      const checkpoint = manager.createCheckpoint(`legacy post-checkpoint addition ${committed ? "committed" : "staged"}`);
+      const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+      const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+      delete record.untrackedFiles;
+      fs.writeFileSync(recordPath, JSON.stringify(record));
+      fs.writeFileSync(path.join(repo, "added-after-checkpoint.txt"), "remove on restore\n");
+      git("add", "added-after-checkpoint.txt");
+      if (committed) git("commit", "-qm", "post-checkpoint addition");
+      const head = git("rev-parse", "HEAD");
+
+      const result = manager.restore(checkpoint.id);
+
+      assert.equal(result.success, true, result.message);
+      assert.equal(fs.existsSync(path.join(repo, "added-after-checkpoint.txt")), false);
+      assert.equal(git("rev-parse", "HEAD"), head);
+    } finally {
+      cleanupGitRepo(repo);
+    }
   }
 });
 
@@ -447,7 +535,7 @@ test("Git checkpoint rejects sensitive tracked nested filename components withou
     assert.equal(manager.listCheckpoints().length, 0);
     assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -464,7 +552,7 @@ test("Git checkpoint rejects sensitive index symlink-target components without w
     assert.equal(manager.listCheckpoints().length, 0);
     assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -481,7 +569,7 @@ test("Git checkpoint rejects sensitive worktree symlink-target components withou
     assert.equal(manager.listCheckpoints().length, 0);
     assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -506,7 +594,7 @@ test("manifest restore refuses a regular-file parent before changing tracked or 
     assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "base\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -531,7 +619,7 @@ test("legacy Git restore refuses an untracked checkout collision before overwrit
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "untracked canary\n");
     assert.equal(git("rev-parse", "HEAD"), head);
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -559,7 +647,7 @@ test("legacy Git restore refuses an untracked tracked-deletion collision before 
     assert.equal(fs.readFileSync(path.join(repo, "deleted.txt"), "utf8"), "untracked canary\n");
     assert.equal(git("rev-parse", "HEAD"), head);
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -582,7 +670,7 @@ test("Git restore removes a directory replacing a checkpoint-deleted file", () =
     assert.equal(fs.existsSync(path.join(repo, "deleted.txt")), false);
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "base\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -606,7 +694,7 @@ test("Git restore preserves ignored entries inside a directory replacing a check
     assert.equal(fs.readFileSync(path.join(repo, "deleted.txt", "ignored.txt"), "utf8"), "preserve me\n");
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "base\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -634,7 +722,7 @@ test("legacy Git restore rejects an uncaptured directory replacing a checkpoint-
     assert.equal(fs.readFileSync(path.join(repo, "deleted.txt", "uncaptured.txt"), "utf8"), "preserve me\n");
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "after checkpoint\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -690,7 +778,7 @@ test("legacy Git restore refuses an ignored untracked checkout collision", () =>
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "ignored untracked canary\n");
     assert.equal(git("rev-parse", "HEAD"), head);
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -720,7 +808,7 @@ test("legacy Git restore refuses an ignored untracked tracked-deletion collision
     assert.equal(fs.readFileSync(path.join(repo, "deleted.txt"), "utf8"), "ignored untracked canary\n");
     assert.equal(git("rev-parse", "HEAD"), head);
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -821,7 +909,7 @@ test("Git manifest restore refuses an ignored file-target obstruction before Git
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "tracked canary\n");
     assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -846,7 +934,7 @@ test("Git manifest restore refuses a nested-repository file-target obstruction b
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "tracked canary\n");
     assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
 
@@ -876,6 +964,6 @@ test("Git manifest restore refuses changed checkpoint ignore rules before Git mu
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "tracked canary\n");
     assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
   } finally {
-    fs.rmSync(repo, { recursive: true, force: true });
+    cleanupGitRepo(repo);
   }
 });
