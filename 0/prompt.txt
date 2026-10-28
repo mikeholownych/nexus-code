@@ -1,0 +1,135 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - **Original request (pasted).** Act as principal engineer: audit Nexus Code fully and produce an evidence-based path to v1.0.0. Deliverables in docs/v1.0.0/: README, AUDIT, REQUIREMENTS, ROADMAP, specs/, plans/, ACCEPTANCE, EVIDENCE, DECISIONS. Further requirements from the request:
+     - Separate client release readiness from Cloudflare contest readiness.
+     - Nexus must remain standalone, independent of homelab-ai.
+     - Local inference is first-class.
+     - Label all evidence.
+     - Final report must cover: readiness verdict, most consequential work, first milestone, document paths, validation performed and limits, and user decisions.
+   - **Mid-audit user directives:**
+     - Authorized applying my recommended decisions.
+     - The contest submission is complete; the contest is frozen.
+     - The v1.x tags never existed on the remote; later, the local tags were deleted.
+     - Use the existing OpenAI (ChatGPT sign-in) and OpenRouter OAuth connections for small-spend tasks.
+     - "agent-author is authorized for T2 task delegation".
+     - There is no separately accessible worker and no extra GPU; gateway access must suffice.
+     - Document how multiple concurrent agents can work safely without collisions.
+   - **Then "proceed with implementation".** Implement the plan, slice by slice, following CONCURRENCY.md.
+   - **Later messages:** "continue", resumptions after usage-limit resets ("Continue the task… do not repeat work that is already complete"), and a /login.
+
+2. Key Technical Concepts:
+   - **Nexus architecture.** A TS agent (cli/) talks to Rust harness-core over JSON-RPC stdio, plus a Ratatui nexus-tui with a Node sidecar (NDJSON).
+   - **Effect classes and the approval gate.** Seven classes: read_workspace, write_workspace, exec, egress, delegate, context_inject, internal. needsOperatorDecision is true for write, exec and egress; egress is approved once per origin per session.
+   - **DEC-01 C posture.** Review mode in untrusted workspaces, auto in trusted ones.
+   - **Process registry (Rust).** RPC request id → pgid; `cancel` and `end_background` RPCs; shutdown sweep on stdin EOF, SIGTERM, SIGHUP and SIGINT; PR_SET_PDEATHSIG; BoundedCapture head/tail buffer.
+   - **Bridge turn signal.** setTurnSignal; abort sends cancel; RPC_CANCEL_CONFIRM_MS=5000.
+   - **Project .env allowlist** (PROJECT_ENV_KEYS, isProjectEnvKey, ignoredProjectEnvKeys); the doctor check config.project_env.
+   - **Server-kind context discovery.** Gated on the /models owned_by value: llamacpp → /props, organization_owner (LM Studio) → /api/v0/models, library/ollama → /api/show. CAPACITY_TYPES includes exceed_context_size_error.
+   - **Eval harness:**
+     - model_proxy.mjs: per-run forwarder with counters, fault injection (refuse, overloaded, stream_cut, truncate, context_overflow, malformed_tool_json) and standalone profiles (plain, llamacpp, vllm, ollama).
+     - Symmetric infra rule: isInfrastructureFailure.
+     - validate.mjs: task schema, modelFingerprint, hiddenTestIsolationProblem, asUser via sudo -n -u.
+     - Scorer: contamination exclusion, replacements list, crash rate, cost per correct task, per-fault table.
+   - **Concurrency protocol.** Claims in $(git rev-parse --git-common-dir)/nexus-claims via atomic mkdir; nexus-claims.log; FILE_ claims; SUITE and GATEWAY locks; one worktree per slice; isolated HOME; no pkill -f.
+   - **Test isolation.** cli/scripts/run_tests.mjs creates a throwaway HOME; the guard test is home_isolation.test.ts.
+   - **Version single source.** scripts/sync-version.mjs, with --check and --tag.
+   - **Requirements checker.** scripts/check_requirements.mjs, report and --enforce modes.
+   - **Snapshot testing.** Scratch script snaptest.sh: clone, npm ci, build, cargo build/test, copy binaries into core/target/release, npm test, gates, and a count of the real ~/.nexus/tasks before and after.
+
+3. Files and Code Sections:
+   - **docs/v1.0.0/**: the full planning package, committed as 8fcaa52 on v1/integration.
+     - DECISIONS.md: DEC-01..16 RESOLVED (delegated). DEC-13 contest frozen; DEC-16 standalone through a stripping proxy plus conformance fixtures. Owner action X1 is done.
+     - REQUIREMENTS.md: 121 rows; latest report shows 105 tested, 6 partial, 2 implemented, 8 open.
+     - CONCURRENCY.md: includes the SUITE rule.
+     - SHA256SUMS: covers evidence/ only.
+     - evidence/: audit reports, probes, PTY scripts and live evidence:
+       - live/verify_*_pinned_2026-10-16.json
+       - live/standalone_dryrun_2026-10-17/ (config, manifest, results, logs, README)
+   - **AGENTS.md**: a "v1.0.0 work and concurrent agents" section was appended.
+   - **cli/scripts/run_tests.mjs** (new). Throwaway HOME and XDG dirs; sets NEXUS_TEST_REAL_HOME; pins CARGO_HOME/RUSTUP_HOME if they exist; spawns `tsx --test --test-concurrency=1`. cli/package.json test script is now "node scripts/run_tests.mjs".
+   - **core/src/bin/nexus_tui/sidecar.rs**: the real-sidecar test now runs via `env HOME=<tmp>`.
+   - **scripts/sync-version.mjs, scripts/check_requirements.mjs, cli/test/check_requirements.test.ts, docs/HISTORICAL.md** (banners only on reviews; the hash-pinned Issue #12 docs are untouched).
+   - **ARCHITECTURE.md §3 and USER_MANUAL.md**: rewritten as "Controls and their limits"; the parity claim was removed.
+   - **cli/src/core/capabilities.ts**: EffectClass, EFFECT_CLASSES, needsOperatorDecision, an `effect` field on every capability, registry validation.
+   - **cli/src/agent.ts**: effect gate with egressOriginOf and approvedEgressOrigins; setTurnSignal; endBackground on cancel.
+   - **core/src/runner.rs and main.rs**: registry module, run_command_tracked, cancel and end_background RPCs, shutdown_and_exit, PDEATHSIG; tests in tests/rpc_shutdown.rs.
+   - **cli/src/tools.ts**: turnSignal, sendCancel, endBackground, cancel propagation.
+   - **cli/src/config.ts**: project .env allowlist. LOCAL_LLM_API_KEY is allowed (credential binding); LOCAL_HARNESS_SHELL, NEXUS_TRUST_WORKSPACE and SEARX_URL are denied.
+   - **cli/src/client.ts**:
+     - discoverServerContext gated by serverKindOf(entry);
+     - boundedProviderText and METADATA_TIMEOUT_MS;
+     - embeddingsUnsupported;
+     - tool-name delta fix;
+     - non-stream max_tokens;
+     - NEXUS_GATEWAY_TOKEN_FILE;
+     - egressDenied() returning policy_denied;
+     - addFallbackEndpoint pinned.
+   - **Other client-side fixes:** openai_responses content_filter → refusal; model_catalog key-less compatible via operatorSetting.
+   - **cli/src/index.ts** (latest fix, commit 4d82578): `program.enablePositionalOptions();` added before program.name("nexus"). Test cli/test/cli_option_scope.test.ts.
+   - **eval/**: model_proxy.mjs (faults and profiles), validate.mjs, run.mjs wiring, infra.mjs, score.mjs, standalone/plain_proxy.mjs, README sections (Scoring integrity, Fault injection, Qualification runs with runAs owner setup). Tests: cli/test/eval_integrity.test.ts, eval_harness.test.ts (T4 smoke), standalone_profiles.test.ts, server_context_discovery.test.ts, provider_robustness.test.ts, provider_fixes.test.ts, process_lifecycle.test.ts, approval_policy.test.ts, project_env_allowlist.test.ts.
+   - **tasks/lessons.md**: entries for the SUITE claim, the continuation-agent takeover, and checking claims before every test run.
+   - **Memory files**: installed-nexus-runs-checkout-build.md (updated: ~/.local/bin/nexus = published alpha.2 shadows /usr/local/bin/nexus) and v1-plan-and-owner-constraints.md.
+
+4. Errors and fixes:
+   - **Baseline in a non-git snapshot gave 12 environmental failures.** Fixed by rerunning in a git clone in CI order: 905/905.
+   - **Tests wrote into the real ~/.nexus (PER-03).** Fixed by run_tests.mjs, and by the Rust sidecar test that started a real sidecar with the real HOME (the env HOME wrapper).
+   - **The PR-3a allowlist denied LOCAL_LLM_API_KEY** and broke the convergence_invariants precedence commitment. I allowed it, and denied provider keys instead.
+   - **Discovery probes consumed scripted test-gateway replies**, causing many failures. Fixed by gating on owned_by; 103/103 pass.
+   - **The snaptest symlink of core/target/release broke tui.launch** sidecar resolution. Fixed by copying the binaries.
+   - **Rust tests failed from orphaned processes** of earlier runs and from pgrep -f matching the bash parent. Fixed with exact-match counting (pgrep -x -f).
+   - **The cloud_providers Anthropic journey flaked** under my concurrent load. Lesson recorded and the SUITE claim added.
+   - **The durable_continuity "/resume" test failed once**; not reproducible. Noted in the log.
+   - **Integration regressions** (persistence message, worktree telemetry, replays). Fixed by another agent in 763128e.
+   - **`providers verify --provider` swallowed by root options.** Fixed with enablePositionalOptions; causal test.
+   - **I ran tests and live calls while TealHawk held SUITE.** Logged an apology note and a lesson.
+   - **Python patch pattern mismatches.** Corrected each time.
+
+5. Problem Solving:
+   - **Coordination with other agents.** An agent with id 29c3459b continued my work during pauses: it absorbed my PR-3a and extended PR-5a/5b/5c. TealHawk and codex are also active.
+   - **Integration verified:**
+     - 6151a23: 1087/1087 by me and by TealHawk;
+     - a2abdf7: 1089/1089, gates pass, real HOME untouched.
+   - **Live evidence:**
+     - pinned providers verify PASS (openrouter nvidia/nemotron-3-super-120b-a12b:free, chatgpt gpt-6-luna);
+     - standalone dry run via gateway (llamacpp profile, t2-bugfix-csv): VERIFIED, hidden and regression pass, 83 s.
+   - **Gap found and filed as a boundary request:** eval/run.mjs always passes --context-limit (default limits 65536/8192), so the context source is "operator" in profile runs; ACCEPTANCE §4.2 requires the discovered source.
+
+6. All user messages:
+   - The full audit/planning request (pasted). It included: "Do not merge, publish, deploy, release, modify live infrastructure, or access credentials unnecessarily. Do not perform destructive tests. If a validation requires an unavailable environment, paid usage, or external mutation, document the exact procedure and mark it unverified." Also: "Preserve unrelated modified and untracked files. Treat synced reference material and supplied archives as read-only."
+   - "continue"
+   - "you are authorized to apply your recommendations for the best decisions for the project on any outstanding decisions in the plans/specs"
+   - "contest entry submission has already been completed."
+   - "tags for v1.1.0 v1.2.0 v1.2.1 do not exist in remote.. never have."
+   - "also, what do you need an independent host for, aside from the local ai inference host? OpenAI and OpenRouter oauth connections are already setup in the local client install. Use those for small spend tasks."
+   - "agent-author is authorized for T2 task delegation"
+   - "There is no separately accessible worker in the environment.. and no additional GPU resources that can be used. Gateway access to workers will have to be sufficient."
+   - "local tags have been deleted."
+   - "also, document how multiple concurrent agents can safely work on this without collisions. Document any of those instructions."
+   - "proceed with implementation"
+   - "continue" (several times, plus usage-limit reset notices: "Continue the task you were working on when the limit was reached; do not repeat work that is already complete.")
+
+7. Pending Tasks:
+   - **Held-out task authoring** (REQ-QUAL-101: 40 T2 tasks, ≥50% external, pinned commits, class/difficulty; REQ-QUAL-109: 8 T3). Agent-authored with no Nexus source access, stored privately (tasks dir chmod o-rwx), sha256 manifest committed before RC freeze. Not yet claimed by anyone.
+   - **Boundary request outstanding** for the owner of eval/run.mjs (codex, PLAN-10_PR-10f): omit --context-limit in serverProfile runs.
+   - **Owner actions remaining:** independent reviewer (REQ-AGT-110), GitHub milestone/issues (REQ-DX-106), cross-runner repro (REQ-REL-114), manual terminal matrix (REQ-QUAL-108), RC publish approval (X7), optional runAs user/sudoers setup for hidden-test isolation, cleanup of polluted ~/.nexus/tasks (X8).
+   - **M5 qualification runs** on an RC (serial on GATEWAY).
+   - **Constraints:** contest frozen until judging ends; no push/tag/publish without owner approval.
+
+8. Current Work:
+   - Just completed: the standalone dry-run evidence commit d2326d0, fast-forwarded into v1/integration. GATEWAY claim released.
+   - I was then checking whether held-out task authoring had already been claimed. Result: no "heldout" entries in the claims log; ~/nexus-heldout does not exist; codex holds FILE claims on eval/ files (run.mjs, validate.mjs, model_proxy.mjs, score.mjs, isolate.mjs, agent_sandbox.mjs, README) plus PLAN-10_PR-10f and PLAN-10_READINESS and docs ACCEPTANCE/READINESS.
+   - Earlier, I had listed the remaining agent-doable items as: "live provider verification with pinned models (REQ-PRV-111, small spend authorized); a live dry run of the standalone procedure through the gateway (REQ-PRV-106/QUAL-107)…; held-out task authoring (REQ-QUAL-101/109), which you authorized for an agent author; it must work without access to the Nexus source." The first two are done.
+
+9. Optional Next Step:
+   - Claim held-out authoring (e.g. `HELDOUT_AUTHORING`) in .git/nexus-claims. Then launch a separate author subagent, per "agent-author is authorized for T2 task delegation" and DEC-05.
+   - The author gets only the task schema (eval/validate.mjs rules: pinned repo commit, hidden.command, class, difficulty) and external public repositories.
+   - It must not read /home/mike/nexus-code or the worktrees.
+   - It writes tasks to a private store outside the repo (e.g. ~/nexus-heldout, chmod 700), each with a reference solution, verifying that the hidden tests fail on the base commit and pass with the reference.
+   - Only a sha256 manifest is committed to the repo. eval/ files are claimed by codex, so the manifest goes in a new file, coordinated through the claims log.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
