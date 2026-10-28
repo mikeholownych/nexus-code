@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>baijlydwy</task-id>
+<tool-use-id>toolu_0141kPfTA32endh4NaHd2EgN</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/baijlydwy.output</output-file>
+<status>completed</status>
+<summary>Background command "ssh -o BatchMode=yes mike@10.0.8.5 'cd /tmp/evalx &amp;&amp; nohup python3 reviewx.py run lead-llama-q4km-nothink http://127.0.0.1:8001 /etc/local-ai/llama/worker2/worker-api-key Qwen3-Coder-30B-A3B-Instruct-Q4_K_M nothink 75 &gt; rv-lead.log 2&gt;&amp;1 &amp; sleep 1; echo started'; timeout 3000 ssh -o BatchMode=yes mike@10.0.8.5 'until grep -q "^RESULT" /tmp/evalx/rv-lead.log 2&gt;/dev/null &amp;&amp; [ "$(wc -l &lt; /tmp/dl.done)" -ge 3 ]; do sleep 20; done; cat /tmp/evalx/rv-lead.log | tail -2; cat /tmp/dl.done; ls -l /var/lib/local-ai/models/gguf | awk "{print \$5, \$9}" | tail -4'" completed (exit code 0)</summary>
+</task-notification>
