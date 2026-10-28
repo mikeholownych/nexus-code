@@ -1,0 +1,61 @@
+<pasted_content id="1233">
+Continue with qualification preparation and release coordination. Your completed lane does not end the overall assignment.
+
+The user’s existing authorization covers release coordination, necessary commits, pushes, PRs, merges, RC creation, and publication after acceptance. Do not request those approvals again.
+
+## 1. Establish qualification-host readiness
+
+Inspect the accepted qualification contract and current host configuration before proposing changes.
+
+Determine whether resource limits are already specified. If so, implement those values. Otherwise prepare a concrete resource profile using task infrastructure requirements, available host capacity, and matched-comparison fairness.
+
+Treat 400% CPU, 8 GiB memory, 1024 processes, and task-sized storage as suggestions, not approved thresholds. Explain the selected values and freeze them before qualification. Do not adjust them after seeing qualification outcomes.
+
+Inspect the actual enforcement semantics, especially tmpfs accounting against memory limits and whether “CPU percent” represents throttling or a total runtime budget. Keep these distinctions explicit.
+
+Prepare the dedicated workspace mount, nexus-eval account, narrow privilege rules, persistence configuration, rollback procedure, and infrastructure-only validation.
+
+Use the canonical host-management mechanism. Do not modify the inference appliance, firewall, gateway, model workers, credentials, or unrelated services.
+
+If existing authorization clearly covers provisioning this qualification host, execute and validate it. If privileged host changes require additional authorization, finish the exact reviewable configuration first, then identify the specific changes, host, required privilege, and reason approval is needed. Continue independent work meanwhile.
+
+Verify the complete execution path fails closed without required controls and cleans up all task processes and workspaces.
+
+## 2. Designate release ownership
+
+Coordinate with the active agents and record one release publisher and a backup. You may take this role if unclaimed and technically capable.
+
+Inspect PR #8’s current diff, review state, and required checks. Reconcile integration with main through the normal reviewed process. Do not merge merely because integration CI passed; confirm the actual PR revision and acceptance sequencing.
+
+Follow the accepted distinction between merging source for RC construction and granting release acceptance.
+
+## 3. Prepare repository protections
+
+Inspect current repository settings using read-only access.
+
+Prepare exact branch and tag rules, required checks, reviewer requirements, publisher permissions, and any narrow workflow exceptions. Ensure the rules permit the accepted RC-to-stable lifecycle and do not create a release deadlock.
+
+Do not present lack of protection as proof that unauthorized publication occurred. Do not change administrative settings unless existing authorization covers them. If owner action is required, provide a concrete configuration and the smallest remaining action.
+
+Continue release preparation while this is resolved; do not bypass any protection required by the accepted release contract.
+
+## 4. Advance remaining acceptance
+
+Coordinate with independent reviewers who did not implement the affected work. Begin eligible continuity review now; final RC acceptance must reference the actual candidate.
+
+Confirm held-out custody acceptance and corpus sealing before running qualification.
+
+Once host controls and source gates pass:
+- Build and verify the RC.
+- Execute the accepted provider, standalone, held-out, T3/T4, and cross-runner checks.
+- Prepare the exact human terminal procedure and evidence capture.
+- Complete independent acceptance.
+- Produce the stable draft through the accepted version-only promotion rules.
+- Publish only after all required gates pass, then verify public installation and assets.
+
+A draft release is not publication. Code review and green CI are not qualification acceptance.
+
+Maintain exact revision/build/configuration evidence. Preserve failed runs. Do not access held-out private material outside your assigned role.
+
+Continue unclaimed work while dependencies run. Report completed, running, queued, and externally blocked work separately. Do not stop with “my lane is finished” while useful authorized work remains.
+</pasted_content id="1233">
