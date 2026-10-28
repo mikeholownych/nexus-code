@@ -1,0 +1,656 @@
+<pasted_content id="e171">
+NEXUS ENGINEERING RESEARCH TASK: TURN-SPECIFIC CONTEXT ENGINEERING + DURABLE MEMORY VALIDATION PLAN
+
+This is an architecture/research/validation-design task.
+
+DO NOT implement the proposed system.
+DO NOT refactor Nexus to fit a preferred architecture.
+DO NOT change production/runtime behavior.
+DO NOT treat the concepts in this prompt as predetermined design decisions.
+DO NOT optimize merely for reducing token count.
+DO NOT replace the current max-step behavior yet.
+
+The purpose of this task is to determine, from the current Nexus implementation and reproducible evidence, whether a durable-memory + turn-specific context-engineering architecture is technically useful, feasible, and superior enough to justify implementation.
+
+GOVERNING PRINCIPLE
+
+The problem is NOT simply "context compression."
+
+The hypothesis to investigate is:
+
+    Nexus should construct a context packet independently for each inference turn,
+    containing sufficient, relevant, current, provenance-aware information for what
+    that specific inference is trying to accomplish, while durable task/evidence/
+    repository state exists outside the model context and can be retrieved when needed.
+
+Important distinction:
+
+    TASK RELEVANCE != TURN RELEVANCE
+
+Information can remain important to the overall task without needing to be included in every inference.
+
+Likewise:
+
+    MODEL CONTEXT != TASK MEMORY
+
+The context window should potentially operate as a temporary working set rather than the lifetime memory of an engineering task.
+
+These are hypotheses to validate, not conclusions to encode into the implementation.
+
+ENGINEERING PHILOSOPHY
+
+Apply:
+
+    Distrust by Default.
+    Trust but Verify.
+    Evidence Changes What We Know.
+
+Agents advise.
+Evidence constrains.
+Experiments discriminate.
+The operator decides.
+Decisions remain revisable.
+
+Do not turn a plausible architecture into an accepted architecture merely because it is coherent.
+
+BACKGROUND / OBSERVED MOTIVATION
+
+Recent supervised Nexus dogfooding produced a useful but unsuccessful result.
+
+The run:
+
+- reached the configured 30-step maximum;
+- terminated truthfully as LIMIT_REACHED / NOT_ESTABLISHED;
+- grew estimated model context from approximately 8.4K tokens at step 1 to approximately 50.9K tokens at step 30;
+- showed no compaction during that visible progression;
+- repeatedly carried/reproduced large tool outputs;
+- displayed [TRUNCATED] frequently;
+- repeatedly rediscovered/re-described repository state;
+- drifted substantially from the supplied engineering objective;
+- repeatedly attempted completion against the same verifier failure;
+- nevertheless demonstrated that the newer verification boundary refused false completion.
+
+This run does NOT prove that context growth caused objective drift.
+It does NOT prove that durable memory would solve the problem.
+It does NOT prove that 30 steps is intrinsically wrong.
+
+It provides evidence sufficient to investigate those hypotheses.
+
+DESIRED LONG-TERM PROPERTY
+
+We do not want arbitrary step count to be the normal lifetime limit of an engineering task.
+
+A difficult task may legitimately require 20, 100, 300, or more inference/tool cycles.
+
+The desired system should eventually be capable of pursuing an objective across long execution periods and potentially across model-context/process boundaries while:
+
+- retaining the objective;
+- retaining applicable operator decisions and constraints;
+- preserving authoritative evidence;
+- preserving epistemic status;
+- recognizing superseded or potentially stale evidence;
+- retrieving detailed historical information when it becomes relevant again;
+- avoiding unnecessary repetition;
+- avoiding unbounded model-visible context growth;
+- providing enough context for each inference to reason correctly;
+- supporting recovery/continuation;
+- avoiding indefinite nonproductive loops.
+
+A hard step limit may remain as an emergency circuit breaker during development. Do not assume it is the desired primary task-budget mechanism.
+
+CORE HYPOTHESIS TO INVESTIGATE
+
+Consider an architecture conceptually resembling:
+
+    DURABLE INFORMATION
+        evidence
+        observations
+        task state
+        decisions
+        repository/system knowledge
+        validation results
+        unresolved questions
+        hypotheses
+        provenance
+        applicability metadata
+              |
+              v
+        CONTEXT PLANNER
+              |
+              v
+        TURN-SPECIFIC CONTEXT PACKET
+              |
+              v
+           INFERENCE
+              |
+              v
+        observations/actions/results
+              |
+              v
+        STATE/EVIDENCE RECONCILIATION
+              |
+              +----> durable information
+              |
+              +----> next turn-specific packet
+
+Do NOT assume this exact decomposition is correct.
+
+Investigate whether Nexus's existing architecture already provides primitives that should be reused rather than duplicated.
+
+IMPORTANT: TURN-SPECIFIC MEANS TURN-SPECIFIC
+
+Do not design a single "good task context" and reuse it for every inference.
+
+Investigate whether context should change according to the immediate proof obligation or operation.
+
+For example, a sequence might require materially different information for:
+
+1. locating behavior;
+2. understanding implementation;
+3. forming a hypothesis;
+4. designing a correction;
+5. implementing;
+6. diagnosing a failed test;
+7. validating;
+8. reviewing;
+9. assessing completion.
+
+A diagnostic inference may require exact failure evidence and related implementation.
+
+An implementation inference may require the accepted design, exact code regions, interfaces, constraints, and relevant tests.
+
+A validation inference may require expected behavior, actual changes, verifier identity/results, baseline comparison, and unresolved uncertainty.
+
+Do not assume these categories should become rigid production enums. They are examples for investigation.
+
+CONTEXT MANAGEMENT MECHANISMS TO CONSIDER
+
+Compression/summarization is only ONE mechanism.
+
+Investigate the applicability, interaction, and risks of at least:
+
+- selective context admission;
+- turn-specific retrieval;
+- tool-result projection;
+- durable raw evidence with compact references;
+- deduplication;
+- supersession;
+- eviction from active context without deletion;
+- recent-context preservation;
+- repository/symbol context selection;
+- task-state extraction;
+- decision-state extraction;
+- evidence-state extraction;
+- epistemic-state preservation;
+- role-specific context projection;
+- lazy/on-demand retrieval;
+- context reconstruction;
+- checkpoint/continuation;
+- conventional summarization/compression;
+- structured reduction of large tool results;
+- protection against single oversized tool responses;
+- cache/prefix-aware packet stability where correctness permits;
+- explicit retrieval when an initial packet proves insufficient.
+
+Do not assume every mechanism belongs in the final design.
+
+PRIOR ART
+
+Inspect current open-source implementations where useful, prioritizing source code over marketing/documentation.
+
+At minimum investigate relevant mechanisms in:
+
+- OpenCode
+- Charmbracelet Crush
+- Aider
+- Cline
+
+Focus on:
+
+- when context pressure is detected;
+- what triggers compaction;
+- what remains verbatim;
+- what is summarized;
+- what is discarded;
+- what remains durable;
+- whether repository state is represented separately from conversation history;
+- how tool results are bounded;
+- how oversized single tool results are handled;
+- how sessions continue after compaction;
+- whether context is reconstructed or merely accumulated;
+- whether context selection is turn-specific;
+- known failure modes/issues relevant to long sessions.
+
+Record exact upstream version/commit/reference where practical.
+
+Do not copy an architecture merely because another harness uses it.
+
+CURRENT NEXUS INSPECTION
+
+Before proposing architecture, inspect the current Nexus implementation.
+
+Trace at minimum:
+
+1. how messages enter model context;
+2. where system prompts are assembled;
+3. where tool results are appended;
+4. where token estimates are calculated;
+5. current context admission logic;
+6. current compaction behavior;
+7. current 30-step limit and its purpose;
+8. session persistence;
+9. existing durable-state primitives;
+10. evidence/provenance mechanisms;
+11. ContextRouteManager and related context primitives, if applicable;
+12. DurableStateManager and related persistence primitives, if applicable;
+13. repository-state representations;
+14. knowledge/memory mechanisms currently present;
+15. agent-profile/specialization mechanisms;
+16. provider/model request construction;
+17. SSE/event lifecycle where relevant to inference context;
+18. how retries/repeated tool results affect context;
+19. whether complete raw tool evidence survives truncation/projection;
+20. whether current context can be reconstructed after process restart.
+
+Distinguish:
+
+    observed implementation
+    inferred behavior
+    reproduced behavior
+    architectural proposal
+
+Do not collapse them.
+
+DOGFOOD TRANSCRIPT FORENSICS
+
+Use the recent 30-step dogfood transcript as a concrete case study if it is available in the repository/evidence supplied to you.
+
+Perform a context-accounting analysis.
+
+Identify, as far as evidence permits:
+
+- useful unique information;
+- repeated information;
+- raw tool-result contribution;
+- assistant narration contribution;
+- repeated repository exploration;
+- repeated verifier information;
+- potentially superseded information;
+- information that remained necessary throughout;
+- information necessary only for particular turns;
+- information that could have been durably referenced instead of reproduced;
+- information whose removal would have risked correctness.
+
+Do NOT manufacture exact token counts if they cannot be measured.
+
+If feasible, create tooling or an offline analysis script only if needed to MEASURE existing evidence. Do not modify runtime behavior.
+
+HYPOTHESES
+
+Define explicit falsifiable hypotheses before designing the validation experiments.
+
+At minimum include hypotheses around:
+
+H1. Turn-specific packet construction can materially reduce model-visible context without reducing task correctness.
+
+H2. Durable evidence + retrieval can preserve information needed later without carrying raw evidence through every intermediate inference.
+
+H3. Objective/constraint retention can remain stable across repeated context reconstruction.
+
+H4. Epistemic status and evidence applicability can survive reduction/retrieval without silently strengthening claims.
+
+H5. Large tool results can be projected/bounded without losing information required for subsequent engineering decisions.
+
+H6. A turn can detect insufficient context and retrieve missing information rather than requiring defensive over-inclusion.
+
+H7. Context reconstruction can support tasks whose cumulative information exceeds one model context window.
+
+H8. Context reduction can avoid repeated-summary degradation.
+
+H9. Context management can distinguish legitimate long-running progress from repetitive/stagnant behavior better than a simple step counter alone.
+
+H10. Existing Nexus primitives can support this without introducing a parallel incompatible state/memory architecture.
+
+Add, modify, or reject hypotheses where evidence warrants it.
+
+VALIDATION DESIGN
+
+Design experiments that can FAIL the proposed architecture.
+
+Do not create demonstrations where success is guaranteed.
+
+The plan should include controlled fixtures covering at least:
+
+A. LONG TASK / SMALL ACTIVE WORKING SET
+
+Create a task with cumulative evidence substantially larger than the model context but where each individual decision needs only a bounded subset.
+
+Measure whether the system retrieves the correct subset over time.
+
+B. DELAYED RELEVANCE
+
+Introduce a seemingly minor observation early.
+
+Make it essential much later.
+
+The system should be able to retrieve the original evidence after it has left active context.
+
+C. STALE EVIDENCE
+
+Establish a valid fact against repository state A.
+
+Change the relevant implementation to state B.
+
+Later request reasoning where the old evidence is semantically relevant but no longer directly applicable.
+
+The system must not silently present A's evidence as current truth.
+
+D. CONTRADICTORY EVIDENCE
+
+Provide two observations with different scopes/conditions.
+
+Ensure reduction does not flatten them into a false single fact.
+
+E. OVERSIZED TOOL RESULT
+
+Produce a tool result capable of consuming a substantial fraction of the model context.
+
+Test ingestion/projection behavior before the next inference.
+
+No context-overflow-after-the-fact design should be accepted.
+
+F. DUPLICATE OBSERVATIONS
+
+Repeatedly produce equivalent git status/test/status information.
+
+Measure whether context grows linearly or whether equivalent state is recognized.
+
+G. OBJECTIVE RETENTION
+
+Run a long sequence containing attractive but irrelevant repository information.
+
+Test whether the original objective and current proof obligation remain dominant.
+
+H. INSUFFICIENT INITIAL PACKET
+
+Deliberately omit a fact required to solve the next decision.
+
+The desired behavior is recognition/retrieval, not hallucination and not permanent failure.
+
+I. PROCESS/SESSION CONTINUATION
+
+Stop and restart the agent/runtime.
+
+Determine whether sufficient state can be reconstructed without replaying the entire historical transcript.
+
+J. EPISTEMIC PRESERVATION
+
+Ensure:
+
+    inferred != observed
+    observed != reproduced
+    reproduced != corroborated
+    historical PASS != current PASS
+
+after storage, reduction, retrieval, and reconstruction.
+
+K. ADVERSARIAL RELEVANCE
+
+Include stale or semantically similar evidence that is more textually similar to the query than the actually applicable evidence.
+
+Test whether applicability/provenance can outrank naive semantic similarity.
+
+L. CONTEXT ECONOMICS
+
+Compare at least:
+
+- current Nexus behavior;
+- conventional rolling summarization;
+- proposed turn-specific reconstruction;
+- any simpler alternative identified during research.
+
+Measure both correctness and cost.
+
+METRICS
+
+Propose measurable metrics rather than "felt better."
+
+Consider:
+
+- task success;
+- validation success;
+- objective retention;
+- required-fact recall;
+- irrelevant-context precision;
+- stale-evidence rejection;
+- provenance preservation;
+- epistemic-status preservation;
+- context tokens per inference;
+- cumulative input tokens;
+- peak context size;
+- TTFT where measurable;
+- inference latency;
+- repeated-token/redundancy ratio;
+- raw-tool-result residency;
+- retrieval frequency;
+- retrieval success;
+- number of context insufficiency recoveries;
+- hallucinations attributable to missing context;
+- false-current claims from stale evidence;
+- compaction/reconstruction frequency;
+- continuation success after restart;
+- task duration;
+- model output quality.
+
+Do not optimize token reduction at the expense of correctness.
+
+A 40K packet that produces the correct decision can be better than a 5K packet missing critical evidence.
+
+MODEL / PROVIDER REALISM
+
+The intended system runs against local models through the Nexus inference/gateway architecture.
+
+Do not design validation exclusively around frontier cloud models.
+
+Determine which experiments can be deterministic/offline and which require actual local-model inference.
+
+Where model behavior introduces nondeterminism, separate:
+
+    context-selection correctness
+from
+    model reasoning correctness.
+
+The context system should be testable independently wherever possible.
+
+MEMORY SAFETY / CORRECTNESS
+
+Explicitly analyze failure modes including:
+
+- memory poisoning;
+- stale-state retrieval;
+- incorrect supersession;
+- summary distortion;
+- evidence/provenance loss;
+- scope loss;
+- accidental elevation of inference to fact;
+- operator decision loss;
+- secret/sensitive information persistence;
+- cross-task contamination;
+- cross-agent contamination;
+- tenant/actor isolation concerns;
+- retrieval feedback loops;
+- unbounded durable-memory growth;
+- corrupted or unavailable memory store;
+- dependency on embeddings/vector search;
+- nondeterministic retrieval;
+- memory schema evolution.
+
+"DURABLE" must not mean "permanently inject everything."
+
+"MEMORY" must not mean "model-generated statements become facts."
+
+CONSIDER INFORMATION LIFECYCLE
+
+Evaluate whether something like the following is useful:
+
+    RAW EVENT
+        ->
+    OBSERVATION
+        ->
+    STRUCTURED EVIDENCE
+        ->
+    FINDING / HYPOTHESIS
+        ->
+    REPRODUCED / CORROBORATED / ACCEPTED STATE
+        ->
+    SUPERSEDED / SUSPECT / STILL APPLICABLE
+
+But do not force this exact lifecycle if Nexus's current architecture supports a better representation.
+
+Also distinguish:
+
+    evidence validity
+from
+    evidence applicability.
+
+A historical PASS should remain historically true even when later change means it no longer establishes current behavior.
+
+CONTEXT PACKET INSPECTABILITY
+
+A critical validation requirement:
+
+For every inference, it should be possible during testing to inspect exactly what Nexus decided to send and why.
+
+The validation design should consider a packet manifest containing, for example:
+
+- inference/turn ID;
+- objective;
+- immediate intent/proof obligation;
+- selected memory/evidence references;
+- selected repository material;
+- recent events retained verbatim;
+- reductions/projections used;
+- excluded/superseded material;
+- token estimates by category;
+- retrieval rationale;
+- applicability status;
+- packet hash.
+
+Do not assume this exact schema is correct.
+
+The goal is reproducibility and explainability of context selection.
+
+NO PREMATURE ML
+
+Do not jump immediately to embeddings, learned retrieval, fine-tuning, reinforcement learning, or a custom model.
+
+Start by determining what can be accomplished deterministically from Nexus's existing structured state.
+
+Semantic/vector retrieval may be useful, but it should not become an unexplained authority over evidence applicability.
+
+A future learned context planner is possible, but first establish a deterministic/reference baseline against which it could be evaluated.
+
+EXPECTED OUTPUT
+
+Produce:
+
+1. CURRENT-NEXUS-CONTEXT-ARCHITECTURE.md
+   - evidence-based description of current context/session behavior
+   - exact relevant code paths
+   - observed limitations
+   - distinction between reproduced and inferred behavior
+
+2. PRIOR-ART-CONTEXT-MANAGEMENT.md
+   - OpenCode / Crush / Aider / Cline
+   - implementation mechanisms
+   - useful ideas
+   - known failure modes
+   - applicability to Nexus
+   - upstream references/versions
+
+3. TURN-SPECIFIC-CONTEXT-ENGINEERING-HYPOTHESIS.md
+   - candidate architecture(s)
+   - alternatives
+   - assumptions
+   - unresolved questions
+   - expected benefits
+   - risks
+   - explicit non-goals
+
+4. CONTEXT-ENGINEERING-VALIDATION-PLAN.md
+   - falsifiable hypotheses
+   - experiment fixtures
+   - controls
+   - metrics
+   - acceptance/rejection criteria
+   - experiment ordering
+   - estimated implementation cost for validation harness only
+
+5. DOGFOOD-CONTEXT-FORENSICS.md
+   - analysis of the recent 30-step run
+   - where context was consumed
+   - what was unique/redundant/turn-specific
+   - what cannot be established from available evidence
+
+6. A short final decision memo:
+
+   CONTEXT_ENGINEERING_RESEARCH_STATUS:
+     READY_FOR_VALIDATION
+     | MORE_EVIDENCE_REQUIRED
+     | HYPOTHESIS_NOT_JUSTIFIED
+
+   Include:
+   - strongest evidence FOR the architecture;
+   - strongest evidence AGAINST it;
+   - simplest viable alternative;
+   - highest-risk assumption;
+   - first discriminating experiment;
+   - what result would cause you to reject the proposed direction.
+
+IMPORTANT ACCEPTANCE RULE
+
+Do not conclude READY_FOR_IMPLEMENTATION.
+
+This task can authorize at most:
+
+    READY_FOR_VALIDATION
+
+Implementation architecture remains undecided until experiments discriminate among the alternatives.
+
+SOURCE CONTROL / SCOPE
+
+Inspect repository state before beginning.
+
+Preserve unrelated existing changes.
+
+Do not clean/reset/rewrite operator work.
+
+Do not push, publish, tag, deploy, or modify remotes.
+
+Do not modify inference-host configuration.
+
+Do not modify Cloudflare contest infrastructure.
+
+Do not broaden into TUI work, output polish, multiline input, SSE rendering, or unrelated dogfooding defects except where they materially affect context evidence and must be documented.
+
+Planning/research artifacts may be committed locally if that is consistent with repository practice, but report exactly what changed and do not represent the commit as operator acceptance.
+
+FINAL REPORT
+
+Report:
+
+- starting HEAD;
+- ending HEAD;
+- files created/modified;
+- external upstream sources inspected and exact revisions where available;
+- commands/tests/analysis tools run;
+- whether runtime/product code changed;
+- whether any live system was changed;
+- unresolved evidence gaps;
+- research status;
+- exact first validation experiment recommended.
+
+Do not claim the architecture is proven.
+
+The objective is to produce a plan capable of proving it wrong.
+</pasted_content id="e171">
