@@ -1,0 +1,33 @@
+<pasted_content id="bd2e">
+Claude's conclusion is appropriately conservative. The investigation has now established something more important than whether 75°C is "right": **the existing thermal policy has no demonstrated engineering basis.**
+
+The evidence separates into three categories. The 90°C benchmark abort is historical configuration, not a qualified limit. The kernel/device readings provide actual sensor-specific critical/emergency values, but those are protection limits rather than necessarily desirable operating thresholds. And the live tests establish observed behavior under the present llama.cpp workload: approximately 55/58°C package/VRAM on the lead GPU, 66/72°C on the 27B GPU during the >100-second test, with an earlier 78°C VRAM observation and no thermal throttling. The observed throttling was PL2 power limiting, not thermal limiting.
+
+That makes Claude's refusal to change thresholds correct. In particular, I agree with rejecting my earlier suggestion that something like 85/95 might be reasonable. We now have better evidence, and there is no basis yet for selecting those numbers either.
+
+### I would authorize the 30–60 minute soak
+
+This is a case where additional investigation is justified because it resolves a concrete engineering question. The short test hasn't established thermal equilibrium. The important measurement isn't another instantaneous peak, but the **temperature curve and eventual plateau under sustained representative load**.
+
+I would make the experiment slightly more rigorous than simply "run both GPUs for an hour." Have Claude preserve per-sensor time series for package, VRAM channels, memory controller and PCIe, along with GPU utilization, frequency, power, PL1/PL2 state, thermal-throttle flags, fan data if exposed, inference throughput, and ambient/intake temperature if the host exposes anything credible. Sampling at one second is appropriate given the current abort mechanism.
+
+The workload should be stable enough to distinguish warm-up from steady state. The analysis should identify whether each relevant sensor reaches an apparent plateau, its peak, sustained range near the end, and whether throughput/frequency changes correlate with thermal or power throttling. **Do not intentionally drive the hardware toward the reported critical limits.** This is normal sustained inference characterization, not thermal stress-to-failure testing.
+
+I would also have it evaluate the current 90°C abort behavior separately. The finding that **one sample from any sensor trips the entire benchmark** deserves examination independent of the numeric threshold. A single noisy VRAM-channel reading probably should not automatically have identical semantics to sustained package overheating. Sensor-specific thresholds plus a short persistence/debounce policy may eventually be better, but the soak should gather evidence before designing that.
+
+### One thing I would add before setting final thresholds
+
+Claude should look up Intel's published B65 thermal documentation now. Not because the device-reported limits are invalid, but because we're about to turn measurements into operational policy. That's exactly when external authoritative evidence has high information value.
+
+The resulting evidence hierarchy would be strong:
+
+**Intel specification + device-reported protection limits + actual sustained behavior in this exact T5820 + operational margin → monitoring/abort policy.**
+
+If Intel doesn't publish sufficiently specific VRAM/package guidance, record that as unresolved rather than deriving a magic number.
+
+There's also a useful discovery in the power data. GPU1 spent 60/90 samples under PL2 limiting while losing only about 3% clock. That's not necessarily a problem, but it's a real characteristic of this configuration. I wouldn't optimize it now. Preserve it as an observation so future performance/power tuning has a baseline.
+
+And Claude followed the scope instruction correctly: streaming, permanent Prometheus infrastructure, and queue enforcement were left alone; only the stale observability documentation was corrected. That's the right stopping discipline.
+
+So my authorization would be: **proceed with the bounded sustained thermal soak and Intel specification research; make no threshold or guardrail changes during data collection.** Afterward, we review the measurements and decide separately on package warning/critical, VRAM warning/critical, benchmark abort threshold, and persistence/debounce semantics. That would turn the current placeholders into evidence-backed operating policy rather than simply replacing one set of guesses with another.
+</pasted_content id="bd2e">
