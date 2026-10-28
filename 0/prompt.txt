@@ -1,0 +1,12 @@
+I'm seeing a lot of errors in the syslog:
+
+
+
+<pasted_content id="bd2e">
+2026-10-02T21:50:43.360263+00:00 ai-5820-01 xpu-smi: me: error: Cannot establish a handle to the Intel MEI driver /dev/mei1 [-13]:Permission denied
+2026-10-02T21:50:43.360387+00:00 ai-5820-01 xpu-smi: Fri Oct  2 21:50:43 2026: IGSC: (./lib/igsc_lib.c:gsc_driver_init():224) Error in HECI init (12)
+2026-10-02T21:50:43.360444+00:00 ai-5820-01 xpu-smi: Fri Oct  2 21:50:43 2026: IGSC: (./lib/igsc_lib.c:igsc_device_fw_version():1374) Failed to init HECI driver
+2026-10-02T21:50:43.360492+00:00 ai-5820-01 xpu-smi: me: error: Cannot establish a handle to the Intel MEI driver /dev/mei1 [-13]:Permission denied
+2026-10-02T21:50:43.360536+00:00 ai-5820-01 xpu-smi: Fri Oct  2 21:50:43 2026: IGSC: (./lib/igsc_lib.c:gsc_driver_init():224) Error in HECI init (12)
+2026-10-02T21:50:43.360578+00:00 ai-5820-01 xpu-smi: Fri Oct  2 21:50:43 2026: IGSC: (./lib/igsc_lib.c:igsc_device_oprom_version():2444) Failed to init HECI driver
+</pasted_content id="bd2e">
