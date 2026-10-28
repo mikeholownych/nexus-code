@@ -104,8 +104,9 @@ BLOCKED unit.
 
 `nexus operation decide` reports a rejected choice as `Decision rejected: …` on stderr and exits with status `2`.
 The rejection happens before the updated operation state is saved, so an invalid choice does not alter durable
-operation state. Run `nexus operation status <operation> --json` and inspect `units[].blocked.decision` and
-`blocked.decisions` for the current decision IDs, questions, and offered option IDs. The human-readable status view
+operation state. Run `nexus operation status <operation> --json`; the result is a one-element array. Inspect
+`$[0].units[].blocked.decision` and `$[0].blocked.decisions` for the current decision IDs, questions, and offered
+option IDs. The human-readable status view
 shows blocked reasons, but does not list every unit decision's options. Retry with an option ID in the current JSON
 state. Do not reuse an option from an older status display: decisions can become stale after another operator action
 or after the operation changes state.
