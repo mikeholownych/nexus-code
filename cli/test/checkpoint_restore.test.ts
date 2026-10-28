@@ -64,6 +64,171 @@ test("Git restore preserves untracked work and HEAD while removing post-checkpoi
   }
 });
 
+test("checkpoint safety checks preserve a repository root ending in carriage return", { skip: process.platform === "win32" }, () => {
+  const normalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-restore-cr-root-"));
+  const repo = `${normalRoot}\r`;
+  fs.renameSync(normalRoot, repo);
+  fs.mkdirSync(normalRoot);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+  try {
+    git("init", "-q");
+    git("config", "user.email", "test@example.invalid");
+    git("config", "user.name", "Test");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "base\n");
+    git("add", "tracked.txt");
+    git("commit", "-qm", "base");
+
+    // Git writes the repository path followed by LF. Keep the CR that belongs
+    // to the path so the checkpoint examines this repository, not its sibling.
+    fs.writeFileSync(path.join(normalRoot, "tracked.txt"), "safe sibling\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), `ghp_${"H".repeat(36)}\n`);
+    const manager = new CheckpointManager(repo);
+
+    assert.throws(() => manager.createCheckpoint("carriage-return repository root"), SensitivePersistenceError);
+  } finally {
+    cleanupGitRepo(repo);
+    fs.rmSync(normalRoot, { recursive: true, force: true });
+  }
+});
+
+test("Git restore preserves executable permissions on captured untracked files", () => {
+  const { repo } = gitRepo();
+  try {
+    const tool = path.join(repo, "tool.sh");
+    fs.writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o751 });
+    fs.chmodSync(tool, 0o751);
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("untracked executable");
+    fs.chmodSync(tool, 0o600);
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.statSync(tool).mode & 0o777, 0o751);
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git restore refuses to mutate while merge metadata is present", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "checkpoint state\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("before resolved merge commit");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "current state\n");
+    const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+    const mergeHead = git("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(repo, ".git", "MERGE_HEAD"), `${mergeHead}\n`);
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /Git operation state/i);
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "current state\n");
+    assert.equal(execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex"), indexBefore);
+    assert.equal(fs.readFileSync(path.join(repo, ".git", "MERGE_HEAD"), "utf8"), `${mergeHead}\n`);
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("checkpoint creation fails closed for non-UTF-8 Git paths before publishing a ref", { skip: process.platform === "win32" }, () => {
+  const { repo, git } = gitRepo();
+  try {
+    const invalidName = Buffer.concat([Buffer.from(`${repo}/invalid-`), Buffer.from([0xff])]);
+    fs.writeFileSync(invalidName, "must not be misaddressed\n");
+    git("add", "--all");
+    const manager = new CheckpointManager(repo);
+
+    assert.throws(() => manager.createCheckpoint("non UTF-8 path"), /not valid UTF-8/i);
+    assert.equal(git("for-each-ref", "--format=%(refname)", "refs/nexus/checkpoints"), "");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git restore refuses an ignored staged addition before changing the index or workspace", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), "ignored.bin\n");
+    git("add", ".gitignore");
+    git("commit", "-qm", "ignore generated artifact");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("before forced ignored addition");
+    fs.writeFileSync(path.join(repo, "ignored.bin"), "ignored staged payload\n");
+    git("add", "-f", "ignored.bin");
+    const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /ignored by current Git rules/i);
+    assert.equal(fs.readFileSync(path.join(repo, "ignored.bin"), "utf8"), "ignored staged payload\n");
+    assert.equal(execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex"), indexBefore);
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("legacy Git restore removes a path renamed after the checkpoint", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "old.txt"), "checkpoint version\n");
+    git("add", "old.txt");
+    git("commit", "-qm", "add legacy rename source");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("before committed rename");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    delete record.untrackedFileModes;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+
+    git("mv", "old.txt", "new.txt");
+    git("commit", "-qm", "rename checkpoint source");
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.readFileSync(path.join(repo, "old.txt"), "utf8"), "checkpoint version\n");
+    assert.equal(fs.existsSync(path.join(repo, "new.txt")), false);
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git restore preflights a renamed ignore file before replacing a tracked file with a directory", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), "a/ignored\n");
+    git("add", ".gitignore");
+    git("commit", "-qm", "add ignore rule");
+    fs.writeFileSync(path.join(repo, "a"), "checkpoint file\n");
+    git("add", "a");
+    git("commit", "-qm", "track file target");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("before ignore file rename");
+
+    git("mv", ".gitignore", "rules");
+    git("commit", "-qm", "rename ignore file");
+    fs.rmSync(path.join(repo, "a"));
+    fs.mkdirSync(path.join(repo, "a"));
+    fs.writeFileSync(path.join(repo, "a", "ignored"), "preserve this obstruction\n");
+    const headBefore = git("rev-parse", "HEAD");
+    const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /ignore rules/i);
+    assert.equal(fs.readFileSync(path.join(repo, "a", "ignored"), "utf8"), "preserve this obstruction\n");
+    assert.equal(git("rev-parse", "HEAD"), headBefore);
+    assert.equal(execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex"), indexBefore);
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
 test("Git checkpoint refuses sensitive untracked content before writing a ref", () => {
   const { repo, git } = gitRepo();
   try {
