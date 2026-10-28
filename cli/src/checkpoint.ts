@@ -190,7 +190,7 @@ export class CheckpointManager {
     }
   }
 
-  private assertUntrackedDestinationSafe(relativePaths: string[], targetRoot: string): void {
+  private assertNoNestedGitRepositoryAncestors(relativePaths: string[], targetRoot: string): void {
     const root = fs.realpathSync(targetRoot);
     for (const relativePath of relativePaths) {
       const destination = path.resolve(root, relativePath);
@@ -198,7 +198,25 @@ export class CheckpointManager {
       if (!relativeDestination || relativeDestination === ".." || relativeDestination.startsWith(`..${path.sep}`) || path.isAbsolute(relativeDestination)) {
         throw new Error("Checkpoint destination path escapes the workspace");
       }
+      const relativeParent = path.dirname(relativeDestination);
+      let parent = root;
+      for (const component of relativeParent === "." ? [] : relativeParent.split(path.sep)) {
+        parent = path.join(parent, component);
+        const stat = fs.lstatSync(parent, { throwIfNoEntry: false });
+        if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) break;
+        if (fs.lstatSync(path.join(parent, ".git"), { throwIfNoEntry: false })) {
+          throw new Error("Checkpoint destination parent is a nested Git repository");
+        }
+      }
+    }
+  }
 
+  private assertUntrackedDestinationSafe(relativePaths: string[], targetRoot: string): void {
+    this.assertNoNestedGitRepositoryAncestors(relativePaths, targetRoot);
+    const root = fs.realpathSync(targetRoot);
+    for (const relativePath of relativePaths) {
+      const destination = path.resolve(root, relativePath);
+      const relativeDestination = path.relative(root, destination);
       const relativeParent = path.dirname(relativeDestination);
       let parent = root;
       for (const component of relativeParent === "." ? [] : relativeParent.split(path.sep)) {
@@ -206,9 +224,6 @@ export class CheckpointManager {
         const stat = fs.lstatSync(parent, { throwIfNoEntry: false });
         if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) {
           throw new Error("Checkpoint destination parent is not a real directory");
-        }
-        if (stat && fs.lstatSync(path.join(parent, ".git"), { throwIfNoEntry: false })) {
-          throw new Error("Checkpoint destination parent is a nested Git repository");
         }
       }
     }
@@ -840,6 +855,7 @@ export class CheckpointManager {
         }
         if (cp.untrackedFiles !== undefined) {
           const replacementTargets = [...new Set([...cp.untrackedFiles, ...this.gitRefBlobPaths(cp.gitRef)])];
+          this.assertNoNestedGitRepositoryAncestors(replacementTargets, this.workspace);
           this.assertGitSnapshotTargetsReplaceable(replacementTargets, cp.gitRef);
         }
         if (cp.untrackedFiles === undefined) this.assertLegacyUntrackedRestoreSafe(cp.gitRef);
