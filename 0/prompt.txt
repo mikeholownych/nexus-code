@@ -1,0 +1,30 @@
+<task-notification>
+<task-id>a527702d80dddd584</task-id>
+<tool-use-id>toolu_01R3bZ4wvSZD2PboVYabNBey</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/a527702d80dddd584.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit terminal experience with PTY" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Scope D is finished. Report: `/tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/audit/D_terminal.md`. PTY transcripts and scripts are in `audit/D_pty/`. All runs used the HEAD-built snap binaries against a local mock gateway. My processes are cleaned up.
+
+- **TUI-01 (S1, blocker):** stopping the agent does not stop its shell command. Esc during a `run_command` (`sleep 23.7`) left the command running. Quitting the TUI orphaned `bash -c sleep 23.7` under PID 1, still running 6s after exit. Likely cause (from reading the code): cancel is never passed to harness-core (`cli/src/tools.ts` has no abort path), and the command runs in its own process group (`core/src/runner.rs:167`). This contradicts ISSUE12 rows EXEC-009 and SUBP-004, which are marked "DEMONSTRATED / Satisfied".
+- **TUI-02 (S2):** in `repl --approve`, a lone Enter approves the action, because `[Y/n/d/a]` defaults to Yes (`repl.ts:385`). Reproduced.
+- **TUI-03 (S2):** in the REPL, a `y` typed during the turn followed by Enter after the approval prompt appeared approved the write. Text typed ahead joins the approval answer. Reproduced.
+- **TUI-04 (S2):** the installed package never reaches the live TUI. Packaged `nexus` is `node index.js`, which starts the REPL, so TUI-02/03 apply to release users. Packaged `nexus-tui --live` fails with "sidecar not found" because it assumes the checkout layout (`live.rs:126-131`). This makes ISSUE12 UI-004 ("TUI is the default surface") false for the package.
+- **TUI-05 (S2):** the USER_MANUAL quick-start commands `nexus --approve` and `nexus -r` fail with "unknown option".
+- **TUI-06 (S2):** with an unreachable endpoint, startup gives no warning. The first prompt then waits through repeated "provider temporarily unavailable" retries (7 in 28s, no end seen) with no endpoint URL or fix hint.
+- **TUI-07 (S2):** both surfaces default to auto mode with no approvals, while quickstart tells users to "review requested actions".
+- **S3 issues:**
+  - Esc gives no "cancelling" feedback.
+  - The arrow keys are reversed in the approval panel: → selects Approve, which is drawn on the left, and ← selects Deny, drawn on the right.
+  - At 40 columns the key decision hint is cut off.
+  - One run showed "cancelling…" for 11s or more after Ctrl-C. Three reruns took 0.2–2.4s, so this is unconfirmed.
+- **What holds up:**
+  - The live TUI's approval guards worked in every test. Continuous typing across the panel appearing, bracketed and unbracketed pastes, key bursts, and a resize to 40x14 never decided an approval; a deliberate key always did.
+  - NO_COLOR removes all colour, and states stay readable from symbols and words.
+  - Ctrl-C during inference cancels in 0.2–2.4s.
+  - Steering, Unicode at 40 and 100 columns, and `-r` resume all worked.
+
+Section 7 of the report proposes 9 v1 requirements. Cancel terminating processes (TUI-R1) and no Enter-only or typed-ahead approval (TUI-R2) are the blockers.</result>
+<usage><subagent_tokens>192595</subagent_tokens><tool_uses>39</tool_uses><duration_ms>657385</duration_ms></usage>
+</task-notification>
