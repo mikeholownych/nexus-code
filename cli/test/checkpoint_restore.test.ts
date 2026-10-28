@@ -335,6 +335,34 @@ test("Git manifest restore replaces a checkpoint file over staged or committed c
   }
 });
 
+test("Git manifest restore replaces a tracked checkpoint blob after committing a child path", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "a"), "tracked checkpoint blob\n");
+    git("add", "a");
+    git("commit", "-qm", "track checkpoint blob");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("tracked blob before committed child");
+
+    fs.rmSync(path.join(repo, "a"));
+    fs.mkdirSync(path.join(repo, "a"));
+    fs.writeFileSync(path.join(repo, "a", "child.txt"), "committed child\n");
+    git("add", "a/child.txt");
+    git("commit", "-qm", "commit child under checkpoint blob path");
+    const headBefore = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.readFileSync(path.join(repo, "a"), "utf8"), "tracked checkpoint blob\n");
+    assert.equal(fs.existsSync(path.join(repo, "a", "child.txt")), false);
+    assert.equal(git("rev-parse", "HEAD"), headBefore);
+    assert.deepEqual(git("ls-files", "--", "a"), "a");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
 test("Git manifest restore replaces a checkpoint-tracked file over an ordinary untracked child", () => {
   const { repo, git } = gitRepo();
   try {
