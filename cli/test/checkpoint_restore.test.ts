@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { CheckpointManager } from "../src/checkpoint.js";
 import { SensitivePersistenceError } from "../src/core/persistence_protection.js";
 
@@ -1232,6 +1232,52 @@ test("Git manifest restore refuses to copy an untracked file into a nested bare 
     assert.equal(git("rev-parse", "HEAD"), outerHeadBefore);
     const outerIndexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
     assert.equal(outerIndexAfter, outerIndexBefore, "rejection must preserve outer index entries");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git restore rejects nested bare repository config FIFOs and external FIFO includes without hanging", () => {
+  const { repo } = gitRepo();
+  const bareRepo = path.join(repo, "nested-bare");
+  const externalInclude = path.join(repo, "external-config.fifo");
+  try {
+    fs.mkdirSync(bareRepo);
+    fs.writeFileSync(path.join(bareRepo, "captured.txt"), "checkpoint content\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("nested bare repository with blocking config paths");
+
+    fs.rmSync(path.join(bareRepo, "captured.txt"));
+    execFileSync("git", ["init", "--bare", "-q", bareRepo]);
+    execFileSync("mkfifo", [externalInclude]);
+
+    const runRestoreWithDeadline = () => spawnSync(process.execPath, [
+      "--import", "tsx", "--input-type=module", "--eval",
+      "import { CheckpointManager } from './src/checkpoint.ts'; const result = new CheckpointManager(process.argv[1]).restore(process.argv[2]); if (result.success) process.exitCode = 1; else console.log(result.message);",
+      "--", repo, checkpoint.id,
+    ], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: { ...process.env, HOME: isolatedHome },
+      timeout: 3_000,
+    });
+
+    fs.rmSync(path.join(bareRepo, "config"));
+    execFileSync("mkfifo", [path.join(bareRepo, "config")]);
+    const fifoConfigResult = runRestoreWithDeadline();
+    assert.equal(fifoConfigResult.error, undefined, `restore must not block on a FIFO config: ${fifoConfigResult.error?.message}`);
+    assert.equal(fifoConfigResult.status, 0, fifoConfigResult.stderr);
+    assert.match(fifoConfigResult.stdout, /nested Git repository/i);
+
+    fs.rmSync(path.join(bareRepo, "config"));
+    fs.writeFileSync(path.join(bareRepo, "config"), `[include]\n\tpath = ${externalInclude}\n`);
+    const externalIncludeResult = runRestoreWithDeadline();
+    assert.equal(externalIncludeResult.error, undefined, `restore must not follow an external FIFO include: ${externalIncludeResult.error?.message}`);
+    assert.equal(externalIncludeResult.status, 0, externalIncludeResult.stderr);
+    assert.match(externalIncludeResult.stdout, /nested Git repository/i);
+
+    assert.equal(fs.existsSync(path.join(bareRepo, "captured.txt")), false, "rejected restores must not write checkpoint content into the nested repository");
+    assert.equal(fs.lstatSync(externalInclude).isFIFO(), true, "the external include target remains untouched");
   } finally {
     cleanupGitRepo(repo);
   }

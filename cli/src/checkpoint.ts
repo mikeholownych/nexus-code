@@ -310,10 +310,6 @@ export class CheckpointManager {
     allowExternalSymlinkAncestors = false,
   ): void {
     const root = fs.realpathSync(targetRoot);
-    const gitProbeEnv = { ...process.env };
-    for (const key of Object.keys(gitProbeEnv)) {
-      if (key.startsWith("GIT_")) delete gitProbeEnv[key];
-    }
     for (const relativePath of relativePaths) {
       const destination = path.resolve(root, relativePath);
       const relativeDestination = path.relative(root, destination);
@@ -350,56 +346,21 @@ export class CheckpointManager {
         if (!stat.isDirectory()) break;
         const dotGit = fs.lstatSync(path.join(parent, ".git"), { throwIfNoEntry: false });
         const bareHead = fs.lstatSync(path.join(parent, "HEAD"), { throwIfNoEntry: false });
-        const bareConfigPath = path.join(parent, "config");
-        const bareConfig = fs.lstatSync(bareConfigPath, { throwIfNoEntry: false });
+        const bareConfig = fs.lstatSync(path.join(parent, "config"), { throwIfNoEntry: false });
+        const bareObjects = fs.lstatSync(path.join(parent, "objects"), { throwIfNoEntry: false });
+        const bareRefs = fs.lstatSync(path.join(parent, "refs"), { throwIfNoEntry: false });
         if (dotGit) {
           throw new Error("Checkpoint destination parent is a nested Git repository");
         }
 
-        // A bare repository root requires HEAD. The Git probe distinguishes a
-        // real repository from ordinary project folders named `objects`/`refs`.
-        const hasGitDirectoryMarkers = !!bareHead;
-        if (hasGitDirectoryMarkers) {
-          try {
-            const discoveredGitDir = execFileSync("git", ["-C", parent, "rev-parse", "--absolute-git-dir"], {
-              cwd: root,
-              encoding: "utf8",
-              env: gitProbeEnv,
-              maxBuffer: 1024 * 1024,
-              stdio: ["ignore", "pipe", "ignore"],
-            }).trim();
-            if (fs.realpathSync(discoveredGitDir) === fs.realpathSync(parent)) {
-              throw new Error("Checkpoint destination parent is a nested Git repository");
-            }
-          } catch (error) {
-            if (error instanceof Error && error.message === "Checkpoint destination parent is a nested Git repository") throw error;
-            if ((error as NodeJS.ErrnoException & { status?: number })?.status !== 128) {
-              throw new Error("Checkpoint could not verify nested Git repository state");
-            }
-          }
-        }
-
-        const bareConfigStat = bareConfig ? fs.statSync(bareConfigPath, { throwIfNoEntry: false }) : undefined;
-        if (hasGitDirectoryMarkers && bareConfigStat?.isFile()) {
-          if (bareConfigStat.size > 1024 * 1024) {
-            throw new Error("Checkpoint destination has an oversized Git configuration");
-          }
-          try {
-            const configuredBare = execFileSync("git", ["config", "--file", bareConfigPath, "--includes", "--type=bool", "--get", "core.bare"], {
-              cwd: root,
-              encoding: "utf8",
-              env: gitProbeEnv,
-              maxBuffer: 1024 * 1024,
-              stdio: ["ignore", "pipe", "ignore"],
-            }).trim();
-            if (configuredBare === "true") {
-              throw new Error("Checkpoint destination parent is a nested Git repository");
-            }
-          } catch (error) {
-            const status = (error as NodeJS.ErrnoException & { status?: number })?.status;
-            if (error instanceof Error && error.message === "Checkpoint destination parent is a nested Git repository") throw error;
-            if (status !== 1) throw new Error("Checkpoint destination has an invalid Git configuration");
-          }
+        // A bare repository (including an incomplete one) has a HEAD marker
+        // alongside its config or object/ref storage. Treat that combination
+        // as protected without asking Git to inspect the untrusted directory:
+        // Git config can include external files, and opening a FIFO config or
+        // include could block checkpoint restore indefinitely. Ordinary source
+        // directories named `objects` and `refs` remain valid without HEAD.
+        if (bareHead && (bareConfig || bareObjects || bareRefs)) {
+          throw new Error("Checkpoint destination parent is a nested Git repository");
         }
       }
     }
