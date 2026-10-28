@@ -1,0 +1,813 @@
+<pasted_content id="bd2e">
+NEXUS INDEPENDENT ARCHITECTURE REVIEW
+Authority, Delegation, Credentials, and External Execution
+
+ROLE
+
+You are an independent architecture and security reviewer.
+
+Your purpose is NOT to implement changes and NOT to validate another agent's
+design.
+
+Your purpose is to inspect the Nexus repository directly, construct your own
+model of the system from primary evidence, identify architectural strengths,
+weaknesses and opportunities, and provide independent recommendations.
+
+Another agent has separately researched this area.
+
+DO NOT seek, read, or rely upon that agent's research/specification during
+your initial review.
+
+We want an independent source of analysis, not consensus produced by shared
+anchoring.
+
+======================================================================
+REPOSITORY
+======================================================================
+
+Canonical repository:
+
+    /home/mike/nexus-code
+
+Inspect the repository directly.
+
+Relevant implementation may include, but is not limited to:
+
+    cli/src/core/
+    core/
+    cli/src/agent.ts
+    cli/src/team.ts
+    docs/
+
+Do not assume these locations contain everything relevant.
+
+Trace actual call paths and data structures where necessary.
+
+You may inspect Git history when it materially helps explain architectural
+intent.
+
+READ ONLY.
+
+Do not:
+
+- edit source;
+- edit documentation;
+- create commits;
+- create branches;
+- create worktrees;
+- push;
+- pull;
+- fetch;
+- modify remotes;
+- create credentials;
+- invoke mutating Cloudflare operations;
+- change runtime configuration.
+
+======================================================================
+CONTEXT
+======================================================================
+
+Nexus is an autonomous engineering system built around several existing
+architectural principles:
+
+- distrust by default;
+- fail closed where authority cannot be established;
+- bounded authority;
+- deterministic behavior where practical;
+- reproducibility;
+- evidence and provenance;
+- external validation;
+- information-flow protection;
+- canonical capabilities shared across human, agent, and automation callers;
+- capability availability does not imply authority;
+- authorization should apply to concrete operations/resources;
+- agents should not bypass validation or security controls;
+- Git is a substrate rather than the definition of the agent workflow.
+
+Do not assume the implementation perfectly satisfies these principles.
+
+Verify what actually exists.
+
+======================================================================
+RESEARCH QUESTION
+======================================================================
+
+We are considering how Nexus should manage authority when agents interact
+with internal and external systems.
+
+One architectural hypothesis is:
+
+    Agents authenticate to Nexus and receive scoped Nexus authority.
+
+    Nexus separately maintains the credentials or workload identities needed
+    to reach external/internal execution surfaces.
+
+    Agents normally request semantic Nexus capabilities rather than receiving
+    raw provider credentials.
+
+Example:
+
+    Agent
+      |
+      | Git.Push(repo=A, ref=candidate/x)
+      v
+    Nexus
+      |
+      | authority admission
+      | information-flow admission
+      | execution
+      v
+    Git provider
+
+The Git credential would remain inside an appropriate Nexus-controlled
+execution boundary.
+
+THIS IS A HYPOTHESIS, NOT AN APPROVED ARCHITECTURE.
+
+Challenge it.
+
+There may be better models.
+
+======================================================================
+CORE AUTHORITY QUESTION
+======================================================================
+
+A particularly important concern is delegation hygiene.
+
+Nexus must not grant an agent authority merely because:
+
+    - Nexus possesses a credential capable of the operation; or
+    - some backend can technically perform the operation.
+
+Potentially distinct concepts include:
+
+1. what a credential technically permits;
+
+2. what Nexus is legitimately/configured to exercise;
+
+3. what a Nexus principal is permitted to delegate;
+
+4. what an agent has actually been granted;
+
+5. what a particular invocation may perform.
+
+A tentative principle is:
+
+    possession != authority
+
+and:
+
+    authority != delegability
+
+and:
+
+    delegation must not amplify authority
+
+For a delegation relationship:
+
+    parent -> child
+
+we would expect something conceptually similar to:
+
+    child authority
+        <=
+    parent's delegable authority
+        <=
+    parent's effective authority
+
+But do NOT accept this formulation automatically.
+
+Determine whether it is correct and sufficient.
+
+======================================================================
+PHASE 1: BUILD YOUR OWN MODEL
+======================================================================
+
+Before proposing anything, inspect the implementation and answer:
+
+1. How are capabilities represented?
+
+2. How are invocation requests represented?
+
+3. How is authority represented?
+
+4. How are grants represented?
+
+5. How does admission actually work?
+
+6. How are resources scoped?
+
+7. How are execution domains represented?
+
+8. How are agents and subagents created?
+
+9. What authority does a child/subagent inherit?
+
+10. How does process execution work?
+
+11. How are filesystem operations constrained?
+
+12. How is network/external execution constrained?
+
+13. How does the ExecutionSpine operate?
+
+14. Where does InformationFlowBoundary participate?
+
+15. How are external provider operations currently performed?
+
+16. Where are credentials currently held or delegated?
+
+17. How are execution receipts/evidence produced?
+
+18. Can one capability be used to reproduce the effect of another capability
+    that would otherwise have been denied?
+
+For each significant statement classify it as:
+
+    OBSERVED
+    DERIVED
+    INFERRED
+    UNKNOWN
+
+Provide exact file/function/type references.
+
+Do not describe intended architecture as implemented behavior unless the code
+supports it.
+
+======================================================================
+PHASE 2: ADVERSARIAL AUTHORITY REVIEW
+======================================================================
+
+Now review the current system adversarially.
+
+Investigate at minimum:
+
+- empty authority/grant sets;
+- default authority behavior;
+- full-access or bypass modes;
+- subagent creation;
+- nested delegation;
+- resource scope inheritance;
+- task/profile authority;
+- capability aliases;
+- process execution;
+- arbitrary shell execution;
+- network execution;
+- Git execution;
+- extension/plugin execution;
+- provider credentials;
+- information-flow enforcement;
+- persistence;
+- audit/evidence paths.
+
+Look specifically for authority amplification.
+
+Example:
+
+    semantic Git.Push denied
+        but
+    Process.Execute("git push ...") succeeds
+
+would mean semantic admission does not actually bound effective authority.
+
+Likewise investigate whether:
+
+    parent has authority X
+    child is created
+    child obtains X + Y
+
+can occur.
+
+Do not assume these defects exist.
+
+Prove or reject them from code.
+
+======================================================================
+PHASE 3: CREDENTIAL VS AUTHORITY ANALYSIS
+======================================================================
+
+Independently assess whether Nexus should distinguish:
+
+    Credential Capability
+    Nexus Accepted Authority
+    Delegable Authority
+    Principal/Agent Authority
+    Invocation Authority
+
+Determine whether these are:
+
+    necessary distinctions;
+    useful but reducible distinctions;
+    redundant;
+    incomplete.
+
+Identify missing concepts.
+
+For example, authorization may also require:
+
+- temporal validity;
+- resource state;
+- expected-state preconditions;
+- information classification;
+- destination trust;
+- approval;
+- obligations;
+- rate limits;
+- separation of duties;
+- negative permissions;
+- freshness;
+- provenance;
+- delegation constraints.
+
+Do not force these into a set-intersection model if that abstraction is
+incorrect.
+
+Propose a better formal model if appropriate.
+
+======================================================================
+PHASE 4: BACKEND-MEDIATED AUTHORITY
+======================================================================
+
+Evaluate the architectural hypothesis:
+
+    agents receive authority, not credentials
+
+with Nexus-controlled backend connectors exercising external authority.
+
+Potential examples:
+
+    Git.Read
+    Git.Push
+    Git.CreateRef
+    Artifact.Read
+    Artifact.Write
+    Database.Query
+    Deployment.Observe
+    Kubernetes.Apply
+
+versus exposing:
+
+    GITHUB_TOKEN
+    CF_API_TOKEN
+    SSH_PRIVATE_KEY
+    DATABASE_PASSWORD
+    KUBECONFIG
+
+Assess this model for:
+
+- least privilege;
+- confused-deputy risk;
+- credential exposure;
+- agent compromise;
+- prompt injection;
+- auditability;
+- provider portability;
+- revocation;
+- credential rotation;
+- provider outages;
+- operational complexity;
+- performance;
+- failure recovery;
+- testing;
+- local/offline execution.
+
+Identify cases where backend mediation is clearly preferable.
+
+Identify cases where it is unsuitable.
+
+======================================================================
+PHASE 5: DIRECT CREDENTIAL DELEGATION
+======================================================================
+
+Some workloads may genuinely require an external process to authenticate
+directly.
+
+Examples might include:
+
+    git
+    package managers
+    container tooling
+    deployment CLIs
+    provider-native tools
+
+Determine when direct credential delegation is architecturally necessary
+rather than merely convenient.
+
+If it remains necessary, propose how Nexus should classify it.
+
+Possible model:
+
+    normal:
+        backend-mediated capability
+
+    exceptional:
+        direct credential delegation
+
+Do not assume ephemeral credentials alone make direct delegation safe.
+
+Analyze:
+
+- issuance;
+- delivery;
+- process inheritance;
+- environment exposure;
+- stdout/stderr;
+- persistence;
+- subprocesses;
+- TTL;
+- revocation;
+- ambiguous issuance;
+- crash recovery;
+- audit evidence.
+
+======================================================================
+PHASE 6: DELEGATION HYGIENE
+======================================================================
+
+Develop an independent model for delegation.
+
+Consider:
+
+    Nexus -> orchestrator
+    orchestrator -> engineering agent
+    engineering agent -> reviewer/subagent
+
+Answer:
+
+- What can be delegated?
+- Who can delegate?
+- Must delegability itself be explicit?
+- Can authority be delegated transitively?
+- Should depth be bounded?
+- What happens when a parent grant expires?
+- What happens when a parent grant is revoked?
+- What happens when Nexus loses provider authority?
+- What happens to an already-running operation?
+- How are resource aliases handled?
+- How is authority laundering prevented?
+- How is provenance retained?
+
+Do NOT select arbitrary constants such as delegation depth or TTL without
+evidence.
+
+Separate:
+
+    architectural invariant
+
+from:
+
+    policy default
+
+from:
+
+    implementation mechanism.
+
+This distinction is important.
+
+======================================================================
+PHASE 7: ALTERNATE-PATH AUTHORITY
+======================================================================
+
+Pay particular attention to ambient execution authority.
+
+Suppose an agent is denied:
+
+    Git.Push
+
+but has:
+
+    Process.Execute
+
+Can it invoke Git directly?
+
+Suppose it cannot invoke Git directly but can execute:
+
+    curl
+    ssh
+    python
+    node
+    shell scripts
+
+Can those reproduce the prohibited external effect?
+
+This problem generalizes beyond Git.
+
+Determine whether the current architecture has an invariant equivalent to:
+
+    An invocation must not exercise ambient authority exceeding its admitted
+    effective authority through an alternate execution path.
+
+If not, determine what architectural property would be needed.
+
+Do NOT immediately prescribe containers, Bubblewrap, Landlock, seccomp,
+network namespaces, or another specific mechanism.
+
+First define the required property.
+
+Then discuss possible enforcement strategies and tradeoffs.
+
+======================================================================
+PHASE 8: AUTHORITY FRESHNESS
+======================================================================
+
+Analyze:
+
+    T0:
+        Nexus legitimately possesses external write authority.
+
+    T1:
+        Agent receives bounded write authority.
+
+    T2:
+        external provider revokes Nexus write authority.
+
+    T3:
+        Agent attempts another write.
+
+What should happen?
+
+Determine whether Nexus needs:
+
+- live provider verification;
+- cached authority observations;
+- provider event invalidation;
+- bounded staleness;
+- fail-closed behavior;
+- different treatment for reads and writes.
+
+Again distinguish invariant from policy.
+
+Do not invent a fixed cache TTL without justification.
+
+======================================================================
+PHASE 9: EXISTING ARCHITECTURE VS NEW PRIMITIVES
+======================================================================
+
+Determine whether this work requires a new major Nexus primitive.
+
+Existing concepts may already provide appropriate homes:
+
+    CapabilityRegistry
+    AuthorityAdmissionEngine
+    ExecutionSpine
+    InformationFlowBoundary
+    execution domains
+    provider adapters
+    evidence/receipts
+
+Prefer evolution over architectural proliferation.
+
+If you recommend a new primitive, establish why existing ones cannot cleanly
+carry the responsibility.
+
+======================================================================
+PHASE 10: THREAT ANALYSIS
+======================================================================
+
+Analyze concrete architecture-level threats including:
+
+- compromised agent;
+- prompt injection;
+- compromised repository;
+- overprivileged provider identity;
+- malicious subagent;
+- confused deputy;
+- stale authority;
+- revoked authority;
+- alternate-path authority laundering;
+- resource aliasing;
+- TOCTOU;
+- connector compromise;
+- credential compromise;
+- extension/plugin bypass;
+- parameter manipulation;
+- evidence failure.
+
+For each identify:
+
+    attack path
+    current containment
+    current gap
+    required invariant
+    possible enforcement point
+
+Do not claim that memory scrubbing provides process isolation.
+
+Do not claim an in-process component is isolated from its own process without
+evidence of an actual isolation mechanism.
+
+======================================================================
+PHASE 11: PRIORITIZATION
+======================================================================
+
+Classify findings independently.
+
+Use:
+
+P0
+    existing implementation violates a fundamental existing Nexus authority
+    invariant and provides a realistic escalation/bypass path.
+
+P1
+    required architectural capability for generalized mediated authority.
+
+P2
+    hardening, resilience, or operational correctness.
+
+P3
+    optimization/future capability.
+
+Be conservative with P0.
+
+For every P0 provide a concrete execution path demonstrating why it qualifies.
+
+Do not classify something P0 merely because another design would be cleaner.
+
+======================================================================
+PHASE 12: PROPOSED ARCHITECTURE
+======================================================================
+
+Only after completing the repository analysis, propose your preferred
+architecture.
+
+Include:
+
+- principal model;
+- authority model;
+- delegation model;
+- capability admission;
+- resource model;
+- backend execution model;
+- credential custody;
+- exceptional direct delegation;
+- freshness/revocation;
+- evidence/provenance;
+- alternate-path confinement.
+
+Explicitly identify:
+
+    EXISTING COMPONENT RETAINED
+    EXISTING COMPONENT EXTENDED
+    NEW COMPONENT REQUIRED
+    POLICY DECISION
+    OPEN QUESTION
+
+======================================================================
+PHASE 13: BACKLOG
+======================================================================
+
+Propose a dependency-aware post-contest backlog.
+
+For each work package provide:
+
+    ID
+    TITLE
+    PROBLEM
+    REQUIRED INVARIANT
+    EVIDENCE FROM CURRENT CODE
+    SCOPE
+    OUT OF SCOPE
+    DEPENDENCIES
+    IMPLEMENTATION SURFACE
+    ACCEPTANCE CRITERIA
+    NEGATIVE TESTS
+    REQUIRED EVIDENCE
+
+Do not create GitHub issues.
+
+Do not implement anything.
+
+Identify the critical path separately.
+
+======================================================================
+PHASE 14: SECONDARY REVIEW MATERIAL
+======================================================================
+
+ONLY AFTER your independent analysis and proposed architecture are complete,
+you may inspect:
+
+    /home/mike/nexus-code-authority-research/
+    docs/architecture/authority/
+
+if that worktree exists.
+
+Treat it as SECONDARY REVIEW MATERIAL.
+
+Do not rewrite your original findings after reading it.
+
+Instead produce a separate comparison:
+
+    AGREEMENT
+    DISAGREEMENT
+    ANTIGRAVITY FINDING I COULD NOT VERIFY
+    MY FINDING ABSENT FROM ANTIGRAVITY
+    DIFFERENT PRIORITIZATION
+    DIFFERENT PROPOSED MECHANISM
+    QUESTION REQUIRING OPERATOR DECISION
+
+This sequencing is intentional.
+
+We want independent reasoning first and convergence analysis second.
+
+======================================================================
+IMPORTANT CONTEST BOUNDARY
+======================================================================
+
+This work is POST-CONTEST architectural research.
+
+It must have:
+
+    CONTEST IMPACT: NONE
+
+Do not modify:
+
+    /home/mike/nexus-code-demo
+
+Do not modify Cloudflare brokerage.
+
+Do not attempt to improve the contest demo.
+
+Do not create or modify Cloudflare credentials.
+
+Do not consume time solving contest credential lifecycle issues.
+
+======================================================================
+FINAL REPORT
+======================================================================
+
+Return a report containing:
+
+1. EXECUTIVE FINDINGS
+
+2. REPOSITORY MODEL
+   - observed architecture
+   - major execution paths
+
+3. AUTHORITY MODEL AS IMPLEMENTED
+
+4. VERIFIED AUTHORITY DEFECTS
+   - exact evidence
+   - exploit/bypass path
+   - confidence
+
+5. CREDENTIAL / AUTHORITY DISTINCTION
+
+6. DELEGATION MODEL
+
+7. ALTERNATE-PATH AUTHORITY ANALYSIS
+
+8. BACKEND-MEDIATED EXECUTION ASSESSMENT
+
+9. DIRECT-CREDENTIAL EXCEPTION ASSESSMENT
+
+10. AUTHORITY FRESHNESS / REVOCATION
+
+11. THREAT ANALYSIS
+
+12. PROPOSED ARCHITECTURE
+
+13. PROPOSED WORK PACKAGES
+
+14. CRITICAL PATH
+
+15. OPEN QUESTIONS / OPERATOR DECISIONS
+
+16. INDEPENDENT COMPARISON WITH ANTIGRAVITY
+    - performed only after primary analysis
+
+17. CLAIM / EVIDENCE MATRIX
+
+For important findings include:
+
+    Claim
+    Epistemic status
+    Source file
+    Function/type/line where practical
+    Reasoning
+    Confidence
+
+18. REPOSITORY STATE
+
+Confirm:
+
+    no modifications
+    no commits
+    no pushes
+    no tags
+    no remote changes
+    no external mutations
+
+19. CONTEST IMPACT
+
+Must be:
+
+    NONE
+
+Finish with exactly one:
+
+INDEPENDENT_AUTHORITY_REVIEW_COMPLETE
+
+INDEPENDENT_AUTHORITY_REVIEW_INCOMPLETE
+
+EXISTING_AUTHORITY_INVARIANT_VIOLATION_CONFIRMED
+</pasted_content id="bd2e">
