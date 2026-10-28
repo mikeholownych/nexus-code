@@ -1,0 +1,42 @@
+<pasted_content id="bd2e">
+This is a good result because it answers several questions without manufacturing a winner.
+
+The **clean paired experiment does not establish an advantage for deep-planner/lead-coder**. B1-run-2 is 7/11 and B2-run-2 is 6/11. Five tasks pass in both, three fail in both, two favor B1, and one favors B2. The reported exact sign-test `p=1.0`, small sample, and observed B1 run-to-run variation all support the agent's conclusion that the one-task difference is not meaningful evidence of superiority. B2 also took 1,387 s versus 1,150 s, about 21% longer, although it averaged slightly fewer steps, 18.2 versus 19.8. I would not interpret either difference strongly from one paired run.
+
+There are, however, some **much stronger engineering findings** here.
+
+First, the parallel-tool-call defect now looks properly qualified. The gateway preserves `[0,1]`; Nexus reconstructs two valid calls; llama.cpp accepts the resulting history; malformed history is treated as a client error without poisoning worker health; and the next valid request succeeds immediately. Most compellingly, B2-run-2 exercised exactly the three tasks that previously triggered the defect, `T01`, `T03`, and `T06`, and all three completed successfully with zero such errors. That closes the causal loop substantially better than the source inspection alone did.
+
+Second, the infrastructure behaved cleanly during the actual comparison: **426 gateway-correlated requests, zero gateway errors, zero tool-call parse errors, and zero routing fallbacks**. B1 sent all 218 requests to lead; B2 sent 12/208 to deep and 196/208 to lead. So we know the intended routing manipulation actually happened and didn't introduce an infrastructure failure.
+
+Third, the experiment says something useful about the current specialization policy: **it is very light specialization**. Only about 6% of B2 requests went to deep, mostly the first planning turn. Therefore this experiment should not be generalized into “planner/coder specialization doesn't help.” What we've tested is much narrower:
+
+> A first-turn-heavy deep-planner/lead-coder routing policy did not demonstrate improved validated task completion over lead-only routing in this small experiment.
+
+That's a useful bounded finding.
+
+The false-completion evidence is also interesting. B1 and B2 each produced three false completions. B2 fixed T03 relative to B1, but introduced them elsewhere. So there is no evidence here that the planner materially improves the epistemic/completion-discipline problem we've been discussing. T03 itself is worth retaining as a candidate for later investigation because B1 false-completed it in both clean runs while B2 passed it. That's a repeatable difference worth studying, but one task isn't enough to generalize from.
+
+I see two experimental limitations beyond those the agent already called out. The arms were **sequential rather than interleaved**, so temporal host/environment effects aren't controlled as tightly as they could be. And although the manifest was verified before, between and after the arms, that proves the covered state remained unchanged, not necessarily every external condition. Neither invalidates the experiment; they simply bound what it establishes.
+
+### What I would accept
+
+I'd accept three separate findings rather than one overall verdict:
+
+> **Tool-call integration correction: QUALIFIED.**  
+> The previously reproduced parallel-call corruption was corrected and exercised successfully under the real workload.
+
+> **B1/B2 experiment: VALID BUT INCONCLUSIVE FOR SPECIALIZATION BENEFIT.**  
+> 7/11 versus 6/11 provides no demonstrated advantage for the tested light planner/coder policy. The sample is small and observed run-to-run variability is comparable to the measured difference.
+
+> **Heterogeneous routing infrastructure: DEMONSTRATED.**  
+> Both inference pools were deliberately exercised under one frozen serving environment with no routing fallback or gateway/tool-call errors.
+
+I would **not immediately tune B2 and rerun**. That starts turning this into optimization against an 11-task corpus. We have learned what this particular routing policy does. Preserve the result.
+
+More importantly, this experiment uncovered and qualified a real integration defect, demonstrated clean heterogeneous routing, gave us better information about task-level variability, and showed that merely adding a deep planning turn does not automatically improve outcomes. That's considerably more useful than forcing the benchmark to produce a positive specialization result.
+
+And it reinforces something from our earlier discussion: the infrastructure now lets us ask these questions cheaply without tearing down workers or changing the serving topology. We can revisit specialization later with a larger corpus and a more substantive hypothesis about **which tasks warrant deeper planning**, rather than simply giving every task a deep first turn.
+
+One housekeeping item matters: the evidence currently lives under a `/tmp/claude-1000/.../scratchpad/evidence/` path. Given that this experiment has produced useful durable evidence, I would have the agent preserve the final evidence package somewhere non-ephemeral before ending the work. That should be preservation only, not another experimental run or tuning cycle.
+</pasted_content id="bd2e">
