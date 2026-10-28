@@ -1,0 +1,12 @@
+<task-notification>
+<task-id>btotrg44w</task-id>
+<tool-use-id>toolu_01AEf6LKPhwShnfg2fp7X8WH</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/btotrg44w.output</output-file>
+<status>completed</status>
+<summary>Background command "cd /tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/scratchpad &amp;&amp; python3 - &lt;&lt;'EOF'
+s=open("nxbench.py").read()
+s=s.replace("    secs = time.time() - t0\n","    secs = time.time() - t0\n    open(os.path.join(os.path.dirname(os.path.abspath(__file__)), f\"nx_{label}_{task['id']}.out\"), \"w\").write(out)\n",1)
+open("nxbench.py","w").write(s)
+EOF
+PLANNER_LLM_MODEL=engineering/deep CODER_LLM_MODEL=engineering/lead python3 nxbench.py deeprerun T01,T02,T03,T05,T07 &gt; nx_deeprerun.log 2&gt;&amp;1; cut -c1-200 nx_deeprerun.log; for f in nx_deeprerun_T0*.out; do echo "== $f"; grep -E "Fatal|Inference error|error:|ContextBudget|truncated|HTTP [45]" $f | head -3 | cut -c1-300; done" completed (exit code 0)</summary>
+</task-notification>
