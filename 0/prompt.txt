@@ -1,0 +1,30 @@
+<task-notification>
+<task-id>a63e1141fd942e5f7</task-id>
+<tool-use-id>toolu_01EDYE6MEZj6Fu6o9mSgV4rg</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/a63e1141fd942e5f7.output</output-file>
+<status>completed</status>
+<summary>Agent "Extract established requirements from history" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Scope F is finished and written to `/tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/audit/F_requirements_history.md` (256 lines, all brief sections). I ran no tests or builds; the checks against HEAD were source greps only, and the many `docs/reviews/evidence/` files were left out.
+
+- **Requirement ledger:** It covers all 122 Issue #12 requirements, each with a proposed ID, its original ID, the status the docs claim, whether it was independently qualified, and any later doc that contradicts it. It also has about 22 commitments made after Issue #12, from the 2026-10-12 top-tier assessment, the compaction work, the cloud providers doc, the TUI acceptance, the user manual and the installer.
+- **Issue #12 is still open:** Three blockers (CTX-001, CTX-002, EXT-004) were never closed in any later doc. EXT-004 (plugins can rewrite tool arguments and results with no before/after audit record) is confirmed still unmet at HEAD.
+- **Old "DEMONSTRATED" claims are unreliable (HIST-02):** At least 10 rows marked satisfied were reproduced as broken 11 days later in the top-tier review. Most of those were fixed in commit 3290234, but the acceptance matrix was never updated.
+- **Spot-checks (19 claims vs HEAD):** 13 hold, 2 partial, 2 stale, 1 false, 1 not met.
+  - Stale: the SBOM covers direct dependencies only, and the CLI/TUI evidence cites the old TypeScript `tui.ts` rather than the Rust TUI.
+  - False (HIST-03): `USER_MANUAL.md` promises plugins run in a sandbox with timeouts and memory caps. In fact they load inside the main process and the sandbox function has no caller.
+- **New source defects:**
+  - HIST-04: Nexus imports every plugin in `~/.config/opencode/plugins` at turn start, which is undocumented.
+  - HIST-05: In review mode (`--approve`), web, search and browser tools never ask for approval before acting.
+- **Other gaps:**
+  - HIST-08: All live evidence is against the homelab gateway. The quickstart's first-run path (LM Studio/vLLM) has never been run live.
+  - HIST-09: The compaction/continuity changes shipped in alpha.2 still say "independent acceptance pending".
+  - HIST-06: The docs overstate things — a parity claim with Codex and Claude Code, a wrong `harness repl` command, and homelab hardware in `ARCHITECTURE.md`.
+  - HIST-07: There is no SECURITY.md and no release signing or provenance, now that releases are public.
+- **Deferred or quietly dropped:** Section 8 lists about 25 items, including UI-006/007 (Ratatui), the 36-tool baseline and the "no Git remote" rule, all superseded without any record. It also lists the open convergence items I3/I4, the stale-lock race, and eval tiers T3/T4.
+- **GitHub issues:** None. The repo has 0 issues and 0 PRs (created 2026-10-13); open work exists only in markdown (HIST-10).
+- **homelab-ai relationship:** The docs say Nexus must work standalone and the gateway is optional. Leftover coupling remains: a hardcoded `t5820-client-token` path in `client.ts:65` and the hardware references in `ARCHITECTURE.md`.
+
+The brief said `docs/reviews` holds 205 files. It actually has 24 review documents plus about 183 evidence files.</result>
+<usage><subagent_tokens>304869</subagent_tokens><tool_uses>39</tool_uses><duration_ms>503197</duration_ms></usage>
+</task-notification>
