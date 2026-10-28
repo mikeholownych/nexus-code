@@ -29,12 +29,12 @@ cancelled/aborted 130, otherwise 2) rather than hanging.
 
 Rendering passes every operation-supplied field (`objective`, titles, block reasons, decision questions, event messages)
 through `safeTerminal`, so provider-controlled error text cannot emit control or OSC sequences into a persistent,
-periodically refreshed terminal. The `--json` document is described by `docs/v1.1.0/operation-view.schema.json` and the
+periodically refreshed terminal. The `--json` document is an array of views described by `docs/v1.1.0/operation-view.schema.json` and the
 test suite validates a view against it (including rejecting unexpected properties such as an event's free-form `detail`).
 
 ## Evidence
 
-`cli/test/operation_view.test.ts` (19 cases):
+`cli/test/operation_view.test.ts` (21 cases):
 
 1. units/depth/durable/result/blocked detail, DAG edges, critical path, decision options and command;
 2. resource eligibility from a real condition record, temporary block with `eligibleAt`, recovery after the window;
@@ -52,10 +52,14 @@ test suite validates a view against it (including rejecting unexpected propertie
 14. a blocked unit's decision is shown while other units are running;
 15. counts split `ready` (RUNNABLE) from `waiting` (dependency), and a three-unit cycle reports all three;
 16. corrupt record: clean error, exit 2, quarantined by the shared loader;
-17. the `--json` document validates against the checked-in schema, which rejects an unexpected event property.
+17. the `--json` document (an array of views) validates against the checked-in schema, which rejects an unexpected
+    event property;
+18. the default sleep wakes promptly on abort (not an injected sleep), so Ctrl-C ends `watch` immediately at any interval;
+19. `watch` on a pipe exits 0 for COMPLETE and 130 for CANCELLED;
+20. newline/tab in operation text is folded so it cannot forge an extra line, and the read-failure line is sanitised.
 
 Focused run: `operation_view` + `convergence_scheduling` + `operation_runner_refactor` + `operation_account_identity`
-→ **74/74 pass**; `tsc --noEmit` and `git diff --check` clean, isolated `HOME`/`XDG_CONFIG_HOME`.
+→ **76/76 pass**; `tsc --noEmit` and `git diff --check` clean, isolated `HOME`/`XDG_CONFIG_HOME`.
 
 `team_convergence`, `convergence_integration` and `convergence_invariants` have 20 failures on this branch **and on a
 pristine `origin/main` worktree** (`ceaf6007`, same command); they are pre-existing and not caused by this slice.

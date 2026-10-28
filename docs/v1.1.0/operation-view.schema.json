@@ -1,235 +1,502 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mikeholownych/nexus-code/docs/v1.1.0/operation-view.schema.json",
-  "title": "Nexus operation view",
-  "description": "Read-only projection of a durable operation produced by `nexus operation status --dag --json`.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "id",
-    "objective",
-    "status",
-    "createdAt",
-    "updatedAt",
-    "terminal",
-    "counts",
-    "units",
-    "resources",
-    "decisions",
-    "dag",
-    "events"
-  ],
-  "properties": {
-    "schemaVersion": { "const": 1 },
-    "id": { "type": "string" },
-    "objective": { "type": "string" },
-    "status": { "enum": ["RUNNING", "WAITING", "BLOCKED", "COMPLETE", "CANCELLED"] },
-    "createdAt": { "type": "string" },
-    "updatedAt": { "type": "string" },
-    "terminal": { "type": "boolean" },
-    "counts": {
+  "title": "Nexus operation view document",
+  "description": "Array of read-only operation projections printed by `nexus operation status --dag --json`.",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/view"
+  },
+  "$defs": {
+    "view": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "https://github.com/mikeholownych/nexus-code/docs/v1.1.0/operation-view.schema.json",
+      "title": "Nexus operation view",
+      "description": "Read-only projection of a durable operation produced by `nexus operation status --dag --json`.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["total", "complete", "running", "ready", "blocked", "parked", "waiting"],
+      "required": [
+        "schemaVersion",
+        "id",
+        "objective",
+        "status",
+        "createdAt",
+        "updatedAt",
+        "terminal",
+        "counts",
+        "units",
+        "resources",
+        "decisions",
+        "dag",
+        "events"
+      ],
       "properties": {
-        "total": { "type": "integer" },
-        "complete": { "type": "integer" },
-        "running": { "type": "integer" },
-        "ready": { "type": "integer" },
-        "blocked": { "type": "integer" },
-        "parked": { "type": "integer" },
-        "waiting": { "type": "integer" }
-      }
-    },
-    "units": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "title", "status", "dependsOn", "required", "depth", "durable", "runs"],
-        "properties": {
-          "id": { "type": "string" },
-          "title": { "type": "string" },
-          "role": { "type": "string" },
-          "status": { "enum": ["RUNNABLE", "RUNNING", "PARKED", "WAITING_ON_DEPENDENCY", "COMPLETE", "BLOCKED"] },
-          "detail": { "type": "string" },
-          "dependsOn": { "type": "array", "items": { "type": "string" } },
-          "required": { "type": "boolean" },
-          "depth": { "type": "integer" },
-          "durable": { "type": "boolean" },
-          "runs": { "type": "integer" },
-          "assignment": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["resourceId", "model", "since"],
-            "properties": {
-              "resourceId": { "type": "string" },
-              "model": { "type": "string" },
-              "since": { "type": "string" }
-            }
-          },
-          "parkedUntil": { "type": "string" },
-          "blocked": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["reason", "decisionId"],
-            "properties": {
-              "reason": { "type": "string" },
-              "decisionId": { "type": "string" }
-            }
-          },
-          "result": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["summary", "completedAt", "resourceId", "outcome"],
-            "properties": {
-              "summary": { "type": "string" },
-              "completedAt": { "type": "string" },
-              "resourceId": { "type": "string" },
-              "outcome": { "type": "string" }
+        "schemaVersion": {
+          "const": 1
+        },
+        "id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "RUNNING",
+            "WAITING",
+            "BLOCKED",
+            "COMPLETE",
+            "CANCELLED"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "total",
+            "complete",
+            "running",
+            "ready",
+            "blocked",
+            "parked",
+            "waiting"
+          ],
+          "properties": {
+            "total": {
+              "type": "integer"
+            },
+            "complete": {
+              "type": "integer"
+            },
+            "running": {
+              "type": "integer"
+            },
+            "ready": {
+              "type": "integer"
+            },
+            "blocked": {
+              "type": "integer"
+            },
+            "parked": {
+              "type": "integer"
+            },
+            "waiting": {
+              "type": "integer"
             }
           }
-        }
-      }
-    },
-    "resources": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "provider", "model", "capabilities", "eligible"],
-        "properties": {
-          "id": { "type": "string" },
-          "provider": { "type": "string" },
-          "model": { "type": "string" },
-          "rank": { "type": "number" },
-          "capabilities": { "type": "array", "items": { "type": "string" } },
-          "contextLength": { "type": "number" },
-          "taskClass": { "type": "string" },
-          "eligible": { "type": "boolean" },
-          "blocking": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["condition", "reason", "scope"],
-              "properties": {
-                "condition": { "type": "string" },
-                "reason": { "type": "string" },
-                "scope": { "type": "string" },
-                "eligibleAt": { "type": "string" }
-              }
-            }
-          },
-          "eligibleAt": { "type": "string" }
-        }
-      }
-    },
-    "wait": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["since", "wakeAt", "reason", "parkedUnits"],
-      "properties": {
-        "since": { "type": "string" },
-        "wakeAt": { "type": "string" },
-        "reason": { "type": "string" },
-        "parkedUnits": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-    "decisions": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "unitId", "cause", "question", "options", "command"],
-        "properties": {
-          "id": { "type": "string" },
-          "unitId": { "type": "string" },
-          "cause": { "type": "string" },
-          "question": { "type": "string" },
-          "options": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["id", "label"],
-              "properties": {
-                "id": { "type": "string" },
-                "label": { "type": "string" }
-              }
-            }
-          },
-          "command": { "type": "string" }
-        }
-      }
-    },
-    "dag": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["nodes", "edges", "criticalPath", "missingDependencies", "cycles"],
-      "properties": {
-        "nodes": {
+        },
+        "units": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["id", "status", "dependsOn", "required"],
+            "required": [
+              "id",
+              "title",
+              "status",
+              "dependsOn",
+              "required",
+              "depth",
+              "durable",
+              "runs"
+            ],
             "properties": {
-              "id": { "type": "string" },
-              "status": { "enum": ["RUNNABLE", "RUNNING", "PARKED", "WAITING_ON_DEPENDENCY", "COMPLETE", "BLOCKED"] },
-              "dependsOn": { "type": "array", "items": { "type": "string" } },
-              "required": { "type": "boolean" }
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "RUNNABLE",
+                  "RUNNING",
+                  "PARKED",
+                  "WAITING_ON_DEPENDENCY",
+                  "COMPLETE",
+                  "BLOCKED"
+                ]
+              },
+              "detail": {
+                "type": "string"
+              },
+              "dependsOn": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "depth": {
+                "type": "integer"
+              },
+              "durable": {
+                "type": "boolean"
+              },
+              "runs": {
+                "type": "integer"
+              },
+              "assignment": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "resourceId",
+                  "model",
+                  "since"
+                ],
+                "properties": {
+                  "resourceId": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "since": {
+                    "type": "string"
+                  }
+                }
+              },
+              "parkedUntil": {
+                "type": "string"
+              },
+              "blocked": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "reason",
+                  "decisionId"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "decisionId": {
+                    "type": "string"
+                  }
+                }
+              },
+              "result": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "summary",
+                  "completedAt",
+                  "resourceId",
+                  "outcome"
+                ],
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "completedAt": {
+                    "type": "string"
+                  },
+                  "resourceId": {
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "type": "string"
+                  }
+                }
+              }
             }
           }
         },
-        "edges": {
+        "resources": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["from", "to"],
+            "required": [
+              "id",
+              "provider",
+              "model",
+              "capabilities",
+              "eligible"
+            ],
             "properties": {
-              "from": { "type": "string" },
-              "to": { "type": "string" }
+              "id": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "rank": {
+                "type": "number"
+              },
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "contextLength": {
+                "type": "number"
+              },
+              "taskClass": {
+                "type": "string"
+              },
+              "eligible": {
+                "type": "boolean"
+              },
+              "blocking": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "condition",
+                    "reason",
+                    "scope"
+                  ],
+                  "properties": {
+                    "condition": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "scope": {
+                      "type": "string"
+                    },
+                    "eligibleAt": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "eligibleAt": {
+                "type": "string"
+              }
             }
           }
         },
-        "criticalPath": { "type": "array", "items": { "type": "string" } },
-        "missingDependencies": { "type": "array", "items": { "type": "string" } },
-        "cycles": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-    "events": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["type", "at", "message"],
-        "properties": {
-          "type": {
-            "enum": [
-              "RESOURCE_INELIGIBLE",
-              "RESOURCE_ELIGIBLE",
-              "WORK_STARTED",
-              "WORK_COMPLETED",
-              "WORK_REROUTED",
-              "WORK_PARKED",
-              "WORK_RESUMED",
-              "WORK_BLOCKED",
-              "CONTINUING_INDEPENDENT_WORK",
-              "OPERATION_WAITING",
-              "OPERATION_RESUMED",
-              "OPERATION_BLOCKED",
-              "OPERATION_COMPLETED",
-              "OPERATION_CANCELLED",
-              "DECISION_APPLIED"
-            ]
-          },
-          "at": { "type": "string" },
-          "message": { "type": "string" },
-          "unitId": { "type": "string" },
-          "resourceId": { "type": "string" }
+        "wait": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "since",
+            "wakeAt",
+            "reason",
+            "parkedUnits"
+          ],
+          "properties": {
+            "since": {
+              "type": "string"
+            },
+            "wakeAt": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "parkedUnits": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "unitId",
+              "cause",
+              "question",
+              "options",
+              "command"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "unitId": {
+                "type": "string"
+              },
+              "cause": {
+                "type": "string"
+              },
+              "question": {
+                "type": "string"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "label"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "command": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "dag": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodes",
+            "edges",
+            "criticalPath",
+            "missingDependencies",
+            "cycles"
+          ],
+          "properties": {
+            "nodes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "status",
+                  "dependsOn",
+                  "required"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "RUNNABLE",
+                      "RUNNING",
+                      "PARKED",
+                      "WAITING_ON_DEPENDENCY",
+                      "COMPLETE",
+                      "BLOCKED"
+                    ]
+                  },
+                  "dependsOn": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "required": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "criticalPath": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "missingDependencies": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cycles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "at",
+              "message"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "RESOURCE_INELIGIBLE",
+                  "RESOURCE_ELIGIBLE",
+                  "WORK_STARTED",
+                  "WORK_COMPLETED",
+                  "WORK_REROUTED",
+                  "WORK_PARKED",
+                  "WORK_RESUMED",
+                  "WORK_BLOCKED",
+                  "CONTINUING_INDEPENDENT_WORK",
+                  "OPERATION_WAITING",
+                  "OPERATION_RESUMED",
+                  "OPERATION_BLOCKED",
+                  "OPERATION_COMPLETED",
+                  "OPERATION_CANCELLED",
+                  "DECISION_APPLIED"
+                ]
+              },
+              "at": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "unitId": {
+                "type": "string"
+              },
+              "resourceId": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     }

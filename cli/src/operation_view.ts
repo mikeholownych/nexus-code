@@ -130,11 +130,18 @@ export interface WatchResult {
   stopped: "terminal" | "aborted" | "limit" | "unreadable";
 }
 
-/** A sleep that resolves early on abort. `setTimeout(…, { signal })` avoids one listener per poll. */
+/** A sleep that resolves early on abort and removes its listener on every path (no per-poll leak). */
 const defaultSleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve) => {
     if (signal?.aborted) return resolve();
-    setTimeout(resolve, ms, { signal } as any);
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
   });
 
 /**
@@ -414,7 +421,9 @@ export interface RenderOptions {
 
 /** Untrusted operation text is made terminal-safe before it is measured or printed. */
 function text(value: string, width: number): string {
-  const safe = safeTerminal(String(value));
+  // safeTerminal redacts secrets and makes controls visible, but keeps LF/TAB; the view is line-oriented, so a
+  // operation-supplied newline is folded rather than allowed to forge an extra line.
+  const safe = safeTerminal(String(value)).replace(/[\r\n\t]+/g, " ");
   if (width <= 0 || safe.length <= width) return safe;
   return `${safe.slice(0, Math.max(0, width - 1))}…`;
 }

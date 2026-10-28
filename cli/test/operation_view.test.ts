@@ -287,6 +287,23 @@ test("watch stops on abort, on a render limit and after repeated read failures",
   assert.match(writes[0], /could not read the operation: operation file is being replaced/);
 });
 
+test("the default sleep wakes promptly when the watch is aborted", async () => {
+  const controller = new AbortController();
+  const started = Date.now();
+  const running = watchOperation({
+    load: () => state(),
+    intervalMs: 5_000,
+    signal: controller.signal,
+    write: () => {},
+    now: () => NOW,
+  });
+  setTimeout(() => controller.abort(), 25);
+  const result = await running;
+  const elapsed = Date.now() - started;
+  assert.deepEqual(result, { renders: 1, stopped: "aborted" });
+  assert.ok(elapsed < 1_000, `abort took ${elapsed} ms`);
+});
+
 test("watch clears the screen only when asked", async () => {
   const op = state();
   const writes: string[] = [];
@@ -356,6 +373,27 @@ test("watch on a pipe renders one snapshot and exits non-zero while the operatio
   assert.equal(createHash("sha256").update(fs.readFileSync(file)).digest("hex"), before);
 });
 
+test("watch on a pipe reports the operation's exit code for complete and cancelled", () => {
+  for (const [id, status, expected] of [
+    ["op-cli-watch-complete", "COMPLETE", 0],
+    ["op-cli-watch-cancelled", "CANCELLED", 130],
+  ] as const) {
+    const { workspace, file } = saveFixture(id);
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    record.status = "COMPLETE";
+    record.operation.status = status;
+    record.operation.blocked = undefined;
+    for (const unit of record.operation.units) {
+      unit.status = "COMPLETE";
+      unit.blocked = undefined;
+      unit.result = unit.result ?? { summary: "done", completedAt: "2026-10-28T11:30:00.000Z", resourceId: "primary", outcome: "VERIFIED" };
+    }
+    fs.writeFileSync(file, JSON.stringify(record));
+    const result = runCli(["operation", "watch", id], workspace);
+    assert.equal(result.status, expected, result.stderr);
+  }
+});
+
 test("status --dag rejects a malformed --events instead of guessing", () => {
   const { workspace } = saveFixture("op-cli-events");
   const result = runCli(["operation", "status", "--dag", "--events", "-1", "op-cli-events"], workspace);
@@ -390,6 +428,8 @@ test("events are copied without their free-form detail", () => {
 });
 
 type JsonSchema = {
+  $ref?: string;
+  $defs?: Record<string, JsonSchema>;
   type?: string;
   const?: unknown;
   enum?: unknown[];
@@ -399,8 +439,13 @@ type JsonSchema = {
   items?: JsonSchema;
 };
 
-/** Minimal draft-2020-12 checker for the keywords the checked-in schema uses. */
-function validate(value: unknown, schema: JsonSchema, at: string): string[] {
+/** Minimal draft-2020-12 checker for the keywords the checked-in schema uses (with local $ref resolution). */
+function validate(value: unknown, schema: JsonSchema, at: string, root: JsonSchema = schema): string[] {
+  if (schema.$ref?.startsWith("#/$defs/")) {
+    const target = root.$defs?.[schema.$ref.slice("#/$defs/".length)];
+    if (!target) return [`${at}: unresolved $ref ${schema.$ref}`];
+    return validate(value, target, at, root);
+  }
   const errors: string[] = [];
   const typeOf = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
   if (schema.const !== undefined && value !== schema.const) errors.push(`${at}: expected const ${JSON.stringify(schema.const)}`);
@@ -421,11 +466,11 @@ function validate(value: unknown, schema: JsonSchema, at: string): string[] {
         if (schema.additionalProperties === false) errors.push(`${at}: unexpected property '${key}'`);
         continue;
       }
-      errors.push(...validate(child, property, `${at}.${key}`));
+      errors.push(...validate(child, property, `${at}.${key}`, root));
     }
   }
   if (schema.type === "array" && Array.isArray(value) && schema.items) {
-    value.forEach((item, index) => errors.push(...validate(item, schema.items!, `${at}[${index}]`)));
+    value.forEach((item, index) => errors.push(...validate(item, schema.items!, `${at}[${index}]`, root)));
   }
   return errors;
 }
@@ -433,7 +478,8 @@ function validate(value: unknown, schema: JsonSchema, at: string): string[] {
 test("the --json document satisfies the checked-in JSON schema", () => {
   const schemaPath = fileURLToPath(new URL("../../docs/v1.1.0/operation-view.schema.json", import.meta.url));
   const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8")) as JsonSchema;
-  assert.equal(schema.required?.includes("schemaVersion"), true);
+  assert.equal(schema.type, "array");
+  assert.equal(schema.items?.$ref, "#/$defs/view");
 
   const op = state();
   op.units[0].agentTaskId = "task-u1";
@@ -445,12 +491,33 @@ test("the --json document satisfies the checked-in JSON schema", () => {
   op.resources[1].contextLength = 200_000;
   op.resources[1].taskClass = "review";
 
+  op.units[2].status = "RUNNABLE";
+  const key = scopeKey(op.resources[0], "model");
+  op.conditions = [
+    {
+      scope: "model",
+      key: key!,
+      condition: "RATE_LIMITED",
+      temporary: true,
+      recheckAt: "2026-10-28T12:05:00.000Z",
+      source: "backoff",
+      confidence: "derived",
+      reason: "rate limited (HTTP 429)",
+      observedAt: "2026-10-28T11:59:00.000Z",
+      failures: 1,
+      resourceId: "primary",
+    },
+  ];
+
   const view = buildOperationView(op, { now: NOW });
-  assert.deepEqual(validate(JSON.parse(JSON.stringify(view)), schema, "view"), []);
+  assert.equal(view.counts.ready, 1);
+  assert.equal(view.resources[0].blocking?.length, 1);
+  const document = JSON.parse(JSON.stringify([view]));
+  assert.deepEqual(validate(document, schema, "views"), []);
 
   // The schema must reject the shapes the projection deliberately removed.
-  const withDetail = { ...view, events: [{ ...view.events[0], detail: { secret: true } }] } as unknown;
-  assert.notDeepEqual(validate(JSON.parse(JSON.stringify(withDetail)), schema, "view"), []);
+  const withDetail = [{ ...view, events: [{ ...view.events[0], detail: { secret: true } }] }];
+  assert.notDeepEqual(validate(JSON.parse(JSON.stringify(withDetail)), schema, "views"), []);
 });
 
 test("a corrupt record is reported cleanly and quarantined by the shared loader", () => {
