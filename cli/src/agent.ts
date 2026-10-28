@@ -56,7 +56,7 @@ import { WorktreeManager } from "./worktree.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
-import { judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, type ChangeBaseline, type Independence } from "./core/independent_check.js";
+import { judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
 /** File-edit tools that can change the workspace before the verifier baseline is captured. */
@@ -1252,12 +1252,12 @@ export class AutonomousAgent {
   }
 
   /**
-   * Rebase the verifier baseline onto a verified TDD RED test set, without moving anything RED was not allowed to
-   * change. RED may only add tests: every pre-RED test must still be present and byte-identical, and every
-   * verifier-definition entry must be unchanged except for the added tests (and the absent-path marker they
-   * legitimately clear). Anything else is refused so GREEN cannot verify against an oracle the model narrowed.
+   * Validate the exact verifier definition created by TDD RED for use by GREEN. RED may only add tests: every
+   * pre-RED test must still be present and byte-identical, and every verifier-definition entry must be unchanged
+   * except for reported RED tests (and absent-path markers they legitimately clear). The pre-change independent
+   * evidence baseline itself is never rebased onto model-authored tests.
    */
-  public rebaseVerifierBaselineAfterTddRed(
+  public validateTddRedVerifierBaseline(
     redTests: readonly string[],
   ): { ok: true } | { ok: false; reason: string } {
     const baseline = this.changeBaseline;
@@ -1273,8 +1273,11 @@ export class AutonomousAgent {
     const workspace = this.config.workspace;
     const rel = (file: string) => path.relative(path.resolve(workspace), path.resolve(workspace, file)).replace(/\\/g, "/");
     const reported = new Set(redTests.map(rel));
+    if (reported.size === 0) return { ok: false, reason: "RED reported no test files" };
     const currentTests = snapshotTests(workspace);
     if (!currentTests) return { ok: false, reason: "the current test set is too large to capture" };
+    const priorRedTests = baseline.tddRedTests ?? new Map<string, string>();
+    const allowedRedTests = new Set([...priorRedTests.keys(), ...reported]);
     for (const [file, content] of baseline.tests) {
       const after = currentTests.get(file);
       if (after === undefined) return { ok: false, reason: `RED removed test ${file}` };
@@ -1283,8 +1286,13 @@ export class AutonomousAgent {
       if (after !== content) return { ok: false, reason: `RED modified the existing test ${file}` };
     }
     for (const file of currentTests.keys()) {
-      if (!baseline.tests.has(file) && !reported.has(file)) {
+      if (!baseline.tests.has(file) && !allowedRedTests.has(file)) {
         return { ok: false, reason: `RED added ${file}, which is not one of its reported tests` };
+      }
+    }
+    for (const [file, content] of priorRedTests) {
+      if (currentTests.get(file) !== content) {
+        return { ok: false, reason: `RED changed previously accepted model-authored test ${file}` };
       }
     }
     for (const file of reported) {
@@ -1311,7 +1319,7 @@ export class AutonomousAgent {
       }
       const trusted = new Set((baseline.trustedDeliverables ?? []).map(rel));
       for (const key of currentVerifier.keys()) {
-        if (key.startsWith("\0") || reported.has(key) || trusted.has(key)) continue;
+        if (key.startsWith("\0") || allowedRedTests.has(key) || trusted.has(key)) continue;
         return {
           ok: false,
           reason: `${key} would enter the trusted verifier definition but is neither a reported test nor a declared deliverable`,
@@ -1325,8 +1333,8 @@ export class AutonomousAgent {
         const before = preVerifier.get(key);
         const after = currentVerifier.get(key);
         if (before === after) continue;
-        if (key.startsWith("\0must-remain-absent:") && reported.has(rel(key.slice("\0must-remain-absent:".length)))) continue;
-        if (!key.startsWith("\0") && reported.has(key)) continue;
+        if (key.startsWith("\0must-remain-absent:") && allowedRedTests.has(rel(key.slice("\0must-remain-absent:".length)))) continue;
+        if (!key.startsWith("\0") && allowedRedTests.has(key)) continue;
         return {
           ok: false,
           reason: key.startsWith("\0")
@@ -1335,25 +1343,14 @@ export class AutonomousAgent {
         };
       }
     }
-    const tests = new Map(baseline.tests);
-    for (const file of reported) tests.set(file, currentTests.get(file)!);
-    const verifier = new Map(baseline.verifier ?? currentVerifier);
-    for (const key of [...verifier.keys()]) {
-      if (key.startsWith("\0test-file-set:")) verifier.delete(key);
-      else if (key.startsWith("\0must-remain-absent:") && reported.has(rel(key.slice("\0must-remain-absent:".length)))) verifier.delete(key);
-    }
+    const tddRedTests = new Map(priorRedTests);
     for (const file of reported) {
-      const content = currentVerifier.get(file);
-      if (content !== undefined) verifier.set(file, content);
+      tddRedTests.set(file, currentTests.get(file)!);
     }
-    verifier.set("\0test-file-set:" + JSON.stringify([...tests.keys()].sort()), "");
     this.changeBaseline = {
-      command,
-      failed: true,
-      tests,
-      verifier,
-      trustedDeliverables: [...(baseline.trustedDeliverables ?? [])],
-      at: new Date().toISOString(),
+      ...baseline,
+      tddRedVerifier: currentVerifier,
+      tddRedTests,
     };
     if (this.durable) {
       try {
@@ -1545,6 +1542,8 @@ export class AutonomousAgent {
             tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
             verifier: this.changeBaseline.verifier ? Object.fromEntries(this.changeBaseline.verifier) : null,
             trustedDeliverables: this.changeBaseline.trustedDeliverables,
+            ...(this.changeBaseline.tddRedVerifier ? { tddRedVerifier: Object.fromEntries(this.changeBaseline.tddRedVerifier) } : {}),
+            ...(this.changeBaseline.tddRedTests ? { tddRedTests: Object.fromEntries(this.changeBaseline.tddRedTests) } : {}),
             at: this.changeBaseline.at,
           }
         : (this.changeBaseline === null
@@ -2120,6 +2119,8 @@ export class AutonomousAgent {
                 tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
                 verifier: this.changeBaseline.verifier ? Object.fromEntries(this.changeBaseline.verifier) : null,
                 trustedDeliverables: this.changeBaseline.trustedDeliverables,
+                ...(this.changeBaseline.tddRedVerifier ? { tddRedVerifier: Object.fromEntries(this.changeBaseline.tddRedVerifier) } : {}),
+                ...(this.changeBaseline.tddRedTests ? { tddRedTests: Object.fromEntries(this.changeBaseline.tddRedTests) } : {}),
                 at: this.changeBaseline.at,
               }
             : (this.changeBaseline === null
@@ -2135,6 +2136,8 @@ export class AutonomousAgent {
                 tests: progress.changeBaseline.tests ? Object.fromEntries(progress.changeBaseline.tests) : null,
                 verifier: progress.changeBaseline.verifier ? Object.fromEntries(progress.changeBaseline.verifier) : null,
                 trustedDeliverables: progress.changeBaseline.trustedDeliverables,
+                ...(progress.changeBaseline.tddRedVerifier ? { tddRedVerifier: Object.fromEntries(progress.changeBaseline.tddRedVerifier) } : {}),
+                ...(progress.changeBaseline.tddRedTests ? { tddRedTests: Object.fromEntries(progress.changeBaseline.tddRedTests) } : {}),
                 at: progress.changeBaseline.at,
               }
             : null,
@@ -4007,12 +4010,24 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               requiresWorkspaceVerifierDefinitionBinding(verifierCommand);
             const matchingBaseline =
               this.changeBaseline?.command === verifierCommand;
+            const hasTddRedVerifier = Boolean(
+              matchingBaseline && this.changeBaseline?.tddRedVerifier && this.changeBaseline.tddRedTests,
+            );
+            const tddRedVerifierMatches = Boolean(
+              hasTddRedVerifier &&
+              verifierDefinitionMatchesSnapshot(
+                this.config.workspace,
+                verifierCommand,
+                this.changeBaseline!.tddRedVerifier!,
+                this.config.trustedDeliverableFiles ?? [],
+              ) &&
+              tddRedTestsMatchSnapshot(this.config.workspace, this.changeBaseline!.tddRedTests!),
+            );
             const verifierDefinitionChanged =
               matchingBaseline &&
-              verifierDefinitionChangedSince(
-                this.config.workspace,
-                this.changeBaseline!,
-              );
+              (hasTddRedVerifier
+                ? !tddRedVerifierMatches
+                : verifierDefinitionChangedSince(this.config.workspace, this.changeBaseline!));
             if (
               bindsWorkspaceDefinition &&
               (!matchingBaseline || verifierDefinitionChanged) &&
