@@ -181,7 +181,8 @@ test("Git restore treats pathspec-magic filenames literally when checking ignore
     const manager = new CheckpointManager(repo);
     const checkpoint = manager.createCheckpoint("before forced pathspec-looking addition");
     fs.writeFileSync(path.join(repo, magicName), "ignored staged payload\n");
-    git("add", "-f", magicName);
+    git("add", "-f", `:(literal)${magicName}`);
+    assert.equal(git("ls-files", "--error-unmatch", "--", `:(literal)${magicName}`), magicName);
     const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
 
     const result = manager.restore(checkpoint.id);
