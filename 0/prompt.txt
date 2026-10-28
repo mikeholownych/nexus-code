@@ -1,0 +1,79 @@
+The other agent is stopped. Here's their summary of work:
+
+
+
+<pasted_content id="ac96">
+  Here is a comprehensive summary of the progress made since taking over the Nexus engineering effort, organized by the qualification remediation stages:
+  ──────
+  ### 1. Stage 0: Build Identity & Deterministic CI Pipeline
+
+  • Build Identity Implementation: Created build_identity.ts to resolve git commit hashes, dirty status, build timestamps, and package versions at runtime.
+  • CLI & Doctor Integration: Integrated build identity into index.ts (nexus --version and banner) and doctor.ts (nexus doctor --json), ensuring diagnostic reports always disclose exact build provenance.
+  • CI Definition: Added .gitlab-ci.yml with automated stages for building, linting, testing, and running security gate checks.
+  ──────
+  ### 2. Stage 1: Execution Authority, Workspace Trust & Path Confinement
+
+  • Read-Only Enforcements (Blocker B1 / R7, R8):
+      • Blocked all mutating capabilities (file operations, subagent mutations, test executions, MCP tool invocations) when running in --read-only mode.
+      • Hardened deletion boundaries in tools.ts and file_ops.rs to prevent deletion of root (.), .git, or paths outside the workspace root.
+      • Ensured subagents inherit and strictly respect read-only constraints.
+  • Workspace Trust Boundary (Blocker B2 / R8):
+      • Created workspace_trust.ts to audit and gate untrusted workspace configurations.
+      • Gated automatic loading of workspace plugins (plugins/) and .mcp.json behind trust checks; completely disabled them in --read-only mode.
+  • Test Filter Sanitization (Blocker B4 / R9):
+      • Secured run_tests in tester.ts against command injection through test filter arguments.
+  • Verification: Verified via scratch/repro/zz_trust_repro.test.ts (13/13 passing tests across R1–R9).
+  ──────
+  ### 3. Stage 2: Exact Edits, RPC Isolation & Subprocess Runtime
+
+  • Abolished Fuzzy Matching in Edits (Blocker B5):
+      • Removed fuzzy matching fallback in file_ops.rs. Replaced with strict exact matching and explicit ambiguity errors if a target replacement occurs multiple times without replace_all.
+  • Atomic File Writes & Permissions:
+      • Implemented write_file_atomically in file_ops.rs using temporary staging files with atomic renames to prevent file truncation on crashes.
+      • Preserved line endings (CRLF/LF) and executable file permission bits (0o755).
+  • Subprocess Confinement & Pipe Draining:
+      • Attached Stdio::null() to background stdin in runner.rs to prevent child processes from blocking on standard input.
+      • Implemented deadline-bounded pipe draining and safe UTF-8 boundary slicing in truncate_output.
+  • Verification: All 225 Rust unit tests and integration tests in core pass (cargo test).
+  ──────
+  ### 4. Stage 3: Parser Safety & Inference Recovery
+
+  • Robust JSON Repair:
+      • Updated repairJson in parser.ts to preserve strings, properly escape control characters, and avoid mangling valid Python literals within JSON values.
+  • Reasoning Extraction Safeguards:
+      • Completely stripped <think> reasoning blocks to eliminate accidental tool execution from model thought output.
+      • Restricted candidate tools strictly to verified isKnownToolName calls.
+      • Handled varied SSE streaming framing formats (with and without space padding).
+  • Verification: Verified via scratch/repro/zz_infer_repro.test.ts (10/10 passing tests across I1–I10).
+  ──────
+  ### 5. Stage 4: Secrets Egress & Data Quarantine (Blocker B6)
+
+  • Information Flow Boundary:
+      • In egress.ts: added deterministic patterns for JWT_TOKEN, DATABASE_URL_PASSWORD, and sensitive environment variables (LOCAL_LLM_API_KEY, etc.).
+      • Prevented recursive re-classification of existing [REDACTED:...] tokens.
+  • Authorized Sink Protection:
+      • In security.ts: configured SecretsVault.restore to fail closed when isAuthorizedSink === false.
+      • In sidecar.ts: ensured diffs and events emitted to sidecars have secrets redacted.
+      • In agent.ts: unified outbound quarantine across search_web, fetch_web, browser_navigate, and browser_type.
+  • Verification: Confirmed with tests R11 & R12 in zz_trust_repro.test.ts (zero secrets sent to models, zero secrets in sidecar events, zero secrets in flight logs).
+  ──────
+  ### 6. Stage 5: Truthful Verification (Blocker B3) & ReDoS Hotfix
+
+  • Separation of VERIFIED and REGRESSION_FREE:
+      • In tester.ts: implemented isVerifierDeliverableBound(), isFilteredVerifierCommand(), and hasExecutedTests().
+      • In turn.ts: added "REGRESSION_FREE" to EngineeringOutcome and TurnReason, with appropriate exit codes.
+      • In objective.ts: updated applyRequirementUpdates to reject status: "verified" if tests were filtered or not deliverable-bound.
+      • In agent.ts: tracked modified files per turn and updated finalizeTurnResult to return outcome: "REGRESSION_FREE" instead of false VERIFIED when test runs do not cover modified deliverables.
+      • In live_state.rs and live_view.rs: added TUI rendering and color mapping for "REGRESSION_FREE".
+      • Verified via scratch/repro/repro_false_verified.test.ts (confirming that an unrelated passing test suite produces REGRESSION_FREE and leaves requirements open).
+  • Catastrophic Backtracking (ReDoS) Diagnosis & Fix:
+      • Found that npm test hung on test/run_json_output.test.ts due to unanchored KEY_VALUE_SECRET and DATABASE_URL_PASSWORD regexes in egress.ts backtracking on a 600 KB payload.
+      • Added word boundaries and length limits; reduced execution time on the test payload from ~150 minutes to 3.6ms, and test/run_json_output.test.ts passed in 7.2s.
+
+  ──────
+  ### Remaining Items Ahead
+
+  1. Stage 6 (Context Accounting & Recovery): Verify preservation of steering instructions across context compaction and flight recorder recovery after crashes.
+  2. Stage 7 (Doctor Scope & Full Verification): Run complete verification of nexus doctor --json against real configuration and check all security gates.
+  3. Stage 8 (Matrix Reconciliation): Update the formal assessment matrix in docs/reviews/NEXUS_TOP_TIER_QUALIFICATION_ASSESSMENT_2026-10-12.md.
+</pasted_content id="ac96">
