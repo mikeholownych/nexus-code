@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bx9vd5kf3</task-id>
+<tool-use-id>toolu_01HfSLiz8zRsJeLagm3sdYFs</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/bx9vd5kf3.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for clone baseline results" completed (exit code 0)</summary>
+</task-notification>
