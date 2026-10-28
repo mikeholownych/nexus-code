@@ -925,6 +925,8 @@ export class AutonomousAgent {
     onConfirm?: ConfirmHandler;
     /** The loop has ended: steering can no longer be applied in this turn (the host starts a follow-up turn). */
     closing?: boolean;
+    /** TDD RED boundary: task_completed may record a failing verifier as the phase result. */
+    tddRed?: boolean;
   };
   private lastTurnResult?: TurnResult;
   private completionSummary?: { summary: string; notes?: string };
@@ -1242,6 +1244,125 @@ export class AutonomousAgent {
       this.initTaskState();
     }
     this.resetConversation();
+  }
+
+  /** The current in-memory verifier baseline, if one is captured. */
+  public getChangeBaseline(): ChangeBaseline | undefined {
+    return this.changeBaseline ?? undefined;
+  }
+
+  /**
+   * Rebase the verifier baseline onto a verified TDD RED test set, without moving anything RED was not allowed to
+   * change. RED may only add tests: every pre-RED test must still be present and byte-identical, and every
+   * verifier-definition entry must be unchanged except for the added tests (and the absent-path marker they
+   * legitimately clear). Anything else is refused so GREEN cannot verify against an oracle the model narrowed.
+   */
+  public rebaseVerifierBaselineAfterTddRed(
+    redTests: readonly string[],
+  ): { ok: true } | { ok: false; reason: string } {
+    const baseline = this.changeBaseline;
+    const command = this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command;
+    if (!command) return { ok: false, reason: "no verifier command is configured or discoverable" };
+    if (!baseline) return { ok: false, reason: "no verifier baseline was captured before RED" };
+    if (baseline.command !== command) {
+      return { ok: false, reason: "the verifier command changed during RED" };
+    }
+    if (!baseline.tests) {
+      return { ok: false, reason: "the verifier baseline captured before RED was incomplete" };
+    }
+    const workspace = this.config.workspace;
+    const rel = (file: string) => path.relative(path.resolve(workspace), path.resolve(workspace, file)).replace(/\\/g, "/");
+    const reported = new Set(redTests.map(rel));
+    const currentTests = snapshotTests(workspace);
+    if (!currentTests) return { ok: false, reason: "the current test set is too large to capture" };
+    for (const [file, content] of baseline.tests) {
+      const after = currentTests.get(file);
+      if (after === undefined) return { ok: false, reason: `RED removed test ${file}` };
+      // RED may add tests; changing or weakening one of the operator's existing tests re-anchors the oracle, and the
+      // model controls which paths are "reported", so an edit cannot be self-authorizing.
+      if (after !== content) return { ok: false, reason: `RED modified the existing test ${file}` };
+    }
+    for (const file of currentTests.keys()) {
+      if (!baseline.tests.has(file) && !reported.has(file)) {
+        return { ok: false, reason: `RED added ${file}, which is not one of its reported tests` };
+      }
+    }
+    for (const file of reported) {
+      if (!currentTests.has(file)) return { ok: false, reason: `the reported RED test ${file} is not present` };
+    }
+    const currentVerifier = snapshotVerifierDefinition(workspace, command, this.config.trustedDeliverableFiles ?? []);
+    if (!currentVerifier) return { ok: false, reason: "the current verifier definition could not be captured" };
+    if (!baseline.verifier) {
+      // Only a repository with no test file at all can legitimately have no pre-RED definition snapshot (the verifier
+      // referenced a file that did not exist). With tests present, a null snapshot means the definition could not be
+      // captured, so a RED-created one must not become the trusted oracle.
+      if (baseline.tests.size > 0) {
+        return { ok: false, reason: "no verifier definition was captured before RED" };
+      }
+      // With nothing captured there is no pre-RED oracle to bind. Only a test-set runner can establish one, and only
+      // the reported tests and operator-declared deliverables may appear in it: a manifest- or config-authored
+      // verifier must exist before RED, and the RED turn cannot be the author of the oracle.
+      const stripped = command.replace(/^(?:\s*(?:env(?:\s+-[A-Za-z]+(?:\s+[^\s-][^\s]*)?)*|[A-Za-z_][A-Za-z0-9_]*=[^\s]*)\s+)+/, "");
+      if (!/^(?:node|tsx)\s+--test\b|^(?:bun|deno)\s+test\b/.test(stripped)) {
+        return {
+          ok: false,
+          reason: "no verifier definition was captured before RED and the command is not a test-set runner",
+        };
+      }
+      const trusted = new Set((baseline.trustedDeliverables ?? []).map(rel));
+      for (const key of currentVerifier.keys()) {
+        if (key.startsWith("\0") || reported.has(key) || trusted.has(key)) continue;
+        return {
+          ok: false,
+          reason: `${key} would enter the trusted verifier definition but is neither a reported test nor a declared deliverable`,
+        };
+      }
+    }
+    const preVerifier = baseline.verifier;
+    if (preVerifier) {
+      for (const key of new Set([...preVerifier.keys(), ...currentVerifier.keys()])) {
+        if (key.startsWith("\0test-file-set:")) continue;
+        const before = preVerifier.get(key);
+        const after = currentVerifier.get(key);
+        if (before === after) continue;
+        if (key.startsWith("\0must-remain-absent:") && reported.has(rel(key.slice("\0must-remain-absent:".length)))) continue;
+        if (!key.startsWith("\0") && reported.has(key)) continue;
+        return {
+          ok: false,
+          reason: key.startsWith("\0")
+            ? `RED changed the verifier's ${key.slice(1).split(":")[0]} definition`
+            : `RED changed ${key}, which the verifier depends on`,
+        };
+      }
+    }
+    const tests = new Map(baseline.tests);
+    for (const file of reported) tests.set(file, currentTests.get(file)!);
+    const verifier = new Map(baseline.verifier ?? currentVerifier);
+    for (const key of [...verifier.keys()]) {
+      if (key.startsWith("\0test-file-set:")) verifier.delete(key);
+      else if (key.startsWith("\0must-remain-absent:") && reported.has(rel(key.slice("\0must-remain-absent:".length)))) verifier.delete(key);
+    }
+    for (const file of reported) {
+      const content = currentVerifier.get(file);
+      if (content !== undefined) verifier.set(file, content);
+    }
+    verifier.set("\0test-file-set:" + JSON.stringify([...tests.keys()].sort()), "");
+    this.changeBaseline = {
+      command,
+      failed: true,
+      tests,
+      verifier,
+      trustedDeliverables: [...(baseline.trustedDeliverables ?? [])],
+      at: new Date().toISOString(),
+    };
+    if (this.durable) {
+      try {
+        this.checkpointDurableState("TDD RED baseline rebased");
+      } catch (err: any) {
+        this.reportPersistenceFailure("tdd_baseline", err);
+      }
+    }
+    return { ok: true };
   }
 
   public getStateManager(): DurableStateManager {
@@ -3894,7 +4015,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               );
             if (
               bindsWorkspaceDefinition &&
-              (!matchingBaseline || verifierDefinitionChanged)
+              (!matchingBaseline || verifierDefinitionChanged) &&
+              !this.activeTurn?.tddRed
             ) {
               const detail = !matchingBaseline
               ? "The workspace-resolved verifier has no matching pre-change baseline. Its current output cannot establish verification; start a fresh task from an operator-reviewed trusted workspace baseline."
@@ -4027,6 +4149,23 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 success: false,
                 output: "",
                 error: `Verification Oracle: the selected verifier timed out after ${deadlineSecs}s, so the changes are NOT verified.\nCommand: ${testRes.command}\nThis is a timeout, not a test failure. The verifier's process tree was terminated, so it is safe to retry.\nPartial output:\n${partial}\nUse a faster verifier, or ask the operator to raise the verifier deadline (NEXUS_VERIFIER_TIMEOUT_SECS); do not claim completion until the verifier can finish.`,
+              };
+            }
+            if (!testRes.success && this.activeTurn?.tddRed) {
+              // The RED phase ends by recording the failing test itself; the unit executor validates this result
+              // before any implementation. Normal task_completed still requires a passing verifier.
+              this.completionSummary = {
+                summary: args.summary || "TDD RED: failing test recorded.",
+                notes: args.notes,
+              };
+              return {
+                success: true,
+                output: JSON.stringify({
+                  status: "tdd_red_recorded",
+                  verification: "FAILED",
+                  command: testRes.command,
+                  summary: this.completionSummary.summary,
+                }),
               };
             }
             if (!testRes.success) {
@@ -5046,7 +5185,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return this.activeTurn?.controller.signal;
   }
 
-  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
+  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
     // same establishment and resolution boundary as one-shot `run` tasks.
     if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
@@ -5081,7 +5220,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     for (const group of groupsTriggeredBy(promptText)) this.enabledToolGroups.add(group);
     await this.pluginManager.notifyTurnStart(promptText, this.config.workspace);
 
-    const turn: NonNullable<AutonomousAgent["activeTurn"]> = { controller: new AbortController(), phase: "idle", step: 0, onConfirm };
+    const turn: NonNullable<AutonomousAgent["activeTurn"]> = {
+      controller: new AbortController(),
+      phase: "idle",
+      step: 0,
+      onConfirm,
+      tddRed: options?.tddRed === true,
+    };
     this.activeTurn = turn;
     const signal = turn.controller.signal;
     this.bridge.setTurnSignal(signal);
