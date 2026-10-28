@@ -25,7 +25,12 @@ test("a plan-only turn completes with no verification obligation", async () => {
   try {
     await server.handleLine(JSON.stringify({ v: 1, type: "prompt.submit", id: "t1", text: "Update the plan only; do not change workspace files." }));
     await server.idle();
-    const result = events.find((event) => event.type === "turn.result");
+    const toolEnd = events.find((event) => event.type === "tool.end" && event.turn_id === "t1" && event.tool === "update_plan");
+    assert.ok(toolEnd, "update_plan must complete on the submitted turn");
+    assert.equal(toolEnd.success, true);
+    const assistantText = events.filter((event) => event.type === "assistant.delta" && event.turn_id === "t1").map((event) => event.text).join("");
+    assert.equal(assistantText, "Plan updated.");
+    const result = events.find((event) => event.type === "turn.result" && event.turn_id === "t1");
     assert.ok(result, "turn.result must be emitted");
     assert.equal(result.turn.execution, "COMPLETED");
     assert.equal(result.turn.outcome, "NOT_REQUIRED");
