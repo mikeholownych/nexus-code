@@ -131,9 +131,14 @@ export function createContextCheckpoint(
       }
     }
   } else {
-    for (const entry of BUNDLE_FILES) {
-      const data = contents.get(entry.name);
-      if (data) writePrivateFile(path.join(bundle, entry.file), data, { durable: true });
+    try {
+      for (const entry of BUNDLE_FILES) {
+        const data = contents.get(entry.name);
+        if (data) writePrivateFile(path.join(bundle, entry.file), data, { durable: true });
+      }
+    } catch (error) {
+      fs.rmSync(bundle, { recursive: true, force: true });
+      throw error;
     }
   }
 

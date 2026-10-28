@@ -475,6 +475,38 @@ test("an identical checkpoint reuses its existing bundle without rewriting it", 
   }
 });
 
+test("a failed first bundle write is cleaned up so checkpoint retry succeeds", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  const originalRename = fs.renameSync;
+  try {
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "retry-journal\n", { durable: true });
+    let failedBundle: string | undefined;
+    (fs as any).renameSync = (from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to).endsWith("messages.jsonl") && String(to).includes("context-checkpoints")) {
+        failedBundle = path.dirname(String(to));
+        throw new Error("simulated first bundle write failure");
+      }
+      return originalRename(from, to);
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => createContextCheckpoint(store.manager, state, "u1", "retry"), /simulated first bundle write failure/);
+    assert.ok(failedBundle);
+    fs.renameSync = originalRename;
+    syncBuiltinESMExports();
+
+    assert.equal(fs.existsSync(failedBundle), false);
+    const record = createContextCheckpoint(store.manager, state, "u1", "retry");
+    assert.equal(fs.readFileSync(path.join(failedBundle, "messages.jsonl"), "utf8"), "retry-journal\n");
+    assert.equal(checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "retry", record.sha256), failedBundle);
+  } finally {
+    fs.renameSync = originalRename;
+    syncBuiltinESMExports();
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("restore removes a journal created after the checkpoint", () => {
   const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
   try {
