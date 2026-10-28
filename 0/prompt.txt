@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bjuq4lnsd</task-id>
+<tool-use-id>toolu_017SK7eVKLNY53CKquPvACnc</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/bjuq4lnsd.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch CI for rebased PR-19, PR-20, PR-21" completed (exit code 0)</summary>
+</task-notification>
