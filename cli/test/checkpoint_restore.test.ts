@@ -954,6 +954,8 @@ test("Git manifest restore refuses an ignored directory replacing a tracked chec
     fs.writeFileSync(path.join(repo, "a", "ignored"), "ignored canary\n");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "tracked canary\n");
     fs.writeFileSync(path.join(repo, "untracked.txt"), "untracked canary\n");
+    fs.writeFileSync(path.join(repo, "staged.txt"), "staged canary\n");
+    git("add", "staged.txt");
     assert.equal(git("check-ignore", "a/ignored"), "a/ignored");
     const headBefore = git("rev-parse", "HEAD");
     const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
@@ -965,11 +967,54 @@ test("Git manifest restore refuses an ignored directory replacing a tracked chec
     assert.equal(fs.readFileSync(path.join(repo, "a", "ignored"), "utf8"), "ignored canary\n");
     assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "tracked canary\n");
     assert.equal(fs.readFileSync(path.join(repo, "untracked.txt"), "utf8"), "untracked canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "staged.txt"), "utf8"), "staged canary\n");
     assert.equal(git("rev-parse", "HEAD"), headBefore);
     const indexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
     assert.equal(indexAfter, indexBefore, "a rejected preflight must leave the Git index entries unchanged");
   } finally {
     cleanupGitRepo(repo);
+  }
+});
+
+test("Git manifest restore refuses special and nested-repository descendants of a tracked checkpoint file", () => {
+  for (const obstruction of ["fifo", "nested repository"] as const) {
+    const { repo, git } = gitRepo();
+    try {
+      fs.writeFileSync(path.join(repo, "a"), "captured file\n");
+      git("add", "a");
+      git("commit", "-qm", "track checkpoint file target");
+      const manager = new CheckpointManager(repo);
+      const checkpoint = manager.createCheckpoint(`tracked file replaced by ${obstruction}`);
+      fs.rmSync(path.join(repo, "a"));
+      fs.mkdirSync(path.join(repo, "a"));
+      if (obstruction === "fifo") {
+        execFileSync("mkfifo", [path.join(repo, "a", "obstruction.fifo")]);
+      } else {
+        execFileSync("git", ["-C", path.join(repo, "a"), "init", "-q"]);
+        fs.writeFileSync(path.join(repo, "a", "nested-canary.txt"), "nested repository canary\n");
+      }
+      fs.writeFileSync(path.join(repo, "staged.txt"), "staged canary\n");
+      git("add", "staged.txt");
+      const headBefore = git("rev-parse", "HEAD");
+      const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+
+      const result = manager.restore(checkpoint.id);
+
+      assert.equal(result.success, false, `${obstruction}: ${result.message}`);
+      assert.match(result.message, /destination|unsafe|snapshot/i);
+      if (obstruction === "fifo") {
+        assert.equal(fs.lstatSync(path.join(repo, "a", "obstruction.fifo")).isFIFO(), true);
+      } else {
+        assert.equal(fs.readFileSync(path.join(repo, "a", "nested-canary.txt"), "utf8"), "nested repository canary\n");
+        assert.equal(fs.existsSync(path.join(repo, "a", ".git")), true);
+      }
+      assert.equal(fs.readFileSync(path.join(repo, "staged.txt"), "utf8"), "staged canary\n");
+      assert.equal(git("rev-parse", "HEAD"), headBefore);
+      const indexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+      assert.equal(indexAfter, indexBefore, `${obstruction}: rejection must preserve staged index entries`);
+    } finally {
+      cleanupGitRepo(repo);
+    }
   }
 });
 
