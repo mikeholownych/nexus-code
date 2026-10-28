@@ -206,7 +206,7 @@ test("Git restore does not treat glob syntax in a filename as an ignore-pattern 
     const manager = new CheckpointManager(repo);
     const checkpoint = manager.createCheckpoint("before glob-bearing staged addition");
     fs.writeFileSync(path.join(repo, globName), "literal bracket filename\n");
-    git("add", globName);
+    git("add", `:(literal)${globName}`);
 
     const result = manager.restore(checkpoint.id);
 
