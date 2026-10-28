@@ -1,0 +1,455 @@
+<pasted_content id="e171">
+NEXUS DOGFOODING ASSESSMENT — INITIAL CAMPAIGN
+
+BASELINE
+
+Repository:
+  /home/mike/nexus-code
+
+Starting baseline:
+  2860228cb84166d0295961587ad4934184165bd0
+
+Phase 3 is complete.
+
+Post-Phase-3 defect dispositions:
+
+  D4  REMEDIATED_WITH_KNOWN_RECOVERY_LIMITATION
+  D3  REMEDIATED_WITH_BOUNDED_PLATFORM_LIMITATIONS
+  D2  REMEDIATED
+  D1  CONSTRAINED_AND_DISCLOSED
+
+The operator has confirmed the actual-terminal Backspace fix works.
+
+The Phase 3 TUI is now sufficiently usable to begin determining whether Nexus
+is trustworthy enough to participate materially in its own development.
+
+THIS IS AN ASSESSMENT CAMPAIGN, NOT A NEW DEVELOPMENT PHASE.
+
+PRIMARY QUESTION
+
+Can Nexus now perform representative Nexus engineering work well enough that
+using Nexus to develop Nexus is useful rather than obstructive?
+
+Do not attempt to prove that the answer is yes.
+
+Discover the answer.
+
+SUCCESS CRITERION
+
+Dogfooding readiness does NOT require:
+
+- perfection;
+- zero defects;
+- completion of every planned feature;
+- universal autonomous success;
+- production-grade reliability;
+- Phase 4 polish.
+
+The relevant threshold is:
+
+  Known limitations no longer prevent reliable completion of representative
+  Nexus development tasks.
+
+More concretely, determine whether Nexus is trustworthy enough to:
+
+- receive a real engineering objective;
+- understand or appropriately investigate what is being requested;
+- preserve the objective through execution;
+- inspect the repository proportionately;
+- make correct changes when changes are appropriate;
+- avoid changes when changes are not appropriate;
+- use tools coherently;
+- distinguish evidence from inference;
+- validate outcomes truthfully;
+- recover from ordinary bounded failures;
+- recognize when operator input is actually required;
+- recognize when the work is complete;
+- reach useful end states often enough to make self-development worthwhile.
+
+ASSESSMENT PHILOSOPHY
+
+Do not optimize for PASS.
+
+The purpose is to discover the current operating envelope.
+
+A successful task is evidence.
+
+A failed task is evidence.
+
+A blocked task is evidence.
+
+A task that correctly asks the operator for information may be successful.
+
+A task that correctly challenges an incorrect premise may be successful.
+
+A task that makes no changes because none are warranted may be successful.
+
+A superficially completed task with incorrect reasoning, weakened tests,
+unverified claims, lost objective, or misleading evidence is NOT successful.
+
+Do not repair every defect immediately after discovering it.
+
+First preserve and classify what happened.
+
+A discovery does not automatically earn investigation.
+
+An investigation does not automatically earn remediation.
+
+A remediation opportunity does not automatically earn implementation now.
+
+CURRENT KNOWLEDGE DISCIPLINE
+
+During assessment distinguish:
+
+  KNOWN
+  UNKNOWN
+  HYPOTHESIS
+  INFERENCE
+  DISPROVEN
+  UNRESOLVED
+
+Ask when relevant:
+
+  What do we know?
+  What do we not know?
+  What do we think?
+  What evidence discriminates between those possibilities?
+  What do we NEED to know to proceed?
+  What might we WANT to know but do not need now?
+  What can safely be done with the evidence already available?
+
+Do not investigate an uncertainty merely because it exists.
+
+Investigate when resolving it can materially affect the current objective,
+safety, recovery, acceptance, or next decision.
+
+TEST THE ASSEMBLED SYSTEM
+
+Do not turn this into another subsystem qualification suite.
+
+Exercise Nexus through its normal operator-facing path wherever practical:
+
+  harness
+
+Use the TUI and normal Nexus execution machinery.
+
+Do not bypass Nexus with direct implementation merely to make an assessment
+task succeed.
+
+External inspection may be used to independently evaluate what Nexus did,
+but the work being assessed must actually be performed through Nexus.
+
+TASK SELECTION
+
+Run a small but representative initial campaign.
+
+Do NOT use only exhaustive specifications.
+
+Prompt completeness is itself an experimental variable.
+
+Select approximately 5-7 real Nexus engineering tasks spanning different
+conditions.
+
+Include examples from several of these classes:
+
+1. ORIENTATION / INVESTIGATION
+
+   A vague but legitimate request requiring Nexus to determine an appropriate
+   investigation scope.
+
+   Example style:
+     "Tell me what changed here."
+     "Review what we've been working on."
+
+2. PRECISE BOUNDED ENGINEERING
+
+   A task with an explicit expected outcome and narrow scope.
+
+   This tests execution fidelity rather than scope inference.
+
+3. NATURAL OPERATOR REQUEST
+
+   Something phrased the way an operator would actually speak rather than as
+   a qualification specification.
+
+   Example style:
+     "This isn't right. Figure out what's happening."
+     "Fix this."
+     "The tests are broken again."
+
+   Use only where the repository contains enough context for the request to
+   be meaningful.
+
+4. JUDGMENT / NO-CHANGE POSSIBILITY
+
+   A task where modification is not necessarily the correct result.
+
+   Nexus should investigate and decide proportionately.
+
+5. MODERATELY COMPLEX ENGINEERING
+
+   A real implementation or defect task requiring multiple repository
+   operations, reasoning, validation, and completion.
+
+6. UNCERTAINTY / INCORRECT ASSUMPTION
+
+   Where naturally available, include a task containing incomplete,
+   ambiguous, stale, or potentially incorrect assumptions.
+
+   Do not artificially manufacture traps solely to make Nexus fail.
+
+   We want realistic operator conditions.
+
+7. RECOVERY
+
+   Allow naturally occurring bounded failures to happen.
+
+   Observe whether Nexus recognizes and recovers from them appropriately.
+
+   Do not deliberately sabotage the environment merely to manufacture
+   recovery evidence during this initial campaign.
+
+TASK DIFFICULTY AND PROMPT COMPLETENESS ARE DIFFERENT VARIABLES.
+
+A detailed prompt can describe a difficult task.
+
+A vague prompt can describe an easy task.
+
+Do not conflate autonomous scope inference with engineering difficulty.
+
+REAL WORK ONLY
+
+Prefer useful Nexus work that we might reasonably perform anyway.
+
+Do not create disposable toy functionality solely to obtain assessment
+results.
+
+Potential work can come from existing defects, TODOs, documentation
+inconsistencies, tests, usability issues, bounded backlog items, or other
+real repository needs.
+
+However:
+
+BACKLOG DOES NOT MEAN AUTHORIZED.
+
+Do not automatically select a backlog item merely because it exists.
+
+An item must earn investigation/work now based on current value.
+
+Do not begin:
+
+- cumulative recovery epochs;
+- new context-planner architecture;
+- Wolfram integration investigation;
+- speculative durable-work-state architecture;
+- large Phase 4 feature work;
+- unrelated generalized hardening;
+
+unless separately authorized by the operator.
+
+FAILURE HANDLING DURING THE CAMPAIGN
+
+When a task does not complete:
+
+DO NOT immediately fix Nexus outside the assessment.
+
+First capture:
+
+1. original operator objective;
+2. prompt as submitted;
+3. repository/system starting state;
+4. what Nexus actually did;
+5. last trustworthy state;
+6. observed failure;
+7. component where the failure became visible;
+8. whether that component is established as causal;
+9. evidence preserved;
+10. whether repository state is safe/recoverable;
+11. whether the objective remains achievable;
+12. known facts;
+13. material unknowns;
+14. hypotheses, clearly identified as hypotheses;
+15. whether further investigation is needed now;
+16. whether remediation is required before continuing the campaign.
+
+Detection point is not automatically origin.
+
+Temporal correlation is not automatically causation.
+
+Do not turn every failure into root-cause analysis.
+
+Investigate only far enough to determine what the evidence means and whether
+the campaign can safely continue.
+
+If the failure exposes a P0/P1-class condition requiring immediate
+containment, suspend the assessment at a resumable boundary, handle the
+incident separately, validate recovery, reconcile changed state, and then
+resume the assessment.
+
+SUSPENDED is not CANCELLED or FAILED.
+
+SCOPE CONTROL
+
+Thinking may branch.
+
+Execution must still have a next action.
+
+Classify discovered work approximately as:
+
+ACTIVE
+  Work currently being executed.
+
+TODO
+  Work required/relevant to complete the current objective.
+
+BACKLOG
+  Worth preserving but not justified as current work.
+
+A backlog item has persistence, not entitlement to investigation.
+
+Do not leave speculative half-built architecture behind.
+
+Prefer:
+
+  finish
+  → validate
+  → integrate
+  → establish baseline
+  → then consider expansion
+
+over:
+
+  discover
+  → partially implement
+  → discover something else
+  → partially implement that
+  → never finish the original objective
+
+SECURITY AND REPOSITORY RULES
+
+Do not push or publish anything.
+
+The Nexus repository currently has no publication authority configured.
+
+Do not create or infer a canonical remote.
+
+Do not expose secrets.
+
+Do not read or print cli/.env secret values.
+
+Preserve unrelated operator working-tree files.
+
+Do not modify the frozen Cloudflare contest video.
+
+Do not weaken tests merely to produce GREEN.
+
+Do not silently change expectations because a test failed.
+
+If a test expectation genuinely needs changing, establish why the expected
+behavior changed independently of the desire to make the test pass.
+
+EVIDENCE
+
+For each assessment task preserve enough evidence to independently determine:
+
+- objective;
+- starting state;
+- Nexus actions;
+- relevant inference/tool activity where available;
+- resulting repository delta;
+- validation performed;
+- completion/failure state;
+- operator intervention required;
+- elapsed time and other useful execution characteristics where available.
+
+Do not assume one visible tool operation corresponds to one inference call.
+
+The TUI is an operator activity projection, not an inference-call trace.
+
+If inference efficiency becomes relevant, correlate execution evidence with
+gateway/worker telemetry rather than inferring model behavior from transcript
+line count.
+
+ASSESSMENT RECORD
+
+Maintain a compact campaign record.
+
+For each task classify the outcome using evidence rather than optimism.
+
+Useful outcome classes may include:
+
+  COMPLETED
+  COMPLETED_WITH_LIMITATIONS
+  CORRECT_NO_CHANGE
+  CORRECTLY_BLOCKED
+  OPERATOR_INPUT_REQUIRED
+  RECOVERED_AND_COMPLETED
+  FAILED_RECOVERABLY
+  FAILED_UNRECOVERABLY
+
+Do not force every result into PASS/FAIL if that loses useful truth.
+
+Also record whether Nexus demonstrated:
+
+  objective preservation
+  proportionate investigation
+  correct tool use
+  appropriate mutation/no-mutation
+  truthful validation
+  recovery where required
+  correct completion recognition
+  useful final communication
+
+Do not create a meaningless aggregate percentage unless the evidence actually
+supports one.
+
+STOPPING RULE
+
+This is an INITIAL dogfooding campaign.
+
+Do not endlessly add tasks because another test could theoretically be run.
+
+Stop when approximately 5-7 representative tasks have produced enough
+evidence to materially update our understanding of Nexus's current
+dogfooding capability.
+
+Stop earlier if a systemic blocker makes further tasks uninformative.
+
+At completion, report:
+
+1. exact starting and ending repository state;
+2. tasks attempted and why each was representative;
+3. exact prompts used;
+4. outcome of each;
+5. repository changes produced;
+6. validation evidence;
+7. failures and recovery behavior;
+8. operator interventions required;
+9. demonstrated strengths;
+10. demonstrated limitations;
+11. newly discovered defects;
+12. backlog candidates discovered but deliberately not pursued;
+13. material unknowns remaining;
+14. whether the evidence supports one of:
+
+    DOGFOODING_NOT_READY
+    DOGFOODING_READY_WITH_KNOWN_LIMITATIONS
+    DOGFOODING_READY
+
+15. the narrowest evidence-based explanation for that recommendation.
+
+IMPORTANT:
+
+The final readiness classification is a recommendation to the operator.
+
+Do not treat your own assessment as architectural or acceptance authority.
+
+Do not begin remediation, Phase 4, another assessment campaign, publication,
+or unrelated work after producing the report.
+
+Stop for operator review.
+
+The objective is not to demonstrate that Nexus can pass a qualification.
+
+The objective is to learn whether Nexus can now usefully help build Nexus.
+</pasted_content id="e171">
