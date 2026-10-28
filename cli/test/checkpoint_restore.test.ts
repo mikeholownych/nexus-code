@@ -726,6 +726,34 @@ test("subdirectory workspace restore removes checkpoint-deleted paths relative t
   }
 });
 
+test("subdirectory workspace restore preserves sibling worktree and index changes", () => {
+  const { repo, git } = gitRepo();
+  const workspace = path.join(repo, "sub");
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(workspace, "tracked.txt"), "subdirectory base\n");
+  git("add", "tracked.txt", "sub/tracked.txt");
+  git("commit", "-qm", "subdirectory restore base");
+  const manager = new CheckpointManager(workspace);
+  try {
+    const checkpoint = manager.createCheckpoint("subdirectory scoped restore");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "sibling staged work\n");
+    git("add", "tracked.txt");
+    fs.writeFileSync(path.join(workspace, "tracked.txt"), "subdirectory later work\n");
+    git("add", "sub/tracked.txt");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "sibling staged work\n");
+    assert.equal(git("show", ":tracked.txt"), "sibling staged work");
+    assert.equal(fs.readFileSync(path.join(workspace, "tracked.txt"), "utf8"), "subdirectory base\n");
+    assert.equal(git("show", ":sub/tracked.txt"), "subdirectory base");
+  } finally {
+    fs.rmSync(manager.getCheckpointDir(), { recursive: true, force: true });
+    cleanupGitRepo(repo);
+  }
+});
+
 test("tracked deletion cleanup runs before a checkpoint symlink can redirect it", () => {
   const { repo, git } = gitRepo();
   const alias = path.join(repo, "alias");
