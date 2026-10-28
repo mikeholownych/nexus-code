@@ -282,8 +282,13 @@ export class CheckpointManager {
         continue;
       }
       if (parent !== workspaceRoot && !parent.startsWith(workspaceRoot + path.sep)) continue;
-      if (fs.lstatSync(targetPath, { throwIfNoEntry: false })?.isDirectory()) continue;
-      fs.rmSync(targetPath, { force: true });
+      try {
+        if (fs.lstatSync(targetPath, { throwIfNoEntry: false })?.isDirectory()) continue;
+        fs.rmSync(targetPath, { force: true });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      }
     }
   }
 
@@ -375,13 +380,11 @@ export class CheckpointManager {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       });
-      if (preview.trim() === `Would remove ${relativePath}/`) {
-        if (!this.directoryContainsOnlyGitCleanRemovableEntries(relativePath)) {
-          throw new Error("Checkpoint snapshot target directory contains entries preserved by Git clean");
-        }
+      if (preview.trim() !== "" && this.directoryContainsOnlyGitCleanRemovableEntries(relativePath)
+        && this.gitTrackedDescendantPaths(relativePath).length === 0) {
         continue;
       }
-      if (preview.trim() !== "" || !this.directoryContainsOnlyTrackedRemovableEntries(relativePath)) {
+      if (!this.directoryContainsOnlyTrackedRemovableEntries(relativePath)) {
         throw new Error("Checkpoint snapshot target directory contains entries preserved by Git clean");
       }
     }
@@ -442,6 +445,14 @@ export class CheckpointManager {
     return visit(root, "");
   }
 
+  private gitTrackedDescendantPaths(relativePath: string): string[] {
+    return execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--cached", "-z", "--", relativePath], {
+      cwd: this.workspace,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    }).toString("utf8").split("\0").filter((entry) => entry.startsWith(`${relativePath}/`));
+  }
+
   private directoryContainsOnlyTrackedRemovableEntries(relativePath: string): boolean {
     const root = path.join(this.workspace, relativePath);
     const diskEntries: string[] = [];
@@ -472,11 +483,7 @@ export class CheckpointManager {
 
     if (!visit(root, "")) return false;
     if (diskEntries.length === 0) return false;
-    const trackedEntries = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--cached", "-z", "--", relativePath], {
-      cwd: this.workspace,
-      encoding: "buffer",
-      maxBuffer: 64 * 1024 * 1024,
-    }).toString("utf8").split("\0").filter(Boolean).filter((entry) => entry.startsWith(`${relativePath}/`));
+    const trackedEntries = this.gitTrackedDescendantPaths(relativePath);
     const tracked = new Set(trackedEntries);
     if (diskEntries.length !== tracked.size || diskEntries.some((entry) => !tracked.has(entry))) return false;
 
