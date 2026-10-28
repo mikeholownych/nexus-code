@@ -1,0 +1,27 @@
+<pasted_content id="9bc7">
+Implement cloud inference provider support in Nexus using the plan at:
+
+`/home/mike/nexus-code/docs/NEXUS-CLOUD-PROVIDERS-PLAN.md`
+
+Work in `/home/mike/nexus-code`. Read the applicable `AGENTS.md` instructions and the complete plan before making changes.
+
+The Nexus snapshot used during planning was old. Treat the actual checkout as authoritative. First inspect current local AI appliance connectivity, configuration precedence, credential handling, routing, streaming, persistence, outbound data controls, and every inference caller. Record the current commit and working-tree state; preserve unrelated changes.
+
+Write a concise source-backed assessment of what already exists, what needs extending, and any necessary departures from the plan. Then proceed with implementation using the existing architecture and conventions. Do not stop after discovery or return only a proposal.
+
+Follow the plan’s milestones and acceptance gates. Prioritize preserving local appliance behavior and defaults, provider-scoped credentials, explicit cloud selection and disclosure policy, complete streamed tool calls, cancellation, bounded recovery, accurate context admission, and usage accounting. Include auxiliary inference and subagents wherever supported. Never implicitly substitute an appliance credential for a cloud credential or send local tasks to cloud through an unconfigured fallback.
+
+Implement incremental, reviewable changes with focused tests and operator documentation. Use deterministic fixtures or mock providers for automated verification. Perform live qualification only with explicitly configured credentials and authorized cloud destinations; report any qualification that could not be completed. Do not change the appliance, gateway, production deployment, or existing credentials.
+
+Make routine implementation decisions independently. Ask only when an unresolved choice materially affects scope, compatibility, disclosure authority, or external changes.
+
+Finish with:
+- What changed and why.
+- Any justified departures from the plan.
+- Tests run and their results.
+- Evidence that existing local connectivity remains compatible.
+- Cloud providers implemented and their qualification status.
+- Setup instructions and remaining limitations.
+
+Clearly distinguish implemented behavior, automated verification, and live qualification. Do not claim completion until the acceptance gates for the delivered scope are satisfied.
+</pasted_content id="9bc7">
