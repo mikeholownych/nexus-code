@@ -1,0 +1,5 @@
+<task-notification>
+<task-id>beb2431mv</task-id>
+<summary>Monitor event: "pilot: false VERIFIED, runner errors, killed runs"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
