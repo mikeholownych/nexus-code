@@ -1,0 +1,42 @@
+<task-notification>
+<task-id>a24d73d6cea41bd5a</task-id>
+<tool-use-id>toolu_018vVR6gWQrKD6QDBjxmjxod</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/a24d73d6cea41bd5a.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit core agent loop" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Scope A audit is written up. Two S2 defects, about 15 S3/S4 findings, and the core completion and stagnation logic is sound. Nine files in scope were only checked for usage, not reviewed (listed at the end).
+
+**S2 defects:**
+- **AGT-01 — `nexus run --resume` does not resume (reproduced).** The task's saved state is loaded, then `agent.run()` resets the conversation (`agent.ts:5236`). The resumed request carried only the system prompt and the new prompt; the saved objective is dropped too. The result comes back under a new task id instead of the resumed one. `--resume` with no id passes the literal `"latest"`, which is never resolved, so the task always fails. The existing test only checks that the "unverified changes" flag survives, which is why this passes.
+- **AGT-02 — work units are treated like throwaway subagents.** `/team` and `nexus operation` units run at depth 1 and are meant to be durable, but the code uses `depth === 0` to decide what is durable. As a result:
+  - their compactions are never archived or checkpointed, which contradicts `COMPACTION_AND_CONTINUITY.md:145-160`;
+  - they get no objective ledger or requirement gating;
+  - loop and stagnation history starts fresh every turn, including after a resume;
+  - their verifier passes are never judged independent, so they can't reach VERIFIED.
+
+**S3 findings:**
+- Subagent inference is left out of token accounting (reproduced: 4 requests reached the test gateway, the stats show 2).
+- Subagents leave orphan durable task records in `~/.nexus/tasks` (reproduced).
+- The separate subagent loop skips token counting and strict-count checks, and the set of tools it offers differs from the set it accepts.
+- A team implementer unit that only replies in prose, with no changes, counts as COMPLETE.
+- When an unexpected error escapes a turn, the fallback result always reports "no unverified changes", even if files were edited.
+- Every prompt is mined for "never/must/always" phrases, which are saved to `&lt;workspace&gt;/.nexus/knowledge.json` and added to all future system prompts. The `.nexus/` folder is created even in `--read-only` mode, and that file is not gated by workspace trust.
+- Inferred, not reproduced: on large repos, a long stretch of write-only steps could be stopped as stagnation by mistake.
+- The docs say team units are "capped at 15 steps"; with default settings 15 is only a checkpoint interval, so the doc is wrong.
+
+**What holds up:**
+- **Step ceilings:** none by default; `maxSteps` only sets a checkpoint interval, and subagents have no step allowance. The remaining limits (provider retry iterations, 10,000 scheduler transitions, 5 compaction attempts) are safety valves. The 10,000-transition stop leaves the operation blocked on a decision with no options, so `decide` can't clear it (S4).
+- **Completion labels are honest:** VERIFIED, REGRESSION_FREE, UNVERIFIED, BLOCKED and LIMIT_REACHED are all backed by evidence and enforced invariants.
+- **Failed commands count as changes:** I suspected a command that changed files and then failed might not mark them unverified; the reproduction showed it does.
+- **Cancellation, steering, provider recovery and compaction at depth 0** behave as documented.
+
+Not reviewed: `parser.ts`, `tester.ts`, `evaluator.ts`, `synthesizer.ts`, `stager.ts`, `tokens.ts`, `findings.ts`, `operation.ts`, and most of `candidate.ts`. `parser.ts` and `tester.ts` should get a follow-up pass because they decide VERIFIED vs REGRESSION_FREE. I also didn't check every claim in the two docs; the open questions and how to settle each are in section 6.
+
+I ran three targeted reproduction tests from a scratch file against the snapshot, not the full suite.
+
+Files are in `/tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/`:
+- `audit/A_core_agent.md`
+- `repro/agt_repro.test.ts`</result>
+<usage><subagent_tokens>328927</subagent_tokens><tool_uses>13</tool_uses><duration_ms>337968</duration_ms></usage>
+</task-notification>
