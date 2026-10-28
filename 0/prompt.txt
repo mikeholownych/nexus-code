@@ -1,0 +1,41 @@
+<task-notification>
+<task-id>acf9470f8adeb42d6</task-id>
+<tool-use-id>toolu_01NPPvTJR3XY1rgo56FH3aeC</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/acf9470f8adeb42d6.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit tools, security, persistence" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Scope C is done: 1 blocker (S1), 10 major (S2), 7 minor (S3) and 1 note (S4), with six of them reproduced against the HEAD harness-core.
+
+1. **SEC-01 (S1 blocker): the default mode runs any shell command on the host with no prompt and no sandbox.** Approval only happens with `--approve`, and bubblewrap/Docker only with `--sandbox`. The only guard is a substring denylist.
+2. **SEC-02: both dangerous-command filters are trivially bypassed.** `rm -r -f /`, `rm -rf "$HOME"` and `find / -delete` all get past both filters. They also block legitimate commands like `rm -rf ./build` and `grep reboot`. Tested only with `echo`.
+3. **SEC-03: `fetch_web` can reach loopback and LAN services, and never needs approval, even in review mode.** `localtest.me` and `[::ffff:127.0.0.1]` both reached a local server. There is no DNS or redirect check, and IPv6 private ranges are not blocked.
+4. **SEC-04: read-only mode still lets `cat ~/.ssh/id_rsa` and `cat /etc/passwd` through.**
+5. **SEC-05: skills from an untrusted repo go into the system prompt with no trust check.** MCP configs and plugins are gated; skills are not. Activating a skill never asks for approval.
+6. **SEC-07: commands keep running after shutdown or cancel.** Stopping the core daemon left a test `sleep` running as an orphan (I killed it by PID). Cancelling a turn never reaches the runner, and the model can set any timeout.
+7. **SEC-08: output and file reads have no memory cap.** 400 MB of command output pushed memory use to 785 MB, and `read_file` on a 200 MB file used 590 MB.
+8. **PER-01: stored data is readable by other local users** (measured on your real `~/.nexus`, read-only). `~/.nexus` is 775, 1,604 checkpoint files (copies of workspace code) are world-readable, and `audit.log`, `~/.nexus_history` and 1,233 session files are 664. Only the main state writer uses 0600.
+9. **PER-02: nothing is ever cleaned up.** `tasks/` holds 52,687 files (916 MB), there are 8,104 checkpoint directories, and `audit.log` is 27 MB with no rotation.
+10. **PER-03: the test suite writes into your real `~/.nexus/tasks`.** 52,660 of those task files point at `/tmp/nexus-app-test-*` workspaces.
+11. **Other S2/S3 items in the report:**
+    - The sandbox command breaks on paths with spaces.
+    - A corrupt or newer-schema session shows up as "not found".
+    - Flight logs inside the workspace can get committed.
+    - The parent directory is not fsynced after the Rust atomic rename.
+    - An unused "sandboxed" plugin runner is not actually isolated.
+    - `docs/ARCHITECTURE.md` section 3 overstates the protections.
+
+**What holds up:**
+- The Rust file-tool path jail blocked every `..`, absolute-path and symlink attempt.
+- Timeouts kill the whole process group.
+- Git operations don't go through a shell.
+- Workspace MCP configs and plugins require explicit trust.
+- Session state has fail-closed schema versioning and a durable compaction archive.
+
+**Not covered:** I did not read `PHASE2S_SECURITY_AND_DATA_REVIEW.md`, and only skimmed the MCP, browser and LSP transports. The rename race, macOS case handling, concurrent edits, PTY cleanup and egress-classifier coverage are listed with procedures to check them.
+
+The report has 13 proposed v1 requirements; one (default approval or sandbox for commands and egress) is a blocker.
+
+Output: `/tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/audit/C_tools_security_persistence.md`</result>
+<usage><subagent_tokens>210009</subagent_tokens><tool_uses>20</tool_uses><duration_ms>349571</duration_ms></usage>
+</task-notification>
