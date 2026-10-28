@@ -153,6 +153,25 @@ test("shows a missing dependency and every unit on a cycle", () => {
   assert.deepEqual(view.dag.cycles, ["u1", "u2", "u3"]);
 });
 
+test("critical path does not memoize a cycle-truncated dependency chain", () => {
+  const op = state();
+  for (const unit of op.units) unit.status = "RUNNABLE";
+  op.units[0].dependsOn = ["u2", "u3"];
+  op.units[1].dependsOn = ["u1"];
+  op.units[2].dependsOn = ["u4"];
+  const prerequisite = structuredClone(op.units[2]);
+  prerequisite.id = "u4";
+  prerequisite.title = "Finish prerequisite";
+  prerequisite.status = "RUNNABLE";
+  prerequisite.dependsOn = [];
+  prerequisite.blocked = undefined;
+  prerequisite.result = undefined;
+  op.units.push(prerequisite);
+
+  const view = buildOperationView(op, { now: NOW });
+  assert.deepEqual(view.dag.criticalPath, ["u4", "u3", "u1", "u2"]);
+});
+
 test("shows a blocked unit's decision even while other work is running", () => {
   const op = state();
   op.status = "RUNNING";
@@ -331,13 +350,47 @@ test("watch clears the screen only when asked", async () => {
 
 const cliDir = fileURLToPath(new URL("..", import.meta.url));
 
-function runCli(args: string[], workspace: string): { status: number; stdout: string; stderr: string } {
+interface CliFixture {
+  root: string;
+  home: string;
+  workspace: string;
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+  cleanup(): void;
+}
+
+function createCliFixture(): CliFixture {
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "nexus-view-test-"));
+  const home = path.join(root, "home");
+  const workspace = path.join(root, "workspace");
+  const stateDir = path.join(root, "state");
+  fs.mkdirSync(home, { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+  return {
+    root,
+    home,
+    workspace,
+    stateDir,
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      XDG_DATA_HOME: path.join(home, ".local", "share"),
+      NEXUS_STATE_DIR: stateDir,
+    },
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+function runCli(args: string[], fixture: CliFixture): { status: number; stdout: string; stderr: string } {
   try {
-    const stdout = execFileSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/index.ts"), ...args, "-w", workspace], {
+    const stdout = execFileSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/index.ts"), ...args, "-w", fixture.workspace], {
       cwd: cliDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 60_000,
+      env: fixture.env,
     });
     return { status: 0, stdout, stderr: "" };
   } catch (error: any) {
@@ -345,29 +398,30 @@ function runCli(args: string[], workspace: string): { status: number; stdout: st
   }
 }
 
-function saveFixture(id: string): { workspace: string; file: string } {
-  const workspace = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "nexus-view-ws-"));
+function saveFixture(fixture: CliFixture, id: string): string {
   const op = state();
   op.id = id;
   op.units[1].blocked!.decision.id = `d-${id}`;
   op.units[1].blocked!.decision.unitId = "u2";
   op.blocked!.decisions = [op.units[1].blocked!.decision];
-  new OperationStore(workspace).save(op);
-  const file = path.join(process.env.HOME ?? "", ".nexus", "tasks", `${id}.json`);
-  return { workspace, file };
+  const store = new OperationStore(fixture.workspace, path.join(fixture.stateDir, "tasks"), fixture.home);
+  store.save(op);
+  return store.manager.getStateFilePath(id);
 }
 
-test("status --dag prints the view and --dag --json prints the same facts without writing the operation", () => {
-  const { workspace, file } = saveFixture("op-cli-view");
+test("status --dag prints the view and --dag --json prints the same facts without writing the operation", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  const file = saveFixture(fixture, "op-cli-view");
   const before = { hash: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), mtime: fs.statSync(file).mtimeMs };
 
-  const text = runCli(["operation", "status", "--dag", "op-cli-view"], workspace);
+  const text = runCli(["operation", "status", "--dag", "op-cli-view"], fixture);
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /Operation op-cli-view: BLOCKED/);
   assert.match(text.stdout, /Critical path: u2 → u3/);
   assert.match(text.stdout, /Decision needed:/);
 
-  const json = runCli(["operation", "status", "--dag", "--json", "op-cli-view"], workspace);
+  const json = runCli(["operation", "status", "--dag", "--json", "op-cli-view"], fixture);
   assert.equal(json.status, 0, json.stderr);
   const views = JSON.parse(json.stdout);
   assert.equal(views.length, 1);
@@ -379,21 +433,25 @@ test("status --dag prints the view and --dag --json prints the same facts withou
   assert.deepEqual(after, before, "the view path wrote the operation");
 });
 
-test("watch on a pipe renders one snapshot and exits non-zero while the operation is blocked", () => {
-  const { workspace, file } = saveFixture("op-cli-watch");
+test("watch on a pipe renders one snapshot and exits non-zero while the operation is blocked", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  const file = saveFixture(fixture, "op-cli-watch");
   const before = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-  const result = runCli(["operation", "watch", "op-cli-watch"], workspace);
+  const result = runCli(["operation", "watch", "op-cli-watch"], fixture);
   assert.equal(result.status, 2);
   assert.match(result.stdout, /Operation op-cli-watch: BLOCKED/);
   assert.equal(createHash("sha256").update(fs.readFileSync(file)).digest("hex"), before);
 });
 
-test("watch on a pipe reports the operation's exit code for complete and cancelled", () => {
+test("watch on a pipe reports the operation's exit code for complete and cancelled", (t) => {
   for (const [id, status, expected] of [
     ["op-cli-watch-complete", "COMPLETE", 0],
     ["op-cli-watch-cancelled", "CANCELLED", 130],
   ] as const) {
-    const { workspace, file } = saveFixture(id);
+    const fixture = createCliFixture();
+    t.after(fixture.cleanup);
+    const file = saveFixture(fixture, id);
     const record = JSON.parse(fs.readFileSync(file, "utf8"));
     record.status = "COMPLETE";
     record.operation.status = status;
@@ -404,17 +462,47 @@ test("watch on a pipe reports the operation's exit code for complete and cancell
       unit.result = unit.result ?? { summary: "done", completedAt: "2026-10-28T11:30:00.000Z", resourceId: "primary", outcome: "VERIFIED" };
     }
     fs.writeFileSync(file, JSON.stringify(record));
-    const result = runCli(["operation", "watch", id], workspace);
+    const result = runCli(["operation", "watch", id], fixture);
     assert.equal(result.status, expected, result.stderr);
   }
 });
 
-test("status --dag rejects a malformed --events instead of guessing", () => {
-  const { workspace } = saveFixture("op-cli-events");
-  const result = runCli(["operation", "status", "--dag", "--events", "-1", "op-cli-events"], workspace);
+test("status and watch reject malformed or blank --events instead of guessing", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  saveFixture(fixture, "op-cli-events");
+  for (const value of ["-1", "", "   "]) {
+    for (const command of ["status", "watch"]) {
+      const args = command === "status"
+        ? ["operation", "status", "--dag", "--events", value, "op-cli-events"]
+        : ["operation", "watch", "--events", value, "op-cli-events"];
+      const result = runCli(args, fixture);
+      assert.equal(result.status, 2, `${command} accepted ${JSON.stringify(value)}`);
+      assert.match(result.stderr, /--events.*non-negative number/);
+      assert.equal(result.stdout, "");
+    }
+  }
+});
+
+test("watch's multiple-operation list sanitizes persisted objectives", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  const first = saveFixture(fixture, "op-cli-list-a");
+  const second = saveFixture(fixture, "op-cli-list-b");
+  const record = JSON.parse(fs.readFileSync(second, "utf8"));
+  record.operation.id = "op-cli-list-b\u001b]52;c;payload\u0007";
+  record.operation.objective = "hostile\u001b]52;c;payload\u0007\u001b[2J forged\nline\tend\u009c";
+  fs.writeFileSync(second, JSON.stringify(record));
+  assert.ok(fs.existsSync(first));
+
+  const result = runCli(["operation", "watch"], fixture);
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /--events must be a non-negative number/);
-  assert.equal(result.stdout, "");
+  const operationRows = result.stderr.split("\n").filter((line) => line.includes("  BLOCKED  "));
+  assert.equal(operationRows.length, 2);
+  assert.doesNotMatch(operationRows.join("\n"), /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+  assert.equal(result.stderr.split("\n").some((line) => line.startsWith("line")), false);
+  assert.match(operationRows.join("\n"), /op-cli-list-b␛\]52;c;payload␇  BLOCKED/);
+  assert.match(operationRows.join("\n"), /hostile.*forged line end<U\+009C>/);
 });
 
 test("terminal-safe rendering: operation text cannot emit control or escape sequences", () => {
@@ -540,10 +628,12 @@ test("the --json document satisfies the checked-in JSON schema", () => {
   assert.notDeepEqual(validate(JSON.parse(JSON.stringify(withDetail)), schema, "views"), []);
 });
 
-test("a corrupt record is reported cleanly and quarantined by the shared loader", () => {
-  const { workspace, file } = saveFixture("op-cli-corrupt");
+test("a corrupt record is reported cleanly and quarantined by the shared loader", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  const file = saveFixture(fixture, "op-cli-corrupt");
   fs.writeFileSync(file, "{ not json");
-  const result = runCli(["operation", "status", "--dag", "op-cli-corrupt"], workspace);
+  const result = runCli(["operation", "status", "--dag", "op-cli-corrupt"], fixture);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /Cannot read operation op-cli-corrupt: Corrupt state/);
   assert.doesNotMatch(result.stderr, /\n\s+at .*node:internal/);

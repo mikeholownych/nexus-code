@@ -173,8 +173,9 @@ export function registerOperationCommands(program: Command): void {
     .action((id: string | undefined, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
       if (options.dag) {
-        const eventLimit = Number(options.events);
-        if (!Number.isFinite(eventLimit) || eventLimit < 0) {
+        const eventsText = String(options.events);
+        const eventLimit = Number(eventsText);
+        if (!eventsText.trim() || !Number.isFinite(eventLimit) || eventLimit < 0) {
           console.error(pc.red(`--events must be a non-negative number (got '${options.events}')`));
           process.exitCode = 2;
           return;
@@ -211,8 +212,9 @@ export function registerOperationCommands(program: Command): void {
     .action(async (id: string | undefined, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
       const intervalSecs = Number(options.interval);
-      const eventLimit = Number(options.events);
-      if (!Number.isFinite(intervalSecs) || intervalSecs <= 0 || !Number.isFinite(eventLimit) || eventLimit < 0) {
+      const eventsText = String(options.events);
+      const eventLimit = Number(eventsText);
+      if (!Number.isFinite(intervalSecs) || intervalSecs <= 0 || !eventsText.trim() || !Number.isFinite(eventLimit) || eventLimit < 0) {
         console.error(pc.red("--interval must be a positive number of seconds and --events a non-negative number"));
         process.exitCode = 2;
         return;
@@ -234,7 +236,12 @@ export function registerOperationCommands(program: Command): void {
         }
         if (operations.length > 1) {
           console.error(pc.red("More than one operation in this workspace; pass an id:"));
-          for (const operation of operations) console.error(`  ${operation.id}  ${operation.status}  ${operation.objective}`);
+          for (const operation of operations) {
+            const id = safeTerminal(operation.id).replace(/[\r\n\t]+/g, " ");
+            const status = safeTerminal(operation.status).replace(/[\r\n\t]+/g, " ");
+            const objective = safeTerminal(operation.objective).replace(/[\r\n\t]+/g, " ");
+            console.error(`  ${id}  ${status}  ${objective}`);
+          }
           process.exitCode = 2;
           return;
         }
