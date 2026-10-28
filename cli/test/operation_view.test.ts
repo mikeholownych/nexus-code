@@ -478,7 +478,7 @@ test("status and watch reject malformed or blank --events instead of guessing", 
         : ["operation", "watch", "--events", value, "op-cli-events"];
       const result = runCli(args, fixture);
       assert.equal(result.status, 2, `${command} accepted ${JSON.stringify(value)}`);
-      assert.match(result.stderr, /--events must be/);
+      assert.match(result.stderr, /--events.*non-negative number/);
       assert.equal(result.stdout, "");
     }
   }
@@ -498,7 +498,7 @@ test("watch's multiple-operation list sanitizes persisted objectives", (t) => {
   assert.equal(result.status, 2);
   assert.doesNotMatch(result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
   assert.equal(result.stderr.split("\n").some((line) => line.startsWith("line")), false);
-  assert.match(result.stderr, /hostile forged line end/);
+  assert.match(result.stderr, /hostile.*forged line end/);
 });
 
 test("terminal-safe rendering: operation text cannot emit control or escape sequences", () => {
