@@ -1,0 +1,34 @@
+<pasted_content id="ac96">
+**Verdict: the artifacts support the main TUI improvements, but do not yet establish full implementation acceptance.** No source diff, test implementations, or raw build/test logs were included.
+
+The [terminal recording](/mnt/c/Users/mike/Downloads/nexus_maturity_tui_2026-10-11.cast) visibly supports:
+
+- Animated activity during waiting.
+- A successful edit’s diff and a failed edit’s error.
+- Steering shown as queued, then applied.
+- Automatic continuation into segment 2.
+- A multiline paste buffer.
+- Cancellation and subsequent session resume.
+
+The [recovered doctor request](/mnt/c/Users/mike/Downloads/NEXUS_DOCTOR_RECOVERED_REQUEST.md) matches the original request retained in the session export.
+
+Four findings remain:
+
+1. **The recording needs repair.** Its timestamps reset from `24.3379` to `0.0007` when the resumed session starts. It appears to concatenate two recordings without offsetting the second. My earlier 1.65-second observation was the second segment’s ending timestamp, not the entire recording’s duration.
+
+2. **Metrics and report differ.** The supplied [metrics](/mnt/c/Users/mike/Downloads/nexus_maturity_tui_2026-10-11.metrics.json) report idle CPU **0%**, rather than **0.33%**, and resize output **1,610 bytes**, rather than **1,578**. These could be different runs, but the report must identify them.
+
+3. **The matrix overstates evidence coverage.** It defines `DONE` as backed by a passing named test, yet some rows cite only code review, documentation, or measurements. Its closing claim that every row has test or receipt evidence is therefore too broad.
+
+4. **Important correctness claims remain unverified.** The attachments describe, but cannot independently establish:
+   - Requirement completion evidence and protection against unauthorized descoping.
+   - Verifier-cache invalidation for untracked files, configuration, dependencies, and environment changes.
+   - Doctor repair safety and provider-specific behavior.
+   - Exactly-once steering across failures and resume.
+   - Token accounting against the actual inference receipts.
+   - The reported `make test` results and baseline.
+
+The configurable 300-step budget is consistent with the requested bounded continuation design; it is not itself a blocker. Missing shell-command diffs remain a disclosed coverage gap. The non-bracketed single-line paste limitation and absence of a shell-completion framework do not alone invalidate the requested multiline/TUI behavior.
+
+**Next step:** obtain the implementation diff, relevant tests, and raw verification logs; correct the recording and evidence references. Until then, label the result **“TUI behavior demonstrated; full acceptance pending source and verification review.”**
+</pasted_content id="ac96">
