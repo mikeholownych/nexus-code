@@ -255,7 +255,8 @@ def main():
     # 2. Steering while the agent works (Enter while busy sends steering, not a second prompt).
     snapshot_a = s.screen.text()
     s.send("keep line 1 unchanged\r", settle=0.1)
-    s.pump(0.6)
+    # The status timer updates once per second; wait past its first tick before asserting 0:01 is visible.
+    s.pump(1.2)
     snapshot_b = s.screen.text()
     s.pump(0.3)
     busy_cpu = (cpu_seconds(s.pid) - cpu0) / (time.monotonic() - t0)

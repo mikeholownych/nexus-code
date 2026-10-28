@@ -378,6 +378,8 @@ function createCliFixture(): CliFixture {
       XDG_CONFIG_HOME: path.join(home, ".config"),
       XDG_DATA_HOME: path.join(home, ".local", "share"),
       NEXUS_STATE_DIR: stateDir,
+      // Keep expected CLI styling out of these raw-control safety assertions.
+      NO_COLOR: "1",
     },
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
   };
@@ -396,6 +398,12 @@ function runCli(args: string[], fixture: CliFixture): { status: number; stdout: 
   } catch (error: any) {
     return { status: Number(error?.status ?? -1), stdout: String(error?.stdout ?? ""), stderr: String(error?.stderr ?? "") };
   }
+}
+
+function assertNoUnsafeTerminalControls(output: string): void {
+  // CLI styling is expected; only discard the known SGR styling form before checking controls from input data.
+  const withoutSgr = output.replace(/\x1b\[[0-9;]*m/g, "");
+  assert.doesNotMatch(withoutSgr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
 }
 
 function saveFixture(fixture: CliFixture, id: string): string {
@@ -510,14 +518,15 @@ test("ordinary status sanitizes blocked decision identifiers", (t) => {
   t.after(fixture.cleanup);
   const file = saveFixture(fixture, "op-cli-decision");
   const record = JSON.parse(fs.readFileSync(file, "utf8"));
-  record.operation.blocked.decisions[0].id = "decision\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2J";
+  record.operation.blocked.decisions[0].id = "decision\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2J\u001b[31m";
   record.operation.blocked.decisions[0].options[0].id = "option\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2J";
   record.operation.units[1].status = "BLOCKED\u001b[2J";
   fs.writeFileSync(file, JSON.stringify(record));
 
   const result = runCli(["operation", "status", "op-cli-decision"], fixture);
   assert.equal(result.status, 0);
-  assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+  assertNoUnsafeTerminalControls(result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /decision␛\]52;c;cGF5bG9hZA==␇␛\[2J␛\[31m/);
 });
 
 test("rejected decisions sanitize the failing decision id", (t) => {
@@ -527,7 +536,7 @@ test("rejected decisions sanitize the failing decision id", (t) => {
 
   const result = runCli(["operation", "decide", "op-cli-reject", "decision\u001b[2J", "1"], fixture);
   assert.equal(result.status, 2);
-  assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+  assertNoUnsafeTerminalControls(result.stdout + result.stderr);
 });
 
 test("run sanitizes an operation id in its resume banner", (t) => {
@@ -538,7 +547,7 @@ test("run sanitizes an operation id in its resume banner", (t) => {
 
   const result = runCli(["operation", "run", spec], fixture);
   assert.notEqual(result.status, 0);
-  assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+  assertNoUnsafeTerminalControls(result.stdout + result.stderr);
 });
 
 test("status and watch sanitize invalid operation identifiers and event arguments", (t) => {
@@ -552,7 +561,7 @@ test("status and watch sanitize invalid operation identifiers and event argument
   ]) {
     const result = runCli(args, fixture);
     assert.notEqual(result.status, 0);
-    assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+    assertNoUnsafeTerminalControls(result.stdout + result.stderr);
   }
 });
 
@@ -568,7 +577,7 @@ test("run sanitizes resource and spec validation errors", (t) => {
     fs.writeFileSync(spec, JSON.stringify(value));
     const result = runCli(["operation", "run", spec], fixture);
     assert.notEqual(result.status, 0);
-    assert.doesNotMatch(result.stdout + result.stderr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+    assertNoUnsafeTerminalControls(result.stdout + result.stderr);
   }
 });
 
