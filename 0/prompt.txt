@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b6kwx41vn</task-id>
+<tool-use-id>toolu_01S3a8VsxkhpVkuvEeuDLKDR</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5e99063d-042c-4962-9221-1650fa0f4489/tasks/b6kwx41vn.output</output-file>
+<status>completed</status>
+<summary>Background command "timeout 1700 ssh -o BatchMode=yes mike@10.0.8.5 'until [ "$(stat -c %s /var/lib/local-ai/models/gguf/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf)" -ge 18556689568 ] &amp;&amp; ! pgrep -f "podman pull" &gt;/dev/null; do sleep 15; done; ls -l /var/lib/local-ai/models/gguf | tail -1; podman images --format "{{.Repository}}:{{.Tag}} {{.Size}}" | grep llama' 2&gt;&amp;1 | tail -3" completed (exit code 0)</summary>
+</task-notification>
