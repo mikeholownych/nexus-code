@@ -1115,7 +1115,7 @@ pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResul
                         }
 
                         let reader = BufReader::new(file);
-                        let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+                        let all_lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
                         let total = all_lines.len();
                         let slice = &all_lines[..total.min(max_lines)];
                         let mut numbered = String::new();
