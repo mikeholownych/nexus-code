@@ -1,0 +1,44 @@
+<pasted_content id="93a6">
+     PR #61 remediation — complete and pushed
+
+     Commit 0f5eb54 pushed to PR #61, rebased onto add06b1 (now integration is d7884f0).
+
+     The crash-safe restore fix addresses all four critique points:
+
+     1. Cross-file atomicity — commit marker (.restore-complete) written LAST; incomplete marker (.restore-incomplete) written FIRST. Next call detects interruption and re-applies from immutable staging (idempotent).
+     2. fsync — temp files fsynced before rename; destination dirs fsynced after each rename.
+     3. Content comparison — SHA-256 hash, not mtime/size (catches same-size edits within same second).
+     4. Regression test — two new tests in upgrade_transaction_recovery.test.ts: interruption leaves no mixed state; restore is idempotent.
+
+     Plus a startup check in index.ts: before any state loads, recoverInterruptedRestore() scans ~/.nexus and ~/.config/nexus for incomplete markers and either completes the restore or fails closed (exit 2).
+
+     Verification: tsc --noEmit PASS, git diff --check PASS, 87/87 upgrade tests pass.
+
+     Release status — major progress
+
+     ┌────────────────────────────────────────────────────────────────┬────────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────┐
+     │Metric                                                          │Start                                                           │Now                                                                                  │
+     ├────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+     │Integration tip                                                 │c8ca662                                                         │d7884f0                                                                              │
+     ├────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+     │CodeQL alerts                                                   │31 (20H/11M)                                                    │18 (down from 25)                                                                    │
+     ├────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+     │My CodeQL slices                                                │0 merged                                                        │3 merged (#73, #74, #75)                                                             │
+     ├────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+     │My open PRs                                                     │5                                                               │0 (#76, #77 merged)                                                                  │
+     ├────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+     │PR #61                                                          │CHANGES_REQUIRED                                                │Remediation pushed, awaiting re-review                                               │
+     └────────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────┘
+
+     Remaining work (owner/external)
+
+     - PR #61 — my remediation pushed, needs owner re-review/merge (unblocks legacy_launch_race)
+     - 2 FREE high alerts — protocols/common.ts:112 (FP dismissal), tokens.ts:35 (accepted-risk, already INDEPENDENT_REVIEW ACCEPT)
+     - PRs #82-#86 — other agents' PRs for remaining alerts, need owner merge
+     - PR #8 — integration draft, CodeQL gate clears when alerts resolved
+     - GATEWAY qualification (§4–§7), X5 review, X7 tag
+
+     Watch loop
+
+     Expired (LOOP_MAX reached). Integration has advanced significantly since. If you want continued monitoring, I can restart it.
+</pasted_content id="93a6">
