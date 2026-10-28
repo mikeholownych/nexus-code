@@ -52,6 +52,8 @@ class GitPathEncodingError extends Error {
   }
 }
 
+const NESTED_GIT_REPOSITORY_ERROR = "Checkpoint destination parent is a nested Git repository";
+
 function lstatOrAbsent(target: string): fs.Stats | undefined {
   try {
     return fs.lstatSync(target, { throwIfNoEntry: false });
@@ -439,7 +441,7 @@ export class CheckpointManager {
         // directories named `HEAD`, `config`, `objects`, or `refs` remain
         // valid unless Git recognizes their safe snapshot as a repository.
         if (bareHead && (bareConfig || bareObjects || bareRefs)) {
-          const nestedRepositoryError = "Checkpoint destination parent is a nested Git repository";
+          const nestedRepositoryError = NESTED_GIT_REPOSITORY_ERROR;
           if (!bareHead.isFile() || !bareConfig?.isFile() || bareHead.size > 4096 || bareConfig.size > 1024 * 1024) {
             throw new Error(nestedRepositoryError);
           }
@@ -489,8 +491,8 @@ export class CheckpointManager {
           const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-checkpoint-git-probe-"));
           try {
             const probeConfig = path.join(probeRoot, "config");
-            fs.writeFileSync(path.join(probeRoot, "HEAD"), headSnapshot, { mode: 0o600, flag: "wx" });
-            fs.writeFileSync(probeConfig, configSnapshot, { mode: 0o600, flag: "wx" });
+            writePrivateFile(path.join(probeRoot, "HEAD"), headSnapshot, { mode: 0o600 });
+            writePrivateFile(probeConfig, configSnapshot, { mode: 0o600 });
             fs.mkdirSync(path.join(probeRoot, "objects"), { mode: 0o700 });
             fs.mkdirSync(path.join(probeRoot, "refs"), { mode: 0o700 });
 
@@ -1237,7 +1239,10 @@ export class CheckpointManager {
           try {
             this.assertUntrackedSnapshotSafe(cp.untrackedFiles, cp.snapshotDir, cp.allowSensitive === true);
             this.assertUntrackedDestinationSafe(cp.untrackedFiles, this.workspace);
-          } catch {
+          } catch (error) {
+            if (error instanceof Error && error.message === NESTED_GIT_REPOSITORY_ERROR) {
+              return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has a destination in a nested Git repository; workspace was not changed` };
+            }
             return { success: false, message: `Rollback failed: checkpoint '${cp.id}' has an unsafe untracked snapshot or destination; workspace was not changed` };
           }
         }
