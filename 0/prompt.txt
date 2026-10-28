@@ -1,0 +1,704 @@
+<pasted_content id="e171">
+NEXUS ENGINEERING SLICE
+TRUTHFUL, INTERRUPTIBLE TURNS
+
+Repository:
+  /home/mike/nexus-code
+
+You previously performed the independent dogfooding-readiness assessment recorded at:
+
+  docs/reviews/NEXUS_DOGFOODING_READINESS_REVIEW_2026-10-03.md
+
+This task authorizes implementation of ONE bounded engineering slice based on the
+material findings from that review.
+
+Do not treat the review as architectural authority.
+
+Its findings are evidence inputs.
+
+Before changing production code, independently reproduce the material behaviors
+required by this task against the CURRENT repository state. If current behavior
+differs materially from the review, investigate the difference before proceeding.
+
+ENGINEERING PRINCIPLES
+
+Apply throughout:
+
+  Distrust by Default.
+  Trust but Verify.
+  Evidence Changes What We Know.
+
+The objective is not to make tests green.
+
+The objective is to make Nexus truthfully represent what happened during an
+engineering turn and to ensure the operator can reliably interrupt active work.
+
+Tests are evidence instruments.
+
+Do not change expected behavior merely because the implementation currently behaves
+differently.
+
+Do not weaken protected invariants to make a scenario pass.
+
+Unexpected does not automatically mean invalid.
+Unknown does not automatically mean unauthorized.
+Novel does not automatically mean unsafe.
+
+Contain the affected operation when safety is uncertain.
+Continue safe investigation where existing authority permits it.
+
+Agents advise.
+Evidence constrains.
+Experiments discriminate.
+The operator decides.
+Decisions remain revisable.
+
+SCOPE
+
+Implement the bounded slice:
+
+  TRUTHFUL, INTERRUPTIBLE TURNS
+
+It consists of four tightly related capabilities:
+
+1. truthful structured turn outcomes
+2. reliable turn cancellation
+3. stream-integrity enforcement
+4. verifier-backed completion state
+
+Do NOT expand this into general Nexus cleanup.
+
+PRE-IMPLEMENTATION
+
+First establish:
+
+- current branch and HEAD
+- ancestry from the reviewed baseline
+- working-tree state
+- relevant intervening commits
+- whether intervening changes affect this slice
+- current build/test state
+- exact source paths involved
+- existing evidence harness state
+
+Do not overwrite, commit, clean, stage, or otherwise disturb unrelated existing
+working-tree changes.
+
+If HEAD has advanced since the review:
+
+Do not automatically stop.
+
+Perform bounded read-only change-impact analysis.
+
+Determine whether the change affects the assumptions or proof obligations of this
+slice.
+
+If unrelated, record the new understood baseline and continue.
+
+If relevant, reproduce affected behavior against current code before deciding how
+to proceed.
+
+Stop only if material uncertainty cannot be safely resolved within this task.
+
+REPRODUCTION GATE
+
+Before production implementation, reproduce against current code the material
+behaviors from the review:
+
+A-1 OUTCOME TRUTH
+
+Demonstrate current behavior for:
+
+- inference HTTP 500
+- step-limit exhaustion
+- model returns final text without establishing completion
+- model explicitly gives up / cannot verify
+
+Determine exactly what currently propagates through:
+
+  inference client
+    →
+  agent turn
+    →
+  ApplicationCore
+    →
+  CLI/REPL
+    →
+  durable/session state
+    →
+  process exit semantics
+
+A-2 CANCELLATION
+
+Reproduce a turn that performs repeated delayed mutations.
+
+Issue one Ctrl-C during active work.
+
+Determine whether additional mutations occur after the interrupt and why.
+
+A-3 COMPLETION GATE
+
+Reproduce:
+
+  mutation
+    →
+  successful command whose TEXT merely resembles validation
+    →
+  task_completed
+
+Determine whether validation can currently be bypassed.
+
+Also reproduce a repository for which no valid verifier can be discovered.
+
+A-4 STREAM INTEGRITY
+
+Reproduce:
+
+- stream truncation
+- provider error frame mid-stream
+
+Determine whether partial output is accepted as a valid final response.
+
+Use the existing deterministic fake-gateway/PTTY evidence harness where appropriate.
+
+Do not use the real inference service when deterministic fixtures are sufficient.
+
+If any reviewed A finding no longer reproduces, investigate why and adjust the
+implementation scope based on current evidence rather than forcing the old result.
+
+DESIGN REQUIREMENT 1
+ORTHOGONAL OUTCOME SEMANTICS
+
+Do NOT solve the problem with one increasingly large enum that conflates execution,
+engineering outcome, verification, and acceptance.
+
+The implementation must distinguish at least these dimensions conceptually:
+
+EXECUTION STATE
+
+Examples:
+
+  COMPLETED
+  INTERRUPTED
+  FAILED
+  BLOCKED
+  LIMIT_REACHED
+
+ENGINEERING / VERIFICATION OUTCOME
+
+Examples:
+
+  VERIFIED
+  UNVERIFIED
+  NOT_ESTABLISHED
+
+OPERATOR ACCEPTANCE
+
+Examples:
+
+  ACCEPTED
+  NOT_ACCEPTED
+  NOT_REQUESTED
+
+These names are candidate vocabulary, not immutable API requirements.
+
+Inspect the existing domain model before choosing exact names.
+
+The important invariant is orthogonality.
+
+For example, Nexus must be capable of representing:
+
+  execution: COMPLETED
+  outcome: UNVERIFIED
+  acceptance: NOT_REQUESTED
+
+without calling that failure and without falsely calling the engineering result
+verified.
+
+Likewise:
+
+  execution: BLOCKED
+  outcome: NOT_ESTABLISHED
+  reason: REPOSITORY_STATE_CHANGED
+
+must be representable without pretending the task succeeded or necessarily
+terminating all possible investigation.
+
+And:
+
+  execution: INTERRUPTED
+  outcome: NOT_ESTABLISHED
+
+must not become TASK COMPLETED.
+
+Do not prematurely design every future state.
+
+Implement only what this slice requires while preserving room for later states.
+
+STRUCTURED TURN RESULT
+
+`runTurn` must no longer communicate its semantic result merely by:
+
+- returning void
+- throwing/not throwing
+- printing text
+- whether the model stopped calling tools
+
+Introduce a structured result sufficient for callers to know:
+
+- execution state
+- engineering/verification outcome
+- reason where applicable
+- whether final model output is complete
+- verification evidence/status where applicable
+- interruption state
+- step-limit state
+- inference failure state
+
+Thread the authoritative semantics through the relevant existing callers.
+
+At minimum:
+
+  AutonomousAgent
+  ApplicationCore.runTask
+  harness run output
+  REPL end-of-turn reporting
+  session/durable state where applicable
+
+Do not create independent competing interpretations at each UI surface.
+
+One semantic result should project outward.
+
+EXIT SEMANTICS
+
+Define process exit behavior deliberately.
+
+At minimum:
+
+- inference failure must not exit 0 as successful work
+- step-limit exhaustion must not masquerade as verified completion
+- interruption must not masquerade as completion
+- verified completion can report success
+- completed-but-unverified must be represented honestly
+
+Do not invent Unix exit-code complexity beyond what is useful.
+
+Document the chosen contract and test it.
+
+MODEL TEXT IS NOT COMPLETION PROOF
+
+A model returning prose without tool calls means the model stopped producing tool
+actions.
+
+It does NOT inherently mean:
+
+- requested work succeeded
+- validation passed
+- engineering outcome was demonstrated
+- operator accepted the result
+
+Represent that distinction.
+
+Do not print `TASK COMPLETED` merely because the model emitted final text if Nexus
+does not possess evidence supporting that statement.
+
+DESIGN REQUIREMENT 2
+RELIABLE CANCELLATION
+
+Introduce one cancellation authority for each active turn.
+
+Prefer an AbortController/AbortSignal or an equivalent mechanism appropriate to the
+existing architecture.
+
+Cancellation must propagate far enough to prevent Nexus from continuing to admit
+new work after the operator interrupts the turn.
+
+At minimum:
+
+- first Ctrl-C while a turn is running requests cancellation
+- Nexus immediately marks the turn as cancellation-requested/interrupted
+- no NEW tool dispatch may begin after cancellation is observed
+- inference request is aborted where supported
+- tool execution receives/checks cancellation where safely possible
+- the agent loop checks cancellation between operations
+- the REPL returns to a usable prompt after bounded cleanup
+- partial work is represented honestly
+- session/evidence records the interruption
+
+Ctrl-C while idle should retain deliberate exit behavior.
+
+Do not promise instantaneous termination of an already-executing external effect if
+the underlying operation cannot safely be interrupted.
+
+Instead distinguish:
+
+  cancellation requested
+  no further work admitted
+  outstanding operation settling/terminated
+  turn interrupted
+
+The operator's stop request is an authority event, not merely a UI keystroke.
+
+REGRESSION PROOF
+
+The prior slow-loop scenario must become a regression test.
+
+After the first interrupt is accepted, demonstrate that no additional tool mutation
+is dispatched.
+
+Do not weaken this by merely hiding subsequent output.
+
+DESIGN REQUIREMENT 3
+STREAM INTEGRITY
+
+A partially received model response must not be treated as a complete model answer.
+
+Inspect the actual protocol used by the current gateway/client.
+
+Define the minimum positive completion evidence supported by that protocol, such as:
+
+- terminal finish_reason
+- [DONE]
+- another explicit protocol completion condition
+
+Do not assume a specific marker without checking current protocol behavior and
+existing fixtures.
+
+Handle distinctly:
+
+- clean completed stream
+- connection/read failure before completion
+- provider error frame
+- timeout
+- malformed event
+- intentionally aborted request
+
+Preserve partial text for diagnosis if useful, but do not promote partial text to a
+complete answer.
+
+If performing a bounded retry:
+
+- define when retry is permitted
+- preserve correlation/provenance
+- avoid duplicate unsafe tool effects
+- do not retry client-originated semantic/protocol errors as though another endpoint
+  will necessarily fix them
+
+If the existing fallback path issues a new request with a new correlation identity,
+correct that behavior where required by this slice.
+
+Do not broaden this into generalized provider failover redesign.
+
+DESIGN REQUIREMENT 4
+VERIFIER-BACKED COMPLETION
+
+Remove command-text heuristics as evidence that validation occurred.
+
+This behavior is specifically unacceptable:
+
+  run_command "echo checking tests"
+
+must not clear the verification obligation merely because the command contains the
+word "test" or "check".
+
+A verification obligation may be cleared only by evidence tied to the actual
+verifier selected/discovered/configured for the task and a successful result from
+that verifier.
+
+Determine the smallest architecture-compatible mechanism for associating:
+
+  candidate/change
+    →
+  required verifier
+    →
+  verifier invocation
+    →
+  result
+    →
+  verification evidence
+
+Reuse existing receipts/candidate/validation mechanisms where appropriate rather
+than creating an unrelated validation subsystem.
+
+NO-VERIFIER STATE
+
+A repository with no applicable verifier is not automatically:
+
+- verified
+- failed
+- permanently dead
+
+Represent it honestly as an unverified engineering outcome with an explicit reason.
+
+Do not guess `npm test` merely because no better verifier exists unless that behavior
+is explicitly justified by repository evidence.
+
+The model may continue safe investigation if useful and authorized.
+
+Eventually returning:
+
+  execution: COMPLETED
+  outcome: UNVERIFIED
+  reason: NO_APPLICABLE_VERIFIER
+
+or equivalent is valid.
+
+TEST STRATEGY
+
+Convert the material evidence probes into regression tests.
+
+At minimum prove:
+
+1. HTTP 500
+   → inference failure represented structurally
+   → process does not claim successful completion
+   → exit semantics reflect failure
+
+2. Truncated stream
+   → partial text not accepted as complete
+   → structured inference failure
+
+3. Mid-stream provider error
+   → not silently ignored
+   → structured inference failure
+
+4. Step-limit loop
+   → LIMIT_REACHED or equivalent
+   → not verified completion
+
+5. Model gives up
+   → model stopping is distinguishable from verified completion
+
+6. False verifier:
+     write_file
+       →
+     run_command "echo checking tests"
+       →
+     task_completed
+
+   → completion gate remains unsatisfied
+
+7. No applicable verifier
+   → honest UNVERIFIED result
+   → no fabricated verifier success
+   → no false TASK COMPLETED
+
+8. Ctrl-C during delayed mutating trajectory
+   → one interrupt requests cancellation
+   → no new mutation dispatched afterward
+   → turn records INTERRUPTED
+   → REPL returns to usable prompt
+
+9. Existing positive multi-prompt REPL behavior remains functional.
+
+10. Clean complete stream remains accepted normally.
+
+Also run existing relevant unit/integration tests.
+
+Do not change unrelated expectations merely to get green.
+
+CANONICAL TEST SUITE
+
+The prior review observed:
+
+- 234 npm tests
+- 232 pass
+- 2 security_gates.test.ts failures caused by nested npm EALLOWSCRIPTS
+- the same security gate passes standalone
+
+Re-establish current behavior.
+
+Do not normalize unrelated red.
+
+Do not modify the security gate itself as part of this slice.
+
+If the environmental test-harness defect remains, record it separately and ensure
+the tests relevant to this slice are positively qualified.
+
+TUI
+
+DO NOT implement the TUI rewrite in this task.
+
+However, design the outcome/cancellation semantics so a future TUI can consume
+structured lifecycle state rather than parsing terminal strings.
+
+Do not add presentation-specific semantics to the domain model.
+
+A future TUI should project authoritative Nexus state.
+
+It should not become a second source of truth.
+
+OUT OF SCOPE
+
+Explicitly exclude:
+
+- TUI framework adoption/rewrite
+- full-screen dashboard
+- multi-agent panes
+- general REPL/ApplicationCore lifecycle unification
+- typed-ahead input queueing/steering
+- prompt-history repair
+- worktree/HEAD anomaly investigation workflow
+- context compaction redesign
+- tool-schema subsetting
+- general multi-agent/concurrency work
+- config-precedence redesign
+- broad provider/failover redesign
+- inference-host changes
+- thermal/observability work
+- Cloudflare contest work
+- unrelated security architecture
+- README marketing cleanup except documentation directly required by the new
+  behavioral contract
+
+Do not allow an attractive adjacent refactor to enlarge this slice.
+
+PRODUCT BEHAVIOR BEFORE INTERNAL ELEGANCE
+
+Prefer the smallest coherent implementation that establishes truthful semantics and
+reliable cancellation.
+
+Do not perform a large architectural rewrite solely because two existing lifecycles
+are imperfect.
+
+If a narrow implementation exposes a hard architectural constraint that makes the
+slice unsafe or incoherent, document the constraint with evidence before expanding
+scope.
+
+VALIDATION
+
+After implementation, rerun the reproduction scenarios from the PRE-IMPLEMENTATION
+gate.
+
+Compare BEFORE and AFTER behavior explicitly.
+
+For every material finding report:
+
+  prior behavior
+  changed behavior
+  test/evidence proving it
+  remaining limitation
+
+Also demonstrate at least one positive normal engineering turn so the remediation
+has not simply converted normal execution into conservative failure.
+
+If safe and already supported, one bounded read-only interaction through the real
+gateway may be used after deterministic qualification.
+
+Do not make real inference a prerequisite when fixtures establish the behavior.
+
+SECURITY / AUTHORITY
+
+Run applicable existing security gates.
+
+Do not weaken authority, persistence protection, egress filtering, credential
+handling, worktree isolation, or validation boundaries.
+
+Cancellation must not become an authority bypass.
+
+Structured outcome state must not allow a caller to self-assert VERIFIED.
+
+Verification must arise from actual evidence.
+
+REPOSITORY DISCIPLINE
+
+Before committing:
+
+- inspect complete diff
+- ensure no unrelated pre-existing working-tree changes are included
+- run relevant tests
+- run typecheck/build
+- run applicable security gates
+- verify generated dist/source consistency if this repository tracks built output
+- record exact remaining known failures
+
+Commit only this engineering slice and directly necessary tests/evidence/docs.
+
+Do not push.
+Do not tag.
+Do not alter remotes.
+Do not publish.
+
+EVIDENCE
+
+Create:
+
+  docs/reviews/NEXUS_TRUTHFUL_INTERRUPTIBLE_TURNS_2026-10-03.md
+
+Include:
+
+1. repository state and change-impact reconciliation
+2. pre-change reproduction results
+3. semantic design and invariants
+4. exact implementation changes
+5. execution/outcome/acceptance contract
+6. cancellation contract
+7. stream-integrity contract
+8. verification contract
+9. before/after results
+10. regression tests added
+11. existing-suite results
+12. security-gate results
+13. positive normal-path validation
+14. limitations and intentionally deferred work
+15. exact files changed
+16. final commit identity
+17. evidence SHA-256
+
+FINAL ASSESSMENT
+
+Do not declare Nexus generally dogfood-ready merely because this slice passes.
+
+Instead answer:
+
+TRUTHFUL_TURNS:
+  QUALIFIED / NOT_QUALIFIED
+
+INTERRUPTIBLE_TURNS:
+  QUALIFIED / NOT_QUALIFIED
+
+STREAM_INTEGRITY:
+  QUALIFIED / NOT_QUALIFIED
+
+VERIFIER_BACKED_COMPLETION:
+  QUALIFIED / NOT_QUALIFIED
+
+Then state:
+
+DOGFOODING_BLOCKERS_FROM_REVIEW:
+  A-1 RESOLVED / UNRESOLVED
+  A-2 RESOLVED / UNRESOLVED
+  A-3 RESOLVED / UNRESOLVED
+  A-4 RESOLVED / UNRESOLVED
+
+And finally:
+
+NEXT_DOGFOODING_READINESS:
+  REASSESS
+  or
+  REMAINS_BLOCKED
+
+`REASSESS` means only that the four previously demonstrated A blockers have been
+resolved sufficiently to justify a new bounded readiness assessment.
+
+It does NOT mean operator acceptance or production readiness.
+
+STOP CONDITIONS
+
+Stop and report evidence if:
+
+- a reviewed blocker cannot be reproduced and the discrepancy cannot be explained
+- implementing the required semantics would require weakening an existing protected
+  invariant
+- current repository changes materially invalidate the slice and cannot be safely
+  reconciled
+- cancellation cannot be implemented without creating a greater integrity problem
+- verification cannot be tied to actual evidence without architectural work outside
+  this authorization
+
+Otherwise, investigate, implement, test, correct defects discovered by testing, and
+carry this bounded slice through qualification.
+
+Do not stop merely because the current HEAD differs from a historical checkpoint if
+bounded read-only investigation can determine whether the difference is relevant.
+</pasted_content id="e171">
