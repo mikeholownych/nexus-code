@@ -35,7 +35,7 @@ function gitNulEntries(output: Buffer): Buffer[] {
   for (const entry of entries) {
     const decoded = entry.toString("utf8");
     if (!Buffer.from(decoded, "utf8").equals(entry)) {
-      throw new Error("Checkpoint cannot safely process Git paths that are not valid UTF-8");
+      throw new GitPathEncodingError();
     }
   }
   return entries;
@@ -43,6 +43,13 @@ function gitNulEntries(output: Buffer): Buffer[] {
 
 function stripGitLineEnding(value: string): string {
   return value.endsWith("\n") ? value.slice(0, -1) : value;
+}
+
+class GitPathEncodingError extends Error {
+  constructor() {
+    super("Checkpoint cannot safely process Git paths that are not valid UTF-8");
+    this.name = "GitPathEncodingError";
+  }
 }
 
 function lstatOrAbsent(target: string): fs.Stats | undefined {
@@ -146,7 +153,7 @@ export class CheckpointManager {
   private assertNoIgnoredAddedPaths(relativePaths: string[]): void {
     for (const relativePath of relativePaths) {
       try {
-        execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", relativePath], {
+        execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `:(literal)${relativePath}`], {
           cwd: this.workspace,
           stdio: "ignore",
         });
@@ -792,7 +799,7 @@ export class CheckpointManager {
         const fullPath = path.join(directory, entry.name);
         if (entry.isDirectory()) {
           try {
-            execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `${relativePath}/${child}`], {
+            execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `:(literal)${relativePath}/${child}`], {
               cwd: this.workspace,
               stdio: "ignore",
             });
@@ -803,7 +810,7 @@ export class CheckpointManager {
           if (!visit(fullPath, child)) return false;
         } else if (entry.isFile() || entry.isSymbolicLink()) {
           try {
-            execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `${relativePath}/${child}`], {
+            execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `:(literal)${relativePath}/${child}`], {
               cwd: this.workspace,
               stdio: "ignore",
             });
@@ -821,7 +828,7 @@ export class CheckpointManager {
   }
 
   private gitTrackedDescendantPaths(relativePath: string): string[] {
-    return gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--cached", "-z", "--", relativePath], {
+    return gitNulEntries(execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--cached", "-z", "--", `:(literal)${relativePath}`], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
@@ -838,7 +845,7 @@ export class CheckpointManager {
         if (entry.name === ".git") return false;
         if (entry.isDirectory()) {
           try {
-            execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `${relativePath}/${child}`], {
+            execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `:(literal)${relativePath}/${child}`], {
               cwd: this.workspace,
               stdio: "ignore",
             });
@@ -864,7 +871,7 @@ export class CheckpointManager {
 
     for (const entry of diskEntries) {
       try {
-        execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", entry], {
+        execFileSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "--no-index", "-q", "--", `:(literal)${entry}`], {
           cwd: this.workspace,
           stdio: "ignore",
         });
@@ -951,7 +958,8 @@ export class CheckpointManager {
         if (
           error instanceof SensitivePersistenceError ||
           error instanceof GitIndexLockError ||
-          error instanceof GitIndexLockCheckError
+          error instanceof GitIndexLockCheckError ||
+          error instanceof GitPathEncodingError
         ) throw error;
         if (this.gitIndexLockExists()) throw new GitIndexLockError();
         throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");

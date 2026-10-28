@@ -171,6 +171,30 @@ test("Git restore refuses an ignored staged addition before changing the index o
   }
 });
 
+test("Git restore treats pathspec-magic filenames literally when checking ignored additions", () => {
+  const { repo, git } = gitRepo();
+  const magicName = ":(exclude)ignored.bin";
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), `${magicName}\n`);
+    git("add", ".gitignore");
+    git("commit", "-qm", "ignore a pathspec-looking filename");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("before forced pathspec-looking addition");
+    fs.writeFileSync(path.join(repo, magicName), "ignored staged payload\n");
+    git("add", "-f", magicName);
+    const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /ignored by current Git rules/i);
+    assert.equal(fs.readFileSync(path.join(repo, magicName), "utf8"), "ignored staged payload\n");
+    assert.equal(execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex"), indexBefore);
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
 test("legacy Git restore removes a path renamed after the checkpoint", () => {
   const { repo, git } = gitRepo();
   try {
@@ -1826,6 +1850,39 @@ test("Git manifest restore refuses an ignored directory replacing a tracked chec
     assert.equal(git("rev-parse", "HEAD"), headBefore);
     const indexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
     assert.equal(indexAfter, indexBefore, "a rejected preflight must leave the Git index entries unchanged");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git restore checks ignored descendants literally beneath a pathspec-looking directory", () => {
+  const { repo, git } = gitRepo();
+  const magicDirectory = ":(top)target";
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), `${magicDirectory}/ignored\n`);
+    git("add", ".gitignore");
+    git("commit", "-qm", "ignore a child beneath a pathspec-looking directory");
+    fs.writeFileSync(path.join(repo, magicDirectory), "captured file\n");
+    git("add", "--", `:(literal)${magicDirectory}`);
+    git("commit", "-qm", "track pathspec-looking file target");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("magic-looking tracked path");
+
+    fs.rmSync(path.join(repo, magicDirectory));
+    fs.mkdirSync(path.join(repo, magicDirectory));
+    fs.writeFileSync(path.join(repo, magicDirectory, "ignored"), "ignored canary\n");
+    fs.writeFileSync(path.join(repo, "outside-canary.txt"), "preserve me\n");
+    const headBefore = git("rev-parse", "HEAD");
+    const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(repo, magicDirectory, "ignored"), "utf8"), "ignored canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "outside-canary.txt"), "utf8"), "preserve me\n");
+    assert.equal(git("rev-parse", "HEAD"), headBefore);
+    assert.equal(execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex"), indexBefore);
   } finally {
     cleanupGitRepo(repo);
   }
