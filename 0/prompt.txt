@@ -1,0 +1,195 @@
+<task-notification>
+<task-id>a84ddeede97096afc</task-id>
+<tool-use-id>toolu_01Bec5VwpdMhoPkhzKXhJzJM</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/a84ddeede97096afc.output</output-file>
+<status>completed</status>
+<summary>Agent "Review qualification stages 0-5 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review worktree removed. The only side effects in `/home/mike/nexus-code` are the transient worktree entry, which is gone now, and my own scratch files.
+
+I ran `cargo test` on the base commit plus the changed Rust files. It passed with 220 unit tests and the integration tests. Several TS suites fail on the changed code (listed under "Tests run" below). An earlier baseline log in the scratchpad (`base_npm.log`) shows 2 failures, both `security_gates` and environmental.
+
+## Findings, ranked
+
+1. **BLOCKER – `core/src/file_ops.rs` (`edit_file`, `delete_file`) vs `cli/src/core/capabilities.ts:467–490` and the `edit_file` schema (~268–295): the new arguments are not in the tool schemas.**
+   - `delete_file` now refuses directories unless `recursive=true`, and the model-facing schema has no `recursive` parameter. Its description still says "Delete a file or directory". Directory deletion is therefore unreachable for schema-following models.
+   - `edit_file` returns "set replace_all: true" on ambiguous matches, but `replace_all` is not in the schema either.
+   - Fix: add both parameters to the schemas, or make the error text not mention parameters the model cannot see.
+   - `docs/USER_MANUAL.md:217` still says "fuzzy recovery".
+
+2. **BLOCKER – `cli/src/tester.ts:24–31`: the test-filter sanitizer allows newlines, so the cargo path still injects commands.**
+   - The allowlist includes `\s`, which matches `\n` and `\r`.
+   - Reproduced: `detectTestCommand(&lt;Cargo.toml dir&gt;, "foo\ntouch /tmp/pwned")` returns `cargo test -- foo\ntouch /tmp/pwned`. The cargo branches (lines 45 and 49) interpolate the filter unquoted.
+   - Fix: replace `\s` with a literal space, `[A-Za-z0-9_:./ -]`. Also forbid a leading `-` so a filter cannot become a flag.
+
+3. **BLOCKER – `cli/src/core/capabilities.ts:787`: `run_tests` is now `mutating: true`.**
+   - `cli/src/core/spine.ts:575` treats any successful mutating capability as `candidateMutated`.
+   - The `candidateMutation` hook at `cli/src/agent.ts:743–752` then runs `mutationSeq++`, `invalidateVerified`, `setUnverifiedChanges(true)`, clears `verificationEvidence`, and increments `turnMutations`.
+   - So a model-invoked passing `run_tests` demotes verified requirements and marks the turn as having unverified changes. A test-only turn can no longer end as `NOT_REQUIRED`.
+   - I found this by reading the code and did not run a probe.
+   - It also makes `run_tests` prompt for approval, because `agent.ts:2574` now uses `cap.mutating`.
+   - Fix: keep `mutating: true` for the read-only gate only. Add a separate flag (for example `mutatesCandidate: false`) that the spine uses for `candidateMutated`. Alternatively, exempt `test_discover_run` the way `orchestration` is exempted at line 744.
+
+4. **BLOCKER (test suite) – five existing tests fail and were not updated.**
+   - `turn_semantics.test.ts:242` and `:257` expect VERIFIED and get REGRESSION_FREE.
+   - `turn_semantics.test.ts:573` expects exit 0 and gets 2.
+   - `convergence_invariants.test.ts:179` and `:303` fail the same way. At `:303` the subagent reports "REGRESSION_FREE: Passing test run did not cover the modified deliverables."
+   - Those fixtures use a trivial verifier such as `true`, so the downgrade is working as designed. The tests and the "verifier must name the deliverable" contract need an explicit decision.
+   - `doctor.test.ts:251` ("MCP servers and plugins are inspected…") also fails: it expects `warn` and gets `skip`. `doctor` now ignores workspace `.mcp.json` and plugins because they are untrusted.
+   - Fix: update the tests, and let `doctor` report the untrusted workspace config as a finding instead of skipping it.
+
+5. **SHOULD-FIX – `cli/src/agent.ts:653,1273` and `cli/src/plugins.ts`: the read-only plugin gate is not wired.**
+   - `new PluginManager(ws)` is called without `readOnly`, and `isWorkspaceTrusted(ws, false)` is used. A trusted workspace therefore still loads plugins under `--read-only`.
+   - `McpClientManager` does receive `readOnly`, so the summary's "disables them in --read-only" holds for MCP only.
+   - Fix: pass `{ readOnly: config.readOnly }` at both sites.
+
+6. **SHOULD-FIX – `cli/src/workspace_trust.ts`: nothing can grant trust.**
+   - `setWorkspaceTrusted` has no caller and there is no CLI or slash command for it. The only paths are the `NEXUS_TRUST_WORKSPACE=1` environment variable or hand-editing `~/.config/nexus/trusted_workspaces.json`.
+   - Workspace plugins and `.mcp.json` are now silently dead, with no prompt and no diagnostic, so this is a regression for existing users.
+   - The trust file is also writable by the agent's own `run_command`, unless it is a protected path.
+   - Fix: add `nexus trust [path]` with a warning when an untrusted config is skipped. Add `~/.config/nexus` to `isPathProtected`.
+
+7. **SHOULD-FIX – `cli/src/tester.ts:236–290` (`isVerifierDeliverableBound`) is both too strict and too loose.**
+   - Too strict:
+     - Rust inline `#[cfg(test)]` tests never count. For a change to `file_ops.rs` with `cargo test`, the command does not name the file and there is no `*_test` file, so the result is REGRESSION_FREE forever.
+     - A root-level `test_foo.py` is not matched by `isTestPath`.
+     - Non-test verifiers such as `tsc --noEmit`, a build, or `./check.sh` always downgrade.
+   - Too loose:
+     - Step 3 returns true if any test file contains the changed file's stem. A common stem such as `index`, `agent` or `utils` almost always matches.
+     - Steps 2 and 3 never check that the matching test actually ran.
+   - Cost: step 3 does a synchronous read of every test file, up to depth 4 with no size cap, per verification and per `run_tests` call.
+   - Fix: bind on the output evidence (test names or paths reported as run) plus an explicit allowance for ecosystems with inline tests. Cache the scan and bound it by size.
+
+8. **SHOULD-FIX – `cli/src/tester.ts:200–204`: `isFilteredVerifierCommand` and `hasExecutedTests` have gaps and false positives.**
+   - Not detected as filtered: `go test -run=X`, `node --test --test-name-pattern=x`, `make test FILTER=foo` (the pattern needs trailing whitespace), `pytest a.py::test_b`, and positional `cargo test name`.
+   - False positive: `git diff -- src` is flagged as filtered.
+   - `hasExecutedTests` returns true for `0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out`.
+   - Fix: match `-run[= ]`, `--test-name-pattern`, `FILTER=\S`, `::`, and positional arguments for known runners. For the zero-pass case, require `passed &gt; 0`.
+
+9. **SHOULD-FIX – `cli/src/core/egress.ts:~238`: the broadened generic secret regex redacts ordinary code.**
+   - It now allows an optional opening quote and a bare `auth`. I measured these:
+     - `password = process.env.DB_PASSWORD` classifies `process.env.DB_PASSWORD`.
+     - `secret = os.environ["X"]` classifies `os.environ[`.
+     - `auth = require("./auth")` classifies `require(`.
+     - `password: Optional[str]` classifies `Optional[str]`.
+     - `self.auth_token = REDACTED classifies `self._generate_token()`.
+   - Each matched value is then `replaceAll`'d over the whole text, which corrupts code shown to the model and in telemetry.
+   - It also raises false quarantines on `search_web` and `fetch_web`.
+   - Fix: restore the required quote, or require the value to contain no `(`, `[`, `.` or `)` unless quoted. Drop bare `auth`.
+   - The new environment-variable secrets have the same flaw: any value of 8+ characters in a variable whose name contains `SECRET`, `PASSWORD` and similar is replaced everywhere. Add a minimum length of about 16, exclude path-like values, and skip common words.
+
+10. **SHOULD-FIX – `cli/src/ui.ts:6–15` with `cli/src/sidecar.ts:338`: `redactSecrets` is now heavy and runs per streamed delta.**
+    - It runs the full `redactForTelemetry` pipeline (environment enumeration, a pass over all patterns, and entropy tokenization) for each `assistant.delta`.
+    - I measured about 0.4 ms per call, on a 96-variable environment under load. Note that `sidecar.ts` is outside the stated scope.
+    - Fix: for deltas, keep the cheap regex-only path and redact fully at message end.
+    - Deltas also split tokens, so full redaction per delta gives weaker protection anyway.
+
+11. **SHOULD-FIX – `core/src/runner.rs:214–235`: bounded drain discards all output on timeout.**
+    - If a reader does not finish within 500 ms, for example because a backgrounded `server &amp;` holds the pipe, `Vec::new()` replaces the whole stdout or stderr. Everything already read is lost.
+    - It also calls `terminate_process_tree`, which adds up to 500 ms of SIGTERM grace and kills the daemon.
+    - `drain_timeout` can be 0 when `remaining_time` is 0, which loses output from a command that finished right at the limit.
+    - Fix: have the reader threads share an `Arc&lt;Mutex&lt;Vec&lt;u8&gt;&gt;&gt;` and return whatever has been collected. Compute the drain as a floor, not `min(remaining, 500ms)`.
+
+12. **SHOULD-FIX – `core/src/file_ops.rs:89–154` (`write_file_atomically`): several behaviours change.**
+    - **Cleanup:** the temp file is not removed if `verify_descriptor_confinement` or `write_all` fails, which leaves `.name.tmp_atomic.&lt;ns&gt;` files in the workspace.
+    - **Read-only files:** a file with mode 0444 in a writable directory can now be edited. The old in-place open failed. Check `meta.permissions().readonly()` first.
+    - **Metadata:** ownership, ACLs, xattrs and hard links are not preserved.
+    - **Race:** `create_dir_all` runs before the jail check on the parent, so directories can be created outside the jail. The check precedes the mkdir only in `write_file`'s earlier pre-check, which does not cover this path.
+    - **Permission window:** `set_permissions` is applied after the content is written, so a restrictive mode is applied late.
+    - **Temp name:** it uses a timestamp only. Add a counter or random suffix.
+
+13. **SHOULD-FIX – `core/src/file_ops.rs:~610–650` (`edit_file`): "exact match only" is not what is implemented.**
+    - The trim fallback, `norm_orig.contains(trimmed_old)`, still matches sub-token substrings. `old="x = 1\n"` matches inside `x = 10`, and the result becomes `x = 20`.
+    - `line_by_line_trim_match` ignores indentation, and the replacement uses the model's indentation.
+    - In a file with mixed endings, `has_crlf` converts every `\n` to `\r\n`, including untouched LF lines.
+    - The exact-match branch inserts a bare `\n` into a CRLF file when the match is single-line but the replacement is multi-line.
+    - Fix: require line boundaries for the trimmed match, and normalise line endings per line.
+
+14. **SHOULD-FIX – `cli/src/core/authority.ts:~128` and `cli/src/tools.ts:~482`: the `--pre` check is not applied in the bridge's read-only gate.**
+    - Authority uses `isSafeReadOnlyCommand`, but the bridge's read-only enforcement still uses `SAFE_READONLY_COMMAND_REGEX.test`. Only dry-run was switched to the new function.
+    - Fix: use the same function in both places.
+    - The check also misses `rg --hostname-bin`, which executes a program.
+
+15. **SHOULD-FIX – `cli/src/security.ts:~230`: the vault restore fails closed only when `isAuthorizedSink === false` is passed.**
+    - An omitted context still rehydrates. The only caller found, `agent.ts:2503`, passes `true` explicitly.
+    - Fix: invert the default so restore requires an explicit `true`.
+
+16. **SHOULD-FIX – `.gitlab-ci.yml`: the pipeline cannot work as written.**
+    - The `node:20-bookworm` image has no Rust toolchain, and `make build` runs `cargo build`.
+    - `npm install` is never run, and `node_modules` is not an artifact, so the `test` stage has no dependencies.
+    - Fix: use an image with both toolchains, or add a Rust setup step, and add `npm ci` plus a cache.
+
+17. **NIT – `cli/src/build_identity.ts` and `cli/src/index.ts:65`: startup cost and a missing field.**
+    - The summary said "build time", but no build timestamp is recorded.
+    - `getBuildIdentity()` runs at module load, so two `execSync` git calls happen on every `harness` start, including the sidecar and `doctor`.
+    - `dirty` is evaluated at runtime, and `cli/dist` is tracked, so a rebuilt install always reports dirty.
+    - Fix: bake the identity at build time into `build_identity.json` and only fall back to git lazily.
+
+18. **NIT – `cli/src/mcp.ts:49–70` (`buildMcpEnvironment`): the environment scrub is too aggressive.**
+    - Proxy variables, `SSL_CERT_FILE`, `NODE_OPTIONS` and `LD_LIBRARY_PATH` are dropped, which breaks MCP servers behind proxies or custom CAs.
+    - Fix: add an allow-extension setting, or document it.
+
+19. **NIT – `cli/src/tools.ts:458` and `agent.ts:2511`: duplicated deletion guards, and `.git` internals are deletable.**
+    - The same check exists in the bridge, the agent and Rust.
+    - Deleting `.git/objects` or `.git/HEAD` with `recursive` is still allowed.
+    - Fix: guard any path with a `.git` component, and remove the duplicates.
+
+20. **NIT – `core/src/runner.rs:42–60`: the truncation byte count is correct but the tail loop is awkward.** Prefer `floor_char_boundary` or `ceil_char_boundary` when available.
+
+## Tests missing for new behaviour
+
+The only new tests are three Rust ones in `file_ops.rs` (`t1`–`t3`), plus 21 added lines in `egress.test.ts` and a 3-line change to `harness.test.ts`. There is no `scratch/repro` directory. Nothing covers:
+- `build_identity`
+- `workspace_trust` or the trust gating in plugins/MCP
+- the tester filter sanitizer, `isFilteredVerifierCommand`, `hasExecutedTests`, or `isVerifierDeliverableBound`
+- the delete guards (TS or Rust)
+- `buildMcpEnvironment`
+- the runner drain and truncation
+- the parser repair, `&lt;think&gt;` stripping and known-tool filter
+- SSE `data:` without a space
+- REGRESSION_FREE and the objective rejection path
+- vault fail-closed
+- `rg --pre`
+- atomic-write permission preservation
+
+## Summary claims
+
+**Verified, with the gaps noted above**
+- Build identity is wired into `--version`, `doctor`, and the report.
+- `.gitlab-ci.yml` exists, but it is not functional (finding 16).
+- Capability gates: `run_tests` and `browser_type` are marked mutating, which drives the authority read-only denial. The cost is finding 3.
+- MCP and workspace config are untrusted unless trusted, and MCP is read-only aware.
+- Rust deletion guards for the workspace root and `.git` (with the exceptions in finding 19) and the `recursive` flag exist, but the flag is unreachable from the schema.
+- Fuzzy matching is gone: the ratio-based matcher is removed and ambiguity errors exist (3 Rust tests pass). The trimmed-substring fallback remains (finding 13).
+- Atomic writes preserve CRLF and Unix mode bits via `fs::set_permissions` on the temp file, which is why 0444 is bypassable (finding 12).
+- `stdin(Stdio::null())` is set, and UTF-8-safe truncation is implemented.
+- `repairJson` is string-aware, and the tool-name allowlist is in place.
+- SSE `data:` framing works with and without a space.
+- Egress: JWT, `DATABASE_URL`, environment-secret patterns and the `[REDACTED:` skip are in. I found no catastrophic backtracking: adversarial inputs of 50–100k characters ran in under 30 ms.
+- The REGRESSION_FREE outcome exists in `turn.ts`, the invariants, the exit code (2), the summary text, and the objective rejection.
+
+**Verified as partial or not as stated**
+- "Disables them in --read-only" holds for MCP but not for plugins (finding 5).
+- "Fails closed" for the vault holds only for an explicit `false` (finding 15).
+- "Parser candidate tools limited to known names" holds. I did not verify that custom plugin tool names (neither `custom__` nor `mcp__`) get through, because `KNOWN_TOOLS` is built at module load.
+- "Subagents inherit read-only": the authority engine is constructed from `config.readOnly`, and the test log shows a denial under a read-only child (`AUTH-009`). I did not trace the construction path.
+- "Subagent mutations feed the parent" is implemented in `agent.ts` around line 2228.
+
+**Could not verify**
+- Whether `vault.restore` or `redactSecrets` are exercised by any other unscoped caller (only one `restore(` caller found).
+- Whether stale tests in the live tree were fixed after my copy: the other agent is editing `agent.ts` and `harness.test.ts` concurrently. I re-synced both mid-review and did not re-run the full suite on the final state.
+- A runtime probe of finding 3 (`run_tests` then `UNVERIFIED`).
+- Performance of the `isVerifierDeliverableBound` scan on a large repo.
+
+## Tests run (in the review copy only)
+
+- `cargo test`: all passed.
+- Failures in the TS suites:
+  - `turn_semantics`: 3 failures
+  - `convergence_invariants`: 2 failures
+  - `doctor`: 1 failure
+  - `harness.parseModelResponse`: 1 failure, a stale-copy artifact since fixed in the live tree
+- Suites that passed: `team_convergence`, `durable_continuity`, `candidate`, `authority`, `capabilities`, `egress`, `objective_continuation`, `credential_boundary`, `security_gates`, `spine`, `client_robustness`.
+- `verifier_timeout` failed in my first run (the Rust binary had not been built yet) and passed on the rerun, which also covered `doctor`.</result>
+<usage><subagent_tokens>125770</subagent_tokens><tool_uses>41</tool_uses><duration_ms>1183397</duration_ms></usage>
+</task-notification>
