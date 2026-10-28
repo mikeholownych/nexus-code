@@ -165,8 +165,8 @@ export async function watchOperation(options: WatchOptions): Promise<WatchResult
     } catch (error: any) {
       failures += 1;
       if (failures >= (options.maxReadFailures ?? 5)) return { renders, stopped: "unreadable" };
-      write(`could not read the operation: ${String(error?.message ?? error)}
-`);
+      const reason = safeTerminal(String(error?.message ?? error)).replace(/[\r\n\t]+/g, " ");
+      write(`could not read the operation: ${reason}\n`);
       await sleep(intervalMs, options.signal);
       continue;
     }

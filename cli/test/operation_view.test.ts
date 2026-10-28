@@ -285,6 +285,21 @@ test("watch stops on abort, on a render limit and after repeated read failures",
   assert.deepEqual(unreadable, { renders: 0, stopped: "unreadable" });
   assert.equal(writes.length, 2);
   assert.match(writes[0], /could not read the operation: operation file is being replaced/);
+
+  const hostile: string[] = [];
+  await watchOperation({
+    load: () => {
+      throw new Error("boom\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2Jforged\nline\tend");
+    },
+    intervalMs: 0,
+    sleep: async () => {},
+    write: (text) => hostile.push(text),
+    maxReadFailures: 2,
+  });
+  assert.equal(hostile.length, 1);
+  assert.doesNotMatch(hostile[0], /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+  assert.equal(hostile[0].split("\n").length, 2, "a read-failure message must stay on one line");
+  assert.match(hostile[0], /forged line end/);
 });
 
 test("the default sleep wakes promptly when the watch is aborted", async () => {
@@ -415,6 +430,10 @@ test("terminal-safe rendering: operation text cannot emit control or escape sequ
   const rendered = renderOperationView(view, { width: 120 });
   assert.doesNotMatch(rendered, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
   assert.match(rendered, /safe/);
+  // A newline in operation text is folded, so it cannot start a line that imitates an operation status line.
+  const lines = rendered.split("\n");
+  assert.equal(lines.some((line) => line.startsWith("after")), false);
+  for (const line of lines) assert.doesNotMatch(line, /[\r\t]/);
 });
 
 test("events are copied without their free-form detail", () => {
