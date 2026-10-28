@@ -1,0 +1,31 @@
+<task-notification>
+<task-id>ac68d7d7207aa2b37</task-id>
+<tool-use-id>toolu_01KXmsDzwv3hGE1rQCrZoxa6</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/ac68d7d7207aa2b37.output</output-file>
+<status>completed</status>
+<summary>Agent "Author held-out T2 tasks batch 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Batch 2 is complete: all 10 tasks validated twice, and `validate.mjs` (qualification: true) reports OK for all 20 tasks across both batches, with nothing to fix. I discarded no tasks.
+
+| id | language | class | difficulty | lockfile | defect injected |
+|---|---|---|---|---|---|
+| ho-py-debug-01 (tomli) | Python | debug | medium | none, pytest pinned 8.3.3 | yes |
+| ho-py-feature-02 (jmespath.py) | Python | feature | hard | none, pytest pinned 8.3.3 | no |
+| ho-py-refactor-02 (python-semver) | Python | refactor | medium | uv.lock exists, but setup uses pip with pinned pytest and pytest-cov | no |
+| ho-js-debug-02 (dom-serializer) | TS | debug | hard | package-lock | yes |
+| ho-js-bugfix-02 (linkify-it) | TS | bugfix | medium | package-lock | yes |
+| ho-js-refactor-01 (domutils) | TS | refactor | medium | package-lock | no |
+| ho-go-feature-02 (gjson) | Go | feature | medium | go.sum | no |
+| ho-go-debug-02 (go-version) | Go | debug | medium | no go.sum (no dependencies) | yes |
+| ho-rs-refactor-02 (hexyl) | Rust | refactor | medium | Cargo.lock | no |
+| ho-rs-bugfix-02 (pastel) | Rust | bugfix | medium | Cargo.lock | yes |
+
+- **History squash:** the five tasks with an injected defect use the same history squash as batch 1. Each one is listed in `reference/NOTES.md`.
+- **Refactor checks:** the hidden tests for the three refactor tasks check behaviour plus one structural property, so other reasonable restructurings should pass. For hexyl, behaviour is compared against a golden output generated from the pinned commit.
+- **One edit after validation:** I reworded the example in ho-go-feature-02's objective after it had validated. Only the text changed, not the commands.
+- **SUITE claim:** the check ran before every validation step, and no claim newer than the stale one appeared, so nothing had to wait. That claim file was the only thing I read under `/home/mike/nexus-code`.
+- **Validity:** nothing new limits independence. Setup still needs network access for npm, pip and cargo installs.
+
+`MANIFEST-batch2.json` is written in the same format as batch 1, and `chmod -R go-rwx` has been applied again to everything under `/home/mike/nexus-heldout`.</result>
+<usage><subagent_tokens>431007</subagent_tokens><tool_uses>16</tool_uses><duration_ms>779878</duration_ms></usage>
+</task-notification>
