@@ -95,9 +95,12 @@ const conversationNotStarted = (messages: ChatMessage[]): boolean => messages.le
  * whichever qualified resource the scheduler picks next.
  */
 export class AgentWorkUnitExecutor implements WorkUnitExecutor {
+  /** Workspace of the unit currently running (its isolated worktree when the operation isolates units). */
+  private runWorkspace: string | undefined;
+
   constructor(private readonly opts: AgentExecutorOptions) {}
 
-  configFor(resource: ResourceDescriptor, unit?: WorkUnit): HarnessConfig {
+  configFor(resource: ResourceDescriptor, unit?: WorkUnit, workspace?: string): HarnessConfig {
     const base = this.opts.baseConfig;
     // The client sends a key only to the origin it belongs to, so the configured key never reaches another provider.
     // A spec names apiKeyEnv for its own provider keys; it cannot re-home a stored credential to another origin.
@@ -119,6 +122,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       : resource.contextLength;
     return {
       ...base,
+      workspace: workspace ?? base.workspace,
       endpoint: resource.endpoint,
       model: resource.model,
       provider: resource.providerId,
@@ -216,7 +220,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   private tddTestSnapshot(agent: AutonomousAgent): Map<string, string> {
     const snapshot = new Map<string, string>();
     try {
-      const identity = agent.getCandidateTracker().computeCandidateIdentitySync(this.opts.baseConfig.workspace);
+      const identity = agent.getCandidateTracker().computeCandidateIdentitySync(this.runWorkspace ?? this.opts.baseConfig.workspace);
       for (const entry of [...identity.trackedChanges, ...identity.untrackedFiles]) {
         if (entry.status !== "deleted" && isTestPath(entry.path)) snapshot.set(entry.path, entry.contentHash);
       }
@@ -228,7 +232,8 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   }
 
   async run(unit: WorkUnit, resource: ResourceDescriptor, ctx: UnitRunContext): Promise<UnitRunResult> {
-    const config = this.configFor(resource, unit);
+    const config = this.configFor(resource, unit, ctx.workspace);
+    this.runWorkspace = config.workspace;
     const agent = this.opts.createAgent
       ? this.opts.createAgent(config, 1, { durable: true, role: unit.role, unitId: unit.id })
       : new AutonomousAgent(config, 1, undefined, { durable: true, role: unit.role, unitId: unit.id });
@@ -410,7 +415,18 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       } catch {
         reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "turn_checkpoint_failed");
       }
-      return this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx, testerVerifiedThisTurn);
+      const outcome = this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx, testerVerifiedThisTurn);
+      if (outcome.kind === "completed" && turn.verification?.command) {
+        return {
+          ...outcome,
+          verification: {
+            command: turn.verification.command,
+            status: turn.verification.status,
+            hasExecutedTests: turn.verification.hasExecutedTests === true,
+          },
+        };
+      }
+      return outcome;
     } finally {
       agent.setProviderRecoveryHooks(undefined);
       agent.shutdown();

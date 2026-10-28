@@ -76,6 +76,8 @@ export interface DecisionOption {
 
 export type BlockCause =
   | "EXECUTION_FAILED"
+  | "MERGE_CONFLICT"
+  | "INTEGRATION_FAILED"
   | "EXECUTION_UNKNOWN"
   | "INTERRUPTED"
   | "NO_QUALIFIED_RESOURCE"
@@ -181,6 +183,41 @@ export const DEFAULT_OPERATION_POLICY: OperationPolicy = {
   minWaitMs: 1_000,
 };
 
+/** One unit's worktree/branch in an isolated operation. */
+export interface OperationGitUnit {
+  branch: string;
+  worktree: string;
+  /** Integration tip the branch was created from. */
+  baseCommit: string;
+  /** Integration tip after the unit was merged (absent until it is). */
+  integratedCommit?: string;
+}
+
+/** Opt-in Git isolation for an operation (`spec.git.isolate`). */
+export interface OperationGitState {
+  isolate: true;
+  repoRoot: string;
+  baseRef: string;
+  baseCommit: string;
+  integrationBranch: string;
+  integrationWorktree: string;
+  baseDir: string;
+  units: Record<string, OperationGitUnit>;
+}
+
+/** What was integrated, and the evidence the merge was accepted with. */
+export interface IntegrationReceipt {
+  unitId: string;
+  branch: string;
+  commit: string;
+  integratedCommit: string;
+  mergedAt: string;
+  files: string[];
+  outcome: string;
+  summary: string;
+  verification: "PASSED" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
+}
+
 export interface DurableOperationState {
   schemaVersion: 1;
   id: string;
@@ -196,6 +233,10 @@ export interface DurableOperationState {
   events: OperationEvent[];
   policy: OperationPolicy;
   decisions?: AppliedDecision[];
+  /** Present only for an isolated operation; absent keeps the original in-place behaviour. */
+  git?: OperationGitState;
+  /** Accepted unit integrations, oldest first. */
+  integrations?: IntegrationReceipt[];
 }
 
 /** An option before it is numbered into a decision. */
@@ -214,7 +255,13 @@ export interface BlockSpec {
 }
 
 export type UnitRunResult =
-  | { kind: "completed"; summary: string; outcome: string }
+  | {
+      kind: "completed";
+      summary: string;
+      outcome: string;
+      /** The verifier that produced the unit's outcome, for the integration check on the merged tree. */
+      verification?: { command: string; status: string; hasExecutedTests: boolean };
+    }
   /** The resource could not take the work and nothing executed (or the condition is recorded at resource scope). */
   | { kind: "resource_unavailable"; failure: InferenceFailure; condition: ResourceConditionRecord }
   /** Inference may have executed and its bounded replays are spent: never resubmitted elsewhere automatically. */

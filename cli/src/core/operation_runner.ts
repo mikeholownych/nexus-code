@@ -7,6 +7,7 @@ import { credentialStorageHome, storedCredentialFor } from "../client.js";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { OperationGit, type OperationGitPlan } from "./operation_git.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
 import {
   credentialFingerprint,
@@ -36,6 +37,8 @@ export interface UnitRunContext {
   operatorDecision?: { label: string; note?: string; restart?: boolean };
   /** Durably records the unit's conversation task before execution, so a crash mid-run can be reconciled. */
   bindAgentTask(taskId: string): void;
+  /** Isolated operations: the unit's worktree. Absent means the executor's configured workspace. */
+  workspace?: string;
   observeFailure(failure: InferenceFailure): ResourceConditionRecord | null;
   observeSuccess(): void;
   shouldYield(failure: InferenceFailure, plannedDelayMs: number): boolean;
@@ -66,11 +69,26 @@ export interface OperationRunnerOptions {
   maxIterations?: number;
 }
 
+function planFromState(state: DurableOperationState): OperationGitPlan {
+  const git = state.git!;
+  const key = git.integrationBranch.split("/")[1]?.replace(/^op-/, "") ?? "op";
+  return {
+    key,
+    repoRoot: git.repoRoot,
+    baseRef: git.baseRef,
+    baseCommit: git.baseCommit,
+    integrationBranch: git.integrationBranch,
+    integrationWorktree: git.integrationWorktree,
+    baseDir: git.baseDir,
+  };
+}
+
 export class OperationRunner {
   readonly registry: ResourceRegistry;
   readonly scheduler: ConvergenceScheduler;
   private readonly clock: RecoveryClock;
   private readonly revalidator: OperationRevalidator;
+  private readonly git: OperationGit | undefined;
 
   constructor(
     readonly state: DurableOperationState,
@@ -80,10 +98,15 @@ export class OperationRunner {
     this.registry = new ResourceRegistry(state.resources, state.conditions, this.clock, (e) => this.onRegistryEvent(e));
     this.revalidator = new OperationRevalidator(opts.executor, this.registry, opts.onDiagnostic);
     this.scheduler = new ConvergenceScheduler(state, this.registry, () => this.clock.now(), opts.onEvent, opts.onDiagnostic);
+    this.git = state.git?.isolate ? new OperationGit(planFromState(state), state.git) : undefined;
   }
 
   async run(signal?: AbortSignal): Promise<DurableOperationState> {
-    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED") return this.state;
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED") {
+      this.git?.disposeAllUnits();
+      return this.state;
+    }
+    this.reconcileIntegrated();
     this.scheduler.reconcileInterruptedRuns();
     if (this.state.status === "WAITING" && this.state.wait && Date.parse(this.state.wait.wakeAt) <= this.clock.now()) {
       await this.revalidator.revalidate(signal);
@@ -94,6 +117,24 @@ export class OperationRunner {
       if (signal?.aborted) return this.cancelled();
       const d = this.scheduler.decide();
       if (d.kind === "run") {
+        if (this.git) {
+          const missing = this.git.missingWorktrees().find((entry) => entry.unitId === d.unit.id);
+          if (missing) {
+            this.scheduler.start(d);
+            this.scheduler.apply(d.unit.id, {
+              kind: "failed",
+              cause: "EXECUTION_FAILED",
+              reason: `isolated worktree is missing (${missing.worktree})`,
+              question: `${d.unit.title}'s isolated worktree was removed outside Nexus. Restart it from the integration tip, or stop?`,
+              options: [
+                { label: "restart the unit from the integration tip", action: { kind: "retry", restart: true } },
+                { label: "stop the operation", action: { kind: "cancel_operation" } },
+              ],
+            });
+            this.save();
+            continue;
+          }
+        }
         if (await this.revalidator.beforeAssign(d.resource, signal)) continue;
         this.scheduler.start(d);
         this.save();
@@ -119,6 +160,7 @@ export class OperationRunner {
         continue;
       }
       this.scheduler.finish(d);
+      this.git?.disposeAllUnits();
       this.save();
       return this.state;
     }
@@ -141,6 +183,21 @@ export class OperationRunner {
 
   private async execute(d: Extract<Decision, { kind: "run" }>, signal?: AbortSignal): Promise<UnitRunResult> {
     const { unit, resource } = d;
+    let workspace: string | undefined;
+    if (this.git) {
+      try {
+        workspace = this.git.prepareUnit(unit, { restart: Boolean(unit.pendingDecision?.restart) }).workspace;
+        this.save();
+      } catch (err: any) {
+        return {
+          kind: "failed",
+          cause: "EXECUTION_FAILED",
+          reason: `cannot prepare the unit's git worktree: ${err?.message ?? err}`,
+          question: `${unit.title}: its isolated worktree could not be prepared (${err?.message ?? err}). Retry, or stop?`,
+          options: [{ label: "retry", action: { kind: "retry" } }],
+        };
+      }
+    }
     const ctx: UnitRunContext = {
       signal,
       objective: this.state.objective,
@@ -166,9 +223,47 @@ export class OperationRunner {
       observeFailure: (f) => this.registry.observeFailure(resource, f),
       observeSuccess: () => this.registry.observeSuccess(resource),
       shouldYield: (_f, delay) => this.shouldYield(unit, resource, delay),
+      ...(workspace ? { workspace } : {}),
     };
     try {
-      return await this.opts.executor.run(unit, resource, ctx);
+      const result = await this.opts.executor.run(unit, resource, ctx);
+      if (result.kind !== "completed" || !this.git) return result;
+      const integration = await this.git.integrate(unit, result);
+      if (integration.kind === "conflict") {
+        const files = integration.files.length ? ` (${integration.files.join(", ")})` : "";
+        return {
+          kind: "failed",
+          cause: "MERGE_CONFLICT",
+          reason: `merging ${unit.id} into the operation branch conflicts${files}`,
+          question:
+            `${unit.title} completed, but its branch conflicts with the integrated work${files}. Resolve it in ` +
+            `${this.state.git?.integrationWorktree} and retry (the unit runs again on its branch), revise it, or stop?`,
+          options: [
+            { label: "retry after resolving the conflict", action: { kind: "retry" } },
+            { label: "revise the unit (note required)", action: { kind: "revise" } },
+          ],
+        };
+      }
+      if (integration.kind === "failed") {
+        return {
+          kind: "failed",
+          cause: "INTEGRATION_FAILED",
+          reason: integration.reason,
+          question: `${unit.title} could not be integrated: ${integration.reason}. Retry the unit, or stop?`,
+          options: [{ label: "retry", action: { kind: "retry" } }],
+        };
+      }
+      this.state.integrations = [...(this.state.integrations ?? []), integration.receipt];
+      this.scheduler.emit(
+        "WORK_COMPLETED",
+        integration.receipt.verification === "NOT_RUN"
+          ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (not re-verified).`
+          : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}.`,
+        { unitId: unit.id, detail: { integration: integration.receipt } },
+      );
+      this.git.disposeUnit(unit.id);
+      this.save();
+      return result;
     } catch (err: any) {
       if (signal?.aborted) return { kind: "cancelled" };
       return {
@@ -213,8 +308,33 @@ export class OperationRunner {
     }
   }
 
+  /**
+   * A crash between the merge and the scheduler transition leaves a receipt but a RUNNING unit; finish that unit from
+   * the receipt instead of running it again on a branch that is already merged.
+   */
+  private reconcileIntegrated(): void {
+    const receipts = this.state.integrations ?? [];
+    for (const receipt of receipts) {
+      const unit = this.state.units.find((candidate) => candidate.id === receipt.unitId);
+      if (!unit || unit.status !== "RUNNING") continue;
+      unit.status = "COMPLETE";
+      unit.result = {
+        summary: receipt.summary,
+        completedAt: receipt.mergedAt,
+        resourceId: unit.assignment?.resourceId ?? "unknown",
+        outcome: receipt.outcome,
+      };
+      this.git?.disposeUnit(unit.id);
+      this.scheduler.emit("WORK_COMPLETED", `${unit.id} completed before the restart and is already integrated.`, {
+        unitId: unit.id,
+        detail: { integration: receipt },
+      });
+    }
+  }
+
   private cancelled(): DurableOperationState {
     this.scheduler.cancel();
+    this.git?.disposeAllUnits();
     this.save();
     return this.state;
   }

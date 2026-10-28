@@ -212,6 +212,38 @@
                     "type": "string"
                   }
                 }
+              },
+              "integration": {
+                "description": "The unit's integration receipt, once merged.",
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "commit",
+                  "integratedCommit",
+                  "mergedAt",
+                  "files",
+                  "verification"
+                ],
+                "properties": {
+                  "commit": {
+                    "type": "string"
+                  },
+                  "integratedCommit": {
+                    "type": "string"
+                  },
+                  "mergedAt": {
+                    "type": "string"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "verification": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
@@ -495,6 +527,23 @@
               "resourceId": {
                 "type": "string"
               }
+            }
+          }
+        },
+        "git": {
+          "description": "Present only for an isolated operation.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "integrationBranch",
+            "integrationWorktree"
+          ],
+          "properties": {
+            "integrationBranch": {
+              "type": "string"
+            },
+            "integrationWorktree": {
+              "type": "string"
             }
           }
         }

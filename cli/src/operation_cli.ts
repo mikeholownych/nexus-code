@@ -18,6 +18,7 @@ import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { buildOperationView, renderOperationView, watchOperation } from "./operation_view.js";
+import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
 import { safeTerminal } from "./ui.js";
 import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
 import { createOperationAccountIdentity } from "./core/account_identity.js";
@@ -33,6 +34,8 @@ interface OperationSpec {
   resources?: Array<Partial<ResourceDescriptor> & { id: string; endpoint?: string; model: string }>;
   discoverCatalog?: boolean;
   policy?: Partial<OperationPolicy>;
+  /** Opt-in Git isolation: each unit runs on its own worktree/branch; completions merge into an operation branch. */
+  git?: { isolate?: boolean; baseRef?: string };
 }
 
 function normalizeResources(spec: OperationSpec, config: HarnessConfig, identity: ReturnType<typeof createOperationAccountIdentity>): ResourceDescriptor[] {
@@ -128,7 +131,24 @@ export function registerOperationCommands(program: Command): void {
       const identity = createOperationAccountIdentity(credentialStorageHome());
       const policy = mergeOperationPolicy(config.operationPolicy, spec.policy);
       const state = newOperation(id, spec.objective, spec.units, normalizeResources(spec, config, identity), createdAt, policy);
-      if (!options.json) console.log(pc.bold(`Operation ${state.id}`) + pc.dim(` — resume after a restart with: nexus operation resume ${state.id}`));
+      if (spec.git?.isolate) {
+        try {
+          const plan = planOperationGit(config.workspace, state.id, spec.git.baseRef);
+          const gitState = newOperationGitState(plan);
+          ensureIntegrationWorktree(plan, gitState);
+          state.git = gitState;
+        } catch (error: any) {
+          console.error(pc.red(`Cannot start an isolated operation: ${error?.message ?? error}`));
+          process.exitCode = 2;
+          return;
+        }
+      }
+      if (!options.json) {
+        console.log(pc.bold(`Operation ${state.id}`) + pc.dim(` — resume after a restart with: nexus operation resume ${state.id}`));
+        if (state.git) {
+          console.log(pc.dim(`  isolated: units run on their own worktrees; integrations land on ${state.git.integrationBranch} (${state.git.integrationWorktree})`));
+        }
+      }
       await drive(state, config, store, Boolean(options.discover || spec.discoverCatalog), Boolean(options.json));
     });
 
