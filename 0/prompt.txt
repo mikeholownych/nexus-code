@@ -1,0 +1,1 @@
+fix the alpha.1 release notes too
