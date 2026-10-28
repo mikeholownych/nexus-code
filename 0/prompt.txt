@@ -1,0 +1,156 @@
+<pasted_content id="4b7d">
+Implement Nexus client compaction and task-continuity hardening on the development host.
+
+Discover the active nexus-code repository, read its applicable AGENTS.md instructions, and establish the current branch, commit, source, build, and launcher identity before changing anything. Locate the available homelab-ai reference checkout separately. Do not assume repository paths or that supplied archives match the live checkouts.
+
+Complete discovery, implementation, validation, documentation, and an evidence-based final report. Do not stop at an assessment or proposed design.
+
+Product and development boundaries
+
+Nexus and homelab-ai are separate, independent products intentionally designed to work well together. Their collaboration may improve capability and efficiency, but neither product may require that collaboration to operate or provide value.
+
+This task authorizes changes to nexus-code only. Their development, validation, and release operations remain separate.
+
+Inspect homelab-ai (/home/mike/Projects/aihost) read-only to understand its existing gateway contract. Do not modify, deploy, or promote homelab-ai. Do not deploy Nexus or modify credentials.
+
+If the gateway contract cannot satisfy an integration requirement, implement the compatible Nexus behavior, document the limitation, and provide a separate gateway capability handoff. Do not silently narrow acceptance or claim an unmet requirement is complete. A missing integration capability must not prevent standalone Nexus operation.
+
+Authoritative requirements
+
+1. Preserve the existing Nexus architecture. Extend its objective ledger, structured context memory, admission controls, archival retrieval, and persistence machinery. A new execution graph or broad harness rewrite is not requested.
+
+2. Progressing agent work must have no fixed step ceiling. Neither 30 nor 300 steps may terminate an otherwise progressing objective. Moving a ceiling into persisted objective state would still violate this requirement.
+
+3. Discover context capacity, output allowances, and token-counting capabilities dynamically from the selected provider where supported. When connected to homelab-ai, consume its advertised gateway capabilities. When unavailable, preserve standalone operation using provider-appropriate configuration and clearly identified estimates.
+
+4. Manual compaction, automatic compaction, follow-up turns, and restart must preserve task intent, user constraints, completed work, failure evidence, and execution continuity.
+
+Source context to verify
+
+The previously inspected nexus-code archive was identified as 38c566b35e75c4f709114458cf00ee533c3283c3. It contained:
+- An objective ledger injected separately into inference requests.
+- Deterministic structured compaction with an optional LLM summary.
+- Archived originals and retrievable findings.
+- Progressive context reduction and admission refusal.
+- Turn-local repetition, stagnation, recovery, and continuation tracking.
+
+The supplied homelab-ai source contained:
+- `/v1/models` advertising alias context_length, max_completion_tokens, limits_version, reasoning policy, and serving workers.
+- `/v1/tokenize` accepting a chat request and returning prompt_tokens, source, context_length, limits_version, and worker_id.
+- Worker adapters that apply the chat template and tokenize it.
+- A separate inference planning path that applies routing and reasoning policy before counting and admission.
+
+These are discovery pointers, not confirmed facts about the development host. Verify the current implementations. Do not assume a flat-summary-only architecture, a Rust/TypeScript echo race, or any other unproven cause.
+
+A. Persist execution continuity without imposing a step ceiling
+
+Maintain cumulative step counts for observability, not termination. Inspect ordinary turns, automatic continuation, resumed operations, and delegated helper loops for fixed step termination and prompts that force premature completion because steps are running out.
+
+Persist objective-scoped repetition observations, stagnation history, failed approaches, recovery interventions, and evidence of meaningful progress. Compaction, follow-up turns, and restart must not erase this tracking.
+
+An unfinished objective continued by the user retains its execution history. A genuinely new objective gets new tracking. Preserve explicit cancellation and intentional objective reset.
+
+Do not introduce a default hard deadline or another fixed allowance as a substitute for the removed step ceiling. Explicit operator deadlines remain valid.
+
+Continue while meaningful progress occurs. Recover, pause, or stop based on completion, cancellation, demonstrated lack of progress, or an actionable execution failure. Cosmetic plan edits, reformatted arguments, new tool-call IDs, or repeated writes of identical content must not manufacture progress.
+
+Use existing recovery policies where suitable. Explain any thresholds and their evidence; do not confuse a repeated-state threshold with a maximum task length.
+
+Keep tracking storage bounded without allowing eviction to conceal a demonstrated loop. Document how the representation preserves relevant evidence.
+
+B. Make repetition detection aware of relevant state
+
+Do not use tool-call equality alone. Combine normalized action identity, outcome identity, and relevant workspace or environment state.
+
+Prefer existing candidate-content identities and state-tracking machinery over shallow mtime-only fingerprints. Consider Git index changes, dependencies, ignored inputs, and external state when they affect the action.
+
+Permit legitimate retries after meaningful input changes. Incidental metadata changes must not continually reset a stalled objective.
+
+Treat polling and transient failures separately from deterministic failures. Polling needs a justified wait/backoff policy. Changing timestamps or request identifiers in output must not count as objective progress.
+
+If relevant state identity cannot be established, report the uncertainty rather than asserting that the state is unchanged.
+
+C. Make compaction a durable, observable boundary
+
+Inspect task-state, session, archive, and findings persistence together. An atomic rename for one file does not establish a consistent transaction across all records.
+
+Ensure successful compaction commits the necessary state before the next consequential action. Surface persistence failures through existing CLI and TUI error paths. Never report durable success after silently swallowing a save failure.
+
+Define recoverable behavior for partial writes, interrupted compaction, and process death immediately before or after the commit boundary. Preserve original evidence. Do not replay an action with an unknown outcome as though it never happened.
+
+Queue manual `/compact` during active work. Execute it after inference and the complete tool-call batch have settled, before further inference or tool dispatch. Do not compact concurrently with an in-flight request, an unfinished tool-call/result pair, or an approval interaction.
+
+Provide an acknowledgement and final outcome for queued requests. Handle duplicates, queue bounds, cancellation, shutdown, and requests arriving as a turn finishes. Apply equivalent safety and persistence guarantees to default compaction and `/compact --llm`.
+
+D. Implement optional provider capability discovery and truthful token accounting
+
+Treat homelab-ai consumables and token counting as optional capabilities of one supported provider connection. Use the existing provider abstraction to discover and consume them without making them universal prerequisites.
+
+When supported, use current advertised context capacity, output allowance, and limit version, refreshing them when model selection, routing, worker identity, or capacity changes. Stale client defaults must not override valid advertised capacity.
+
+When unsupported or temporarily unavailable, preserve standalone operation through explicit provider configuration and clearly identified estimates. Make capability availability, sizing source, and uncertainty observable. Validate against configured capacity rather than assuming unlimited capacity.
+
+Operator-requested strict counting may refuse an unmeasured request, but strict counting must not be a default dependency.
+
+Keep integration failures scoped to that connection and capability. Do not silently select another provider or disclose task content elsewhere.
+
+For supported request counting, submit the actual outbound chat representation: messages, pinned state, tools, tool choice, template-affecting settings, and relevant reasoning parameters. Reuse the inference path’s disclosure controls, credential scoping, sanitization, cancellation, and destination checks.
+
+Do not tokenize JSON or concatenated message text and label it an exact chat-request count.
+
+Verify this contract distinction: the inspected homelab-ai `/v1/tokenize` path selected a worker from the alias, while inference separately applied routing and reasoning policy. Determine whether the current contract guarantees equivalent worker, template, and policy selection.
+
+If it does not, distinguish an exact count on the sampled worker from an exact count for the subsequently admitted inference request. Document the limitation and the gateway capability needed in a separate handoff. Do not change homelab-ai.
+
+Preserve the selected provider’s admission authority. Do not bypass the gateway or route directly to its workers.
+
+Distinguish exact worker counts, gateway conservative counts, and client estimates in logs and receipts. Unsupported or unavailable counting must not be silently described as exact.
+
+Future tool-output headroom is a scheduling policy, not an actual token count. Separate it from the measured current prompt and advertised output allowance. Document any client policy ratios or margins without presenting them as physical capacity limits.
+
+Validation
+
+Use existing tests where meaningful and add tests for changed behavior. Validate actual operator paths as well as scripted gateways.
+
+At minimum demonstrate:
+- A progressing objective runs beyond 300 steps without forced termination or step-exhaustion prompts.
+- Unchanged-state repetition is detected, while meaningful input changes permit legitimate retries.
+- Follow-up turns, compaction, and restart retain accumulated tracking and original user constraints.
+- Manual compaction queues safely during inference, tool batches, and approval handling.
+- Automatic compaction preserves unseen results appropriately and does not repeatedly compact without useful reduction.
+- Process death around the compaction commit boundary recovers consistently.
+- Task-state, session, and archive write failures produce truthful visible outcomes.
+- Advertised capacity and output-allowance changes take effect dynamically where supported.
+- Supported request counting includes the actual tools and template-affecting fields.
+- Worker, routing, and policy differences are reported accurately.
+- Conservative counts, unavailable counting, malformed responses, cancellation, and credential boundaries are handled correctly.
+- Standalone Nexus remains useful without homelab-ai and without its consumables or tokenizer endpoints.
+- Loss of an optional integration capability does not create an unnecessary product-wide failure.
+- Explicit strict-counting behavior remains distinguishable from normal standalone operation.
+
+Include a real local-inference multistep task crossing compaction boundaries. Record the exact checkout, build, launcher, model, available provider capabilities, limit versions, sizing sources, compaction events, repeated-state evidence, and delivered artifacts.
+
+Separate compaction thrashing from task repetition:
+- Thrashing means repeated context reduction or admission pressure without useful stabilization.
+- Repetition means actions recur without meaningful progress even when the request fits.
+
+Passing scripted tests establishes behavior under those fixtures; it does not establish real local-model task quality.
+
+Acceptance and deliverables
+
+Evaluate standalone Nexus and optional homelab-ai integration separately.
+
+Standalone acceptance must demonstrate useful operation without homelab-ai. Integration acceptance must demonstrate correct use of the existing gateway contract when available.
+
+A missing gateway capability may leave an integration-specific requirement unmet; it must not become a prerequisite for standalone Nexus acceptance. Report both verdicts explicitly.
+
+Provide:
+- The nexus-code implementation.
+- Updated operator and developer documentation.
+- An acceptance ledger mapping every requirement to implementation, evidence, status, and remaining limits.
+- A separate read-only gateway capability handoff if the existing contract leaves an integration requirement unmet.
+
+Report what changed, why, and how it was tested. Identify live local-inference acceptance separately from scripted validation. State any untested or unmet requirements explicitly.
+
+Do not replace the original acceptance scope with a narrower self-authored checklist. A green suite alone does not establish full acceptance. Complete all authorized Nexus work and report external contract limitations without making changes to homelab-ai.
+</pasted_content id="4b7d">
