@@ -1,0 +1,1 @@
+build and install the latest client on this host
