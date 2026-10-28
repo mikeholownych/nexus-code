@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b3h5xj3kl</task-id>
+<tool-use-id>toolu_01EKwJWbyQ3BkL1XCUg9wrMa</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/b3h5xj3kl.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait until pilot completes or runners exit" completed (exit code 0)</summary>
+</task-notification>
