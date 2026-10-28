@@ -309,7 +309,7 @@ test("untracked restore refuses dangling and in-workspace symlink ancestors befo
   }
 });
 
-test("Git manifest restore replaces a checkpoint file when post-checkpoint tracked children occupy its path", () => {
+test("Git manifest restore replaces a checkpoint file over staged or committed children without ENOTDIR", () => {
   for (const committed of [false, true]) {
     const { repo, git } = gitRepo();
     try {
@@ -332,6 +332,30 @@ test("Git manifest restore replaces a checkpoint file when post-checkpoint track
     } finally {
       cleanupGitRepo(repo);
     }
+  }
+});
+
+test("Git manifest restore replaces a checkpoint-tracked file over an ordinary untracked child", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "a"), "captured file\n");
+    git("add", "a");
+    git("commit", "-qm", "track checkpoint file target");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("untracked child replacement");
+    fs.rmSync(path.join(repo, "a"));
+    fs.mkdirSync(path.join(repo, "a"));
+    fs.writeFileSync(path.join(repo, "a", "child.txt"), "ordinary untracked child\n");
+    const headBefore = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.readFileSync(path.join(repo, "a"), "utf8"), "captured file\n");
+    assert.equal(fs.existsSync(path.join(repo, "a", "child.txt")), false);
+    assert.equal(git("rev-parse", "HEAD"), headBefore);
+  } finally {
+    cleanupGitRepo(repo);
   }
 });
 
@@ -1015,6 +1039,38 @@ test("Git manifest restore refuses special and nested-repository descendants of 
     } finally {
       cleanupGitRepo(repo);
     }
+  }
+});
+
+test("Git manifest restore rejects a nested-repository descendant of a tracked checkpoint file before mutation", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "a"), "captured file\n");
+    git("add", "a");
+    git("commit", "-qm", "track checkpoint file target");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("nested repository under tracked file target");
+    fs.rmSync(path.join(repo, "a"));
+    fs.mkdirSync(path.join(repo, "a"));
+    execFileSync("git", ["-C", path.join(repo, "a"), "init", "-q"]);
+    fs.writeFileSync(path.join(repo, "a", "nested-canary.txt"), "nested repository canary\n");
+    fs.writeFileSync(path.join(repo, "staged.txt"), "staged canary\n");
+    git("add", "staged.txt");
+    const headBefore = git("rev-parse", "HEAD");
+    const indexBefore = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.existsSync(path.join(repo, "a", ".git")), true);
+    assert.equal(fs.readFileSync(path.join(repo, "a", "nested-canary.txt"), "utf8"), "nested repository canary\n");
+    assert.equal(fs.readFileSync(path.join(repo, "staged.txt"), "utf8"), "staged canary\n");
+    assert.equal(git("rev-parse", "HEAD"), headBefore);
+    const indexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
+    assert.equal(indexAfter, indexBefore, "a rejected preflight must preserve staged index entries");
+  } finally {
+    cleanupGitRepo(repo);
   }
 });
 
