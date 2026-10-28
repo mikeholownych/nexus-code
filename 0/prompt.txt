@@ -1,0 +1,196 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - **Most recent request:** "make it follow the same evidence rule and proceed with stage 7 and 8".
+     - (a) Configured verifiers (`authoritativeVerifierCommand`) must follow the same evidence rule as discovered verifiers: VERIFIED only when the run shows executed tests covering the changed files, otherwise REGRESSION_FREE. Done in 95ef861.
+     - (b) Stage 7: context reliability, assessment §8 row 7. R6 context fixes and R7 acceptance of fix/context-convergence. Exit: CTX exit criteria met, plus a T3 long-task tier with 0 false absence claims and steering honoured after compaction.
+     - (c) Stage 8: the §9 evaluation.
+   - **Earlier requests in this segment:**
+     - Continue the TUI re-acceptance rounds.
+     - "what's the curent status of the PTY runs".
+     - Repeated "continue" after logins and usage-limit resets.
+   - **Earlier session requests, all completed:**
+     - "action the remaining items above": the TUI items, F1–F3, F5, O1–O3, visual defects, repeated PTY runs, re-capture of evidence and independent sign-off.
+     - The coordination choice after the Cursor overlap: "Cursor stops; I continue".
+     - Evidence-bound VERIFIED, chosen by the user.
+     - Cherry-pick the gate fix to main (done as 604687c).
+   - **Stage 8 questions asked and still unanswered:**
+     1. How many appliance (engineering/deep gateway) hours, and when?
+     2. Cloud provider, model and spending cap, or skip cloud?
+     3. First-pass scope: a 12-task pilot × 5 runs on the gateway, Nexus only, or include peer tools?
+     4. Permission to install Aider, llama.cpp-server and Ollama (via Ansible on the inference host).
+
+2. Key Technical Concepts:
+   - Nexus components:
+     - TS CLI/sidecar in `cli/src`;
+     - Rust harness-core in `core/src`;
+     - Ratatui TUI in `core/src/bin/nexus_tui`;
+     - NDJSON protocol between them.
+   - The installed `/usr/local/bin/nexus` points at the `~/nexus-code` checkout build. `nexus --version` shows build-info from `cli/dist/build-info.json`; currently `1.2.1 (d2d02e781248, feat/tui-surface)`, rebuilt before 95ef861.
+   - Approval-input design after the round-4/5 redesign:
+     - approve-all only via `a`/`A` on a panel whose letters are armed, then Enter twice;
+     - arrows choose only Approve or Deny;
+     - Enter takes a choice after `APPROVAL_CHOICE_SHOWN` (400 ms) on an armed panel, or `APPROVAL_TYPING_RECENT` (2 s) on a typed-into/draft panel;
+     - on a disarmed panel Approve takes Enter twice, Deny once;
+     - `APPROVAL_AFTER_DECISION` (1.5 s) settle, which Esc also honours;
+     - modifiers: arrows/Enter only bare, letters Shift-only;
+     - Delete counts as typing;
+     - pending approvals are a queue, with "N more waiting" in the title.
+   - Evidence-bound verification:
+     - `isVerifierDeliverableBound`, `hasExecutedTests` and `isFilteredVerifierCommand` in `cli/src/tester.ts`;
+     - REGRESSION_FREE outcome, exit code 2.
+   - Findings memory (`cli/src/core/findings.ts`):
+     - tiers are full → condensed → indexed → elided id list;
+     - `FINDINGS_BUDGET_CHARS` = 24,000, scaled by `contextLimit/65536`.
+   - The secret classifier (`cli/src/core/egress.ts`) has a high-entropy token rule. Nexus session ids (`session_\d{8}_\d{6}_[a-z0-9]{1,8}`) are now exempt.
+   - PTY repetition script `scratchpad/pty_repeat.sh WORKTREE OUT`: 10 serial runs plus 3 runs under 8 busy loops. PTY tests use a cross-process lock.
+   - Evidence capture runs in the clean worktree `scratchpad/base`:
+     - `NEXUS_E2E_EVIDENCE=1`;
+     - PNGs rendered with the scratch venv Pillow (`scratchpad/venv/bin/python -I cli/test/helpers/render_screens.py`);
+     - `SHA256SUMS` written without the `./` prefix.
+
+3. Files and Code Sections (this segment):
+
+   **Committed on feat/tui-surface:**
+   - Commit history:
+     - b50ae9a (round-4 redesign), 9792d03 (maturity driver wait 180 s), 7503b23 (report round 4);
+     - 028ca90 (round-5 follow-up: disarmed Approve takes two Enters, Esc settle, Delete typing, hints, dimmed approve-all);
+     - 88e0700 (egress session-id exemption plus a test that varies the clock);
+     - d2d02e7 (report round 5, evidence from 88e0700);
+     - 95ef861 (configured verifier follows the evidence rule).
+   - `cli/src/agent.ts` (95ef861): `const isDeliverableBound = isVerifierDeliverableBound(this.config.workspace, Array.from(this.modifiedFiles), verifierCommand, testRes.rawOutput || "");`. The `source === "configured" ||` exemption was removed.
+   - Tests updated in 95ef861:
+     - `cli/test/context_convergence.test.ts`: verifiers now print evidence. Examples: `... review.md && echo '✔ review.md lists every value' && echo 'ℹ tests 1'`, `const VERIFIER = "grep -q ready out.md && echo '✔ out.md is ready' && echo 'ℹ tests 1'"`, and `grep -q ready out.md && { echo VERIFIER-OK out.md; echo 'ℹ tests 1'; } || {...}`.
+     - `durable_continuity` uses `'test -f impl.txt && echo "✔ impl.txt exists" && echo "ℹ tests 1"'`.
+     - `turn_semantics` gained a new test: "an operator-configured verifier follows the same evidence rule…" (configured `true` → REGRESSION_FREE).
+     - `docs/USER_MANUAL.md` now says "whether you configured the verifier or Nexus found it".
+   - `docs/reviews/NEXUS_TUI_SURFACE_2026-10-12.md` now has:
+     - sections for re-acceptance rounds 2, 3, 4 and 5;
+     - a revision table with evidence from 88e0700 (nexus-tui `f979a79c4965c96d…`, sidecar `6dd91487bb659dc7…`);
+     - the status "Independent acceptance: ACCEPTED WITH DEFECTS (round 5…)".
+
+   **Uncommitted Stage 7 work (HEAD 95ef861):**
+   - `cli/src/core/findings.ts`, CTX-04: `outputLimits` additionally recognizes:
+     - `grep -m N` / `--max-count[= ]N` / `-…mN`;
+     - `sed -n 'A,Bp'` / `sed -n 'Np'`;
+     - `sed Nq`;
+     - `awk 'NR<=N'` / `NR<N` / `NR==N` / `NR>=A && NR<=B` (the lines count is computed from these bounds).
+   - `cli/src/core/findings.ts`, `READ_ARCHIVE_CAPABILITY` and `readArchive`:
+     - `READ_ARCHIVE_CAPABILITY`: id `orchestrate_read_archive`, tool `read_archive`, required arg `query`, category orchestration, not mutating.
+     - `readArchive(archive, args)`:
+       - returns passages `[#N role/tool name]…` of up to 1,200 characters, with a 12,000-character total;
+       - "No archived message contains … (N archived messages searched). That is not evidence it never existed outside this conversation.";
+       - "Nothing has been compacted…" when empty, and an error when there is no query.
+     - `import type { ChatMessage } from "../types.js"` was added if missing.
+   - `cli/src/core/findings.ts`, CTX-07:
+     - `const INDEXED_CLAIM_CHARS = 240;`
+     - `indexFinding` now emits `${shortHeader}\nFirst claim: ${first}\n[Indexed only, to fit this memory: ${rest} more claim(s) not shown; ${recovery}. It mentions: …]`.
+     - New `isIndexedBody(body)`: `body.startsWith(INDEXED_MARK) || (body.startsWith("First claim: ") && body.includes("\n"+INDEXED_MARK))`. `isCondensedFinding` and `isIndexedFinding` use it.
+   - `cli/src/agent.ts`, CTX-06:
+     - `private harnessNote(text) { return /^\[Nexus[ :]/.test(text); }`
+     - The priorTasks condition is now `... && !this.pinnedUserText(contentText) && !this.harnessNote(contentText)`.
+     - In `recordFindings`, `lastUser` is the last user message that is not a harness note.
+   - `cli/src/agent.ts`, archive:
+     - `const ARCHIVE_FOR_READING = 5_000;`
+     - new field `private archiveForReading: ChatMessage[] = [];`, reset in `resetConversation`, appended and capped in `archiveReplaced`;
+     - `public restoreArchive(messages)`;
+     - the `READ_ARCHIVE_CAPABILITY` registration, a `getEffectiveTools` entry, and the `read_archive` spine handler;
+     - findings recording skips `read_archive ` keys;
+     - imports added: `READ_ARCHIVE_CAPABILITY`, `readArchive`.
+   - `cli/src/sidecar.ts`: after `restoreSession(...)` in `resumeSession`, it calls `this.app.getAgent().restoreArchive(this.app.getSessionManager().readArchivedHistory(session.id).messages);`.
+   - `cli/src/repl.ts`: `this.agent.restoreArchive(this.sessionManager.readArchivedHistory(sess.id).messages);` was inserted after both `restoreSession` calls.
+   - New tests in `cli/test/context_convergence.test.ts`, all passing:
+     - "CTX-04: grep -m / --max-count, sed -n ranges, sed Nq and awk NR limits are limits too";
+     - "CTX-06: Nexus's own notes…" (fails before the change, verified);
+     - "archive: what compaction replaced is searchable…";
+     - "archive: the agent keeps replaced originals searchable and restores them on resume";
+     - "CTX-07: 30 findings on 5 subjects bounded to the 24K budget keep at least one full claim sentence per subject in view". It uses long `run_command` sources and subjects grouped by age (`subjects[Math.floor((n-1)/6)]`), and asserts that indexing occurred. It is verified to fail without the first-claim change and pass with it.
+   - `cli/test/sidecar_surface.test.ts`: the resume test now writes an archive (`appendArchivedHistory("session_20261012_000000_test", [kappa-31 marker])`) and asserts `readArchive((server as any).app.getAgent().archiveForReading, {query:"kappa-31"})` finds it. The rig callback now destructures `{ events, server }`. It passes 4/4.
+
+   **Other files:**
+   - `tasks/todo.md` (untracked) holds the Stage 7/8 plan and progress.
+   - `tasks/lessons.md` (untracked) records two lessons:
+     - ask whether a continuation agent was used;
+     - check `git log -1` against my last commit before committing, and never commit generated artefacts over a branch that moved.
+   - Memory file `installed-nexus-runs-checkout-build.md` updated to d2d02e7.
+
+4. Errors and fixes:
+   - Round-5 reviewer: hit the API rate limit, then resumed via SendMessage. Verdict: ACCEPTED WITH DEFECTS.
+   - Repeated PTY runs on 028ca90: the surface scenario failed with "Session not found: latest" and "The session could not be saved… identity validation failed (taskId, sessionId, id)". Root cause: about 1/70 session ids were classified as high-entropy secrets. Fixed in 88e0700.
+   - The first fail-before test for that fix did not discriminate, because it used the current time. It now varies Date via a subclass.
+   - My cleanup ran `git checkout -- cli/src/core/egress.ts`, which removed the exemption. It was re-applied by editing.
+   - One `sidecar_steering_diff` test failure, intermittent. Same root cause (session id), fixed.
+   - One maturity-scenario failure under load: the driver's 90 s wait was raised to 180 s (9792d03). A later maturity failure lost its output and did not recur in 4 reruns; it is recorded as unexplained.
+   - Test fixes:
+     - variable `state` shadowed the `state()` helper; variables were renamed;
+     - clippy `type_complexity` was fixed with a `type Case`;
+     - synthetic future timestamps broke settle checks; test times were adjusted.
+   - The CTX-07 test initially passed without the change. It was fixed by grouping subjects by age and making headers long enough to force indexing.
+   - A repl.ts patch failed on whitespace matching; it was done with a line-based insertion instead.
+
+5. Problem Solving:
+   - TUI approval safety was resolved over 5 independent rounds. Round 5 judged the residual risk acceptable for a review-mode gate.
+   - Final PTY repetition at 88e0700: 91/91. Full make test at 95ef861: Rust 24+238+2, CLI 812/812, gates pass.
+   - Stage 7 status from the explorer (HEAD 95ef861):
+
+     | Item | Status |
+     |---|---|
+     | CTX-02 | FIXED |
+     | CTX-01 | FIXED (unit level) with residuals |
+     | CTX-05 | FIXED in code, not accepted end to end |
+     | CTX-04 | OPEN (now fixed, uncommitted) |
+     | CTX-06 | OPEN (now fixed, uncommitted) |
+     | CTX-07 | OPEN (now fixed, uncommitted) |
+     | Archive retrieval | OPEN (now fixed, uncommitted) |
+
+   - CTX-01 residuals:
+     - `readFindings` says "No findings have been recorded" when the store is empty; it should say ids were lost;
+     - `persistProgress` swallows write failures with `catch {}`;
+     - no mock-gateway crash repro exists.
+   - CTX-05: the earlier closing notice for when nothing has been written yet was not added.
+   - Exit criteria still unmet:
+     - #6: one real dogfood run with an artifact, a verifier pass, a fact spot-check (Rust-core launch path in `cli/src/tools.ts`, 1,120 tracked files, no false absence claims) and a committed RESULT.md. Candidate: `~/df2/postdog/dogfood/run_25208c1_r3_deep120`, which ended VERIFIED with a 324-line artifact but has no RESULT.md.
+     - #7: VERIFIED semantics documented. The manual now documents it; also CTX-03.
+   - Stage 8 needs: a harness, a task set, a scorer, and resources. Peer tools present: opencode, goose, codex. Not installed: aider, ollama, llama-server. The gateway model is engineering/deep at 64k context; runs take hours.
+
+6. All user messages (this segment):
+   - "continue" (after /login; several times, including "Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.")
+   - "what's the curent status of the PTY runs"
+   - "make it follow the same evidence rule and proceed with stage 7 and 8"
+   - Earlier-session constraints still in effect:
+     - Preserve existing dirty and untracked work.
+     - Do not publish or deploy.
+     - Redact credentials, authorization headers and URL secrets.
+     - Do not switch the main checkout's branch: use temporary worktrees for main operations.
+     - Commit or push only when asked; there is no git remote.
+     - "Cursor stops; I continue". The other agent (Cursor) was a continuation agent; check HEAD before every commit.
+
+7. Pending Tasks:
+   - Stage 7:
+     - Run the full context_convergence, sidecar_surface, harness and capabilities suites, plus `make test`, on the uncommitted Stage 7 changes.
+     - Commit them, guarded on HEAD = 95ef861.
+     - Fix the CTX-01 residuals (the lost-ids wording in `readFindings`; surface `persistProgress` failures) and possibly the CTX-05 closing notice.
+     - Document CTX changes and `read_archive` in the manual.
+     - Write the R3 dogfood RESULT.md spot-check, read-only analysis of the existing run, and commit it.
+     - Update the context remediation doc §12.
+     - Acceptance rerun of the compaction reproduction on the fixed build: this needs appliance time and the user's answer.
+   - Stage 8: await the user's answers to the 4 resource questions. Then build the harness, task set, scorer and pre-registered thresholds, and add the T1 smoke tier to CI.
+   - Optional: a targeted independent round 6 on 028ca90/88e0700, which I offered.
+
+8. Current Work:
+   I was implementing the Stage 7 code fixes. The last action was the CTX-07 fail-before check. After grouping subjects by age, the test passed with the change (ℹ pass 1) and failed without it: "AssertionError: a full claim sentence of each subject is in view: cli/src/tools.ts spawns harness-core through resolveCoreBinary." The code was restored; line 150 of `findings.ts` is `const head = first ? \`First claim: ${first}\n\` : "";`. All Stage 7 changes are uncommitted on top of 95ef861. The CTX-04, CTX-06, archive and CTX-07 tests pass individually; the context_convergence suite passed 53/53 before the CTX-07 test was added.
+
+9. Optional Next Step:
+   Run the full suites and `make test` on the uncommitted Stage 7 changes. Then commit them, after checking `git rev-parse --short HEAD` = 95ef861, with a message covering:
+   - CTX-04 limiters;
+   - CTX-06 harness notes;
+   - `read_archive` with archive restore on resume;
+   - CTX-07 first claim in indexed findings.
+
+   After that, address the CTX-01 residuals and write the R3 RESULT.md spot-check. This follows the user's request: "make it follow the same evidence rule and proceed with stage 7 and 8". The Stage 8 runs stay blocked until the user answers the appliance-hours, cloud, scope and install questions.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
