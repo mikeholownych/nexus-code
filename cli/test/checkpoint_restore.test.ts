@@ -1049,6 +1049,9 @@ test("Git manifest restore refuses to copy an untracked file into a nested bare 
 
     fs.rmSync(path.join(bareRepo, "captured.txt"));
     execFileSync("git", ["init", "--bare", "-q", bareRepo]);
+    fs.writeFileSync(path.join(bareRepo, "config"), "[core]\n\tfilemode = true\n[include]\n\tpath = bare-core.ini\n");
+    fs.writeFileSync(path.join(bareRepo, "bare-core.ini"), "[core]\n\tbare = true\n");
+    assert.equal(execFileSync("git", ["-C", bareRepo, "config", "--bool", "core.bare"], { encoding: "utf8" }).trim(), "true");
     const bareHeadBefore = fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8");
     const bareConfigBefore = fs.readFileSync(path.join(bareRepo, "config"), "utf8");
     fs.writeFileSync(path.join(bareRepo, "repository-canary.txt"), "bare repository canary\n");
@@ -1070,6 +1073,127 @@ test("Git manifest restore refuses to copy an untracked file into a nested bare 
     assert.equal(git("rev-parse", "HEAD"), outerHeadBefore);
     const outerIndexAfter = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd: repo, encoding: "buffer" }).toString("hex");
     assert.equal(outerIndexAfter, outerIndexBefore, "rejection must preserve outer index entries");
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git manifest restore refuses a nested bare repository with a symlinked config", () => {
+  const { repo, git } = gitRepo();
+  const bareRepo = path.join(repo, "nested-bare");
+  const externalConfig = path.join(repo, "external-bare-config");
+  try {
+    fs.mkdirSync(bareRepo);
+    fs.writeFileSync(path.join(bareRepo, "captured.txt"), "checkpoint content\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("nested bare repository with symlinked config");
+
+    fs.rmSync(path.join(bareRepo, "captured.txt"));
+    execFileSync("git", ["init", "--bare", "-q", bareRepo]);
+    fs.writeFileSync(externalConfig, "[core]\n\tbare = true\n");
+    fs.rmSync(path.join(bareRepo, "config"));
+    fs.symlinkSync(externalConfig, path.join(bareRepo, "config"));
+    assert.equal(execFileSync("git", ["-C", bareRepo, "config", "--bool", "core.bare"], { encoding: "utf8" }).trim(), "true");
+    const bareHeadBefore = fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8");
+    const outerHeadBefore = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8"), bareHeadBefore);
+    assert.equal(fs.existsSync(path.join(bareRepo, "captured.txt")), false, "rejection must not copy the captured file into the bare repository");
+    assert.equal(git("rev-parse", "HEAD"), outerHeadBefore);
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git manifest restore refuses a nested bare repository with symlinked object storage", () => {
+  const { repo, git } = gitRepo();
+  const bareRepo = path.join(repo, "nested-bare");
+  const externalObjects = path.join(repo, "external-bare-objects");
+  try {
+    fs.mkdirSync(bareRepo);
+    fs.writeFileSync(path.join(bareRepo, "captured.txt"), "checkpoint content\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("nested bare repository with symlinked object storage");
+
+    fs.rmSync(path.join(bareRepo, "captured.txt"));
+    execFileSync("git", ["init", "--bare", "-q", bareRepo]);
+    fs.renameSync(path.join(bareRepo, "objects"), externalObjects);
+    fs.symlinkSync(externalObjects, path.join(bareRepo, "objects"), "dir");
+    assert.equal(execFileSync("git", ["-C", bareRepo, "config", "--bool", "core.bare"], { encoding: "utf8" }).trim(), "true");
+    const bareHeadBefore = fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8");
+    const outerHeadBefore = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8"), bareHeadBefore);
+    assert.equal(fs.existsSync(path.join(bareRepo, "captured.txt")), false, "rejection must not copy the captured file into the bare repository");
+    assert.equal(git("rev-parse", "HEAD"), outerHeadBefore);
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git manifest restore refuses a nested bare repository with continued core config", () => {
+  const { repo, git } = gitRepo();
+  const bareRepo = path.join(repo, "nested-bare");
+  try {
+    fs.mkdirSync(bareRepo);
+    fs.writeFileSync(path.join(bareRepo, "captured.txt"), "checkpoint content\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("nested bare repository with continued config");
+
+    fs.rmSync(path.join(bareRepo, "captured.txt"));
+    execFileSync("git", ["init", "--bare", "-q", bareRepo]);
+    fs.writeFileSync(path.join(bareRepo, "config"), "[core]\n\tbare = \\\n\ttrue\n");
+    assert.equal(execFileSync("git", ["-C", bareRepo, "config", "--bool", "core.bare"], { encoding: "utf8" }).trim(), "true");
+    const bareHeadBefore = fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8");
+    const outerHeadBefore = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8"), bareHeadBefore);
+    assert.equal(fs.existsSync(path.join(bareRepo, "captured.txt")), false, "rejection must not copy the captured file into the bare repository");
+    assert.equal(git("rev-parse", "HEAD"), outerHeadBefore);
+  } finally {
+    cleanupGitRepo(repo);
+  }
+});
+
+test("Git manifest restore refuses a partial bare repository whose config declares bare mode", () => {
+  const { repo, git } = gitRepo();
+  const bareRepo = path.join(repo, "nested-bare");
+  try {
+    fs.mkdirSync(bareRepo);
+    fs.writeFileSync(path.join(bareRepo, "captured.txt"), "checkpoint content\n");
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("partial nested bare repository");
+
+    fs.rmSync(path.join(bareRepo, "captured.txt"));
+    execFileSync("git", ["init", "--bare", "-q", bareRepo]);
+    fs.rmSync(path.join(bareRepo, "objects"), { recursive: true });
+    fs.rmSync(path.join(bareRepo, "refs"), { recursive: true });
+    fs.writeFileSync(path.join(bareRepo, "config"), "[core]\n\tbare = true\n");
+    assert.equal(fs.existsSync(path.join(bareRepo, "HEAD")), true);
+    assert.equal(fs.existsSync(path.join(bareRepo, "objects")), false);
+    assert.equal(fs.existsSync(path.join(bareRepo, "refs")), false);
+    const bareHeadBefore = fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8");
+    const outerHeadBefore = git("rev-parse", "HEAD");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /destination|unsafe|snapshot/i);
+    assert.equal(fs.readFileSync(path.join(bareRepo, "HEAD"), "utf8"), bareHeadBefore);
+    assert.equal(fs.existsSync(path.join(bareRepo, "captured.txt")), false, "rejection must not copy the captured file into the partial bare repository");
+    assert.equal(git("rev-parse", "HEAD"), outerHeadBefore);
   } finally {
     cleanupGitRepo(repo);
   }
