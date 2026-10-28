@@ -252,7 +252,12 @@ export class CheckpointManager {
       maxBuffer: 64 * 1024 * 1024,
     }).toString("utf8").split("\0").filter(Boolean);
     const mutationPaths = new Set([...checkoutPaths, ...deletedPaths]);
-    if (this.gitUntrackedPaths(true).some((relativePath) => mutationPaths.has(relativePath))) {
+    if (this.gitUntrackedPaths(true).some((relativePath) => {
+      for (let candidate = relativePath; candidate && candidate !== "."; candidate = path.posix.dirname(candidate)) {
+        if (mutationPaths.has(candidate)) return true;
+      }
+      return false;
+    })) {
       throw new Error("Checkpoint legacy restore would overwrite or delete an uncaptured untracked file");
     }
   }
@@ -273,6 +278,7 @@ export class CheckpointManager {
         continue;
       }
       if (parent !== workspaceRoot && !parent.startsWith(workspaceRoot + path.sep)) continue;
+      if (fs.lstatSync(targetPath, { throwIfNoEntry: false })?.isDirectory()) continue;
       fs.rmSync(targetPath, { force: true });
     }
   }

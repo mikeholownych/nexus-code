@@ -563,6 +563,81 @@ test("legacy Git restore refuses an untracked tracked-deletion collision before 
   }
 });
 
+test("Git restore removes a directory replacing a checkpoint-deleted file", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "deleted.txt"), "base\n");
+    git("add", "deleted.txt");
+    git("commit", "-qm", "add deleted file");
+    fs.rmSync(path.join(repo, "deleted.txt"));
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("directory replaces deleted file");
+    fs.mkdirSync(path.join(repo, "deleted.txt"));
+    fs.writeFileSync(path.join(repo, "deleted.txt", "created-later.txt"), "remove me\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "after checkpoint\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.existsSync(path.join(repo, "deleted.txt")), false);
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "base\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Git restore preserves ignored entries inside a directory replacing a checkpoint-deleted file", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, ".gitignore"), "/deleted.txt/\n");
+    fs.writeFileSync(path.join(repo, "deleted.txt"), "base\n");
+    git("add", ".gitignore", "deleted.txt");
+    git("commit", "-qm", "add ignored deletion target");
+    fs.rmSync(path.join(repo, "deleted.txt"));
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("ignored directory deletion collision");
+    fs.mkdirSync(path.join(repo, "deleted.txt"));
+    fs.writeFileSync(path.join(repo, "deleted.txt", "ignored.txt"), "preserve me\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "after checkpoint\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, true, result.message);
+    assert.equal(fs.readFileSync(path.join(repo, "deleted.txt", "ignored.txt"), "utf8"), "preserve me\n");
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "base\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("legacy Git restore rejects an uncaptured directory replacing a checkpoint-deleted file before mutation", () => {
+  const { repo, git } = gitRepo();
+  try {
+    fs.writeFileSync(path.join(repo, "deleted.txt"), "base\n");
+    git("add", "deleted.txt");
+    git("commit", "-qm", "add deleted file");
+    fs.rmSync(path.join(repo, "deleted.txt"));
+    const manager = new CheckpointManager(repo);
+    const checkpoint = manager.createCheckpoint("legacy directory deletion collision");
+    const recordPath = path.join(manager.getCheckpointDir(), `${checkpoint.id}.json`);
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    delete record.untrackedFiles;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    fs.mkdirSync(path.join(repo, "deleted.txt"));
+    fs.writeFileSync(path.join(repo, "deleted.txt", "uncaptured.txt"), "preserve me\n");
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "after checkpoint\n");
+
+    const result = manager.restore(checkpoint.id);
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /untracked|collision/i);
+    assert.equal(fs.readFileSync(path.join(repo, "deleted.txt", "uncaptured.txt"), "utf8"), "preserve me\n");
+    assert.equal(fs.readFileSync(path.join(repo, "tracked.txt"), "utf8"), "after checkpoint\n");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("legacy non-Git restore refuses an empty-directory destination parent symlink", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-legacy-empty-dir-"));
   const external = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-non-git-legacy-empty-external-"));
