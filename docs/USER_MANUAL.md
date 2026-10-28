@@ -388,7 +388,7 @@ These values configure the maximum time an operation waits without runnable work
 an unknown execution outcome, the per-unit run limit, and the minimum delay between wait wake-ups.
 Values must be safe integers; wait values and the run limit must be positive, while the unknown-resume budget may be
 zero. Each wait value is capped at 2,147,483,647 ms, the maximum delay supported by Node.js timers, and the minimum
-wait may not exceed the maximum wait. Invalid settings stop operation startup with the setting named in the error.
+wait may not exceed the maximum wait. Invalid operator settings stop every Nexus command except `nexus doctor` with a `Configuration error` naming the problem. Run `nexus doctor` for recovery guidance, then fix or remove `~/.config/nexus/config.json` as directed.
 Project `.env` files cannot set these operator-owned values. A policy explicitly supplied in an operation
 specification overrides the configured defaults for that operation, subject to the same wait-interval consistency
 check. Invalid effective settings are reported when an operation is created; a specification override can repair
