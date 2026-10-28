@@ -1,0 +1,110 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - **Original power-failure recovery directive (still in force).** Complete the v1.0.0 plan: remediation, integration, qualification, independent and human acceptance, and verified public v1.0.0 publication. Publication is authorized once every gate passes; do not request those approvals again.
+     - Re-establish state, recover ownership and coordinate with other agents.
+     - Preserve uncommitted and unrelated work.
+     - Never take another agent's work without a handoff.
+     - Isolate HOME/XDG and take SUITE/GATEWAY/CLOUD claims as required.
+     - **Never read held-out payloads, expose credentials, weaken thresholds, or convert infrastructure failures into passes.**
+     - Keep implemented, tested, accepted, RC-qualified and published statuses separate.
+   - **Persistent /loop prompt (verbatim):** "Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker."
+   - **Owner mandates:**
+     - "My mandate is NO deprecated packages". This applies to v1.0.0, with no documented-EOL exceptions (Node 20 had to go).
+     - "for everything else (the dependabot prs), v1.0.0 has been exempted for that, it will be rolled into the next release".
+     - The owner selected Node >=22 (DEC-12 updated).
+     - "yes, fix D2b for rc.3" (done in PR #159).
+     - Inference is gateway-preferred with cloud models available. The contest is over.
+
+2. Key Technical Concepts:
+   - Shared log: `/home/mike/nexus-code/.git/nexus-claims.log`. Claims live in `.git/nexus-claims/<NAME>/owner.json`, and released claims are archived in `.git/nexus-claims/archived/`.
+   - Re-check claims after any pause (memory rule `recheck-claims-after-pause`).
+   - Independent review must cite the exact full head SHA; verify it with `git cat-file`. Other agents have twice cited non-existent SHAs, on #157 and #179.
+   - Use stable patch-ids (`git diff base head | git patch-id --stable`) to carry a review forward across rebases.
+   - Stable is the RC plus version-only changes (`check-version-only-diff.mjs`), so docs freeze at the RC tag.
+   - `release.yml:81` requires `docs/releases/<tag>.md`.
+   - repro.yml (from #180) must be dispatched from main. It rebuilds the published RC on ubuntu-22.04/24.04 and compares archive, compatibility.json, SHA256SUMS, THIRD_PARTY_NOTICES.txt, sbom.cdx.json and install.sh, plus the repro-identity record. It requires the lock-pinned release tools (`scripts/release-tools`, `check_deprecated_lock.mjs`).
+   - Packaging uses the pinned builder `rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb` with a GLIBC<=2.35 gate. `NEXUS_ALLOW_HOST_RUST_BUILD=1` is for local use only, when no image is set.
+   - Read-only mode: bwrap only (Docker refused), pinned workspace fd, `--unshare-net`, `--clearenv`.
+   - Requirements gate: `node scripts/check_requirements.mjs --enforce` in a clean detached worktree with isolated HOME. Last result: 123 rows, 108 tested, 6 partial, 2 implemented, 7 open, 12 exact-RC deferred, exit 0.
+   - The rm safety check requires guarded expansions: `"${C:?}/${s:?}"`.
+   - Merge my own PRs with `gh pr merge N --merge --match-head-commit <sha>`.
+
+3. Files and Code Sections:
+   - **docs/DEVELOPMENT.md** (my PR #168, merged 6383623). It documents the approved-image packaging command:
+     ```
+     NEXUS_BUILD_CONTAINER_IMAGE="$(sed -n 's/^APPROVED_RUST_BUILD_IMAGE := //p' Makefile)" \
+       bash scripts/package-linux.sh "$NEXUS_VERSION" ./release
+     ```
+     It also covers Docker, the exit-2 rule (qualified for `NEXUS_ALLOW_HOST_RUST_BUILD=1` with the image unset), and `verify-reproducibility` comparing archive, SHA256SUMS, notices, SBOM and install.sh.
+   - **docs/CLIENT_GUIDE.md** (my PR #179, merged d8dc58b). Read-only shell commands are allowlisted and Bubblewrap-only, with no network, a cleared environment and a pinned workspace. They are refused without Bubblewrap, including on Docker-only hosts.
+   - **docs/releases/v1.0.0-rc.4.md** (my PR #181, merged 1a5365b from head 43c3d884a028f286443f7e8fd6d7a5fd4c947c83). Added bullets for:
+     - read-only confinement (#169, #171, #174);
+     - safeFetch and mixed-quote repair (#169);
+     - evaluator fail-closed (#165): recursive untracked hashing, .git skipped, O_NOFOLLOW, depth 128, 100k entries, 256 MiB per file, 1 GiB total;
+     - checkpoint confinement (#184, #187);
+     - .nexus whole-rule exclude (#182);
+     - doctor unreadable-store warning (#185);
+     - locked, deprecation-checked release tools and the cross-runner workflow (#180).
+     My claims were released and archived.
+   - Earlier work, already merged:
+     - Node22 floor (PR #137, converged into #150 by /root);
+     - doctor D1/D1b/D2/D2b/D3 fixes (#155, #158, #159);
+     - #171/#174 read-only Docker guard (`tools.ts` `engine !== "bwrap"`, `sandbox.ts` docker branch refuses `readOnlyHost`).
+
+4. Errors and fixes:
+   - The `make -p` lookup in the #168 docs would have run the default build. A reviewer caught it; I fixed it with `sed`.
+   - #168 exit-2 wording needed the host-build qualification, and install.sh was missing from the compare list. Both fixed.
+   - The #181 evaluator bullet was incomplete. I expanded it after verifying `candidate.ts` via `git diff $M^1 $M` (the PR165 merge commit fcc44d1).
+   - `git show <merge>` gives an empty diff for merges; use `git diff M^1 M`.
+   - The rtk wrapper truncates output; use `rtk proxy`.
+   - The rm safety check blocked an unguarded `rm -r $C/$s`; I reran it with `"${C:?}/${s:?}"`.
+   - FETCH_HEAD went stale between commands; use explicit SHAs.
+   - My earlier mistakes: I missed root package.json engines in #137 (a reviewer caught it). In #137 I also edited rc.2 notes after the tag, which I reverted.
+
+5. Problem Solving:
+   - **#180:** I raised REQUEST_CHANGES for a narrowed comparison and 7 deprecated packages in the lock. Both were fixed before merge (verified on main).
+   - **#171:** merged over my REQUEST_CHANGES. Fixed afterwards by #174, which I accepted (patch-id c9376c3b).
+   - **Dependabot:** 5 alerts (undici, zod) exist only in the `experiments/cloudflare` lockfiles, which aren't shipped. Logged as debt; they don't block rc.4.
+   - **#183:** accepted (unborn HEAD tested in a scratch repo).
+   - **#188:** accepted. The shadowed `rootStat` is correct, and I suggested a rename. The review was carried forward to faebcc0 (patch-id d378f600).
+   - **#186:** startup trust prompt (owner-requested). `NEXUS_TRUST_WORKSPACE=1` is a pre-existing override. It has an independent ACCEPT from another agent.
+
+6. All user messages:
+   - The power-failure recovery directive, including the security constraints in section 1.
+   - Repeated /loop invocations and "Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete."
+   - "codex agent is currently working on the documentation"
+   - "/home/mike/nexus-wt/docs-post-v1"
+   - "My mandate is NO deprecated packages"
+   - "for everything else (the dependabot prs), v1.0.0 has been exempted for that, it will be rolled into the next release"
+   - "continue" (after re-login)
+   - A pasted `nexus doctor --deep --fix` output
+   - "yes, fix D2b for rc.3"
+   - Earlier messages included: replacing bwrap with 0.13.1, taking over PR #56, Harness² notes and issue #69, closing PR #38, "approved", dismissing the common.ts false positive, and reviewing open PRs.
+
+7. Pending Tasks:
+   - Continue the /loop until v1.0.0 is verified and published.
+   - Review new heads, re-run enforce at new main heads, diagnose CI failures, and log everything.
+   - Watch the rc.4 tag and release, the cross-runner repro, and installed-rc.4 qualification.
+   - Not owned by me: held-out custody, the human terminal matrix, and independent installed-RC acceptance.
+
+8. Current Work:
+   I was in the loop iteration right after a usage-limit pause, at 2026-10-24T12:21Z. Latest state:
+   - **v1.0.0-rc.4 is tagged** (tag object 79b2f4f) and **published as a prerelease at 11:54:37Z**. Main is at `b024027` (PR #191 merged).
+   - Open PRs: #192 (reap the REPL PTY before fixture cleanup; head 03a8db1b, with an independent ACCEPT), #183 (accepted by me), and #131.
+   - The log at 12:05Z reports `RELEASE_BLOCKER_DISCOVERED`. repro.yml run 40092008160, job 120867113126, failed in its compare step during action resolution, because `actions/download-artifact@ea165f8d…` is a wrong SHA.
+   - At 12:10Z there's `WORKFLOW_FIX_READY` on FILE_.github_workflows_repro.yml (head 1fced3016a8f19c2fef91ea2f2f0c7e65a515c58), which corrects it to the official v4 SHA `d3f86a106a0bac45b974a628896c90dbdf5c8093`.
+   - I had not yet reviewed that fix or verified the rc.4 tag's commit and contents.
+
+9. Optional Next Step:
+   Continue the loop:
+   - Verify that the rc.4 tag's commit is on main and contains #183/#188/#186 as intended, and that the rc.4 notes match.
+   - Independently review the repro.yml download-artifact SHA fix (head 1fced3016a8f…) once it's pushed or opened as a PR. Check that `d3f86a106a0bac45b974a628896c90dbdf5c8093` is the genuine actions/download-artifact v4 commit.
+   - Review PR #192, then watch the re-run of the cross-runner repro for rc.4.
+   This directly follows the loop mandate: "review new heads independently … diagnose CI failures … Stop only at verified v1.0.0 publication".
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
