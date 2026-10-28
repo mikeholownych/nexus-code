@@ -1,0 +1,203 @@
+<pasted_content id="7cf0">
+You are the principal engineer responsible for auditing Nexus Code and producing a complete, evidence-based path to v1.0.0.
+
+Audit the full codebase, determine what remains outstanding, and create a prioritized roadmap, technical specifications, and executable implementation plans. Complete the audit and planning deliverables in this run. Do not stop after outlining an approach.
+
+This assignment authorizes inspection, safe local validation, and creation of audit/planning documents. Production implementation is a subsequent phase.
+
+## 1. Discover the actual project
+
+Locate the active Nexus Code repository. Do not assume paths, architecture, languages, supported platforms, or runtime identity.
+
+Read applicable AGENTS.md instructions and relevant project documentation. Preserve unrelated modified and untracked files. Treat synced reference material and supplied archives as read-only.
+
+Record:
+- Repository root and Git remotes.
+- Branch, commit, working-tree state, and available version information.
+- Build and test entry points.
+- Installed launcher and binary/build identity, if available.
+- Runtime services, provider configuration, and external dependencies, with credentials redacted.
+
+The expected canonical repository is mikeholownych/nexus-code; verify its relationship to the checkout. Treat historical reports, exports, roadmap documents, and “VERIFIED” claims as evidence to check, never as proof of current completion.
+
+Do not merge, publish, deploy, release, modify live infrastructure, or access credentials unnecessarily. Do not perform destructive tests. If a validation requires an unavailable environment, paid usage, or external mutation, document the exact procedure and mark it unverified.
+
+## 2. Establish the v1.0.0 contract
+
+Derive the product’s intended users, supported workflows, public promises, compatibility requirements, and release scope from source, documentation, tests, issues available to you, and user requirements.
+
+Define what v1.0.0 maturity means for Nexus Code. Separate:
+- Established product commitments.
+- Proposed minimum release criteria.
+- Optional improvements after v1.0.0.
+- Decisions that need product-owner input.
+
+Do not silently discard existing requirements to make the release appear achievable. Do not make every desirable feature a release blocker. Justify each blocker using a user workflow, safety requirement, compatibility commitment, or reproducible failure.
+
+Nexus must remain operational and valuable independently of homelab-ai. Integration may improve the experience but cannot replace standalone operation or qualification. Preserve local inference as a first-class capability.
+
+Separate Nexus client release readiness from Cloudflare contest submission readiness. Where contest work is present, the Cloudflare Workers + Artifacts Git collaboration service is the contest product and Nexus is its demonstration harness.
+
+## 3. Audit the entire repository
+
+Create an inventory of first-party components, packages, executables, shared libraries, configuration, build tooling, CI, packaging, documentation, and tests.
+
+Map architecture and data flow from user input through orchestration, model requests, tool execution, approvals, persistence, recovery, and output. Identify trust boundaries and interfaces.
+
+Review every first-party subsystem. For generated code, vendored dependencies, large assets, and reference material, state the review method and exclusions. Maintain a coverage ledger so “full codebase audit” has an explicit, inspectable meaning.
+
+Assess at least:
+
+**Core agent behavior**
+- Task lifecycle, tool contracts, orchestration, steering, cancellation, completion verification, and bounded failure.
+- Repetition and stagnation detection, retries, partial progress, and recovery.
+- Objective tracking and durable continuation.
+- Context admission, compaction, token accounting, and provider-specific limits.
+- Continuity across compaction, interruption, restart, and crash.
+- Avoid arbitrary cumulative step ceilings as a substitute for completion, cancellation, demonstrated stagnation, or actionable failure. Distinguish these from legitimate configurable resource budgets.
+
+**Terminal experience**
+- Startup, onboarding, normal task execution, progress, diffs, approvals, errors, and session history.
+- Keyboard handling, focus, multiline paste, queued or held input, scrolling, resize, and narrow terminals.
+- Approval safety during continuous typing, pasted input, panel transitions, and rendering races.
+- Steering and cancellation while tools or inference are active.
+- Accessibility and understandable recovery guidance.
+
+Exercise real PTY paths where possible; handler-level unit tests cannot establish terminal acceptance.
+
+**Providers and inference**
+- Actual supported providers and protocol behavior.
+- Local inference setup, discovery, context limits, streaming, cancellation, failures, and diagnostics.
+- Credential scoping and redaction.
+- Timeouts, retry policy, rate limits, malformed responses, and interrupted streams.
+- Separation of fixture success from live inference evidence.
+
+**Tools, security, and persistence**
+- Filesystem, process, network, Git, and approval boundaries.
+- Path handling, command construction, prompt injection exposure, secret leakage, and unsafe defaults.
+- Tool failures, output limits, concurrency, process cleanup, and side effects.
+- Session storage, schema evolution, corruption handling, atomic writes, history, and crash recovery.
+
+**Maintainability and compatibility**
+- Module boundaries, duplication, dead code, unfinished implementations, dependency health, API contracts, and error handling.
+- Supported operating systems, shells, terminals, architectures, and configuration migration.
+- Reproducible builds, dependency locking, test reliability, and CI coverage.
+
+**Diagnostics and operations**
+- Logging, actionable errors, privacy, supportability, and troubleshooting.
+- `/doctor` and CLI diagnostics, if present: consistency, operation without an active model/session, redaction, and narrow, confirmed, idempotent repairs.
+- Performance and resource use using explicit workloads and measurements.
+
+**Distribution and release**
+- Complete runtime packaging, installer, uninstall, upgrade, pinned versions, and rollback where promised.
+- Public one-line installation, platform detection, non-root defaults, PATH guidance, checksums, and predictable failures.
+- Clean-environment installation using the exact documented command.
+- Release artifacts, publication workflows, license and dependency notices, versioning, changelog, and user documentation.
+- Distinguish declared release workflows from actual published assets and verified installation.
+
+## 4. Validate claims with evidence
+
+Run the relevant baseline build, tests, and safe integration checks. Record commands, outcomes, environmental limitations, and the revision tested.
+
+Prioritize representative end-to-end user workflows and adversarial tests for serious reliability or safety claims. Reproduce suspected defects where safe.
+
+For task-quality claims, propose or execute matched evaluations with fixed repository, prompt, model, configuration, and budget. Measure completion, correctness, regressions, recovery, user intervention, and bounded failure separately. Use fault injection where appropriate.
+
+Maintain an evidence manifest with revision, build/runtime identity, run IDs, artifact paths, and relevant hashes.
+
+Label evidence as:
+- Source inspection.
+- Automated test.
+- Live runtime observation.
+- Measurement.
+- Documentation claim.
+- Historical/reported evidence.
+- Inference.
+- Unknown or unverified.
+
+A passing test suite does not establish product maturity. Missing evidence is not automatically a defect; distinguish proven failures from qualification gaps.
+
+## 5. Create the planning package
+
+Choose a suitable documentation location following repository conventions. Prefer a dedicated `docs/v1.0.0/` directory if none exists. Create:
+
+### README.md
+An index explaining how to navigate and execute the package.
+
+### AUDIT.md
+Current project identity, architecture, audit coverage, methods, findings, reproducible defects, strengths supported by evidence, and limitations.
+
+Each finding needs an ID, severity, affected workflow, source location, evidence, user impact, and recommended disposition.
+
+### REQUIREMENTS.md
+A complete requirement ledger with:
+- Stable requirement ID and source.
+- Requirement and rationale.
+- Implementation location.
+- Evidence and tested revision.
+- Current status and open risk.
+- Exact acceptance test.
+- Release-blocker classification.
+- Linked finding, specification, and implementation task.
+
+Distinguish implemented, tested, visually accepted, and product-qualified status. Keep independent acceptance pending unless it actually occurred.
+
+### ROADMAP.md
+A dependency-ordered roadmap from current state to v1.0.0, with milestones, critical path, release gates, deliverables, and exit criteria.
+
+Separate release blockers, release-required improvements, and post-v1 work. Give effort ranges with assumptions and uncertainty; avoid unsupported delivery dates.
+
+### specs/
+Create substantive specifications for each cohesive outstanding workstream. Include:
+- Problem, evidence, requirements, and scope.
+- Proposed behavior and user flows.
+- Architecture, interfaces, state changes, and compatibility.
+- Failure handling, security, recovery, and migration.
+- Alternatives and justified decisions.
+- Measurable acceptance criteria and validation.
+- Dependencies and unresolved decisions.
+
+### plans/
+Create executable implementation plans linked to the specifications. Include:
+- Ordered tasks and concrete code locations.
+- Dependencies and safe change boundaries.
+- Suggested reviewable PR slices.
+- Required tests, fixtures, PTY checks, and live validation.
+- Documentation, packaging, and migration work.
+- Rollback considerations and definition of done.
+
+Plans must contain enough detail for another engineer or terminal agent to begin without repeating discovery.
+
+### ACCEPTANCE.md
+The v1.0.0 release qualification procedure, required environments, workflow matrix, evidence requirements, and explicit pass/fail gates.
+
+Include standalone Nexus qualification, supported provider/platform coverage, clean installation and upgrade, terminal safety, continuity/recovery, and representative task outcomes.
+
+### EVIDENCE.md
+The evidence manifest and precise limitations of all conclusions.
+
+### DECISIONS.md
+Only consequential unresolved decisions, each with options, a recommendation, tradeoffs, affected requirements, and whether it blocks execution.
+
+## 6. Check completeness and report
+
+Before finishing:
+- Ensure every first-party subsystem appears in the coverage ledger.
+- Link every release blocker to a specification, plan, and acceptance test.
+- Ensure every plan traces to a requirement or justified finding.
+- Check links, requirement IDs, dependency ordering, and contradictions.
+- Preserve unverified requirements and unavailable-environment checks.
+- State which evidence will need rerunning after implementation.
+
+Continue until the planning package is complete. If a particular check is blocked, finish independent work and document the blocker precisely. Do not stop merely because the audit is large or the baseline tests pass.
+
+Your final report must state:
+1. Whether v1.0.0 readiness is established, blocked, or unverified.
+2. The most consequential outstanding work and supporting evidence.
+3. The recommended first implementation milestone and why.
+4. Paths to all created documents.
+5. Validation performed and material limitations.
+6. Decisions or external actions that require the user.
+
+Keep implementation self-assessment, independent acceptance, client release readiness, and contest readiness separate. Make the roadmap actionable and the maturity conclusion honest.
+</pasted_content id="7cf0">
