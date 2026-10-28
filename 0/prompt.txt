@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>a3ba40a183b32a6c6</task-id>
+<tool-use-id>toolu_01KZhntkipGobWgEqVjPeGfb</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/a3ba40a183b32a6c6.output</output-file>
+<status>failed</status>
+<summary>Agent "Independent TUI acceptance review" failed: Agent terminated early due to an API error: You've hit your session limit · resets 4:20pm (UTC) (error type rate_limit, HTTP 429, request id req_011CfxH6gRQpkr4Nm6dxjiUg, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now the tui_diff screens.</result>
+</task-notification>
