@@ -71,6 +71,9 @@ cat > "$TMP/snapshot.json" <<'EOF'
 EOF
 "$TMP/nexus/lib/core/nexus-tui" --plain "$TMP/snapshot.json" | grep -F NEXUS >/dev/null
 
+# Create the log before starting the background process. Bash may schedule the
+# next command before the child's redirection creates this file.
+: > "$TMP/server.out"
 node "$(dirname "$0")/package-smoke-server.mjs" > "$TMP/server.out" 2>&1 &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$TMP"' EXIT
