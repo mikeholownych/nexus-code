@@ -1,0 +1,145 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+## Session summary (mike-nexus-code; user mike / Mike Holownych; AI claude)
+
+### Original task (user's pasted brief, 2026-10-13)
+Implement Nexus client compaction and task-continuity hardening on the development host. Required deliverables:
+- the nexus-code implementation;
+- operator and developer docs;
+- an acceptance ledger mapping every requirement to implementation, evidence, status and limits;
+- a separate read-only gateway capability handoff;
+- an evidence-based final report.
+
+**Constraints, verbatim or near-verbatim — preserve:**
+- "This task authorizes changes to nexus-code only."
+- "Inspect homelab-ai (/home/mike/Projects/aihost) read-only… Do not modify, deploy, or promote homelab-ai. Do not deploy Nexus or modify credentials."
+- A missing integration capability must not prevent standalone Nexus operation.
+- Do not silently narrow acceptance, claim unmet requirements complete, or replace scope with a self-authored checklist.
+- State untested or unmet requirements explicitly.
+- Identify live local-inference acceptance separately from scripted validation; a green suite alone does not establish acceptance.
+
+**Pillars:**
+- A: no fixed step ceiling; persisted objective-scoped tracking.
+- B: state-aware repetition.
+- C: durable compaction boundary and queued `/compact`.
+- D: optional provider capability discovery and truthful token accounting.
+
+**Standing user/global instructions:**
+- Plan in `tasks/todo.md` and record lessons in `tasks/lessons.md`.
+- Commit only when asked; end commit messages with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Run `graphify update .` after code changes.
+- Never use `mcp__claude-in-chrome__*`.
+- From Honcho memory: never leave debt; when uncertain, refuse/defer/escalate; prefer Ansible for infrastructure.
+- Never send the user's email to unrelated services.
+
+### Discovery and reconciliation
+- During a usage-limit pause, `~/nexus-code` `main` was reset to `origin/main` `d91f498`; earlier state was stashed as `pre-origin-sync-main-20261013T202528Z`, and foreign uncommitted edits appeared.
+- The user said there were no other agents and asked me to verify what had landed. Nothing had.
+- I worked in an isolated worktree: `/home/mike/nexus-cc`, branch `feat/compaction-continuity`, from `origin/main` `a58f860`.
+- `cli/node_modules` is a symlink to `~/nexus-code/cli/node_modules`; it is untracked and must never be committed.
+- `core` was built in the worktree: `harness-core` sha256 prefix `cbea89b9`.
+- The installed launcher `/usr/local/bin/nexus` points to `~/nexus-code/harness.sh`. It was not changed.
+- homelab-ai `fb1a2cd` (deployed `t5820-gateway-b72a4f5`) was inspected read-only via an Explore agent:
+  - `/v1/models` gives `context_length`, `max_completion_tokens`, `limits_version` (alias hash) and `serving` workers.
+  - `/v1/tokenize` returns `source` of `exact` or `estimated_conservative` on the first unblocked worker, without routing or reasoning policy.
+  - Inference headers `X-AIHost-*` carry the admitted count and route plus a per-worker `limits_version`.
+  - A tokenize 404 is returned for both an unknown model and blocked workers.
+  - The vLLM tokenize adapter omits `tool_choice`.
+- Live gateway: `https://10.0.8.5:8443/v1`, model `engineering/b0`, worker `b0-live-llama-worker1`. Config is in `~/.config/nexus/config.env`, with the CA trusted via `NODE_EXTRA_CA_CERTS`. Secrets were never printed.
+
+### Implementation (worktree; now committed as `73489bd` on `feat/compaction-continuity`)
+**New modules:**
+- `cli/src/core/execution_tracking.ts`: action, outcome and state identities; `commandResult` (exit code decides success; `duration_ms` normalized); progress evaluation; repetition/poll/loop/re-acquire/thrash verdicts; bounded persisted record; `normalizeTracking` fills **in place**; backoff 1–30 s.
+- `cli/src/core/durable_file.ts`: `writeFileDurably`, `withDurableSync`, `appendLinesDurably` (always fsync), `readArchiveLines` (filters by committed ids).
+- `cli/src/core/provider_capabilities.ts`: `parseAdvertisement`, `resolveLimits`, `parseTokenizeResponse`, `parseAdmissionHeaders`, and count sources `exact_admitted` / `exact_sampled_worker` / `gateway_conservative` / `client_estimate`.
+
+**Modified (main points):**
+- `agent.ts` — continuation and turn loop:
+  - no default ceiling; `stepPosition`;
+  - tracker in `runTurn` and the subagent loop (no 8/15 cap, cancellation propagated);
+  - `workspaceStateIdentity`: candidate content, git index, dependency-marker content and PATH, with a 1.5 s cap.
+- `agent.ts` — compaction:
+  - `commitCompaction`: archive, then task state, then session; no-op guard; low-yield hold;
+  - `compactNow`, `requestCompaction`, `drainCompactionQueue`;
+  - `restoreConversation` / `restoreHistory`; `PERSISTENCE_FAILED`.
+- `agent.ts` — capabilities and counting:
+  - `refreshCapabilities` (skips clients without `discoverAdvertisement`/`getModel`);
+  - `measureAdmission`, `noteAdmission`, `effectiveLimits` (resolved on read), `scaledBudget`, `tokenAccounting`.
+- `client.ts`:
+  - `outboundChatBody`, shared by inference and counting;
+  - `discoverAdvertisement` (sends header `X-Nexus-Purpose: capabilities`);
+  - `countRequestTokens` (active endpoint only, no failover); `TokenCountError`;
+  - admission-header capture; `setOutputAllowance`.
+- Other files: `objective.ts` (`trackingOf`, `isContinuationPrompt`, pinned loops and failures), `config.ts`/`types.ts` (unbounded defaults, `strictTokenCount`), `state.ts` (durable writes; `appendArchive`/`readArchive`), `session.ts`, `sidecar.ts` (`/compact` queue, archive sink, standing progress listener), `repl.ts`, `app.ts`, `operation_runner.ts` (no 65536 default capping advertised capacity), `doctor.ts`, `turn.ts`, `slash/session_commands.ts` (`/status` sizing rows), `capabilities.ts` (`max_steps` removed from the `spawn_subagent` schema), `ui.ts`, `index.ts` (help texts, `--strict-token-count`).
+
+**Tests:**
+- New: `execution_tracking.test.ts` (18), `provider_capabilities.test.ts` (10), `compaction_continuity.test.ts` (34, including the 311-step run and 3 real-SIGKILL crash tests via `test/helpers/compaction_crash_child.ts`), `sidecar_compact_queue.test.ts` (3).
+- Updated: `context_convergence`, `objective_continuation`, `turn_semantics` (abort after inference starts), `harness.test.ts` (servers answer discovery reads with an empty catalog), `helpers/fixtures.ts`, `helpers/provider_fixture.ts`.
+
+**Docs:**
+- `docs/COMPACTION_AND_CONTINUITY.md`;
+- `docs/USER_MANUAL.md` and `docs/ARCHITECTURE.md` updated;
+- `docs/reviews/2026-10-13-compaction-continuity-acceptance.md` (the ledger);
+- `docs/reviews/2026-10-13-homelab-ai-gateway-capability-handoff.md`;
+- `docs/reviews/evidence/2026-10-13-compaction-continuity/` (live logs, identities, tracking dumps, delivered diff; `.gitattributes` `* -whitespace`);
+- `tasks/todo.md` and `tasks/lessons.md` (lessons restored from stash plus new ones: never use `pkill -f`; run long suites on a snapshot).
+
+### Validation results
+**Live runs:**
+
+| Run | Window | Outcome | Found or established |
+| --- | --- | --- | --- |
+| 1 | 24,576 | false loop stop | re-reads after compaction treated as a loop (fixed) |
+| 2 | 24,576 | BLOCKED, truthful refusal at 13,343 + 8,192 + 3,072 tokens | orphaned tracker (fixed); double count per request (fixed) |
+| 3 | 32,768 | COMPLETED / REGRESSION_FREE | 50 steps; see below |
+| 4 | final build | UNVERIFIED (workspace had run 3's pending changes) | advertised 65,536/8,192; counted exact and admitted |
+
+- **Run 3 details:** 15 compactions; 13 tests OK; existing signatures unchanged; the model removed padding comments, which was not requested.
+
+**Full `make test` history:**
+- first snapshot: 847/849;
+- second: 882/899 plus a whitespace gate failure (17 failures, all fixed);
+- final snapshot (tracked diff `10fc46f4`, identical to the worktree code): 266 Rust tests pass, CLI 899/899, all security gates passed, exit 0.
+
+**Stated limits (explicit):**
+- no live standalone run against a non-gateway server;
+- no live capacity, `limits_version` or worker change observed;
+- no live TUI `/compact`;
+- admission-equivalent counting is unmet externally (see the handoff);
+- `graphify update` skipped (no graph in the worktree);
+- per-step overhead: about 50–140 ms for state identity, plus fsync only at commits, segment checkpoints and turn ends.
+
+### Current state / open thread
+**User request:** "commit it on the feature branch and merge to main."
+- Done: committed `73489bd` on `feat/compaction-continuity`; the `node_modules` symlink was excluded.
+- Merge blocked: `~/nexus-code` has `main` checked out (local `main` is at `a58f860`; `origin/main` is at `ce7e58b`, a docs-only contest commit that merges cleanly with my branch). That checkout holds about 900 lines of uncommitted foreign edits, last modified around 22:22.
+- I asked how to land the merge. The user answered: "there are no other agents currently working. determine which code provides a better solution to the work being done."
+
+**Their uncommitted work in `~/nexus-code`:**
+- `cli/src/core/repetition.ts`;
+- diffs to `agent.ts`, `client.ts`, `config.ts`, `core/app.ts`, `core/objective.ts` (`ExecutionContinuityState`), `core/state.ts` (compaction journal), `knowledge.ts`, `sidecar.ts`, `types.ts`;
+- tests `continuity_and_compaction_hardening`, `qualification_and_acceptance_hardening`, `instruction_precedence_and_knowledge_scope` (37/37 pass; tsc clean);
+- `docs/gateway_capability_handoff.md`;
+- `nexus-continuity-validation/`;
+- it also contains separate instruction-precedence and knowledge-scope work, which is a different task.
+
+**Comparison findings so far (theirs vs mine):**
+- Capability discovery is opt-in only (`NEXUS_DISCOVER_CAPABILITIES` or `--aihost`), and an explicit context limit overrides the advertised one entirely.
+- `countTokensRemote` is **never called**. It also sends a raw `{model, messages, tools}` body, bypassing the egress quarantine, sanitization and disclosure checks, and omitting `tool_choice`.
+- `progressSignature` still includes `activePlan` and `nextAction`, so plan edits count as progress, which violates the requirement.
+- Outcome masking does not handle run_command JSON `duration_ms` or `exit_code`. Empirically, two identical failing `run_command` runs yield different outcome digests in theirs (`false`) and equal ones in mine (`true`, classed `deterministic_failure`), so their command repetition is never detected.
+- Polling is detected only by tool-name heuristics.
+- The compaction journal applies only to manual compaction; the auto-compaction path is unchanged (originals are drained only at turn end), there is no session record in the commit, and no fsync.
+- The queued `/compact` resolves at step start and at turn end.
+- Possible merits to note: argument path normalization (absolute to relative), localhost-port masking, and the separate instruction-precedence feature.
+
+**Next steps:**
+1. Present an evidence-based comparison verdict (mine is more complete and correct on the requirements).
+2. Recommend landing `73489bd` on `main`. Preserve their uncommitted edits — stash them with a label, or move them to their own branch — rather than discarding them, and offer to salvage the separate instruction-precedence/knowledge-scope work and any useful pieces.
+3. Do not push or discard anything without confirmation.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
