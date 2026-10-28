@@ -41,6 +41,8 @@ export class CheckpointManager {
   private workspace: string;
   private checkpointDir: string;
   private isGit: boolean = false;
+  private repositoryRootCache: string | undefined;
+  private workspacePrefixCache: string | undefined;
 
   constructor(workspace: string) {
     this.workspace = path.resolve(workspace);
@@ -57,6 +59,33 @@ export class CheckpointManager {
     } catch {
       this.isGit = false;
     }
+  }
+
+  private gitRoot(): string {
+    if (!this.repositoryRootCache) {
+      this.repositoryRootCache = fs.realpathSync(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: this.workspace,
+        encoding: "utf8",
+      }).trim());
+    }
+    return this.repositoryRootCache;
+  }
+
+  private gitWorkspacePrefix(): string {
+    if (this.workspacePrefixCache === undefined) {
+      const prefix = execFileSync("git", ["rev-parse", "--show-prefix"], {
+        cwd: this.workspace,
+        encoding: "utf8",
+      }).trim();
+      this.workspacePrefixCache = prefix.replace(/\\/g, "/");
+    }
+    return this.workspacePrefixCache;
+  }
+
+  private workspaceRelativeGitPath(gitPath: string): string | undefined {
+    const prefix = this.gitWorkspacePrefix();
+    if (!prefix) return gitPath;
+    return gitPath.startsWith(prefix) ? gitPath.slice(prefix.length) : undefined;
   }
 
   private gitIndexLockExists(): boolean {
@@ -112,22 +141,28 @@ export class CheckpointManager {
       encoding: "buffer",
     }).toString("utf8").split("\0").filter(Boolean);
 
+    const gitRoot = this.gitRoot();
     for (const relativePath of changedPaths) {
       if (!allowSensitive) this.assertSnapshotTextSafe(relativePath);
       try {
-        const indexed = execFileSync("git", ["-c", "core.fsmonitor=false", "show", `:${relativePath}`], {
+        const indexEntry = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--stage", "--full-name", "-z", "--", `:(top,literal)${relativePath}`], {
+          cwd: this.workspace,
+          encoding: "buffer",
+          maxBuffer: 64 * 1024 * 1024,
+        }).toString("utf8");
+        const entry = indexEntry.split("\0").find(Boolean);
+        if (!entry) throw new Error("Checkpoint could not verify protected Git index state");
+        const tab = entry.indexOf("\t");
+        const [mode, objectId, stage] = entry.slice(0, tab).split(" ");
+        if (stage !== "0") throw new Error("Checkpoint could not verify protected Git index state");
+        const indexed = execFileSync("git", ["-c", "core.fsmonitor=false", "cat-file", "blob", objectId], {
           cwd: this.workspace,
           encoding: "buffer",
           maxBuffer: 64 * 1024 * 1024,
           stdio: ["ignore", "pipe", "ignore"],
         });
         if (!allowSensitive) {
-          const indexEntry = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--stage", "-z", "--", relativePath], {
-            cwd: this.workspace,
-            encoding: "utf8",
-          });
-          if (!indexEntry) throw new Error("Checkpoint could not verify protected Git index state");
-          if (indexEntry.startsWith("120000 ")) this.assertSnapshotTextSafe(indexed.toString("utf8"));
+          if (mode === "120000") this.assertSnapshotTextSafe(indexed.toString("utf8"));
           else assertNoSensitivePersistenceContent(indexed.toString("utf8"), "checkpoint");
         }
       } catch (error) {
@@ -135,7 +170,7 @@ export class CheckpointManager {
         try {
           // A staged deletion has no index blob and no worktree bytes to copy.
           // Any other inability to inspect an indexed object is fail-closed.
-          execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--error-unmatch", "--", relativePath], {
+          execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--error-unmatch", "--full-name", "--", `:(top,literal)${relativePath}`], {
             cwd: this.workspace,
             stdio: "ignore",
           });
@@ -153,7 +188,7 @@ export class CheckpointManager {
         }
       }
 
-      const worktreePath = path.join(this.workspace, relativePath);
+      const worktreePath = path.join(gitRoot, relativePath);
       const stat = fs.lstatSync(worktreePath, { throwIfNoEntry: false });
       if (stat?.isSymbolicLink()) {
         if (!allowSensitive) this.assertSnapshotTextSafe(fs.readlinkSync(worktreePath));
@@ -164,14 +199,19 @@ export class CheckpointManager {
   }
 
   private gitUntrackedPaths(includeIgnored = false): string[] {
-    return execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--others", ...(includeIgnored ? [] : ["--exclude-standard"]), "-z"], {
+    const paths = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--others", "--full-name", ...(includeIgnored ? [] : ["--exclude-standard"]), "-z"], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
     }).toString("utf8").split("\0").filter(Boolean);
+    return paths.flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
   }
 
   private assertSnapshotTextSafe(value: string): void {
+    assertNoSensitivePersistenceContent(value, "checkpoint");
     for (const component of value.split(/[\\/]/)) assertNoSensitivePersistenceContent(component, "checkpoint");
   }
 
@@ -190,7 +230,11 @@ export class CheckpointManager {
     }
   }
 
-  private assertNoNestedGitRepositoryAncestors(relativePaths: string[], targetRoot: string): void {
+  private assertNoNestedGitRepositoryAncestors(
+    relativePaths: string[],
+    targetRoot: string,
+    allowExternalSymlinkAncestors = false,
+  ): void {
     const root = fs.realpathSync(targetRoot);
     for (const relativePath of relativePaths) {
       const destination = path.resolve(root, relativePath);
@@ -214,6 +258,15 @@ export class CheckpointManager {
         const stat = fs.lstatSync(parent, { throwIfNoEntry: false });
         if (!stat) break;
         if (stat.isSymbolicLink()) {
+          if (allowExternalSymlinkAncestors) {
+            try {
+              const resolvedParent = fs.realpathSync(parent);
+              if (resolvedParent !== root && !resolvedParent.startsWith(root + path.sep)) break;
+            } catch {
+              // Deletion cleanup already skips dangling or inaccessible parents.
+              break;
+            }
+          }
           throw new Error("Checkpoint destination parent is a symbolic link");
         }
         if (!stat.isDirectory()) break;
@@ -329,16 +382,22 @@ export class CheckpointManager {
   }
 
   private assertLegacyUntrackedRestoreSafe(gitRef: string): void {
-    const checkoutPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-tree", "-r", "--name-only", "-z", gitRef], {
+    const checkoutPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-tree", "-r", "--name-only", "--full-tree", "-z", gitRef], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
-    }).toString("utf8").split("\0").filter(Boolean);
+    }).toString("utf8").split("\0").filter(Boolean).flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
     const deletedPaths = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
-    }).toString("utf8").split("\0").filter(Boolean);
+    }).toString("utf8").split("\0").filter(Boolean).flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
     const mutationPaths = new Set([...checkoutPaths, ...deletedPaths]);
     if (this.gitUntrackedPaths(true).some((relativePath) => {
       for (let candidate = relativePath; candidate && candidate !== "."; candidate = path.posix.dirname(candidate)) {
@@ -355,13 +414,19 @@ export class CheckpointManager {
     const workspaceRoot = fs.realpathSync(this.workspace);
     for (const relativePath of new Set([...deletedPaths, ...addedPaths])) {
       const targetPath = path.join(workspaceRoot, relativePath);
-      let parent: string;
-      try {
-        parent = fs.realpathSync(path.dirname(targetPath));
-      } catch {
-        continue;
+      const relativeTarget = path.relative(workspaceRoot, targetPath);
+      if (!relativeTarget || relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`) || path.isAbsolute(relativeTarget)) continue;
+      let parent = workspaceRoot;
+      let blocked = false;
+      for (const component of path.dirname(relativeTarget).split(path.sep).filter((part) => part && part !== ".")) {
+        parent = path.join(parent, component);
+        const parentStat = fs.lstatSync(parent, { throwIfNoEntry: false });
+        if (!parentStat || !parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+          blocked = true;
+          break;
+        }
       }
-      if (parent !== workspaceRoot && !parent.startsWith(workspaceRoot + path.sep)) continue;
+      if (blocked) continue;
       try {
         if (fs.lstatSync(targetPath, { throwIfNoEntry: false })?.isDirectory()) continue;
         fs.rmSync(targetPath, { force: true });
@@ -373,11 +438,15 @@ export class CheckpointManager {
   }
 
   private gitRefDeletedPaths(gitRef: string): string[] {
-    return execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
+    const paths = execFileSync("git", ["-c", "core.fsmonitor=false", "diff", "--name-only", "--diff-filter=D", "-z", "HEAD", gitRef], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
     }).toString("utf8").split("\0").filter(Boolean);
+    return paths.flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
   }
 
   private trackedPathsAddedSince(gitRef: string): string[] {
@@ -385,12 +454,18 @@ export class CheckpointManager {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
-    }).toString("utf8").split("\0").filter(Boolean);
+    }).toString("utf8").split("\0").filter(Boolean).flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
     const staged = execFileSync("git", ["-c", "core.fsmonitor=false", "diff-index", "--cached", "--name-only", "--diff-filter=A", "-z", gitRef], {
       cwd: this.workspace,
       encoding: "buffer",
       maxBuffer: 64 * 1024 * 1024,
-    }).toString("utf8").split("\0").filter(Boolean);
+    }).toString("utf8").split("\0").filter(Boolean).flatMap((gitPath) => {
+      const relativePath = this.workspaceRelativeGitPath(gitPath);
+      return relativePath ? [relativePath] : [];
+    });
     return [...new Set([...committed, ...staged])];
   }
 
@@ -488,7 +563,10 @@ export class CheckpointManager {
       const separator = entry.indexOf("\t");
       if (separator < 0) throw new Error("Could not parse checkpoint Git tree entry");
       const objectType = entry.slice(0, separator).split(" ")[1];
-      if (objectType === "blob") paths.push(entry.slice(separator + 1));
+      if (objectType === "blob") {
+        const relativePath = this.workspaceRelativeGitPath(entry.slice(separator + 1));
+        if (relativePath) paths.push(relativePath);
+      }
     }
     return paths;
   }
@@ -909,6 +987,9 @@ export class CheckpointManager {
     if (!cp) {
       return { success: false, message: `Checkpoint '${id}' not found.` };
     }
+    if (cp.gitRef && !this.isGit) {
+      return { success: false, message: `Rollback failed: checkpoint '${cp.id}' requires its Git repository metadata; workspace was not changed` };
+    }
 
     try {
       if (this.isGit && cp.gitRef) {
@@ -916,12 +997,8 @@ export class CheckpointManager {
         const postCheckpointAdditions = cp.untrackedFiles === undefined ? this.trackedPathsAddedSince(cp.gitRef) : [];
         const deletedPaths = this.gitRefDeletedPaths(cp.gitRef);
         const checkoutPaths = this.gitRefBlobPaths(cp.gitRef);
-        const mutationPaths = [...new Set([
-          ...checkoutPaths,
-          ...deletedPaths,
-          ...postCheckpointAdditions,
-          ...(cp.untrackedFiles ?? []),
-        ])];
+        const writePaths = [...new Set([...checkoutPaths, ...(cp.untrackedFiles ?? [])])];
+        const removalPaths = [...new Set([...deletedPaths, ...postCheckpointAdditions])];
         if (cp.untrackedFiles !== undefined && cp.untrackedFiles.length > 0) {
           if (!cp.snapshotDir) return { success: false, message: `Rollback failed: checkpoint '${cp.id}' is missing its untracked snapshot; workspace was not changed` };
           try {
@@ -934,15 +1011,22 @@ export class CheckpointManager {
         // Validate every path that restore may write or remove before read-tree
         // mutates the outer index. Tracked deletions are destructive too: they
         // must not cross into nested repositories in the current worktree.
-        this.assertNoNestedGitRepositoryAncestors(mutationPaths, this.workspace);
+        this.assertNoNestedGitRepositoryAncestors(writePaths, this.workspace);
+        // Tracked deletion cleanup intentionally leaves targets behind when a
+        // parent symlink resolves outside the workspace. Preserve that behavior
+        // while still rejecting a nested repository reachable within the tree.
+        this.assertNoNestedGitRepositoryAncestors(removalPaths, this.workspace, true);
         if (cp.untrackedFiles !== undefined) {
           const replacementTargets = [...new Set([...cp.untrackedFiles, ...checkoutPaths])];
           this.assertGitSnapshotTargetsReplaceable(replacementTargets, cp.gitRef);
         }
         if (cp.untrackedFiles === undefined) this.assertLegacyUntrackedRestoreSafe(cp.gitRef);
         execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "read-tree", cp.gitRef], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
-        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f", "-a"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
+        // Remove checkpoint-deleted paths while their current ancestors are still
+        // present. Installing checkpoint symlinks first could redirect deletion
+        // through an in-workspace link into unrelated ignored data.
         this.removeTrackedDeletions(cp.gitRef, postCheckpointAdditions);
+        execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "checkout-index", "-f", "-a"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
         if (cp.untrackedFiles !== undefined) {
           execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "clean", "-fd"], { cwd: this.workspace, stdio: "ignore", env: hookGuardEnv });
           if (cp.untrackedFiles.length > 0) {
