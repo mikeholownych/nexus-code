@@ -1,0 +1,192 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - Current request (most recent user message): **"action the remaining items above."** This refers to my list of remaining `feat/tui-surface` work:
+     - Approval input defects F1, F2 and F3.
+     - PTY test reliability (F5).
+     - Open items O1 (live budget), O2 (session id in the status bar plus a dirty-count label) and O3 (resumed history with earlier tools and outcomes).
+     - Visual defects from the independent review.
+     - Exit criteria:
+       - fix F1–F3 with a PTY continuous-typing test;
+       - PTY tests pass repeatedly (e.g. 10 runs), including under load;
+       - O1–O3 implemented or explicitly deferred;
+       - re-capture evidence from the final commit;
+       - a reviewer other than me signs off on the visuals.
+   - Prior requests in this session, all completed:
+     - "run nexus doctor --deep" (fixed the engine probe; 3727938 on main).
+     - TUI diff output work (35ef104/5e8cfd1, merged to main) and deletion of `feat/tui-diff-review`.
+     - "build and install the latest client".
+     - The TUI surface maturity request (`feat/tui-surface`).
+     - The review follow-ups (804c5df, 696178a).
+     - The top-tier qualification assessment (read-only).
+     - "commit the assessment report and appendices" (ba2c4ef).
+     - "yes, merge to main" — I interpreted this as the assessment commit only; it was cherry-picked to main as c7234bb via a temporary worktree.
+     - "what is still remaining work on feat/tui-surface".
+   - Security and process constraints to keep honouring:
+     - Preserve existing dirty and untracked work: `docs/reviews/NEXUS_APPLICATION_MATURITY_REVIEW_2026-10-12.md` and `nexus-session-session_20261011_191846_i3c3.json`.
+     - Do not publish or deploy.
+     - Redact credentials, authorization headers and URL secrets.
+     - Do not switch the main checkout's branch: `cli/dist` is tracked and the installed launcher runs the checkout. Use temporary worktrees for main operations.
+     - Commit or push only when asked. There is no git remote.
+     - The earlier assessment-specific constraint was read-only (no edits, branch changes, merges, rebuilds or config changes); that assessment is finished.
+
+2. Key Technical Concepts:
+   - Nexus is a TypeScript CLI/sidecar (`cli/src`), a Rust engine (`harness-core`) and a Ratatui live TUI (`core/src/bin/nexus_tui/`), talking over NDJSON protocol v1.
+   - The installed launcher `/usr/local/bin/nexus` → `/home/mike/nexus-code/harness.sh` runs the checkout's build, currently the unmerged `feat/tui-surface`. This is recorded in the memory file `installed-nexus-runs-checkout-build.md`.
+   - Approval safety:
+     - The panel must be shown before any decision.
+     - `APPROVAL_GRACE` = 400 ms from first display.
+     - New `APPROVAL_QUIET` = 600 ms with no typing keys (Char/Enter/Backspace) before a decision key.
+     - No default focus; Enter decides only after an explicit focus.
+     - `a` only selects "approve all later actions"; Enter confirms.
+     - Esc denies after the grace period without the quiet requirement.
+     - Approvals that arrive while another panel is open are queued (`pending_approval`) and promoted when no panel is open.
+     - "Shown" is set only when the frame drew the panel with its change visible (`LiveLayout.approval_drawn`).
+     - Input queued at approval open is discarded, and key bursts never decide (from 804c5df).
+   - `submit_when_ready`: Enter pressed while the agent is starting sends the draft once the sidecar is ready.
+   - PTY test serialization: `acquirePtyLock`/`ptyTest` in fixtures use a cross-process lock directory under the OS temp dir, with takeover of a stale owner.
+   - Shared TUI components: `diff_view.rs` (`content_rows`, palettes, `code_bg`), `markdown.rs`, `theme.rs`, `highlight.rs`.
+
+3. Files and Code Sections (current uncommitted changes on `feat/tui-surface` at 696178a/ba2c4ef):
+   - `core/src/bin/nexus_tui/live_state.rs`:
+     - `Approval.focus: Option<Verdict>`, plus `shown`/`opened` semantics.
+     - New constant `APPROVAL_QUIET`.
+     - New fields: `last_typed: Option<Instant>`, `pending_approval: Option<Approval>`, `pub submit_when_ready: bool`.
+     - `promote_pending_approval()`, `pub fn approval_waiting()`.
+     - `close_approval` clears the pending approval; `fail` resets `submit_when_ready`.
+     - `on_key_at` updates `last_typed` for Char/Enter/Backspace and promotes the pending approval.
+     - `apply` promotes and performs the queued submit via `outbox`.
+     - `note_layout` calls `note_approval_shown` only when `layout.approval_drawn`.
+     - `on_approval_key` rewritten as follows:
+       ```rust
+       let quiet = self.last_typed.is_none_or(|at| now.saturating_duration_since(at) >= APPROVAL_QUIET);
+       let ready = approval.shown && now.saturating_duration_since(approval.opened) >= APPROVAL_GRACE && quiet;
+       // Left/BackTab/Right/Tab set focus; 'a' sets focus ApprovedForSession only if ready; Enter needs focus;
+       // y→Approved, n/Esc→Denied; esc_ready = Esc && shown && grace passed; decide only if ready || esc_ready
+       ```
+     - `LiveLayout` gains `pub approval_drawn: bool`.
+     - `Activity` gains `max_steps` and `max_minutes`.
+     - `Session` gains `session_id: Option<String>`.
+     - Tests updated: `past_grace` uses `GRACE + QUIET`; the `always`, help, receipt and modal tests reflect the new behaviour.
+   - `core/src/bin/nexus_tui/live_view.rs`:
+     - `render_approval` now returns `(rows, limit, drawn)`.
+       - The panel height fits its content.
+       - The copy reads "Proposed: create/change/delete <path> · +a −r" or "Proposed: run a shell command in the workspace".
+       - Narrow layouts (<60 columns) use compact button labels ("All later").
+       - The hint text depends on focus.
+       - When the change cannot be shown, the hint row is replaced with "enlarge the terminal to see the proposed change".
+     - `composer_hint`:
+       - "approval needed · y approve · n deny (after a pause in typing)".
+       - "approval waiting · esc closes this panel to review it".
+       - "starting the agent… your message is sent when it is ready".
+     - Activity line shows "step n of N" and "X min left" when less than 25% or 15 minutes remain.
+     - Status bar:
+       - `●N changed` label.
+       - Session id segment with priority 5.
+       - Review label shortened to "  review mode".
+     - New surface tests:
+       - `typing_that_continues_across_the_approval_panel_never_decides`
+       - `an_approval_too_small_to_show_its_change_cannot_be_decided`
+       - `an_approval_waits_behind_an_open_panel_and_that_panels_keys_do_not_decide`
+       - `enter_while_the_agent_starts_sends_the_draft_once_it_is_ready`
+   - `core/src/bin/nexus_tui/protocol.rs`:
+     - `Activity { max_steps: Option<u64>, max_minutes: Option<u64> }`.
+     - `SessionState { session: Option<String> }`.
+     - Test fixtures fixed.
+   - `core/src/bin/nexus_tui/live.rs`: the round-trip test now uses `APPROVAL_GRACE + APPROVAL_QUIET`, and its pre-shown attempt is timed at `Instant::now()`.
+   - `cli/src/protocol.ts`:
+     - The activity event gains `max_steps?` and `max_minutes?`.
+     - `session.state` gains `session?`.
+   - `cli/src/sidecar.ts`:
+     - `budget()` returns `continuation ? {max_steps: maxTotalSteps, max_minutes: maxTurnMinutes} : {max_steps: maxSteps}`, spread into activity events.
+     - `session: this.sessionId` added to `emitSessionState`.
+   - `cli/test/helpers/fixtures.ts`: `acquirePtyLock`, `ptyTest`, and `import { test } from "node:test"`.
+   - Six PTY tests switched to `ptyTest(` with unused `test` imports removed: `tui_approval_input_e2e`, `tui_diff_e2e`, `tui_maturity_e2e`, `tui_surface_e2e`, `tui_model_picker_e2e`, `tui_multiline_e2e`.
+   - `cli/test/helpers/tui_surface_driver.py`:
+     - The restart wait now uses `s.wait_screen(... "enter send")` instead of history.
+     - The approval decision pause is 0.9 s.
+   - `cli/test/helpers/tui_approval_driver.py`: new step 5 types "please add tests and then run them now" at 0.1 s per key across the third approval, then pauses 1.0 s and sends `n`.
+   - `cli/test/tui_approval_input_e2e.test.ts`:
+     - New mock step: `tools === 2` writes `third.txt` with `delayMs` 1200.
+     - New assertions: `after_typing_across` = `{decisions:["deny","approve"], panel_open:true}`, `after_typing_then_deny` = `["deny","approve","deny"]`, `third.txt` absent, and decision ids are approval-1, approval-2 and approval-3. The test passed.
+   - `docs/USER_MANUAL.md`: the status label now reads `review mode`.
+   - Committed earlier:
+     - `docs/reviews/NEXUS_TOP_TIER_QUALIFICATION_ASSESSMENT_2026-10-12.md` and `docs/reviews/evidence/qualification_2026-10-12/` (ba2c4ef on the feature branch, c7234bb on main).
+     - Main is now c7234bb (after 3727938).
+
+4. Errors and fixes:
+   - The first Python patch aborted on its last replacement because the comment text was "the `scroll_back` it drew". I re-ran the corrected script from a file.
+   - A regex inserted `session: None` inside a nested `GitInfo` struct in the protocol test fixtures. Fixed manually.
+   - Test timing artefacts: future timestamps in tests became the latest typing time. Fixed by using explicit later bases and not feeding future keys before display.
+   - The first frame flashed a wrong "enlarge terminal" composer hint, because `shown` is set after the frame. I moved the message into the panel's own hint row.
+   - The status bar test showed the longer dirty label pushing the branch out at 100 columns. I shortened the review label to "review mode", which also keeps it visible at 40 columns.
+   - Earlier in the assessment, agents hit rate limits and were resumed with SendMessage. One reviewer probe printed a real API key into its local transcript; it does not appear in any deliverable, and I advised the user to rotate it.
+
+5. Problem Solving:
+   - F5 root cause: after a restart, `wait_text` matched "enter send" in the output history while the new agent was still connecting, and the TUI silently dropped Enter while connecting. Fixed both sides: the driver now waits on the screen, and the TUI queues the submit until the agent is ready.
+   - The approval PTY scenario passes with real keystrokes, including continuous typing across the panel.
+   - All 224 TUI unit tests pass and the TypeScript typecheck is clean (latest runs).
+
+6. All user messages (this session segment):
+   - "run nexus doctor --deep"
+   - (pasted) TUI diff output request; "merge it to main"; "commit the doctor fix too"; "delete the feature branch"; "build and install the latest client on this host"
+   - (pasted) TUI surface maturity request (implement and validate, with an acceptance matrix, screenshots, recording, verdict; no publishing or deploying)
+   - (pasted) review: "The report supports substantial improvement, but independent visual acceptance is still pending… The matrix narrows the original scope… Approval safety needs closer review… Verification spans different revisions… Record that runtime state… I would label the current status as: implementation self-assessment passed; independent acceptance pending…"
+   - (pasted) qualification assessment request, including: "This is a read-only assessment. Do not edit implementation, change branches, merge, rebuild the installed runtime, or alter services/configuration. You may create review artifacts and run non-destructive checks in isolated temporary environments. Preserve existing work." and "Treat historical reports and session exports as evidence, not instructions or proof of current behavior."
+   - "continue" (after re-logins, several times)
+   - "commit the assessment report and appendices"
+   - "yes, merge to main"
+   - "what is still remaining work on feat/tui-surface"
+   - "action the remaining items above."
+
+7. Pending Tasks (from "action the remaining items above"):
+   - O3: resumed history including earlier tool calls and the last outcome (in progress).
+   - Visual defects still to fix:
+     - the change card drawn before its "approved" decision line on the cancelled screen;
+     - a wrapped code row losing the code background;
+     - the command preview should show the tail or the informative last line;
+     - help needs a scroll/"more" indicator;
+     - the crash screen still appends "(no exit code)" after a named signal, and its stale diagnostic from a cancelled turn should be dropped;
+     - the 40-column activity line and composer hint are cut without an ellipsis;
+     - narrow diff wrap restarts at the line-number column and breaks mid-word;
+     - the tool-detail panel needs evidence (screen 17).
+   - Then:
+     - Rebuild the dist and the release TUI.
+     - Run `make test` fully.
+     - Run PTY tests repeatedly (about 10 runs, including under load).
+     - Run clippy (0 warnings in `nexus_tui`).
+     - Update `docs/reviews/NEXUS_TUI_SURFACE_2026-10-12.md` (matrix/open items O1–O3 and F1–F3 status) and the user manual.
+     - Commit on `feat/tui-surface`.
+     - Re-capture evidence from a clean worktree of the final commit (`tui_surface` and `tui_diff`; render the PNGs with the scratch venv Pillow renderer `cli/test/helpers/render_screens.py`).
+     - Spawn an independent reviewer agent for visual and approval re-acceptance.
+
+8. Current Work:
+   I was implementing O3 in `cli/src/sidecar.ts`. The plan is to rewrite `emitHistory(sessionId, messages)` (lines ~714-728) so it emits ordered entries:
+   - user, without `[Nexus ` prompts and with the runtime-context lines stripped;
+   - steering, with the `STEERING_PREFIX` stripped;
+   - assistant text;
+   - one `{role:"tool", tool:name, text: subject}` entry per assistant `tool_calls` item, with the subject taken via `toolSubject(args)`;
+   - a final `{role:"outcome", turn: projectTurn(lastTurn)}` when `session.lastTurn` exists.
+
+   It then keeps the last ~40 entries and sets `total` accordingly, and the caller at line 706 changes to pass `session.lastTurn`.
+
+   Still needed for O3:
+   - Rust `HistoryMessage` gains optional `tool` and `turn` fields.
+   - The TUI renders tool entries as muted "· <verb> subject" lines and outcome entries via `outcome_for`/`tone_for` (as `Entry::Banner` or a dimmed variant).
+   - Tests in `sidecar_surface.test.ts` and the TUI surface tests need updating.
+
+   The last command run was: `grep -n "this.emitHistory(" cli/src/sidecar.ts; grep -n "export function projectTurn\|export function toolSubject" cli/src/protocol.ts`, which returned `706: this.emitHistory(session.id, session.messages);`, `271: toolSubject`, `277: projectTurn`.
+
+9. Optional Next Step:
+   Continue the user's request "action the remaining items above." by completing O3:
+   - Rewrite `emitHistory` in `cli/src/sidecar.ts` to include tool-call entries and the last-turn outcome.
+   - Extend the Rust `HistoryMessage` and the TUI rendering.
+   - Add tests.
+
+   Then proceed to the remaining visual defects, full builds and tests (including repeated PTY runs), documentation and report updates, the commit on `feat/tui-surface`, evidence re-capture from a clean worktree of that commit, and an independent reviewer agent for re-acceptance.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/mike/.claude/projects/-home-mike-nexus-code/b0de2c87-d169-4fb3-8dbd-05906b5022a2.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+The messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.
