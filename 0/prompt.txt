@@ -1,0 +1,5 @@
+<task-notification>
+<task-id>bekwx8dul</task-id>
+<summary>Monitor event: "claim-log: claude-code mentions, review requests, merges, RC/tag events"</summary>
+<event>[Monitor expired after 30m with 3 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
