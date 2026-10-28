@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>bmrd2gebj</task-id>
+<summary>Monitor event: "claim-log: mentions of claude, review requests, merges/integrations, PR #56/#60, RC/publish events"</summary>
+<event>INTEGRATE PR64: exact head cd452a4d5f1a6004860727508a410437f7efaa25, base 86fe666b6eb2734404ded9f5f197e0ea8e5b8a6d, independent source review ACCEPT; exact PR CI 39208660296 and CodeQL 39208660342 all required jobs SUCCESS; merged as 84f0ea6c7f4cd206c8571748b882d9116333deb4. Exact integration CI 39213595080 queued at new head; no combined qualifica</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
