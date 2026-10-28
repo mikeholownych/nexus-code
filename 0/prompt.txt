@@ -1,0 +1,1 @@
+yes, run the live verify on both
