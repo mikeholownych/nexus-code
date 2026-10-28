@@ -63,6 +63,8 @@ export type DecisionAction =
   | { kind: "assign"; resourceId: string; overriding: string[] }
   /** Append the operator's note to the unit's task and run it again. */
   | { kind: "revise" }
+  /** Remove this unit's context budget and run it again (the resource limit still applies). */
+  | { kind: "lift_context_budget" }
   /** Drop an advisory unit (required units cannot be dropped: the objective would be unmet). */
   | { kind: "drop" }
   | { kind: "cancel_operation" }
@@ -214,6 +216,12 @@ export interface OperationGitState {
 }
 
 /** A durable snapshot of a unit's conversation, restorable by the operator. */
+export interface ContextCheckpointFile {
+  name: "task" | "messages" | "history";
+  bytes: number;
+  sha256: string;
+}
+
 export interface ContextCheckpoint {
   unitId: string;
   name: string;
@@ -221,8 +229,10 @@ export interface ContextCheckpoint {
   taskId: string;
   messages: number;
   bytes: number;
-  /** SHA-256 of the checkpoint file; restore refuses a checkpoint that no longer matches. */
+  /** SHA-256 of the task state (also the bundle's name); restore refuses a checkpoint that no longer matches. */
   sha256: string;
+  /** The copied task state and journals with their own hashes. */
+  files: ContextCheckpointFile[];
 }
 
 /** What was integrated, and the evidence the merge was accepted with. */

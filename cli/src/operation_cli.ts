@@ -301,7 +301,7 @@ export function registerOperationCommands(program: Command): void {
           const restored = restoreContextCheckpoint(store.manager, state, unitId, name);
           store.save(state);
           console.log(pc.bold(`Restored ${unitId} from ${name}`) + pc.dim(` — ${restored.record.messages} messages`));
-          if (restored.backup) console.log(pc.dim(`  previous task state kept at ${restored.backup}`));
+          if (restored.backupDir) console.log(pc.dim(`  previous task state kept at ${restored.backupDir}`));
           console.log(pc.yellow(`The restored conversation is recovered as unverified; resume with: nexus operation resume ${id}`));
         } finally {
           release();

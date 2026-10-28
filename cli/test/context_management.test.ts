@@ -11,10 +11,11 @@ import type { TurnResult } from "../src/core/turn.js";
 import type { ChatMessage } from "../src/types.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { OperationStore } from "../src/core/operation_runner.js";
-import { newOperation, type DurableOperationState } from "../src/core/operation.js";
+import { ConvergenceScheduler, newOperation, type DurableOperationState } from "../src/core/operation.js";
+import { ResourceRegistry } from "../src/core/resources.js";
 import {
   ContextCheckpointError,
-  checkpointFile,
+  checkpointBundleDir,
   createContextCheckpoint,
   listContextCheckpoints,
   restoreContextCheckpoint,
@@ -119,8 +120,8 @@ test("a unit budget below the resource capacity blocks before inference when the
     assert.equal(outcome.cause, "CONTEXT_BUDGET");
     assert.match(outcome.reason, /20000 prompt tokens \+ 8192 completion \+ 4096 tool-response reserves exceed the unit budget of 15000/);
     assert.match(outcome.question!, /needs about 32288 tokens/);
-    assert.equal(outcome.offerReassign, true, "the scheduler must offer a larger resource");
-    assert.deepEqual(outcome.options.map((option) => option.action.kind), ["revise"]);
+    assert.equal(outcome.offerReassign, undefined, "reassigning cannot clear a per-unit cap");
+    assert.deepEqual(outcome.options.map((option) => option.action.kind), ["lift_context_budget"]);
   }
   assert.equal(fake.prompts.length, 0, "no inference may run over the operator's budget");
   assert.equal(work.context?.budgetTokens, 15_000);
@@ -255,8 +256,10 @@ test("a checkpoint copies the conversation and restore brings it back with a bac
     const record = createContextCheckpoint(store.manager, state, "u1", "before-refactor", 1_800_000_000_000);
     assert.equal(record.messages, 2);
     assert.equal(record.taskId, "task-u1");
-    assert.ok(fs.existsSync(checkpointFile(store.manager.getBaseDir(), state.id, "u1", "before-refactor")));
-    assert.equal(fs.statSync(checkpointFile(store.manager.getBaseDir(), state.id, "u1", "before-refactor")).mode & 0o777, 0o600);
+    const bundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "before-refactor", record.sha256);
+    assert.ok(fs.existsSync(path.join(bundle, "task.json")));
+    assert.equal(fs.statSync(path.join(bundle, "task.json")).mode & 0o777, 0o600);
+    assert.deepEqual(record.files.map((file) => file.name), ["task"]);
     assert.deepEqual(listContextCheckpoints(state).map((entry) => entry.name), ["before-refactor"]);
 
     // The unit runs on and the conversation changes.
@@ -275,9 +278,9 @@ test("a checkpoint copies the conversation and restore brings it back with a bac
 
     const restored = restoreContextCheckpoint(store.manager, state, "u1", "before-refactor", 1_800_000_001_000);
     assert.equal(restored.record.name, "before-refactor");
-    assert.match(restored.backup!, /context-checkpoints\/.*\/backups\//, "backups live with the checkpoints, not the live tasks");
+    assert.match(restored.backupDir!, /context-checkpoints\/.*\/backups\//, "backups live with the checkpoints, not the live tasks");
     assert.equal(JSON.parse(fs.readFileSync(taskFile, "utf8")).messages.length, 2);
-    assert.equal(JSON.parse(fs.readFileSync(restored.backup!, "utf8")).messages.length, 1, "the pre-restore state is kept");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(restored.backupDir!, "task.json"), "utf8")).messages.length, 1, "the pre-restore state is kept");
     assert.equal(state.units[0].status, "RUNNABLE");
     assert.equal(state.units[0].blocked, undefined);
     assert.equal(state.units[0].result, undefined);
@@ -294,8 +297,9 @@ test("restore refuses tampered checkpoints and lifecycle states it does not own"
   const { store, state, workspace, stateRoot } = checkpointFixture();
   try {
     createContextCheckpoint(store.manager, state, "u1", "cp");
-    const file = checkpointFile(store.manager.getBaseDir(), state.id, "u1", "cp");
-    writePrivateFile(file, JSON.stringify({ taskId: "task-u1", messages: [{ role: "system", content: "tampered" }] }), { durable: true });
+    const record = state.contextCheckpoints!.find((entry) => entry.name === "cp")!;
+    const bundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "cp", record.sha256);
+    writePrivateFile(path.join(bundle, "task.json"), JSON.stringify({ taskId: "task-u1", messages: [{ role: "system", content: "tampered" }] }), { durable: true });
     assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "cp"), /does not match its recorded hash/);
 
     createContextCheckpoint(store.manager, state, "u1", "cp2");
@@ -336,7 +340,7 @@ test("restoring one unit keeps an operation-level decision intact", () => {
     restoreContextCheckpoint(store.manager, state, "u1", "cp");
     assert.equal(state.units[0].blocked, undefined);
     assert.deepEqual(state.blocked?.decisions.map((decision) => decision.id), ["operation#git"], "the operation-level guard stays");
-    assert.equal(state.status, "RUNNING");
+    assert.equal(state.status, "BLOCKED", "an operation-level decision keeps the operation blocked");
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -363,6 +367,68 @@ test("checkpoints refuse traversal, running units, missing conversations and unk
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
+});
+
+test("a checkpoint copies the conversation journals too and restores them without the originals", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  try {
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, `${JSON.stringify({ message: { role: "user", content: "one" } })}\n`, { durable: true });
+    const record = createContextCheckpoint(store.manager, state, "u1", "with-journal");
+    assert.deepEqual(record.files.map((file) => file.name), ["task", "messages"]);
+
+    // Retention (or an operator) removes the original task and journal; the checkpoint must still restore both.
+    fs.rmSync(taskFile);
+    fs.rmSync(journal);
+    state.units[0].status = "BLOCKED";
+    restoreContextCheckpoint(store.manager, state, "u1", "with-journal");
+    assert.equal(JSON.parse(fs.readFileSync(taskFile, "utf8")).messages.length, 2);
+    assert.match(fs.readFileSync(journal, "utf8"), /one/);
+
+    // A tampered journal is refused before anything is written.
+    const bundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "with-journal", record.sha256);
+    writePrivateFile(path.join(bundle, "messages.jsonl"), "tampered\n", { durable: true });
+    const before = fs.readFileSync(journal, "utf8");
+    assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "with-journal"), /does not match its recorded hash/);
+    assert.equal(fs.readFileSync(journal, "utf8"), before);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("the lift_context_budget decision clears the cap and makes the unit runnable", () => {
+  const state = newOperation(
+    `op-lift-${randomUUID().slice(0, 8)}`,
+    "lift the cap",
+    [{ id: "u1", prompt: "p", contextBudget: 1_000 }],
+    [{ id: "primary", provider: "http://p", endpoint: "http://p/v1", model: "m", capabilities: ["tools"] }],
+    Date.now(),
+  );
+  const unit = state.units[0];
+  unit.status = "BLOCKED";
+  unit.context = { estimatedPromptTokens: 5_000, budgetTokens: 1_000, contextLimit: 100_000, at: new Date().toISOString() };
+  unit.blocked = {
+    since: new Date().toISOString(),
+    reason: "over budget",
+    decision: {
+      id: "u1#1",
+      unitId: "u1",
+      cause: "CONTEXT_BUDGET",
+      question: "over budget",
+      options: [{ id: "1", label: "lift this unit's context budget", action: { kind: "lift_context_budget" } }],
+    },
+  };
+  state.status = "BLOCKED";
+  state.blocked = { since: new Date().toISOString(), decisions: [unit.blocked.decision] };
+
+  const scheduler = new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now());
+  scheduler.resolve("u1#1", "1");
+
+  assert.equal(unit.contextBudget, undefined);
+  assert.equal(unit.context, undefined);
+  assert.equal(unit.status, "RUNNABLE");
+  assert.equal(state.status, "RUNNING");
 });
 
 const cliDir = fileURLToPath(new URL("..", import.meta.url));

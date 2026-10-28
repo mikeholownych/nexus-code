@@ -180,8 +180,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         `${unit.title} needs about ${total} tokens (prompt ${estimate.estimatedPromptTokens}, completion ` +
         `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over its ${unit.contextBudget}-token ` +
         `budget. Assign it to a resource with more context, revise it, or stop?`,
-      options: [{ label: "revise the unit (note required)", action: { kind: "revise" } }],
-      offerReassign: true,
+      // Reassigning cannot clear a cap (the cap travels with the unit) and revise only grows the prompt, so the offered
+      // remedy changes the thing that blocks: the budget itself.
+      options: [{ label: "lift this unit's context budget", action: { kind: "lift_context_budget" } }],
     };
   }
 

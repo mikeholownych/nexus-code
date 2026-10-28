@@ -321,6 +321,12 @@ export class ConvergenceScheduler {
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;
+      case "lift_context_budget":
+        delete u.contextBudget;
+        delete u.context;
+        u.runsBase = u.runs;
+        u.status = "RUNNABLE";
+        break;
       case "drop":
         u.dropped = true;
         break;

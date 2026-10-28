@@ -603,7 +603,7 @@ test("the --json document satisfies the checked-in JSON schema", () => {
   op.units[0].contextBudget = 120_000;
   op.units[0].context = { estimatedPromptTokens: 42_000, budgetTokens: 120_000, contextLimit: 200_000, at: "2026-10-28T11:30:00.000Z" };
   op.contextCheckpoints = [
-    { unitId: "u1", name: "before-refactor", at: "2026-10-28T11:30:00.000Z", taskId: "task-u1", messages: 12, bytes: 4096, sha256: "a".repeat(64) },
+    { unitId: "u1", name: "before-refactor", at: "2026-10-28T11:30:00.000Z", taskId: "task-u1", messages: 12, bytes: 4096, sha256: "a".repeat(64), files: [{ name: "task", bytes: 4096, sha256: "a".repeat(64) }] },
   ];
   op.git = {
     isolate: true,
@@ -725,7 +725,7 @@ test("projects the operation's git isolation and unit integration receipts", () 
   assert.match(renderOperationView(buildOperationView(op, { now: NOW }), { width: 120 }), /context 42000 tokens \(effective cap 200000\)/);
 
   op.contextCheckpoints = [
-    { unitId: "u1", name: "before-refactor", at: "2026-10-28T11:30:00.000Z", taskId: "task-u1", messages: 12, bytes: 4096, sha256: "a".repeat(64) },
+    { unitId: "u1", name: "before-refactor", at: "2026-10-28T11:30:00.000Z", taskId: "task-u1", messages: 12, bytes: 4096, sha256: "a".repeat(64), files: [{ name: "task", bytes: 4096, sha256: "a".repeat(64) }] },
   ];
   const withCheckpoints = buildOperationView(op, { now: NOW });
   assert.deepEqual(withCheckpoints.checkpoints, [

@@ -16,14 +16,15 @@ tool definitions, completion reserve and tool-response reserve as the conversati
 below.
 
 If the prompt fits the resource but not the unit budget, the unit fails before inference with `CONTEXT_BUDGET`, names the
-prompt tokens and the completion/tool reserves that exceed the budget, offers `revise`, and sets `offerReassign` so the
-scheduler adds its "assign to another resource" options. If the prompt does not fit the resource at all, or the budget is at or above the resource capacity,
+prompt tokens and the completion/tool reserves that exceed the budget, and offers **lift this unit's context budget**
+(clears `contextBudget`, records the decision, makes the unit runnable; the resource limit still applies). Reassigning
+cannot help because the cap travels with the unit, and `revise` only grows the prompt, so neither is offered. If the prompt does not fit the resource at all, or the budget is at or above the resource capacity,
 resource-limit pressure stays with the agent's normal admission/compaction path (which can compact and continue), so the
 preflight never pre-empts it.
 
-The estimate is a start-of-turn lower bound: the turn adds the tool groups its prompt enables, runtime context and, for
-a fresh objective, the pinned requirement ledger. The cap therefore gates the start prompt; mid-turn growth is bounded
-by the resource limit, not by the unit budget.
+The estimate includes the tool groups the prompt enables (the same groups `runTurn` activates). It remains a
+start-of-turn lower bound because the turn also adds runtime context and, for a fresh objective, the pinned requirement
+ledger. The cap gates the start prompt; mid-turn growth is bounded by the resource limit, not by the unit budget.
 
 ## Context checkpoints
 
@@ -49,7 +50,7 @@ covers the new fields.
 
 ## Tests
 
-`cli/test/context_management.test.ts` (12 cases):
+`cli/test/context_management.test.ts` (14 cases):
 
 1. a unit budget below the resource capacity blocks before inference, records the estimate, offers reassignment and only
    `revise`; no turn runs;
@@ -63,11 +64,14 @@ covers the new fields.
 9. a unit budget must be a positive integer;
 10. tampered checkpoints and COMPLETE/CANCELLED operations, complete or dropped units are refused;
 11. restoring one unit keeps an operation-level decision (for example the git guard) intact;
-12. the CLI creates/lists/restores a checkpoint, rejects a traversal name and refuses with exit 2 while a driver holds
+12. a checkpoint copies the journals and restores them after the originals are removed; a tampered journal is refused
+    before any write;
+13. `lift_context_budget` clears the cap and the estimate, and makes the unit runnable;
+14. the CLI creates/lists/restores a checkpoint, rejects a traversal name and refuses with exit 2 while a driver holds
     the operation lock.
 
 Focused run (`context_management`, `operation_view`, `operation_git`, `tdd_work_units`, `convergence_scheduling`,
-`operation_runner_refactor`, `operation_account_identity`): **132/132 pass**; `tsc --noEmit` and `git diff --check`
+`operation_runner_refactor`, `operation_account_identity`): **134/134 pass**; `tsc --noEmit` and `git diff --check`
 clean, isolated HOME/XDG.
 
 ## Residuals / not in this slice

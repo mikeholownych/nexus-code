@@ -1839,14 +1839,19 @@ export class AutonomousAgent {
   }
 
   public getEffectiveTools(): ToolDefinition[] {
+    return this.effectiveTools(this.enabledToolGroups);
+  }
+
+  /** The tools for a given enabled-group set (the estimate uses the set the prompt will enable). */
+  private effectiveTools(enabled: ReadonlySet<string>): ToolDefinition[] {
     const hasSkills = (this.skillManager?.listSkills().length ?? 0) > 0;
     const offered = HARNESS_TOOLS.filter((tool) => {
       const name = tool.function.name;
       if (name === "activate_skill") return hasSkills;
       const group = toolGroupOf(name);
-      return !group || this.enabledToolGroups.has(group);
+      return !group || enabled.has(group);
     });
-    const allEnabled = Object.keys(TOOL_GROUPS).every((group) => this.enabledToolGroups.has(group));
+    const allEnabled = Object.keys(TOOL_GROUPS).every((group) => enabled.has(group));
     let tools = [
       ...offered,
       ...(allEnabled ? [] : [ENABLE_TOOLS_CAPABILITY.toolDefinition as ToolDefinition]),
@@ -1872,9 +1877,9 @@ export class AutonomousAgent {
   }
 
   /**
-   * The admission estimate for adding one user message, using the same budget, reserves and current tool definitions.
-   * Tool groups enabled by the prompt, runtime context and a freshly pinned objective ledger are added inside the turn
-   * and are not included, so this is a lower bound. Compaction is not attempted here.
+   * The admission estimate for adding one user message, using the same budget and reserves and the tool definitions the
+   * turn will use (including the groups this prompt enables). Runtime context and a freshly pinned objective ledger are
+   * added inside the turn and are not included, so this remains a lower bound. Compaction is not attempted here.
    */
   public estimateTurnAdmission(content: string): {
     estimatedPromptTokens: number;
@@ -1886,7 +1891,10 @@ export class AutonomousAgent {
     const messages = [...this.messages, { role: "user", content } as ChatMessage];
     const contextLimit = this.contextLimit();
     const reserves = this.getContextReserves();
-    const estimatedPromptTokens = this.scaledBudget(messages, contextLimit).totalActiveTokens;
+    // Include the groups this prompt will enable inside the turn, so a prompt that triggers a tool group is not
+    // estimated without that group's schema.
+    const enabled = new Set([...this.enabledToolGroups, ...groupsTriggeredBy(content)]);
+    const estimatedPromptTokens = this.scaledBudget(messages, contextLimit, this.effectiveTools(enabled)).totalActiveTokens;
     return {
       estimatedPromptTokens,
       contextLimit,
@@ -2707,8 +2715,8 @@ export class AutonomousAgent {
    * The client estimate of a request, scaled by the last measured/estimated ratio when the connection counts requests
    * (estimateScale): admission's compaction ladder then aims at what the provider will actually count.
    */
-  private scaledBudget(messages: ChatMessage[], contextLimit: number): TokenBudget {
-    const budget = calculateContextBudget(this.requestMessages(messages), this.getEffectiveTools(), contextLimit);
+  private scaledBudget(messages: ChatMessage[], contextLimit: number, tools: ToolDefinition[] = this.getEffectiveTools()): TokenBudget {
+    const budget = calculateContextBudget(this.requestMessages(messages), tools, contextLimit);
     return this.estimateScale === 1 ? budget : { ...budget, totalActiveTokens: Math.ceil(budget.totalActiveTokens * this.estimateScale) };
   }
 
