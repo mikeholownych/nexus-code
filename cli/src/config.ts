@@ -17,6 +17,21 @@ let userConfigFile: Record<string, string> = {};
 let operatorJsonOperationPolicy: HarnessConfig["operationPolicy"];
 const SHELL_PRECEDENCE_KEYS = ["NEXUS_VERIFY_ATTESTATION"] as const;
 const OPERATOR_CONFIG_JSON_LIMIT = 64 * 1024;
+
+/** Read UTF-8 config data with a strict byte cap, even if the open file grows after stat. */
+export function readBoundedOperatorConfig(fd: number): string {
+  const buffer = Buffer.allocUnsafe(OPERATOR_CONFIG_JSON_LIMIT + 1);
+  let bytesRead = 0;
+  while (bytesRead < buffer.length) {
+    const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+    if (count === 0) break;
+    bytesRead += count;
+  }
+  if (bytesRead > OPERATOR_CONFIG_JSON_LIMIT) {
+    throw new Error("Nexus config.json exceeds the 64 KiB size limit.");
+  }
+  return buffer.subarray(0, bytesRead).toString("utf8");
+}
 let applianceEndpointOverride: { endpoint: string; model?: string; apiKey?: string; persistModelOnSelection: boolean } | undefined;
 
 /** Session-scoped endpoint override established by the explicit local connect flow. */
@@ -522,10 +537,7 @@ function readOperatorOperationPolicy(file: string): HarnessConfig["operationPoli
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) throw new Error("Nexus config.json must be a regular file.");
     if (stat.size > OPERATOR_CONFIG_JSON_LIMIT) throw new Error("Nexus config.json exceeds the 64 KiB size limit.");
-    contents = fs.readFileSync(fd, "utf8");
-    if (Buffer.byteLength(contents, "utf8") > OPERATOR_CONFIG_JSON_LIMIT) {
-      throw new Error("Nexus config.json exceeds the 64 KiB size limit.");
-    }
+    contents = readBoundedOperatorConfig(fd);
   } finally {
     fs.closeSync(fd);
   }

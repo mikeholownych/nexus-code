@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { buildConfig, autoDetectModel, configuredOperationPolicy, mergeOperationPolicy } from "../src/config.js";
+import { buildConfig, autoDetectModel, configuredOperationPolicy, mergeOperationPolicy, readBoundedOperatorConfig } from "../src/config.js";
 import { startGateway } from "./helpers/fixtures.js";
 
 function runOperatorConfig(home: string, workspace: string, extraEnv: Record<string, string> = {}) {
@@ -26,6 +26,28 @@ function runOperatorConfig(home: string, workspace: string, extraEnv: Record<str
 }
 
 describe("config", () => {
+  test("operator config bounded read rejects growth after stat without consuming the whole file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-config-growth-race-"));
+    const file = path.join(dir, "config.json");
+    let fd: number | undefined;
+    try {
+      fs.writeFileSync(file, "{}");
+      fd = fs.openSync(file, fs.constants.O_RDONLY);
+      assert.equal(fs.fstatSync(fd).size, 2);
+
+      // Simulate the file growing after the caller's stat check but before it reads.
+      fs.appendFileSync(file, "x".repeat(80 * 1024));
+      assert.throws(() => readBoundedOperatorConfig(fd!), /exceeds the 64 KiB size limit/);
+
+      // The reader must stop at limit + 1 instead of allocating/consuming the grown file.
+      const nextByte = Buffer.alloc(1);
+      assert.equal(fs.readSync(fd, nextByte, 0, 1, null), 1);
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a shell NEXUS_VERIFY_ATTESTATION outranks config.env for the provenance setting", () => {
     const cliDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-attest-precedence-"));
