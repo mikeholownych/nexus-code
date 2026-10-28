@@ -1,0 +1,8 @@
+<task-notification>
+<task-id>ae2e6aa10c3f1daa8</task-id>
+<tool-use-id>toolu_01VAHFH8G8GUtzr68K7vYMuN</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/ae2e6aa10c3f1daa8.output</output-file>
+<status>failed</status>
+<summary>Agent "Trust boundaries and inference review" failed: Agent terminated early due to an API error: You've hit your session limit · resets 11:20am (UTC) (error type rate_limit, HTTP 429, request id req_011CfwyzQmgRKV1n2F9oaqzd, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+</task-notification>
