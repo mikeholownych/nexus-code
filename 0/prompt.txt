@@ -1,0 +1,30 @@
+<task-notification>
+<task-id>ae12a952e79458538</task-id>
+<tool-use-id>toolu_011u1CtEB4LZjbvxVM1w2DjV</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/5854e03a-1246-49e8-b2c2-790021904850/tasks/ae12a952e79458538.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit contest, eval, demo" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Scope G is finished, and neither part is ready. The contest code works locally, but there is no fresh-account Cloudflare run. The eval harness is sound, but there is no evidence that would qualify v1 task quality. The contest deadline was 2026-10-14, today.
+
+**Contest (judged separately from the client):**
+- **CON-001 (S1, reproduced):** the documented deploy command and the CI "contest" job both build the old Experiment-1 Worker (`artifacts-first-repo`), not the contest Worker. That Worker has a hard-coded namespace, `nexus-exp1-oct02`, and an unauthenticated `POST /create`. The contest Worker in `agent-collab-worker/` has no build scripts and no lockfile. It does build by hand, but its typecheck fails on `process` (CON-010).
+- **CON-002 (S1):** the operator's note is confirmed from source. The launcher clears its environment, so the per-run settings never reach the broker. The broker then falls back to the operator's hard-coded repository and Worker address. With anyone else's resources the identity check fails, so no other host can complete a Cloudflare run.
+- **CON-003 (S2, latent):** the obvious fix for CON-002, passing the environment through, would let the caller choose the credential file paths and the destination URLs. That would send root-only secrets to an attacker-chosen address. Today `clearenv()` blocks this.
+- **CON-004 (S2):** the source commits behind the video are not in main and are on no remote branch. The run record it cites is not committed.
+- **CON-005 (S2, reproduced):** the committed broker bundle fails its own checksum (`demo-transport.mjs`), so it cannot be installed. The installer is also upgrade-only; there is no path for a clean host.
+- **CON-006 (S2):** the required `NEXUS_PROTECTED_TRANSPORT` setting is undocumented, and no sudo setup is shipped. The guide's advice to allow passwordless `sudo setpriv` effectively gives the demo user root.
+
+What works: credential handling inside the broker is careful, and every local broker and Worker test I ran passes. `npm test --prefix demo` passes. The vendored Node signature checks out with `gpgv`.
+
+**Evaluation harness:**
+- **EVL-001 (S1 for any v1 quality claim):** the only results are a 6-task fixture pilot, and its own write-up says those tasks were used for tuning. There is no held-out set, no long-task (T3) set, no fault injection (T4), and no run on the release commit `db1ca55`.
+- **EVL-002 (S2):** the rerun rule for infrastructure failures favours Nexus. Any Nexus run with no parsed result, such as a crash, gets rerun instead of counted as a failure. Peers are rerun only on a connection-error message and only if they failed.
+- **EVL-003 (S3):** the agent can read the hidden tests, contamination detection is partial, and contaminated runs still count in the pooled pass rate.
+- **EVL-004 (S3):** the model's weights, server build and sampling settings are not recorded.
+
+Section 7 of the report proposes the v1 protocol and the contest-fix requirements. The protocol needs at least 40 held-out tasks, half from external repositories and kept private until the release freeze. It sets at least 5 runs per task, with matched model identity and budgets, and 8 fault-injection cases. The pass thresholds are drafts that need owner sign-off. Their hard lines are zero false VERIFIED and 100% truthful outcomes under faults.
+
+Output: /tmp/claude-1000/-home-mike-nexus-code/b79a4439-e6ad-4986-aa16-4a81f838ac71/scratchpad/audit/G_contest_eval.md</result>
+<usage><subagent_tokens>215027</subagent_tokens><tool_uses>40</tool_uses><duration_ms>562439</duration_ms></usage>
+</task-notification>
