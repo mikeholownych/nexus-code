@@ -1,0 +1,10 @@
+<pasted_content id="bd2e">
+Proceed with the offline thermal-policy replay tool.
+Keep it strictly analytical and read-only. It must consume the preserved raw 1 Hz soak evidence and accept explicit candidate policy inputs covering sensor class/selection, state semantics (warning/critical/abort), threshold, persistence, and hysteresis.
+Report the resulting state transitions, trip counts, time in each state, flapping/transitions, first/last transition times, and relevant per-sensor-class behavior. Preserve visibility into the raw observations responsible for each transition.
+Do not choose, recommend, or modify any threshold or production policy. Do not modify hardware, services, benchmark guardrails, alerting rules, or the preserved raw evidence.
+Treat package and VRAM as distinct sensor classes. Preserve the hottest-channel VRAM behavior rather than averaging it away. Make instantaneous versus persistent behavior directly comparable.
+Include deterministic tests using small synthetic traces where the expected transition sequence can be calculated by inspection, including threshold crossing, persistence, hysteresis, single-sample excursions, oscillation around a boundary, and missing samples.
+Then replay several illustrative policies only to demonstrate the tool's behavior and expose their consequences. Clearly label those as examples, not recommendations.
+Preserve the current soak conclusions and caveats unchanged. Return the implementation/test evidence and stop. Do not proceed into policy selection.
+</pasted_content id="bd2e">
