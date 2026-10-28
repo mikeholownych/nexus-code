@@ -1,0 +1,52 @@
+<task-notification>
+<task-id>aeef40f6f7d19646b</task-id>
+<tool-use-id>toolu_01MTYH3YbEBQUtE5eQEpJ7w2</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/d184487f-a73f-4129-b606-05e268e060c2/tasks/aeef40f6f7d19646b.output</output-file>
+<status>completed</status>
+<summary>Agent "Map CTX item status on HEAD" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Only one item is fully fixed in code at HEAD 95ef861: CTX-02. CTX-01 and CTX-05 are fixed at the unit level but still have gaps. CTX-04, CTX-06, CTX-07 and the archive item are still open. No accepted dogfood run exists. The context-convergence branch tip 31d6622 and its follow-ups (da6a6f5, 45af267, e0a59cf, 25208c1, d09c08f) are all in HEAD (checked with `git merge-base --is-ancestor`), so everything below is current code.
+
+| Item | Status | Main evidence | Test covering it |
+|---|---|---|---|
+| CTX-01 crash loses mid-turn findings; ids collide | **FIXED (unit level), small residual** | da6a6f5: `cli/src/core/state.ts:536-550`; `cli/src/agent.ts:1394-1405` and `:1331-1344` | `cli/test/context_convergence.test.ts:1381` "mid-turn progress saves the findings with the conversation, and a restore never reuses an id the restored memory names" |
+| CTX-02 steering: last 10 kept, 600 chars each | **FIXED** | d09c08f: `cli/src/core/objective.ts:22`, `:494-534`, `:617-647`; `state.ts:546` | `cli/test/objective_continuation.test.ts:367`, `:386`, `:306` |
+| CTX-04 cut-off notice misses `grep -m`, `sed -n`, `awk NR` | **OPEN** | `cli/src/core/findings.ts:259-270` | `context_convergence.test.ts:1537-1546` (head, tail and fold only) |
+| CTX-05 long write cut off, then replayed identically | **FIXED in code; not accepted end to end** | 45af267 and e0a59cf: `agent.ts:370-373`, `:731`, `:2329-2347`, reset at `:1446` and `:3497` | `cli/test/provider_recovery_agent.test.ts:99`, `:128`, `:148` |
+| CTX-06 harness messages treated as operator requests | **OPEN** | `agent.ts:1703-1706`, `:1880`, `:3658-3669`, `:2261-2262` | none |
+| CTX-07 most findings shown as names only | **OPEN (only instructions help)** | `cli/src/core/findings.ts:135-142`; `agent.ts:2371`, `:2384` | none for the remedy (merge findings by subject) |
+| Archived history is audit-only | **OPEN** | `cli/src/session.ts:162-185`; only reader `cli/src/session_export.ts:65` | none |
+
+**CTX-01.** Every mid-turn save (`persistProgress({messages:true})`) now writes the findings and the objective ledger together with the messages. On restore, new ids continue past the highest id named in either the store or the restored memory (`recordedFindingsState(...).highest`). That closes the stale-store, empty-store and id-collision cases. Two gaps remain:
+- `readFindings` still answers "No findings have been recorded" when the store is empty (`findings.ts:201`); the suggested "these ids were lost" wording was not added. It is only reachable now if a save fails, and `persistProgress` silently ignores write failures (`catch {}`).
+- The suggested crash test through a mock gateway was not added; coverage is a unit-level restore test.
+
+**CTX-02.** Steering and follow-ups are now pinned verbatim, newest first, within 12,000 characters. Anything that doesn't fit is named with its size and a preview, and `read_objective` now returns a steering message or follow-up verbatim by id. Mid-turn saves include the ledger, which also fixes CTX-08(c). Coverage is unit-level plus the mid-turn save test; there is no full turn through compaction with steering.
+
+**CTX-04.** `outputLimits` still only recognises `| head` and `| tail`. A grep over `cli/src` for `max-count`, `grep -m`, `sed -n` or `awk` finds nothing, and `read_file` ranges are not marked either. The remediation doc §12 (37278e3) says R1 covers "`grep -m`, `--max-count`", but the code does not support that claim.
+
+**CTX-05.** If a submission fails with its execution unknown after running at least 120 s, later submissions of that step carry a note asking for the work in parts. The note is added to the request only, never as a user message. In run R2 (`run_45af267_r2_deep120`) the step-103 cut-off was followed by a first part, then edits at 104, 105, 108 and 118 with no further cut-offs. The suggested earlier closing notice when nothing has been written yet was not added; 25208c1 only rewords the notice shown when findings outgrow memory (`agent.ts:2371`).
+
+**CTX-06.** `pinnedUserText` still excludes only steering and the objective; it was last changed by 7b84fac, so neither 31d6622 nor d09c08f touched it. The `[Nexus recovery …]`, empty-reply (`:3869`) and continuation (`:3886`) notes are still pushed as user messages. So they can become "Earlier task requests" entries in the durable record. `recordFindings` still uses the last user message as the current request. 45af267 kept only the new cut-off notice out of the conversation.
+
+**CTX-07.** The indexed form still keeps only what a finding mentions (paths and symbols), not its claims, and findings on the same subject are not merged. Only notices push the model to use `read_findings`: the outgrown notice (now with counts, 25208c1), the "you ran this same call before" notice, and the closing notice. R2 ended with 0 findings in full, 1 condensed and 33 indexed.
+
+**Archive.** Replaced originals are still written to `&lt;session&gt;.history.jsonl`. The only model tools are `read_findings` and `read_objective`; nothing gives the model access to the archive.
+
+**Exit criteria from context.md (all 7 must be met):**
+1. CTX-01 fixed, with the crash repro as a passing product test: **largely met.** A unit-level restore test exists, not the mock-gateway repro.
+2. CTX-04 table test plus CTX-06 exclusion: **not met** (both open).
+3. CTX-05: no identical replay, and a work product produced in parts: **met in code**; seen once in R2.
+4. CTX-02 fixed: **met** (d09c08f, on feat/tui-surface rather than main first).
+5. Merged with current main, dist rebuilt, full suite run in a git checkout: **appears met.** 197328a and 70ace1d merged main, and d09c08f's message claims CLI 810/810. I did not re-run anything (read-only).
+6. One real dogfood rerun with an artifact, verifier pass, a spot-check finding no false absence claims and the d88a897 facts correct, and RESULT.md committed: **not met.**
+7. VERIFIED semantics documented, or a context qualifier added (CTX-03): **not met as far as I found.** `docs/USER_MANUAL.md` has no VERIFIED entry, and `CONTEXT_EVIDENCE_NOT_RETAINED` (`agent.ts:4213`) still applies only to read-only turns. I only checked this briefly.
+
+**Dogfood runs (none accepted):**
+- `~/df2/postdog/dogfood/run_31d6622_r1_deep120`: FAILED at step 119 with no artifact.
+- `run_45af267_r2_deep120`: LIMIT_REACHED at step 120, verifier 19/21. Its RESULT.md verdict is "Not accepted", with substantive errors: the Rust core described as separate, F-3 false, and F-1's severity unsupported.
+- `run_25208c1_r3_deep120` (the latest, 2026-10-12 16:01–20:50Z): its `events.jsonl` shows VERIFIED, verifier PASSED (configured), objective COMPLETED and a 324-line artifact. However, it has **no RESULT.md** and no substantive spot-check. `docs/reviews/NEXUS_CONTEXT_CONVERGENCE_REMEDIATION_2026-10-09.md` §12 still says "results below once complete" and "Not accepted". No later context-acceptance doc exists. `NEXUS_POST_REMEDIATION_DOGFOOD_QUALIFICATION.md`, `NEXUS_DOGFOODING_READINESS_REVIEW_2026-10-03.md` and `NEXUS_SUPERVISED_DOGFOODING_REASSESSMENT_2026-10-03.md` all predate these commits.
+
+So R3 is the only candidate for criterion 6. It still needs the spot-check (Rust-core launch path in `cli/src/tools.ts`, 1,120 tracked files, no false absence claims) and a committed RESULT.md.</result>
+<usage><subagent_tokens>95332</subagent_tokens><tool_uses>28</tool_uses><duration_ms>190872</duration_ms></usage>
+</task-notification>
