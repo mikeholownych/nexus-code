@@ -475,15 +475,10 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
     }
     policy[property] = value;
   }
-  const maxWaitMs = policy.maxWaitMs ?? DEFAULT_OPERATION_POLICY.maxWaitMs;
-  const minWaitMs = policy.minWaitMs ?? DEFAULT_OPERATION_POLICY.minWaitMs;
-  if (minWaitMs > maxWaitMs) {
-    throw new Error(`Invalid operation wait settings: NEXUS_OPERATION_MIN_WAIT_MS (${minWaitMs}) must not exceed NEXUS_OPERATION_MAX_WAIT_MS (${maxWaitMs}).`);
-  }
   return Object.keys(policy).length ? policy : undefined;
 }
 
-/** Merge per-operation overrides with operator defaults and reject an impossible wait interval. */
+/** Merge operator defaults and spec overrides, then validate the effective operation policy. */
 export function mergeOperationPolicy(
   configured: HarnessConfig["operationPolicy"],
   override: HarnessConfig["operationPolicy"],

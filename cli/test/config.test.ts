@@ -108,27 +108,23 @@ describe("config", () => {
     });
   });
 
-  test("operation scheduling policy rejects invalid or contradictory operator values", () => {
+  test("operation scheduling policy rejects invalid operator values", () => {
     assert.throws(
       () => configuredOperationPolicy((key) => key === "NEXUS_OPERATION_MAX_RUNS_PER_UNIT" ? "1.5" : undefined),
       /NEXUS_OPERATION_MAX_RUNS_PER_UNIT/,
     );
     assert.throws(
-      () => configuredOperationPolicy((key) => ({ NEXUS_OPERATION_MAX_WAIT_MS: "500", NEXUS_OPERATION_MIN_WAIT_MS: "1000" }[key])),
-      /must not exceed/,
+      () => configuredOperationPolicy((key) => ({ NEXUS_OPERATION_MAX_WAIT_MS: "3000000000", NEXUS_OPERATION_MIN_WAIT_MS: "2147483648" }[key])),
+      /Node's timer limit/,
     );
-  assert.throws(
-    () => configuredOperationPolicy((key) => ({ NEXUS_OPERATION_MAX_WAIT_MS: "3000000000", NEXUS_OPERATION_MIN_WAIT_MS: "2147483648" }[key])),
-    /Node's timer limit/,
-  );
-  assert.throws(
-    () => configuredOperationPolicy((key) => key === "NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET" ? "" : undefined),
-    /non-empty decimal integer/,
-  );
-  assert.throws(
-    () => configuredOperationPolicy((key) => key === "NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET" ? "2e0" : undefined),
-    /non-empty decimal integer/,
-  );
+    assert.throws(
+      () => configuredOperationPolicy((key) => key === "NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET" ? "" : undefined),
+      /non-empty decimal integer/,
+    );
+    assert.throws(
+      () => configuredOperationPolicy((key) => key === "NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET" ? "2e0" : undefined),
+      /non-empty decimal integer/,
+    );
   });
 
   test("operation spec overrides cannot invert the configured wait interval", () => {
@@ -136,6 +132,19 @@ describe("config", () => {
       () => mergeOperationPolicy({ minWaitMs: 5_000 }, { maxWaitMs: 1_000 }),
       /minWaitMs \(5000\) must not exceed maxWaitMs \(1000\)/,
     );
+  });
+
+  test("valid spec overrides can repair contradictory operator wait defaults", () => {
+    const configured = configuredOperationPolicy((key) => ({
+      NEXUS_OPERATION_MAX_WAIT_MS: "500",
+      NEXUS_OPERATION_MIN_WAIT_MS: "1000",
+    }[key]));
+    assert.deepEqual(configured, { maxWaitMs: 500, minWaitMs: 1000 });
+    assert.deepEqual(mergeOperationPolicy(configured, { maxWaitMs: 1500 }), {
+      maxWaitMs: 1500,
+      minWaitMs: 1000,
+    });
+    assert.throws(() => mergeOperationPolicy(configured, undefined), /must not exceed/);
   });
 
   test("operation spec overrides are validated after merging with operator policy", () => {
