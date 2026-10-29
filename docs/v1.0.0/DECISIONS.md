@@ -258,6 +258,20 @@ This amendment is **narrow by design**. It applies only to corpora where the mea
 
 **Affected:** ACCEPTANCE §5.3 / ACC-TUI-MANUAL; ACCEPTANCE §10 G6; SPEC-10 REQ-QUAL-108; `TERMINAL-MATRIX-WORKSHEET.md`; PLAN-10 task 12; READINESS; release notes.
 
+## DEC-20: v1.0.0 manual terminal-matrix waiver
+
+**Status: accepted by the release owner, 2026-10-29.** This decision supersedes DEC-19 for v1.0.0.
+
+**Direction.** The manual five-terminal by three-size matrix in ACCEPTANCE §5.3 is waived for v1.0.0. No manual operator run, cell verdict, or per-cell evidence is required, and the waiver does not claim that any cell passed. The automated CI gate in §5.1 and the scripted installed-RC PTY gate in §5.2 remain mandatory and must pass.
+
+**Scope.** This waiver applies only to ACC-TUI-MANUAL and only for v1.0.0. It does not waive ACC-TUI-STEER, ACC-TUI-A11Y, exact-RC identity, any §5.1 or §5.2 scenario, safety checks, or any other release gate. DEC-18's screenshot-artifact waiver remains recorded; no screenshots are required for a matrix that is not run.
+
+**Qualification applicability:** REQ-QUAL-108 = ACC-TUI-STEER and ACC-TUI-A11Y remain required; ACC-TUI-MANUAL is waived for v1.0.0 by DEC-20.
+
+**Disclosure.** Report ACC-TUI-MANUAL as waived by this decision, not passed and not outstanding. Preserve historical operator observations as observations only; do not promote them to cell results.
+
+**Affected:** ACCEPTANCE §§1.1, 3.1, 5, and 10; REQ-QUAL-108 exact-RC evidence mapping; stable v1.0.0 release notes; READINESS; terminal-matrix worksheet disposition.
+
 ## Owner and external actions required (not performed by the audit)
 
 | # | Action | Why | When |

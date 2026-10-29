@@ -2,7 +2,7 @@
 
 For `REQ-QUAL-108` / `ACC-TUI-MANUAL`, following [`ACCEPTANCE.md` §5.3](ACCEPTANCE.md#53-manual-real-terminal-matrix-e3).
 
-> **Required for v1.0.0.** Complete all 15 cells against the exact installed RC. Blank cells are incomplete; no result is inferred. Automated PTY runs do not count as manual cell evidence. DEC-18 waives screenshot artifacts only. The prior waiver record is withdrawn by [DEC-19](DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver).
+> **Waived for v1.0.0 by DEC-20.** No cell runs or evidence are required, and no cell result is inferred. Blank cells are not a release blocker. The worksheet remains available for optional operator checks. Automated CI (§5.1) and scripted PTY (§5.2) gates remain mandatory.
 
 ## Installed candidate identity
 
@@ -40,7 +40,7 @@ Run each step against the installed candidate in the terminal and size named by 
 6. Press Ctrl-C twice; confirm clean terminal restoration (echo on, no stray escape codes).
 7. Exercise `NO_COLOR`.
 
-Screenshot artifacts are waived for v1.0.0 per [DEC-18](DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver). This does not waive any live manual interaction, check, observation, per-cell verdict, or evidence record. Automated PTY runs do not count as completion of these manual real-terminal cells.
+For v1.0.0, manual runs are waived by [DEC-20](DECISIONS.md#dec-20-v100-manual-terminal-matrix-waiver). If optional manual checks are performed, record only what was actually observed. Such checks do not replace mandatory automated CI (§5.1) or scripted PTY (§5.2) evidence.
 
 ## Partial operator report
 
@@ -68,30 +68,12 @@ Select exactly one PASS or FAIL for each cell. Record observed outcomes for ever
 | 14 | GNOME Terminal | 40×14 | [ ] PASS  [ ] FAIL | | |
 | 15 | GNOME Terminal | 200×60 | [ ] PASS  [ ] FAIL | | |
 
-## Acceptance gate
+## Optional observation summary
 
-- Safety checks 2, 5, and 6: **zero failures across all 15 cells**. Any failure here blocks this gate.
-- Any failure on another check requires a written disposition: fix, or a documented known limitation.
-- All 15 cells have exactly one verdict, check outcomes, and per-cell evidence references: [ ] yes  [ ] no
-- All non-safety failures have a written disposition: [ ] yes  [ ] no  [ ] no such failures
-- Safety gate has zero failures: [ ] yes  [ ] no
+- If optional checks are performed, record outcomes and failures truthfully; do not infer missing results.
+- This worksheet does not establish acceptance of mandatory automated CI (§5.1) or scripted PTY (§5.2) gates.
 
-§5.3 matrix gate: [ ] PASS  [ ] FAIL  [ ] INCOMPLETE
-
-Mark the §5.3 matrix gate PASS when all 15 verdicts, check outcomes, and per-cell evidence
-references are complete, checks 2, 5, and 6 have zero failures, and every
-failure on another check has a written disposition. Mark it FAIL if any safety
-check (2, 5, or 6) failed. Mark it INCOMPLETE when required evidence is missing
-or a non-safety failure has no written disposition.
-
-ACC-TUI-MANUAL: [ ] PASS  [ ] FAIL  [ ] INCOMPLETE
-
-Mark ACC-TUI-MANUAL PASS only when all 15 cell verdicts are PASS and the
-per-cell outcomes and evidence records are complete. Screenshots are waived per DEC-18. Mark it FAIL if any
-cell is FAIL. Mark it INCOMPLETE when evidence is missing and no cell has
-failed. A documented known limitation for a non-safety failure may satisfy the
-§5.3 disposition requirement, but the cell remains FAIL and ACC-TUI-MANUAL
-remains unmet until every cell passes.
+§5.3 matrix disposition: WAIVED for v1.0.0 by DEC-20. Optional observations do not change that disposition.
 
 Operator summary / evidence index: ______________________________________________
 

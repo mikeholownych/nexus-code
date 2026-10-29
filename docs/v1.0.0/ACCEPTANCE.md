@@ -48,7 +48,7 @@ The post-RC closure requirements listed below may remain `open`, `partial`, or `
 | REQ-REL-114 | ACC-SUP-08 | Exact-RC cross-runner reproducibility |
 | REQ-QUAL-101 | ACC-QUAL-T2 | Installed-RC held-out T2 qualification |
 | REQ-QUAL-107 | ACC-PRV-STANDALONE, ACC-PRV-LIVE | Installed-RC standalone and provider matrix |
-| REQ-QUAL-108 | ACC-TUI-STEER, ACC-TUI-A11Y, ACC-TUI-MANUAL | CI PTY checks and installed-RC real-terminal matrix |
+| REQ-QUAL-108 | ACC-TUI-STEER, ACC-TUI-A11Y | Installed-RC automated and scripted PTY acceptance; the manual E3 matrix is waived by DEC-20 |
 | REQ-QUAL-109 | ACC-QUAL-T3 | Installed-RC T3 long-task qualification |
 <!-- RC-QUALIFICATION-ONLY:END -->
 
@@ -118,7 +118,7 @@ These are retained commitments from REQUIREMENTS §2 and cross-cutting checks.
 | ACC-QUAL-T3 | §6.3 + §6.4 | Thresholds met. |
 | ACC-QUAL-T4 | §6.2 + §6.4 | Thresholds met. |
 | ACC-QUAL-SMOKE | `make test` includes the T1 self-test and the T4 smoke | Present and passing. |
-| ACC-TUI-MANUAL | §5.3 on the installed RC across five required terminal environments and three required sizes | All 15 cells have actual manual execution, recorded PASS/FAIL verdicts, observed outcomes, and evidence bound to the exact installed RC. Automated §5.1 and §5.2 do not substitute for these cells. Screenshot artifacts alone are waived by DEC-18. |
+| ACC-TUI-MANUAL | §5.3 on the installed RC across five terminal environments and three sizes | Waived for v1.0.0 by DEC-20. No manual-cell execution or evidence is required, and no result is inferred. Automated §5.1 and scripted PTY §5.2 remain mandatory. |
 
 ## 4. Standalone and provider qualification (REQ-PRV-106, REQ-PRV-111, REQ-QUAL-107)
 
@@ -189,7 +189,7 @@ These are ports of `evidence/D_pty/`.
 
 ### 5.3 Manual real-terminal matrix (E3)
 
-**Required for v1.0.0.** Run every terminal × size combination below against the exact installed RC and record a verdict and observed outcomes for each cell. Automated suites in §5.1 and §5.2 remain required but do not replace operator execution. DEC-18 waives screenshot artifacts only. See [DEC-19](DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver).
+**Waived for v1.0.0 by DEC-20.** The five-terminal by three-size manual matrix below is not a release gate; no operator runs, cell verdicts, or per-cell evidence are required, and none are claimed. Automated CI checks in §5.1 and scripted installed-RC PTY scenarios in §5.2 remain mandatory and must pass.
 
 Terminals: xterm, kitty (kitty keyboard protocol on), tmux 3.x inside GNOME Terminal, VS Code integrated terminal, GNOME Terminal. Sizes: 80×24, 40×14, 200×60.
 
@@ -333,7 +333,7 @@ G6 passes only when every item below holds. It authorizes a version-only stable 
 - [ ] G0–G4 automated gates pass on the final RC commit (§3).
 - [ ] RC artifact gates pass on the workflow-produced RC, including ACC-SUP-01/02/03/06/08; record the exact source commit, workflow run, and artifact digest.
 - [ ] §4 standalone and provider matrix: all rows PASS.
-- [ ] §5 terminal acceptance: CI and scripted gates PASS, and all 15 manual real-terminal cells have verified operator evidence. DEC-18 waives screenshots only.
+- [ ] §5 terminal acceptance: automated CI (§5.1) and scripted PTY (§5.2) gates PASS. The manual 5×3 matrix (§5.3) is waived for v1.0.0 by DEC-20.
 - [ ] §6 thresholds: all hold.
 - [ ] §7 install matrix: all rows PASS.
 - [ ] §8 independent acceptance: ACCEPT, or ACCEPT WITH DEFECTS with owner dispositions and no blocker defects outstanding.

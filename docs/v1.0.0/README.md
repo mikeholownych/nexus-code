@@ -2,7 +2,7 @@
 
 This package is the evidence-based path from `v0.1.0-alpha.2` (audited at `db1ca55`, 2026-10-14) to v1.0.0.
 
-**Verdict: v1.0.0 readiness is BLOCKED.** Candidate source revision `6151a231e9179c109cfbe8cff87e0a4148587b6a` passed an isolated `make build` and full `make test` run on 2026-10-16 (Rust 281/281; CLI 1087/1087; zero skipped). This is source-suite evidence, not RC qualification. Held-out task quality, T3/T4 qualification, standalone/provider qualification, the manual terminal matrix, package/install matrix on the RC, and independent RC acceptance remain incomplete. See [the current readiness reconciliation](READINESS.md) for exact open requirements and gates. The contest entry remains a separate track; judging has concluded and no contest freeze applies.
+**Historical verdict: v1.0.0 readiness was BLOCKED at the 2026-10-16 source-suite checkpoint.** Candidate source revision `6151a231e9179c109cfbe8cff87e0a4148587b6a` passed an isolated `make build` and full `make test` run on 2026-10-16 (Rust 281/281; CLI 1087/1087; zero skipped). This is source-suite evidence, not RC qualification. At that checkpoint, held-out task quality, T3/T4 qualification, standalone/provider qualification, the manual terminal matrix, package/install matrix on the RC, and independent RC acceptance remained incomplete. For v1.0.0, the manual matrix was later waived by DEC-20; see [the current readiness reconciliation](READINESS.md) for the current disposition and remaining gates. The contest entry remains a separate track; judging has concluded and no contest freeze applies.
 
 ## How to read it
 
