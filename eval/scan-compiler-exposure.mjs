@@ -1,6 +1,9 @@
 // Run one trusted GNU find inventory per canonical system root. These roots are
-// independent, and parallel traversal avoids serially timing out on large images.
+// independent. Large roots are split at their immediate children so a single
+// broad directory cannot monopolize one worker and exceed the inventory deadline.
+import fs from "node:fs";
 import { spawn } from "node:child_process";
+import path from "node:path";
 
 const FIND = "/usr/bin/find";
 const MAX_OUTPUT = 64 * 1024 * 1024;
@@ -12,7 +15,7 @@ const COMPILER_NAMES = [
   "rustup",
 ];
 
-function findArgs(root) {
+function findArgs(roots) {
   const nameExpression = COMPILER_NAMES.flatMap((name, index) => index === 0
     ? ["-name", name]
     : ["-o", "-name", name]);
@@ -23,7 +26,7 @@ function findArgs(root) {
       : ["-o", "-lname", pattern]);
   });
   return [
-    "-P", root,
+    "-P", ...roots,
     "(", "(", "-type", "l", "(", ...nameExpression, "-o", ...linkTargetExpression, ")", ")",
     "-o",
     "(", "(", ...nameExpression, ")", "-a", "-type", "f", "-a", "-perm", "/111", ")",
@@ -68,54 +71,88 @@ const deadline = setTimeout(() => {
   stopAll();
 }, TIMEOUT_MS);
 
-function scanRoot(root) {
+function scanRoots(roots) {
   return new Promise((resolve) => {
-  const child = spawn(FIND, findArgs(root), {
-    env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  children.add(child);
-  const stdout = [];
-  let stderrBytes = 0;
-  child.stdout.on("data", (chunk) => {
-    outputBytes += chunk.length;
-    if (outputBytes > MAX_OUTPUT) {
+    const child = spawn(FIND, findArgs(roots), {
+      env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+    const stdout = [];
+    let stderrBytes = 0;
+    child.stdout.on("data", (chunk) => {
+      outputBytes += chunk.length;
+      if (outputBytes > MAX_OUTPUT) {
+        failed = true;
+        stopAll();
+        return;
+      }
+      stdout.push(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderrBytes += chunk.length;
       failed = true;
       stopAll();
-      return;
-    }
-    stdout.push(chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    stderrBytes += chunk.length;
-    failed = true;
-    stopAll();
-  });
-  child.on("error", () => {
-    failed = true;
-    stopAll();
-  });
-  child.on("close", (code) => {
-    children.delete(child);
-    if (code !== 0 || stderrBytes !== 0) {
+    });
+    child.on("error", () => {
       failed = true;
       stopAll();
-    }
-    outputs.push(stdout);
-    resolve();
-  });
+    });
+    child.on("close", (code) => {
+      children.delete(child);
+      if (code !== 0 || stderrBytes !== 0) {
+        failed = true;
+        stopAll();
+      }
+      outputs.push(stdout);
+      resolve();
+    });
   });
 }
 
-let nextRoot = 0;
-async function worker() {
-  while (!failed && nextRoot < roots.length) {
-    const root = roots[nextRoot++];
-    await scanRoot(root);
+const jobs = [];
+let entryCount = 0;
+for (const root of roots) {
+  let entries;
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    failed = true;
+    stopAll();
+    break;
+  }
+  const directEntries = [];
+  for (const entry of entries) {
+    if (++entryCount > 500_000) {
+      failed = true;
+      stopAll();
+      break;
+    }
+    const item = path.join(root, entry.name);
+    // Never follow symlinked directories. GNU find receives symlinks as starting
+    // points under -P and checks their names and link targets without traversal.
+    if (entry.isDirectory()) jobs.push([item]);
+    else directEntries.push(item);
+  }
+  for (let offset = 0; offset < directEntries.length; offset += 256) {
+    jobs.push(directEntries.slice(offset, offset + 256));
+  }
+  if (failed || jobs.length > 100_000) {
+    failed = true;
+    stopAll();
+    break;
   }
 }
 
-await Promise.all(Array.from({ length: Math.min(4, roots.length) }, () => worker()));
+let nextJob = 0;
+async function worker() {
+  while (!failed && nextJob < jobs.length) {
+    const job = jobs[nextJob++];
+    await scanRoots(job);
+  }
+}
+
+await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, () => worker()));
 clearTimeout(deadline);
 clearTimeout(killTimer);
 if (failed) {
