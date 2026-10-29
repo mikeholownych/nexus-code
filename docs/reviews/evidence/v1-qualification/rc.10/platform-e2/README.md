@@ -56,7 +56,7 @@ Fixtures were generated from the published RC10 archive (SHA-256 `444d0812ad583b
 | Synthetic journal recovery | `run-synthetic-journal-recovery.sh` writes a valid `staged` journal with a staging directory, then a `preparing` journal without one: `nexus upgrade --recover` reports `cleaned_up`, removes staging, keeps the launcher and version, and creates no target directory; a malformed journal is refused with `failed schema or path validation` and the installation is untouched; a second recovery is a no-op | [log](ubuntu-22-04-node22-synthetic-journal-recovery.log) |
 | Provenance attestation | `gh attestation verify nexus-linux-x86_64-v1.0.0-rc.10.tar.gz -R mikeholownych/nexus-code` exited 0 on the published archive (SHA-256 `444d0812…b3e7`) with a Sigstore bundle; `--format json` returned a 13,989-byte verification result | [log](attestation-rc10.log) |
 
-The other additional lifecycle scripts do not set `NEXUS_VERIFY_ATTESTATION`; their installer calls use the installer's default `auto` mode. The incompatible-downgrade script sets it to `0` explicitly. Provenance attestation is verified independently by the attestation cell above.
+The other additional lifecycle scripts do not set `NEXUS_VERIFY_ATTESTATION`; their installer calls use the installer's default `auto` mode. The incompatible-downgrade and synthetic-journal-recovery scripts set it to `0` explicitly. Provenance is verified separately by the attestation cell. Provenance attestation is verified independently by the attestation cell above.
 
 Per-cell logs and results: `results.tsv`; image names and IDs: `prepared-images.json`; digests: `SHA256SUMS`.
 

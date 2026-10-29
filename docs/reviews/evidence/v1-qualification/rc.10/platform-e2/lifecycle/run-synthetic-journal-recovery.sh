@@ -5,6 +5,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 log="$here/../ubuntu-22-04-node22-synthetic-journal-recovery.log"
 [ -f /tmp/nexus-install.sh ] || { echo "missing installer at /tmp/nexus-install.sh" >&2; exit 2; }
+[ "$(sha256sum /tmp/nexus-install.sh | awk '{print $1}')" = "5620d56ef6f8d637fc102ae2c8ea3b055effbc4069243a2df68b67520b1e2302" ] || { echo "installer hash mismatch" >&2; exit 2; }
 docker run --rm --pull=never --network bridge \
   --mount "type=bind,src=/tmp/nexus-install.sh,dst=/tmp/nexus-install.sh,readonly" \
   nexus-e2/ubuntu-22-04-node22:prep-182e8addeee0 sh -ec '
@@ -45,6 +46,7 @@ docker run --rm --pull=never --network bridge \
   test "$(node -e "console.log(JSON.parse(require(\"fs\").readFileSync(\"$journal\",\"utf8\")).state)")" = "rolled_back"
   unchanged
   nexus upgrade --recover >/tmp/r1b.log 2>&1
+  cat /tmp/r1b.log
   grep -F "No interrupted upgrade found" /tmp/r1b.log >/dev/null
 
   echo "== preparing journal without staging"

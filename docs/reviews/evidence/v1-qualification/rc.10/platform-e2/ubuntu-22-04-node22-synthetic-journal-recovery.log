@@ -1,5 +1,6 @@
 == staged journal with staging directory
 ✔ Recovery completed (cleaned_up): Restored verified source release v1.0.0-rc.10.
+Recovery check: No interrupted upgrade found in journal.
 == preparing journal without staging
 ✔ Recovery completed (cleaned_up): Restored verified source release v1.0.0-rc.10.
 == malformed journal is refused, installation untouched
