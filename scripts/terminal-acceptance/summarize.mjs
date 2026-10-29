@@ -5,8 +5,9 @@
 // --manifest-sha256 is the SHA-256 of MANIFEST.sha256 inside the RC release archive, so every cell must have run the
 // published RC package. The gate fails closed:
 //   - every terminal × size cell needs a complete, verified attempt (otherwise NOT RUN: ACCEPTANCE §1 rule 5);
-//   - an attempt is complete only when its self-hash, file hashes, both launch measurements and the mock log's
-//     scenario proof (approve x2 tool rounds, stream, sleep tool call) all verify;
+//   - an attempt is complete only when its self-hash, required evidence file hashes, both launch measurements and
+//     the mock log's scenario proof (approve x2 tool rounds, stream, sleep tool call) all verify; screenshots are
+//     optional only for v1.0.0-rc.N under DEC-18 and, when supplied, both screenshot files must verify;
 //   - checks 2, 5 and 6 have zero FAIL in ANY attempt; a measured survivor or unrestored terminal turns PASS into FAIL;
 //   - every other FAIL, in any attempt, needs a written disposition keyed "<cell>:<check>";
 //   - an aborted attempt (a .partial file) needs a written disposition keyed "<cell>:partial-<n>".
@@ -19,10 +20,13 @@ const TERMINALS = ["xterm", "kitty", "tmux-gnome", "vscode", "gnome"];
 const SIZES = ["80x24", "40x14", "200x60"];
 const CHECKS = ["1", "2", "3", "4", "5", "6", "7"];
 const SAFETY = new Set(["2", "5", "6"]);
+const REQUIRED_FILES = ["mockLog", "answers", "exits"];
+const OPTIONAL_SCREENSHOTS = ["approvalScreenshot", "postExitScreenshot"];
 const arg = (name) => (process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : null);
 const dir = process.argv[2];
 const rc = arg("--rc");
 const manifestSha = arg("--manifest-sha256");
+const screenshotWaiverApplies = /^v1\.0\.0-rc\.\d+$/.test(rc ?? "");
 if (!dir || !/^v\d+\.\d+\.\d+-rc\.\d+$/.test(rc ?? "") || !/^[0-9a-f]{64}$/.test(manifestSha ?? "")) {
   console.error("usage: summarize.mjs <evidence dir> --rc vX.Y.Z-rc.N --manifest-sha256 <hex> [--dispositions file]");
   process.exit(2);
@@ -37,12 +41,22 @@ function attemptProblem(file, record, cell) {
   if (record.cell !== cell) return `record names cell ${record.cell}`;
   if (record.rc !== rc) return `record is for ${record.rc}, not ${rc}`;
   if (record.packageManifestSha256 !== manifestSha) return "installed package manifest differs from the RC archive";
-  for (const [name, entry] of Object.entries(record.files ?? {})) {
+  const files = record.files;
+  if (!files || typeof files !== "object" || Array.isArray(files)) return "evidence files are missing";
+  const allowedFiles = new Set([...REQUIRED_FILES, ...OPTIONAL_SCREENSHOTS]);
+  if (REQUIRED_FILES.some((name) => !Object.hasOwn(files, name)) || Object.keys(files).some((name) => !allowedFiles.has(name))) {
+    return "required evidence files are missing or unknown file entries are present";
+  }
+  const hasApprovalScreenshot = Object.hasOwn(files, OPTIONAL_SCREENSHOTS[0]);
+  const hasPostExitScreenshot = Object.hasOwn(files, OPTIONAL_SCREENSHOTS[1]);
+  if (hasApprovalScreenshot !== hasPostExitScreenshot) return "optional screenshots must be supplied as a pair";
+  if (!screenshotWaiverApplies && !hasApprovalScreenshot) return "required screenshots are missing for this release series";
+  for (const [name, entry] of Object.entries(files)) {
+    if (!entry || typeof entry.path !== "string" || typeof entry.sha256 !== "string") return `${name} file entry is malformed`;
     const target = path.join(dir, entry.path);
     if (!fs.existsSync(target) || sha(target) !== entry.sha256) return `${name} file missing or changed`;
   }
-  if (Object.keys(record.files ?? {}).length !== 5) return "record does not list its five evidence files";
-  if (record.files.approvalScreenshot.sha256 === record.files.postExitScreenshot.sha256) return "the two screenshots are the same file";
+  if (hasApprovalScreenshot && files.approvalScreenshot.sha256 === files.postExitScreenshot.sha256) return "the two screenshots are the same file";
   const launches = (record.measured ?? []).map((m) => m.launch).sort().join(",");
   if (launches !== "main,no_color") return `measured launches are [${launches}], not main and no_color`;
   if (record.measured.some((m) => !Number.isInteger(m.survivors) || m.survivors < 0 || !["verified", "unavailable"].includes(m.scopeMeasurement) || typeof m.sttyRestored !== "boolean")) return "measurements are malformed";

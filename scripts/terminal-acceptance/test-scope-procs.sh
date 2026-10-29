@@ -75,27 +75,29 @@ SYSTEMCTL_FAIL=1 expect_unavailable
 
 mkdir -p "$tmp/evidence"
 write_evidence_fixture() {
-  MODE="$1" EVIDENCE_DIR="$tmp/evidence" node --input-type=module <<'NODE'
+  MODE="$1" RC="${2:-v1.0.0-rc.1}" EVIDENCE_DIR="$tmp/evidence" node --input-type=module <<'NODE'
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 const dir = process.env.EVIDENCE_DIR;
 const sha = (data) => createHash("sha256").update(data).digest("hex");
-for (const [name, body] of Object.entries({
-  "approval.png": "approval screenshot",
-  "post-exit.png": "post exit screenshot",
+const contents = {
   "mock.log": "mock request log",
   "answers.tsv": "checks",
   "exits.tsv": "measurements",
-})) fs.writeFileSync(path.join(dir, name), body);
-const files = Object.fromEntries(Object.entries({
-  approvalScreenshot: "approval.png",
-  postExitScreenshot: "post-exit.png",
+};
+if (process.env.MODE !== "no_screenshots") contents["approval.png"] = "approval screenshot";
+if (!new Set(["no_screenshots", "one_screenshot"]).has(process.env.MODE)) contents["post-exit.png"] = "post exit screenshot";
+for (const [name, body] of Object.entries(contents)) fs.writeFileSync(path.join(dir, name), body);
+const fileNames = {
   mockLog: "mock.log",
   answers: "answers.tsv",
   exits: "exits.tsv",
-}).map(([key, name]) => [key, { path: name, sha256: sha(fs.readFileSync(path.join(dir, name))) }]));
+};
+if (contents["approval.png"]) fileNames.approvalScreenshot = "approval.png";
+if (contents["post-exit.png"]) fileNames.postExitScreenshot = "post-exit.png";
+const files = Object.fromEntries(Object.entries(fileNames).map(([key, name]) => [key, { path: name, sha256: sha(fs.readFileSync(path.join(dir, name))) }]));
 for (const terminal of ["xterm", "kitty", "tmux-gnome", "vscode", "gnome"]) {
   for (const size of ["80x24", "40x14", "200x60"]) {
     const cell = `${terminal}-${size}`;
@@ -110,7 +112,7 @@ for (const terminal of ["xterm", "kitty", "tmux-gnome", "vscode", "gnome"]) {
     const record = {
       cell,
       attempt: 1,
-      rc: "v1.0.0-rc.1",
+      rc: process.env.RC,
       packageManifestSha256: "a".repeat(64),
       measured: [measurement("main"), measurement("no_color")],
       scenarios: { approveToolRounds: [0, 1], stream: 1, sleepTool: 1 },
@@ -138,5 +140,142 @@ printf '%s\n' '{}' > "$tmp/evidence/cell-xterm-80x24.attempt-2.json.backup"
 node "$HERE/summarize.mjs" "$tmp/evidence" --rc v1.0.0-rc.1 --manifest-sha256 "$(printf 'a%.0s' {1..64})" > "$tmp/verified-summary.log"
 grep -q 'manual matrix gate for v1.0.0-rc.1 .*: PASS' "$tmp/verified-summary.log"
 grep -q '^| xterm-80x24 | 1 | PASS | PASS' "$tmp/verified-summary.log"
+
+# DEC-18 waives screenshot artifacts, but a supplied screenshot pair remains hash-checked.
+write_evidence_fixture no_screenshots
+node "$HERE/summarize.mjs" "$tmp/evidence" --rc v1.0.0-rc.1 --manifest-sha256 "$(printf 'a%.0s' {1..64})" > "$tmp/no-screenshots-summary.log"
+grep -q 'manual matrix gate for v1.0.0-rc.1 .*: PASS' "$tmp/no-screenshots-summary.log"
+write_evidence_fixture one_screenshot
+if node "$HERE/summarize.mjs" "$tmp/evidence" --rc v1.0.0-rc.1 --manifest-sha256 "$(printf 'a%.0s' {1..64})" > "$tmp/one-screenshot-summary.log" 2>&1; then
+  echo "summary gate accepted an incomplete optional screenshot pair" >&2
+  exit 1
+fi
+grep -q 'optional screenshots must be supplied as a pair' "$tmp/one-screenshot-summary.log"
+write_evidence_fixture no_screenshots v1.0.1-rc.1
+if node "$HERE/summarize.mjs" "$tmp/evidence" --rc v1.0.1-rc.1 --manifest-sha256 "$(printf 'a%.0s' {1..64})" > "$tmp/non-v100-no-screenshots.log" 2>&1; then
+  echo "summary gate applied the v1.0.0 screenshot waiver to another release series" >&2
+  exit 1
+fi
+grep -q 'required screenshots are missing for this release series' "$tmp/non-v100-no-screenshots.log"
+
+# Drive the actual manual runner in a PTY with a synthetic installed package to prove that
+# the interactive run can be recorded without prompting for screenshot paths. This is a
+# tooling regression fixture only and never counts as a manual qualification cell.
+runner="$tmp/runner"
+mkdir -p "$runner/package/bin" "$runner/bin" "$runner/out"
+cat > "$runner/package/VERSION" <<'EOF'
+v1.0.0-rc.1
+EOF
+cat > "$runner/package/bin/nexus" <<'EOF'
+#!/usr/bin/env bash
+package="$(cd "$(dirname "$0")/.." && pwd)"
+version="$(cat "$package/VERSION")"
+if [[ "${1:-}" == --version ]]; then echo "Nexus $version"; exit 0; fi
+: > "$HOME/mock.log"
+echo 'synthetic terminal runner fixture'
+EOF
+chmod +x "$runner/package/bin/nexus"
+(cd "$runner/package" && sha256sum VERSION bin/nexus > MANIFEST.sha256)
+cat > "$runner/bin/systemd-run" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+while [[ $# -gt 0 && "$1" != -- ]]; do shift; done
+[[ $# -gt 0 ]] || exit 2
+shift
+exec "$@"
+EOF
+cat > "$runner/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+property=""
+for arg in "$@"; do [[ "$arg" == --property=* ]] && property="${arg#--property=}"; done
+case "$property" in
+  LoadState) echo not-found ;;
+  ActiveState|ControlGroup) echo "" ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$runner/bin/systemd-run" "$runner/bin/systemctl"
+RUNNER="$HERE/run-cell.sh" FIXTURE="$runner" python3 - <<'PY'
+import fcntl, glob, hashlib, json, os, pty, select, struct, termios, time, sys
+fixture = os.environ["FIXTURE"]
+out = os.path.join(fixture, "out")
+env = os.environ.copy()
+env.update({
+    "HOME": os.path.join(fixture, "home"),
+    "TMPDIR": fixture,
+    "PATH": os.path.join(fixture, "package", "bin") + os.pathsep + os.path.join(fixture, "bin") + os.pathsep + env["PATH"],
+    "TERM": "xterm", "XTERM_VERSION": "XTerm fixture", "COLUMNS": "80", "LINES": "24",
+})
+os.makedirs(env["HOME"], exist_ok=True)
+
+def update_package_version(version):
+    package = os.path.join(fixture, "package")
+    with open(os.path.join(package, "VERSION"), "w", encoding="utf-8") as f: f.write(version + "\n")
+    paths = ["VERSION", "bin/nexus"]
+    with open(os.path.join(package, "MANIFEST.sha256"), "w", encoding="utf-8") as f:
+        for relative in paths:
+            with open(os.path.join(package, relative), "rb") as source:
+                digest = hashlib.sha256(source.read()).hexdigest()
+            f.write(f"{digest}  {relative}\n")
+
+def run_cell(version, screenshot_inputs):
+    update_package_version(version)
+    pid, fd = pty.fork()
+    if pid == 0:
+        time.sleep(0.1)
+        os.execve(os.environ["RUNNER"], [os.environ["RUNNER"], "--rc", version, "--terminal", "xterm", "--size", "80x24", "--out", out], env)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    payload = "\n\n" + "PASS\n\n" * 7 + "test-operator\n" + screenshot_inputs
+    os.write(fd, payload.encode())
+    captured = bytearray()
+    deadline = time.monotonic() + 45
+    status = None
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([fd], [], [], 0.2)
+        if ready:
+            try: captured.extend(os.read(fd, 65536))
+            except OSError: pass
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            while True:
+                ready, _, _ = select.select([fd], [], [], 0)
+                if not ready: break
+                try: captured.extend(os.read(fd, 65536))
+                except OSError: break
+            break
+    if status is None:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        raise SystemExit(f"run-cell fixture timed out for {version}")
+    text = captured.decode(errors="replace")
+    if status != 0:
+        print(text[-6000:], file=sys.stderr)
+        raise SystemExit(f"run-cell fixture exited with wait status {status} for {version}")
+    return text
+
+v100 = run_cell("v1.0.0-rc.1", "n\n")
+if "Attach optional approval and post-exit screenshots?" not in v100:
+    raise SystemExit("v1.0.0 runner did not expose the optional screenshot choice")
+if "approval-panel screenshot path:" in v100 or "post-exit screenshot path:" in v100:
+    raise SystemExit("v1.0.0 runner still required screenshot paths")
+for name, body in (("approval.png", b"approval"), ("post-exit.png", b"post-exit")):
+    path = os.path.join(fixture, name)
+    with open(path, "wb") as f: f.write(body)
+    future = time.time() + 120
+    os.utime(path, (future, future))
+non_v100 = run_cell("v1.0.1-rc.1", os.path.join(fixture, "approval.png") + "\n" + os.path.join(fixture, "post-exit.png") + "\n")
+if "Screenshots are required for v1.0.1-rc.1" not in non_v100:
+    raise SystemExit("non-v1.0.0 runner did not retain required screenshot behavior")
+records = sorted(glob.glob(os.path.join(out, "cell-xterm-80x24.attempt-*.json")))
+if len(records) != 2:
+    raise SystemExit(f"expected two synthetic runner records, found {len(records)}")
+v100_record = json.load(open(records[0], encoding="utf-8"))
+if set(v100_record["files"]) != {"mockLog", "answers", "exits"}:
+    raise SystemExit(f"v1.0.0 record unexpectedly requires screenshots: {sorted(v100_record['files'])}")
+non_v100_record = json.load(open(records[1], encoding="utf-8"))
+if not {"approvalScreenshot", "postExitScreenshot"}.issubset(non_v100_record["files"]):
+    raise SystemExit("non-v1.0.0 record did not retain both required screenshot artifacts")
+PY
 
 echo "scope measurement fixtures passed"
