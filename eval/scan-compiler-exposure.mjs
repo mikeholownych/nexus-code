@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 
 const FIND = "/usr/bin/find";
 const MAX_OUTPUT = 64 * 1024 * 1024;
-const TIMEOUT_MS = 30_000;
+const TIMEOUT_MS = 25_000;
 const COMPILER_NAMES = [
   "go", "go[0-9]*", "go-[0-9]*",
   "rustc", "rustc[0-9]*", "rustc-[0-9]*",
@@ -32,7 +32,7 @@ function findArgs(root) {
 }
 
 const roots = process.argv.slice(2);
-if (roots.length === 0 || roots.length > 16 || roots.some((root) => !root.startsWith("/"))) {
+if (roots.length === 0 || roots.length > 128 || roots.some((root) => !root.startsWith("/"))) {
   process.stderr.write("compiler inventory roots must be absolute\n");
   process.exit(2);
 }
