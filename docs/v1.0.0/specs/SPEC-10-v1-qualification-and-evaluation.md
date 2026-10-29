@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Ready. Protocol and thresholds fixed by [DEC-05](../DECISIONS.md#dec-05-v1-evaluation-protocol-and-thresholds); task authorship needs owner action X2. |
-| Release class | **BLOCKER** for any v1 maturity claim: held-out matched evaluation, fault-injection qualification, standalone live qualification, scoring integrity. RELEASE-REQUIRED: T3 long tasks, a T4 smoke test in CI, a PTY terminal matrix. |
+| Release class | **BLOCKER** for any v1 maturity claim: held-out matched evaluation, fault-injection qualification, standalone live qualification, scoring integrity. RELEASE-REQUIRED: T3 long tasks, a T4 smoke test in CI, automated and scripted PTY terminal gates. |
 | Requirements | REQ-QUAL-101, REQ-QUAL-102, REQ-QUAL-103, REQ-QUAL-104, REQ-QUAL-105, REQ-QUAL-106, REQ-QUAL-107, REQ-QUAL-108 |
 | Findings | EVL-001, EVL-002, EVL-003, EVL-004, EVL-005, HIST-08, PRV G1/G2, TUI gaps (kitty/real terminals), VER-07 |
 | Plan | [PLAN-10](../plans/PLAN-10-v1-qualification-and-evaluation.md) |
@@ -80,7 +80,7 @@ Standalone live inference evidence is absent (HIST-08; SPEC-05). Real-terminal c
    - The scorer logs every replacement.
    - `nexus eval` is labelled experimental and excluded from claims (DEC-07).
 7. **REQ-QUAL-107. Standalone and provider matrix.** The live standalone set (a T2 subset of ≥ 10 tasks plus a T4 subset) is run through the gateway-stripping proxy in its plain profile and its emulated-server profiles (DEC-16). `providers verify` is run live for each provider listed as supported (DEC-06). Receipts are archived.
-8. **REQ-QUAL-108. Terminal matrix.** PTY scripted runs in CI (existing `tui_*_e2e`, plus the new ACC-SAFE and ACC-PROC scripts) are mandatory. A manual matrix covers {xterm, kitty, tmux, VS Code terminal, GNOME Terminal} × {80x24, 40x14, 200x60}, checking: approval safety, paste, resize, cancel, narrow hints and NO_COLOR. All 15 cells require actual operator execution and per-cell verdict/evidence bound to the exact installed RC; automated terminal evidence does not replace this gate. Screenshot artifacts alone are waived by [DEC-18](../DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver). [DEC-19](../DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver) withdraws the prior matrix waiver record.
+8. **REQ-QUAL-108. Terminal acceptance.** Automated CI checks in ACCEPTANCE §5.1 and scripted installed-RC PTY scenarios in §5.2 are mandatory. The manual five-terminal by three-size matrix in §5.3 is waived for v1.0.0 by [DEC-20](../DECISIONS.md#dec-20-v100-manual-terminal-matrix-waiver); no operator runs or cell results are required or implied. Screenshot artifacts are separately waived by [DEC-18](../DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver). [DEC-19](../DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver) is superseded for v1.0.0 by DEC-20.
 9. **REQ-QUAL-109 (RELEASE-REQUIRED).** T3 long tasks: at least 8 tasks × 5 runs, each over 60 steps and with at least 2 compactions. Gates: false-absence = 0, false-presence = 0 (DEC-05 amendment, 2026-10-18), and steering honoured ≥ 95% (eval/README thresholds).
 10. **REQ-QUAL-110 (RELEASE-REQUIRED).** A T4 smoke (scripted model, 2 fault cases) and the T1 self-test run in `make test`.
 

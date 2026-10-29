@@ -33,7 +33,7 @@ Implements [SPEC-10](../specs/SPEC-10-v1-qualification-and-evaluation.md). Harne
 | 10 | Mark `nexus eval` experimental (help and docs). Fix its operator-workspace checkout: run in a worktree (VER-07a). | `index.ts:663-688`; `evaluator.ts:128` | — |
 | 11 | M5 runs: T2 held-out (5×), T3 (5×), T4 (9×5), standalone subset (PLAN-05), provider verify (DEC-06). Archive everything under `docs/reviews/evidence/v1-qualification/<rc>/`. | runbook in ACCEPTANCE §4–§6 | all, RC build |
 | 13 | `eval/standalone/plain_proxy.mjs`: a forward proxy to the gateway. It injects the gateway token server-side. It strips `/v1/models` to `{id,object,owned_by}`, returns 404 for `/v1/tokenize`, and drops `X-AIHost-*` and admission headers. The `--emulate {llamacpp,vllm,ollama}` profiles add that server's `/models`, `/props`, `/api/show` and overflow-error shapes, derived from the real gateway limits. Unit-tested against a mock gateway. | new `eval/standalone/` | — |
-| 12 | Terminal matrix (manual): {xterm, kitty, tmux, VS Code, GNOME Terminal} × 3 sizes. Run the full checklist per ACCEPTANCE §5.3 and record all per-cell outcomes and evidence. Screenshot artifacts are waived for v1.0.0 per [DEC-18](../DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver). | ACCEPTANCE §5.3; DEC-18 | RC build |
+| 12 | Manual terminal matrix: waived for v1.0.0 by [DEC-20](../DECISIONS.md#dec-20-v100-manual-terminal-matrix-waiver); no manual cells or per-cell evidence are required or implied. Automated CI PTY (§5.1) and scripted installed-RC PTY (§5.2) remain mandatory and must pass. | ACCEPTANCE §§5.1–5.3; DEC-20 | RC build |
 
 ## PR slices
 

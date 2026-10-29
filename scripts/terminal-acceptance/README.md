@@ -1,6 +1,6 @@
 # Manual real-terminal matrix (ACCEPTANCE §5.3, REQ-QUAL-108)
 
-A human runs this procedure against the **installed RC**. Automated PTY suites (§5.1, §5.2) do not replace it.
+A human may run this procedure against the **installed RC** for optional terminal checks. For v1.0.0, the manual matrix is waived by DEC-20; these runs are not a release gate. Automated CI (§5.1) and scripted PTY (§5.2) remain mandatory.
 
 **Cells:** five terminals, each at 80×24, 40×14 and 200×60, giving 15 cells.
 - xterm
@@ -9,12 +9,11 @@ A human runs this procedure against the **installed RC**. Automated PTY suites (
 - the VS Code integrated terminal
 - GNOME Terminal
 
-**Gate:** zero FAIL on checks 2, 5 and 6. Any other FAIL needs a written disposition.
+**Optional check:** zero FAIL on checks 2, 5 and 6. Any other FAIL needs a written disposition if these optional checks are run.
 
-**Screenshots:** DEC-18 waives screenshot artifacts only for `v1.0.0-rc.N`. For those candidates, screenshots are
-optional; every interactive check, measurement, per-cell verdict, observed outcome, exact installed-RC identity, and
-written disposition remains required. Other release series retain the approval-panel and post-exit screenshot
-requirement. Automated PTY runs do not replace these manual cells.
+**v1.0.0 disposition:** DEC-20 waives the manual 5×3 matrix. DEC-18 separately waives screenshot artifacts for
+`v1.0.0-rc.N`. Other release series retain their applicable terminal acceptance and screenshot requirements.
+Automated PTY evidence remains mandatory under ACCEPTANCE §§5.1–5.2.
 
 ## Before you start
 
