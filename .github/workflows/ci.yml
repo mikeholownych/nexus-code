@@ -22,6 +22,21 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.22.x'
+      - name: Install pinned evaluator toolchains
+        run: |
+          go_root="$(go env GOROOT)"
+          rust_root="$(rustc --print sysroot)"
+          test -n "$go_root" && test -d "$go_root"
+          test -n "$rust_root" && test -d "$rust_root"
+          sudo rm -rf -- /usr/local/go /opt/nexus-qual/rust
+          sudo install -d -o root -g root -m 0755 /usr/local /opt/nexus-qual
+          sudo cp -a "$go_root" /usr/local/go
+          sudo cp -a "$rust_root" /opt/nexus-qual/rust
+          sudo chown -hR root:root /usr/local/go /opt/nexus-qual/rust
+          sudo chmod -R go-w /usr/local/go /opt/nexus-qual/rust
+          test "$(/usr/local/go/bin/go version)" = "$(go version)"
+          test "$(/opt/nexus-qual/rust/bin/rustc --version)" = "$(rustc --version)"
+          test "$(/opt/nexus-qual/rust/bin/cargo --version)" = "$(cargo --version)"
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
       - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
@@ -87,6 +102,21 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.22.x'
+      - name: Install pinned evaluator toolchains
+        run: |
+          go_root="$(go env GOROOT)"
+          rust_root="$(rustc --print sysroot)"
+          test -n "$go_root" && test -d "$go_root"
+          test -n "$rust_root" && test -d "$rust_root"
+          sudo rm -rf -- /usr/local/go /opt/nexus-qual/rust
+          sudo install -d -o root -g root -m 0755 /usr/local /opt/nexus-qual
+          sudo cp -a "$go_root" /usr/local/go
+          sudo cp -a "$rust_root" /opt/nexus-qual/rust
+          sudo chown -hR root:root /usr/local/go /opt/nexus-qual/rust
+          sudo chmod -R go-w /usr/local/go /opt/nexus-qual/rust
+          test "$(/usr/local/go/bin/go version)" = "$(go version)"
+          test "$(/opt/nexus-qual/rust/bin/rustc --version)" = "$(rustc --version)"
+          test "$(/opt/nexus-qual/rust/bin/cargo --version)" = "$(cargo --version)"
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
       - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
