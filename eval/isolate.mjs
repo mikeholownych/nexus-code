@@ -205,33 +205,18 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
         || (findStat.mode & 0o111) === 0 || fs.realpathSync(FIND) !== FIND) {
         throw new Error("trusted compiler inventory tool is unavailable");
       }
-      const compilerNames = [
-        "go", "go[0-9]*", "go-[0-9]*",
-        "rustc", "rustc[0-9]*", "rustc-[0-9]*",
-        "cargo", "cargo[0-9]*", "cargo-[0-9]*",
-        "rustup",
-      ];
-      const nameExpression = compilerNames.flatMap((name, index) => index === 0
-        ? ["-name", name]
-        : ["-o", "-name", name]);
-      const linkTargetExpression = compilerNames.flatMap((name, index) => {
-        const patterns = [name, `*/${name}`];
-        return patterns.flatMap((pattern, patternIndex) => index === 0 && patternIndex === 0
-          ? ["-lname", pattern]
-          : ["-o", "-lname", pattern]);
-      });
-      const findArgs = [
-        "-P",
-        ...[...directoryRoots].sort(),
-        "(",
-        "(", "-type", "l", "(", ...nameExpression, "-o", ...linkTargetExpression, ")", ")",
-        "-o",
-        "(", "(", ...nameExpression, ")", "-a", "-type", "f", "-a", "-perm", "/111", ")",
-        ")", "-print0",
-      ];
-      const result = spawnSync(FIND, findArgs, {
+      // Broad system roots can contain millions of entries. Traverse independent,
+      // canonical roots concurrently, while keeping one fail-closed deadline and
+      // retaining per-process output buffers so NUL-delimited paths cannot interleave.
+      const inventory = path.join(path.dirname(fileURLToPath(import.meta.url)), "scan-compiler-exposure.mjs");
+      const inventoryStat = fs.lstatSync(inventory);
+      if (!inventoryStat.isFile() || inventoryStat.isSymbolicLink() || (inventoryStat.mode & 0o022) !== 0
+        || fs.realpathSync(inventory) !== inventory) {
+        throw new Error("trusted compiler inventory helper is unavailable");
+      }
+      const result = spawnSync(process.execPath, [inventory, ...[...directoryRoots].sort()], {
         encoding: null,
-        timeout: 30_000,
+        timeout: 35_000,
         maxBuffer: 64 * 1024 * 1024,
         env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       });
