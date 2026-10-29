@@ -579,19 +579,34 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.ok(!maskedDestinations.includes(path.join(fakeSystemAlias, "bin", "go")), "Bubblewrap must not bind over an aliased symlink destination");
   const invalidRootTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-invalid-candidate-toolchain-target-"));
   const invalidCandidateRoot = `${invalidRootTarget}-link`;
+  const danglingCandidateRoot = `${invalidRootTarget}-dangling`;
   fs.mkdirSync(path.join(invalidRootTarget, "bin"));
   const invalidRootCompiler = path.join(invalidRootTarget, "bin", "rustc");
   fs.writeFileSync(invalidRootCompiler, compilerCanary);
   fs.chmodSync(invalidRootCompiler, 0o755);
   fs.symlinkSync(invalidRootTarget, invalidCandidateRoot, "dir");
+  fs.symlinkSync(path.join(invalidRootTarget, "missing-target"), danglingCandidateRoot, "dir");
   t.after(() => {
     fs.rmSync(invalidRootTarget, { recursive: true, force: true });
     fs.rmSync(invalidCandidateRoot, { recursive: true, force: true });
+    fs.rmSync(danglingCandidateRoot, { recursive: true, force: true });
   });
-  assert.deepEqual(candidateToolchainRootSources([{ root: invalidCandidateRoot, required: ["bin/go"] }]), { [invalidCandidateRoot]: null }, "an unsafe host compiler root is omitted from candidate mounts rather than blocking compiler-independent tasks");
-  const selectedToolchainRoots = Object.values(candidateToolchainRootSources()).filter(Boolean);
-  const invalidRootExposure = scanOracleCompilerExposure([], [], [invalidCandidateRoot], selectedToolchainRoots);
-  assert.ok(invalidRootExposure.paths.includes(path.join(invalidCandidateRoot, "bin", "rustc")), "compiler under an inactive unsafe root remains masked even when that root is explicitly mounted");
+  const inactiveRustToolchain = {
+    root: "/usr/local/nexus-qual/rust",
+    sourceRoots: [invalidCandidateRoot],
+    required: ["bin/rustc"],
+  };
+  const inactiveRustSource = candidateToolchainRootSources([inactiveRustToolchain]);
+  assert.deepEqual(inactiveRustSource, { "/usr/local/nexus-qual/rust": null }, "an unsafe configured Rust fallback is omitted from candidate mounts rather than blocking compiler-independent tasks");
+  const danglingRustSource = candidateToolchainRootSources([{
+    root: "/usr/local/nexus-qual/rust",
+    sourceRoots: [danglingCandidateRoot, "/usr/local/go"],
+    required: ["bin/go"],
+  }]);
+  assert.deepEqual(danglingRustSource, { "/usr/local/nexus-qual/rust": "/usr/local/go" }, "a dangling optional root is skipped so a valid pinned fallback remains available");
+  const selectedToolchainRoots = Object.values(inactiveRustSource).filter(Boolean);
+  const invalidRootExposure = scanOracleCompilerExposure([], [], [invalidRootCompiler], selectedToolchainRoots);
+  assert.ok(invalidRootExposure.paths.includes(invalidRootCompiler), "compiler under an inactive configured Rust source remains masked when separately mounted as a runtime file");
   if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives], additionalMountedPaths: [fakeExternalGoTarget] })) {
     const isolated = isolatedProcessArgv({
       cwd: fakeSystem,

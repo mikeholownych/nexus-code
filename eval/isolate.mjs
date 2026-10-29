@@ -85,7 +85,14 @@ export function candidateToolchainRootSources(toolchains = PINNED_ORACLE_TOOLCHA
         if (error?.code === "ENOENT") continue;
         throw error;
       }
-      const rootProblem = candidateToolchainRootProblem(stat, fs.realpathSync(sourceRoot), sourceRoot);
+      if (stat.isSymbolicLink()) continue;
+      let resolvedRoot;
+      try { resolvedRoot = fs.realpathSync(sourceRoot); }
+      catch (error) {
+        if (["EACCES", "ELOOP", "ENOENT", "ENOTDIR", "EPERM"].includes(error?.code)) continue;
+        throw error;
+      }
+      const rootProblem = candidateToolchainRootProblem(stat, resolvedRoot, sourceRoot);
       if (rootProblem || pinnedToolchainProblem(sourceRoot, required)) continue;
       return [root, sourceRoot];
     }
