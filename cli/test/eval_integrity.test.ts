@@ -569,6 +569,13 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const aliasedExposure = scanOracleCompilerExposure([fakeSystem, fakeSystemAlias], []);
   assert.ok(aliasedExposure.paths.includes(fakeGoTarget), "the canonical mounted spelling is scanned and masked");
   assert.ok(aliasedExposure.paths.includes(path.join(fakeSystemAlias, path.relative(fakeSystem, fakeGoTarget))), "every mounted spelling of a shared system directory is scanned and masked");
+  const invalidUtf8Directory = Buffer.concat([Buffer.from(fakeSystem), Buffer.from([path.sep.charCodeAt(0), 0xff])]);
+  const invalidUtf8Compiler = Buffer.concat([invalidUtf8Directory, Buffer.from("/rustc")]);
+  fs.mkdirSync(invalidUtf8Directory);
+  fs.writeFileSync(invalidUtf8Compiler, compilerCanary);
+  fs.chmodSync(invalidUtf8Compiler, 0o755);
+  const invalidUtf8Exposure = scanOracleCompilerExposure([fakeSystem], [], []);
+  assert.match(invalidUtf8Exposure.problem ?? "", /compiler exposure could not be checked/, "non-UTF-8 path bytes fail closed instead of being replaced with a different path");
   const fakeGoAliasTarget = path.join(fakeSystemAlias, "lib", "go-1.22.12", "go");
   const maskArgs = compilerExposureMaskArgs({ paths: [fakeGoTarget, fakeGoAliasTarget, fakeCargo, fakeCargo], problem: null });
   const maskedDestinations = maskArgs.filter((value, index) => index > 0 && maskArgs[index - 1] === "/dev/null");

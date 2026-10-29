@@ -47,6 +47,83 @@ test("asUserSpec preserves timeout metadata and isolated processes reject missin
   assert.throws(() => runIsolatedProcess({ cmd: "/usr/bin/true", argv: [], timeoutMs: 0 }), /isolated process spec has no timeoutMs/);
 });
 
+test("compiler inventory exits promptly and reaps enumeration after SIGTERM", { timeout: 90_000 }, async (t) => {
+  if (process.platform !== "linux") {
+    t.skip("the compiler inventory uses Linux /proc and GNU find");
+    return;
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "compiler-inventory-cancel-"));
+  const scanner = path.join(ROOT, "eval/scan-compiler-exposure.mjs");
+  let findPid: number | undefined;
+  let scannerChild: ReturnType<typeof spawn> | undefined;
+  try {
+    for (let i = 0; i < 50_000; i++) fs.writeFileSync(path.join(root, `entry-${i}`), "");
+
+    const startedAt = Date.now();
+    const child = spawn(process.execPath, [scanner, root], {
+      env: { HOME: os.tmpdir(), LANG: "C", PATH: "/usr/bin:/bin" },
+      stdio: "ignore",
+    });
+    scannerChild = child;
+    const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && findPid === undefined) {
+      if (child.exitCode !== null) break;
+      const childrenPath = `/proc/${child.pid}/task/${child.pid}/children`;
+      try {
+        const pids = fs.readFileSync(childrenPath, "utf8").trim().split(/\s+/).filter(Boolean);
+        findPid = pids.map(Number).find((pid) => {
+          try {
+            const args = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+            return args[0] === "/usr/bin/find" && args.includes("-mindepth") && args.includes("-maxdepth");
+          } catch {
+            return false;
+          }
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (findPid === undefined) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(findPid !== undefined, "the fixture should catch the root enumeration process while it is active");
+
+    child.kill("SIGTERM");
+    const result = await Promise.race([
+      exit,
+      new Promise<never>((_, reject) => {
+        const timeout = setTimeout(() => reject(new Error("compiler inventory did not stop after SIGTERM")), 5_000);
+        exit.finally(() => clearTimeout(timeout));
+      }),
+    ]);
+    assert.notEqual(result.code, 0, "scanner should fail closed after cancellation");
+    assert.ok(Date.now() - startedAt < 5_000, "cancellation should finish within the caller's deadline");
+
+    const reapDeadline = Date.now() + 2_000;
+    while (Date.now() < reapDeadline) {
+      try { process.kill(findPid, 0); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail(`enumeration process ${findPid} survived scanner cancellation`);
+  } finally {
+    if (findPid !== undefined) {
+      try { process.kill(findPid, "SIGKILL"); } catch { /* The child may already have exited. */ }
+    }
+    if (scannerChild && scannerChild.exitCode === null) {
+      scannerChild.kill("SIGKILL");
+      await new Promise((resolve) => scannerChild?.once("close", resolve));
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("test infrastructure is recognised across Python, Go, JS/TS and Rust layouts", async () => {
   const { isTestInfraPath } = await hardened();
   for (const p of ["conftest.py", "pkg/conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "sitecustomize.py", "x.pth", "tests/test_a.py", "src/test_a.py", "a_test.py",

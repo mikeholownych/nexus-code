@@ -94,6 +94,9 @@ async function* enumerateJobs() {
             throw new Error("compiler inventory entry limit exceeded");
           }
           const item = field.toString("utf8");
+          if (!Buffer.from(item, "utf8").equals(field)) {
+            throw new Error("compiler inventory path is not valid UTF-8");
+          }
           let job;
           // The `-P` inventory process reports immediate directories separately and
           // leaves symlinks as non-directory entries, so descendants are never followed.
