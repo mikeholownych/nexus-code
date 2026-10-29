@@ -504,6 +504,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   }), /do not match policy/);
 
   const fakeSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-system-"));
+  const changingSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-changing-compiler-system-"));
   const fakeSystemAlias = `${fakeSystem}-alias`;
   const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
   const fakeSymlinkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-target-"));
@@ -540,11 +541,19 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.symlinkSync(fakeSystem, fakeSystemAlias, "dir");
   t.after(() => {
     fs.rmSync(fakeSystem, { recursive: true, force: true });
+    fs.rmSync(changingSystem, { recursive: true, force: true });
     fs.rmSync(fakeSystemAlias, { recursive: true, force: true });
     fs.rmSync(fakeAlternatives, { recursive: true, force: true });
     fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
     fs.rmSync(fakeMountedRuntime, { recursive: true, force: true });
   });
+  assert.equal(oracleCompilerExposureProblem([changingSystem], [], []), null, "an initially clean mounted system passes compiler preflight");
+  assert.equal(candidateCompilerExposureProblem([changingSystem], [], []), null, "candidate preflight initially observes the same clean mount");
+  const introducedCompiler = path.join(changingSystem, "go");
+  fs.writeFileSync(introducedCompiler, compilerCanary);
+  fs.chmodSync(introducedCompiler, 0o755);
+  assert.match(oracleCompilerExposureProblem([changingSystem], [], []) ?? "", /unapproved Go\/Rust compiler executable/, "oracle preflight rescans mounted roots after filesystem changes");
+  assert.match(candidateCompilerExposureProblem([changingSystem], [], []) ?? "", /candidate task has unapproved Go\/Rust compiler executable/, "candidate preflight cannot reuse a stale clean scan");
   const exposure = oracleCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
   assert.match(exposure ?? "", /unapproved Go\/Rust compiler executable/);
   assert.match(exposure ?? "", /rustlib\/bin\/rustc/);

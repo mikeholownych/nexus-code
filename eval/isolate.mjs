@@ -24,7 +24,6 @@ const PINNED_ORACLE_TOOLCHAINS = Object.freeze([
 const UNPINNED_ORACLE_COMPILER_NAME = /^(?:go(?:-?\d[A-Za-z0-9.+-]*)?|rustc(?:-\d[A-Za-z0-9.+-]*)?|cargo(?:-\d[A-Za-z0-9.+-]*)?|rustup)$/;
 let sandboxPreflight;
 const pinnedToolchainPreflights = new Map();
-const oracleCompilerExposurePreflights = new Map();
 
 function shellQuote(value) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
@@ -143,8 +142,6 @@ export function oracleCompilerExposureProblem(systemDirectories = SYSTEM_BINARIE
 
 function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = []) {
   const roots = [...new Set([...systemDirectories, ...systemEtcDirectories, ...additionalMountedPaths])].sort();
-  const cacheKey = JSON.stringify(roots);
-  if (oracleCompilerExposurePreflights.has(cacheKey)) return oracleCompilerExposurePreflights.get(cacheKey);
 
   const exposed = new Set();
   const visited = new Set();
@@ -211,9 +208,7 @@ function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemE
     return { paths: [], problem: "oracle compiler exposure could not be checked; refusing qualification" };
   }
 
-  const result = { paths: [...exposed].sort(), problem: null };
-  oracleCompilerExposurePreflights.set(cacheKey, result);
-  return result;
+  return { paths: [...exposed].sort(), problem: null };
 }
 
 export function compilerExposureMaskArgs(scan) {
