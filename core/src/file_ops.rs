@@ -981,8 +981,22 @@ pub struct BatchReadResult {
     pub files: Vec<BatchReadFileEntry>,
 }
 
-fn read_all_lines<R: BufRead>(reader: R) -> io::Result<Vec<String>> {
-    reader.lines().collect()
+fn read_all_lines<R: BufRead>(mut reader: R) -> io::Result<Vec<String>> {
+    let mut lines = Vec::new();
+    loop {
+        let mut bytes = Vec::new();
+        if reader.read_until(b'\n', &mut bytes)? == 0 {
+            break;
+        }
+        if bytes.last() == Some(&b'\n') {
+            bytes.pop();
+            if bytes.last() == Some(&b'\r') {
+                bytes.pop();
+            }
+        }
+        lines.push(String::from_utf8_lossy(&bytes).into_owned());
+    }
+    Ok(lines)
 }
 
 pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResult, String> {
@@ -1366,6 +1380,14 @@ mod tests {
         let err = read_all_lines(reader).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert!(err.to_string().contains("injected mid-stream failure"));
+    }
+
+    #[test]
+    fn test_batch_read_line_collection_preserves_lossy_utf8() {
+        let bytes = b"valid prefix\ninvalid: \xff\nlast line";
+        let reader = BufReader::new(std::io::Cursor::new(bytes));
+        let lines = read_all_lines(reader).unwrap();
+        assert_eq!(lines, ["valid prefix", "invalid: \u{fffd}", "last line"]);
     }
 
     #[test]
