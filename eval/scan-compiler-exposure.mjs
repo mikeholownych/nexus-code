@@ -12,8 +12,9 @@ const MAX_ENUMERATION_OUTPUT = 64 * 1024 * 1024;
 const TIMEOUT_MS = 25_000;
 const MAX_ENTRIES = 500_000;
 const MAX_JOBS = 100_000;
-const DIRECTORY_BATCH_SIZE = 8;
+const DIRECTORY_BATCH_SIZE = 2;
 const DIRECT_ENTRY_BATCH_SIZE = 256;
+const SCAN_WORKERS = 8;
 const COMPILER_NAMES = [
   "go", "go[0-9]*", "go-[0-9]*",
   "rustc", "rustc[0-9]*", "rustc-[0-9]*",
@@ -238,7 +239,7 @@ async function worker() {
   }
 }
 
-await Promise.all(Array.from({ length: 4 }, () => worker()));
+await Promise.all(Array.from({ length: SCAN_WORKERS }, () => worker()));
 clearTimeout(deadline);
 clearTimeout(killTimer);
 if (failed) {
