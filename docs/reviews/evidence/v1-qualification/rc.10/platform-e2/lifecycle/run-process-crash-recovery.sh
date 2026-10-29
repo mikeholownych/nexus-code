@@ -50,7 +50,7 @@ docker run --rm --pull=never --network bridge \
    test "$(sha256sum "$installed" | cut -d" " -f1)" = "$original_sha"
    test "$(sha256sum "$HOME/.nexus/tasks/marker")" = "$state_before"
    test "$(nexus --version)" = "1.0.0-rc.10 (16ee8ca36438)"
-   node -e "const fs=require(\"node:fs\");const j=JSON.parse(fs.readFileSync(process.env.HOME+\"/.local/lib/nexus/.upgrade-journal.json\",\"utf8\"));if(j.state!==\"rolled_back\")process.exit(1);if(!fs.existsSync(j.displacedTargetDir))process.exit(2);if(j.stagingDir&&fs.existsSync(j.stagingDir))process.exit(3);console.log(\"post-recovery journal=\"+j.state+\" failed_target_retained=true staging_removed=true\")"
+   node -e "const fs=require(\"node:fs\");const j=JSON.parse(fs.readFileSync(process.env.HOME+\"/.local/lib/nexus/.upgrade-journal.json\",\"utf8\"));if(j.state!==\"rolled_back\")process.exit(1);if(!fs.existsSync(j.displacedTargetDir))process.exit(2);if(!j.stagingDir)process.exit(3);if(fs.existsSync(j.stagingDir))process.exit(3);console.log(\"post-recovery journal=\"+j.state+\" failed_target_retained=true staging_removed=true\")"
    test "$(find "$HOME/.local/lib/nexus" -maxdepth 1 -name ".tmp-upgrade-*" | wc -l)" = 0
    nexus upgrade --recover
    test "$(sha256sum "$installed" | cut -d" " -f1)" = "$original_sha"

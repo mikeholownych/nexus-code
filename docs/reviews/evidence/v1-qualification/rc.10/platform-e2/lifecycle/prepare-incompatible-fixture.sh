@@ -18,7 +18,7 @@ fs.writeFileSync(p, JSON.stringify(c,null,2)+"\n");
 printf 'v1.0.0-rc.4\n' > "$out/release/pkg/nexus/VERSION"
 (cd "$out/release/pkg/nexus" && find . -type f ! -name MANIFEST.sha256 -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256)
 mkdir -p "$out/release/download/v1.0.0-rc.4"
-(cd "$out/release/pkg" && tar -czf "$out/release/download/v1.0.0-rc.4/nexus-linux-x86_64-v1.0.0-rc.4.tar.gz" nexus)
+(cd "$out/release/pkg" && tar --sort=name --mtime="2026-10-01 00:00:00 UTC" --owner=0 --group=0 --numeric-owner -czf "$out/release/download/v1.0.0-rc.4/nexus-linux-x86_64-v1.0.0-rc.4.tar.gz" nexus)
 archive_sha=$(sha256sum "$out/release/download/v1.0.0-rc.4/nexus-linux-x86_64-v1.0.0-rc.4.tar.gz" | awk "{print \$1}")
 node -e '
 const fs=require("fs"), p=process.argv[1], sha=process.argv[2];
