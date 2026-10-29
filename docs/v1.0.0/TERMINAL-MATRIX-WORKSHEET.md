@@ -1,6 +1,8 @@
 # Manual real-terminal acceptance worksheet
 
-For `REQ-QUAL-108` / `ACC-TUI-MANUAL`, following [`ACCEPTANCE.md` §5.3](ACCEPTANCE.md#53-manual-real-terminal-matrix-e3). This is an unfilled recording template; it contains no test results and does not qualify an RC.
+For `REQ-QUAL-108` / `ACC-TUI-MANUAL`, following [`ACCEPTANCE.md` §5.3](ACCEPTANCE.md#53-manual-real-terminal-matrix-e3).
+
+> **Waived for v1.0.0 by owner decision [DEC-19](DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver) (2026-10-29).** This worksheet is retained for a successor release. It contains no results, no cell verdict is recorded for v1.0.0, and it does not qualify an RC.
 
 ## Installed candidate identity
 
