@@ -117,7 +117,7 @@ function isInsideAnyRoot(candidate, roots) {
   return roots.some((root) => candidate === root || candidate.startsWith(`${root}${path.sep}`));
 }
 
-/** Reject every unpinned Go/Rust compiler reachable through the system mounts used by an oracle. */
+/** Reject every unpinned Go/Rust compiler reachable through the system mounts used by a task sandbox. */
 export function oracleCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS) {
   const roots = [...new Set([...systemDirectories, ...systemEtcDirectories])].sort();
   const cacheKey = JSON.stringify(roots);
@@ -146,10 +146,10 @@ export function oracleCompilerExposureProblem(systemDirectories = SYSTEM_BINARIE
         if (error?.code === "ENOENT") continue;
         throw error;
       }
-      if (stat.isDirectory()) {
-        visit(item);
-        continue;
-      }
+      // A symlinked directory's target is visible only when that target is itself in a sandbox mount.
+      // Every mount root is scanned independently; following an unmounted host target can fail (for example,
+      // /usr/lib/ssl/private -> /etc/ssl/private, where /etc is intentionally not mounted) and block safe runs.
+      if (stat.isDirectory()) continue;
       if (!stat.isFile()
         || (stat.mode & 0o111) === 0
         || (!UNPINNED_ORACLE_COMPILER_NAME.test(entry.name) && !UNPINNED_ORACLE_COMPILER_NAME.test(path.basename(target)))
@@ -177,6 +177,15 @@ export function oracleCompilerExposureProblem(systemDirectories = SYSTEM_BINARIE
     : null;
   oracleCompilerExposurePreflights.set(cacheKey, result);
   return result;
+}
+
+/** Candidate processes receive the same system mounts as oracle processes and must share their compiler boundary. */
+export function candidateCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS) {
+  const problem = oracleCompilerExposureProblem(systemDirectories, systemEtcDirectories);
+  if (!problem) return null;
+  return problem
+    .replace(/^oracle/, "candidate task")
+    .replace(/^unapproved Go\/Rust/, "candidate task has unapproved Go\/Rust");
 }
 
 function executableVersion(command, argv) {
@@ -483,6 +492,8 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
   const mountSources = candidateSandboxHostMountSources({ cwd, home, proxyDirectory, readOnlyPaths, nodeRuntime: process.execPath, supervisorPath });
   const protectedOverlap = candidateMountOverlapProblem(mountSources, protectedCorpusPaths);
   if (protectedOverlap) throw new Error(protectedOverlap);
+  const compilerExposure = candidateCompilerExposureProblem(mountSources.systemDirectories, mountSources.systemEtcDirectories);
+  if (compilerExposure) throw new Error(compilerExposure);
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing candidate execution");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRuntimeRoots, runtimeExecutablePaths);
   if (mountProblem) throw new Error(mountProblem);

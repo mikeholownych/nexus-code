@@ -478,7 +478,7 @@ test("black-box oracle keeps canary expectations outside the candidate process a
 
 test("Python black-box oracle uses only pinned offline Go and Rust toolchains, or fails preflight", { timeout: 60_000 }, async (t) => {
   const { blackBoxOracleProblem, runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
-  const { candidateToolchainRootProblem, oracleCompilerExposureProblem, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { candidateCompilerExposureProblem, candidateToolchainRootProblem, oracleCompilerExposureProblem, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const toolchainPolicy = JSON.parse(fs.readFileSync(path.join(ROOT, "eval/toolchain-versions.json"), "utf8"));
   const rustToolchain = fs.readFileSync(path.join(ROOT, "rust-toolchain.toml"), "utf8");
   const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
@@ -522,6 +522,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.writeFileSync(path.join(fakeSymlinkTarget, "rustc"), compilerCanary);
   fs.chmodSync(path.join(fakeSymlinkTarget, "rustc"), 0o755);
   fs.symlinkSync(fakeSymlinkTarget, path.join(fakeSystem, "compiler-reach"));
+  fs.symlinkSync(path.join(fakeSymlinkTarget, "rustc"), path.join(fakeSystem, "bin", "rustc-alias"));
   t.after(() => {
     fs.rmSync(fakeSystem, { recursive: true, force: true });
     fs.rmSync(fakeAlternatives, { recursive: true, force: true });
@@ -530,9 +531,13 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const exposure = oracleCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
   assert.match(exposure ?? "", /unapproved Go\/Rust compiler executable/);
   assert.match(exposure ?? "", /rustlib\/bin\/rustc/);
-  assert.match(exposure ?? "", /compiler-reach\/rustc/);
+  assert.match(exposure ?? "", /rustc-alias/);
   assert.match(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/cargo/);
   assert.match(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/compiler-alias/);
+  const candidateExposure = candidateCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
+  assert.match(candidateExposure ?? "", /candidate task has unapproved Go\/Rust compiler executable/);
+  assert.match(candidateExposure ?? "", /rustlib\/bin\/rustc/);
+  assert.match(candidateExposure ?? "", /compiler-alias/);
   if (sandboxAvailable()) {
     assert.throws(() => isolatedProcessArgv({
       cwd: fakeSystem,
@@ -1342,7 +1347,7 @@ test("task setup and validators run with cleared env, no network, confined files
   delete process.env.EVAL_SYNTHETIC_SECRET;
 });
 
-test("candidate namespace reaches only its authenticated run proxy and cannot read host files", async () => {
+test("candidate namespace cannot read host files or bypass pinned compilers with absolute paths", async () => {
   const { agentSandboxArgv, candidateAgentPath } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const { startModelProxy } = await import(proxyModule);
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "eval-agent-ws-"));
@@ -1361,8 +1366,14 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
     proxy = await startModelProxy({ upstream: `http://127.0.0.1:${(upstream.address() as any).port}/v1`, authToken: "UPSTREAM_AUTH_CANARY", clientToken: "RUN_LOCAL_TOKEN", socketPath: path.join(proxyDirectory, "proxy.sock") });
     const nodeRuntime = process.execPath;
-    const sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: [nodeRuntime], runtimeExecutablePaths: [nodeRuntime], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
-    const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);const toolchains={};for(const [name,args] of [['go',['version']],['rustc',['--version']],['cargo',['--version']]]){if(process.env.PATH.includes(name==='go'?'/usr/local/go/bin':'/usr/local/nexus-qual/rust/bin')){const check=cp.spawnSync(name,args,{encoding:'utf8'});toolchains[name]={status:check.status,stdout:check.stdout,stderr:check.stderr}}};console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status,toolchains}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
+    let sandbox;
+    try {
+      sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: [nodeRuntime], runtimeExecutablePaths: [nodeRuntime], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
+    } catch (error) {
+      assert.match(String(error), /candidate task has unapproved Go\/Rust compiler executable|candidate task compiler exposure could not be checked/);
+      return; // An unsafe host system mount is rejected before candidate code can run.
+    }
+    const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);const toolchains={};for(const [name,args] of [['go',['version']],['rustc',['--version']],['cargo',['--version']]]){if(process.env.PATH.includes(name==='go'?'/usr/local/go/bin':'/usr/local/nexus-qual/rust/bin')){const check=cp.spawnSync(name,args,{encoding:'utf8'});toolchains[name]={status:check.status,stdout:check.stdout,stderr:check.stderr}}};const absoluteToolchains={};for(const [name,command,args] of [['go','/usr/bin/go',['version']],['rustc','/usr/bin/rustc',['--version']],['cargo','/usr/bin/cargo',['--version']]]){const check=cp.spawnSync(command,args,{encoding:'utf8'});absoluteToolchains[name]={status:check.status,error:check.error?.code??null,version:check.status===0?check.stdout.trim():null}};console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status,toolchains,absoluteToolchains}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
     process.env.UPSTREAM_AUTH_CANARY = "UPSTREAM_AUTH_CANARY";
     const candidatePath = candidateAgentPath("/usr/bin:/bin");
     const child = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", script], env: { PATH: candidatePath, OPENAI_API_KEY: "RUN_LOCAL_TOKEN" } }));
@@ -1377,6 +1388,10 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     if (candidatePath.includes("/usr/local/nexus-qual/rust/bin")) {
       assert.equal(output.toolchains.rustc?.status, 0, `Rust compiler is not executable in candidate namespace: ${JSON.stringify(output.toolchains.rustc)}`);
       assert.equal(output.toolchains.cargo?.status, 0, `Cargo is not executable in candidate namespace: ${JSON.stringify(output.toolchains.cargo)}`);
+    }
+    for (const [name, pinnedVersion] of [["go", "go version go1.22.12"], ["rustc", "rustc 1.95.0"], ["cargo", "cargo 1.95.0"]] as const) {
+      const absolute = output.absoluteToolchains[name];
+      assert.ok(absolute.error === "ENOENT" || absolute.status !== 0 || absolute.version.startsWith(pinnedVersion), `${name} via absolute /usr/bin path was not pinned: ${JSON.stringify(absolute)}`);
     }
     assert.deepEqual(seen, ["Bearer UPSTREAM_AUTH_CANARY"]);
     assert.equal(fs.existsSync("/tmp/host-write-canary"), false);
