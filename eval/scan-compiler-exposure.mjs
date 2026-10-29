@@ -10,6 +10,7 @@ const MAX_ENUMERATION_OUTPUT = 64 * 1024 * 1024;
 const TIMEOUT_MS = 25_000;
 const MAX_ENTRIES = 500_000;
 const MAX_JOBS = 100_000;
+const DIRECTORY_BATCH_SIZE = 8;
 const DIRECT_ENTRY_BATCH_SIZE = 256;
 const COMPILER_NAMES = [
   "go", "go[0-9]*", "go-[0-9]*",
@@ -66,6 +67,7 @@ async function* enumerateJobs() {
       stopAll();
     });
     const closed = new Promise((resolve) => child.once("close", (code) => resolve(code)));
+    let directDirectories = [];
     let directEntries = [];
     let entryType = null;
     let pending = Buffer.alloc(0);
@@ -101,8 +103,14 @@ async function* enumerateJobs() {
           let job;
           // The `-P` inventory process reports immediate directories separately and
           // leaves symlinks as non-directory entries, so descendants are never followed.
+          // Group bounded sibling directories into one recursive find invocation. This
+          // preserves the complete scan while avoiding one process per top-level child.
           if (entryType === "d") {
-            job = [item];
+            directDirectories.push(item);
+            if (directDirectories.length === DIRECTORY_BATCH_SIZE) {
+              job = directDirectories;
+              directDirectories = [];
+            }
           } else {
             directEntries.push(item);
             if (directEntries.length === DIRECT_ENTRY_BATCH_SIZE) {
@@ -132,9 +140,11 @@ async function* enumerateJobs() {
       }
     }
     if (failed) throw new Error("compiler inventory enumeration failed");
-    if (directEntries.length) {
-      if (++jobCount > MAX_JOBS) throw new Error("compiler inventory job limit exceeded");
-      yield directEntries;
+    for (const remaining of [directDirectories, directEntries]) {
+      if (remaining.length) {
+        if (++jobCount > MAX_JOBS) throw new Error("compiler inventory job limit exceeded");
+        yield remaining;
+      }
     }
   }
 }

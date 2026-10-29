@@ -504,6 +504,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   }), /do not match policy/);
 
   const fakeSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-system-"));
+  const batchedSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-batched-compiler-system-"));
   const changingSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-changing-compiler-system-"));
   const fakeSystemAlias = `${fakeSystem}-alias`;
   const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
@@ -541,12 +542,28 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.symlinkSync(fakeSystem, fakeSystemAlias, "dir");
   t.after(() => {
     fs.rmSync(fakeSystem, { recursive: true, force: true });
+    fs.rmSync(batchedSystem, { recursive: true, force: true });
     fs.rmSync(changingSystem, { recursive: true, force: true });
     fs.rmSync(fakeSystemAlias, { recursive: true, force: true });
     fs.rmSync(fakeAlternatives, { recursive: true, force: true });
     fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
     fs.rmSync(fakeMountedRuntime, { recursive: true, force: true });
   });
+  const batchedChildren = Array.from({ length: 17 }, (_, index) => {
+    const child = path.join(batchedSystem, `child-${String(index).padStart(2, "0")}`);
+    fs.mkdirSync(child);
+    return child;
+  });
+  const batchedRootEntries = spawnSync("/usr/bin/find", ["-P", batchedSystem, "-mindepth", "1", "-maxdepth", "1", "-type", "d", "-print0"], { encoding: "buffer" });
+  assert.equal(batchedRootEntries.status, 0, "the fixture can enumerate the bounded directory batches");
+  const orderedBatchedChildren = batchedRootEntries.stdout.toString("utf8").split("\0").filter(Boolean);
+  assert.equal(orderedBatchedChildren.length, batchedChildren.length);
+  const lateBatchedCompiler = path.join(orderedBatchedChildren.at(-1), "rustc");
+  fs.writeFileSync(lateBatchedCompiler, compilerCanary);
+  fs.chmodSync(lateBatchedCompiler, 0o755);
+  const batchedExposure = scanOracleCompilerExposure([batchedSystem], [], []);
+  assert.equal(batchedExposure.problem, null);
+  assert.ok(batchedExposure.paths.includes(lateBatchedCompiler), "compiler binaries in later sibling batches remain discoverable and maskable");
   assert.deepEqual(scanOracleCompilerExposure([changingSystem], [], []), { paths: [], problem: null }, "an initially clean mounted system has no compiler masks");
   const introducedCompiler = path.join(changingSystem, "go");
   fs.writeFileSync(introducedCompiler, compilerCanary);
