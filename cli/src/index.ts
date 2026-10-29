@@ -26,6 +26,7 @@ import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, redactDiagnostic, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
+import { safeTerminal } from "./ui.js";
 
 function collectDeliverableFile(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -510,7 +511,7 @@ program
           error: err.message,
         }, null, 2));
       } else {
-        console.error(pc.red(`\nTask failed: ${err.message}`));
+        console.error(pc.red(`\nTask failed: ${safeTerminal(String(err?.message ?? err))}`));
       }
       const exitCode = (err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? 2 : 1;
       app.shutdown();

@@ -250,6 +250,28 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     assert.match(payload.error, /newer.*JSON parse error|JSON parse error.*newer/i);
   });
 
+  test("PERS-004: CLI latest resume makes corrupt task filename controls visible in terminal errors", () => {
+    const home = path.join(tmpDir, "cli-home-controls");
+    const cliTasksDir = path.join(home, ".nexus", "tasks");
+    const controlTaskId = "newer\u001b[31m";
+    fs.mkdirSync(cliTasksDir, { recursive: true });
+    fs.writeFileSync(path.join(cliTasksDir, `${controlTaskId}.json`), "{truncated");
+    const result = spawnSync(process.execPath, [
+      "--import", path.resolve("node_modules/tsx/dist/loader.mjs"), path.resolve("src/index.ts"),
+      "run", "--resume", "--endpoint", "http://127.0.0.1:1/v1", "--model", "m", "--workspace", gitRepoDir,
+    ], {
+      cwd: gitRepoDir,
+      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), NO_COLOR: "1" },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+
+    assert.strictEqual(result.status, 1, result.stderr);
+    assert.match(result.stderr, /Task failed:.*Corrupt state/);
+    assert.ok(!result.stderr.includes("\u001b"), "raw terminal escape must not reach stderr");
+    assert.ok(result.stderr.includes("␛[31m"), "the escape must remain visible to the operator");
+  });
+
   test("PERS-002 & F-07: In-flight operation detected as interrupted on recovery (no false completion)", () => {
     const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const taskId = "task-interrupted";
