@@ -503,7 +503,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.writeFileSync(path.join(workspace, "check.py"), [
     "import json, subprocess, sys",
     "subprocess.run(['go', 'build', '-o', '/tmp/nexus-oracle-go', '/workspace/main.go'], check=True, capture_output=True, text=True)",
-    "subprocess.run(['cargo', 'build', '--offline', '--manifest-path', '/workspace/Cargo.toml'], check=True, capture_output=True, text=True)",
+    "subprocess.run(['cargo', 'build', '--locked', '--offline', '--manifest-path', '/workspace/Cargo.toml'], check=True, capture_output=True, text=True)",
     "go = subprocess.run(['/tmp/nexus-oracle-go'], check=True, capture_output=True, text=True).stdout",
     "rust = subprocess.run(['/tmp/cargo-target/debug/nexus-oracle-canary'], check=True, capture_output=True, text=True).stdout",
     "value = json.loads(sys.stdin.readline())['value']",
