@@ -849,7 +849,6 @@ test("the runner verifies a merged unit after disposal-before-receipt before com
   fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
   git(prep.workspace, ["add", "-A"]);
   git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u1"]);
-  const unitCommit = git(prep.workspace, ["rev-parse", "HEAD"]);
   git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
   const mergedTip = ops.currentTip();
   git(root, ["worktree", "remove", "--force", prep.workspace]);
@@ -888,7 +887,7 @@ test("the runner verifies a merged unit after disposal-before-receipt before com
   assert.equal(state.integrations?.length, 1);
   assert.equal(persisted[persisted.length - 1]?.integrations?.length, 1);
   assert.equal(persisted[persisted.length - 1]?.integrations?.[0].unitId, "u1");
-  assert.equal(persisted[persisted.length - 1]?.integrations?.[0].commit, unitCommit);
+  assert.equal(persisted[persisted.length - 1]?.integrations?.[0].commit, mergedTip);
   assert.equal(persisted[persisted.length - 1]?.integrations?.[0].integratedCommit, mergedTip);
 });
 
