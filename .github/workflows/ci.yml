@@ -24,6 +24,8 @@ jobs:
           go-version: '1.22.12'
       - name: Install pinned evaluator toolchains
         run: bash scripts/install-evaluator-toolchains.sh
+      - name: Remove preinstalled SDK trees from the hosted runner
+        run: bash scripts/ci-trim-runner-image.sh
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
       - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
@@ -91,6 +93,8 @@ jobs:
           go-version: '1.22.12'
       - name: Install pinned evaluator toolchains
         run: bash scripts/install-evaluator-toolchains.sh
+      - name: Remove preinstalled SDK trees from the hosted runner
+        run: bash scripts/ci-trim-runner-image.sh
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
       - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
