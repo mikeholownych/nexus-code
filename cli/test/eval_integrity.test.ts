@@ -598,6 +598,8 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   };
   const inactiveRustSource = candidateToolchainRootSources([inactiveRustToolchain]);
   assert.deepEqual(inactiveRustSource, { "/usr/local/nexus-qual/rust": null }, "an unsafe configured Rust fallback is omitted from candidate mounts rather than blocking compiler-independent tasks");
+  const legacyExposure = scanOracleCompilerExposure([], [], [invalidRootCompiler], inactiveRustToolchain.sourceRoots);
+  assert.ok(!legacyExposure.paths.includes(invalidRootCompiler), "approving every configured source root reproduces the old bypass by suppressing this compiler mask");
   const danglingRustSource = candidateToolchainRootSources([{
     root: "/usr/local/nexus-qual/rust",
     sourceRoots: [danglingCandidateRoot, "/usr/local/go"],
