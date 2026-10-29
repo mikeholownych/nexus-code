@@ -24,6 +24,7 @@ import { writePrivateFile } from "../src/core/durable_file.js";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { syncBuiltinESMExports } from "node:module";
 
 const resource: ResourceDescriptor = {
   id: "primary",
@@ -392,6 +393,167 @@ test("a checkpoint copies the conversation journals too and restores them withou
     assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "with-journal"), /does not match its recorded hash/);
     assert.equal(fs.readFileSync(journal, "utf8"), before);
   } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("changing only a journal creates a new checkpoint bundle instead of overwriting the old one", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  try {
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "first-journal\n", { durable: true });
+    const first = createContextCheckpoint(store.manager, state, "u1", "same-name");
+    const firstBundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "same-name", first.sha256);
+    writePrivateFile(journal, "second-journal\n", { durable: true });
+
+    const second = createContextCheckpoint(store.manager, state, "u1", "same-name");
+    const secondBundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "same-name", second.sha256);
+
+    assert.notEqual(second.sha256, first.sha256);
+    assert.notEqual(secondBundle, firstBundle);
+    assert.equal(fs.readFileSync(path.join(firstBundle, "messages.jsonl"), "utf8"), "first-journal\n");
+    assert.equal(fs.readFileSync(path.join(secondBundle, "messages.jsonl"), "utf8"), "second-journal\n");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("bundle hashes cannot collide across journal boundaries", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  try {
+    const messages = taskFile.replace(/\.json$/, ".messages.jsonl");
+    const history = taskFile.replace(/\.json$/, ".history.jsonl");
+    writePrivateFile(messages, "x\0history\0y", { durable: true });
+    const first = createContextCheckpoint(store.manager, state, "u1", "framing");
+    writePrivateFile(messages, "x", { durable: true });
+    writePrivateFile(history, "y", { durable: true });
+
+    const second = createContextCheckpoint(store.manager, state, "u1", "framing");
+
+    assert.notEqual(second.sha256, first.sha256);
+    const firstBundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "framing", first.sha256);
+    const secondBundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "framing", second.sha256);
+    assert.notEqual(secondBundle, firstBundle);
+    assert.equal(fs.readFileSync(path.join(firstBundle, "messages.jsonl"), "utf8"), "x\0history\0y");
+    assert.equal(fs.readFileSync(path.join(secondBundle, "history.jsonl"), "utf8"), "y");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("an identical checkpoint reuses its existing bundle without rewriting it", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  const originalRename = fs.renameSync;
+  try {
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "original-journal\n", { durable: true });
+    const first = createContextCheckpoint(store.manager, state, "u1", "duplicate");
+    const bundle = checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "duplicate", first.sha256);
+    let failed = false;
+    (fs as any).renameSync = (from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to) === path.join(bundle, "messages.jsonl")) {
+        failed = true;
+        throw new Error("duplicate bundle write must not happen");
+      }
+      return originalRename(from, to);
+    };
+    syncBuiltinESMExports();
+
+    const duplicate = createContextCheckpoint(store.manager, state, "u1", "duplicate");
+
+    assert.equal(duplicate.sha256, first.sha256);
+    assert.equal(failed, false);
+    assert.equal(fs.readFileSync(path.join(bundle, "messages.jsonl"), "utf8"), "original-journal\n");
+  } finally {
+    fs.renameSync = originalRename;
+    syncBuiltinESMExports();
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("a failed first bundle write is cleaned up so checkpoint retry succeeds", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  const originalRename = fs.renameSync;
+  try {
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "retry-journal\n", { durable: true });
+    let failedBundle: string | undefined;
+    (fs as any).renameSync = (from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to).endsWith("messages.jsonl") && String(to).includes("context-checkpoints")) {
+        failedBundle = path.dirname(String(to));
+        throw new Error("simulated first bundle write failure");
+      }
+      return originalRename(from, to);
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => createContextCheckpoint(store.manager, state, "u1", "retry"), /simulated first bundle write failure/);
+    assert.ok(failedBundle);
+    fs.renameSync = originalRename;
+    syncBuiltinESMExports();
+
+    assert.equal(fs.existsSync(failedBundle), false);
+    const record = createContextCheckpoint(store.manager, state, "u1", "retry");
+    assert.equal(fs.readFileSync(path.join(failedBundle, "messages.jsonl"), "utf8"), "retry-journal\n");
+    assert.equal(checkpointBundleDir(store.manager.getBaseDir(), state.id, "u1", "retry", record.sha256), failedBundle);
+  } finally {
+    fs.renameSync = originalRename;
+    syncBuiltinESMExports();
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("restore removes a journal created after the checkpoint", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  try {
+    createContextCheckpoint(store.manager, state, "u1", "before-journal");
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "post-checkpoint-message\n", { durable: true });
+    state.units[0].status = "BLOCKED";
+
+    restoreContextCheckpoint(store.manager, state, "u1", "before-journal");
+
+    assert.equal(fs.existsSync(journal), false);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("a journal write failure rolls back the task and preserves the blocked operation", () => {
+  const { store, state, taskFile, workspace, stateRoot } = checkpointFixture();
+  const originalRename = fs.renameSync;
+  try {
+    const journal = taskFile.replace(/\.json$/, ".messages.jsonl");
+    writePrivateFile(journal, "before-checkpoint\n", { durable: true });
+    createContextCheckpoint(store.manager, state, "u1", "atomic");
+    writePrivateFile(taskFile, JSON.stringify({ taskId: "task-u1", messages: [{ role: "user", content: "current" }] }), { durable: true });
+    writePrivateFile(journal, "current-journal\n", { durable: true });
+    const taskBefore = fs.readFileSync(taskFile, "utf8");
+    const journalBefore = fs.readFileSync(journal, "utf8");
+    state.units[0].status = "BLOCKED";
+    let failed = false;
+    (fs as any).renameSync = (from: fs.PathLike, to: fs.PathLike) => {
+      if (!failed && String(to) === journal) {
+        failed = true;
+        throw new Error("simulated journal rename failure");
+      }
+      return originalRename(from, to);
+    };
+    syncBuiltinESMExports();
+
+    assert.throws(() => restoreContextCheckpoint(store.manager, state, "u1", "atomic"), /simulated journal rename failure/);
+    assert.equal(failed, true);
+    assert.equal(fs.readFileSync(taskFile, "utf8"), taskBefore);
+    assert.equal(fs.readFileSync(journal, "utf8"), journalBefore);
+    assert.equal(state.units[0].status, "BLOCKED");
+  } finally {
+    fs.renameSync = originalRename;
+    syncBuiltinESMExports();
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }

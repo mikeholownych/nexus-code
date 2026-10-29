@@ -52,14 +52,13 @@ const stateFile = () => path.join(credentialStorageHome(), ".local/state/nexus/r
 const cacheFile = (id: string) => path.join(credentialStorageHome(), ".cache/nexus/models", `${id.replace(/[^a-z0-9_-]/gi, "_")}.json`);
 
 function cacheId(providerId: string, endpoint: string): string {
-  if (providerId !== APPLIANCE) return providerId;
   let identity = endpoint.trim();
   try {
     const normalized = new URL(identity);
     normalized.hash = "";
     identity = normalized.toString().replace(/\/+$/, "");
   } catch {}
-  return `${APPLIANCE}-${createHash("sha256").update(identity).digest("hex").slice(0, 20)}`;
+  return `${providerId}-${createHash("sha256").update(identity).digest("hex").slice(0, 20)}`;
 }
 
 export function readRecent(): ModelRef[] {
@@ -80,8 +79,8 @@ export function recordRecent(ref: ModelRef): void {
 }
 
 /** Chat-capable entries of a provider's list (OpenAI and Copilot lists also carry embedding/audio/image models). */
-function chatModel(providerId: string, id: string): boolean {
-  if (/(embedding|tts|whisper|dall-e|gpt-image|audio|realtime|transcribe|moderation|davinci|babbage)/i.test(id)) return false;
+export function chatModel(providerId: string, id: string): boolean {
+  if (/(embedding|rerank|tts|whisper|dall-e|gpt-image|audio|realtime|transcribe|moderation|davinci|babbage)/i.test(id)) return false;
   if (providerId === "openai") return /^(gpt-|o\d|chatgpt-|codex)/i.test(id);
   return true;
 }

@@ -202,18 +202,22 @@ export class OperationRunner {
   private async execute(d: Extract<Decision, { kind: "run" }>, signal?: AbortSignal): Promise<UnitRunResult> {
     const { unit, resource } = d;
     let workspace: string | undefined;
+    let recoverMerged = false;
     if (this.git) {
-      try {
-        workspace = this.git.prepareUnit(unit, { restart: Boolean(unit.pendingDecision?.restart) }).workspace;
-        this.save();
-      } catch (err: any) {
-        return {
-          kind: "failed",
-          cause: "EXECUTION_FAILED",
-          reason: `cannot prepare the unit's git worktree: ${err?.message ?? err}`,
-          question: `${unit.title}: its isolated worktree could not be prepared (${err?.message ?? err}). Retry, or stop?`,
-          options: [{ label: "retry", action: { kind: "retry" } }],
-        };
+      recoverMerged = !unit.pendingDecision?.restart && this.git.canRecoverMissingWorktree(unit.id);
+      if (!recoverMerged) {
+        try {
+          workspace = this.git.prepareUnit(unit, { restart: Boolean(unit.pendingDecision?.restart) }).workspace;
+          this.save();
+        } catch (err: any) {
+          return {
+            kind: "failed",
+            cause: "EXECUTION_FAILED",
+            reason: `cannot prepare the unit's git worktree: ${err?.message ?? err}`,
+            question: `${unit.title}: its isolated worktree could not be prepared (${err?.message ?? err}). Retry, or stop?`,
+            options: [{ label: "retry", action: { kind: "retry" } }],
+          };
+        }
       }
     }
     const ctx: UnitRunContext = {
@@ -244,7 +248,18 @@ export class OperationRunner {
       ...(workspace ? { workspace } : {}),
     };
     try {
-      const result = await this.opts.executor.run(unit, resource, ctx);
+      if (recoverMerged) {
+        return {
+          kind: "failed",
+          cause: "EXECUTION_UNKNOWN",
+          reason: `unit ${unit.id} is present in the integration history, but its durable result is missing`,
+          question:
+            `${unit.title}: its branch is already merged, but Nexus has no saved result to verify the task. ` +
+            `Restart it from the merged source so it can verify the work, or stop the operation?`,
+          options: [{ label: "restart from the merged source and verify", action: { kind: "retry", restart: true } }],
+        };
+      }
+      const result: UnitRunResult = await this.opts.executor.run(unit, resource, ctx);
       if (result.kind !== "completed" || !this.git) return result;
       const integration = await this.git.integrate(unit, result);
       if (integration.kind === "conflict") {
@@ -280,6 +295,7 @@ export class OperationRunner {
           : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}.`,
         { unitId: unit.id, detail: { integration: integration.receipt } },
       );
+      this.save();
       this.git.disposeUnit(unit.id);
       this.save();
       return result;

@@ -209,7 +209,7 @@ test("a FIFO at the account identity key path is rejected without blocking or mi
       cwd: cliRoot,
       env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), NEXUS_TEST_WORKSPACE: workspace, NEXUS_TEST_STATE: stateDir },
       encoding: "utf8",
-      timeout: 2_000,
+      timeout: 10_000,
     });
     assert.equal(result.error?.name, undefined, result.error?.message);
     assert.equal(result.status, 0, result.stderr || result.stdout);

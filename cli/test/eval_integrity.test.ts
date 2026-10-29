@@ -752,11 +752,15 @@ test("resource contract: candidate memory, processes, storage and CPU are kernel
     assert.ok(forks.resources.pidsPeak <= 16);
     assert.equal(forks.resources.cleaned, true);
 
-    // The dedicated workspace mount caps storage before the larger memory limit; sandbox /tmp is separately charged
-    // to the task cgroup and must hit memory.max. Neither failure may leave a task process behind.
+    // A dedicated mount smaller than memory caps storage with ENOSPC; a larger host mount reaches memory.max first.
+    // Sandbox /tmp is separately charged to the task cgroup and must hit memory.max. Neither path may leave a process.
+    if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) {
+      assert.ok(resources.storageBytes < memoryBytes, "the CI workspace fixture must exercise its storage cap before memory exhaustion");
+    }
     const workspaceDisk = await run("dd if=/dev/zero of=/workspace/fill bs=1M count=512 status=none");
     assert.notEqual(workspaceDisk.status, 0, JSON.stringify(workspaceDisk));
-    assert.equal(workspaceDisk.resources.oomKills, 0, JSON.stringify(workspaceDisk.resources));
+    if (resources.storageBytes < memoryBytes) assert.equal(workspaceDisk.resources.oomKills, 0, JSON.stringify(workspaceDisk.resources));
+    else assert.ok(workspaceDisk.resources.oomKills >= 1, JSON.stringify(workspaceDisk.resources));
     assert.equal(workspaceDisk.resources.cleaned, true);
     assert.ok((fs.existsSync(path.join(ws, "fill")) ? fs.statSync(path.join(ws, "fill")).size : 0) <= resources.storageBytes);
 

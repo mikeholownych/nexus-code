@@ -298,7 +298,8 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
           process.exitCode = 2;
           return;
         }
-        const endpoint = await askText(`OpenAI-compatible endpoint URL [${base.endpoint}]: `) || base.endpoint;
+        const endpointDisplay = safeOriginOf(base.endpoint) ?? "endpoint unavailable";
+        const endpoint = await askText(`OpenAI-compatible endpoint URL [${endpointDisplay}]: `) || base.endpoint;
         const key = await askSecret("Optional endpoint API key (press Enter for none): ");
         const discovered = await connectLocalEndpoint(base, endpoint, undefined, key);
         if (discovered.models.length === 0) {

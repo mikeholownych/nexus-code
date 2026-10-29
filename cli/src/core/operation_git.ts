@@ -251,23 +251,32 @@ export class OperationGit {
         },
       };
     }
-    if (!fs.existsSync(entry.worktree)) {
+    const worktreeMissing = !fs.existsSync(entry.worktree);
+    const recoveredCommit = worktreeMissing ? this.mergedUnitCommit(entry) : undefined;
+    if (worktreeMissing && !recoveredCommit) {
       return { kind: "failed", reason: `unit ${unit.id}'s worktree is missing (${entry.worktree})` };
     }
 
-    // Uncommitted agent work is the normal case; commit it without touching ignored build output.
-    const dirty = gitResult(entry.worktree, ["status", "--porcelain"]).stdout.trim();
-    if (dirty) {
-      const added = gitResult(entry.worktree, ["add", "-A"]);
-      if (!added.ok) return { kind: "failed", reason: `cannot stage ${unit.id}: ${added.stderr.trim()}` };
-      const committed = gitResult(entry.worktree, [
-        ...this.mechanicalGitConfig(), "commit", "--no-verify", "-q", "-m", `nexus: ${unit.title}`,
-      ]);
-      if (!committed.ok) {
-        return { kind: "failed", reason: `cannot commit ${unit.id}: ${committed.stderr.trim() || "git commit failed"}` };
+    if (!worktreeMissing) {
+      const branch = gitResult(entry.worktree, ["rev-parse", "--abbrev-ref", "HEAD"]);
+      if (!branch.ok || branch.stdout.trim() !== entry.branch) {
+        return { kind: "failed", reason: `unit ${unit.id}'s worktree is not on its recorded branch ${entry.branch}` };
+      }
+
+      // Uncommitted agent work is the normal case; commit it without touching ignored build output.
+      const dirty = gitResult(entry.worktree, ["status", "--porcelain"]).stdout.trim();
+      if (dirty) {
+        const added = gitResult(entry.worktree, ["add", "-A"]);
+        if (!added.ok) return { kind: "failed", reason: `cannot stage ${unit.id}: ${added.stderr.trim()}` };
+        const committed = gitResult(entry.worktree, [
+          ...this.mechanicalGitConfig(), "commit", "--no-verify", "-q", "-m", `nexus: ${unit.title}`,
+        ]);
+        if (!committed.ok) {
+          return { kind: "failed", reason: `cannot commit ${unit.id}: ${committed.stderr.trim() || "git commit failed"}` };
+        }
       }
     }
-    const commit = git(entry.worktree, ["rev-parse", "HEAD"]);
+    const commit = recoveredCommit ?? git(entry.worktree, ["rev-parse", "HEAD"]);
     if (commit === entry.baseCommit) {
       const tip = this.currentTip();
       this.state.units[unit.id] = { ...entry, integratedCommit: tip };
@@ -295,6 +304,12 @@ export class OperationGit {
       const posthoc = result.verification?.command && result.verification.status === "PASSED" && result.verification.hasExecutedTests
         ? this.verifyMerged(result.verification.command)
         : undefined;
+      const integrity = posthoc ? this.integrationIntegrity(commit, tip) : undefined;
+      if (integrity && !integrity.ok) {
+        const reason = integrity.reason ?? "integration verification changed the integration history";
+        const restoration = this.restoreIntegration(tip);
+        return { kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason };
+      }
       if (posthoc) this.cleanIntegrationWorktree();
       if (posthoc && !posthoc.ok) {
         // Do not record this as integrated: a retry must re-check the merged tree (and may add the missing work).
@@ -335,14 +350,16 @@ export class OperationGit {
       return { kind: "conflict", files: conflicted, tip };
     }
 
+    const mergedTip = this.currentTip();
     const verification = result.verification?.command && result.verification.status === "PASSED" && result.verification.hasExecutedTests
       ? this.verifyMerged(result.verification.command)
       : undefined;
-    if (verification && !verification.ok) {
+    const integrity = verification ? this.integrationIntegrity(commit, mergedTip) : undefined;
+    if (verification && (!verification.ok || (integrity && !integrity.ok))) {
       // The merge is mechanically clean but the merged tree does not pass the unit's verifier: undo it.
-      gitResult(this.plan.integrationWorktree, ["reset", "--hard", tip]);
-      this.cleanIntegrationWorktree();
-      return { kind: "failed", reason: verification.reason ?? "integration verification failed" };
+      const reason = integrity?.reason ?? verification.reason ?? "integration verification failed";
+      const restoration = this.restoreIntegration(tip);
+      return { kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason };
     }
     if (verification) this.cleanIntegrationWorktree();
 
@@ -364,22 +381,31 @@ export class OperationGit {
     return { kind: "integrated", receipt };
   }
 
-  /** Remove a completed unit's worktree (its branch and receipt stay). */
+  /** Remove a completed unit's clean worktree (its branch and receipt stay). */
   disposeUnit(unitId: string): void {
     const entry = this.state.units[unitId];
-    if (entry) this.removeWorktree(entry.worktree);
+    if (entry) this.removeWorktree(entry.worktree, true);
   }
 
-  /** Integrity check at runner start: a recorded worktree that vanished fails closed instead of rerunning blind. */
+  /** A missing worktree is recoverable only when its retained branch is already merged. */
+  canRecoverMissingWorktree(unitId: string): boolean {
+    const entry = this.state.units[unitId];
+    return Boolean(
+      entry && entry.integratedCommit === undefined && !fs.existsSync(entry.worktree) && this.mergedUnitCommit(entry),
+    );
+  }
+
+  /** Integrity check at runner start: an unmerged missing worktree fails closed instead of rerunning blind. */
   missingWorktrees(): Array<{ unitId: string; worktree: string }> {
     return Object.entries(this.state.units)
-      .filter(([, entry]) => entry.integratedCommit === undefined && !fs.existsSync(entry.worktree))
+      .filter(([, entry]) =>
+        entry.integratedCommit === undefined && !fs.existsSync(entry.worktree) && !this.mergedUnitCommit(entry))
       .map(([unitId, entry]) => ({ unitId, worktree: entry.worktree }));
   }
 
-  /** Drop remaining unit worktrees (operation complete/cancelled); branches and the integration worktree stay. */
+  /** Drop clean remaining unit worktrees; branches, dirty files and the integration worktree stay. */
   disposeAllUnits(): void {
-    for (const entry of Object.values(this.state.units)) this.removeWorktree(entry.worktree);
+    for (const entry of Object.values(this.state.units)) this.removeWorktree(entry.worktree, true);
   }
 
   unitState(unitId: string): OperationGitUnit | undefined {
@@ -416,8 +442,47 @@ export class OperationGit {
     gitResult(this.plan.integrationWorktree, ["clean", "-fd"]);
   }
 
-  private removeWorktree(worktree: string): void {
-    if (fs.existsSync(worktree)) gitResult(this.plan.repoRoot, ["worktree", "remove", "--force", worktree]);
+  private integrationIntegrity(commit: string, expectedTip: string): { ok: boolean; reason?: string } {
+    const branch = gitResult(this.plan.integrationWorktree, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    if (!branch.ok || branch.stdout.trim() !== this.plan.integrationBranch) {
+      return { ok: false, reason: "integration verification moved the worktree off the integration branch" };
+    }
+    const head = gitResult(this.plan.integrationWorktree, ["rev-parse", "HEAD"]);
+    if (!head.ok || head.stdout.trim() !== expectedTip) {
+      return { ok: false, reason: "integration verification changed the integration tip; it was rewritten or rewound" };
+    }
+    if (!gitResult(this.plan.integrationWorktree, ["merge-base", "--is-ancestor", commit, "HEAD"]).ok) {
+      return { ok: false, reason: "integration branch no longer contains the unit commit; it was rewritten or rewound" };
+    }
+    return { ok: true };
+  }
+
+  private restoreIntegration(commit: string): string | undefined {
+    const restored = gitResult(this.plan.integrationWorktree, [
+      "checkout", "--force", "-B", this.plan.integrationBranch, commit,
+    ]);
+    if (!restored.ok) return `could not restore the integration branch: ${restored.stderr.trim() || "git checkout failed"}`;
+    const cleaned = gitResult(this.plan.integrationWorktree, ["clean", "-fd"]);
+    if (!cleaned.ok) return `could not clean the restored integration worktree: ${cleaned.stderr.trim() || "git clean failed"}`;
+    return undefined;
+  }
+
+  private mergedUnitCommit(entry: OperationGitUnit): string | undefined {
+    const resolved = gitResult(this.plan.repoRoot, ["rev-parse", "--verify", `refs/heads/${entry.branch}^{commit}`]);
+    const commit = resolved.stdout.trim();
+    if (!resolved.ok || !commit || commit === entry.baseCommit) return undefined;
+    return gitResult(this.plan.integrationWorktree, ["merge-base", "--is-ancestor", commit, "HEAD"]).ok
+      ? commit
+      : undefined;
+  }
+
+  private removeWorktree(worktree: string, preserveIfNotClean = false): void {
+    if (!fs.existsSync(worktree)) return;
+    if (preserveIfNotClean) {
+      const status = gitResult(worktree, ["status", "--porcelain", "--ignored"]);
+      if (!status.ok || status.stdout.trim()) return;
+    }
+    gitResult(this.plan.repoRoot, ["worktree", "remove", "--force", worktree]);
   }
 
   /** Re-run the unit's verifier on the merged tree. The unit's own evidence already proved it executed tests. */

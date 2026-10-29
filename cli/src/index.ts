@@ -26,6 +26,7 @@ import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, redactDiagnostic, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
+import { safeTerminal } from "./ui.js";
 
 function collectDeliverableFile(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -436,27 +437,7 @@ program
     const app = new ApplicationCore(config);
 
     let resumeTaskId: string | undefined;
-    if (options.resume !== undefined && options.resume !== false) {
-      if (typeof options.resume === "string" && options.resume !== "latest") {
-        resumeTaskId = options.resume;
-      } else {
-        const targetWorkspace = config.workspace || process.cwd();
-        const tasks = app
-          .getStateManager()
-          .listTasks({ workspace: targetWorkspace })
-          .filter((t) => t.taskId !== app.getTaskId());
-        if (tasks.length === 0) {
-          console.error(`no task to resume in ${targetWorkspace}; see 'nexus status'`);
-          app.shutdown();
-          exitAfterFlush(2);
-          return;
-        }
-        resumeTaskId = tasks[0].taskId;
-      }
-      if (!prompt) {
-        prompt = "continue";
-      }
-    } else if (!prompt) {
+    if ((options.resume === undefined || options.resume === false) && !prompt) {
       console.error("error: missing required argument 'prompt'");
       app.shutdown();
       exitAfterFlush(1);
@@ -478,6 +459,27 @@ program
     process.on("SIGINT", onSigint);
 
     try {
+      if (options.resume !== undefined && options.resume !== false) {
+        if (typeof options.resume === "string" && options.resume !== "latest") {
+          resumeTaskId = options.resume;
+        } else {
+          const targetWorkspace = config.workspace || process.cwd();
+          const tasks = app
+            .getStateManager()
+            .listTasks({ workspace: targetWorkspace })
+            .filter((t) => t.taskId !== app.getTaskId());
+          if (tasks.length === 0) {
+            console.error(`no task to resume in ${targetWorkspace}; see 'nexus status'`);
+            app.shutdown();
+            exitAfterFlush(2);
+            return;
+          }
+          resumeTaskId = tasks[0].taskId;
+        }
+        if (!prompt) {
+          prompt = "continue";
+        }
+      }
       const result = await app.runTask(prompt, {
         json: isJson,
         resumeTaskId,
@@ -509,7 +511,7 @@ program
           error: err.message,
         }, null, 2));
       } else {
-        console.error(pc.red(`\nTask failed: ${err.message}`));
+        console.error(pc.red(`\nTask failed: ${safeTerminal(String(err?.message ?? err))}`));
       }
       const exitCode = (err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? 2 : 1;
       app.shutdown();

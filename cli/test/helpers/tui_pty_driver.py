@@ -168,6 +168,13 @@ class Session:
                 raise TimeoutError(f"never saw {text!r}; tail: {self.screen_text()[-1500:]!r}")
             self.pump(0.1)
 
+    def wait_screen(self, text, timeout):
+        deadline = time.monotonic() + timeout
+        while text not in self.screen.text():
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"never saw {text!r} on screen; screen: {self.screen.text()!r}")
+            self.pump(0.05)
+
     def wait_idle(self, timeout=20):
         """Until the idle hint is on screen: the sidecar reported the turn over (typing earlier would steer)."""
         deadline = time.monotonic() + timeout
@@ -244,11 +251,12 @@ def main():
     s.send("Edit notes.txt, then write the batch files f4 to f34.\r", settle=0.1)
     mark = len(s.out)
     cpu0, t0 = cpu_seconds(s.pid), time.monotonic()
-    s.pump(0.8)
+    s.wait_screen("thinking · 0:0", 5)
     # 2. Steering while the agent works (Enter while busy sends steering, not a second prompt).
     snapshot_a = s.screen.text()
     s.send("keep line 1 unchanged\r", settle=0.1)
-    s.pump(0.6)
+    # The status timer updates once per second; wait past its first tick before asserting 0:01 is visible.
+    s.pump(1.2)
     snapshot_b = s.screen.text()
     s.pump(0.3)
     busy_cpu = (cpu_seconds(s.pid) - cpu0) / (time.monotonic() - t0)

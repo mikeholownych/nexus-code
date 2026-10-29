@@ -981,6 +981,10 @@ pub struct BatchReadResult {
     pub files: Vec<BatchReadFileEntry>,
 }
 
+fn read_all_lines<R: BufRead>(reader: R) -> io::Result<Vec<String>> {
+    reader.lines().collect()
+}
+
 pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResult, String> {
     let base_canon = base_dir.canonicalize().map_err(|e| format!("Invalid workspace directory: {e}"))?;
     let mut results = Vec::new();
@@ -1115,7 +1119,19 @@ pub fn batch_read(args: BatchReadArgs, base_dir: &Path) -> Result<BatchReadResul
                         }
 
                         let reader = BufReader::new(file);
-                        let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+                        let all_lines = match read_all_lines(reader) {
+                            Ok(lines) => lines,
+                            Err(e) => {
+                                results.push(BatchReadFileEntry {
+                                    path: path_str.clone(),
+                                    success: false,
+                                    total_lines: 0,
+                                    content: String::new(),
+                                    error: Some(format!("Failed to read file: {e}")),
+                                });
+                                continue;
+                            }
+                        };
                         let total = all_lines.len();
                         let slice = &all_lines[..total.min(max_lines)];
                         let mut numbered = String::new();
@@ -1325,6 +1341,32 @@ pub fn patch_file(args: PatchFileArgs, base_dir: &Path) -> Result<PatchFileResul
 mod tests {
     use super::*;
     use std::io::Write;
+
+    struct FailsAfterFirstRead(bool);
+
+    impl Read for FailsAfterFirstRead {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "injected mid-stream failure",
+                ));
+            }
+            self.0 = true;
+            let bytes = b"first line\n";
+            let len = bytes.len().min(buf.len());
+            buf[..len].copy_from_slice(&bytes[..len]);
+            Ok(len)
+        }
+    }
+
+    #[test]
+    fn test_batch_read_line_collection_fails_on_mid_stream_error() {
+        let reader = BufReader::new(FailsAfterFirstRead(false));
+        let err = read_all_lines(reader).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(err.to_string().contains("injected mid-stream failure"));
+    }
 
     #[test]
     fn test_resolve_safe_path() {

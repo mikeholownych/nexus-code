@@ -97,15 +97,49 @@ export function createContextCheckpoint(
     throw new ContextCheckpointError(`unit '${unitId}' has unreadable task state; refusing to checkpoint it`);
   }
 
-  const taskHash = digest(taskData);
-  const bundle = checkpointBundleDir(base, state.id, unitId, name, taskHash);
-  const files: ContextCheckpointFile[] = [];
+  const contents = new Map<ContextCheckpointFile["name"], Buffer>();
   for (const entry of BUNDLE_FILES) {
     const from = path.join(base, `${taskId}${entry.suffix}`);
-    if (!fs.existsSync(from)) continue;
-    const data = fs.readFileSync(from);
-    writePrivateFile(path.join(bundle, entry.file), data, { durable: true });
-    files.push({ name: entry.name, bytes: data.length, sha256: digest(data) });
+    if (fs.existsSync(from)) contents.set(entry.name, fs.readFileSync(from));
+  }
+  const bundleHash = createHash("sha256");
+  for (const entry of BUNDLE_FILES) {
+    const data = contents.get(entry.name);
+    if (!data) continue;
+    bundleHash.update(entry.name);
+    bundleHash.update("\0");
+    bundleHash.update(digest(data));
+    bundleHash.update("\0");
+  }
+  const bundleSha256 = bundleHash.digest("hex");
+  const bundle = checkpointBundleDir(base, state.id, unitId, name, bundleSha256);
+  const files: ContextCheckpointFile[] = [];
+  for (const entry of BUNDLE_FILES) {
+    const data = contents.get(entry.name);
+    if (data) files.push({ name: entry.name, bytes: data.length, sha256: digest(data) });
+  }
+  if (fs.existsSync(bundle)) {
+    for (const entry of BUNDLE_FILES) {
+      const target = path.join(bundle, entry.file);
+      const data = contents.get(entry.name);
+      if (data) {
+        if (!fs.existsSync(target) || !fs.readFileSync(target).equals(data)) {
+          throw new ContextCheckpointError(`checkpoint bundle has conflicting contents: ${bundle}`);
+        }
+      } else if (fs.existsSync(target)) {
+        throw new ContextCheckpointError(`checkpoint bundle has conflicting contents: ${bundle}`);
+      }
+    }
+  } else {
+    try {
+      for (const entry of BUNDLE_FILES) {
+        const data = contents.get(entry.name);
+        if (data) writePrivateFile(path.join(bundle, entry.file), data, { durable: true });
+      }
+    } catch (error) {
+      fs.rmSync(bundle, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   const record: ContextCheckpoint = {
@@ -115,7 +149,7 @@ export function createContextCheckpoint(
     taskId,
     messages,
     bytes: taskData.length,
-    sha256: taskHash,
+    sha256: bundleSha256,
     files,
   };
   state.contextCheckpoints = [
@@ -169,13 +203,35 @@ export function restoreContextCheckpoint(
 
   const target = taskFile(store, record.taskId);
   const backupDir = path.join(checkpointDir(base, state.id), "backups", `${slug(unitId)}--${name}--${now}`);
+  const originals = new Map<ContextCheckpointFile["name"], Buffer | undefined>();
   for (const entry of BUNDLE_FILES) {
     const current = path.join(base, `${record.taskId}${entry.suffix}`);
-    if (fs.existsSync(current)) {
-      writePrivateFile(path.join(backupDir, entry.file), fs.readFileSync(current), { durable: true });
+    const original = fs.existsSync(current) ? fs.readFileSync(current) : undefined;
+    originals.set(entry.name, original);
+    if (original) writePrivateFile(path.join(backupDir, entry.file), original, { durable: true });
+  }
+  try {
+    for (const entry of BUNDLE_FILES) {
+      const current = path.join(base, `${record.taskId}${entry.suffix}`);
+      const restored = contents.get(entry.name);
+      if (restored) writePrivateFile(current, restored, { durable: true });
+      else if (fs.existsSync(current)) fs.rmSync(current);
     }
-    const restored = contents.get(entry.name);
-    if (restored) writePrivateFile(current, restored, { durable: true });
+  } catch (error: any) {
+    const rollbackFailures: string[] = [];
+    for (const entry of BUNDLE_FILES) {
+      const current = path.join(base, `${record.taskId}${entry.suffix}`);
+      const original = originals.get(entry.name);
+      try {
+        if (original) writePrivateFile(current, original, { durable: true });
+        else fs.rmSync(current, { force: true });
+      } catch {
+        rollbackFailures.push(entry.name);
+      }
+    }
+    throw new ContextCheckpointError(
+      `${error?.message ?? error}${rollbackFailures.length ? `; rollback also failed for ${rollbackFailures.join(", ")}` : ""}`,
+    );
   }
 
   unit.agentTaskId = record.taskId;

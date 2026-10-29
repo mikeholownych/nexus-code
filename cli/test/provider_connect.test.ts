@@ -5,7 +5,7 @@
  */
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -126,6 +126,54 @@ describe("credentials: precedence and other clients' sign-ins", () => {
       assert.equal(settingsCommitted, false, `${label}: settings callback must not run`);
       assert.equal(fs.readFileSync(credentialsPath(), "utf8"), original, `${label}: original bytes must remain exact`);
       assert.equal(fs.statSync(credentialsPath()).mode & 0o777, mode, `${label}: original mode must remain exact`);
+    }
+  });
+
+  test("ordinary credential mutations preserve a malformed store", () => {
+    const original = '{"version":1,"providers": {malformed\n';
+    write(".config/nexus/credentials.json", original);
+    const mode = fs.statSync(credentialsPath()).mode & 0o777;
+    assert.throws(
+      () => saveCredential("openrouter", { type: "api", key: "synthetic-key", savedAt: "now" }),
+      /unreadable or has an unsupported format/,
+    );
+    assert.throws(() => removeCredential("openrouter"), /unreadable or has an unsupported format/);
+    assert.equal(fs.readFileSync(credentialsPath(), "utf8"), original);
+    assert.equal(fs.statSync(credentialsPath()).mode & 0o777, mode);
+  });
+
+  test("concurrent provider saves preserve every credential", async () => {
+    const release = path.join(home, "release");
+    const script = `
+      import fs from "node:fs";
+      import { saveCredential } from "${path.resolve(process.cwd(), "src/credentials.ts")}";
+      while (!fs.existsSync(process.env.RELEASE_FILE)) {}
+      for (let index = 0; index < 100; index++) {
+        saveCredential(process.env.PROVIDER_PREFIX + index, { type: "api", key: "synthetic-key", savedAt: "now" });
+      }
+    `;
+    const save = (providerPrefix: string) => spawn(process.execPath, ["--import", path.resolve(process.cwd(), "node_modules/tsx/dist/esm/index.mjs"), "--input-type=module", "--eval", script], {
+      env: { HOME: home, PATH: process.env.PATH, PROVIDER_PREFIX: providerPrefix, RELEASE_FILE: release },
+      timeout: 30_000,
+    });
+    try {
+      const writers = ["a", "b", "c", "d"].map(save);
+      fs.writeFileSync(release, "release");
+      const results = await Promise.all(writers.map((writer) => new Promise<{ status: number | null; stderr: string }>((resolve, reject) => {
+        let stderr = "";
+        writer.stderr.setEncoding("utf8");
+        writer.stderr.on("data", (chunk) => { stderr += chunk; });
+        writer.on("error", reject);
+        writer.on("close", (status) => resolve({ status, stderr }));
+      })));
+      for (const writer of results) assert.equal(writer.status, 0, writer.stderr);
+      const store = JSON.parse(fs.readFileSync(credentialsPath(), "utf8"));
+      assert.equal(Object.keys(store.providers).length, 400, "every concurrent save remains durable");
+      for (const prefix of ["a", "b", "c", "d"]) {
+        for (let index = 0; index < 100; index++) assert.equal(store.providers[`${prefix}${index}`].key, "synthetic-key");
+      }
+    } finally {
+      fs.rmSync(release, { force: true });
     }
   });
 
@@ -357,6 +405,21 @@ describe("connecting from the picker", () => {
       assert.equal(fs.existsSync(path.join(home, ".config/nexus/config.env")), false);
     } finally {
       await local.close();
+    }
+  });
+
+  test("local discovery excludes non-chat model entries in both setup paths", async () => {
+    const local = await mock((_s, res) => json(res, 200, { data: [{ id: "safe-model" }, { id: "text-embedding-3-large" }, { id: "whisper-1" }, { id: "BAAI/bge-reranker-v2-m3" }] }));
+    try {
+      const discovered = await connectLocalEndpoint(cfg(), `${local.url}/v1`);
+      assert.deepEqual(discovered.models, ["safe-model"]);
+
+      const prepared = await prepareLocalEndpoint(cfg(), `${local.url}/v1`);
+      assert.equal(prepared.ok, true, prepared.message);
+      assert.match(prepared.message, /1 models found/);
+    } finally {
+      await local.close();
+      resetApplianceEndpointOverride();
     }
   });
 
@@ -624,6 +687,22 @@ describe("connecting from the picker", () => {
     } finally { await m.close(); }
   });
 
+  test("a provider connection reports failure and preserves an array credential store", async () => {
+    const m = await mock((s, res) => json(res, s.headers["x-api-key"] === "sk-ant-GOOD" ? 200 : 401, { data: [{ id: "claude-a" }] }));
+    const original = '{"version":1,"providers":[]}\n';
+    try {
+      operator({ NEXUS_ANTHROPIC_BASE_URL: `${m.url}/v1` });
+      fs.mkdirSync(path.dirname(credentialsPath()), { recursive: true });
+      fs.writeFileSync(credentialsPath(), original, { mode: 0o600 });
+      const result = await connectWithKey(cfg(), "anthropic", "sk-ant-GOOD");
+      assert.equal(result.ok, false, "connection must not report success when its key cannot be persisted");
+      assert.match(result.message, /key not saved/);
+      assert.equal(fs.readFileSync(credentialsPath(), "utf8"), original, "the malformed store is not overwritten");
+    } finally {
+      await m.close();
+    }
+  });
+
   test("the catalog lists the appliance first, connected providers with their source, and falls back to a cached list", async () => {
     const appliance = await mock((_s, res) => json(res, 200, { data: [{ id: "engineering/b0" }] }));
     let up = true;
@@ -680,6 +759,25 @@ describe("connecting from the picker", () => {
       assert.equal(second.models.some((model) => model.id === "first-origin-model"), false, "an offline new endpoint cannot inherit another endpoint's model cache");
     } finally {
       await endpoint.close();
+    }
+  });
+
+  test("a provider model cache is isolated by base URL", async () => {
+    const firstEndpoint = await mock((_s, res) => json(res, 200, { data: [{ id: "first-provider-model" }] }));
+    const secondEndpoint = await mock((_s, res) => json(res, 503, {}));
+    try {
+      operator({ NEXUS_COMPATIBLE_BASE_URL: `${firstEndpoint.url}/v1`, NEXUS_COMPATIBLE_AUTH: "none" });
+      const first = await buildCatalog(cfg(), { timeoutMs: 500 });
+      assert.ok(first.models.some((model) => model.provider === "compatible" && model.id === "first-provider-model"));
+
+      operator({ NEXUS_COMPATIBLE_BASE_URL: `${secondEndpoint.url}/v1`, NEXUS_COMPATIBLE_AUTH: "none" });
+      const second = await buildCatalog(cfg(), { timeoutMs: 500 });
+      const compatible = second.providers.find((provider) => provider.id === "compatible")!;
+      assert.equal(compatible.status, "error");
+      assert.equal(second.models.some((model) => model.id === "first-provider-model"), false, "an offline provider cannot inherit a different base URL's model cache");
+    } finally {
+      await firstEndpoint.close();
+      await secondEndpoint.close();
     }
   });
 

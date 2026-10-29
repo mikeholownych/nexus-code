@@ -1,9 +1,12 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import * as fs from "node:fs";
+import fsDefault from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { pathToFileURL } from "node:url";
 import {
   DurableStateManager,
   DurableTaskState,
@@ -156,6 +159,117 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     assert.strictEqual(list.length, 2);
     assert.ok(list.some((t) => t.taskId === taskA));
     assert.ok(list.some((t) => t.taskId === taskB));
+  });
+
+  test("PERS-004: task listing quarantines and reports a corrupt newest record instead of silently falling back", () => {
+    const manager = new DurableStateManager({ baseDir: tasksDir });
+    fs.writeFileSync(path.join(tasksDir, "older.json"), JSON.stringify({
+      taskId: "older",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      workspacePath: gitRepoDir,
+      messages: [],
+    }));
+    const corruptPath = path.join(tasksDir, "newer.json");
+    fs.writeFileSync(corruptPath, "{truncated");
+
+    assert.throws(() => manager.listTasks({ workspace: gitRepoDir }), (error: any) => {
+      assert.ok(error instanceof CorruptStateError);
+      assert.match(error.message, /newer/);
+      assert.ok(fs.existsSync(error.quarantinedPath));
+      assert.strictEqual(fs.readFileSync(error.quarantinedPath, "utf8"), "{truncated");
+      return true;
+    });
+    assert.strictEqual(fs.existsSync(corruptPath), false);
+    assert.deepStrictEqual(manager.listTasks({ workspace: gitRepoDir }).map((task) => task.taskId), ["older"]);
+  });
+
+  test("PERS-004: listing holds the store guard through quarantine so a valid replacement is not renamed", () => {
+    const manager = new DurableStateManager({ baseDir: tasksDir });
+    const corruptPath = path.join(tasksDir, "newer.json");
+    fs.writeFileSync(corruptPath, "{truncated");
+    const originalRename = fsDefault.renameSync;
+    let replacement: ReturnType<typeof spawnSync> | undefined;
+    let quarantinedPath: string | undefined;
+    (fsDefault as any).renameSync = (from: fs.PathLike, to: fs.PathLike) => {
+      const guardUrl = pathToFileURL(path.resolve("src/core/state_store_guard.ts")).href;
+      const script = `
+        import fs from "node:fs";
+        import { withStateStoreGuard } from ${JSON.stringify(guardUrl)};
+        try {
+          withStateStoreGuard(${JSON.stringify(tasksDir)}, () => fs.writeFileSync(${JSON.stringify(corruptPath)}, JSON.stringify({ taskId: "newer", schemaVersion: 2, messageLog: {}, messages: undefined })));
+        } catch (error) {
+          console.error(error.name);
+          process.exit(23);
+        }
+      `;
+      replacement = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+        cwd: path.resolve("."),
+        env: { ...process.env, HOME: tmpDir, XDG_CONFIG_HOME: path.join(tmpDir, ".config") },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      return originalRename(from, to);
+    };
+    syncBuiltinESMExports();
+    try {
+      assert.throws(() => manager.listTasks(), (error: any) => {
+        assert.ok(error instanceof CorruptStateError);
+        quarantinedPath = error.quarantinedPath;
+        return true;
+      });
+    } finally {
+      fsDefault.renameSync = originalRename;
+      syncBuiltinESMExports();
+    }
+    assert.ok(replacement);
+    assert.strictEqual(replacement.status, 23, replacement.stderr);
+    assert.match(replacement.stderr, /StateStoreBusyError/);
+    assert.ok(quarantinedPath);
+    assert.strictEqual(fs.readFileSync(quarantinedPath, "utf8"), "{truncated");
+  });
+
+  test("PERS-004: CLI latest resume returns a structured error for a corrupt newest record", () => {
+    const home = path.join(tmpDir, "cli-home");
+    const cliTasksDir = path.join(home, ".nexus", "tasks");
+    fs.mkdirSync(cliTasksDir, { recursive: true });
+    fs.writeFileSync(path.join(cliTasksDir, "newer.json"), "{truncated");
+    const result = spawnSync(process.execPath, [
+      "--import", path.resolve("node_modules/tsx/dist/loader.mjs"), path.resolve("src/index.ts"),
+      "run", "--resume", "--json", "--endpoint", "http://127.0.0.1:1/v1", "--model", "m", "--workspace", gitRepoDir,
+    ], {
+      cwd: gitRepoDir,
+      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), NO_COLOR: "1" },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+
+    assert.strictEqual(result.status, 1, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.strictEqual(payload.success, false);
+    assert.strictEqual(payload.status, "failed");
+    assert.match(payload.error, /newer.*JSON parse error|JSON parse error.*newer/i);
+  });
+
+  test("PERS-004: CLI latest resume makes corrupt task filename controls visible in terminal errors", () => {
+    const home = path.join(tmpDir, "cli-home-controls");
+    const cliTasksDir = path.join(home, ".nexus", "tasks");
+    const controlTaskId = "newer\u001b[31m";
+    fs.mkdirSync(cliTasksDir, { recursive: true });
+    fs.writeFileSync(path.join(cliTasksDir, `${controlTaskId}.json`), "{truncated");
+    const result = spawnSync(process.execPath, [
+      "--import", path.resolve("node_modules/tsx/dist/loader.mjs"), path.resolve("src/index.ts"),
+      "run", "--resume", "--endpoint", "http://127.0.0.1:1/v1", "--model", "m", "--workspace", gitRepoDir,
+    ], {
+      cwd: gitRepoDir,
+      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), NO_COLOR: "1" },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+
+    assert.strictEqual(result.status, 1, result.stderr);
+    assert.match(result.stderr, /Task failed:.*Corrupt state/);
+    assert.ok(!result.stderr.includes("\u001b"), "raw terminal escape must not reach stderr");
+    assert.ok(result.stderr.includes("␛[31m"), "the escape must remain visible to the operator");
   });
 
   test("PERS-002 & F-07: In-flight operation detected as interrupted on recovery (no false completion)", () => {

@@ -1012,7 +1012,19 @@ export class DurableStateManager {
     mtime: number;
   }> {
     if (!fs.existsSync(this.baseDir)) return [];
+    return withStateStoreGuard(this.baseDir, () => this.listTasksLocked(options));
+  }
 
+  private listTasksLocked(options?: { workspace?: string }): Array<{
+    taskId: string;
+    sessionId: string;
+    title: string;
+    updatedAt: string;
+    workspacePath: string;
+    status: TaskLifecycleStatus;
+    milestoneCount: number;
+    mtime: number;
+  }> {
     const files = fs.readdirSync(this.baseDir).filter((f) => f.endsWith(".json"));
     const results: Array<{
       taskId: string;
@@ -1026,12 +1038,15 @@ export class DurableStateManager {
     }> = [];
 
     for (const file of files) {
+      const fullPath = path.join(this.baseDir, file);
+      const cleanId = file.replace(/\.json$/, "");
       try {
-        const fullPath = path.join(this.baseDir, file);
         const stat = fs.statSync(fullPath);
         const content = fs.readFileSync(fullPath, "utf-8");
         const data = JSON.parse(content);
-        const cleanId = file.replace(/\.json$/, "");
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+          throw new CorruptStateError(cleanId, "State file does not contain a JSON object", this.quarantineFile(fullPath));
+        }
         results.push({
           taskId: data.taskId || data.id || cleanId,
           sessionId: data.sessionId || data.id || cleanId,
@@ -1042,8 +1057,11 @@ export class DurableStateManager {
           milestoneCount: Array.isArray(data.milestones) ? data.milestones.length : 0,
           mtime: stat.mtimeMs,
         });
-      } catch {
-        // Skip unparseable files in listing
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new CorruptStateError(cleanId, "JSON parse error", this.quarantineFile(fullPath));
+        }
+        throw error;
       }
     }
 
