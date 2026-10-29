@@ -7,10 +7,9 @@ import path from "node:path";
 const FIND = "/usr/bin/find";
 const MAX_OUTPUT = 64 * 1024 * 1024;
 const MAX_ENUMERATION_OUTPUT = 64 * 1024 * 1024;
-// The inventory covers every read-only system mount. Hosted qualification runners may
-// have much larger /usr/share and /usr/local/lib trees than developer hosts; keep the
-// scan bounded, but allow the full inventory to finish under normal CI I/O contention.
-const TIMEOUT_MS = 60_000;
+// This is a hard fail-closed bound. Keep the full inventory within it by letting GNU
+// find optimize the cheap name predicates ahead of filesystem metadata checks.
+const TIMEOUT_MS = 25_000;
 const MAX_ENTRIES = 500_000;
 const MAX_JOBS = 100_000;
 const DIRECTORY_BATCH_SIZE = 8;
@@ -33,7 +32,7 @@ function findArgs(roots) {
       : ["-o", "-lname", pattern]);
   });
   return [
-    "-P", ...roots,
+    "-O3", "-P", ...roots,
     "(", "(", "-type", "l", "(", ...nameExpression, "-o", ...linkTargetExpression, ")", ")",
     "-o",
     "(", "(", ...nameExpression, ")", "-a", "-type", "f", "-a", "-perm", "/111", ")",
