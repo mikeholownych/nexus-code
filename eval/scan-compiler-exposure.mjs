@@ -1,5 +1,6 @@
 // Run trusted GNU find inventories across canonical system roots. Large roots are
 // split at their immediate children so a broad directory cannot monopolize a worker.
+import { isUtf8 } from "node:buffer";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
@@ -232,5 +233,11 @@ if (failed) {
   process.stderr.write("trusted compiler inventory could not complete\n");
   process.exitCode = 1;
 } else {
-  process.stdout.write(Buffer.concat(outputs.flat(), outputBytes));
+  const output = Buffer.concat(outputs.flat(), outputBytes);
+  if (!isUtf8(output)) {
+    process.stderr.write("trusted compiler inventory paths are not valid UTF-8\n");
+    process.exitCode = 1;
+  } else {
+    process.stdout.write(output);
+  }
 }

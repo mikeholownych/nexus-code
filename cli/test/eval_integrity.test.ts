@@ -576,6 +576,17 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.chmodSync(invalidUtf8Compiler, 0o755);
   const invalidUtf8Exposure = scanOracleCompilerExposure([fakeSystem], [], []);
   assert.match(invalidUtf8Exposure.problem ?? "", /compiler exposure could not be checked/, "non-UTF-8 path bytes fail closed instead of being replaced with a different path");
+  const nestedUtf8System = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-nested-invalid-compiler-system-"));
+  const nestedParent = path.join(nestedUtf8System, "nested-parent");
+  fs.mkdirSync(nestedParent);
+  const nestedInvalidDirectory = Buffer.concat([Buffer.from(nestedParent), Buffer.from(path.sep), Buffer.from([0xff])]);
+  const nestedInvalidCompiler = Buffer.concat([nestedInvalidDirectory, Buffer.from("/rustc")]);
+  fs.mkdirSync(nestedInvalidDirectory);
+  fs.writeFileSync(nestedInvalidCompiler, compilerCanary);
+  fs.chmodSync(nestedInvalidCompiler, 0o755);
+  t.after(() => fs.rmSync(nestedUtf8System, { recursive: true, force: true }));
+  const nestedInvalidUtf8Exposure = scanOracleCompilerExposure([nestedUtf8System], [], []);
+  assert.match(nestedInvalidUtf8Exposure.problem ?? "", /compiler exposure could not be checked/, "nested non-UTF-8 compiler paths fail closed instead of disappearing during output decoding");
   const fakeGoAliasTarget = path.join(fakeSystemAlias, "lib", "go-1.22.12", "go");
   const maskArgs = compilerExposureMaskArgs({ paths: [fakeGoTarget, fakeGoAliasTarget, fakeCargo, fakeCargo], problem: null });
   const maskedDestinations = maskArgs.filter((value, index) => index > 0 && maskArgs[index - 1] === "/dev/null");
