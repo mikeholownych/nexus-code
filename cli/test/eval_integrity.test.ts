@@ -523,6 +523,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
   const fakeSymlinkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-target-"));
   const fakeMountedRuntime = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-mounted-runtime-"));
+  const fakeApprovedToolchain = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-approved-toolchain-"));
   const fakeLib = path.join(fakeSystem, "rustlib", "bin");
   const fakeGoTarget = path.join(fakeSystem, "lib", "go-1.22.12", "go");
   const fakeExternalGoTarget = path.join(fakeMountedRuntime, "go");
@@ -561,6 +562,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     fs.rmSync(fakeAlternatives, { recursive: true, force: true });
     fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
     fs.rmSync(fakeMountedRuntime, { recursive: true, force: true });
+    fs.rmSync(fakeApprovedToolchain, { recursive: true, force: true });
   });
   // Keep the compiler beyond the scanner's 64-directory batch so this catches dropped later batches.
   const batchedChildren = Array.from({ length: 65 }, (_, index) => {
@@ -598,6 +600,14 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.ok(!exposure.paths.some((item) => item.includes("go-225")), "executable-mode terminfo data is not a compiler binary");
   const externalMountedExposure = scanOracleCompilerExposure([fakeSystem], [], [fakeExternalGoTarget]);
   assert.ok(externalMountedExposure.paths.includes(fakeExternalGoTarget), "a compiler target outside system roots must be masked when separately mounted");
+  const approvedToolchainCompiler = path.join(fakeApprovedToolchain, "bin", "rustc");
+  fs.mkdirSync(path.dirname(approvedToolchainCompiler), { recursive: true });
+  fs.writeFileSync(approvedToolchainCompiler, compilerCanary);
+  fs.chmodSync(approvedToolchainCompiler, 0o755);
+  const approvedToolchainScan = scanOracleCompilerExposure([], [], [approvedToolchainCompiler], [fakeApprovedToolchain]);
+  assert.deepEqual(approvedToolchainScan, { paths: [], problem: null }, "an independently validated approved toolchain is excluded from the unapproved compiler inventory");
+  const mixedToolchainScan = scanOracleCompilerExposure([], [], [approvedToolchainCompiler, fakeExternalGoTarget], [fakeApprovedToolchain]);
+  assert.deepEqual(mixedToolchainScan.paths, [fakeExternalGoTarget], "excluding an approved toolchain does not skip other separately mounted compiler paths");
   const aliasedExposure = scanOracleCompilerExposure([fakeSystem, fakeSystemAlias], []);
   assert.ok(aliasedExposure.paths.includes(fakeGoTarget), "the canonical mounted spelling is scanned and masked");
   assert.ok(aliasedExposure.paths.includes(path.join(fakeSystemAlias, path.relative(fakeSystem, fakeGoTarget))), "every mounted spelling of a shared system directory is scanned and masked");

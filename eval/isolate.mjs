@@ -177,11 +177,20 @@ function mountedSpellingsForTarget(target, roots) {
 }
 
 export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = [], approvedToolchainRoots = []) {
-  const roots = [...new Set([...systemDirectories, ...systemEtcDirectories, ...additionalMountedPaths])].sort();
+  const approvedRoots = approvedToolchainRoots.map((root) => fs.realpathSync(root));
+  const roots = [...new Set([...systemDirectories, ...systemEtcDirectories, ...additionalMountedPaths])]
+    .filter((root) => {
+      try {
+        return !isInsideAnyRoot(fs.realpathSync(root), approvedRoots);
+      } catch (error) {
+        if (error?.code === "ENOENT") return true;
+        throw error;
+      }
+    })
+    .sort();
 
   const exposed = new Set();
   const visited = new Set();
-  const approvedRoots = approvedToolchainRoots.map((root) => fs.realpathSync(root));
   const inspectExecutable = (item, isSymbolicLink) => {
     if (visited.has(item)) return;
     visited.add(item);
