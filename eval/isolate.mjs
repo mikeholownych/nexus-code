@@ -244,6 +244,10 @@ function executableVersion(command, argv) {
 export function oracleToolchainsProblem({ systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = [] } = {}) {
   const exposureScan = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths);
   if (exposureScan.problem) return exposureScan.problem;
+  return pinnedOracleToolchainsProblem();
+}
+
+function pinnedOracleToolchainsProblem() {
   for (const { root, required } of PINNED_ORACLE_TOOLCHAINS) {
     const problem = pinnedToolchainProblem(root, required);
     if (problem) return problem;
@@ -599,7 +603,7 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
     const additionalMountedPaths = readOnlyPaths.map((item) => fs.realpathSync(item));
     compilerExposure = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths);
     if (compilerExposure.problem) throw new Error(compilerExposure.problem);
-    const problem = oracleToolchainsProblem({ systemDirectories, systemEtcDirectories, additionalMountedPaths });
+    const problem = pinnedOracleToolchainsProblem();
     if (problem) throw new Error(problem);
   }
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRoots, allowedFiles);
