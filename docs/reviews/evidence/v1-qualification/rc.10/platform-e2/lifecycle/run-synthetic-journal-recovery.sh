@@ -56,7 +56,7 @@ docker run --rm --pull=never --network bridge \
   grep -F "Recovery completed (cleaned_up)" /tmp/r2.log >/dev/null
   unchanged
 
-  echo "== malformed journal is refused, installation untouched"
+  echo "== malformed journal is refused; version, launcher target, and target directory checks follow"
   printf "{\"formatVersion\":1" > "$journal"
   set +e
   nexus upgrade --recover >/tmp/r3.log 2>&1
@@ -67,6 +67,6 @@ docker run --rm --pull=never --network bridge \
   grep -F "failed schema or path validation" /tmp/r3.log >/dev/null
   test -f "$journal"
   unchanged
-  echo "synthetic_journal_recovery=PASS staged_cleaned=true preparing_cleaned=true malformed_refused=true installation_unchanged=true"
+  echo "synthetic_journal_recovery=PASS staged_cleaned=true preparing_cleaned=true malformed_refused=true version_unchanged=true launcher_target_unchanged=true target_install_dir_absent=true"
   ' > "$log" 2>&1
 cat "$log"
