@@ -1,11 +1,11 @@
 // Run trusted GNU find inventories across canonical system roots. Large roots are
 // split at their immediate children so a broad directory cannot monopolize a worker.
-import { opendir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
 const FIND = "/usr/bin/find";
 const MAX_OUTPUT = 64 * 1024 * 1024;
+const MAX_ENUMERATION_OUTPUT = 64 * 1024 * 1024;
 const TIMEOUT_MS = 25_000;
 const MAX_ENTRIES = 500_000;
 const MAX_JOBS = 100_000;
@@ -45,29 +45,89 @@ if (roots.length === 0 || roots.length > 128 || roots.some((root) => !root.start
 async function* enumerateJobs() {
   let entryCount = 0;
   let jobCount = 0;
+  let enumerationBytes = 0;
   for (const root of roots) {
-    const directory = await opendir(root);
+    const child = spawn(FIND, ["-P", root, "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\\0%p\\0"], {
+      env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+    let stderrBytes = 0;
+    let spawnError = null;
+    child.stderr.on("data", (chunk) => {
+      stderrBytes += chunk.length;
+      failed = true;
+      stopAll();
+    });
+    child.on("error", (error) => {
+      spawnError = error;
+      failed = true;
+      stopAll();
+    });
+    const closed = new Promise((resolve) => child.once("close", (code) => resolve(code)));
     let directEntries = [];
-    for await (const entry of directory) {
-      if (++entryCount > MAX_ENTRIES) throw new Error("compiler inventory entry limit exceeded");
-      const item = path.join(root, entry.name);
-      // Never follow symlinked directories. GNU find receives symlinks as starting
-      // points under -P and checks their names and link targets without traversal.
-      let job;
-      if (entry.isDirectory()) {
-        job = [item];
-      } else {
-        directEntries.push(item);
-        if (directEntries.length === DIRECT_ENTRY_BATCH_SIZE) {
-          job = directEntries;
-          directEntries = [];
+    let entryType = null;
+    let pending = Buffer.alloc(0);
+    try {
+      for await (const chunk of child.stdout) {
+        enumerationBytes += chunk.length;
+        if (enumerationBytes > MAX_ENUMERATION_OUTPUT) {
+          failed = true;
+          stopAll();
+          throw new Error("compiler inventory enumeration output limit exceeded");
         }
+        const data = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+        let offset = 0;
+        while (true) {
+          const delimiter = data.indexOf(0, offset);
+          if (delimiter < 0) break;
+          const field = data.subarray(offset, delimiter);
+          offset = delimiter + 1;
+          if (entryType === null) {
+            if (field.length !== 1) throw new Error("invalid compiler inventory entry type");
+            entryType = field.toString("ascii");
+            continue;
+          }
+          if (++entryCount > MAX_ENTRIES) {
+            failed = true;
+            stopAll();
+            throw new Error("compiler inventory entry limit exceeded");
+          }
+          const item = field.toString("utf8");
+          let job;
+          // The `-P` inventory process reports immediate directories separately and
+          // leaves symlinks as non-directory entries, so descendants are never followed.
+          if (entryType === "d") {
+            job = [item];
+          } else {
+            directEntries.push(item);
+            if (directEntries.length === DIRECT_ENTRY_BATCH_SIZE) {
+              job = directEntries;
+              directEntries = [];
+            }
+          }
+          entryType = null;
+          if (job) {
+            if (++jobCount > MAX_JOBS) {
+              failed = true;
+              stopAll();
+              throw new Error("compiler inventory job limit exceeded");
+            }
+            yield job;
+          }
+        }
+        pending = data.subarray(offset);
       }
-      if (job) {
-        if (++jobCount > MAX_JOBS) throw new Error("compiler inventory job limit exceeded");
-        yield job;
+    } finally {
+      if (child.exitCode === null && !child.killed) child.kill("SIGTERM");
+      const code = await closed;
+      children.delete(child);
+      if (spawnError || code !== 0 || stderrBytes !== 0 || entryType !== null || pending.length !== 0) {
+        failed = true;
+        stopAll();
       }
     }
+    if (failed) throw new Error("compiler inventory enumeration failed");
     if (directEntries.length) {
       if (++jobCount > MAX_JOBS) throw new Error("compiler inventory job limit exceeded");
       yield directEntries;
