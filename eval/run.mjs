@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
 import { asUserSpec, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, runtimeCorpusOverlapProblem, taskTreeDigest, validateTask } from "./validate.mjs";
-import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, hiddenOutputHasTests, isolatedProcessArgv, normalizeRunAsPermissions, runIsolated, runIsolatedProcess, sandboxAvailable, stageHiddenFiles } from "./isolate.mjs";
+import { agentSandboxArgv, assertNoSymlinks, candidateAgentPath, confinedPath, grantRunAsAccess, hiddenOutputHasTests, isolatedProcessArgv, normalizeRunAsPermissions, runIsolated, runIsolatedProcess, sandboxAvailable, stageHiddenFiles } from "./isolate.mjs";
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
 import { applyAgentChanges, cloneWorkspace } from "./hardened_check.mjs";
@@ -265,7 +265,7 @@ async function runOnce(task, run) {
       cloneWorkspace(hiddenWs, regressionWs);
     }
     const refused = (check) => ({ pass: false, status: null, timedOut: false, overflow: false, output: `hardened check refused: ${hardening.configChanges.join("; ")}`, refused: true, resources: null, containmentProblem: null, check });
-    const hidden = hardening?.configChanges.length ? refused("hidden") : await runCheck(task, hiddenWs, task.hidden, true, { readOnlyHidden: hardened });
+    const hidden = hardening?.configChanges.length ? refused("hidden") : await runCheck(task, hiddenWs, task.hidden, true, { readOnlyHidden: hardened, protectedCorpusPaths: protectedCorpusPathsForRun() });
     const regression = task.regression ? (hardening?.configChanges.length ? refused("regression") : await runCheck(task, regressionWs, task.regression, false)) : null;
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
@@ -471,7 +471,7 @@ function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
   if (forbiddenEnv) throw new Error(`candidate configuration may not contain credential-like environment key ${forbiddenEnv}`);
   const ep = "http://127.0.0.1:40127/v1";
   const env = {
-    PATH: config.env?.PATH ?? "/usr/bin:/bin", LANG: config.env?.LANG ?? "C.UTF-8", LC_ALL: config.env?.LC_ALL ?? "C.UTF-8",
+    PATH: candidateAgentPath(config.env?.PATH), LANG: config.env?.LANG ?? "C.UTF-8", LC_ALL: config.env?.LC_ALL ?? "C.UTF-8",
     TERM: config.env?.TERM ?? "dumb", HOME: "/home/eval", PWD: "/workspace", CI: "1",
     LOCAL_LLM_API_KEY: localToken, OPENAI_API_KEY: localToken, GW_KEY: localToken,
     XDG_CONFIG_HOME: "/home/eval/.config", XDG_DATA_HOME: "/home/eval/.local/share", XDG_STATE_HOME: "/home/eval/.local/state",
@@ -697,9 +697,9 @@ function runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, 
   });
 }
 
-function runCheck(task, ws, check, hidden, { readOnlyHidden = false } = {}) {
+function runCheck(task, ws, check, hidden, { readOnlyHidden = false, protectedCorpusPaths = [] } = {}) {
   if (hidden && check.protocol === "blackbox-v1") {
-    return runBlackBoxOracle(task, ws, check, { resources: config.resources ?? null }).then((result) => ({
+    return runBlackBoxOracle(task, ws, check, { resources: config.resources ?? null, protectedCorpusPaths }).then((result) => ({
       ...result,
       status: result.pass ? 0 : 1,
       output: JSON.stringify({
