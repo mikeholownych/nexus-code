@@ -564,14 +564,14 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     fs.rmSync(fakeMountedRuntime, { recursive: true, force: true });
     fs.rmSync(fakeApprovedToolchain, { recursive: true, force: true });
   });
-  // Keep the compiler beyond the scanner's 64-directory batch so this catches dropped later batches.
+  // Keep the compiler under the 65th depth-3 subtree so this catches dropped later batches.
   const batchedChildren = Array.from({ length: 65 }, (_, index) => {
     const child = path.join(batchedSystem, `child-${String(index).padStart(2, "0")}`);
-    const scanDirectory = path.join(child, "scan-subtree");
+    const scanDirectory = path.join(child, "scan-subtree", "deep");
     fs.mkdirSync(scanDirectory, { recursive: true });
     return scanDirectory;
   });
-  const batchedRootEntries = spawnSync("/usr/bin/find", ["-P", batchedSystem, "-mindepth", "2", "-maxdepth", "2", "-type", "d", "-print0"], { encoding: "buffer" });
+  const batchedRootEntries = spawnSync("/usr/bin/find", ["-P", batchedSystem, "-mindepth", "3", "-maxdepth", "3", "-type", "d", "-print0"], { encoding: "buffer" });
   assert.equal(batchedRootEntries.status, 0, "the fixture can enumerate the bounded directory batches");
   const orderedBatchedChildren = batchedRootEntries.stdout.toString("utf8").split("\0").filter(Boolean);
   assert.equal(orderedBatchedChildren.length, batchedChildren.length);
@@ -600,6 +600,15 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.ok(!exposure.paths.some((item) => item.includes("go-225")), "executable-mode terminfo data is not a compiler binary");
   const externalMountedExposure = scanOracleCompilerExposure([fakeSystem], [], [fakeExternalGoTarget]);
   assert.ok(externalMountedExposure.paths.includes(fakeExternalGoTarget), "a compiler target outside system roots must be masked when separately mounted");
+  const fakeExcludedRuntime = path.join(fakeMountedRuntime, "android-sdk");
+  const excludedCompiler = path.join(fakeExcludedRuntime, "platform-tools", "go");
+  fs.mkdirSync(path.dirname(excludedCompiler), { recursive: true });
+  fs.writeFileSync(excludedCompiler, compilerCanary);
+  fs.chmodSync(excludedCompiler, 0o755);
+  const excludedTreeScan = scanOracleCompilerExposure([fakeMountedRuntime], [], [], [], [fakeExcludedRuntime]);
+  assert.equal(excludedTreeScan.problem, null);
+  assert.ok(excludedTreeScan.paths.includes(fakeExternalGoTarget), "compiler paths outside the masked SDK subtree remain scanned");
+  assert.ok(!excludedTreeScan.paths.includes(excludedCompiler), "compiler paths below a candidate-hidden SDK subtree are not exposed to the candidate");
   const approvedToolchainCompiler = path.join(fakeApprovedToolchain, "bin", "rustc");
   fs.mkdirSync(path.dirname(approvedToolchainCompiler), { recursive: true });
   fs.writeFileSync(approvedToolchainCompiler, compilerCanary);
@@ -669,6 +678,17 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const selectedToolchainRoots = Object.values(inactiveRustSource).filter(Boolean);
   const invalidRootExposure = scanOracleCompilerExposure([], [], [invalidRootCompiler], selectedToolchainRoots);
   assert.ok(invalidRootExposure.paths.includes(invalidRootCompiler), "compiler under an inactive configured Rust source remains masked when separately mounted as a runtime file");
+  if (sandboxAvailable() && fs.existsSync("/usr/local/lib/android")) {
+    const systemSdkMasked = isolatedProcessArgv({
+      cwd: fakeSystem,
+      command: "/usr/bin/true",
+      systemDirectories: ["/usr/local/lib"],
+      systemEtcDirectories: [],
+    });
+    const sdkMaskIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--tmpfs" && systemSdkMasked.argv[index + 1] === "/usr/local/lib/android");
+    const libBindIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--ro-bind" && systemSdkMasked.argv[index + 1] === "/usr/local/lib" && systemSdkMasked.argv[index + 2] === "/usr/local/lib");
+    assert.ok(libBindIndex >= 0 && sdkMaskIndex > libBindIndex, "the host-only Android SDK is hidden after its parent runtime directory is mounted");
+  }
   if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives], additionalMountedPaths: [fakeExternalGoTarget] })) {
     const isolated = isolatedProcessArgv({
       cwd: fakeSystem,

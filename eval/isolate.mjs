@@ -14,6 +14,9 @@ const FIND = "/usr/bin/find";
 const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share/git-core/templates", "/usr/share/terminfo", "/usr/share/zoneinfo", "/lib", "/lib64", "/usr/local/lib"];
 const SYSTEM_ETC_FILES = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"];
 const SYSTEM_ETC_DIRS = ["/etc/alternatives"];
+// The hosted Ubuntu image exposes the Android SDK under /usr/local/lib. It is not part of
+// the evaluator runtime; hide it from candidates and exclude it from compiler inventory.
+const SYSTEM_UNMOUNTED_DIRECTORIES = ["/usr/local/lib/android"];
 const FORBIDDEN_RUNTIME_ROOTS = ["/etc", "/root", "/proc", "/sys", "/run", "/var", "/dev", "/tmp", "/mnt", "/media", "/srv"];
 const SENSITIVE_HOME_PARTS = [".ssh", ".config", ".aws", ".azure", ".gnupg", ".kube", ".nexus", ".cache"];
 const TOOLCHAIN_POLICY = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "toolchain-versions.json"), "utf8"));
@@ -161,6 +164,57 @@ function isInsideAnyRoot(candidate, roots) {
   return roots.some((root) => candidate === root || candidate.startsWith(`${root}${path.sep}`));
 }
 
+function splitRootsAroundExcludedDirectories(roots, excludedDirectories) {
+  const canonicalExclusions = [];
+  for (const excluded of excludedDirectories) {
+    try { canonicalExclusions.push(fs.realpathSync(excluded)); }
+    catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  const expanded = [];
+  const expand = (root) => {
+    let canonicalRoot;
+    try { canonicalRoot = fs.realpathSync(root); }
+    catch (error) {
+      if (error?.code === "ENOENT") { expanded.push(root); return; }
+      throw error;
+    }
+    if (isInsideAnyRoot(canonicalRoot, canonicalExclusions)) return;
+    const nestedExclusions = canonicalExclusions.filter((excluded) => excluded !== canonicalRoot && isInsideAnyRoot(excluded, [canonicalRoot]));
+    if (!nestedExclusions.length || !fs.statSync(root).isDirectory()) {
+      expanded.push(root);
+      return;
+    }
+    const entries = fs.readdirSync(root, { withFileTypes: true }).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    for (const entry of entries) expand(path.join(root, entry.name));
+  };
+  for (const root of roots) expand(root);
+  return expanded;
+}
+
+function maskedSystemDirectoryPaths(systemDirectories) {
+  const masked = [];
+  for (const excluded of SYSTEM_UNMOUNTED_DIRECTORIES) {
+    if (!systemDirectories.some((root) => excluded === root || excluded.startsWith(`${root}${path.sep}`))) continue;
+    let stat;
+    try { stat = fs.lstatSync(excluded); }
+    catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(excluded) !== excluded) {
+      throw new Error(`excluded system runtime path is not a real directory: ${excluded}`);
+    }
+    masked.push(excluded);
+  }
+  return masked;
+}
+
+function appendSystemDirectoryMasks(args, maskedDirectories) {
+  for (const directory of maskedDirectories) args.push("--tmpfs", directory);
+}
+
 function mountedSpellingsForTarget(target, roots) {
   const spellings = new Set();
   for (const root of roots) {
@@ -176,10 +230,12 @@ function mountedSpellingsForTarget(target, roots) {
   return [...spellings];
 }
 
-export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = [], approvedToolchainRoots = []) {
+export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = [], approvedToolchainRoots = [], excludedDirectories = []) {
   const approvedRoots = approvedToolchainRoots.map((root) => fs.realpathSync(root));
-  const roots = [...new Set([...systemDirectories, ...systemEtcDirectories, ...additionalMountedPaths])]
-    .filter((root) => {
+  const roots = splitRootsAroundExcludedDirectories(
+    [...new Set([...systemDirectories, ...systemEtcDirectories, ...additionalMountedPaths])],
+    excludedDirectories,
+  ).filter((root) => {
       try {
         return !isInsideAnyRoot(fs.realpathSync(root), approvedRoots);
       } catch (error) {
@@ -303,7 +359,8 @@ function executableVersion(command, argv) {
 }
 
 export function oracleToolchainsProblem({ systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = [] } = {}) {
-  const exposureScan = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths);
+  const maskedDirectories = maskedSystemDirectoryPaths(systemDirectories);
+  const exposureScan = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths, [], maskedDirectories);
   if (exposureScan.problem) return exposureScan.problem;
   return pinnedOracleToolchainsProblem();
 }
@@ -489,7 +546,8 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
   const mountSources = candidateSandboxHostMountSources({ cwd: workspace, readOnlyPaths: [...readOnlySources, ...hiddenSources] });
   const protectedOverlap = candidateMountOverlapProblem(mountSources, protectedCorpusPaths);
   if (protectedOverlap) throw new Error(protectedOverlap);
-  const compilerExposure = scanOracleCompilerExposure(mountSources.systemDirectories, mountSources.systemEtcDirectories, [], mountSources.toolchainDirectories);
+  const maskedDirectories = maskedSystemDirectoryPaths(mountSources.systemDirectories);
+  const compilerExposure = scanOracleCompilerExposure(mountSources.systemDirectories, mountSources.systemEtcDirectories, [], mountSources.toolchainDirectories, maskedDirectories);
   if (compilerExposure.problem) throw new Error(compilerExposure.problem);
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing to execute task-controlled commands");
   const hiddenGuestPaths = hiddenSources.map((source) => path.posix.join("/workspace", path.relative(workspace, source).split(path.sep).join("/")));
@@ -510,6 +568,7 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
       }
     } catch {}
   }
+  appendSystemDirectoryMasks(args, maskedDirectories);
   const { goRoot, rustRoot } = mountSources.toolchainRoots;
   args.push(...toolchainMountArgs({ goRoot, rustRoot }, localPrefixCreated));
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
@@ -610,11 +669,13 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
   const mountSources = candidateSandboxHostMountSources({ cwd, home, proxyDirectory, readOnlyPaths, nodeRuntime: process.execPath, supervisorPath });
   const protectedOverlap = candidateMountOverlapProblem(mountSources, protectedCorpusPaths);
   if (protectedOverlap) throw new Error(protectedOverlap);
+  const maskedDirectories = maskedSystemDirectoryPaths(mountSources.systemDirectories);
   const compilerExposure = scanOracleCompilerExposure(
     mountSources.systemDirectories,
     mountSources.systemEtcDirectories,
     mountSources.runtimeSources.readOnlyPaths,
     mountSources.toolchainDirectories,
+    maskedDirectories,
   );
   if (compilerExposure.problem) throw new Error(compilerExposure.problem);
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing candidate execution");
@@ -633,6 +694,7 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
     if (source === "/usr/local/lib") args.push("--dir", "/usr/local");
     args.push("--ro-bind", source, source);
   }
+  appendSystemDirectoryMasks(args, maskedDirectories);
   args.push(...candidateToolchainMountArgs(mountSources.toolchainRoots, mountSources.systemDirectories));
   for (const source of mountSources.systemFiles) args.push("--ro-bind", source, source);
   for (const source of mountSources.systemEtcDirectories) args.push("--ro-bind", source, source);
@@ -671,7 +733,8 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   if (oracleToolchains) {
     const additionalMountedPaths = readOnlyPaths.map((item) => fs.realpathSync(item));
     oracleToolchainSources = candidateToolchainRootSources();
-    compilerExposure = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths, Object.values(oracleToolchainSources).filter(Boolean));
+    const maskedDirectories = maskedSystemDirectoryPaths(systemDirectories);
+    compilerExposure = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths, Object.values(oracleToolchainSources).filter(Boolean), maskedDirectories);
     if (compilerExposure.problem) throw new Error(compilerExposure.problem);
     const problem = pinnedOracleToolchainsProblem(oracleToolchainSources);
     if (problem) throw new Error(problem);
@@ -688,6 +751,7 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
       }
     } catch {}
   }
+  appendSystemDirectoryMasks(args, maskedSystemDirectoryPaths(systemDirectories));
   if (oracleToolchains) {
     for (const { root } of PINNED_ORACLE_TOOLCHAINS) {
       const parent = path.dirname(root);

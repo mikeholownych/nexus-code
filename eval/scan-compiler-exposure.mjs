@@ -1,5 +1,5 @@
 // Run trusted GNU find inventories across canonical system roots. Large roots are
-// split at their immediate children so a broad directory cannot monopolize a worker.
+// split at bounded-depth subtrees so a broad directory cannot monopolize a worker.
 import { isUtf8 } from "node:buffer";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -55,7 +55,7 @@ async function* enumerateJobs() {
   let jobCount = 0;
   let enumerationBytes = 0;
   for (const root of roots) {
-    const child = spawn(FIND, ["-P", root, "-mindepth", "1", "-maxdepth", "2", "-printf", "%d\\0%y\\0%p\\0"], {
+    const child = spawn(FIND, ["-P", root, "-mindepth", "1", "-maxdepth", "3", "-printf", "%d\\0%y\\0%p\\0"], {
       env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -94,7 +94,7 @@ async function* enumerateJobs() {
           const field = data.subarray(offset, delimiter);
           offset = delimiter + 1;
           if (entryDepth === null) {
-            if (field.length !== 1 || field[0] < 0x31 || field[0] > 0x32) {
+            if (field.length !== 1 || field[0] < 0x31 || field[0] > 0x33) {
               throw new Error("invalid compiler inventory entry depth");
             }
             entryDepth = field[0] - 0x30;
@@ -115,9 +115,9 @@ async function* enumerateJobs() {
             throw new Error("compiler inventory path is not valid UTF-8");
           }
           let job;
-          // Enumerate two levels before scheduling recursive scans. This splits large
+          // Enumerate three levels before scheduling recursive scans. This splits large
           // immediate subtrees into independent jobs without following symlinked dirs.
-          if (entryType === "d" && entryDepth === 2) {
+          if (entryType === "d" && entryDepth === 3) {
             scanDirectories.push(item);
             if (scanDirectories.length === DIRECTORY_BATCH_SIZE) {
               job = scanDirectories;
