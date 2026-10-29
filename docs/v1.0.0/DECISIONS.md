@@ -248,13 +248,15 @@ This amendment is **narrow by design**. It applies only to corpora where the mea
 
 ## DEC-19: v1.0.0 manual terminal-matrix waiver
 
-**Context.** [DEC-18](#dec-18-v100-terminal-screenshot-artifact-waiver) waived screenshot artifacts only; the fifteen manual matrix cells (five terminals × three sizes, ACCEPTANCE §5.3) remained mandatory. On 2026-10-29 the release owner waived the manual real-terminal matrix for v1.0.0.
+**Status: withdrawn.** The waiver described in this decision is not in effect.
 
-**Chosen (owner-confirmed 2026-10-29).** The manual E3 matrix, its per-cell PASS/FAIL verdicts and its evidence records are not required for v1.0.0. ACC-TUI-MANUAL is **waived**, not PASS: no cell verdict is recorded and none may be inferred. The automated CI PTY suites and the scripted installed-RC PTY scenarios (ACCEPTANCE §5.1–§5.2) remain mandatory and are the only terminal evidence for this release. This waiver changes no other acceptance criterion, safety gate, or verification rule, and it does not change any requirements-ledger status: REQ-QUAL-108 remains `partial` unless the ledger owner records a different disposition.
+**History.** A prior revision of this decision recorded that the release owner waived the manual matrix. That record conflicted with the explicit release requirement for five terminal environments × three sizes. The waiver is withdrawn and must not be used to disposition any v1.0.0 gate.
 
-**Disclosure.** The v1.0.0 release notes must state that the manual real-terminal matrix was waived by owner decision and that terminal evidence is automated (PTY/CI) only.
+**Current decision (release owner direction, 2026-10-29).** All fifteen manual E3 cells remain mandatory on the exact installed RC. Record a PASS or FAIL and observed outcomes for every required check in every cell. Automated CI or PTY runs do not substitute for operator evidence. [DEC-18](#dec-18-v100-terminal-screenshot-artifact-waiver) remains in force and waives screenshot artifacts only; it does not waive interaction, checks, per-cell verdicts, evidence records, or safety gates. No cell is accepted as complete without actual manual execution.
 
-**Affected:** ACCEPTANCE §5.3 / ACC-TUI-MANUAL; ACCEPTANCE §10 G6; SPEC-10 REQ-QUAL-108; `TERMINAL-MATRIX-WORKSHEET.md`; PLAN-10 task 12; READINESS.
+**Disclosure.** Do not describe the manual matrix as waived. Until all fifteen cells have verified operator evidence, ACC-TUI-MANUAL remains incomplete and v1.0.0 acceptance remains blocked.
+
+**Affected:** ACCEPTANCE §5.3 / ACC-TUI-MANUAL; ACCEPTANCE §10 G6; SPEC-10 REQ-QUAL-108; `TERMINAL-MATRIX-WORKSHEET.md`; PLAN-10 task 12; READINESS; release notes.
 
 ## Owner and external actions required (not performed by the audit)
 

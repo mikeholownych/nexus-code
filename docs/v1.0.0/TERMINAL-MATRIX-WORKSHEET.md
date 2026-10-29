@@ -2,7 +2,7 @@
 
 For `REQ-QUAL-108` / `ACC-TUI-MANUAL`, following [`ACCEPTANCE.md` §5.3](ACCEPTANCE.md#53-manual-real-terminal-matrix-e3).
 
-> **Waived for v1.0.0 by owner decision [DEC-19](DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver) (2026-10-29).** This worksheet is retained for a successor release. It contains no results, no cell verdict is recorded for v1.0.0, and it does not qualify an RC.
+> **Required for v1.0.0.** Complete all 15 cells against the exact installed RC. Blank cells are incomplete; no result is inferred. Automated PTY runs do not count as manual cell evidence. DEC-18 waives screenshot artifacts only. The prior waiver record is withdrawn by [DEC-19](DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver).
 
 ## Installed candidate identity
 
