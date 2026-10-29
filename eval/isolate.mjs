@@ -117,6 +117,21 @@ function isInsideAnyRoot(candidate, roots) {
   return roots.some((root) => candidate === root || candidate.startsWith(`${root}${path.sep}`));
 }
 
+function mountedSpellingsForTarget(target, roots) {
+  const spellings = new Set();
+  for (const root of roots) {
+    let canonicalRoot;
+    try { canonicalRoot = fs.realpathSync(root); }
+    catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!isInsideAnyRoot(target, [canonicalRoot])) continue;
+    spellings.add(path.resolve(root, path.relative(canonicalRoot, target)));
+  }
+  return [...spellings];
+}
+
 /** Reject every unpinned Go/Rust compiler reachable through the system mounts used by a task sandbox. */
 export function oracleCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS) {
   const scan = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories);
@@ -177,7 +192,10 @@ function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemE
       }
       const terminfoMagic = header.equals(Buffer.from([0x1a, 0x01])) || header.equals(Buffer.from([0x1e, 0x02]));
       if (terminfoMagic && /(?:^|\/)terminfo\//.test(item)) continue;
-      exposed.add(item);
+      // Mask the final regular-file path, not a symlink such as /usr/bin/go: bubblewrap
+      // refuses to bind over a symlink destination. Map that target into every mounted
+      // spelling of its root so aliases cannot expose the same file through another path.
+      for (const mountedPath of mountedSpellingsForTarget(target, roots)) exposed.add(mountedPath);
     }
   };
 
@@ -200,9 +218,16 @@ function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemE
   return result;
 }
 
-function compilerExposureMaskArgs(scan) {
+export function compilerExposureMaskArgs(scan) {
   if (scan.problem) throw new Error(scan.problem);
-  return scan.paths.flatMap((item) => ["--ro-bind", "/dev/null", item]);
+  const targets = [...new Set(scan.paths)];
+  for (const target of targets) {
+    let stat;
+    try { stat = fs.lstatSync(target); }
+    catch { throw new Error("oracle compiler exposure target is unavailable; refusing qualification"); }
+    if (!stat.isFile()) throw new Error("oracle compiler exposure target is not a regular file; refusing qualification");
+  }
+  return targets.flatMap((target) => ["--ro-bind", "/dev/null", target]);
 }
 
 /** Candidate processes receive the same system mounts as oracle processes and must share their compiler boundary. */

@@ -478,7 +478,7 @@ test("black-box oracle keeps canary expectations outside the candidate process a
 
 test("Python black-box oracle uses only pinned offline Go and Rust toolchains, or fails preflight", { timeout: 60_000 }, async (t) => {
   const { blackBoxOracleProblem, runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
-  const { candidateCompilerExposureProblem, candidateToolchainRootProblem, oracleCompilerExposureProblem, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { candidateCompilerExposureProblem, candidateToolchainRootProblem, compilerExposureMaskArgs, oracleCompilerExposureProblem, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const toolchainPolicy = JSON.parse(fs.readFileSync(path.join(ROOT, "eval/toolchain-versions.json"), "utf8"));
   const rustToolchain = fs.readFileSync(path.join(ROOT, "rust-toolchain.toml"), "utf8");
   const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
@@ -508,8 +508,10 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
   const fakeSymlinkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-target-"));
   const fakeLib = path.join(fakeSystem, "rustlib", "bin");
+  const fakeGoTarget = path.join(fakeSystem, "lib", "go-1.22.12", "go");
   fs.mkdirSync(path.join(fakeSystem, "bin"), { recursive: true });
   fs.mkdirSync(fakeLib, { recursive: true });
+  fs.mkdirSync(path.dirname(fakeGoTarget), { recursive: true });
   const compilerCanary = "#!/bin/sh\nprintf '%s\\n' UNPINNED_COMPILER_CANARY\n";
   const fakeGo = path.join(fakeSystem, "bin", "go");
   const fakeRustc = path.join(fakeLib, "rustc");
@@ -519,10 +521,11 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.mkdirSync(path.dirname(fakeTerminfo), { recursive: true });
   fs.writeFileSync(fakeTerminfo, Buffer.from([0x1a, 0x01, 0x00, 0x00]));
   fs.chmodSync(fakeTerminfo, 0o755);
-  for (const file of [fakeGo, fakeRustc, fakeCargo]) {
+  for (const file of [fakeGoTarget, fakeRustc, fakeCargo]) {
     fs.writeFileSync(file, compilerCanary);
     fs.chmodSync(file, 0o755);
   }
+  fs.symlinkSync(fakeGoTarget, fakeGo);
   fs.writeFileSync(fakeNoShebang, "exit 7\n");
   fs.chmodSync(fakeNoShebang, 0o755);
   fs.symlinkSync(fakeCargo, path.join(fakeAlternatives, "cargo"));
@@ -541,34 +544,47 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const exposure = oracleCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
   assert.match(exposure ?? "", /unapproved Go\/Rust compiler executable/);
   assert.match(exposure ?? "", /rustlib\/bin\/rustc/);
-  assert.match(exposure ?? "", /rustc-alias/);
-  assert.match(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/cargo/);
-  assert.match(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/compiler-alias/);
+  assert.match(exposure ?? "", /bin\/cargo-1\.94\.0/);
+  assert.doesNotMatch(exposure ?? "", /rustc-alias/, "a symlink to a compiler outside mounted system roots is not reachable in the sandbox");
+  assert.doesNotMatch(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/cargo/);
+  assert.doesNotMatch(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/compiler-alias/);
   assert.match(exposure ?? "", /rustc-1\.94\.0/, "no-shebang executable compilers must be detected and masked");
   assert.doesNotMatch(exposure ?? "", /go-225/, "executable-mode terminfo data is not a compiler binary");
   const aliasedExposure = oracleCompilerExposureProblem([fakeSystem, fakeSystemAlias], []);
-  assert.match(aliasedExposure ?? "", /eval-oracle-unpinned-compiler-system-[^,]+\/bin\/go/);
-  assert.match(aliasedExposure ?? "", /eval-oracle-unpinned-compiler-system-[^,]+-alias\/bin\/go/, "every mounted spelling of a shared system directory must be detected and masked");
+  assert.ok(aliasedExposure?.includes(fakeGoTarget), "the canonical mounted spelling is scanned and masked");
+  assert.ok(aliasedExposure?.includes(path.join(fakeSystemAlias, path.relative(fakeSystem, fakeGoTarget))), "every mounted spelling of a shared system directory must be scanned and masked");
+  const fakeGoAliasTarget = path.join(fakeSystemAlias, "lib", "go-1.22.12", "go");
+  const maskArgs = compilerExposureMaskArgs({ paths: [fakeGoTarget, fakeGoAliasTarget, fakeCargo, fakeCargo], problem: null });
+  const maskedDestinations = maskArgs.filter((value, index) => index > 0 && maskArgs[index - 1] === "/dev/null");
+  assert.ok(maskedDestinations.includes(fakeGoTarget), "the canonical compiler mount spelling must be masked");
+  assert.ok(maskedDestinations.includes(fakeGoAliasTarget), "the compiler's alternate mounted spelling must remain masked");
+  assert.equal(maskedDestinations.filter((destination) => destination === fakeCargo).length, 1, "duplicate regular-file mount destinations must be deduplicated");
+  assert.ok(!maskedDestinations.includes(fakeGo), "Bubblewrap must not bind over a symlink destination");
+  assert.ok(!maskedDestinations.includes(path.join(fakeSystemAlias, "bin", "go")), "Bubblewrap must not bind over an aliased symlink destination");
   const candidateExposure = candidateCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
   assert.match(candidateExposure ?? "", /candidate task has unapproved Go\/Rust compiler executable/);
   assert.match(candidateExposure ?? "", /rustlib\/bin\/rustc/);
-  assert.match(candidateExposure ?? "", /compiler-alias/);
+  assert.match(candidateExposure ?? "", /bin\/cargo-1\.94\.0/);
   assert.match(candidateExposure ?? "", /rustc-1\.94\.0/);
   assert.doesNotMatch(candidateExposure ?? "", /go-225/);
-  if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem], systemEtcDirectories: [fakeAlternatives] })) {
+  if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives] })) {
     const isolated = isolatedProcessArgv({
       cwd: fakeSystem,
       command: "/usr/bin/true",
       readOnlyPaths: ["/usr/bin/true"],
       allowedFiles: ["/usr/bin/true"],
       oracleToolchains: true,
-      systemDirectories: [fakeSystem],
+      systemDirectories: [fakeSystem, fakeSystemAlias],
       systemEtcDirectories: [fakeAlternatives],
     });
     for (const executable of [fakeGo, fakeRustc, fakeCargo, fakeNoShebang, path.join(fakeAlternatives, "cargo"), path.join(fakeAlternatives, "compiler-alias")]) {
-      assert.ok(isolated.argv.some((value, index) => value === "--ro-bind" && isolated.argv[index + 1] === "/dev/null" && isolated.argv[index + 2] === executable), `unapproved compiler path is not masked in the execution namespace: ${executable}`);
+      const mountedTargets = [executable, fs.realpathSync(executable)];
+      assert.ok(mountedTargets.some((target) => isolated.argv.some((value, index) => value === "--ro-bind" && isolated.argv[index + 1] === "/dev/null" && isolated.argv[index + 2] === target)), `unapproved compiler target is not masked in the execution namespace: ${executable}`);
     }
     assert.ok(!isolated.argv.includes(fakeTerminfo), "non-executable compiler-like data must not be masked");
+    const actualMaskDestinations = isolated.argv.filter((value, index) => index > 0 && isolated.argv[index - 1] === "/dev/null");
+    assert.ok(actualMaskDestinations.includes(fakeGoTarget), "the canonical system mount spelling is masked in the actual candidate argv");
+    assert.ok(actualMaskDestinations.includes(fakeGoAliasTarget), "the alternate system mount spelling is masked in the actual candidate argv");
   }
 
   assert.equal(oracleToolchainPathProblem({ uid: 0, mode: 0o040755 }), null, "root-owned read-only directories are eligible");
