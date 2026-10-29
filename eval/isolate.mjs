@@ -132,23 +132,57 @@ function mountedSpellingsForTarget(target, roots) {
   return [...spellings];
 }
 
-/** Reject every unpinned Go/Rust compiler reachable through the system mounts used by a task sandbox. */
-export function oracleCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS) {
-  const scan = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories);
+/** Reject every unpinned Go/Rust compiler reachable through the task's mounted runtime paths. */
+export function oracleCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = []) {
+  const scan = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths);
   if (scan.problem) return scan.problem;
   return scan.paths.length
     ? `unapproved Go/Rust compiler executable is exposed through oracle system mounts: ${scan.paths.join(", ")}`
     : null;
 }
 
-function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS) {
-  const roots = [...new Set([...systemDirectories, ...systemEtcDirectories])].sort();
+function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = []) {
+  const roots = [...new Set([...systemDirectories, ...systemEtcDirectories, ...additionalMountedPaths])].sort();
   const cacheKey = JSON.stringify(roots);
   if (oracleCompilerExposurePreflights.has(cacheKey)) return oracleCompilerExposurePreflights.get(cacheKey);
 
   const exposed = new Set();
   const visited = new Set();
   const approvedRoots = PINNED_ORACLE_TOOLCHAINS.map(({ root }) => root);
+  const inspectExecutable = (item, isSymbolicLink) => {
+    if (visited.has(item)) return;
+    visited.add(item);
+    const entryName = path.basename(item);
+    if (!UNPINNED_ORACLE_COMPILER_NAME.test(entryName) && !isSymbolicLink) return;
+    let stat;
+    let target;
+    try {
+      stat = fs.statSync(item);
+      target = fs.realpathSync(item);
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    if (!stat.isFile()
+      || (stat.mode & 0o111) === 0
+      || (!UNPINNED_ORACLE_COMPILER_NAME.test(entryName) && !UNPINNED_ORACLE_COMPILER_NAME.test(path.basename(target)))
+      || isInsideAnyRoot(target, approvedRoots)) return;
+    const descriptor = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    let header;
+    try {
+      header = Buffer.alloc(2);
+      fs.readSync(descriptor, header, 0, header.length, 0);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    // Names such as `go-225` also occur in executable-mode terminfo records. Exclude only
+    // positively identified compiled terminfo data; keep no-shebang and binfmt executables.
+    const terminfoMagic = header.equals(Buffer.from([0x1a, 0x01])) || header.equals(Buffer.from([0x1e, 0x02]));
+    if (terminfoMagic && /(?:^|\/)terminfo\//.test(item)) return;
+    // The candidate's explicit runtime mounts may expose compiler targets outside the
+    // standard system roots. Mask each visible spelling after all runtime mounts are added.
+    for (const mountedPath of mountedSpellingsForTarget(target, roots)) exposed.add(mountedPath);
+  };
   const visit = (directory) => {
     // Preserve each mounted spelling. `/lib` and `/usr/lib` may resolve to the same host
     // directory but remain distinct paths in the sandbox namespace, so both need masks.
@@ -157,45 +191,8 @@ function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemE
     visited.add(mountedDirectory);
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const item = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        visit(item);
-        continue;
-      }
-      if (!entry.isSymbolicLink() && !UNPINNED_ORACLE_COMPILER_NAME.test(entry.name)) continue;
-      let stat;
-      let target;
-      try {
-        stat = fs.statSync(item);
-        target = fs.realpathSync(item);
-      } catch (error) {
-        if (error?.code === "ENOENT") continue;
-        throw error;
-      }
-      // A symlinked directory's target is visible only when that target is itself in a sandbox mount.
-      // Every mount root is scanned independently; following an unmounted host target can fail (for example,
-      // /usr/lib/ssl/private -> /etc/ssl/private, where /etc is intentionally not mounted) and block safe runs.
-      if (stat.isDirectory()) continue;
-      if (!stat.isFile()
-        || (stat.mode & 0o111) === 0
-        || (!UNPINNED_ORACLE_COMPILER_NAME.test(entry.name) && !UNPINNED_ORACLE_COMPILER_NAME.test(path.basename(target)))
-        || isInsideAnyRoot(target, approvedRoots)) continue;
-      // Names such as `go-225` also occur in executable-mode terminfo records. Exclude only
-      // positively identified compiled terminfo data; mask every other executable candidate,
-      // including no-shebang scripts and formats supported by registered Linux binfmt handlers.
-      const descriptor = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-      let header;
-      try {
-        header = Buffer.alloc(2);
-        fs.readSync(descriptor, header, 0, header.length, 0);
-      } finally {
-        fs.closeSync(descriptor);
-      }
-      const terminfoMagic = header.equals(Buffer.from([0x1a, 0x01])) || header.equals(Buffer.from([0x1e, 0x02]));
-      if (terminfoMagic && /(?:^|\/)terminfo\//.test(item)) continue;
-      // Mask the final regular-file path, not a symlink such as /usr/bin/go: bubblewrap
-      // refuses to bind over a symlink destination. Map that target into every mounted
-      // spelling of its root so aliases cannot expose the same file through another path.
-      for (const mountedPath of mountedSpellingsForTarget(target, roots)) exposed.add(mountedPath);
+      if (entry.isDirectory()) visit(item);
+      else inspectExecutable(item, entry.isSymbolicLink());
     }
   };
 
@@ -208,6 +205,7 @@ function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemE
         throw error;
       }
       if (stat.isDirectory()) visit(root);
+      else if (stat.isFile()) inspectExecutable(root, fs.lstatSync(root).isSymbolicLink());
     }
   } catch {
     return { paths: [], problem: "oracle compiler exposure could not be checked; refusing qualification" };
@@ -231,8 +229,8 @@ export function compilerExposureMaskArgs(scan) {
 }
 
 /** Candidate processes receive the same system mounts as oracle processes and must share their compiler boundary. */
-export function candidateCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS) {
-  const problem = oracleCompilerExposureProblem(systemDirectories, systemEtcDirectories);
+export function candidateCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = []) {
+  const problem = oracleCompilerExposureProblem(systemDirectories, systemEtcDirectories, additionalMountedPaths);
   if (!problem) return null;
   return problem
     .replace(/^oracle/, "candidate task")
@@ -248,8 +246,8 @@ function executableVersion(command, argv) {
   return !result.error && result.status === 0 ? result.stdout.trim() : null;
 }
 
-export function oracleToolchainsProblem({ systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS } = {}) {
-  const exposureScan = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories);
+export function oracleToolchainsProblem({ systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = [] } = {}) {
+  const exposureScan = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths);
   if (exposureScan.problem) return exposureScan.problem;
   for (const { root, required } of PINNED_ORACLE_TOOLCHAINS) {
     const problem = pinnedToolchainProblem(root, required);
@@ -546,7 +544,11 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
   const mountSources = candidateSandboxHostMountSources({ cwd, home, proxyDirectory, readOnlyPaths, nodeRuntime: process.execPath, supervisorPath });
   const protectedOverlap = candidateMountOverlapProblem(mountSources, protectedCorpusPaths);
   if (protectedOverlap) throw new Error(protectedOverlap);
-  const compilerExposure = scanOracleCompilerExposure(mountSources.systemDirectories, mountSources.systemEtcDirectories);
+  const compilerExposure = scanOracleCompilerExposure(
+    mountSources.systemDirectories,
+    mountSources.systemEtcDirectories,
+    mountSources.runtimeSources.readOnlyPaths,
+  );
   if (compilerExposure.problem) throw new Error(compilerExposure.problem);
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing candidate execution");
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRuntimeRoots, runtimeExecutablePaths);
@@ -567,7 +569,6 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
   args.push(...candidateToolchainMountArgs(resolveHostToolchains(), mountSources.systemDirectories));
   for (const source of mountSources.systemFiles) args.push("--ro-bind", source, source);
   for (const source of mountSources.systemEtcDirectories) args.push("--ro-bind", source, source);
-  args.push(...compilerExposureMaskArgs(compilerExposure));
   const isolatedHome = mountSources.runtimeSources.home;
   args.push("--symlink", "usr/bin", "/bin", "--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--bind", isolatedHome, "/home/eval", "--tmpfs", "/run");
   args.push("--dir", "/run/eval-proxy", "--ro-bind", mountSources.runtimeSources.proxyDirectory, "/run/eval-proxy");
@@ -586,6 +587,7 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
     addTargetParents(resolved);
     args.push("--ro-bind", resolved, resolved);
   }
+  args.push(...compilerExposureMaskArgs(compilerExposure));
   addTargetParents("/runner/agent_sandbox.mjs");
   args.push("--ro-bind", nodeRuntime, "/runner/node");
   args.push("--ro-bind", mountSources.runtimeSources.supervisorPath, "/runner/agent_sandbox.mjs");
@@ -599,9 +601,10 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing executable probe");
   let compilerExposure = null;
   if (oracleToolchains) {
-    compilerExposure = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories);
+    const additionalMountedPaths = readOnlyPaths.map((item) => fs.realpathSync(item));
+    compilerExposure = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths);
     if (compilerExposure.problem) throw new Error(compilerExposure.problem);
-    const problem = oracleToolchainsProblem({ systemDirectories, systemEtcDirectories });
+    const problem = oracleToolchainsProblem({ systemDirectories, systemEtcDirectories, additionalMountedPaths });
     if (problem) throw new Error(problem);
   }
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRoots, allowedFiles);
@@ -629,7 +632,6 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   for (const source of systemEtcDirectories) {
     try { if (fs.statSync(source).isDirectory()) args.push("--ro-bind", source, source); } catch {}
   }
-  if (compilerExposure) args.push(...compilerExposureMaskArgs(compilerExposure));
   args.push(workspaceReadOnly ? "--ro-bind" : "--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--tmpfs", "/run", "--symlink", "usr/bin", "/bin");
   const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/usr/local", "/usr/local/lib", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/home/eval", "/run"]);
   const addParents = (target) => {
@@ -646,6 +648,7 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
     addParents(resolved);
     args.push("--ro-bind", resolved, resolved);
   }
+  if (compilerExposure) args.push(...compilerExposureMaskArgs(compilerExposure));
   const resolvedCommand = fs.realpathSync(command);
   if (!SYSTEM_BINARIES.some((root) => resolvedCommand === root || resolvedCommand.startsWith(`${root}${path.sep}`)) && !readOnlyPaths.some((item) => fs.realpathSync(item) === resolvedCommand)) {
     throw new Error("isolated executable must be included in the explicit read-only runtime paths");

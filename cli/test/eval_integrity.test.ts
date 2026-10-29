@@ -507,8 +507,10 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const fakeSystemAlias = `${fakeSystem}-alias`;
   const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
   const fakeSymlinkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-target-"));
+  const fakeMountedRuntime = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-mounted-runtime-"));
   const fakeLib = path.join(fakeSystem, "rustlib", "bin");
   const fakeGoTarget = path.join(fakeSystem, "lib", "go-1.22.12", "go");
+  const fakeExternalGoTarget = path.join(fakeMountedRuntime, "go");
   fs.mkdirSync(path.join(fakeSystem, "bin"), { recursive: true });
   fs.mkdirSync(fakeLib, { recursive: true });
   fs.mkdirSync(path.dirname(fakeGoTarget), { recursive: true });
@@ -521,11 +523,12 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.mkdirSync(path.dirname(fakeTerminfo), { recursive: true });
   fs.writeFileSync(fakeTerminfo, Buffer.from([0x1a, 0x01, 0x00, 0x00]));
   fs.chmodSync(fakeTerminfo, 0o755);
-  for (const file of [fakeGoTarget, fakeRustc, fakeCargo]) {
+  for (const file of [fakeGoTarget, fakeExternalGoTarget, fakeRustc, fakeCargo]) {
     fs.writeFileSync(file, compilerCanary);
     fs.chmodSync(file, 0o755);
   }
   fs.symlinkSync(fakeGoTarget, fakeGo);
+  fs.symlinkSync(fakeExternalGoTarget, path.join(fakeSystem, "bin", "go-1.99.0"));
   fs.writeFileSync(fakeNoShebang, "exit 7\n");
   fs.chmodSync(fakeNoShebang, 0o755);
   fs.symlinkSync(fakeCargo, path.join(fakeAlternatives, "cargo"));
@@ -540,6 +543,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     fs.rmSync(fakeSystemAlias, { recursive: true, force: true });
     fs.rmSync(fakeAlternatives, { recursive: true, force: true });
     fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
+    fs.rmSync(fakeMountedRuntime, { recursive: true, force: true });
   });
   const exposure = oracleCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
   assert.match(exposure ?? "", /unapproved Go\/Rust compiler executable/);
@@ -550,6 +554,8 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.doesNotMatch(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/compiler-alias/);
   assert.match(exposure ?? "", /rustc-1\.94\.0/, "no-shebang executable compilers must be detected and masked");
   assert.doesNotMatch(exposure ?? "", /go-225/, "executable-mode terminfo data is not a compiler binary");
+  const externalMountedExposure = oracleCompilerExposureProblem([fakeSystem], [], [fakeExternalGoTarget]);
+  assert.ok(externalMountedExposure?.includes(fakeExternalGoTarget), "a compiler target outside system roots must be masked when separately mounted");
   const aliasedExposure = oracleCompilerExposureProblem([fakeSystem, fakeSystemAlias], []);
   assert.ok(aliasedExposure?.includes(fakeGoTarget), "the canonical mounted spelling is scanned and masked");
   assert.ok(aliasedExposure?.includes(path.join(fakeSystemAlias, path.relative(fakeSystem, fakeGoTarget))), "every mounted spelling of a shared system directory must be scanned and masked");
@@ -561,13 +567,14 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.equal(maskedDestinations.filter((destination) => destination === fakeCargo).length, 1, "duplicate regular-file mount destinations must be deduplicated");
   assert.ok(!maskedDestinations.includes(fakeGo), "Bubblewrap must not bind over a symlink destination");
   assert.ok(!maskedDestinations.includes(path.join(fakeSystemAlias, "bin", "go")), "Bubblewrap must not bind over an aliased symlink destination");
-  const candidateExposure = candidateCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
+  const candidateExposure = candidateCompilerExposureProblem([fakeSystem], [fakeAlternatives], [fakeExternalGoTarget]);
   assert.match(candidateExposure ?? "", /candidate task has unapproved Go\/Rust compiler executable/);
   assert.match(candidateExposure ?? "", /rustlib\/bin\/rustc/);
   assert.match(candidateExposure ?? "", /bin\/cargo-1\.94\.0/);
+  assert.ok(candidateExposure?.includes(fakeExternalGoTarget), "candidate preflight includes compiler targets in separately mounted runtime files");
   assert.match(candidateExposure ?? "", /rustc-1\.94\.0/);
   assert.doesNotMatch(candidateExposure ?? "", /go-225/);
-  if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives] })) {
+  if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives], additionalMountedPaths: [fakeExternalGoTarget] })) {
     const isolated = isolatedProcessArgv({
       cwd: fakeSystem,
       command: "/usr/bin/true",
@@ -585,6 +592,18 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     const actualMaskDestinations = isolated.argv.filter((value, index) => index > 0 && isolated.argv[index - 1] === "/dev/null");
     assert.ok(actualMaskDestinations.includes(fakeGoTarget), "the canonical system mount spelling is masked in the actual candidate argv");
     assert.ok(actualMaskDestinations.includes(fakeGoAliasTarget), "the alternate system mount spelling is masked in the actual candidate argv");
+    const externalRuntime = isolatedProcessArgv({
+      cwd: fakeSystem,
+      command: "/usr/bin/true",
+      readOnlyPaths: ["/usr/bin/true", fakeExternalGoTarget],
+      allowedFiles: ["/usr/bin/true", fakeExternalGoTarget],
+      oracleToolchains: true,
+      systemDirectories: [fakeSystem],
+      systemEtcDirectories: [fakeAlternatives],
+    });
+    const externalMaskIndex = externalRuntime.argv.findIndex((value, index) => value === "--ro-bind" && externalRuntime.argv[index + 1] === "/dev/null" && externalRuntime.argv[index + 2] === fakeExternalGoTarget);
+    const externalRuntimeMountIndex = externalRuntime.argv.findIndex((value, index) => value === "--ro-bind" && externalRuntime.argv[index + 1] === fakeExternalGoTarget && externalRuntime.argv[index + 2] === fakeExternalGoTarget);
+    assert.ok(externalMaskIndex > externalRuntimeMountIndex, "external compiler mask must follow and override its explicit runtime mount");
   }
 
   assert.equal(oracleToolchainPathProblem({ uid: 0, mode: 0o040755 }), null, "root-owned read-only directories are eligible");
