@@ -118,7 +118,7 @@ These are retained commitments from REQUIREMENTS §2 and cross-cutting checks.
 | ACC-QUAL-T3 | §6.3 + §6.4 | Thresholds met. |
 | ACC-QUAL-T4 | §6.2 + §6.4 | Thresholds met. |
 | ACC-QUAL-SMOKE | `make test` includes the T1 self-test and the T4 smoke | Present and passing. |
-| ACC-TUI-MANUAL | §5.3 on the installed RC across five required terminal environments and three required sizes | Every cell has a per-cell verdict and recorded outcomes; screenshot artifacts are waived for v1.0.0 per DEC-18. |
+| ACC-TUI-MANUAL | §5.3 on the installed RC across five required terminal environments and three required sizes | **Waived for v1.0.0 by owner decision [DEC-19](DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver) (2026-10-29).** No per-cell verdicts are recorded; this is not a PASS. Automated §5.1 and §5.2 remain required. |
 
 ## 4. Standalone and provider qualification (REQ-PRV-106, REQ-PRV-111, REQ-QUAL-107)
 
@@ -188,6 +188,8 @@ These are ports of `evidence/D_pty/`.
 | r1a / r1d REPL approvals | DENIED for a lone Enter and for a typed-ahead `y`. |
 
 ### 5.3 Manual real-terminal matrix (E3)
+
+**Waived for v1.0.0 by owner decision [DEC-19](DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver) (2026-10-29).** The procedure below is retained for a successor release; it is not required for v1.0.0 and no cell verdict is recorded. The automated suites in §5.1 and §5.2 remain mandatory.
 
 Terminals: xterm, kitty (kitty keyboard protocol on), tmux 3.x inside GNOME Terminal, VS Code integrated terminal, GNOME Terminal. Sizes: 80×24, 40×14, 200×60.
 
@@ -331,7 +333,7 @@ G6 passes only when every item below holds. It authorizes a version-only stable 
 - [ ] G0–G4 automated gates pass on the final RC commit (§3).
 - [ ] RC artifact gates pass on the workflow-produced RC, including ACC-SUP-01/02/03/06/08; record the exact source commit, workflow run, and artifact digest.
 - [ ] §4 standalone and provider matrix: all rows PASS.
-- [ ] §5 terminal acceptance: CI, scripted and manual gates PASS.
+- [ ] §5 terminal acceptance: CI and scripted gates PASS; the manual real-terminal matrix is waived for v1.0.0 per DEC-19.
 - [ ] §6 thresholds: all hold.
 - [ ] §7 install matrix: all rows PASS.
 - [ ] §8 independent acceptance: ACCEPT, or ACCEPT WITH DEFECTS with owner dispositions and no blocker defects outstanding.
