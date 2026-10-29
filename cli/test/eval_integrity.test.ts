@@ -478,16 +478,82 @@ test("black-box oracle keeps canary expectations outside the candidate process a
 
 test("Python black-box oracle uses only pinned offline Go and Rust toolchains, or fails preflight", { timeout: 60_000 }, async (t) => {
   const { blackBoxOracleProblem, runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
-  const { candidateToolchainRootProblem, oracleToolchainPathProblem, oracleToolchainsProblem } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { candidateToolchainRootProblem, oracleCompilerExposureProblem, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const toolchainPolicy = JSON.parse(fs.readFileSync(path.join(ROOT, "eval/toolchain-versions.json"), "utf8"));
+  const rustToolchain = fs.readFileSync(path.join(ROOT, "rust-toolchain.toml"), "utf8");
+  const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
+  assert.equal(toolchainPolicy.go, "1.22.12");
+  assert.equal(toolchainPolicy.rust, /^channel = "([^"]+)"$/m.exec(rustToolchain)?.[1]);
+  assert.equal((workflow.match(/go-version: '([^']+)'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/go-version: '1\.22\.12'/g) ?? []).length, 2, "both CI jobs install the exact approved Go version");
+  assert.equal((workflow.match(/run: bash scripts\/install-evaluator-toolchains\.sh/g) ?? []).length, 2, "both CI jobs use the same exact-version installer");
+  assert.equal(oracleToolchainVersionProblem({
+    goVersion: "go version go1.22.12 linux/amd64",
+    rustcVersion: "rustc 1.95.0 (fixture)",
+    cargoVersion: "cargo 1.95.0 (fixture)",
+  }), null);
+  assert.match(oracleToolchainVersionProblem({
+    goVersion: "go version go1.22.11 linux/amd64",
+    rustcVersion: "rustc 1.95.0 (fixture)",
+    cargoVersion: "cargo 1.95.0 (fixture)",
+  }), /do not match policy/);
+  assert.match(oracleToolchainVersionProblem({
+    goVersion: "go version go1.22.12 linux/amd64",
+    rustcVersion: "rustc 1.94.0 (fixture)",
+    cargoVersion: "cargo 1.95.0 (fixture)",
+  }), /do not match policy/);
+
+  const fakeSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-system-"));
+  const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
+  const fakeSymlinkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-target-"));
+  const fakeLib = path.join(fakeSystem, "rustlib", "bin");
+  fs.mkdirSync(path.join(fakeSystem, "bin"), { recursive: true });
+  fs.mkdirSync(fakeLib, { recursive: true });
+  const compilerCanary = "#!/bin/sh\nprintf '%s\\n' UNPINNED_COMPILER_CANARY\n";
+  const fakeGo = path.join(fakeSystem, "bin", "go");
+  const fakeRustc = path.join(fakeLib, "rustc");
+  const fakeCargo = path.join(fakeSystem, "bin", "cargo-1.94.0");
+  for (const file of [fakeGo, fakeRustc, fakeCargo]) {
+    fs.writeFileSync(file, compilerCanary);
+    fs.chmodSync(file, 0o755);
+  }
+  fs.symlinkSync(fakeCargo, path.join(fakeAlternatives, "cargo"));
+  fs.symlinkSync(fakeCargo, path.join(fakeAlternatives, "compiler-alias"));
+  fs.writeFileSync(path.join(fakeSymlinkTarget, "rustc"), compilerCanary);
+  fs.chmodSync(path.join(fakeSymlinkTarget, "rustc"), 0o755);
+  fs.symlinkSync(fakeSymlinkTarget, path.join(fakeSystem, "compiler-reach"));
+  t.after(() => {
+    fs.rmSync(fakeSystem, { recursive: true, force: true });
+    fs.rmSync(fakeAlternatives, { recursive: true, force: true });
+    fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
+  });
+  const exposure = oracleCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
+  assert.match(exposure ?? "", /unapproved Go\/Rust compiler executable/);
+  assert.match(exposure ?? "", /rustlib\/bin\/rustc/);
+  assert.match(exposure ?? "", /compiler-reach\/rustc/);
+  assert.match(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/cargo/);
+  assert.match(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/compiler-alias/);
+  if (sandboxAvailable()) {
+    assert.throws(() => isolatedProcessArgv({
+      cwd: fakeSystem,
+      command: "/usr/bin/true",
+      readOnlyPaths: ["/usr/bin/true"],
+      allowedFiles: ["/usr/bin/true"],
+      oracleToolchains: true,
+      systemDirectories: [fakeSystem],
+      systemEtcDirectories: [fakeAlternatives],
+    }), /unapproved Go\/Rust compiler executable/, "the execution-path preflight rejects deliberate compiler escape fixtures");
+  }
+
   assert.equal(oracleToolchainPathProblem({ uid: 0, mode: 0o040755 }), null, "root-owned read-only directories are eligible");
   assert.match(oracleToolchainPathProblem({ uid: 0, mode: 0o040775 }), /without group or other write permission/, "group-writable toolchain paths must fail closed");
   assert.match(oracleToolchainPathProblem({ uid: 0, mode: 0o040757 }), /without group or other write permission/, "other-writable toolchain paths must fail closed");
   assert.match(oracleToolchainPathProblem({ uid: 1234, mode: 0o040755 }), /root-owned/, "non-root-owned paths are not pinned roots");
   const candidateRootStat = { uid: 0, mode: 0o040755, isDirectory: () => true, isSymbolicLink: () => false };
-  assert.equal(candidateToolchainRootProblem(candidateRootStat, "/opt/nexus-qual/rust", "/opt/nexus-qual/rust"), null);
-  assert.match(candidateToolchainRootProblem({ ...candidateRootStat, isSymbolicLink: () => true }, "/opt/nexus-qual/rust", "/opt/nexus-qual/rust"), /safe real directory/, "candidate mounts reject symlinked toolchain roots");
-  assert.match(candidateToolchainRootProblem({ ...candidateRootStat, mode: 0o040775 }, "/opt/nexus-qual/rust", "/opt/nexus-qual/rust"), /safe real directory/, "candidate mounts reject group-writable toolchain roots");
-  assert.match(candidateToolchainRootProblem(candidateRootStat, "/tmp/toolchain", "/opt/nexus-qual/rust"), /safe real directory/, "candidate mounts reject roots resolving outside the pinned path");
+  assert.equal(candidateToolchainRootProblem(candidateRootStat, "/usr/local/nexus-qual/rust", "/usr/local/nexus-qual/rust"), null);
+  assert.match(candidateToolchainRootProblem({ ...candidateRootStat, isSymbolicLink: () => true }, "/usr/local/nexus-qual/rust", "/usr/local/nexus-qual/rust"), /safe real directory/, "candidate mounts reject symlinked toolchain roots");
+  assert.match(candidateToolchainRootProblem({ ...candidateRootStat, mode: 0o040775 }, "/usr/local/nexus-qual/rust", "/usr/local/nexus-qual/rust"), /safe real directory/, "candidate mounts reject group-writable toolchain roots");
+  assert.match(candidateToolchainRootProblem(candidateRootStat, "/tmp/toolchain", "/usr/local/nexus-qual/rust"), /safe real directory/, "candidate mounts reject roots resolving outside the pinned path");
   const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-toolchain-task-"));
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-toolchain-candidate-"));
   t.after(() => {
@@ -502,6 +568,14 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.writeFileSync(path.join(workspace, "src/main.rs"), 'fn main(){print!("rust-ok")}\n');
   fs.writeFileSync(path.join(workspace, "check.py"), [
     "import json, subprocess, sys",
+    "for executable, expected in (('/usr/bin/go', 'go1.22.12'), ('/usr/bin/rustc', '1.95.0'), ('/usr/bin/cargo', '1.95.0')):",
+    "    try:",
+    "        result = subprocess.run([executable, '--version'], capture_output=True, text=True)",
+    "    except FileNotFoundError:",
+    "        continue",
+    "    reported = (result.stdout + result.stderr).strip()",
+    "    if result.returncode == 0 and expected not in reported:",
+    "        raise SystemExit('unapproved compiler reached by absolute path: ' + executable)",
     "subprocess.run(['go', 'build', '-o', '/tmp/nexus-oracle-go', '/workspace/main.go'], check=True, capture_output=True, text=True)",
     "subprocess.run(['cargo', 'build', '--locked', '--offline', '--manifest-path', '/workspace/Cargo.toml'], check=True, capture_output=True, text=True)",
     "go = subprocess.run(['/tmp/nexus-oracle-go'], check=True, capture_output=True, text=True).stdout",
@@ -574,11 +648,14 @@ test("candidate agents receive only the approved read-only Go and Rust toolchain
   const toolchains = { goRoot: "/host/toolchains/go", rustRoot: "/host/toolchains/rust" };
   assert.equal(
     candidateAgentPath("/custom/bin:/usr/bin:/bin", toolchains),
-    "/opt/nexus-qual/rust/bin:/usr/local/go/bin:/custom/bin:/usr/bin:/bin",
+    "/usr/local/nexus-qual/rust/bin:/usr/local/go/bin:/custom/bin:/usr/bin:/bin",
   );
   assert.deepEqual(candidateToolchainMountArgs(toolchains), [
     "--dir", "/usr/local", "--ro-bind", toolchains.goRoot, "/usr/local/go",
-    "--dir", "/opt", "--dir", "/opt/nexus-qual", "--ro-bind", toolchains.rustRoot, "/opt/nexus-qual/rust",
+    "--dir", "/usr/local/nexus-qual", "--ro-bind", toolchains.rustRoot, "/usr/local/nexus-qual/rust",
+  ]);
+  assert.deepEqual(candidateToolchainMountArgs({ goRoot: null, rustRoot: toolchains.rustRoot }), [
+    "--dir", "/usr/local", "--dir", "/usr/local/nexus-qual", "--ro-bind", toolchains.rustRoot, "/usr/local/nexus-qual/rust",
   ]);
   assert.deepEqual(candidateToolchainMountArgs({ goRoot: null, rustRoot: null }), []);
   assert.deepEqual(candidateToolchainMountArgs({ goRoot: toolchains.goRoot, rustRoot: null }, ["/usr/local/lib"]), [
@@ -615,7 +692,7 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
 
     const mountContext = { cwd: runtimeRoot, home, proxyDirectory, nodeRuntime: process.execPath, supervisorPath };
     const hostMounts = candidateSandboxHostMountSources({ ...mountContext, readOnlyPaths: [readOnlyRuntime] });
-    const expectedToolchains = ["/usr/local/go", "/opt/nexus-qual/rust"]
+    const expectedToolchains = ["/usr/local/go", "/usr/local/nexus-qual/rust"]
       .filter((item) => { try { return fs.statSync(item).isDirectory(); } catch { return false; } });
     const existingDirectories = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/lib", "/lib64", "/usr/local/lib"]
       .filter((item) => { try { return fs.statSync(item).isDirectory(); } catch { return false; } });
@@ -1285,7 +1362,7 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     proxy = await startModelProxy({ upstream: `http://127.0.0.1:${(upstream.address() as any).port}/v1`, authToken: "UPSTREAM_AUTH_CANARY", clientToken: "RUN_LOCAL_TOKEN", socketPath: path.join(proxyDirectory, "proxy.sock") });
     const nodeRuntime = process.execPath;
     const sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: [nodeRuntime], runtimeExecutablePaths: [nodeRuntime], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
-    const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);const toolchains={};for(const [name,args] of [['go',['version']],['rustc',['--version']],['cargo',['--version']]]){if(process.env.PATH.includes(name==='go'?'/usr/local/go/bin':'/opt/nexus-qual/rust/bin')){const check=cp.spawnSync(name,args,{encoding:'utf8'});toolchains[name]={status:check.status,stdout:check.stdout,stderr:check.stderr}}};console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status,toolchains}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
+    const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);const toolchains={};for(const [name,args] of [['go',['version']],['rustc',['--version']],['cargo',['--version']]]){if(process.env.PATH.includes(name==='go'?'/usr/local/go/bin':'/usr/local/nexus-qual/rust/bin')){const check=cp.spawnSync(name,args,{encoding:'utf8'});toolchains[name]={status:check.status,stdout:check.stdout,stderr:check.stderr}}};console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status,toolchains}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
     process.env.UPSTREAM_AUTH_CANARY = "UPSTREAM_AUTH_CANARY";
     const candidatePath = candidateAgentPath("/usr/bin:/bin");
     const child = await runSandbox(sandbox.cmd, sandbox.argv, JSON.stringify({ command: nodeRuntime, argv: ["-e", script], env: { PATH: candidatePath, OPENAI_API_KEY: "RUN_LOCAL_TOKEN" } }));
@@ -1297,7 +1374,7 @@ test("candidate namespace reaches only its authenticated run proxy and cannot re
     assert.equal(output.canary, "");
     assert.notEqual(output.nestedUserns, 0, "candidate code could create a nested user namespace");
     if (candidatePath.includes("/usr/local/go/bin")) assert.equal(output.toolchains.go?.status, 0, `Go toolchain is not executable in candidate namespace: ${JSON.stringify(output.toolchains.go)}`);
-    if (candidatePath.includes("/opt/nexus-qual/rust/bin")) {
+    if (candidatePath.includes("/usr/local/nexus-qual/rust/bin")) {
       assert.equal(output.toolchains.rustc?.status, 0, `Rust compiler is not executable in candidate namespace: ${JSON.stringify(output.toolchains.rustc)}`);
       assert.equal(output.toolchains.cargo?.status, 0, `Cargo is not executable in candidate namespace: ${JSON.stringify(output.toolchains.cargo)}`);
     }

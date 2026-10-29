@@ -13,12 +13,18 @@ const SYSTEM_ETC_FILES = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc
 const SYSTEM_ETC_DIRS = ["/etc/alternatives"];
 const FORBIDDEN_RUNTIME_ROOTS = ["/etc", "/root", "/proc", "/sys", "/run", "/var", "/dev", "/tmp", "/mnt", "/media", "/srv"];
 const SENSITIVE_HOME_PARTS = [".ssh", ".config", ".aws", ".azure", ".gnupg", ".kube", ".nexus", ".cache"];
+const TOOLCHAIN_POLICY = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "toolchain-versions.json"), "utf8"));
+if (TOOLCHAIN_POLICY.schemaVersion !== 1 || !/^\d+\.\d+\.\d+$/.test(TOOLCHAIN_POLICY.go) || !/^\d+\.\d+\.\d+$/.test(TOOLCHAIN_POLICY.rust)) {
+  throw new Error("evaluator toolchain policy must pin exact Go and Rust versions");
+}
 const PINNED_ORACLE_TOOLCHAINS = Object.freeze([
   { root: "/usr/local/go", required: ["bin/go"] },
-  { root: "/opt/nexus-qual/rust", required: ["bin/rustc", "bin/cargo"] },
+  { root: "/usr/local/nexus-qual/rust", required: ["bin/rustc", "bin/cargo"] },
 ]);
+const UNPINNED_ORACLE_COMPILER_NAME = /^(?:go(?:-?\d[A-Za-z0-9.+-]*)?|rustc(?:-\d[A-Za-z0-9.+-]*)?|cargo(?:-\d[A-Za-z0-9.+-]*)?|rustup)$/;
 let sandboxPreflight;
 const pinnedToolchainPreflights = new Map();
+const oracleCompilerExposurePreflights = new Map();
 
 function shellQuote(value) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
@@ -27,7 +33,7 @@ function shellQuote(value) {
 export function candidateAgentPath(configuredPath, toolchains = resolveHostToolchains()) {
   const configuredEntries = (configuredPath ?? "/usr/bin:/bin").split(path.delimiter).filter(Boolean);
   const toolchainEntries = [
-    ...(toolchains.rustRoot ? ["/opt/nexus-qual/rust/bin"] : []),
+    ...(toolchains.rustRoot ? ["/usr/local/nexus-qual/rust/bin"] : []),
     ...(toolchains.goRoot ? ["/usr/local/go/bin"] : []),
   ];
   return [...new Set([...toolchainEntries, ...configuredEntries])].join(path.delimiter);
@@ -51,16 +57,28 @@ export function candidateToolchainRootProblem(stat, resolvedPath, expectedPath) 
   return null;
 }
 
-export function candidateToolchainMountArgs(toolchains, systemDirectories = []) {
+function toolchainMountArgs(toolchains, parentDirectoryAvailable = false) {
   const args = [];
+  const createdDirectories = new Set(parentDirectoryAvailable ? ["/usr/local"] : []);
+  const ensureDirectory = (directory) => {
+    if (createdDirectories.has(directory)) return;
+    args.push("--dir", directory);
+    createdDirectories.add(directory);
+  };
   if (toolchains.goRoot) {
-    if (!systemDirectories.includes("/usr/local/lib")) args.push("--dir", "/usr/local");
+    ensureDirectory("/usr/local");
     args.push("--ro-bind", toolchains.goRoot, "/usr/local/go");
   }
   if (toolchains.rustRoot) {
-    args.push("--dir", "/opt", "--dir", "/opt/nexus-qual", "--ro-bind", toolchains.rustRoot, "/opt/nexus-qual/rust");
+    ensureDirectory("/usr/local");
+    ensureDirectory("/usr/local/nexus-qual");
+    args.push("--ro-bind", toolchains.rustRoot, "/usr/local/nexus-qual/rust");
   }
   return args;
+}
+
+export function candidateToolchainMountArgs(toolchains, systemDirectories = []) {
+  return toolchainMountArgs(toolchains, systemDirectories.includes("/usr/local/lib"));
 }
 
 function resolveHostToolchains() {
@@ -80,17 +98,108 @@ function resolveHostToolchains() {
   const roots = Object.fromEntries(PINNED_ORACLE_TOOLCHAINS.map((toolchain) => [toolchain.root, availableDirectory(toolchain)]));
   return {
     goRoot: roots["/usr/local/go"],
-    rustRoot: roots["/opt/nexus-qual/rust"],
+    rustRoot: roots["/usr/local/nexus-qual/rust"],
   };
 }
 
 /** Python black-box oracles may invoke only these root-owned, pinned compiler runtimes. */
-export function oracleToolchainsProblem() {
+export function oracleToolchainVersionProblem({ goVersion, rustcVersion, cargoVersion }) {
+  const actualGo = /^go version (go\S+)/.exec(goVersion ?? "")?.[1];
+  const actualRustc = /^rustc (\S+)/.exec(rustcVersion ?? "")?.[1];
+  const actualCargo = /^cargo (\S+)/.exec(cargoVersion ?? "")?.[1];
+  if (actualGo !== `go${TOOLCHAIN_POLICY.go}` || actualRustc !== TOOLCHAIN_POLICY.rust || actualCargo !== TOOLCHAIN_POLICY.rust) {
+    return `pinned oracle toolchain versions do not match policy (expected Go ${TOOLCHAIN_POLICY.go} and Rust ${TOOLCHAIN_POLICY.rust})`;
+  }
+  return null;
+}
+
+function isInsideAnyRoot(candidate, roots) {
+  return roots.some((root) => candidate === root || candidate.startsWith(`${root}${path.sep}`));
+}
+
+/** Reject every unpinned Go/Rust compiler reachable through the system mounts used by an oracle. */
+export function oracleCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS) {
+  const roots = [...new Set([...systemDirectories, ...systemEtcDirectories])].sort();
+  const cacheKey = JSON.stringify(roots);
+  if (oracleCompilerExposurePreflights.has(cacheKey)) return oracleCompilerExposurePreflights.get(cacheKey);
+
+  const exposed = new Set();
+  const visited = new Set();
+  const approvedRoots = PINNED_ORACLE_TOOLCHAINS.map(({ root }) => root);
+  const visit = (directory) => {
+    const canonicalDirectory = fs.realpathSync(directory);
+    if (visited.has(canonicalDirectory)) return;
+    visited.add(canonicalDirectory);
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const item = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(item);
+        continue;
+      }
+      if (!entry.isSymbolicLink() && !UNPINNED_ORACLE_COMPILER_NAME.test(entry.name)) continue;
+      let stat;
+      let target;
+      try {
+        stat = fs.statSync(item);
+        target = fs.realpathSync(item);
+      } catch (error) {
+        if (error?.code === "ENOENT") continue;
+        throw error;
+      }
+      if (stat.isDirectory()) {
+        visit(item);
+        continue;
+      }
+      if (!stat.isFile()
+        || (stat.mode & 0o111) === 0
+        || (!UNPINNED_ORACLE_COMPILER_NAME.test(entry.name) && !UNPINNED_ORACLE_COMPILER_NAME.test(path.basename(target)))
+        || isInsideAnyRoot(target, approvedRoots)) continue;
+      exposed.add(item);
+    }
+  };
+
+  try {
+    for (const root of roots) {
+      let stat;
+      try { stat = fs.statSync(root); }
+      catch (error) {
+        if (error?.code === "ENOENT") continue;
+        throw error;
+      }
+      if (stat.isDirectory()) visit(root);
+    }
+  } catch {
+    return "oracle compiler exposure could not be checked; refusing qualification";
+  }
+
+  const result = exposed.size
+    ? `unapproved Go/Rust compiler executable is exposed through oracle system mounts: ${[...exposed].sort().join(", ")}`
+    : null;
+  oracleCompilerExposurePreflights.set(cacheKey, result);
+  return result;
+}
+
+function executableVersion(command, argv) {
+  const result = spawnSync(command, argv, {
+    encoding: "utf8",
+    timeout: 5000,
+    env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
+  });
+  return !result.error && result.status === 0 ? result.stdout.trim() : null;
+}
+
+export function oracleToolchainsProblem({ systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS } = {}) {
+  const exposureProblem = oracleCompilerExposureProblem(systemDirectories, systemEtcDirectories);
+  if (exposureProblem) return exposureProblem;
   for (const { root, required } of PINNED_ORACLE_TOOLCHAINS) {
     const problem = pinnedToolchainProblem(root, required);
     if (problem) return problem;
   }
-  return null;
+  return oracleToolchainVersionProblem({
+    goVersion: executableVersion("/usr/local/go/bin/go", ["version"]),
+    rustcVersion: executableVersion("/usr/local/nexus-qual/rust/bin/rustc", ["--version"]),
+    cargoVersion: executableVersion("/usr/local/nexus-qual/rust/bin/cargo", ["--version"]),
+  });
 }
 
 function pinnedToolchainProblem(root, required) {
@@ -276,13 +385,7 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
     } catch {}
   }
   const { goRoot, rustRoot } = resolveHostToolchains();
-  if (goRoot) {
-    if (!localPrefixCreated) args.push("--dir", "/usr/local");
-    args.push("--ro-bind", goRoot, "/usr/local/go");
-  }
-  if (rustRoot) {
-    args.push("--dir", "/opt", "--dir", "/opt/nexus-qual", "--ro-bind", rustRoot, "/opt/nexus-qual/rust");
-  }
+  args.push(...toolchainMountArgs({ goRoot, rustRoot }, localPrefixCreated));
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
     try {
       if (fs.statSync(source).isFile()) args.push("--ro-bind", source, source);
@@ -302,7 +405,7 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
     args.push("--ro-bind", source, path.posix.join("/workspace", path.relative(workspace, source).split(path.sep).join("/")));
   }
   args.push("--symlink", "usr/bin", "/bin");
-  args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/opt/nexus-qual/rust/bin:/usr/local/go/bin:/usr/bin:/bin");
+  args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", "/usr/local/nexus-qual/rust/bin:/usr/local/go/bin:/usr/bin:/bin");
   args.push("--setenv", "HOME", home ? "/home/eval" : "/tmp");
   args.push("--setenv", "CI", "1", "--setenv", "LANG", "C.UTF-8");
   if (hiddenSubpaths.length) {
@@ -426,17 +529,17 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
 }
 
 /** Run a fixed executable probe without exposing the host filesystem, environment, or network. */
-export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000, workspaceReadOnly = false, protectedCorpusPaths = [], oracleToolchains = false }) {
+export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [], allowedRoots = [], allowedFiles = [], timeoutMs = 5000, workspaceReadOnly = false, protectedCorpusPaths = [], oracleToolchains = false, systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS }) {
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing executable probe");
   if (oracleToolchains) {
-    const problem = oracleToolchainsProblem();
+    const problem = oracleToolchainsProblem({ systemDirectories, systemEtcDirectories });
     if (problem) throw new Error(problem);
   }
   const mountProblem = runtimeMountProblem(readOnlyPaths, allowedRoots, allowedFiles);
   if (mountProblem) throw new Error(mountProblem);
   const workspace = fs.realpathSync(cwd);
   const args = ["--unshare-user", "--unshare-pid", "--unshare-net", "--disable-userns", "--die-with-parent", "--new-session", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
-  for (const source of SYSTEM_BINARIES) {
+  for (const source of systemDirectories) {
     try {
       if (fs.statSync(source).isDirectory()) {
         if (source === "/usr/local/lib") args.push("--dir", "/usr/local");
@@ -454,7 +557,9 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
     try { if (fs.statSync(source).isFile()) args.push("--ro-bind", source, source); } catch {}
   }
-  try { if (fs.statSync("/etc/alternatives").isDirectory()) args.push("--ro-bind", "/etc/alternatives", "/etc/alternatives"); } catch {}
+  for (const source of systemEtcDirectories) {
+    try { if (fs.statSync(source).isDirectory()) args.push("--ro-bind", source, source); } catch {}
+  }
   args.push(workspaceReadOnly ? "--ro-bind" : "--bind", workspace, "/workspace", "--tmpfs", "/home", "--dir", "/home/eval", "--tmpfs", "/run", "--symlink", "usr/bin", "/bin");
   const madeDirs = new Set(["/", "/usr", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/usr/local", "/usr/local/lib", "/lib", "/lib64", "/bin", "/etc", "/workspace", "/home", "/home/eval", "/run"]);
   const addParents = (target) => {
@@ -478,7 +583,7 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   const bindSources = args.flatMap((arg, i) => (arg === "--bind" || arg === "--ro-bind") ? [args[i + 1]] : []);
   const protectedOverlap = mountSourceOverlapProblem(bindSources, protectedCorpusPaths);
   if (protectedOverlap) throw new Error(protectedOverlap);
-  args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", oracleToolchains ? "/usr/local/go/bin:/opt/nexus-qual/rust/bin:/usr/bin:/bin" : "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "LANG", "C.UTF-8");
+  args.push("--chdir", "/workspace", "--clearenv", "--setenv", "PATH", oracleToolchains ? "/usr/local/go/bin:/usr/local/nexus-qual/rust/bin:/usr/bin:/bin" : "/usr/bin:/bin", "--setenv", "HOME", "/home/eval", "--setenv", "LANG", "C.UTF-8");
   if (oracleToolchains) {
     args.push("--setenv", "GOROOT", "/usr/local/go", "--setenv", "GOTOOLCHAIN", "local", "--setenv", "GOPROXY", "off", "--setenv", "GOCACHE", "/tmp/go-cache", "--setenv", "GOMODCACHE", "/tmp/go-mod-cache", "--setenv", "GOPATH", "/tmp/go-path", "--setenv", "CARGO_HOME", "/tmp/cargo-home", "--setenv", "CARGO_TARGET_DIR", "/tmp/cargo-target", "--setenv", "CARGO_NET_OFFLINE", "true", "--setenv", "TMPDIR", "/tmp");
   }

@@ -168,7 +168,7 @@ assert not any(isinstance(obj, (bytes, bytearray, str)) and any(needle in (obj.d
     assert.equal(unittestResult.status, 0, `${unittestResult.stderr}\n${unittestResult.stdout}`);
     assert.match(`${unittestResult.stdout}${unittestResult.stderr}`, /Ran 1 test\b/);
     const pytestModule = fs.existsSync("/usr/local/lib/python3.12/dist-packages/pytest");
-    const rustPytest = fs.existsSync("/opt/nexus-qual/rust/bin/pytest");
+    const rustPytest = fs.existsSync("/usr/local/nexus-qual/rust/bin/pytest");
     if (pytestModule || rustPytest) {
       fs.writeFileSync(path.join(ws, hiddenPaths[0]), "\n");
       fs.writeFileSync(path.join(ws, hiddenPaths[1]), hiddenSource);
