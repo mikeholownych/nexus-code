@@ -1,8 +1,6 @@
 # v1.0.0 release readiness checkpoint
 
-## Current release checkpoint (observed 2026-10-28 22:00 UTC; custodian update 2026-10-29)
-
-**Custodian update (2026-10-29).** The release owner waived the manual real-terminal matrix for v1.0.0 ([DEC-19](DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver)). The gate is **waived, not passed**: no cell verdicts were recorded, the automated CI PTY suites and scripted installed-RC PTY scenarios remain required and passing, and the release notes must disclose the waiver. The terminal-matrix item is no longer an outstanding qualification gate; every other gate in this checkpoint is unchanged.
+## Current release checkpoint (observed 2026-10-28 22:00 UTC)
 
 **Authoritative source and source gates:** `origin/main` is `10c84df89d391987454e4997aaa8f97529cc2496`, the PR #308 merge commit. Exact-main CI run [40770466028](https://github.com/mikeholownych/nexus-code/actions/runs/40770466028) completed successfully at 2026-10-28 21:58:49 UTC on this SHA. Node 22 and Node 24 test matrices passed; Linux x86_64 passed Rust and CLI tests, requirements and security gates, reproducible package builds with matching output hashes, SBOM validation, package smoke, and installer smoke. CodeQL run [40770465935](https://github.com/mikeholownych/nexus-code/actions/runs/40770465935) completed successfully. On a clean detached worktree at this exact SHA, `node scripts/check_requirements.mjs --enforce` passed: 123 rows, 108 tested, 6 partial, 2 implemented, 7 open, with 12 requirements deferred to exact-RC qualification. `node scripts/sync-version.mjs --check` reports all components at `1.0.0-rc.10`. These are source-stage results, not installed-RC qualification.
 
