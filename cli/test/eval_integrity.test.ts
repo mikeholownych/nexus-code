@@ -478,7 +478,7 @@ test("black-box oracle keeps canary expectations outside the candidate process a
 
 test("Python black-box oracle uses only pinned offline Go and Rust toolchains, or fails preflight", { timeout: 60_000 }, async (t) => {
   const { blackBoxOracleProblem, runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
-  const { candidateCompilerExposureProblem, candidateToolchainRootProblem, compilerExposureMaskArgs, oracleCompilerExposureProblem, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { candidateToolchainRootProblem, candidateToolchainRootSources, compilerExposureMaskArgs, scanOracleCompilerExposure, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const toolchainPolicy = JSON.parse(fs.readFileSync(path.join(ROOT, "eval/toolchain-versions.json"), "utf8"));
   const rustToolchain = fs.readFileSync(path.join(ROOT, "rust-toolchain.toml"), "utf8");
   const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
@@ -547,27 +547,28 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
     fs.rmSync(fakeMountedRuntime, { recursive: true, force: true });
   });
-  assert.equal(oracleCompilerExposureProblem([changingSystem], [], []), null, "an initially clean mounted system passes compiler preflight");
-  assert.equal(candidateCompilerExposureProblem([changingSystem], [], []), null, "candidate preflight initially observes the same clean mount");
+  assert.deepEqual(scanOracleCompilerExposure([changingSystem], [], []), { paths: [], problem: null }, "an initially clean mounted system has no compiler masks");
   const introducedCompiler = path.join(changingSystem, "go");
   fs.writeFileSync(introducedCompiler, compilerCanary);
   fs.chmodSync(introducedCompiler, 0o755);
-  assert.match(oracleCompilerExposureProblem([changingSystem], [], []) ?? "", /unapproved Go\/Rust compiler executable/, "oracle preflight rescans mounted roots after filesystem changes");
-  assert.match(candidateCompilerExposureProblem([changingSystem], [], []) ?? "", /candidate task has unapproved Go\/Rust compiler executable/, "candidate preflight cannot reuse a stale clean scan");
-  const exposure = oracleCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
-  assert.match(exposure ?? "", /unapproved Go\/Rust compiler executable/);
-  assert.match(exposure ?? "", /rustlib\/bin\/rustc/);
-  assert.match(exposure ?? "", /bin\/cargo-1\.94\.0/);
-  assert.doesNotMatch(exposure ?? "", /rustc-alias/, "a symlink to a compiler outside mounted system roots is not reachable in the sandbox");
-  assert.doesNotMatch(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/cargo/);
-  assert.doesNotMatch(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/compiler-alias/);
-  assert.match(exposure ?? "", /rustc-1\.94\.0/, "no-shebang executable compilers must be detected and masked");
-  assert.doesNotMatch(exposure ?? "", /go-225/, "executable-mode terminfo data is not a compiler binary");
-  const externalMountedExposure = oracleCompilerExposureProblem([fakeSystem], [], [fakeExternalGoTarget]);
-  assert.ok(externalMountedExposure?.includes(fakeExternalGoTarget), "a compiler target outside system roots must be masked when separately mounted");
-  const aliasedExposure = oracleCompilerExposureProblem([fakeSystem, fakeSystemAlias], []);
-  assert.ok(aliasedExposure?.includes(fakeGoTarget), "the canonical mounted spelling is scanned and masked");
-  assert.ok(aliasedExposure?.includes(path.join(fakeSystemAlias, path.relative(fakeSystem, fakeGoTarget))), "every mounted spelling of a shared system directory must be scanned and masked");
+  const changedScan = scanOracleCompilerExposure([changingSystem], [], []);
+  assert.equal(changedScan.problem, null);
+  assert.ok(changedScan.paths.includes(introducedCompiler), "compiler exposure is rescanned after filesystem changes");
+  assert.deepEqual(compilerExposureMaskArgs(changedScan), ["--ro-bind", "/dev/null", introducedCompiler], "the discovered compiler is converted to an actual sandbox mask");
+  const exposure = scanOracleCompilerExposure([fakeSystem], [fakeAlternatives]);
+  assert.equal(exposure.problem, null);
+  assert.ok(exposure.paths.some((item) => item.includes("rustlib/bin/rustc")));
+  assert.ok(exposure.paths.some((item) => item.includes("bin/cargo-1.94.0")));
+  assert.ok(!exposure.paths.some((item) => item.includes("rustc-alias")), "a symlink to a compiler outside mounted system roots is not reachable in the sandbox");
+  assert.ok(!exposure.paths.some((item) => item.includes("eval-oracle-unpinned-compiler-alternatives-") && item.endsWith("/cargo")));
+  assert.ok(!exposure.paths.some((item) => item.includes("eval-oracle-unpinned-compiler-alternatives-") && item.endsWith("/compiler-alias")));
+  assert.ok(exposure.paths.some((item) => item.includes("rustc-1.94.0")), "no-shebang executable compilers must be detected and masked");
+  assert.ok(!exposure.paths.some((item) => item.includes("go-225")), "executable-mode terminfo data is not a compiler binary");
+  const externalMountedExposure = scanOracleCompilerExposure([fakeSystem], [], [fakeExternalGoTarget]);
+  assert.ok(externalMountedExposure.paths.includes(fakeExternalGoTarget), "a compiler target outside system roots must be masked when separately mounted");
+  const aliasedExposure = scanOracleCompilerExposure([fakeSystem, fakeSystemAlias], []);
+  assert.ok(aliasedExposure.paths.includes(fakeGoTarget), "the canonical mounted spelling is scanned and masked");
+  assert.ok(aliasedExposure.paths.includes(path.join(fakeSystemAlias, path.relative(fakeSystem, fakeGoTarget))), "every mounted spelling of a shared system directory is scanned and masked");
   const fakeGoAliasTarget = path.join(fakeSystemAlias, "lib", "go-1.22.12", "go");
   const maskArgs = compilerExposureMaskArgs({ paths: [fakeGoTarget, fakeGoAliasTarget, fakeCargo, fakeCargo], problem: null });
   const maskedDestinations = maskArgs.filter((value, index) => index > 0 && maskArgs[index - 1] === "/dev/null");
@@ -576,13 +577,14 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.equal(maskedDestinations.filter((destination) => destination === fakeCargo).length, 1, "duplicate regular-file mount destinations must be deduplicated");
   assert.ok(!maskedDestinations.includes(fakeGo), "Bubblewrap must not bind over a symlink destination");
   assert.ok(!maskedDestinations.includes(path.join(fakeSystemAlias, "bin", "go")), "Bubblewrap must not bind over an aliased symlink destination");
-  const candidateExposure = candidateCompilerExposureProblem([fakeSystem], [fakeAlternatives], [fakeExternalGoTarget]);
-  assert.match(candidateExposure ?? "", /candidate task has unapproved Go\/Rust compiler executable/);
-  assert.match(candidateExposure ?? "", /rustlib\/bin\/rustc/);
-  assert.match(candidateExposure ?? "", /bin\/cargo-1\.94\.0/);
-  assert.ok(candidateExposure?.includes(fakeExternalGoTarget), "candidate preflight includes compiler targets in separately mounted runtime files");
-  assert.match(candidateExposure ?? "", /rustc-1\.94\.0/);
-  assert.doesNotMatch(candidateExposure ?? "", /go-225/);
+  const invalidRootTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-invalid-candidate-toolchain-target-"));
+  const invalidCandidateRoot = `${invalidRootTarget}-link`;
+  fs.symlinkSync(invalidRootTarget, invalidCandidateRoot, "dir");
+  t.after(() => {
+    fs.rmSync(invalidRootTarget, { recursive: true, force: true });
+    fs.rmSync(invalidCandidateRoot, { recursive: true, force: true });
+  });
+  assert.deepEqual(candidateToolchainRootSources([{ root: invalidCandidateRoot, required: ["bin/go"] }]), { [invalidCandidateRoot]: null }, "an unsafe host compiler root is omitted from candidate mounts rather than blocking compiler-independent tasks");
   if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives], additionalMountedPaths: [fakeExternalGoTarget] })) {
     const isolated = isolatedProcessArgv({
       cwd: fakeSystem,
@@ -1431,13 +1433,7 @@ test("candidate namespace cannot read host files or bypass pinned compilers with
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
     proxy = await startModelProxy({ upstream: `http://127.0.0.1:${(upstream.address() as any).port}/v1`, authToken: "UPSTREAM_AUTH_CANARY", clientToken: "RUN_LOCAL_TOKEN", socketPath: path.join(proxyDirectory, "proxy.sock") });
     const nodeRuntime = process.execPath;
-    let sandbox;
-    try {
-      sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: [nodeRuntime], runtimeExecutablePaths: [nodeRuntime], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
-    } catch (error) {
-      assert.match(String(error), /candidate task has unapproved Go\/Rust compiler executable|candidate task compiler exposure could not be checked/);
-      return; // An unsafe host system mount is rejected before candidate code can run.
-    }
+    const sandbox = agentSandboxArgv({ cwd: workspace, home, proxyDirectory, readOnlyPaths: [nodeRuntime], runtimeExecutablePaths: [nodeRuntime], supervisorPath: path.join(ROOT, "eval/agent_sandbox.mjs") });
     const script = `const fs=require('fs'),cp=require('child_process');fetch('http://127.0.0.1:40127/v1/models',{headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY},signal:AbortSignal.timeout(2000)}).then(async r=>{let value='';try{value=fs.readFileSync(${JSON.stringify(canary)},'utf8')}catch{};try{fs.writeFileSync('/tmp/host-write-canary','changed')}catch{};const nested=cp.spawnSync('/usr/bin/unshare',['-Ur','true']);const toolchains={};for(const [name,args] of [['go',['version']],['rustc',['--version']],['cargo',['--version']]]){if(process.env.PATH.includes(name==='go'?'/usr/local/go/bin':'/usr/local/nexus-qual/rust/bin')){const check=cp.spawnSync(name,args,{encoding:'utf8'});toolchains[name]={status:check.status,stdout:check.stdout,stderr:check.stderr}}};const absoluteToolchains={};for(const [name,command,args] of [['go','/usr/bin/go',['version']],['rustc','/usr/bin/rustc',['--version']],['cargo','/usr/bin/cargo',['--version']]]){const check=cp.spawnSync(command,args,{encoding:'utf8'});absoluteToolchains[name]={status:check.status,error:check.error?.code??null,version:check.status===0?check.stdout.trim():null}};console.log(JSON.stringify({status:r.status,token:process.env.OPENAI_API_KEY,upstreamVisible:process.env.UPSTREAM_AUTH_CANARY??null,canary:value,nestedUserns:nested.status,toolchains,absoluteToolchains}))}).catch(e=>{console.error(e.message);process.exit(1)})`;
     process.env.UPSTREAM_AUTH_CANARY = "UPSTREAM_AUTH_CANARY";
     const candidatePath = candidateAgentPath("/usr/bin:/bin");

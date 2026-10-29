@@ -38,10 +38,6 @@ export function candidateAgentPath(configuredPath, toolchains = resolveHostToolc
   return [...new Set([...toolchainEntries, ...configuredEntries])].join(path.delimiter);
 }
 
-export function selectToolchainRoot(configuredRoot, fallbackRoot) {
-  return configuredRoot ?? fallbackRoot ?? null;
-}
-
 export function oracleToolchainPathProblem(stat) {
   if (!stat || stat.isSymbolicLink?.() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) {
     return "pinned oracle toolchain entry is not a real root-owned path without group or other write permission";
@@ -80,7 +76,7 @@ export function candidateToolchainMountArgs(toolchains, systemDirectories = []) 
   return toolchainMountArgs(toolchains, systemDirectories.includes("/usr/local/lib"));
 }
 
-function resolveHostToolchains() {
+export function candidateToolchainRootSources(toolchains = PINNED_ORACLE_TOOLCHAINS) {
   const availableDirectory = ({ root, required }) => {
     let stat;
     try { stat = fs.lstatSync(root); }
@@ -89,12 +85,17 @@ function resolveHostToolchains() {
       throw error;
     }
     const rootProblem = candidateToolchainRootProblem(stat, fs.realpathSync(root), root);
-    if (rootProblem) throw new Error(rootProblem);
+    if (rootProblem) return null;
     const problem = pinnedToolchainProblem(root, required);
-    if (problem) throw new Error(problem);
+    if (problem) return null;
     return root;
   };
-  const roots = Object.fromEntries(PINNED_ORACLE_TOOLCHAINS.map((toolchain) => [toolchain.root, availableDirectory(toolchain)]));
+  const roots = Object.fromEntries(toolchains.map((toolchain) => [toolchain.root, availableDirectory(toolchain)]));
+  return roots;
+}
+
+function resolveHostToolchains() {
+  const roots = candidateToolchainRootSources();
   return {
     goRoot: roots["/usr/local/go"],
     rustRoot: roots["/usr/local/nexus-qual/rust"],
@@ -131,16 +132,7 @@ function mountedSpellingsForTarget(target, roots) {
   return [...spellings];
 }
 
-/** Reject every unpinned Go/Rust compiler reachable through the task's mounted runtime paths. */
-export function oracleCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = []) {
-  const scan = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths);
-  if (scan.problem) return scan.problem;
-  return scan.paths.length
-    ? `unapproved Go/Rust compiler executable is exposed through oracle system mounts: ${scan.paths.join(", ")}`
-    : null;
-}
-
-function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = []) {
+export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = []) {
   const roots = [...new Set([...systemDirectories, ...systemEtcDirectories, ...additionalMountedPaths])].sort();
 
   const exposed = new Set();
@@ -205,7 +197,7 @@ function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemE
       else if (stat.isFile()) inspectExecutable(root, fs.lstatSync(root).isSymbolicLink());
     }
   } catch {
-    return { paths: [], problem: "oracle compiler exposure could not be checked; refusing qualification" };
+    return { paths: [], problem: "compiler exposure could not be checked; refusing qualification" };
   }
 
   return { paths: [...exposed].sort(), problem: null };
@@ -217,19 +209,10 @@ export function compilerExposureMaskArgs(scan) {
   for (const target of targets) {
     let stat;
     try { stat = fs.lstatSync(target); }
-    catch { throw new Error("oracle compiler exposure target is unavailable; refusing qualification"); }
-    if (!stat.isFile()) throw new Error("oracle compiler exposure target is not a regular file; refusing qualification");
+    catch { throw new Error("compiler exposure target is unavailable; refusing qualification"); }
+    if (!stat.isFile()) throw new Error("compiler exposure target is not a regular file; refusing qualification");
   }
   return targets.flatMap((target) => ["--ro-bind", "/dev/null", target]);
-}
-
-/** Candidate processes receive the same system mounts as oracle processes and must share their compiler boundary. */
-export function candidateCompilerExposureProblem(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = []) {
-  const problem = oracleCompilerExposureProblem(systemDirectories, systemEtcDirectories, additionalMountedPaths);
-  if (!problem) return null;
-  return problem
-    .replace(/^oracle/, "candidate task")
-    .replace(/^unapproved Go\/Rust/, "candidate task has unapproved Go\/Rust");
 }
 
 function executableVersion(command, argv) {
