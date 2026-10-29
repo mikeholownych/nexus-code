@@ -48,7 +48,7 @@ The post-RC closure requirements listed below may remain `open`, `partial`, or `
 | REQ-REL-114 | ACC-SUP-08 | Exact-RC cross-runner reproducibility |
 | REQ-QUAL-101 | ACC-QUAL-T2 | Installed-RC held-out T2 qualification |
 | REQ-QUAL-107 | ACC-PRV-STANDALONE, ACC-PRV-LIVE | Installed-RC standalone and provider matrix |
-| REQ-QUAL-108 | ACC-TUI-STEER, ACC-TUI-A11Y, ACC-TUI-MANUAL | CI PTY checks and installed-RC real-terminal matrix |
+| REQ-QUAL-108 | ACC-TUI-STEER, ACC-TUI-A11Y | CI PTY checks and installed-RC scripted PTY scenarios (§5.1–§5.2); the manual matrix is waived by DEC-19 |
 | REQ-QUAL-109 | ACC-QUAL-T3 | Installed-RC T3 long-task qualification |
 <!-- RC-QUALIFICATION-ONLY:END -->
 
@@ -203,9 +203,9 @@ For each terminal × size, check:
 6. Ctrl-C twice (clean terminal restore: echo on, no stray escape codes).
 7. NO_COLOR.
 
-Record PASS/FAIL per cell and the observed outcomes for each check, bound to the exact installed RC artifact, terminal environment, and size. Screenshot artifacts are waived for v1.0.0 per [DEC-18](DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver); this does not waive any interactive check, safety gate, per-cell verdict, or evidence record.
+For successor-release qualification, record PASS/FAIL per cell and the observed outcomes for each check, bound to the exact installed RC artifact, terminal environment, and size. Screenshot artifacts were waived for v1.0.0 per [DEC-18](DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver); that screenshot waiver did not waive checks for a release where the matrix applied. The v1.0.0 manual matrix itself is waived by DEC-19 above.
 
-**Gate:** zero FAIL on checks 2, 5 and 6, which are safety checks. Other FAILs need a written disposition (fix, or a documented known limitation).
+**Successor-release gate:** zero FAIL on checks 2, 5 and 6, which are safety checks. Other FAILs need a written disposition (fix, or a documented known limitation).
 
 ## 6. Task-quality qualification (REQ-QUAL-101 to REQ-QUAL-106, REQ-QUAL-109)
 

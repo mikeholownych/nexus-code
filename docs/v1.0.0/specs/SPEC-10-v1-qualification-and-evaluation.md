@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Ready. Protocol and thresholds fixed by [DEC-05](../DECISIONS.md#dec-05-v1-evaluation-protocol-and-thresholds); task authorship needs owner action X2. |
-| Release class | **BLOCKER** for any v1 maturity claim: held-out matched evaluation, fault-injection qualification, standalone live qualification, scoring integrity. RELEASE-REQUIRED: T3 long tasks, a T4 smoke test in CI, a PTY terminal matrix. |
+| Release class | **BLOCKER** for any v1 maturity claim: held-out matched evaluation, fault-injection qualification, standalone live qualification, scoring integrity. RELEASE-REQUIRED: T3 long tasks, a T4 smoke test in CI, and the applicable automated PTY terminal gates. The v1.0.0 manual matrix is waived by DEC-19, not passed. |
 | Requirements | REQ-QUAL-101, REQ-QUAL-102, REQ-QUAL-103, REQ-QUAL-104, REQ-QUAL-105, REQ-QUAL-106, REQ-QUAL-107, REQ-QUAL-108 |
 | Findings | EVL-001, EVL-002, EVL-003, EVL-004, EVL-005, HIST-08, PRV G1/G2, TUI gaps (kitty/real terminals), VER-07 |
 | Plan | [PLAN-10](../plans/PLAN-10-v1-qualification-and-evaluation.md) |

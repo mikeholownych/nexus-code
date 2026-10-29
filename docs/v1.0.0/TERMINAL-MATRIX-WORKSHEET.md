@@ -28,9 +28,9 @@ Record the actual terminal versions/protocol configuration used. Kitty must have
 | VS Code integrated terminal | VS Code: ; integrated terminal profile: |
 | GNOME Terminal | |
 
-## Procedure to perform in every matrix cell
+## Successor-release procedure to perform in every matrix cell
 
-Run each step against the installed candidate in the terminal and size named by that row. Record the observations and evidence references for the cell.
+For a successor release that requires this matrix, run each step against the installed candidate in the terminal and size named by that row. Record the observations and evidence references for the cell.
 
 1. Launch `nexus`; confirm the TUI appears.
 2. At the approval panel, type continuously across it, paste 3 lines, then approve with a deliberate key.
@@ -40,9 +40,9 @@ Run each step against the installed candidate in the terminal and size named by 
 6. Press Ctrl-C twice; confirm clean terminal restoration (echo on, no stray escape codes).
 7. Exercise `NO_COLOR`.
 
-Screenshot artifacts are waived for v1.0.0 per [DEC-18](DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver). This does not waive any live manual interaction, check, observation, per-cell verdict, or evidence record. Automated PTY runs do not count as completion of these manual real-terminal cells.
+For a successor release, follow that release's screenshot and evidence decisions; the v1.0.0 screenshot waiver in [DEC-18](DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver) does not change this successor procedure. For v1.0.0, the entire manual matrix is waived by [DEC-19](DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver), so no manual interaction, cell verdict, or cell evidence is required or claimed. Automated PTY runs remain mandatory for v1.0.0 but are not manual-matrix results.
 
-## Terminal × size results
+## Successor-release terminal × size results
 
 Select exactly one PASS or FAIL for each cell. Record observed outcomes for every check and a per-cell evidence reference bound to the installed RC identity, terminal environment, and size. Record failures in the disposition/notes field.
 
@@ -64,9 +64,9 @@ Select exactly one PASS or FAIL for each cell. Record observed outcomes for ever
 | 14 | GNOME Terminal | 40×14 | [ ] PASS  [ ] FAIL | | |
 | 15 | GNOME Terminal | 200×60 | [ ] PASS  [ ] FAIL | | |
 
-## Acceptance gate
+## Successor-release acceptance gate
 
-- Safety checks 2, 5, and 6: **zero failures across all 15 cells**. Any failure here blocks this gate.
+- For a successor release that requires this matrix, safety checks 2, 5, and 6 must have **zero failures across all 15 cells**. Any failure here blocks that gate.
 - Any failure on another check requires a written disposition: fix, or a documented known limitation.
 - All 15 cells have exactly one verdict, check outcomes, and per-cell evidence references: [ ] yes  [ ] no
 - All non-safety failures have a written disposition: [ ] yes  [ ] no  [ ] no such failures

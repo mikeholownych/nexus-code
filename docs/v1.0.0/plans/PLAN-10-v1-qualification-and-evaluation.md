@@ -33,7 +33,7 @@ Implements [SPEC-10](../specs/SPEC-10-v1-qualification-and-evaluation.md). Harne
 | 10 | Mark `nexus eval` experimental (help and docs). Fix its operator-workspace checkout: run in a worktree (VER-07a). | `index.ts:663-688`; `evaluator.ts:128` | — |
 | 11 | M5 runs: T2 held-out (5×), T3 (5×), T4 (9×5), standalone subset (PLAN-05), provider verify (DEC-06). Archive everything under `docs/reviews/evidence/v1-qualification/<rc>/`. | runbook in ACCEPTANCE §4–§6 | all, RC build |
 | 13 | `eval/standalone/plain_proxy.mjs`: a forward proxy to the gateway. It injects the gateway token server-side. It strips `/v1/models` to `{id,object,owned_by}`, returns 404 for `/v1/tokenize`, and drops `X-AIHost-*` and admission headers. The `--emulate {llamacpp,vllm,ollama}` profiles add that server's `/models`, `/props`, `/api/show` and overflow-error shapes, derived from the real gateway limits. Unit-tested against a mock gateway. | new `eval/standalone/` | — |
-| 12 | Terminal matrix (manual): {xterm, kitty, tmux, VS Code, GNOME Terminal} × 3 sizes. Run the full checklist per ACCEPTANCE §5.3 and record all per-cell outcomes and evidence. Screenshot artifacts are waived for v1.0.0 per [DEC-18](../DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver). | ACCEPTANCE §5.3; DEC-18 | RC build |
+| 12 | Manual terminal matrix: waived for v1.0.0 by [DEC-19](../DECISIONS.md#dec-19-v100-manual-terminal-matrix-waiver), not passed; no manual cells or evidence are required. Retain the five-environment × three-size procedure in ACCEPTANCE §5.3 for a successor release. CI PTY and installed-RC scripted PTY scenarios in ACCEPTANCE §5.1–§5.2 remain required for v1.0.0. | ACCEPTANCE §5.1–§5.3; DEC-19 | v1.0.0 automated PTY gates; manual matrix for a successor release |
 
 ## PR slices
 
@@ -65,6 +65,6 @@ The original run-wall-time estimate above predates the nine-class T4 correction 
 
 ## Definition of done
 
-- REQ-QUAL-101 to REQ-QUAL-108 evidence is archived.
+- Applicable evidence for REQ-QUAL-101 to REQ-QUAL-108 is archived. For REQ-QUAL-108, record ACC-TUI-MANUAL as waived, not passed, under DEC-19; the CI and installed-RC scripted PTY criteria remain required.
 - The DEC-05 thresholds were evaluated with the scorer verdict table, signed off before the run and reported after it.
 - REQ-QUAL-109/110 are met.
