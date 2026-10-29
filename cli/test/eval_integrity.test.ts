@@ -504,6 +504,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   }), /do not match policy/);
 
   const fakeSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-system-"));
+  const fakeSystemAlias = `${fakeSystem}-alias`;
   const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
   const fakeSymlinkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-target-"));
   const fakeLib = path.join(fakeSystem, "rustlib", "bin");
@@ -513,18 +514,27 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const fakeGo = path.join(fakeSystem, "bin", "go");
   const fakeRustc = path.join(fakeLib, "rustc");
   const fakeCargo = path.join(fakeSystem, "bin", "cargo-1.94.0");
+  const fakeNoShebang = path.join(fakeSystem, "bin", "rustc-1.94.0");
+  const fakeTerminfo = path.join(fakeSystem, "share", "terminfo", "g", "go-225");
+  fs.mkdirSync(path.dirname(fakeTerminfo), { recursive: true });
+  fs.writeFileSync(fakeTerminfo, Buffer.from([0x1a, 0x01, 0x00, 0x00]));
+  fs.chmodSync(fakeTerminfo, 0o755);
   for (const file of [fakeGo, fakeRustc, fakeCargo]) {
     fs.writeFileSync(file, compilerCanary);
     fs.chmodSync(file, 0o755);
   }
+  fs.writeFileSync(fakeNoShebang, "exit 7\n");
+  fs.chmodSync(fakeNoShebang, 0o755);
   fs.symlinkSync(fakeCargo, path.join(fakeAlternatives, "cargo"));
   fs.symlinkSync(fakeCargo, path.join(fakeAlternatives, "compiler-alias"));
   fs.writeFileSync(path.join(fakeSymlinkTarget, "rustc"), compilerCanary);
   fs.chmodSync(path.join(fakeSymlinkTarget, "rustc"), 0o755);
   fs.symlinkSync(fakeSymlinkTarget, path.join(fakeSystem, "compiler-reach"));
   fs.symlinkSync(path.join(fakeSymlinkTarget, "rustc"), path.join(fakeSystem, "bin", "rustc-alias"));
+  fs.symlinkSync(fakeSystem, fakeSystemAlias, "dir");
   t.after(() => {
     fs.rmSync(fakeSystem, { recursive: true, force: true });
+    fs.rmSync(fakeSystemAlias, { recursive: true, force: true });
     fs.rmSync(fakeAlternatives, { recursive: true, force: true });
     fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
   });
@@ -534,12 +544,19 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.match(exposure ?? "", /rustc-alias/);
   assert.match(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/cargo/);
   assert.match(exposure ?? "", /eval-oracle-unpinned-compiler-alternatives-[^,]+\/compiler-alias/);
+  assert.match(exposure ?? "", /rustc-1\.94\.0/, "no-shebang executable compilers must be detected and masked");
+  assert.doesNotMatch(exposure ?? "", /go-225/, "executable-mode terminfo data is not a compiler binary");
+  const aliasedExposure = oracleCompilerExposureProblem([fakeSystem, fakeSystemAlias], []);
+  assert.match(aliasedExposure ?? "", /eval-oracle-unpinned-compiler-system-[^,]+\/bin\/go/);
+  assert.match(aliasedExposure ?? "", /eval-oracle-unpinned-compiler-system-[^,]+-alias\/bin\/go/, "every mounted spelling of a shared system directory must be detected and masked");
   const candidateExposure = candidateCompilerExposureProblem([fakeSystem], [fakeAlternatives]);
   assert.match(candidateExposure ?? "", /candidate task has unapproved Go\/Rust compiler executable/);
   assert.match(candidateExposure ?? "", /rustlib\/bin\/rustc/);
   assert.match(candidateExposure ?? "", /compiler-alias/);
-  if (sandboxAvailable()) {
-    assert.throws(() => isolatedProcessArgv({
+  assert.match(candidateExposure ?? "", /rustc-1\.94\.0/);
+  assert.doesNotMatch(candidateExposure ?? "", /go-225/);
+  if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem], systemEtcDirectories: [fakeAlternatives] })) {
+    const isolated = isolatedProcessArgv({
       cwd: fakeSystem,
       command: "/usr/bin/true",
       readOnlyPaths: ["/usr/bin/true"],
@@ -547,7 +564,11 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
       oracleToolchains: true,
       systemDirectories: [fakeSystem],
       systemEtcDirectories: [fakeAlternatives],
-    }), /unapproved Go\/Rust compiler executable/, "the execution-path preflight rejects deliberate compiler escape fixtures");
+    });
+    for (const executable of [fakeGo, fakeRustc, fakeCargo, fakeNoShebang, path.join(fakeAlternatives, "cargo"), path.join(fakeAlternatives, "compiler-alias")]) {
+      assert.ok(isolated.argv.some((value, index) => value === "--ro-bind" && isolated.argv[index + 1] === "/dev/null" && isolated.argv[index + 2] === executable), `unapproved compiler path is not masked in the execution namespace: ${executable}`);
+    }
+    assert.ok(!isolated.argv.includes(fakeTerminfo), "non-executable compiler-like data must not be masked");
   }
 
   assert.equal(oracleToolchainPathProblem({ uid: 0, mode: 0o040755 }), null, "root-owned read-only directories are eligible");
