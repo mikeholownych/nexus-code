@@ -1,13 +1,15 @@
-// Run one trusted GNU find inventory per canonical system root. These roots are
-// independent. Large roots are split at their immediate children so a single
-// broad directory cannot monopolize one worker and exceed the inventory deadline.
-import fs from "node:fs";
+// Run trusted GNU find inventories across canonical system roots. Large roots are
+// split at their immediate children so a broad directory cannot monopolize a worker.
+import { opendir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
 const FIND = "/usr/bin/find";
 const MAX_OUTPUT = 64 * 1024 * 1024;
 const TIMEOUT_MS = 25_000;
+const MAX_ENTRIES = 500_000;
+const MAX_JOBS = 100_000;
+const DIRECT_ENTRY_BATCH_SIZE = 256;
 const COMPILER_NAMES = [
   "go", "go[0-9]*", "go-[0-9]*",
   "rustc", "rustc[0-9]*", "rustc-[0-9]*",
@@ -40,6 +42,41 @@ if (roots.length === 0 || roots.length > 128 || roots.some((root) => !root.start
   process.exit(2);
 }
 
+async function* enumerateJobs() {
+  let entryCount = 0;
+  let jobCount = 0;
+  for (const root of roots) {
+    const directory = await opendir(root);
+    let directEntries = [];
+    for await (const entry of directory) {
+      if (++entryCount > MAX_ENTRIES) throw new Error("compiler inventory entry limit exceeded");
+      const item = path.join(root, entry.name);
+      // Never follow symlinked directories. GNU find receives symlinks as starting
+      // points under -P and checks their names and link targets without traversal.
+      let job;
+      if (entry.isDirectory()) {
+        job = [item];
+      } else {
+        directEntries.push(item);
+        if (directEntries.length === DIRECT_ENTRY_BATCH_SIZE) {
+          job = directEntries;
+          directEntries = [];
+        }
+      }
+      if (job) {
+        if (++jobCount > MAX_JOBS) throw new Error("compiler inventory job limit exceeded");
+        yield job;
+      }
+    }
+    if (directEntries.length) {
+      if (++jobCount > MAX_JOBS) throw new Error("compiler inventory job limit exceeded");
+      yield directEntries;
+    }
+  }
+}
+
+const jobs = enumerateJobs();
+
 const children = new Set();
 const outputs = [];
 let outputBytes = 0;
@@ -51,6 +88,7 @@ function stopAll() {
   if (stopping) return;
   stopping = true;
   for (const child of children) child.kill("SIGTERM");
+  void jobs.return().catch(() => {});
   killTimer = setTimeout(() => {
     for (const child of children) child.kill("SIGKILL");
   }, 1_000);
@@ -110,49 +148,21 @@ function scanRoots(roots) {
   });
 }
 
-const jobs = [];
-let entryCount = 0;
-for (const root of roots) {
-  let entries;
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    failed = true;
-    stopAll();
-    break;
-  }
-  const directEntries = [];
-  for (const entry of entries) {
-    if (++entryCount > 500_000) {
+async function worker() {
+  while (!failed) {
+    try {
+      const next = await jobs.next();
+      if (failed || next.done) return;
+      await scanRoots(next.value);
+    } catch {
       failed = true;
       stopAll();
-      break;
+      return;
     }
-    const item = path.join(root, entry.name);
-    // Never follow symlinked directories. GNU find receives symlinks as starting
-    // points under -P and checks their names and link targets without traversal.
-    if (entry.isDirectory()) jobs.push([item]);
-    else directEntries.push(item);
-  }
-  for (let offset = 0; offset < directEntries.length; offset += 256) {
-    jobs.push(directEntries.slice(offset, offset + 256));
-  }
-  if (failed || jobs.length > 100_000) {
-    failed = true;
-    stopAll();
-    break;
   }
 }
 
-let nextJob = 0;
-async function worker() {
-  while (!failed && nextJob < jobs.length) {
-    const job = jobs[nextJob++];
-    await scanRoots(job);
-  }
-}
-
-await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, () => worker()));
+await Promise.all(Array.from({ length: 4 }, () => worker()));
 clearTimeout(deadline);
 clearTimeout(killTimer);
 if (failed) {
