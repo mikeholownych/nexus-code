@@ -42,6 +42,10 @@ Run each step against the installed candidate in the terminal and size named by 
 
 Screenshot artifacts are waived for v1.0.0 per [DEC-18](DECISIONS.md#dec-18-v100-terminal-screenshot-artifact-waiver). This does not waive any live manual interaction, check, observation, per-cell verdict, or evidence record. Automated PTY runs do not count as completion of these manual real-terminal cells.
 
+## Partial operator report
+
+In response to the RC10 matrix request, the release owner reported that the client rendered at the tested sizes except in tmux inside GNOME Terminal; that setup could not be resized below 43×13, and the other results seemed okay. The report was received on 2026-10-29; test time, exact installed artifact identity, terminal versions, and per-cell check outcomes were not supplied. Treat this as useful partial operator information only: it does not fill any matrix cell or establish the installed-RC gate. No screenshot was supplied; DEC-18 waives screenshot artifacts.
+
 ## Terminal × size results
 
 Select exactly one PASS or FAIL for each cell. Record observed outcomes for every check and a per-cell evidence reference bound to the installed RC identity, terminal environment, and size. Record failures in the disposition/notes field.
