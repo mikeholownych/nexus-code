@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { containmentProblem, spawnContained } from "./resources.mjs";
 
 const BWRAP = "/usr/bin/bwrap";
+const FIND = "/usr/bin/find";
 const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/lib", "/lib64", "/usr/local/lib"];
 const SYSTEM_ETC_FILES = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"];
 const SYSTEM_ETC_DIRS = ["/etc/alternatives"];
@@ -18,7 +19,7 @@ if (TOOLCHAIN_POLICY.schemaVersion !== 1 || !/^\d+\.\d+\.\d+$/.test(TOOLCHAIN_PO
   throw new Error("evaluator toolchain policy must pin exact Go and Rust versions");
 }
 const PINNED_ORACLE_TOOLCHAINS = Object.freeze([
-  { root: "/usr/local/go", sourceRoots: ["/usr/local/go"], required: ["bin/go"] },
+  { root: "/usr/local/go", sourceRoots: ["/usr/local/go", "/opt/nexus-qual/go"], required: ["bin/go"] },
   { root: "/usr/local/nexus-qual/rust", sourceRoots: ["/usr/local/nexus-qual/rust", "/opt/nexus-qual/rust"], required: ["bin/rustc", "bin/cargo"] },
 ]);
 const UNPINNED_ORACLE_COMPILER_NAME = /^(?:go(?:-?\d[A-Za-z0-9.+-]*)?|rustc(?:-\d[A-Za-z0-9.+-]*)?|cargo(?:-\d[A-Za-z0-9.+-]*)?|rustup)$/;
@@ -179,20 +180,8 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
     // standard system roots. Mask each visible spelling after all runtime mounts are added.
     for (const mountedPath of mountedSpellingsForTarget(target, roots)) exposed.add(mountedPath);
   };
-  const visit = (directory) => {
-    // Preserve each mounted spelling. `/lib` and `/usr/lib` may resolve to the same host
-    // directory but remain distinct paths in the sandbox namespace, so both need masks.
-    const mountedDirectory = path.resolve(directory);
-    if (visited.has(mountedDirectory)) return;
-    visited.add(mountedDirectory);
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const item = path.join(directory, entry.name);
-      if (entry.isDirectory()) visit(item);
-      else inspectExecutable(item, entry.isSymbolicLink());
-    }
-  };
-
   try {
+    const directoryRoots = new Set();
     for (const root of roots) {
       let stat;
       try { stat = fs.statSync(root); }
@@ -200,8 +189,50 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
         if (error?.code === "ENOENT") continue;
         throw error;
       }
-      if (stat.isDirectory()) visit(root);
+      if (stat.isDirectory()) directoryRoots.add(fs.realpathSync(root));
       else if (stat.isFile()) inspectExecutable(root, fs.lstatSync(root).isSymbolicLink());
+    }
+
+    if (directoryRoots.size) {
+      // `readdirSync` in JavaScript made every task recursively enumerate the complete
+      // mounted system tree. Use GNU find's native directory traversal to keep this
+      // fail-closed inventory fast enough for repeated evaluator launches. Do not follow
+      // symlinked directories; inspect file symlinks (to catch compiler aliases) and
+      // regular files whose names could identify a compiler, then retain the same
+      // stat/realpath checks below.
+      const findStat = fs.lstatSync(FIND);
+      if (!findStat.isFile() || findStat.uid !== 0 || (findStat.mode & 0o022) !== 0
+        || (findStat.mode & 0o111) === 0 || fs.realpathSync(FIND) !== FIND) {
+        throw new Error("trusted compiler inventory tool is unavailable");
+      }
+      const compilerNames = [
+        "go", "go[0-9]*", "go-[0-9]*",
+        "rustc", "rustc[0-9]*", "rustc-[0-9]*",
+        "cargo", "cargo[0-9]*", "cargo-[0-9]*",
+        "rustup",
+      ];
+      const nameExpression = compilerNames.flatMap((name, index) => index === 0
+        ? ["-name", name]
+        : ["-o", "-name", name]);
+      const findArgs = [
+        "-P",
+        ...[...directoryRoots].sort(),
+        "(", "-type", "l", "-xtype", "f", "-o",
+        "(", "-type", "f", "(", ...nameExpression, ")", ")",
+        ")", "-print0",
+      ];
+      const result = spawnSync(FIND, findArgs, {
+        encoding: null,
+        timeout: 30_000,
+        maxBuffer: 64 * 1024 * 1024,
+        env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
+      });
+      if (result.error || result.status !== 0 || result.stderr?.length) {
+        throw new Error("trusted compiler inventory could not complete");
+      }
+      for (const item of (result.stdout ?? Buffer.alloc(0)).toString("utf8").split("\0")) {
+        if (item) inspectExecutable(item, fs.lstatSync(item).isSymbolicLink());
+      }
     }
   } catch {
     return { paths: [], problem: "compiler exposure could not be checked; refusing qualification" };
