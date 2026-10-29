@@ -5,4 +5,6 @@ sha256: 444d0812ad583b7f688890ac8536cb872e92364c977d9fbf298fa0408d98b3e7
 gh: gh version 2.103.3 (2026-10-26)
 command: gh attestation verify nexus-linux-x86_64-v1.0.0-rc.10.tar.gz -R mikeholownych/nexus-code
 exit: 0
-json: gh attestation verify ... --format json (bundle bytes: 13989)
+json: gh attestation verify ... --format json (verification-result bytes: 13989)
+verified identity (from --format json): issuer token.actions.githubusercontent.com; workflow .github/workflows/release.yml@refs/tags/v1.0.0-rc.10; source commit 16ee8ca3643824741b6da67936b41f262414fdf0; SLSA provenance v1
+note: the tarball is attested; `gh attestation verify install.sh` returns 404, so provenance covers the archive only

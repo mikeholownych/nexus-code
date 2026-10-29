@@ -5,9 +5,9 @@
 | Tag | `v1.0.0-rc.10` |
 | Commit | `16ee8ca3643824741b6da67936b41f262414fdf0` |
 | Installer | release asset `install.sh`, SHA-256 `5620d56ef6f8d637fc102ae2c8ea3b055effbc4069243a2df68b67520b1e2302` (verified before the run) |
-| Result | **20/20 matrix cells pass; lifecycle cell pass** |
+| Result | **20/20 matrix cells pass; lifecycle cells pass (Ubuntu 22.04, Debian 12, Fedora 40)** |
 | Runner | `mike-dev`, Docker; prepared images `nexus-e2/*:prep-182e8addeee0` |
-| Run | 2026-10-27, `run-rc10-e2-matrix.sh` |
+| Run | matrix and Ubuntu lifecycle 2026-10-27 (`run-rc10-e2-matrix.sh`); Debian/Fedora lifecycle and attestation 2026-10-29 |
 
 ## Matrix
 
@@ -52,7 +52,7 @@ Fixtures were generated from the published RC10 archive (SHA-256 `444d0812ad583b
 | Broken candidate self-test | `nexus upgrade --version v1.0.0-rc.10 --force --yes` against a fixture whose launcher reports `9.9.9` failed with `Unpacked binary failed staging self-test`; existing install and user state unchanged | [log](ubuntu-22-04-node22-upgrade-self-test-failure.log) |
 | Backup restore | Recognized private `~/.nexus/backups/...` backup restored state and config with 0700 directories / 0600 files | [log](ubuntu-22-04-node22-backup-restore.log) |
 | Updater process crash | Updater SIGKILLed after the durable journal reached `switched`; `nexus upgrade --recover` restored the verified RC10 package, retained the failed target for diagnosis, and was idempotent. The script does not separately assert staging-directory cleanup. **Power loss is not tested** | [log](ubuntu-22-04-node22-upgrade-process-crash-recovery.log) |
-| Provenance attestation | `gh attestation verify nexus-linux-x86_64-v1.0.0-rc.10.tar.gz -R mikeholownych/nexus-code` exited 0 on the published archive (SHA-256 `444d0812…b3e7`) with a Sigstore bundle; `--format json` returned a 13,989-byte bundle | [log](attestation-rc10.log) |
+| Provenance attestation | `gh attestation verify nexus-linux-x86_64-v1.0.0-rc.10.tar.gz -R mikeholownych/nexus-code` exited 0 on the published archive (SHA-256 `444d0812…b3e7`) with a Sigstore bundle; `--format json` returned a 13,989-byte verification result | [log](attestation-rc10.log) |
 
 The four additional lifecycle scripts do not set `NEXUS_VERIFY_ATTESTATION`; their installer calls use the installer's default `auto` mode. Provenance attestation is verified independently by the attestation cell above.
 
