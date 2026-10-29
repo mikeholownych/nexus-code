@@ -214,11 +214,19 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
       const nameExpression = compilerNames.flatMap((name, index) => index === 0
         ? ["-name", name]
         : ["-o", "-name", name]);
+      const linkTargetExpression = compilerNames.flatMap((name, index) => {
+        const patterns = [name, `*/${name}`];
+        return patterns.flatMap((pattern, patternIndex) => index === 0 && patternIndex === 0
+          ? ["-lname", pattern]
+          : ["-o", "-lname", pattern]);
+      });
       const findArgs = [
         "-P",
         ...[...directoryRoots].sort(),
-        "(", "-type", "l", "-xtype", "f", "-o",
-        "(", "-type", "f", "(", ...nameExpression, ")", ")",
+        "(",
+        "(", "-type", "l", "(", ...nameExpression, "-o", ...linkTargetExpression, ")", ")",
+        "-o",
+        "(", "(", ...nameExpression, ")", "-a", "-type", "f", "-a", "-perm", "/111", ")",
         ")", "-print0",
       ];
       const result = spawnSync(FIND, findArgs, {
