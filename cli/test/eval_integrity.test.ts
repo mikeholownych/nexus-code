@@ -478,7 +478,7 @@ test("black-box oracle keeps canary expectations outside the candidate process a
 
 test("Python black-box oracle uses only pinned offline Go and Rust toolchains, or fails preflight", { timeout: 60_000 }, async (t) => {
   const { blackBoxOracleProblem, runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
-  const { candidateToolchainRootProblem, candidateToolchainRootSources, compilerExposureMaskArgs, scanOracleCompilerExposure, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { candidateToolchainRootProblem, candidateToolchainRootSources, candidateToolchainVersionProblem, selectCandidateToolchainSource, compilerExposureMaskArgs, scanOracleCompilerExposure, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const toolchainPolicy = JSON.parse(fs.readFileSync(path.join(ROOT, "eval/toolchain-versions.json"), "utf8"));
   const rustToolchain = fs.readFileSync(path.join(ROOT, "rust-toolchain.toml"), "utf8");
   const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
@@ -497,6 +497,19 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     rustcVersion: "rustc 1.95.0 (fixture)",
     cargoVersion: "cargo 1.95.0 (fixture)",
   }), /do not match policy/);
+  assert.equal(candidateToolchainVersionProblem("/usr/local/go", { goVersion: "go version go1.22.12 linux/amd64" }), null);
+  assert.match(candidateToolchainVersionProblem("/usr/local/go", { goVersion: "go version go1.22.11 linux/amd64" }), /expected 1\.22\.12/);
+  assert.equal(candidateToolchainVersionProblem("/usr/local/nexus-qual/rust", {
+    rustcVersion: "rustc 1.95.0 (fixture)", cargoVersion: "cargo 1.95.0 (fixture)",
+  }), null);
+  assert.match(candidateToolchainVersionProblem("/usr/local/nexus-qual/rust", {
+    rustcVersion: "rustc 1.94.0 (fixture)", cargoVersion: "cargo 1.95.0 (fixture)",
+  }), /expected 1\.95\.0/);
+  const staleGoFallback = "/opt/nexus-qual/go";
+  const pinnedGoFallback = "/usr/local/go";
+  assert.equal(selectCandidateToolchainSource([staleGoFallback, pinnedGoFallback], (sourceRoot) => candidateToolchainVersionProblem("/usr/local/go", {
+    goVersion: sourceRoot === staleGoFallback ? "go version go1.22.11 linux/amd64" : "go version go1.22.12 linux/amd64",
+  })), pinnedGoFallback, "a stale fallback is skipped and the later pinned candidate compiler is selected");
   assert.match(oracleToolchainVersionProblem({
     goVersion: "go version go1.22.12 linux/amd64",
     rustcVersion: "rustc 1.94.0 (fixture)",
@@ -549,12 +562,14 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
     fs.rmSync(fakeMountedRuntime, { recursive: true, force: true });
   });
-  const batchedChildren = Array.from({ length: 17 }, (_, index) => {
+  // Keep the compiler beyond the scanner's 64-directory batch so this catches dropped later batches.
+  const batchedChildren = Array.from({ length: 65 }, (_, index) => {
     const child = path.join(batchedSystem, `child-${String(index).padStart(2, "0")}`);
-    fs.mkdirSync(child);
-    return child;
+    const scanDirectory = path.join(child, "scan-subtree");
+    fs.mkdirSync(scanDirectory, { recursive: true });
+    return scanDirectory;
   });
-  const batchedRootEntries = spawnSync("/usr/bin/find", ["-P", batchedSystem, "-mindepth", "1", "-maxdepth", "1", "-type", "d", "-print0"], { encoding: "buffer" });
+  const batchedRootEntries = spawnSync("/usr/bin/find", ["-P", batchedSystem, "-mindepth", "2", "-maxdepth", "2", "-type", "d", "-print0"], { encoding: "buffer" });
   assert.equal(batchedRootEntries.status, 0, "the fixture can enumerate the bounded directory batches");
   const orderedBatchedChildren = batchedRootEntries.stdout.toString("utf8").split("\0").filter(Boolean);
   assert.equal(orderedBatchedChildren.length, batchedChildren.length);
@@ -640,7 +655,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     sourceRoots: [danglingCandidateRoot, "/usr/local/go"],
     required: ["bin/go"],
   }]);
-  assert.deepEqual(danglingRustSource, { "/usr/local/nexus-qual/rust": "/usr/local/go" }, "a dangling optional root is skipped so a valid pinned fallback remains available");
+  assert.deepEqual(danglingRustSource, { "/usr/local/nexus-qual/rust": null }, "a Go fallback cannot be mounted as the pinned Rust toolchain when Rust executables are absent");
   const selectedToolchainRoots = Object.values(inactiveRustSource).filter(Boolean);
   const invalidRootExposure = scanOracleCompilerExposure([], [], [invalidRootCompiler], selectedToolchainRoots);
   assert.ok(invalidRootExposure.paths.includes(invalidRootCompiler), "compiler under an inactive configured Rust source remains masked when separately mounted as a runtime file");
@@ -722,10 +737,12 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     return;
   }
   assert.equal(blackBoxOracleProblem(check, taskDir), null);
+  const candidateToolchainRoots = candidateToolchainRootSources();
+  assert.ok(candidateToolchainRoots["/usr/local/go"], "the pinned Go source used by the candidate runtime is available");
   const sourceFiles = ["main.go", "Cargo.toml", "Cargo.lock", "src/main.rs", "check.py"];
   const sourceBefore = sourceFiles.map((file) => fs.readFileSync(path.join(workspace, file), "utf8"));
   await assert.rejects(
-    runBlackBoxOracle({ dir: taskDir }, workspace, check, { protectedCorpusPaths: ["/usr/local/go"] }),
+    runBlackBoxOracle({ dir: taskDir }, workspace, check, { protectedCorpusPaths: [candidateToolchainRoots["/usr/local/go"]!] }),
     /overlaps protected corpus/,
     "the oracle refuses even a pinned runtime root if it overlaps protected corpus material",
   );

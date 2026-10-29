@@ -55,6 +55,30 @@ export function candidateToolchainRootProblem(stat, resolvedPath, expectedPath) 
   return null;
 }
 
+export function candidateToolchainVersionProblem(root, { goVersion, rustcVersion, cargoVersion } = {}) {
+  if (root === "/usr/local/go") {
+    const actualGo = /^go version (go\S+)/.exec(goVersion ?? "")?.[1];
+    return actualGo === `go${TOOLCHAIN_POLICY.go}`
+      ? null
+      : `pinned candidate Go version does not match policy (expected ${TOOLCHAIN_POLICY.go})`;
+  }
+  if (root === "/usr/local/nexus-qual/rust") {
+    const actualRustc = /^rustc (\S+)/.exec(rustcVersion ?? "")?.[1];
+    const actualCargo = /^cargo (\S+)/.exec(cargoVersion ?? "")?.[1];
+    return actualRustc === TOOLCHAIN_POLICY.rust && actualCargo === TOOLCHAIN_POLICY.rust
+      ? null
+      : `pinned candidate Rust versions do not match policy (expected ${TOOLCHAIN_POLICY.rust})`;
+  }
+  return "unknown candidate toolchain root";
+}
+
+export function selectCandidateToolchainSource(sourceRoots, sourceProblem) {
+  for (const sourceRoot of sourceRoots) {
+    if (sourceProblem(sourceRoot) === null) return sourceRoot;
+  }
+  return null;
+}
+
 function toolchainMountArgs(toolchains, parentDirectoryAvailable = false) {
   const args = [];
   const createdDirectories = new Set(parentDirectoryAvailable ? ["/usr/local"] : []);
@@ -81,25 +105,35 @@ export function candidateToolchainMountArgs(toolchains, systemDirectories = []) 
 
 export function candidateToolchainRootSources(toolchains = PINNED_ORACLE_TOOLCHAINS) {
   const roots = Object.fromEntries(toolchains.map(({ root, sourceRoots = [root], required }) => {
-    for (const sourceRoot of sourceRoots) {
+    const selectedRoot = selectCandidateToolchainSource(sourceRoots, (sourceRoot) => {
       let stat;
       try { stat = fs.lstatSync(sourceRoot); }
       catch (error) {
-        if (error?.code === "ENOENT") continue;
+        if (error?.code === "ENOENT") return "candidate toolchain source is unavailable";
         throw error;
       }
-      if (stat.isSymbolicLink()) continue;
+      if (stat.isSymbolicLink()) return "candidate toolchain source is a symlink";
       let resolvedRoot;
       try { resolvedRoot = fs.realpathSync(sourceRoot); }
       catch (error) {
-        if (["EACCES", "ELOOP", "ENOENT", "ENOTDIR", "EPERM"].includes(error?.code)) continue;
+        if (["EACCES", "ELOOP", "ENOENT", "ENOTDIR", "EPERM"].includes(error?.code)) return "candidate toolchain source cannot be resolved";
         throw error;
       }
       const rootProblem = candidateToolchainRootProblem(stat, resolvedRoot, sourceRoot);
-      if (rootProblem || pinnedToolchainProblem(sourceRoot, required)) continue;
-      return [root, sourceRoot];
-    }
-    return [root, null];
+      if (rootProblem) return rootProblem;
+      const integrityProblem = pinnedToolchainProblem(sourceRoot, required);
+      if (integrityProblem) return integrityProblem;
+      const versions = root === "/usr/local/go"
+        ? { goVersion: executableVersion(path.join(sourceRoot, "bin/go"), ["version"]) }
+        : root === "/usr/local/nexus-qual/rust"
+          ? {
+            rustcVersion: executableVersion(path.join(sourceRoot, "bin/rustc"), ["--version"]),
+            cargoVersion: executableVersion(path.join(sourceRoot, "bin/cargo"), ["--version"]),
+          }
+          : {};
+      return candidateToolchainVersionProblem(root, versions);
+    });
+    return [root, selectedRoot];
   }));
   return roots;
 }
