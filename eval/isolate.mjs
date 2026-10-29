@@ -216,7 +216,9 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
       }
       const result = spawnSync(process.execPath, [inventory, ...[...directoryRoots].sort()], {
         encoding: null,
-        timeout: 35_000,
+        // Keep the parent deadline outside the helper's own bounded scan deadline so
+        // it can terminate and reap its find children before spawnSync is interrupted.
+        timeout: 70_000,
         maxBuffer: 64 * 1024 * 1024,
         env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       });

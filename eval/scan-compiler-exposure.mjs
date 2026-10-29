@@ -7,7 +7,10 @@ import path from "node:path";
 const FIND = "/usr/bin/find";
 const MAX_OUTPUT = 64 * 1024 * 1024;
 const MAX_ENUMERATION_OUTPUT = 64 * 1024 * 1024;
-const TIMEOUT_MS = 25_000;
+// The inventory covers every read-only system mount. Hosted qualification runners may
+// have much larger /usr/share and /usr/local/lib trees than developer hosts; keep the
+// scan bounded, but allow the full inventory to finish under normal CI I/O contention.
+const TIMEOUT_MS = 60_000;
 const MAX_ENTRIES = 500_000;
 const MAX_JOBS = 100_000;
 const DIRECTORY_BATCH_SIZE = 8;
