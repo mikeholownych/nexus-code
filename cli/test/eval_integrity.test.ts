@@ -579,12 +579,19 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.ok(!maskedDestinations.includes(path.join(fakeSystemAlias, "bin", "go")), "Bubblewrap must not bind over an aliased symlink destination");
   const invalidRootTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-invalid-candidate-toolchain-target-"));
   const invalidCandidateRoot = `${invalidRootTarget}-link`;
+  fs.mkdirSync(path.join(invalidRootTarget, "bin"));
+  const invalidRootCompiler = path.join(invalidRootTarget, "bin", "rustc");
+  fs.writeFileSync(invalidRootCompiler, compilerCanary);
+  fs.chmodSync(invalidRootCompiler, 0o755);
   fs.symlinkSync(invalidRootTarget, invalidCandidateRoot, "dir");
   t.after(() => {
     fs.rmSync(invalidRootTarget, { recursive: true, force: true });
     fs.rmSync(invalidCandidateRoot, { recursive: true, force: true });
   });
   assert.deepEqual(candidateToolchainRootSources([{ root: invalidCandidateRoot, required: ["bin/go"] }]), { [invalidCandidateRoot]: null }, "an unsafe host compiler root is omitted from candidate mounts rather than blocking compiler-independent tasks");
+  const selectedToolchainRoots = Object.values(candidateToolchainRootSources()).filter(Boolean);
+  const invalidRootExposure = scanOracleCompilerExposure([], [], [invalidCandidateRoot], selectedToolchainRoots);
+  assert.ok(invalidRootExposure.paths.includes(path.join(invalidCandidateRoot, "bin", "rustc")), "compiler under an inactive unsafe root remains masked even when that root is explicitly mounted");
   if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives], additionalMountedPaths: [fakeExternalGoTarget] })) {
     const isolated = isolatedProcessArgv({
       cwd: fakeSystem,
@@ -737,7 +744,7 @@ test("candidate agents receive only the approved read-only Go and Rust toolchain
 
 test("qualification runtime mounts cannot overlap the task tree, held-out store, or private validator paths", async () => {
   const { hiddenTestIsolationProblem, runtimeCorpusOverlapProblem } = await import(path.join(ROOT, "eval/validate.mjs"));
-  const { agentSandboxArgv, candidateSandboxHostMountSources, isolatedArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { agentSandboxArgv, candidateSandboxHostMountSources, candidateToolchainRootSources, isolatedArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-corpus-overlap-"));
   try {
     const store = path.join(root, "heldout-v2");
@@ -747,6 +754,8 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
     const home = path.join(root, "home");
     const proxyDirectory = path.join(root, "proxy");
     const readOnlyRuntime = path.join(runtimeRoot, "runtime.bin");
+    const inactiveToolchainRoot = path.join(root, "inactive-toolchain");
+    const inactiveCompiler = path.join(inactiveToolchainRoot, "bin", "rustc");
     const supervisorPath = path.join(ROOT, "eval/agent_sandbox.mjs");
     const privateValidator = path.join(root, "private-validator");
     fs.mkdirSync(tasks, { recursive: true });
@@ -755,7 +764,10 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
     fs.mkdirSync(home);
     fs.mkdirSync(proxyDirectory);
     fs.mkdirSync(privateValidator);
+    fs.mkdirSync(path.dirname(inactiveCompiler), { recursive: true });
     fs.writeFileSync(readOnlyRuntime, "runtime\n");
+    fs.writeFileSync(inactiveCompiler, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(inactiveCompiler, 0o755);
     fs.writeFileSync(path.join(tasks, "task.json"), "{}\n");
     fs.writeFileSync(path.join(references, "solution.patch"), "REFERENCE_SOLUTION_CANARY\n");
     fs.writeFileSync(path.join(privateValidator, "validate.mjs"), "PRIVATE_VALIDATOR_CANARY\n");
@@ -764,8 +776,7 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
 
     const mountContext = { cwd: runtimeRoot, home, proxyDirectory, nodeRuntime: process.execPath, supervisorPath };
     const hostMounts = candidateSandboxHostMountSources({ ...mountContext, readOnlyPaths: [readOnlyRuntime] });
-    const expectedToolchains = ["/usr/local/go", "/usr/local/nexus-qual/rust"]
-      .filter((item) => { try { return fs.statSync(item).isDirectory(); } catch { return false; } });
+    const expectedToolchains = Object.values(candidateToolchainRootSources()).filter(Boolean);
     const existingDirectories = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/lib", "/lib64", "/usr/local/lib"]
       .filter((item) => { try { return fs.statSync(item).isDirectory(); } catch { return false; } });
     const existingEtcFiles = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]
@@ -784,6 +795,18 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
       supervisorPath: fs.realpathSync(supervisorPath),
       readOnlyPaths: [fs.realpathSync(readOnlyRuntime)],
     });
+
+    if (sandboxAvailable()) {
+      const candidate = agentSandboxArgv({
+        ...mountContext,
+        readOnlyPaths: [readOnlyRuntime, inactiveCompiler],
+        runtimeExecutablePaths: [readOnlyRuntime, inactiveCompiler],
+        supervisorPath,
+      });
+      const compilerMount = candidate.argv.findIndex((value, index) => value === "--ro-bind" && candidate.argv[index + 1] === inactiveCompiler && candidate.argv[index + 2] === inactiveCompiler);
+      const compilerMask = candidate.argv.findIndex((value, index) => value === "--ro-bind" && candidate.argv[index + 1] === "/dev/null" && candidate.argv[index + 2] === inactiveCompiler);
+      assert.ok(compilerMount >= 0 && compilerMask > compilerMount, "an explicitly mounted inactive compiler root is masked after its bind");
+    }
 
     assert.equal(runtimeCorpusOverlapProblem([runtimeRoot], [runtimeRoot], tasks), null, "an unrelated pinned runtime remains usable");
     assert.match(runtimeCorpusOverlapProblem([path.join(references, "solution.patch")], [store], tasks) ?? "", /overlaps protected corpus material/);

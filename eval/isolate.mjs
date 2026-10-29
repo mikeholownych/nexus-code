@@ -132,12 +132,12 @@ function mountedSpellingsForTarget(target, roots) {
   return [...spellings];
 }
 
-export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = []) {
+export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, systemEtcDirectories = SYSTEM_ETC_DIRS, additionalMountedPaths = [], approvedToolchainRoots = []) {
   const roots = [...new Set([...systemDirectories, ...systemEtcDirectories, ...additionalMountedPaths])].sort();
 
   const exposed = new Set();
   const visited = new Set();
-  const approvedRoots = PINNED_ORACLE_TOOLCHAINS.flatMap(({ root, sourceRoots = [root] }) => [root, ...sourceRoots]);
+  const approvedRoots = approvedToolchainRoots.map((root) => fs.realpathSync(root));
   const inspectExecutable = (item, isSymbolicLink) => {
     if (visited.has(item)) return;
     visited.add(item);
@@ -310,6 +310,7 @@ function oracleToolchainsFingerprint(paths) {
 /** Return the host paths that the candidate sandbox mounts, grouped by the bind logic. */
 export function candidateSandboxHostMountSources({ cwd, home, proxyDirectory, readOnlyPaths = [], nodeRuntime, supervisorPath } = {}) {
   if (!Array.isArray(readOnlyPaths)) throw new Error("candidate sandbox readOnlyPaths must be an array");
+  const toolchainRoots = resolveHostToolchains();
   const existing = (paths, kind) => paths.filter((source) => {
     try {
       const stat = fs.statSync(source);
@@ -321,7 +322,8 @@ export function candidateSandboxHostMountSources({ cwd, home, proxyDirectory, re
     systemDirectories: existing(SYSTEM_BINARIES, "directory"),
     systemFiles: existing(SYSTEM_ETC_FILES, "file"),
     systemEtcDirectories: existing(SYSTEM_ETC_DIRS, "directory"),
-    toolchainDirectories: Object.values(resolveHostToolchains()).filter(Boolean),
+    toolchainRoots,
+    toolchainDirectories: Object.values(toolchainRoots).filter(Boolean),
     runtimeSources: {
       cwd: optional(cwd),
       home: optional(home),
@@ -409,7 +411,7 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
   const mountSources = candidateSandboxHostMountSources({ cwd: workspace, readOnlyPaths: [...readOnlySources, ...hiddenSources] });
   const protectedOverlap = candidateMountOverlapProblem(mountSources, protectedCorpusPaths);
   if (protectedOverlap) throw new Error(protectedOverlap);
-  const compilerExposure = scanOracleCompilerExposure(mountSources.systemDirectories, mountSources.systemEtcDirectories);
+  const compilerExposure = scanOracleCompilerExposure(mountSources.systemDirectories, mountSources.systemEtcDirectories, [], mountSources.toolchainDirectories);
   if (compilerExposure.problem) throw new Error(compilerExposure.problem);
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing to execute task-controlled commands");
   const hiddenGuestPaths = hiddenSources.map((source) => path.posix.join("/workspace", path.relative(workspace, source).split(path.sep).join("/")));
@@ -430,7 +432,7 @@ export function isolatedArgv({ cwd, home, command, timeoutSec = 300, readOnlySub
       }
     } catch {}
   }
-  const { goRoot, rustRoot } = resolveHostToolchains();
+  const { goRoot, rustRoot } = mountSources.toolchainRoots;
   args.push(...toolchainMountArgs({ goRoot, rustRoot }, localPrefixCreated));
   for (const source of ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]) {
     try {
@@ -534,6 +536,7 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
     mountSources.systemDirectories,
     mountSources.systemEtcDirectories,
     mountSources.runtimeSources.readOnlyPaths,
+    mountSources.toolchainDirectories,
   );
   if (compilerExposure.problem) throw new Error(compilerExposure.problem);
   if (!sandboxAvailable()) throw new Error("Bubblewrap is unavailable; refusing candidate execution");
@@ -552,7 +555,7 @@ export function agentSandboxArgv({ cwd, home, proxyDirectory, readOnlyPaths = []
     if (source === "/usr/local/lib") args.push("--dir", "/usr/local");
     args.push("--ro-bind", source, source);
   }
-  args.push(...candidateToolchainMountArgs(resolveHostToolchains(), mountSources.systemDirectories));
+  args.push(...candidateToolchainMountArgs(mountSources.toolchainRoots, mountSources.systemDirectories));
   for (const source of mountSources.systemFiles) args.push("--ro-bind", source, source);
   for (const source of mountSources.systemEtcDirectories) args.push("--ro-bind", source, source);
   const isolatedHome = mountSources.runtimeSources.home;
@@ -589,9 +592,9 @@ export function isolatedProcessArgv({ cwd, command, argv = [], readOnlyPaths = [
   let oracleToolchainSources = null;
   if (oracleToolchains) {
     const additionalMountedPaths = readOnlyPaths.map((item) => fs.realpathSync(item));
-    compilerExposure = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths);
-    if (compilerExposure.problem) throw new Error(compilerExposure.problem);
     oracleToolchainSources = candidateToolchainRootSources();
+    compilerExposure = scanOracleCompilerExposure(systemDirectories, systemEtcDirectories, additionalMountedPaths, Object.values(oracleToolchainSources).filter(Boolean));
+    if (compilerExposure.problem) throw new Error(compilerExposure.problem);
     const problem = pinnedOracleToolchainsProblem(oracleToolchainSources);
     if (problem) throw new Error(problem);
   }
