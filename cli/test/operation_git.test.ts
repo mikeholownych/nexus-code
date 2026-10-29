@@ -709,6 +709,54 @@ test("a merged unit recovers after its worktree is removed before receipt persis
   assert.equal(state.units.u1.integratedCommit, mergedTip);
 });
 
+test("a merged unit without a durable result blocks dependents until restarted and verified", async () => {
+  const root = repo();
+  const state = isolatedState([{ id: "u1" }, { id: "u2", dependsOn: ["u1"] }], root);
+  const p = state.git!;
+  const ops = new OperationGit(plan(root, state.id), p);
+  const prep = ops.prepareUnit(state.units.find((current) => current.id === "u1")!);
+  fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "verified after recovery\n");
+  git(prep.workspace, ["add", "-A"]);
+  git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u1"]);
+  git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
+  git(root, ["worktree", "remove", "--force", prep.workspace]);
+
+  const runs: string[] = [];
+  const runner = new OperationRunner(state, {
+    executor: {
+      async run(current, _resource, ctx) {
+        runs.push(current.id);
+        if (current.id === "u1") {
+          assert.equal(fs.readFileSync(path.join(ctx.workspace!, "u1.txt"), "utf8"), "verified after recovery\n");
+          return completed({
+            verification: { command: "test -f u1.txt", status: "PASSED", hasExecutedTests: true },
+          });
+        }
+        return completed();
+      },
+    },
+    clock: clock(),
+    persist: () => {},
+  });
+
+  await runner.run();
+
+  assert.equal(state.status, "BLOCKED");
+  assert.deepEqual(runs, [], "neither the unverified unit nor its dependent may run automatically");
+  assert.equal(state.units.find((current) => current.id === "u1")!.status, "BLOCKED");
+  assert.equal(state.units.find((current) => current.id === "u2")!.status, "WAITING_ON_DEPENDENCY");
+  const decision = state.blocked!.decisions.find((current) => current.unitId === "u1")!;
+  assert.equal(decision.cause, "EXECUTION_UNKNOWN");
+  assert.match(decision.question, /no saved result to verify/);
+  assert.deepEqual(decision.options[0].action, { kind: "retry", restart: true });
+
+  runner.scheduler.resolve(decision.id, "1");
+  await runner.run();
+
+  assert.equal(state.status, "COMPLETE", JSON.stringify(state.blocked));
+  assert.deepEqual(runs, ["u1", "u2"], "the dependent runs only after recovery replay verifies its prerequisite");
+});
+
 test("a verifier cannot move integration to another branch", async () => {
   const root = repo();
   const p = plan(root);
@@ -792,7 +840,7 @@ test("operation cleanup preserves ignored files", () => {
   assert.equal(fs.readFileSync(path.join(prep.workspace, "ignored.txt"), "utf8"), "preserve\n");
 });
 
-test("the runner completes a merged unit without rerunning after disposal-before-receipt", async () => {
+test("the runner verifies a merged unit after disposal-before-receipt before completing", async () => {
   const root = repo();
   const state = isolatedState([{ id: "u1" }], root);
   const p = plan(root, state.id);
@@ -801,14 +849,22 @@ test("the runner completes a merged unit without rerunning after disposal-before
   fs.writeFileSync(path.join(prep.workspace, "u1.txt"), "one\n");
   git(prep.workspace, ["add", "-A"]);
   git(prep.workspace, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "-qm", "u1"]);
-  const unitCommit = git(prep.workspace, ["rev-parse", "HEAD"]);
   git(p.integrationWorktree, ["-c", "user.name=N", "-c", "user.email=n@l", "merge", "--no-ff", "-m", "integrate", prep.branch]);
   const mergedTip = ops.currentTip();
   git(root, ["worktree", "remove", "--force", prep.workspace]);
   state.units[0].status = "RUNNING";
   let calls = 0;
   const persisted: DurableOperationState[] = [];
-  const executor: WorkUnitExecutor = { async run() { calls++; throw new Error("must not rerun"); } };
+  const executor: WorkUnitExecutor = {
+    async run(current, _resource, ctx) {
+      calls++;
+      assert.equal(current.id, "u1");
+      assert.equal(fs.readFileSync(path.join(ctx.workspace!, "u1.txt"), "utf8"), "one\n");
+      return completed({
+        verification: { command: "test -f u1.txt", status: "PASSED", hasExecutedTests: true },
+      });
+    },
+  };
   const runner = new OperationRunner(state, {
     executor,
     clock: clock(),
@@ -817,12 +873,21 @@ test("the runner completes a merged unit without rerunning after disposal-before
 
   await runner.run();
 
-  assert.equal(calls, 0);
+  assert.equal(calls, 0, "a missing durable result must not be inferred from the merge");
+  assert.equal(state.status, "BLOCKED");
+  assert.equal(state.integrations?.length ?? 0, 0);
+
+  const decision = state.blocked!.decisions.find((current) => current.unitId === "u1")!;
+  assert.equal(decision.cause, "EXECUTION_UNKNOWN");
+  runner.scheduler.resolve(decision.id, "1");
+  await runner.run();
+
+  assert.equal(calls, 1, "only the explicit restart may execute verification");
   assert.equal(state.status, "COMPLETE");
   assert.equal(state.integrations?.length, 1);
   assert.equal(persisted[persisted.length - 1]?.integrations?.length, 1);
   assert.equal(persisted[persisted.length - 1]?.integrations?.[0].unitId, "u1");
-  assert.equal(persisted[persisted.length - 1]?.integrations?.[0].commit, unitCommit);
+  assert.equal(persisted[persisted.length - 1]?.integrations?.[0].commit, mergedTip);
   assert.equal(persisted[persisted.length - 1]?.integrations?.[0].integratedCommit, mergedTip);
 });
 
