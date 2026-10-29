@@ -401,9 +401,8 @@ function runCli(args: string[], fixture: CliFixture): { status: number; stdout: 
 }
 
 function assertNoUnsafeTerminalControls(output: string): void {
-  // CLI styling is expected; only discard the known SGR styling form before checking controls from input data.
-  const withoutSgr = output.replace(/\x1b\[[0-9;]*m/g, "");
-  assert.doesNotMatch(withoutSgr, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
+  // The fixture disables CLI color; inspect raw output so an injected SGR sequence cannot be hidden.
+  assert.doesNotMatch(output, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
 }
 
 function saveFixture(fixture: CliFixture, id: string): string {
