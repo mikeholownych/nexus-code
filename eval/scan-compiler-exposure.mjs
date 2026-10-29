@@ -52,7 +52,7 @@ async function* enumerateJobs() {
   let jobCount = 0;
   let enumerationBytes = 0;
   for (const root of roots) {
-    const child = spawn(FIND, ["-P", root, "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\\0%p\\0"], {
+    const child = spawn(FIND, ["-P", root, "-mindepth", "1", "-maxdepth", "2", "-printf", "%d\\0%y\\0%p\\0"], {
       env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -70,8 +70,9 @@ async function* enumerateJobs() {
       stopAll();
     });
     const closed = new Promise((resolve) => child.once("close", (code) => resolve(code)));
-    let directDirectories = [];
+    let scanDirectories = [];
     let directEntries = [];
+    let entryDepth = null;
     let entryType = null;
     let pending = Buffer.alloc(0);
     try {
@@ -89,6 +90,13 @@ async function* enumerateJobs() {
           if (delimiter < 0) break;
           const field = data.subarray(offset, delimiter);
           offset = delimiter + 1;
+          if (entryDepth === null) {
+            if (field.length !== 1 || field[0] < 0x31 || field[0] > 0x32) {
+              throw new Error("invalid compiler inventory entry depth");
+            }
+            entryDepth = field[0] - 0x30;
+            continue;
+          }
           if (entryType === null) {
             if (field.length !== 1) throw new Error("invalid compiler inventory entry type");
             entryType = field.toString("ascii");
@@ -104,23 +112,24 @@ async function* enumerateJobs() {
             throw new Error("compiler inventory path is not valid UTF-8");
           }
           let job;
-          // The `-P` inventory process reports immediate directories separately and
-          // leaves symlinks as non-directory entries, so descendants are never followed.
-          // Group bounded sibling directories into one recursive find invocation. This
-          // preserves the complete scan while avoiding one process per top-level child.
-          if (entryType === "d") {
-            directDirectories.push(item);
-            if (directDirectories.length === DIRECTORY_BATCH_SIZE) {
-              job = directDirectories;
-              directDirectories = [];
+          // Enumerate two levels before scheduling recursive scans. This splits large
+          // immediate subtrees into independent jobs without following symlinked dirs.
+          if (entryType === "d" && entryDepth === 2) {
+            scanDirectories.push(item);
+            if (scanDirectories.length === DIRECTORY_BATCH_SIZE) {
+              job = scanDirectories;
+              scanDirectories = [];
             }
           } else {
-            directEntries.push(item);
-            if (directEntries.length === DIRECT_ENTRY_BATCH_SIZE) {
-              job = directEntries;
-              directEntries = [];
+            if (entryType !== "d") {
+              directEntries.push(item);
+              if (directEntries.length === DIRECT_ENTRY_BATCH_SIZE) {
+                job = directEntries;
+                directEntries = [];
+              }
             }
           }
+          entryDepth = null;
           entryType = null;
           if (job) {
             if (++jobCount > MAX_JOBS) {
@@ -137,13 +146,13 @@ async function* enumerateJobs() {
       if (child.exitCode === null && !child.killed) child.kill("SIGTERM");
       const code = await closed;
       children.delete(child);
-      if (spawnError || code !== 0 || stderrBytes !== 0 || entryType !== null || pending.length !== 0) {
+      if (spawnError || code !== 0 || stderrBytes !== 0 || entryDepth !== null || entryType !== null || pending.length !== 0) {
         failed = true;
         stopAll();
       }
     }
     if (failed) throw new Error("compiler inventory enumeration failed");
-    for (const remaining of [directDirectories, directEntries]) {
+    for (const remaining of [scanDirectories, directEntries]) {
       if (remaining.length) {
         if (++jobCount > MAX_JOBS) throw new Error("compiler inventory job limit exceeded");
         yield remaining;
