@@ -829,13 +829,14 @@ test("qualification runtime mounts cannot overlap the task tree, held-out store,
     const mountContext = { cwd: runtimeRoot, home, proxyDirectory, nodeRuntime: process.execPath, supervisorPath };
     const hostMounts = candidateSandboxHostMountSources({ ...mountContext, readOnlyPaths: [readOnlyRuntime] });
     const expectedToolchains = Object.values(candidateToolchainRootSources()).filter(Boolean);
-    const existingDirectories = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/lib", "/lib64", "/usr/local/lib"]
+    const existingDirectories = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share/git-core/templates", "/usr/share/terminfo", "/usr/share/zoneinfo", "/lib", "/lib64", "/usr/local/lib"]
       .filter((item) => { try { return fs.statSync(item).isDirectory(); } catch { return false; } });
     const existingEtcFiles = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"]
       .filter((item) => { try { return fs.statSync(item).isFile(); } catch { return false; } });
     const existingEtcDirectories = ["/etc/alternatives"]
       .filter((item) => { try { return fs.statSync(item).isDirectory(); } catch { return false; } });
     assert.deepEqual(hostMounts.systemDirectories, existingDirectories);
+    assert.ok(!hostMounts.systemDirectories.includes("/usr/share"), "candidate runtimes do not mount the host's broad application-data tree");
     assert.deepEqual(hostMounts.systemFiles, existingEtcFiles);
     assert.deepEqual(hostMounts.systemEtcDirectories, existingEtcDirectories);
     assert.deepEqual(hostMounts.toolchainDirectories, expectedToolchains);
@@ -1654,7 +1655,9 @@ test("executable probes refuse bind sources that overlap protected corpus materi
     const alias = path.join(root, "store-alias");
     fs.symlinkSync(store, alias, "dir");
     const probe = (options: Record<string, unknown>) => () => isolatedProcessArgv({ command: "/usr/bin/true", argv: ["--version"], ...options });
-    assert.throws(probe({ cwd: workspace, protectedCorpusPaths: ["/usr/share/nexus-heldout"] }), /overlaps protected corpus material: \/usr\/share/, "system bind containing a protected path");
+    assert.throws(probe({ cwd: workspace, protectedCorpusPaths: ["/usr/share/git-core/templates/nexus-heldout"] }), /overlaps protected corpus material: \/usr\/share\/git-core\/templates/, "Git template bind containing a protected path");
+    assert.throws(probe({ cwd: workspace, protectedCorpusPaths: ["/usr/share/terminfo/nexus-heldout"] }), /overlaps protected corpus material: \/usr\/share\/terminfo/, "system bind containing a protected path");
+    assert.doesNotThrow(probe({ cwd: workspace, protectedCorpusPaths: ["/usr/share/nexus-heldout"] }), "unmounted host application data does not overlap candidate runtime mounts");
     assert.throws(probe({ cwd: path.join(alias, "reference"), protectedCorpusPaths: [store] }), /overlaps protected corpus material/, "workspace bind through a symlink alias");
     assert.doesNotThrow(probe({ cwd: workspace, protectedCorpusPaths: [store] }), "an unrelated workspace remains usable");
   } finally {

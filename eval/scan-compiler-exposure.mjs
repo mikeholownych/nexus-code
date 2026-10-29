@@ -12,7 +12,10 @@ const MAX_ENUMERATION_OUTPUT = 64 * 1024 * 1024;
 const TIMEOUT_MS = 25_000;
 const MAX_ENTRIES = 500_000;
 const MAX_JOBS = 100_000;
-const DIRECTORY_BATCH_SIZE = 2;
+// Bundle enough sibling directories to avoid spawning one `find` process for
+// every pair on large hosted system roots, while keeping independent jobs for
+// bounded parallel scanning.
+const DIRECTORY_BATCH_SIZE = 64;
 const DIRECT_ENTRY_BATCH_SIZE = 256;
 const SCAN_WORKERS = 8;
 const COMPILER_NAMES = [
