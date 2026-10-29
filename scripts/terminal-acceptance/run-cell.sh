@@ -5,7 +5,7 @@
 #   - terminal state (stty) before and after each exit;
 #   - processes from the cell (by HOME or workspace cwd) that survive an exit, with a planted positive control;
 #   - the mock's request log, which proves which scenarios ran.
-# The human records PASS/FAIL per check and two screenshots. Every attempt is kept. Usage:
+# The human records PASS/FAIL per check. Screenshots are optional under DEC-18; every attempt is kept. Usage:
 #   scripts/terminal-acceptance/run-cell.sh --rc v1.0.0-rc.N --terminal <xterm|kitty|tmux-gnome|vscode|gnome> \
 #     --size <80x24|40x14|200x60> --out <evidence dir>
 set -euo pipefail
@@ -143,11 +143,11 @@ cat <<EOF
 In the TUI that opens next (the first word of each prompt selects the mock scenario):
   1  It launches and shows the TUI.
   2  Prompt "approve". While each of the two approval panels is open, type continuously, paste 3 lines, then
-     approve with a deliberate key. Screenshot an approval panel.
+     approve with a deliberate key.
   3  Enter a multiline prompt with Shift+Enter (or Alt+Enter).
   4  Prompt "stream" and resize the window while it streams; restore $size afterwards.
   5  Prompt "sleep" and press Esc while "sleep 30" runs.
-  6  Quit with Ctrl-C twice. Screenshot the terminal after exit.
+  6  Quit with Ctrl-C twice. Confirm the terminal is restored (echo on, no stray escape codes).
 Press Enter to launch.
 EOF
 read -r _
@@ -174,18 +174,28 @@ cp "$cell_home/checks.tsv" "$stem.answers.tsv"
 cp "$cell_home/exits.tsv" "$stem.exits.tsv"
 cp "$mock_log" "$stem.mock.log"
 read -r -p "operator name: " operator
-while true; do
-  read -r -p "approval-panel screenshot path: " shot_approval
-  read -r -p "post-exit screenshot path: " shot_exit
-  if [[ "$shot_approval" =~ \.(png|jpe?g)$ && "$shot_exit" =~ \.(png|jpe?g)$ && -f "$shot_approval" && -f "$shot_exit" ]] \
-     && ! cmp -s "$shot_approval" "$shot_exit" \
-     && (( $(stat -c %Y "$shot_approval") >= attempt_start && $(stat -c %Y "$shot_exit") >= attempt_start )); then break; fi
-  echo "both screenshots must be .png/.jpg files taken during this attempt, and differ; try again"
-done
-approval_copy="$stem.approval.${shot_approval##*.}"
-exit_copy="$stem.post-exit.${shot_exit##*.}"
-cp "$shot_approval" "$approval_copy"
-cp "$shot_exit" "$exit_copy"
+shot_approval="" shot_exit="" approval_copy="" exit_copy=""
+if [[ "$rc" =~ ^v1\.0\.0-rc\.[0-9]+$ ]]; then
+  read -r -p "Attach optional approval and post-exit screenshots? (y/N): " screenshot_choice
+  screenshots_requested="${screenshot_choice,,}"
+else
+  echo "Screenshots are required for $rc; DEC-18 applies only to v1.0.0-rc.N."
+  screenshots_requested="yes"
+fi
+if [[ "$screenshots_requested" == y || "$screenshots_requested" == yes ]]; then
+  while true; do
+    read -r -p "approval-panel screenshot path: " shot_approval
+    read -r -p "post-exit screenshot path: " shot_exit
+    if [[ "$shot_approval" =~ \.(png|jpe?g)$ && "$shot_exit" =~ \.(png|jpe?g)$ && -f "$shot_approval" && -f "$shot_exit" ]] \
+       && ! cmp -s "$shot_approval" "$shot_exit" \
+       && (( $(stat -c %Y "$shot_approval") >= attempt_start && $(stat -c %Y "$shot_exit") >= attempt_start )); then break; fi
+    echo "both optional screenshots must be distinct .png/.jpg files taken during this attempt; try again"
+  done
+  approval_copy="$stem.approval.${shot_approval##*.}"
+  exit_copy="$stem.post-exit.${shot_exit##*.}"
+  cp "$shot_approval" "$approval_copy"
+  cp "$shot_exit" "$exit_copy"
+fi
 
 # Values reach Python only through the environment, never through generated source.
 CELL="$cell" ATTEMPT="$attempt" TERMINAL_NAME="$terminal" CELL_SIZE="$size" RC="$rc" NEXUS_VERSION_LINE="$version_line" \
@@ -213,6 +223,11 @@ for line in open(f"{stem}.mock.log"):
     if prompt == "stream" and entry["kind"] == "stream": scenarios["stream"] += 1
     if prompt == "sleep" and entry["kind"] == "tools": scenarios["sleepTool"] += 1
 scenarios["approveToolRounds"] = sorted(scenarios["approveToolRounds"])
+files = {name: {"path": os.path.basename(path), "sha256": sha(path)} for name, path in
+         [("mockLog", f"{stem}.mock.log"), ("answers", f"{stem}.answers.tsv"), ("exits", f"{stem}.exits.tsv")]}
+for name, env_name in [("approvalScreenshot", "APPROVAL_SHOT"), ("postExitScreenshot", "EXIT_SHOT")]:
+    if e[env_name]:
+        files[name] = {"path": os.path.basename(e[env_name]), "sha256": sha(e[env_name])}
 record = {
     "acceptance": "ACCEPTANCE §5.3", "cell": e["CELL"], "attempt": int(e["ATTEMPT"]), "terminal": e["TERMINAL_NAME"], "size": e["CELL_SIZE"],
     "rc": e["RC"], "nexusVersion": e["NEXUS_VERSION_LINE"], "nexusPath": e["NEXUS_PATH"], "packageDir": e["PACKAGE_DIR"],
@@ -220,9 +235,7 @@ record = {
     "env": {k: e.get(k) for k in ["TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM", "VTE_VERSION", "KITTY_WINDOW_ID", "TMUX", "XTERM_VERSION"]},
     "tmux": e["TMUX_VERSION"] or None, "kittyKeyboardProtocol": e["KITTY_PROTOCOL"] or None,
     "measured": exits, "scenarios": scenarios, "checks": checks,
-    "files": {name: {"path": os.path.basename(path), "sha256": sha(path)} for name, path in
-              [("approvalScreenshot", e["APPROVAL_SHOT"]), ("postExitScreenshot", e["EXIT_SHOT"]), ("mockLog", f"{stem}.mock.log"),
-               ("answers", f"{stem}.answers.tsv"), ("exits", f"{stem}.exits.tsv")]},
+    "files": files,
     "operator": e["OPERATOR_NAME"],
 }
 with open(f"{stem}.json", "x") as f:

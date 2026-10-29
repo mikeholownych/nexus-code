@@ -11,12 +11,17 @@ A human runs this procedure against the **installed RC**. Automated PTY suites (
 
 **Gate:** zero FAIL on checks 2, 5 and 6. Any other FAIL needs a written disposition.
 
+**Screenshots:** DEC-18 waives screenshot artifacts only for `v1.0.0-rc.N`. For those candidates, screenshots are
+optional; every interactive check, measurement, per-cell verdict, observed outcome, exact installed-RC identity, and
+written disposition remains required. Other release series retain the approval-panel and post-exit screenshot
+requirement. Automated PTY runs do not replace these manual cells.
+
 ## Before you start
 
 1. Install the RC with the documented one-line command. `nexus --version` must print the RC version, and `nexus` must
    not resolve into a checkout.
 2. Choose a new evidence directory, `OUT=docs/reviews/evidence/v1-qualification/<rc>/terminal`, and use it for every cell.
-3. You need a screenshot tool, and `python3` and `git` on `PATH`. No inference is used: a local mock gateway
+3. You need `python3` and `git` on `PATH`. No inference is used: a local mock gateway
    (`mockgw.py`) answers every request.
 
 ## Each cell
@@ -35,11 +40,11 @@ the TUI twice, once normally and once with `NO_COLOR=1`, and prompts you through
 | # | You do | You judge |
 |---|---|---|
 | 1 | The TUI opens | It renders correctly at this size |
-| 2 | Prompt `approve`. At each approval panel, type continuously, paste 3 lines, then approve with a deliberate key | No decision is made by the stray input, and the deliberate key decides. **Screenshot the panel.** |
+| 2 | Prompt `approve`. At each approval panel, type continuously, paste 3 lines, then approve with a deliberate key | No decision is made by the stray input, and the deliberate key decides |
 | 3 | Shift+Enter or Alt+Enter while composing | It inserts a newline and does not submit |
 | 4 | Prompt `stream`, then resize while it streams and restore the size | Layout recovers and nothing is garbled or lost |
 | 5 | Prompt `sleep`, then press Esc while `sleep 30` runs | Cancel is acknowledged, and nothing survives |
-| 6 | Press Ctrl-C twice to quit | The terminal is restored: echo on, no stray escape codes. **Screenshot the terminal after exit.** |
+| 6 | Press Ctrl-C twice to quit | The terminal is restored: echo on, no stray escape codes |
 | 7 | Second launch, with `NO_COLOR=1` | The TUI is readable without colour |
 
 The script also **measures** two things:
@@ -48,8 +53,8 @@ The script also **measures** two things:
 
 A measured survivor or unavailable systemd-scope measurement fails check 5, and an unrestored terminal fails check 6, whatever you recorded. A zero survivor count is recorded only when the scope's `cgroup.procs` file was readable or systemd confirmed the scope stopped or disappeared. Missing or unreadable scope data while the unit is active is recorded as unavailable and fails the matrix gate. Each cell writes
 `cell-<terminal>-<size>.json` with the RC version, binary path and SHA-256, terminal environment, measurements, your
-results and notes, screenshot hashes, and the mock request log. A cell is recorded once. To retry, keep the failed
-attempt and use a new evidence directory.
+results and notes, and the mock request log. If you provide both optional screenshots, their hashes are also recorded.
+A cell is recorded once. To retry, keep the failed attempt and use a new evidence directory.
 
 ## Gate
 
@@ -71,5 +76,5 @@ The summarizer prints the 15-cell table and writes `matrix-summary.json`. **PASS
 - every aborted attempt (a `.partial` file, which holds the measurements taken before it was abandoned) has an entry
   `"<cell>:partial-<n>"`.
 
-The record hashes prove that files are unchanged since recording, not who recorded them. Commit the evidence directory
-to the qualification evidence PR to make it authoritative.
+The record hashes prove that files are unchanged since recording, not who recorded them. Screenshot presence does not
+change the gate. Commit the evidence directory to the qualification evidence PR to make it authoritative.
