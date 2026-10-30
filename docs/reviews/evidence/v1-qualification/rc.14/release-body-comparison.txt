@@ -1,0 +1,1 @@
+GitHub release body and docs/releases/v1.0.0-rc.14.md have identical visible content. GitHub's body has one additional terminal LF: source file ends with one LF (3219 bytes); API body ends with two LFs (3220 bytes). After removing terminal LF characters, the byte sequences compare equal. No substantive release-note difference.

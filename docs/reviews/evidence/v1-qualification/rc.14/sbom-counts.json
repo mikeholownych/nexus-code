@@ -1,0 +1,10 @@
+{
+  "cycloneDx": "1.5 validated by release workflow",
+  "componentCount": 142,
+  "cargoComponentsIncludingRoot": 120,
+  "cargoProductionDependenciesExcludingRoot": 119,
+  "npmComponentsIncludingRoot": 22,
+  "npmProductionPackagesExcludingRoot": 21,
+  "lockfileProductionPackagesExcludingRoot": 21,
+  "countsMatchIncludingEachRootPackage": true
+}
