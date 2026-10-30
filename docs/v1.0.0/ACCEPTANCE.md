@@ -77,7 +77,7 @@ The post-RC closure requirements listed below may remain `open`, `partial`, or `
 | ID | Environment | Used for |
 |---|---|---|
 | E1 | GitHub Actions: ubuntu-22.04 and ubuntu-24.04; Node 22 and 24; pinned Rust | Unit, integration and PTY suites; packaging; reproducibility |
-| E2 | Docker clean images: ubuntu:22.04, ubuntu:24.04, debian:12, fedora:40. Each with no Node, then with Node 20, Node 22 and Node 24. Non-root user. | Installer, upgrade, rollback, uninstall, platform failure messages |
+| E2 | Docker clean images: ubuntu:22.04, ubuntu:24.04, debian:12, fedora:40. Each with no Node, Node 12 and Node 20 as unsupported preflight cases, then Node 22 and Node 24 as supported runtimes. Non-root user. | Installer, upgrade, rollback, uninstall, platform failure messages |
 | E3 | Operator dev box: Linux x86-64, real terminals (xterm, kitty, tmux, VS Code terminal, GNOME Terminal) | Terminal matrix, live sessions |
 | E4 | Homelab-ai gateway, the **only** inference path (DEC-16): direct, and through `eval/standalone/plain_proxy.mjs` | Task-quality runs, standalone qualification, T3/T4 |
 | E5 | Cloud, small spend: ChatGPT sign-in (experimental tier) and OpenRouter with a pinned model; OpenAI and Anthropic keys if added | Provider verify; one live task per supported cloud provider |
@@ -273,7 +273,7 @@ The scorer output `verdict.md` lists each metric with its Wilson 95% interval, a
 | Case | Command | Pass condition |
 |---|---|---|
 | Fresh install, each image with Node ≥ 22 | Documented one-line command with `NEXUS_VERSION=<rc>`, then the no-version command after v1.0.0 is published | Installed. `nexus --version` equals the RC. `nexus doctor` shows no version warning and an empty stderr. |
-| No Node / Node 20 | Same | Clear prerequisite message before download or state change. HOME untouched. |
+| No Node / Node 12 / Node 20 | Same | Clear Node 22 prerequisite message before download or state change. HOME untouched. |
 | Upgrade alpha.2 → RC | Same, with the tag | Symlink swapped. Old version retained. User state intact. |
 | Rollback RC → alpha.2 | Same, with the old tag | Works. |
 | Repair | Delete a file in the version dir, then reinstall | Repaired (REQ-REL-105). Same-version reinstall preserves working files if package fails verification. |
