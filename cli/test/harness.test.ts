@@ -2367,16 +2367,26 @@ error[E0308]: mismatched types
 
   test("RustCoreBridge executes run_tests tool with structured diagnostic output", async () => {
     const { RustCoreBridge } = await import("../src/tools.js");
-    const bridge = new RustCoreBridge(process.cwd());
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus_run_tests_bridge_"));
+    const packageJson = {
+      name: "run-tests-bridge-fixture",
+      private: true,
+      scripts: { test: "node -e \"console.log('fixture tests passed')\"" },
+    };
+    fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify(packageJson));
+    const bridge = new RustCoreBridge(workspace);
     try {
       const res = await bridge.executeTool("run_tests", {});
-      assert.strictEqual(res.success, true);
+      assert.strictEqual(res.success, true, `${res.error ?? "run_tests failed"}\n${res.output}`);
       const parsed = JSON.parse(res.output);
       assert.strictEqual(typeof parsed.passed, "boolean");
+      assert.strictEqual(parsed.passed, true);
       assert.ok(Array.isArray(parsed.failures));
       assert.ok(Array.isArray(parsed.diagnostics));
+      assert.match(parsed.report, /fixture tests passed/);
     } finally {
       bridge.shutdown();
+      fs.rmSync(workspace, { recursive: true, force: true });
     }
   });
 
