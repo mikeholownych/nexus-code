@@ -1,0 +1,18 @@
+{
+  "candidate": "v1.0.0-rc.14",
+  "tagRevision": "16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99",
+  "base": "v1.0.0-rc.14",
+  "baseArchiveSha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+  "target": "v1.0.0-rc.14",
+  "targetArchiveSha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+  "nodeVersion": "v22.23.3",
+  "nodeBinarySha256": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+  "kernel": "6.8.0-147-generic",
+  "kernelSha256": "41ba36d860aa0b0cd995f4ca8856d80249b244577e704929b55be13fbd1ebd2f",
+  "qemu": "QEMU/KVM with -enable-kvm -cpu host, cache=none",
+  "runnerUpstreamCommit": "8e60c347ea8bece11bbfab63dd8942f29328ec8b",
+  "runnerBindingPatch": "Append POWERLOSS_RUN_BINDING with both archive digests and Node version/binary digest to write and verify logs after normalization",
+  "runnerBoundSha256": "f537747654a29b19345f1fb732267aefe19230085a48eb0fe1cde5e4e70ac69c",
+  "outcome": "PASS; cut at switched; recovery rolled back to RC14; user state retained; retry completed to RC14",
+  "limitations": ["one exact Ubuntu 22.04 x86_64 QEMU/KVM scenario", "does not establish other E2 matrix cells", "does not establish overall RC or stable release acceptance"]
+}
