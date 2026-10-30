@@ -85,6 +85,21 @@ from this evidence package. This package therefore makes no RC11 pass or failure
 claim. The RC10 failure and fixed-CLI demonstration below are supported by their
 included logs and remain distinct from RC11 qualification.
 
+## Result on the published RC14 artifact: PASS
+
+`v1.0.0-rc.14` (revision `16eeb6ee`) is the first published RC built after the fix.
+The cell runs a forced same-version reinstall (rc.12 and rc.13 carry the fix but
+were never published, so no newer published target exists) and cuts power at
+`switched`. After reboot `bin/nexus` is 580 bytes and `nexus --version` works,
+`upgrade --recover` restores the verified source package, staging is removed, the
+stale lock is reclaimed, a second recovery exits 0 and reports no interrupted
+upgrade, and the retry completes
+(`...-power-loss-durability-rc14-verify.log`).
+
+The reinstall exercises the same fetch, checksum verification, extraction into
+staging, rename, provenance write and launcher switch as a version change; only
+the source and target directories coincide.
+
 ## Fix demonstration
 
 `NEXUS_POWERLOSS_BASELINE_DIST` replaces the baseline CLI's `lib/cli/dist` with a
