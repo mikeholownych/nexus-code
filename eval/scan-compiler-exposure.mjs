@@ -12,6 +12,8 @@ const MAX_ENUMERATION_OUTPUT = 64 * 1024 * 1024;
 const TIMEOUT_MS = 25_000;
 const MAX_ENTRIES = 500_000;
 const MAX_JOBS = 100_000;
+const MAX_ROOTS = 4_096;
+const MAX_ROOT_BYTES = 1024 * 1024;
 // Bundle enough sibling directories to avoid spawning one `find` process for
 // every pair on large hosted system roots, while keeping independent jobs for
 // bounded parallel scanning.
@@ -45,8 +47,9 @@ function findArgs(roots) {
 }
 
 const roots = process.argv.slice(2);
-if (roots.length === 0 || roots.length > 128 || roots.some((root) => !root.startsWith("/"))) {
-  process.stderr.write("compiler inventory roots must be absolute\n");
+const rootBytes = roots.reduce((total, root) => total + Buffer.byteLength(root) + 1, 0);
+if (roots.length === 0 || roots.length > MAX_ROOTS || rootBytes > MAX_ROOT_BYTES || roots.some((root) => !root.startsWith("/"))) {
+  process.stderr.write("compiler inventory roots must be absolute and within bounded input limits\n");
   process.exit(2);
 }
 

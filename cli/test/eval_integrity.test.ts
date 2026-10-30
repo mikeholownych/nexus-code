@@ -518,6 +518,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
 
   const fakeSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-system-"));
   const batchedSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-batched-compiler-system-"));
+  const manyRootsSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-many-roots-system-"));
   const changingSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-changing-compiler-system-"));
   const fakeSystemAlias = `${fakeSystem}-alias`;
   const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
@@ -557,6 +558,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   t.after(() => {
     fs.rmSync(fakeSystem, { recursive: true, force: true });
     fs.rmSync(batchedSystem, { recursive: true, force: true });
+    fs.rmSync(manyRootsSystem, { recursive: true, force: true });
     fs.rmSync(changingSystem, { recursive: true, force: true });
     fs.rmSync(fakeSystemAlias, { recursive: true, force: true });
     fs.rmSync(fakeAlternatives, { recursive: true, force: true });
@@ -581,6 +583,17 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const batchedExposure = scanOracleCompilerExposure([batchedSystem], [], []);
   assert.equal(batchedExposure.problem, null);
   assert.ok(batchedExposure.paths.includes(lateBatchedCompiler), "compiler binaries in later sibling batches remain discoverable and maskable");
+  const manyRoots = Array.from({ length: 129 }, (_, index) => {
+    const root = path.join(manyRootsSystem, `root-${String(index).padStart(3, "0")}`);
+    fs.mkdirSync(root);
+    return root;
+  });
+  const lateRootCompiler = path.join(manyRoots.at(-1), "rustc");
+  fs.writeFileSync(lateRootCompiler, compilerCanary);
+  fs.chmodSync(lateRootCompiler, 0o755);
+  const manyRootsExposure = scanOracleCompilerExposure(manyRoots, [], []);
+  assert.equal(manyRootsExposure.problem, null, "more than 128 disjoint system roots stay within the bounded scanner input contract");
+  assert.ok(manyRootsExposure.paths.includes(lateRootCompiler), "a compiler in the final root remains discoverable when the root list exceeds 128");
   assert.deepEqual(scanOracleCompilerExposure([changingSystem], [], []), { paths: [], problem: null }, "an initially clean mounted system has no compiler masks");
   const introducedCompiler = path.join(changingSystem, "go");
   fs.writeFileSync(introducedCompiler, compilerCanary);
