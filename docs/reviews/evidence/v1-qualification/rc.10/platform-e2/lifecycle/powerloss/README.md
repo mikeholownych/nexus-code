@@ -85,20 +85,21 @@ from this evidence package. This package therefore makes no RC11 pass or failure
 claim. The RC10 failure and fixed-CLI demonstration below are supported by their
 included logs and remain distinct from RC11 qualification.
 
-## Result on the published RC14 artifact: PASS
+## Result on the published RC14 artifact: PASS (one bound Node 22 scenario)
 
 `v1.0.0-rc.14` (revision `16eeb6ee`) is the first published RC built after the fix.
-The cell runs a forced same-version reinstall (rc.12 and rc.13 carry the fix but
-were never published, so no newer published target exists) and cuts power at
-`switched`. After reboot `bin/nexus` is 580 bytes and `nexus --version` works,
-`upgrade --recover` restores the verified source package, staging is removed, the
-stale lock is reclaimed, a second recovery exits 0 and reports no interrupted
-upgrade, and the retry completes
-(`...-power-loss-durability-rc14-verify.log`).
+The independently reviewed [RC14 Node 22 evidence packet](../../../../rc.14/powerloss-node22/README.md)
+binds the write and verify logs to the published archive SHA-256, Node 22.23.3
+binary digest, and runner identity. It records a forced same-version reinstall,
+a power cut at `switched`, recovery of the verified source package, staging and
+stale-lock cleanup, an idempotent second recovery, and a successful retry.
 
-The reinstall exercises the same fetch, checksum verification, extraction into
-staging, rename, provenance write and launcher switch as a version change; only
-the source and target directories coincide.
+The older files named `ubuntu-22-04-node22-power-loss-durability-rc14-{write,verify}.log`
+are retained for audit history but are not counted as Node 22 qualification
+evidence: their runtime line reports Node v24.11.1, and they do not bind the run
+to the published archive digest. The exact-artifact Node 22 packet above is the
+evidence for this single RC14 power-loss scenario. This does not qualify the
+remaining E2 cells or establish overall RC acceptance.
 
 ## Fix demonstration
 
