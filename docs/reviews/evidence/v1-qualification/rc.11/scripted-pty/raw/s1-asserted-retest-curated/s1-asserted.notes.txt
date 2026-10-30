@@ -1,0 +1,4 @@
+[   4.00s] SCREEN startup (100x30)
+[   4.01s] TYPE 'say hello\r' gap=0.08
+[ 124.35s] SCREEN turn-finished-with-guidance (100x30)
+[ 124.35s] SEND b'/quit\r'

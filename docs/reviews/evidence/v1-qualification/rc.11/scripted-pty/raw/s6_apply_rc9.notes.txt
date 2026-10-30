@@ -1,0 +1,5 @@
+[   1.22s] SAW idle
+[   1.23s] SEND b'write two files\r'
+[   1.43s] TYPE steering during first model step gap=0.05
+[   4.87s] SAW turn-complete
+[   4.87s] SCREEN after-steer-turn (100x30)

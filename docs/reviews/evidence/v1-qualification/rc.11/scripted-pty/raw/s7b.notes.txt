@@ -1,0 +1,5 @@
+[   1.33s] SAW idle
+[   2.33s] SCREEN resumed-start (100x30)
+[   2.33s] SEND b'/sessions\r'
+[   5.54s] SCREEN sessions (100x30)
+[   5.54s] SEND b'\x03'

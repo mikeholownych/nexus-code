@@ -1,0 +1,4 @@
+[   1.66s] SAW idle
+[   1.66s] SEND b'talk slowly\r'
+[   2.06s] SAW streaming
+[   2.27s] SAW idle-after-cancel

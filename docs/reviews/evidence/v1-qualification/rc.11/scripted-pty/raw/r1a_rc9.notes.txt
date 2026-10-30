@@ -1,0 +1,4 @@
+[   0.72s] SAW repl-prompt
+[   0.72s] SEND b'create hello.txt\r'
+[   2.65s] SAW approval-prompt
+[   5.65s] SEND lone Enter defaults to deny

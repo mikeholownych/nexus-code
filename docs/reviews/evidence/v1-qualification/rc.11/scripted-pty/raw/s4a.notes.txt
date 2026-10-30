@@ -1,0 +1,11 @@
+[   1.11s] SAW idle
+[   1.11s] SCREEN idle-40x20-nocolor (40x20)
+[   1.11s] SEND b'talk slowly\r'
+[   4.31s] SCREEN streaming (40x20)
+[   4.31s] TYPE 'also mention cats\r' gap=0.05
+[   6.72s] SCREEN after-steer (40x20)
+[   6.72s] SEND Ctrl-C
+[   9.92s] SCREEN after-ctrl-c (40x20)
+[   9.92s] SEND b'again\r'
+[  12.12s] SEND Esc
+[  15.33s] SCREEN after-esc (40x20)
