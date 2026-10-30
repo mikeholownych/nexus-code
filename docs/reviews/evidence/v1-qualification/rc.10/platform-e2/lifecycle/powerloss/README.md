@@ -67,7 +67,8 @@ switches the launcher.
 `NEXUS_POWERLOSS_BASELINE_DIST` replaces the baseline CLI's `lib/cli/dist` with a
 local build, so the same published artifacts are upgraded by a CLI that contains
 the fix. `NEXUS_POWERLOSS_LOG_SUFFIX=fixed-cli` names the resulting logs, and the
-guest records the dist's SHA-256 in them. With it, the identical cut leaves a
+guest records the SHA-256 of the dist's sorted file manifest in them (hashing only
+`index.js` would not cover `durable_tree.js`, which carries the fix). With it, the identical cut leaves a
 working launcher, recovery rolls back to rc.9, and a retry completes to rc.10
 (`...-power-loss-durability-fixed-cli-{write,verify}.log`).
 

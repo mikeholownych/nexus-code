@@ -71,7 +71,7 @@ Per-cell logs and results: `results.tsv`; image names and IDs: `prepared-images.
 
 On the published RC10 artifact the cell **fails**: the extracted package's file data was never fsynced, so the rename and launcher switch survived while the payload did not. `v1.0.0-rc.10/bin/nexus` is 0 bytes, `nexus --version` prints nothing, and `nexus upgrade --recover` exits 0 without doing anything, because a 0-byte launcher is an empty shell script. The upgrade is performed by the installed rc.9 CLI, and the missing flush is in that running CLI.
 
-The fix (PR #333) flushes every extracted file and directory before the switch. `NEXUS_POWERLOSS_BASELINE_DIST` runs the same published artifacts through a CLI containing the fix (the guest records the dist's SHA-256); that cut leaves a working launcher, recovery rolls back to rc.9, and the retry completes to rc.10. This demonstrates the fix; it is not qualification. The cell can only pass for a release whose own artifact contains the fix.
+The fix (PR #333) flushes every extracted file and directory before the switch. `NEXUS_POWERLOSS_BASELINE_DIST` runs the same published artifacts through a CLI containing the fix (the guest records the SHA-256 of the dist's sorted file manifest); that cut leaves a working launcher, recovery rolls back to rc.9, and the retry completes to rc.10. This demonstrates the fix; it is not qualification. The cell can only pass for a release whose own artifact contains the fix.
 
 The harness needs KVM. Under TCG emulation the CLI's 5 s package-health probe can exceed its budget on a cold start and produce a false failure unrelated to durability.
 

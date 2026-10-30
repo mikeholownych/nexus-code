@@ -90,7 +90,9 @@ mv "$work/mnt/home/.local/lib/nexus/nexus" "$work/mnt/home/.local/lib/nexus/v1.0
 dist_sha=""
 if [ -n "$baseline_dist" ]; then
   [ -f "$baseline_dist/index.js" ] || die "baseline dist not found at $baseline_dist"
-  dist_sha=$(sha256sum "$baseline_dist/index.js" | awk '{print $1}')
+  # Hash the whole dist (sorted file manifest), not just the entry point: the fix
+  # lives in durable_tree.js, which index.js imports dynamically.
+  dist_sha=$(cd "$baseline_dist" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
   rm -rf "$work/mnt/home/.local/lib/nexus/v1.0.0-rc.9/lib/cli/dist"
   cp -a "$baseline_dist" "$work/mnt/home/.local/lib/nexus/v1.0.0-rc.9/lib/cli/dist"
 fi

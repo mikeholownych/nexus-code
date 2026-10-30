@@ -17,7 +17,7 @@ echo "NODE=$(node --version 2>&1) NEXUS=$(nexus --version 2>&1)"
 journal="$HOME/.local/lib/nexus/.upgrade-journal.json"
 fixedcli=$(cat /proc/cmdline | tr ' ' '\n' | sed -n 's/^fixedcli=//p')
 if [ -n "${fixedcli:-}" ] && [ "$fixedcli" != "none" ]; then
-  echo "BASELINE_CLI_DIST=patched sha256=$fixedcli (fix demonstration, not release qualification)"
+  echo "BASELINE_CLI_DIST=patched dist_manifest_sha256=$fixedcli (fix demonstration, not release qualification)"
 fi
 lib="$HOME/.local/lib/nexus"
 
