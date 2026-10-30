@@ -1,0 +1,30 @@
+uid=10001(nexus-e2) gid=10001(nexus-e2) groups=10001(nexus-e2)
+v24.11.1
+Installed Nexus Code v1.0.0-rc.11 in /home/nexus-e2/.local/lib/nexus/v1.0.0-rc.11
+Add this to your shell profile if needed: export PATH="/home/nexus-e2/.local/bin:$PATH"
+1.0.0-rc.11 (8d4e5319f1a3)
+launcher_version=1.0.0-rc.11 (8d4e5319f1a3)
+doctor_rc=2 doctor_stderr_bytes=0
+pass	install.build	The CLI build is present and not older than its source.
+pass	tui.launch	The live TUI is launchable and its sidecar resolves.
+pass	runtime.node	Node.js 24.11.1 (supported).
+pass	runtime.launcher	The `nexus` launcher on PATH is this packaged installation.
+pass	config.valid	The configuration builds with the same rules a session uses.
+skip	config.project_env_ignored	The workspace has no .env.
+pass	endpoint.configured	An inference endpoint is configured.
+fail	endpoint.reachable	The endpoint did not answer.
+skip	endpoint.authenticated	Skipped: the endpoint was not reachable.
+skip	model.available	Skipped: the endpoint was not reachable.
+skip	inference.verified	Inference was not tested: a listed model is not proof that inference works. --deep sends one minimal request.
+pass	shell.executable	The shell bash runs commands.
+pass	engine.binary	The Rust engine binary runs and matches the CLI version.
+pass	workspace.access	The workspace is readable and writable; it is not a git repository, so checkpoints use file snapshots.
+warn	state.sessions	The saved sessions directory does not exist yet; Nexus creates it on first save.
+warn	state.tasks	The durable task state directory does not exist yet; Nexus creates it on first save.
+pass	state.permissions	Nexus state directories and files are private (0700/0600).
+pass	state.integrity	No saved sessions or task state yet.
+pass	credentials.store	Nexus's own credential store is not in use (credentials come from the environment or other clients).
+pass	config.env	No ~/.config/nexus/config.env file present (optional configuration).
+skip	config.custom_ca	No custom CA certificate bundle (NODE_EXTRA_CA_CERTS) is configured (optional).
+skip	mcp.config	No MCP servers are configured (optional).
+skip	plugins.config	No plugins are installed (optional).

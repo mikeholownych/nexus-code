@@ -1,0 +1,7 @@
+nexus installer: build provenance was not verified: no trusted GitHub CLI at /usr/bin/gh or /usr/local/bin/gh; the SHA-256 checksum was verified. Set NEXUS_VERIFY_ATTESTATION=1 to require provenance.
+Installed Nexus Code v1.0.0-rc.11 in /home/nexus-e2/.local/lib/nexus/v1.0.0-rc.11
+Add this to your shell profile if needed: export PATH="/home/nexus-e2/.local/bin:$PATH"
+1.0.0-rc.11 (8d4e5319f1a3)
+nexus installer: SHA-256 verification failed; no installation was changed.
+package_file=/home/nexus-e2/.local/lib/nexus/v1.0.0-rc.11/lib/cli/dist/index.js sha256=08f3970bece31880df497e4eb75b048bb7568d1cbf57e950d60bb3760c4794fa
+checksum_tamper=PASS same_version_existing_package_file_launcher_and_state_unchanged=true
