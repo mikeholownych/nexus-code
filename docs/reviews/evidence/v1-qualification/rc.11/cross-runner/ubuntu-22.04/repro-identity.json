@@ -1,0 +1,48 @@
+{
+  "source": {
+    "version": "v1.0.0-rc.11",
+    "commit": "8d4e5319f1a31ee67e31d3edb6b44c2e7d9ecb05",
+    "tree": "08857fbc7c5044cfa10ca45c947c2fa0f78ac221",
+    "tagObject": "86bcb4a8f0493fc2e7f8b349716483053d2fedd4",
+    "tagCommit": "8d4e5319f1a31ee67e31d3edb6b44c2e7d9ecb05",
+    "lockfiles": {
+      "cli/package-lock.json": "54d7fedebf9f42f195e3986201530eef33c7699e1aca7b82fc01d7a48b497025",
+      "core/Cargo.lock": "b9422bf95b3f1c5e14e7d6489d04e22f15faf2beeb692f73cfb126f554248eae",
+      "rust-toolchain.toml": "97aab3493c1fb14fe9a21c760433577f434714f5725bbb176e67048dde581afe",
+      "scripts/release-tools/package-lock.json": "ca57fbb380d9eadcc135207d880257f53f7749346ff65fd6cc2082f623e05fae"
+    },
+    "untracked": []
+  },
+  "toolchain": {
+    "node": "v22.22.1",
+    "npm": "10.9.4",
+    "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+    "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+  },
+  "buildEnvironment": {
+    "rustContainerImage": "rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb"
+  },
+  "packagingTool": {
+    "commit": "8d4e5319f1a31ee67e31d3edb6b44c2e7d9ecb05",
+    "packageScriptSha256": "d948cdecbe4cd42663d298d652726a0414ac9b01727313b9e0d3107eb0fce788"
+  },
+  "runner": {
+    "label": "ubuntu-22.04",
+    "image": "ubuntu22",
+    "imageVersion": "20261026.341.1"
+  },
+  "workflow": {
+    "ref": "refs/heads/main",
+    "sha": "8d4e5319f1a31ee67e31d3edb6b44c2e7d9ecb05",
+    "runId": "40980085377",
+    "runAttempt": "1"
+  },
+  "artifacts": {
+    "SHA256SUMS": "80e4a1475e242382f84f6164ef7197bde71f1af93abeb9a831c71c8d59b9b73d",
+    "THIRD_PARTY_NOTICES.txt": "6feffa89a43a37ad0e2d21f36864528564bb1bfefd2da930e5adcee283d0500c",
+    "compatibility.json": "8269af9a8757c43c03ec93907ad99d8bf3f1924146e822c3b02bbdeb4a5e31ba",
+    "install.sh": "5620d56ef6f8d637fc102ae2c8ea3b055effbc4069243a2df68b67520b1e2302",
+    "nexus-linux-x86_64-v1.0.0-rc.11.tar.gz": "72d73f3565a48fb83d0c9a13a93fe38c2a3ae8af75184dab3af73c0b749c4053",
+    "sbom.cdx.json": "a98ee809f8d8aa0fa4d07f4708598fa18804bfa157dfa289ac9b2da73df84ff5"
+  }
+}
