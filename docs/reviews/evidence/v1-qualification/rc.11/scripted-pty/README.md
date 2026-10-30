@@ -8,7 +8,7 @@ This packet preserves selected raw outputs and scripts from the installed-packag
 - Scenario environment: mike-dev, Linux x86_64, Node 24.11.1, Python 3.12.3, pyte 0.8.2, synthetic PTYs, loopback mock gateway, isolated HOME/XDG and synthetic workspaces.
 - Qualification used no real provider, credentials, held-out tasks, or user workspace.
 
-`RC11-SCRIPTED-RESULTS.md` is the run report. `RECOVERY-STATUS-20261030.md` explains the corrected s1 completion predicate and retained rerun. `raw/` contains selected run scripts, raw terminal streams, screen captures, mock-gateway records, and s1 task/session receipts. `raw/s5-cancel-ack-timing/` preserves a timestamped 3-trial rerun that observed the cancellation state within a 16.667ms 60Hz frame budget and idle within 5s against the exact installed artifact.
+`RC11-SCRIPTED-RESULTS.md` is the run report. `RECOVERY-STATUS-20261030.md` explains the corrected s1 completion predicate and retained rerun. `raw/` contains selected run scripts, raw terminal streams, screen captures, mock-gateway records, and assertion logs. `raw/s5-cancel-ack-timing/` preserves a timestamped 3-trial rerun that observed the cancellation state within a 16.667ms 60Hz frame budget and idle within 5s against the exact installed artifact. Ignored local `.nexus` task/session state is not included or relied on as packet evidence.
 
 ## Integrity reconciliation
 
