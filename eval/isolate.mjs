@@ -335,8 +335,13 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
       });
       if (result.error || result.status !== 0 || result.stderr?.length) {
         const helperFailure = /^trusted compiler inventory could not complete: ([a-z_]+)\n$/.exec(result.stderr?.toString("utf8") ?? "");
+        const spawnErrorCode = result.error?.code;
         inventoryFailureReason = helperFailure?.[1]
-          ?? (result.error?.code === "ETIMEDOUT" ? "parent_timeout" : "helper_failure");
+          ?? (spawnErrorCode === "ETIMEDOUT" ? "parent_timeout"
+            : spawnErrorCode ? "spawn_error"
+              : result.signal === "SIGKILL" ? "helper_sigkill"
+                : result.signal === "SIGTERM" ? "helper_sigterm"
+                  : result.stderr?.length ? "unexpected_stderr" : "helper_exit");
         throw new Error("trusted compiler inventory could not complete");
       }
       for (const item of (result.stdout ?? Buffer.alloc(0)).toString("utf8").split("\0")) {
