@@ -77,7 +77,7 @@
     "pythonBytecodeExcluded": true
   },
   "review": {
-    "status": "fresh independent review pending after timestamped s5 cancellation rerun was added",
+    "status": "independent evidence-packet review accepted after s5 rerun and disclosure of absent s9 run logs; §5.2 remains incomplete because s9 per-run evidence is not independently reviewable",
     "overallRcAcceptance": "not established"
   },
   "criteriaStatus": {
