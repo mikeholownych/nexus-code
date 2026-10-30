@@ -1,6 +1,6 @@
 # RC14 targeted E2 lifecycle scenarios — candidate evidence
 
-Status: candidate results for independent review; this is not whole E2, §7 install-matrix, or release acceptance.
+Status: the review record ACCEPTs the prior exact lifecycle and enclosing platform manifest digests; this README edit changes those digests and requires fresh independent review. This is not whole E2, §7 install-matrix, or release acceptance.
 
 ## Artifact and environment
 

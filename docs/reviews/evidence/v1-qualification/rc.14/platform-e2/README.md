@@ -1,6 +1,6 @@
 # RC14 E2 platform installer evidence (partial)
 
-This packet records RC14 fresh-install and prerequisite-preflight cases plus four targeted lifecycle scenarios. Review dispositions for the exact packet and enclosing manifest are tracked separately in [`../platform-e2-lifecycle-review.md`](../platform-e2-lifecycle-review.md), outside this checksummed directory. The current corrected lifecycle packet is awaiting a fresh exact-digest review. It does not complete ACC-PLAT: upgrade, rollback, repair, uninstall, tamper, backup restore, self-test failure, crash recovery, and incompatible-downgrade rows are not established across the full E2 matrix. The four additional scenarios are limited to Ubuntu 22.04 / Node 22.23.3 and do not satisfy the remaining platform/runtime cells.
+This packet records RC14 fresh-install and prerequisite-preflight cases plus four targeted lifecycle scenarios. Review dispositions for the exact packet and enclosing manifest are tracked separately in [`../platform-e2-lifecycle-review.md`](../platform-e2-lifecycle-review.md), outside this checksummed directory. The review record documents an ACCEPT for the then-current exact lifecycle and platform manifest digests. This README edit changes the packet digest, so the updated packet requires fresh exact-digest review before that disposition can apply. It does not complete ACC-PLAT: upgrade, rollback, repair, uninstall, tamper, backup restore, self-test failure, crash recovery, and incompatible-downgrade rows are not established across the full E2 matrix. The four additional scenarios are limited to Ubuntu 22.04 / Node 22.23.3 and do not satisfy the remaining platform/runtime cells.
 
 ## Bound artifact
 
@@ -35,7 +35,7 @@ The containers did not have a trusted GitHub CLI, so installer mode `auto` verif
 
 ## Targeted lifecycle cases
 
-The [lifecycle-targeted packet](lifecycle-targeted/README.md) records four additional cases against the exact published RC14 archive: candidate staging self-test refusal, updater process-crash recovery, backup restore, and incompatible-downgrade refusal. A prior independent review accepted an earlier checksum of that subpacket; after checksum corrections and reruns, fresh review is pending. See the [review disposition](../platform-e2-lifecycle-review.md). The process-crash case is not a power-loss test. These results do not complete the lifecycle matrix across platforms or runtimes.
+The [lifecycle-targeted packet](lifecycle-targeted/README.md) records four additional cases against the exact published RC14 archive: candidate staging self-test refusal, updater process-crash recovery, backup restore, and incompatible-downgrade refusal. The review record documents an ACCEPT for the exact lifecycle and enclosing platform manifest digests listed there. This README edit changes those digests; fresh independent review is required for the updated packet. See the [review disposition](../platform-e2-lifecycle-review.md). The process-crash case is not a power-loss test. These results do not complete the lifecycle matrix across platforms or runtimes.
 
 ## Acceptance wording reconciliation
 
