@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "requirement": "RC artifact verification",
+  "acceptance": [
+    "ACC-SUP-01",
+    "ACC-SUP-02",
+    "ACC-SUP-03",
+    "ACC-SUP-06",
+    "ACC-PKG-01",
+    "ACC-SUP-08"
+  ],
+  "status": "PARTIAL_PASS",
+  "candidate": {
+    "tag": "v1.0.0-rc.14",
+    "tagObject": "03770c12a30af830f392eb916122b864c12cf322",
+    "sourceCommit": "16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99",
+    "releaseUrl": "https://github.com/mikeholownych/nexus-code/releases/tag/v1.0.0-rc.14"
+  },
+  "workflow": {
+    "runId": "41035120551",
+    "url": "https://github.com/mikeholownych/nexus-code/actions/runs/41035120551",
+    "conclusion": "success",
+    "sourceCiRun": "41029564419",
+    "codeqlRun": "41029564602"
+  },
+  "artifact": {
+    "name": "nexus-linux-x86_64-v1.0.0-rc.14.tar.gz",
+    "size": 4913202,
+    "sha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+    "githubApiDigestMatched": true,
+    "releaseSha256SumsMatched": true,
+    "provenance": "VERIFIED: SLSA v1; repository mikeholownych/nexus-code; signer .github/workflows/release.yml; tag refs/tags/v1.0.0-rc.14; source commit 16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99"
+  },
+  "installedCheck": {
+    "installer": "workflow-produced release install.sh",
+    "isolatedHome": true,
+    "provenanceRequired": true,
+    "runtime": "Linux x86_64, Node v24.11.1, glibc 2.39",
+    "version": "1.0.0-rc.14 (16eeb6eeffe7)",
+    "helpExit": 0,
+    "installedManifest": "all listed package file checksums passed"
+  },
+  "artifactAcceptance": {
+    "ACC-SUP-01": "PASS: release workflow package smoke passed; independent archive notice checker verified 119 Rust crates and 21 production npm packages",
+    "ACC-SUP-02": "PASS: CycloneDX validation passed in workflow; SBOM has 142 components, matching 119 Cargo dependencies plus Cargo root and 21 production npm dependencies plus CLI root",
+    "ACC-SUP-03": "PASS: independently verified archive and SHA256SUMS attestations with exact repository, workflow signer, RC tag, and commit",
+    "ACC-SUP-06": "PASS: release body matches source release notes; GitHub adds one terminal LF",
+    "ACC-SUP-08": "PASS: exact-RC two-runner workflow 41038503854 completed successfully; its compare job matched Ubuntu 22.04 and Ubuntu 24.04 builds byte-for-byte with the published RC14 archive"
+  },
+  "limitations": [
+    "This record verifies RC14 artifact integrity, clean installation, and cross-runner reproducibility only; it is not complete exact-RC product qualification or independent RC acceptance."
+  ]
+}

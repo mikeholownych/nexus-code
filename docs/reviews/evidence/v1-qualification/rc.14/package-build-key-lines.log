@@ -1,0 +1,6 @@
+package	Run bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/dist"	2026-10-30T09:59:28.1424556Z Retained 119 Cargo production dependencies; removed 15 compile-only components and 3 compile-only edges
+package	Run bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/dist"	2026-10-30T09:59:29.2022337Z Generated and validated CycloneDX SBOM: /home/runner/work/_temp/dist/sbom.cdx.json
+package	Run bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/repro-check"	2026-10-30T10:01:00.4159343Z Retained 119 Cargo production dependencies; removed 15 compile-only components and 3 compile-only edges
+package	Run bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/repro-check"	2026-10-30T10:01:01.4263149Z Generated and validated CycloneDX SBOM: /home/runner/work/_temp/repro-check/sbom.cdx.json
+package	Run bash scripts/smoke-package.sh "$RUNNER_TEMP/dist/nexus-linux-x86_64-$GITHUB_REF_NAME.tar.gz"	2026-10-30T10:01:12.9621773Z NOTICES_CHECK_PASS: Verified 119 Rust crate(s) and 21 npm package(s) in /tmp/tmp.W2Hl7KWGf8/nexus/THIRD_PARTY_NOTICES.txt
+package	Run softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65	2026-10-30T10:01:34.2531918Z 🎉 Release ready at https://github.com/mikeholownych/nexus-code/releases/tag/v1.0.0-rc.14
