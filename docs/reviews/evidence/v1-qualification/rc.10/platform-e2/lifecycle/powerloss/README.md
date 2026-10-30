@@ -50,7 +50,19 @@ serial console `CR` bytes stripped on copy.
 
 Tags and archive digests are pinned in the script (rc.9 → rc.10 by default) and
 can be overridden with `NEXUS_POWERLOSS_{BASE,TARGET}_{TAG,SHA}` for another
-candidate.
+candidate. Tag overrides must be v-prefixed semantic versions. The optional
+`NEXUS_POWERLOSS_LOG_SUFFIX` must be a safe filename component of at most 64
+letters, digits, dots, underscores, or hyphens, and cannot contain `..`.
+
+The script creates a fresh private mode-0700 work directory under `/var/tmp`
+for each default run. `NEXUS_POWERLOSS_WORK` may name a new absolute work path;
+it is never recursively deleted or reused. Its parent must be `/var/tmp` (mode
+1777) or an existing mode-0700 directory owned by the invoking user. Preserve
+the resulting directory when diagnosing a failed run; remove it manually only
+after verifying the exact path and retaining any needed logs.
+When replacing a baseline `dist`, the runner resolves the target through any
+symlinks and refuses deletion unless the resolved path remains inside the
+mounted image.
 
 ## Result on the published RC10 artifact: FAIL
 
@@ -66,13 +78,12 @@ The fix is in `cli/src/durable_tree.ts` (PR #333): `safeExtractTar` flushes ever
 file and directory of the extracted tree before the caller renames it and
 switches the launcher.
 
-## Result on the published RC11 artifact: FAIL
+## RC11 disposition: not verified in this evidence package
 
-`v1.0.0-rc.11` (tag `8d4e5319`) predates the fix, so rc.10 → rc.11 reproduces the
-same failure: `v1.0.0-rc.11/bin/nexus` is 0 bytes, `nexus --version` is empty, and
-`nexus upgrade --recover` exits 0 without doing anything
-(`...-power-loss-durability-rc11-verify.log`). Any release built before #333
-carries the defect.
+A prior draft named RC11 write and verify logs, but those log files are absent
+from this evidence package. This package therefore makes no RC11 pass or failure
+claim. The RC10 failure and fixed-CLI demonstration below are supported by their
+included logs and remain distinct from RC11 qualification.
 
 ## Fix demonstration
 

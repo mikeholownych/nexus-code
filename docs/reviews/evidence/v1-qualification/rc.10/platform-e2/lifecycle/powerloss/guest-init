@@ -123,9 +123,15 @@ if [ "$phase" = "verify" ]; then
   echo "--- package dirs after recovery ---"
   ls -a "$lib" | grep -vE '^\.$|^\.\.$' || true
   grep -F "Restored verified source release $basever" /mnt/recover.log >/dev/null
-  nexus upgrade --recover > /mnt/recover2.log 2>&1 || true
+  if nexus upgrade --recover > /mnt/recover2.log 2>&1; then
+    recover2_rc=0
+  else
+    recover2_rc=$?
+  fi
   echo "--- second recovery ---"
   cat /mnt/recover2.log
+  echo "RECOVER2_RC=$recover2_rc"
+  test "$recover2_rc" -eq 0
   grep -F "No interrupted upgrade found" /mnt/recover2.log >/dev/null
   echo "--- retry upgrade to completion ---"
   NEXUS_RELEASES_API=http://10.0.2.2:18080/api/releases \

@@ -19,16 +19,48 @@
 # published pins in git history are rc.9 -> rc.10 and rc.10 -> rc.11.
 set -euo pipefail
 
+die() { echo "power-loss: $*" >&2; exit 1; }
+
 here="$(cd "$(dirname "$0")" && pwd)"
 evidence="$(cd "$here/../.." && pwd)"
 assets="${NEXUS_POWERLOSS_ASSETS:-/var/tmp/nexus-powerloss-assets}"
-work="${NEXUS_POWERLOSS_WORK:-/var/tmp/nexus-powerloss-run}"
+work="${NEXUS_POWERLOSS_WORK:-}"
+work_parent=""
+work_default=0
+if [ -z "$work" ]; then
+  work_parent=/var/tmp
+  work_default=1
+else
+  case "$work" in
+    /*) ;;
+    *) die "NEXUS_POWERLOSS_WORK must be an absolute path" ;;
+  esac
+  work_parent="${work%/*}"
+  work_name="${work##*/}"
+  [ -n "$work_name" ] && [ "$work_name" != . ] && [ "$work_name" != .. ] || die "NEXUS_POWERLOSS_WORK must name a directory, not its parent"
+  [ -d "$work_parent" ] || die "NEXUS_POWERLOSS_WORK parent does not exist: $work_parent"
+  canonical_parent="$(cd -- "$work_parent" && pwd -P)" || die "cannot resolve NEXUS_POWERLOSS_WORK parent"
+  [ "$canonical_parent" = "$work_parent" ] || die "NEXUS_POWERLOSS_WORK parent must not contain symlinks or dot segments"
+  work_parent="$canonical_parent"
+  if [ "$work_parent" = /var/tmp ]; then
+    [ "$(stat -c '%a' -- "$work_parent")" = 1777 ] || die "/var/tmp must be mode 1777 for a caller-selected work directory"
+  else
+    expected_owner="${SUDO_UID:-$(id -u)}"
+    [ "$(stat -c '%u' -- "$work_parent")" = "$expected_owner" ] || die "NEXUS_POWERLOSS_WORK parent must be owned by uid $expected_owner"
+    [ "$(stat -c '%a' -- "$work_parent")" = 700 ] || die "NEXUS_POWERLOSS_WORK parent must be private mode 700"
+  fi
+  { [ ! -e "$work" ] && [ ! -L "$work" ]; } || die "refusing to reuse existing NEXUS_POWERLOSS_WORK path: $work"
+fi
 kernel="${NEXUS_POWERLOSS_KERNEL:-/boot/vmlinuz-$(uname -r)}"
 node_bin="${NEXUS_POWERLOSS_NODE:-$(command -v node)}"
 # Optional: replace the baseline CLI's dist with a local build to demonstrate a
 # fix under test. Release qualification must leave this unset.
 baseline_dist="${NEXUS_POWERLOSS_BASELINE_DIST:-}"
 suffix="${NEXUS_POWERLOSS_LOG_SUFFIX:-}"
+if [ -n "$suffix" ]; then
+  [[ "$suffix" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || die "NEXUS_POWERLOSS_LOG_SUFFIX must be a safe filename component"
+  case "$suffix" in *..*) die "NEXUS_POWERLOSS_LOG_SUFFIX must not contain '..'" ;; esac
+fi
 write_log="$evidence/ubuntu-22-04-node22-power-loss-durability${suffix:+-$suffix}-write.log"
 verify_log="$evidence/ubuntu-22-04-node22-power-loss-durability${suffix:+-$suffix}-verify.log"
 
@@ -37,7 +69,11 @@ base_sha="${NEXUS_POWERLOSS_BASE_SHA:-35795d2b7639b68a541c512976d8bc7f251115ebdc
 target_tag="${NEXUS_POWERLOSS_TARGET_TAG:-v1.0.0-rc.10}"
 target_sha="${NEXUS_POWERLOSS_TARGET_SHA:-444d0812ad583b7f688890ac8536cb872e92364c977d9fbf298fa0408d98b3e7}"
 
-die() { echo "power-loss: $*" >&2; exit 1; }
+# These values become directory and filename components below. Accept only
+# semantic-version release tags and a bounded log basename suffix.
+tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+[[ "$base_tag" =~ $tag_pattern ]] || die "invalid NEXUS_POWERLOSS_BASE_TAG: expected a v-prefixed semantic version"
+[[ "$target_tag" =~ $tag_pattern ]] || die "invalid NEXUS_POWERLOSS_TARGET_TAG: expected a v-prefixed semantic version"
 
 # Serial console output carries CR bytes and trailing padding; normalize on copy.
 normalize() { tr -d '\r' | sed 's/[[:space:]]*$//'; }
@@ -58,7 +94,18 @@ done
 
 [ -r /dev/kvm ] && [ -w /dev/kvm ] || die "/dev/kvm is not writable by $(id -un); run: sudo setfacl -m u:$(id -un):rw /dev/kvm"
 
-rm -rf "$work"
+# Never recursively delete a caller-selected path from a privileged harness.
+# The default is a fresh private directory; an explicit path must be new and
+# have a validated parent (either sticky /var/tmp or a private owner directory).
+umask 077
+if [ "$work_default" -eq 1 ]; then
+  work="$(mktemp -d /var/tmp/nexus-powerloss-run.XXXXXX)" || die "cannot create private work directory under /var/tmp"
+else
+  mkdir -m 700 -- "$work" || die "cannot create private work directory: $work"
+fi
+[ -d "$work" ] && [ ! -L "$work" ] || die "work directory is not a real directory"
+[ "$(stat -c '%a' -- "$work")" = 700 ] || die "work directory is not mode 700"
+echo "power-loss: private work directory $work"
 mkdir -p "$work/initrd"/{bin,proc,sys,dev,tmp,mnt,opt/node/bin,usr/bin}
 mkdir -p "$work/initrd/lib/x86_64-linux-gnu" "$work/initrd/lib64"
 
@@ -96,7 +143,15 @@ if [ -n "$baseline_dist" ]; then
   # Hash the whole dist (sorted file manifest), not just the entry point: the fix
   # lives in durable_tree.js, which index.js imports dynamically.
   dist_sha=$(cd "$baseline_dist" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
-  rm -rf "$work/mnt/home/.local/lib/nexus/$base_tag/lib/cli/dist"
+  mount_root="$(realpath -e -- "$work/mnt")" || die "cannot resolve mounted image root"
+  dist_target="$work/mnt/home/.local/lib/nexus/$base_tag/lib/cli/dist"
+  resolved_parent="$(realpath -e -- "$(dirname -- "$dist_target")")" || die "cannot resolve baseline dist parent"
+  case "$resolved_parent" in
+    "$mount_root"/*) ;;
+    *) die "baseline dist parent resolves outside mounted image: $resolved_parent" ;;
+  esac
+  [ -d "$dist_target" ] && [ ! -L "$dist_target" ] || die "baseline dist target must be a real directory inside the mounted image"
+  rm -rf -- "$dist_target"
   cp -a "$baseline_dist" "$work/mnt/home/.local/lib/nexus/$base_tag/lib/cli/dist"
 fi
 ln -sfn "../lib/nexus/$base_tag/bin/nexus" "$work/mnt/home/.local/bin/nexus"
