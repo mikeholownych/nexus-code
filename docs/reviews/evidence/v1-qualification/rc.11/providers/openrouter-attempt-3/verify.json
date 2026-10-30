@@ -1,0 +1,16 @@
+{
+  "date": "2026-10-30T01:39:04.614Z",
+  "passed": true,
+  "provider": "openrouter",
+  "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "steps": [
+    {"step": "streamed completion", "ok": true, "requestId": "a57548c5-5232-4c7d-b234-b8cfad29946f", "detail": "streamed completion received (5 chars)"},
+    {"step": "tool call", "ok": true, "requestId": "b4001d6e-fdf8-45d2-b074-f50df576abf7", "detail": "echo_token tool call completed (1 call(s))"},
+    {"step": "tool result round trip", "ok": true, "requestId": "b5c1c841-1453-4557-a4f9-dcba872194c9", "detail": "tool result round trip completed"}
+  ],
+  "receipts": [
+    {"at":"2026-10-30T01:39:02.540Z","requestId":"a57548c5-5232-4c7d-b234-b8cfad29946f","role":"qualification","providerId":"openrouter","selectedModel":"nvidia/nemotron-3-ultra-550b-a55b:free","effectiveModel":"nvidia/nemotron-3-ultra-550b-a55b:free","endpointOrigin":"https://openrouter.ai","protocol":"openai-chat","disclosure":"cloud","outcome":"completed","usage":{"inputTokens":24,"outputTokens":18,"cachedInputTokens":0,"reasoningTokens":15,"costUsd":0},"usageConfidence":"provider","costConfidence":"provider-reported"},
+    {"at":"2026-10-30T01:39:03.589Z","requestId":"b4001d6e-fdf8-45d2-b074-f50df576abf7","role":"qualification","providerId":"openrouter","selectedModel":"nvidia/nemotron-3-ultra-550b-a55b:free","effectiveModel":"nvidia/nemotron-3-ultra-550b-a55b:free","endpointOrigin":"https://openrouter.ai","protocol":"openai-chat","disclosure":"cloud","outcome":"completed","usage":{"inputTokens":320,"outputTokens":67,"cachedInputTokens":0,"reasoningTokens":32,"costUsd":0},"usageConfidence":"provider","costConfidence":"provider-reported"},
+    {"at":"2026-10-30T01:39:04.613Z","requestId":"b5c1c841-1453-4557-a4f9-dcba872194c9","role":"qualification","providerId":"openrouter","selectedModel":"nvidia/nemotron-3-ultra-550b-a55b:free","effectiveModel":"nvidia/nemotron-3-ultra-550b-a55b:free","endpointOrigin":"https://openrouter.ai","protocol":"openai-chat","disclosure":"cloud","outcome":"completed","usage":{"inputTokens":377,"outputTokens":40,"cachedInputTokens":0,"reasoningTokens":20,"costUsd":0},"usageConfidence":"provider","costConfidence":"provider-reported"}
+  ]
+}

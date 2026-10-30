@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-30T00:51:13.313Z",
+  "passed": false,
+  "provider": "openrouter",
+  "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "steps": [
+    {
+      "step": "streamed completion",
+      "ok": false,
+      "requestId": "82adb87c-6172-4732-93ff-8db6775ea43b",
+      "detail": "Provider request failed",
+      "failureKind": "provider_error_frame",
+      "condition": "TEMPORARILY_UNAVAILABLE"
+    }
+  ],
+  "receipts": [
+    {
+      "at": "2026-10-30T00:51:13.311Z",
+      "requestId": "82adb87c-6172-4732-93ff-8db6775ea43b",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "outcome": "failed",
+      "failureKind": "provider_error_frame",
+      "usageConfidence": "uncertain",
+      "costConfidence": "unknown"
+    }
+  ]
+}
