@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "gate": "ACCEPTANCE.md \u00a75.2 installed RC scripted PTY scenarios",
+  "rcTag": "v1.0.0-rc.11",
+  "sourceCommit": "8d4e5319f1a31ee67e31d3edb6b44c2e7d9ecb05",
+  "artifact": {
+    "name": "nexus-linux-x86_64-v1.0.0-rc.11.tar.gz",
+    "sha256": "72d73f3565a48fb83d0c9a13a93fe38c2a3ae8af75184dab3af73c0b749c4053",
+    "installedVersion": "1.0.0-rc.11",
+    "installedShortCommit": "8d4e5319f1a3"
+  },
+  "execution": {
+    "startedAt": "2026-10-30T00:23:53Z",
+    "completedAt": "2026-10-30T00:43:36Z",
+    "hostClass": "Linux x86_64 mike-dev",
+    "node": "24.11.1",
+    "python": "3.12.3",
+    "pyte": "0.8.2",
+    "terminal": "xterm-256color synthetic PTYs",
+    "gateway": "loopback synthetic OpenAI-compatible mock",
+    "homeAndWorkspace": "isolated and synthetic",
+    "heldOutAccess": false,
+    "realProviderOrCredentials": false,
+    "userWorkspaceAccess": false,
+    "runnerExitCode": "not retained",
+    "s9NamedSurvivorReruns": {
+      "completedAt": "2026-10-30T00:40:05Z",
+      "trials": 3,
+      "result": "PASS 3/3; matching tool child observed before quit and no matching process remained after TUI exit",
+      "evidence": "raw/s9-named-survivor/",
+      "sourceInventory": "raw/s9-named-survivor/SOURCE-SHA256SUMS"
+    },
+    "s5CancelAckRerun": {
+      "startedAt": "2026-10-30T02:48:12Z",
+      "completedAt": "2026-10-30T02:48:19Z",
+      "artifact": "nexus-linux-x86_64-v1.0.0-rc.11.tar.gz",
+      "artifactSha256": "72d73f3565a48fb83d0c9a13a93fe38c2a3ae8af75184dab3af73c0b749c4053",
+      "installedVersion": "1.0.0-rc.11 (8d4e5319f1a3)",
+      "hostClass": "Linux x86_64 mike-dev",
+      "python": "3.11.15",
+      "pyte": "0.8.2",
+      "wcwidth": "0.9.4",
+      "gateway": "loopback synthetic OpenAI-compatible mock",
+      "homeAndWorkspace": "isolated, synthetic per trial",
+      "heldOutAccess": false,
+      "realProviderOrCredentials": false,
+      "frameBudgetMs": 16.667,
+      "trials": 3,
+      "ackOutputLatencyMs": [
+        3.366,
+        2.266,
+        2.99
+      ],
+      "idleLatencyMs": [
+        188.367,
+        429.878,
+        521.106
+      ],
+      "result": "3/3 acknowledgement outputs observed within one 60Hz frame budget; 3/3 idle within 5 seconds",
+      "evidence": "raw/s5-cancel-ack-timing/measure.py and measure.log"
+    }
+  },
+  "integrity": {
+    "verifiedSourceIndex": "RC11-SCRIPTED-SHA256SUMS",
+    "verifiedSourceIndexSha256": "5bac85a0f2b094acea0ece828f45b9e9d39b6572eec0c00fada0a12f31dc14bc",
+    "verifiedSourceIndexEntries": 959,
+    "verifiedSourceS1Indices": {
+      "asserted": "72e80cdc07db7125aa7091856f122c7a94e67beac4de9ff6048bca3d337f6d15",
+      "natural": "4e959a19086236f25521bdd2655b0c31ec666a5c918be8b113c1f57785e47a39"
+    },
+    "legacyIndexExcluded": "source-run legacy SHA256SUMS",
+    "legacyIndexSha256": "0a711ef430a7f2531574c6f4f7fe650a3a7836890aa7ddcde4e3302cf37c0f94",
+    "legacyIndexObservedMismatches": 57,
+    "legacyIndexObservedMissingPaths": 245,
+    "curatedPacketIndex": "SHA256SUMS (regenerated from tracked packet files only)",
+    "embeddedGitStoresExcluded": true,
+    "pythonBytecodeExcluded": true
+  },
+  "review": {
+    "status": "fresh independent review pending after timestamped s5 cancellation rerun was added",
+    "overallRcAcceptance": "not established"
+  },
+  "criteriaStatus": {
+    "s9ZeroSurvivingProcesses": "observed 3/3 named-survivor reruns",
+    "s4ToS6CancelAcknowledgementOneFrame": "observed 3/3; timestamped synthetic PTY first cancel-state output at 2.266-3.366ms after Ctrl-C write against exact installed RC11; 16.667ms frame budget",
+    "s4ToS6IdleWithinFiveSeconds": "observed 3/3; 188.367-521.106ms after Ctrl-C write"
+  }
+}

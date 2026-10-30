@@ -1,0 +1,11 @@
+Exact installed command: /var/tmp/nexus-rc11-artifact.Wx2lPi/prefix/bin/nexus
+Version: 1.0.0-rc.11 (8d4e5319f1a3)
+Archive: nexus-linux-x86_64-v1.0.0-rc.11.tar.gz
+Archive SHA-256: 72d73f3565a48fb83d0c9a13a93fe38c2a3ae8af75184dab3af73c0b749c4053
+Host: Linux x86_64 mike-dev
+Runner: Python 3.11.15, pyte 0.8.2, wcwidth 0.9.4; pyte/wcwidth installed into disposable uv virtual environment from the packet's pinned requirements.txt
+Gateway: loopback-only synthetic OpenAI-compatible mock; no credentials or external inference
+Workspace and Nexus HOME/XDG: isolated synthetic directories created per trial
+Run window: 2026-10-30 02:48:12-02:48:19 UTC
+Measurement: monotonic timestamp immediately before PTY Ctrl-C write to the first PTY output after the screen contained “cancelling”; frame budget 16.667ms (60Hz). Idle measured to visible “Cancelled” plus composer.
+Setup note: the first runner launch stopped before any trial because pyte was absent from the host Python. No product behavior ran in that attempt. The pinned test dependency was installed into the disposable venv and the three qualification trials then completed.

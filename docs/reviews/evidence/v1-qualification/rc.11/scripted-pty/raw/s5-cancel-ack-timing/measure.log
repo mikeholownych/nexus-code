@@ -1,0 +1,19 @@
+[   1.12s] SAW initial idle
+[   1.12s] SEND b'talk slowly\r'
+[   1.73s] SAW streaming response
+TRIAL 1 started=2026-10-30T02:48:12.161490+00:00 cancel_write_monotonic_ns=910170143936355 ack_output_observed_monotonic_ns=910170147302527 latency_ms=3.366 frame_budget_ms=16.667 ack_within_one_frame=True
+ACK_SCREEN=⠋ cancelling… ctrl-c again to quit ──────────────────────────────────────────────────────────────── | › type to steer the running turn · esc cancels it
+TRIAL 1 idle_latency_ms=188.367 IDLE_WITHIN_5S=YES
+[   1.43s] SAW initial idle
+[   1.43s] SEND b'talk slowly\r'
+[   2.36s] SAW streaming response
+TRIAL 2 started=2026-10-30T02:48:15.405025+00:00 cancel_write_monotonic_ns=910173387452724 ack_output_observed_monotonic_ns=910173389718513 latency_ms=2.266 frame_budget_ms=16.667 ack_within_one_frame=True
+ACK_SCREEN=⠸ cancelling… ctrl-c again to quit ──────────────────────────────────────────────────────────────── | › type to steer the running turn · esc cancels it
+TRIAL 2 idle_latency_ms=429.878 IDLE_WITHIN_5S=YES
+[   1.93s] SAW initial idle
+[   1.93s] SEND b'talk slowly\r'
+[   2.34s] SAW streaming response
+TRIAL 3 started=2026-10-30T02:48:19.029731+00:00 cancel_write_monotonic_ns=910177012167318 ack_output_observed_monotonic_ns=910177015156827 latency_ms=2.990 frame_budget_ms=16.667 ack_within_one_frame=True
+ACK_SCREEN=⠏ cancelling… ctrl-c again to quit ──────────────────────────────────────────────────────────────── | › type to steer the running turn · esc cancels it
+TRIAL 3 idle_latency_ms=521.106 IDLE_WITHIN_5S=YES
+RESULT=3/3 trials met one-frame ack plus idle <=5s
