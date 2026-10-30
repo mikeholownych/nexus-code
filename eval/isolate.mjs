@@ -291,6 +291,18 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
     // standard system roots. Mask each visible spelling after all runtime mounts are added.
     for (const mountedPath of mountedSpellingsForTarget(target, roots)) exposed.add(mountedPath);
   };
+  const inspectInventoryPath = (item) => {
+    let stat;
+    try { stat = fs.lstatSync(item); }
+    catch (error) {
+      // A runner can remove an ephemeral path after GNU find reports it. The
+      // executable check below already treats ENOENT as no remaining exposure.
+      // Preserve fail-closed behavior for every other inspection error.
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    inspectExecutable(item, stat.isSymbolicLink());
+  };
   try {
     const directoryRoots = new Set();
     for (const root of roots) {
@@ -301,7 +313,7 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
         throw error;
       }
       if (stat.isDirectory()) directoryRoots.add(fs.realpathSync(root));
-      else if (stat.isFile()) inspectExecutable(root, fs.lstatSync(root).isSymbolicLink());
+      else if (stat.isFile()) inspectInventoryPath(root);
     }
 
     if (directoryRoots.size) {
@@ -346,7 +358,7 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
         throw new Error("trusted compiler inventory could not complete");
       }
       for (const item of (result.stdout ?? Buffer.alloc(0)).toString("utf8").split("\0")) {
-        if (item) inspectExecutable(item, fs.lstatSync(item).isSymbolicLink());
+        if (item) inspectInventoryPath(item);
       }
     }
   } catch {

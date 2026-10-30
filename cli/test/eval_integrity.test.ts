@@ -520,6 +520,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const batchedSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-batched-compiler-system-"));
   const manyRootsSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-many-roots-system-"));
   const changingSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-changing-compiler-system-"));
+  const disappearingSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-disappearing-compiler-system-"));
   const fakeSystemAlias = `${fakeSystem}-alias`;
   const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
   const fakeSymlinkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-target-"));
@@ -532,6 +533,9 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.mkdirSync(fakeLib, { recursive: true });
   fs.mkdirSync(path.dirname(fakeGoTarget), { recursive: true });
   const compilerCanary = "#!/bin/sh\nprintf '%s\\n' UNPINNED_COMPILER_CANARY\n";
+  const disappearingCompiler = path.join(disappearingSystem, "go");
+  fs.writeFileSync(disappearingCompiler, compilerCanary);
+  fs.chmodSync(disappearingCompiler, 0o755);
   const fakeGo = path.join(fakeSystem, "bin", "go");
   const fakeRustc = path.join(fakeLib, "rustc");
   const fakeCargo = path.join(fakeSystem, "bin", "cargo-1.94.0");
@@ -560,6 +564,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     fs.rmSync(batchedSystem, { recursive: true, force: true });
     fs.rmSync(manyRootsSystem, { recursive: true, force: true });
     fs.rmSync(changingSystem, { recursive: true, force: true });
+    fs.rmSync(disappearingSystem, { recursive: true, force: true });
     fs.rmSync(fakeSystemAlias, { recursive: true, force: true });
     fs.rmSync(fakeAlternatives, { recursive: true, force: true });
     fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
@@ -602,6 +607,25 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.equal(changedScan.problem, null);
   assert.ok(changedScan.paths.includes(introducedCompiler), "compiler exposure is rescanned after filesystem changes");
   assert.deepEqual(compilerExposureMaskArgs(changedScan), ["--ro-bind", "/dev/null", introducedCompiler], "the discovered compiler is converted to an actual sandbox mask");
+  const mutableFs = fs as unknown as { lstatSync: (...args: unknown[]) => unknown };
+  const originalLstatSync = mutableFs.lstatSync;
+  const callOriginalLstatSync = originalLstatSync.bind(fs);
+  let disappearedDuringInspection = false;
+  mutableFs.lstatSync = (...args) => {
+    if (args[0] === disappearingCompiler && !disappearedDuringInspection) {
+      disappearedDuringInspection = true;
+      fs.unlinkSync(disappearingCompiler);
+    }
+    return callOriginalLstatSync(...args);
+  };
+  let disappearanceExposure;
+  try {
+    disappearanceExposure = scanOracleCompilerExposure([disappearingSystem], [], []);
+  } finally {
+    mutableFs.lstatSync = originalLstatSync;
+  }
+  assert.equal(disappearedDuringInspection, true, "the fixture removes a compiler after inventory enumeration");
+  assert.deepEqual(disappearanceExposure, { paths: [], problem: null }, "a disappeared inventory path is ignored while other inspection failures remain fail-closed");
   const exposure = scanOracleCompilerExposure([fakeSystem], [fakeAlternatives]);
   assert.equal(exposure.problem, null);
   assert.ok(exposure.paths.some((item) => item.includes("rustlib/bin/rustc")));
