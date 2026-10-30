@@ -341,7 +341,8 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
             : spawnErrorCode ? "spawn_error"
               : result.signal === "SIGKILL" ? "helper_sigkill"
                 : result.signal === "SIGTERM" ? "helper_sigterm"
-                  : result.stderr?.length ? "unexpected_stderr" : "helper_exit");
+                  : result.status !== 0 ? "helper_nonzero_exit"
+                    : result.stderr?.length ? "unexpected_stderr" : "helper_exit");
         throw new Error("trusted compiler inventory could not complete");
       }
       for (const item of (result.stdout ?? Buffer.alloc(0)).toString("utf8").split("\0")) {
