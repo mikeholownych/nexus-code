@@ -16,6 +16,11 @@ export PATH=/opt/node/bin:/mnt/home/.local/bin:/usr/bin:/bin:/sbin
 echo "NODE=$(node --version 2>&1) NEXUS=$(nexus --version 2>&1)"
 journal="$HOME/.local/lib/nexus/.upgrade-journal.json"
 fixedcli=$(cat /proc/cmdline | tr ' ' '\n' | sed -n 's/^fixedcli=//p')
+basever=$(cat /proc/cmdline | tr ' ' '\n' | sed -n 's/^basever=//p')     # e.g. v1.0.0-rc.9
+targetver=$(cat /proc/cmdline | tr ' ' '\n' | sed -n 's/^targetver=//p') # e.g. v1.0.0-rc.10
+baseplain=${basever#v}
+targetplain=${targetver#v}
+echo "POWERLOSS_BASE=$basever TARGET=$targetver"
 if [ -n "${fixedcli:-}" ] && [ "$fixedcli" != "none" ]; then
   echo "BASELINE_CLI_DIST=patched dist_manifest_sha256=$fixedcli (fix demonstration, not release qualification)"
 fi
@@ -29,7 +34,7 @@ echo "net_addr=$(ip -4 addr show eth0 2>/dev/null | grep 'inet ' || true)"
 node -e 'const http=require("http");const r=http.get("http://10.0.2.2:18080/api/releases/tags/v1.0.0-rc.10",res=>{console.log("api_probe_status="+res.statusCode);res.resume();process.exit(0)});r.on("error",e=>{console.log("api_probe_error="+e.message);process.exit(0)});setTimeout(()=>{console.log("api_probe_timeout");process.exit(0)},5000)'
 
 if [ "$phase" = "write" ]; then
-  test "$(nexus --version | cut -d' ' -f1)" = "1.0.0-rc.9" || { echo "POWERLOSS_BASELINE_UNEXPECTED"; poweroff -f; }
+  test "$(nexus --version | cut -d' ' -f1)" = "$baseplain" || { echo "POWERLOSS_BASELINE_UNEXPECTED"; poweroff -f; }
   marker="powerloss-$(date -u +%s)-$$"
   echo "$marker" > "$HOME/.nexus/tasks/powerloss-marker"
   printf '{"marker":"%s","at":"%s"}\n' "$marker" "$(date -u +%FT%TZ)" > "$HOME/.nexus/tasks/state.json"
@@ -38,7 +43,7 @@ if [ "$phase" = "write" ]; then
   NEXUS_RELEASES_API=http://10.0.2.2:18080/api/releases \
   NEXUS_RELEASE_BASE_URL=http://10.0.2.2:18080 \
   NEXUS_VERIFY_ATTESTATION=0 \
-    nexus upgrade --version v1.0.0-rc.10 --force --yes > /mnt/upgrade.log 2>&1 &
+    nexus upgrade --version "$targetver" --force --yes > /mnt/upgrade.log 2>&1 &
   echo "POWERLOSS_UPGRADE_PID=$!"
   # Cut power at a durable in-flight state. Nothing is synced or shut down:
   # whatever reached the disk is what the second boot sees.
@@ -86,7 +91,7 @@ if [ "$phase" = "verify" ]; then
   cat /mnt/upgrade.log 2>/dev/null || echo "NO_UPGRADE_LOG"
   echo "--- package dirs after power loss ---"
   ls -a "$lib" | grep -vE '^\.$|^\.\.$' || true
-  for pkg in "$lib"/v1.0.0-rc.10 "$lib"/v1.0.0-rc.9; do
+  for pkg in "$lib/$targetver" "$lib/$basever"; do
     [ -d "$pkg" ] || continue
     echo "payload $(basename "$pkg"): $(stat -c '%s bytes %n' "$pkg/bin/nexus" 2>/dev/null || echo 'bin/nexus missing')"
   done
@@ -111,13 +116,13 @@ if [ "$phase" = "verify" ]; then
   echo "--- journal after recovery ---"
   cat "$journal" 2>/dev/null || echo "NO_JOURNAL"
   test -n "$marker"
-  test "$(printf '%s' "$version_after" | cut -d' ' -f1)" = "1.0.0-rc.9"
+  test "$(printf '%s' "$version_after" | cut -d' ' -f1)" = "$baseplain"
   test "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(j.state)' "$journal")" = "rolled_back"
   test -z "$(ls -A "$lib" | grep -E '^\.tmp-upgrade-' || true)"
   test ! -e "$lib/.upgrade.lock"
   echo "--- package dirs after recovery ---"
   ls -a "$lib" | grep -vE '^\.$|^\.\.$' || true
-  grep -F "Restored verified source release v1.0.0-rc.9" /mnt/recover.log >/dev/null
+  grep -F "Restored verified source release $basever" /mnt/recover.log >/dev/null
   nexus upgrade --recover > /mnt/recover2.log 2>&1 || true
   echo "--- second recovery ---"
   cat /mnt/recover2.log
@@ -126,11 +131,11 @@ if [ "$phase" = "verify" ]; then
   NEXUS_RELEASES_API=http://10.0.2.2:18080/api/releases \
   NEXUS_RELEASE_BASE_URL=http://10.0.2.2:18080 \
   NEXUS_VERIFY_ATTESTATION=0 \
-    nexus upgrade --version v1.0.0-rc.10 --force --yes > /mnt/retry.log 2>&1
+    nexus upgrade --version "$targetver" --force --yes > /mnt/retry.log 2>&1
   cat /mnt/retry.log
   echo "VERSION_RETRY=$(nexus --version 2>&1)"
   node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("JOURNAL_STATE_AFTER_RETRY="+j.state)' "$journal"
-  test "$(nexus --version 2>&1 | cut -d' ' -f1)" = "1.0.0-rc.10"
+  test "$(nexus --version 2>&1 | cut -d' ' -f1)" = "$targetplain"
   echo "POWERLOSS_VERIFY=PASS marker_retained=true json_intact=true journal_rolled_back=true staging_removed=true stale_lock_reclaimed=true recovery_idempotent=true retry_completed=true install_functional=true"
   poweroff -f
 fi

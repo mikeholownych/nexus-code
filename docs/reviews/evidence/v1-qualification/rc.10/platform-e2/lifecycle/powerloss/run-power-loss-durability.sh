@@ -13,8 +13,10 @@
 # be able to signal QEMU directly so the power cut is a real SIGKILL.
 #
 # Assets layout (see fetch-assets.sh):
-#   $ASSETS/rc.9/{nexus-linux-x86_64-v1.0.0-rc.9.tar.gz,SHA256SUMS,compatibility.json}
-#   $ASSETS/rc.10/{nexus-linux-x86_64-v1.0.0-rc.10.tar.gz,SHA256SUMS,compatibility.json}
+#   $ASSETS/<base-tag>/{nexus-linux-x86_64-<base-tag>.tar.gz,SHA256SUMS,compatibility.json}
+#   $ASSETS/<target-tag>/{nexus-linux-x86_64-<target-tag>.tar.gz,SHA256SUMS,compatibility.json}
+# Tags and archive digests are pinned below; override for another candidate. The
+# published pins in git history are rc.9 -> rc.10 and rc.10 -> rc.11.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -30,8 +32,10 @@ suffix="${NEXUS_POWERLOSS_LOG_SUFFIX:-}"
 write_log="$evidence/ubuntu-22-04-node22-power-loss-durability${suffix:+-$suffix}-write.log"
 verify_log="$evidence/ubuntu-22-04-node22-power-loss-durability${suffix:+-$suffix}-verify.log"
 
-rc9_sha=35795d2b7639b68a541c512976d8bc7f251115ebdccf48f6b9cf5f98ef1af9bb
-rc10_sha=444d0812ad583b7f688890ac8536cb872e92364c977d9fbf298fa0408d98b3e7
+base_tag="${NEXUS_POWERLOSS_BASE_TAG:-v1.0.0-rc.9}"
+base_sha="${NEXUS_POWERLOSS_BASE_SHA:-35795d2b7639b68a541c512976d8bc7f251115ebdccf48f6b9cf5f98ef1af9bb}"
+target_tag="${NEXUS_POWERLOSS_TARGET_TAG:-v1.0.0-rc.10}"
+target_sha="${NEXUS_POWERLOSS_TARGET_SHA:-444d0812ad583b7f688890ac8536cb872e92364c977d9fbf298fa0408d98b3e7}"
 
 die() { echo "power-loss: $*" >&2; exit 1; }
 
@@ -42,14 +46,13 @@ if [ "$(id -u)" -ne 0 ]; then
   [ -r /dev/kvm ] && [ -w /dev/kvm ] || die "/dev/kvm is not writable by $(id -un); rerun with sudo -E or grant access"
 fi
 
-for f in "$assets/rc.9/nexus-linux-x86_64-v1.0.0-rc.9.tar.gz" \
-         "$assets/rc.9/SHA256SUMS" "$assets/rc.9/compatibility.json" \
-         "$assets/rc.10/nexus-linux-x86_64-v1.0.0-rc.10.tar.gz" \
-         "$assets/rc.10/SHA256SUMS" "$assets/rc.10/compatibility.json"; do
-  [ -f "$f" ] || die "missing asset $f (run fetch-assets.sh)"
+for tag in "$base_tag" "$target_tag"; do
+  for f in "$assets/$tag/nexus-linux-x86_64-$tag.tar.gz" "$assets/$tag/SHA256SUMS" "$assets/$tag/compatibility.json"; do
+    [ -f "$f" ] || die "missing asset $f (run fetch-assets.sh)"
+  done
 done
-[ "$(sha256sum "$assets/rc.9/nexus-linux-x86_64-v1.0.0-rc.9.tar.gz" | awk '{print $1}')" = "$rc9_sha" ] || die "rc.9 archive digest mismatch"
-[ "$(sha256sum "$assets/rc.10/nexus-linux-x86_64-v1.0.0-rc.10.tar.gz" | awk '{print $1}')" = "$rc10_sha" ] || die "rc.10 archive digest mismatch"
+[ "$(sha256sum "$assets/$base_tag/nexus-linux-x86_64-$base_tag.tar.gz" | awk '{print $1}')" = "$base_sha" ] || die "$base_tag archive digest mismatch"
+[ "$(sha256sum "$assets/$target_tag/nexus-linux-x86_64-$target_tag.tar.gz" | awk '{print $1}')" = "$target_sha" ] || die "$target_tag archive digest mismatch"
 [ -f "$kernel" ] || die "missing kernel image $kernel"
 [ -x "$node_bin" ] || die "missing node binary $node_bin"
 
@@ -65,7 +68,7 @@ cp /usr/bin/busybox "$work/initrd/bin/busybox"
 cp /usr/bin/flock "$work/initrd/usr/bin/flock"
 cp "$node_bin" "$work/initrd/opt/node/bin/node"
 mkdir -p "$work/pkg"
-tar -xzf "$assets/rc.10/nexus-linux-x86_64-v1.0.0-rc.10.tar.gz" -C "$work/pkg"
+tar -xzf "$assets/$target_tag/nexus-linux-x86_64-$target_tag.tar.gz" -C "$work/pkg"
 for bin in "$work/initrd/opt/node/bin/node" "$work/pkg/nexus/lib/core/harness-core" \
            "$work/pkg/nexus/lib/core/nexus-tui" "$work/initrd/usr/bin/flock"; do
   ldd "$bin" | awk '{print $3}' | grep '^/' || true
@@ -85,23 +88,23 @@ mkdir -p "$work/mnt"
 sudo mount -o loop "$work/disk.img" "$work/mnt"
 sudo chown -R "$(id -u):$(id -g)" "$work/mnt"
 mkdir -p "$work/mnt/home/.local/lib/nexus" "$work/mnt/home/.local/bin" "$work/mnt/home/.nexus/tasks"
-tar -xzf "$assets/rc.9/nexus-linux-x86_64-v1.0.0-rc.9.tar.gz" -C "$work/mnt/home/.local/lib/nexus"
-mv "$work/mnt/home/.local/lib/nexus/nexus" "$work/mnt/home/.local/lib/nexus/v1.0.0-rc.9"
+tar -xzf "$assets/$base_tag/nexus-linux-x86_64-$base_tag.tar.gz" -C "$work/mnt/home/.local/lib/nexus"
+mv "$work/mnt/home/.local/lib/nexus/nexus" "$work/mnt/home/.local/lib/nexus/$base_tag"
 dist_sha=""
 if [ -n "$baseline_dist" ]; then
   [ -f "$baseline_dist/index.js" ] || die "baseline dist not found at $baseline_dist"
   # Hash the whole dist (sorted file manifest), not just the entry point: the fix
   # lives in durable_tree.js, which index.js imports dynamically.
   dist_sha=$(cd "$baseline_dist" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
-  rm -rf "$work/mnt/home/.local/lib/nexus/v1.0.0-rc.9/lib/cli/dist"
-  cp -a "$baseline_dist" "$work/mnt/home/.local/lib/nexus/v1.0.0-rc.9/lib/cli/dist"
+  rm -rf "$work/mnt/home/.local/lib/nexus/$base_tag/lib/cli/dist"
+  cp -a "$baseline_dist" "$work/mnt/home/.local/lib/nexus/$base_tag/lib/cli/dist"
 fi
-ln -sfn ../lib/nexus/v1.0.0-rc.9/bin/nexus "$work/mnt/home/.local/bin/nexus"
-printf 'baseline rc.9\n' > "$work/mnt/home/.nexus/tasks/marker"
+ln -sfn "../lib/nexus/$base_tag/bin/nexus" "$work/mnt/home/.local/bin/nexus"
+printf 'baseline %s\n' "$base_tag" > "$work/mnt/home/.nexus/tasks/marker"
 sudo umount "$work/mnt"
 
 # Fixture server for the rc.10 assets.
-node "$here/serve-release.cjs" "$assets/rc.10" 18080 > "$work/serve.log" 2>&1 &
+node "$here/serve-release.cjs" "$assets/$target_tag" 18080 > "$work/serve.log" 2>&1 &
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 for _ in $(seq 1 50); do grep -q serving "$work/serve.log" 2>/dev/null && break; sleep 0.1; done
@@ -113,7 +116,7 @@ boot() {
   local phase=$1 out=$2
   exec qemu-system-x86_64 -enable-kvm -cpu host -m 2048 -smp 2 \
     -kernel "$kernel" -initrd "$work/initrd.gz" \
-    -append "console=ttyS0 phase=$phase panic=-1 fixedcli=${dist_sha:-none}" \
+    -append "console=ttyS0 phase=$phase panic=-1 fixedcli=${dist_sha:-none} basever=$base_tag targetver=$target_tag" \
     -nographic -no-reboot \
     -drive "file=$work/disk.img,format=raw,if=virtio,cache=none" \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0 > "$out" 2>&1

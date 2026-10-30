@@ -48,6 +48,10 @@ Logs are written to the platform-e2 directory as
 `ubuntu-22-04-node22-power-loss-durability{,-SUFFIX}-{write,verify}.log`, with
 serial console `CR` bytes stripped on copy.
 
+Tags and archive digests are pinned in the script (rc.9 → rc.10 by default) and
+can be overridden with `NEXUS_POWERLOSS_{BASE,TARGET}_{TAG,SHA}` for another
+candidate.
+
 ## Result on the published RC10 artifact: FAIL
 
 `v1.0.0-rc.10/bin/nexus` is **0 bytes** after the cut (the verify log prints the
@@ -61,6 +65,14 @@ status would read the failed recovery as success.
 The fix is in `cli/src/durable_tree.ts` (PR #333): `safeExtractTar` flushes every
 file and directory of the extracted tree before the caller renames it and
 switches the launcher.
+
+## Result on the published RC11 artifact: FAIL
+
+`v1.0.0-rc.11` (tag `8d4e5319`) predates the fix, so rc.10 → rc.11 reproduces the
+same failure: `v1.0.0-rc.11/bin/nexus` is 0 bytes, `nexus --version` is empty, and
+`nexus upgrade --recover` exits 0 without doing anything
+(`...-power-loss-durability-rc11-verify.log`). Any release built before #333
+carries the defect.
 
 ## Fix demonstration
 
