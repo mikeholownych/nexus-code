@@ -14,9 +14,18 @@ const FIND = "/usr/bin/find";
 const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share/git-core/templates", "/usr/share/terminfo", "/usr/share/zoneinfo", "/lib", "/lib64", "/usr/local/lib"];
 const SYSTEM_ETC_FILES = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"];
 const SYSTEM_ETC_DIRS = ["/etc/alternatives"];
-// The hosted Ubuntu image exposes the Android SDK under /usr/local/lib. It is not part of
-// the evaluator runtime; hide it from candidates and exclude it from compiler inventory.
-const SYSTEM_UNMOUNTED_DIRECTORIES = ["/usr/local/lib/android"];
+// Hosted images expose large, host-only SDK trees under otherwise useful system roots.
+// They are not part of the candidate runtime contract. Hide them in the candidate namespace
+// and exclude only those exact subtrees from compiler inventory; every other mounted path
+// remains scanned under the same 25-second fail-closed deadline.
+const SYSTEM_UNMOUNTED_DIRECTORIES = [
+  "/usr/local/lib/android",
+  "/usr/lib/firefox",
+  "/usr/lib/google-cloud-sdk",
+  "/usr/lib/heroku",
+  "/usr/lib/jvm",
+  "/usr/lib/mono",
+];
 const FORBIDDEN_RUNTIME_ROOTS = ["/etc", "/root", "/proc", "/sys", "/run", "/var", "/dev", "/tmp", "/mnt", "/media", "/srv"];
 const SENSITIVE_HOME_PARTS = [".ssh", ".config", ".aws", ".azure", ".gnupg", ".kube", ".nexus", ".cache"];
 const TOOLCHAIN_POLICY = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "toolchain-versions.json"), "utf8"));

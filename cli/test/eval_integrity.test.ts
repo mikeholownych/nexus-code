@@ -678,16 +678,29 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const selectedToolchainRoots = Object.values(inactiveRustSource).filter(Boolean);
   const invalidRootExposure = scanOracleCompilerExposure([], [], [invalidRootCompiler], selectedToolchainRoots);
   assert.ok(invalidRootExposure.paths.includes(invalidRootCompiler), "compiler under an inactive configured Rust source remains masked when separately mounted as a runtime file");
-  if (sandboxAvailable() && fs.existsSync("/usr/local/lib/android")) {
+  const hostOnlySystemDirectories = [
+    "/usr/local/lib/android",
+    "/usr/lib/firefox",
+    "/usr/lib/google-cloud-sdk",
+    "/usr/lib/heroku",
+    "/usr/lib/jvm",
+    "/usr/lib/mono",
+  ];
+  const systemDirectories = ["/usr/local/lib", "/usr/lib"].filter((directory) => fs.existsSync(directory));
+  if (sandboxAvailable() && hostOnlySystemDirectories.some((directory) => fs.existsSync(directory))) {
     const systemSdkMasked = isolatedProcessArgv({
       cwd: fakeSystem,
       command: "/usr/bin/true",
-      systemDirectories: ["/usr/local/lib"],
+      systemDirectories,
       systemEtcDirectories: [],
     });
-    const sdkMaskIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--tmpfs" && systemSdkMasked.argv[index + 1] === "/usr/local/lib/android");
-    const libBindIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--ro-bind" && systemSdkMasked.argv[index + 1] === "/usr/local/lib" && systemSdkMasked.argv[index + 2] === "/usr/local/lib");
-    assert.ok(libBindIndex >= 0 && sdkMaskIndex > libBindIndex, "the host-only Android SDK is hidden after its parent runtime directory is mounted");
+    for (const directory of hostOnlySystemDirectories.filter((candidate) => fs.existsSync(candidate))) {
+      const parent = systemDirectories.find((root) => directory.startsWith(`${root}/`));
+      assert.ok(parent, `host-only SDK directory is nested under a mounted runtime root: ${directory}`);
+      const sdkMaskIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--tmpfs" && systemSdkMasked.argv[index + 1] === directory);
+      const parentBindIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--ro-bind" && systemSdkMasked.argv[index + 1] === parent && systemSdkMasked.argv[index + 2] === parent);
+      assert.ok(parentBindIndex >= 0 && sdkMaskIndex > parentBindIndex, `host-only SDK subtree is hidden after its parent runtime directory is mounted: ${directory}`);
+    }
   }
   if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives], additionalMountedPaths: [fakeExternalGoTarget] })) {
     const isolated = isolatedProcessArgv({
