@@ -5,7 +5,7 @@ Three trials against the exact installed RC11 binary and its local synthetic gat
 - Trial latencies: 3.366ms, 2.266ms, 2.990ms.
 - Idle latencies: 188.367ms, 429.878ms, 521.106ms.
 - Artifact SHA-256 and runner versions: `runtime.txt`.
-- Raw measurements and per-trial screens: `measure.log`, `s5_ack_1.raw` through `s5_ack_3.raw`, and `s5_ack_1.screens.txt` through `s5_ack_3.screens.txt`.
+- Raw measurements and per-trial PTY streams: `measure.log` and `s5_ack_1.raw` through `s5_ack_3.raw`. No separate screen-capture files were retained.
 - The initial runner setup attempt lacked `pyte` and stopped before a trial. That environment failure was fixed using the pinned test dependency in a disposable venv; it is not counted as a product result.
 
 This synthetic PTY measures the first cancellation-state output observable by the runner; it does not claim physical-display refresh evidence.
