@@ -47,6 +47,7 @@ test("release job prepares the same evaluator environment as CI before running t
     );
     const suite = job.indexOf("run: npm --prefix cli test");
     assert.ok(suite >= 0, `${jobName} runs the CLI suite`);
+    assert.match(job, /timeout-minutes: \d+\n\s+run: npm --prefix cli test/, `${jobName} bounds the CLI suite so a hung test process fails the job`);
     const positions = REQUIRED_EVALUATOR_SETUP.map((step) => {
       const position = job.indexOf(step);
       assert.ok(position >= 0, `${jobName} includes required evaluator setup: ${step}`);

@@ -101,7 +101,10 @@ jobs:
       - run: npm --prefix cli run build
       - run: cargo test --locked --manifest-path core/Cargo.toml
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
-      - run: npm --prefix cli test
+      - name: Run the CLI suite with a hang bound
+        # Normal runs take 12-20 minutes; a test process that never exits must fail the job, not hold it for 6 hours.
+        timeout-minutes: 45
+        run: npm --prefix cli test
       - run: bash scripts/security_gates.sh
       - run: bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/dist"
       - run: bash scripts/package-linux.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/repro-check"
