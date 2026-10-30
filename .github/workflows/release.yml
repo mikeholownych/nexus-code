@@ -24,6 +24,13 @@ jobs:
           fetch-depth: 0
       - run: sudo apt-get update
       - run: sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.22.12'
+      - name: Install pinned evaluator toolchains
+        run: bash scripts/install-evaluator-toolchains.sh
+      - name: Remove preinstalled SDK trees from the hosted runner
+        run: bash scripts/ci-trim-runner-image.sh
       - run: bash scripts/ensure-ci-bubblewrap.sh
       - run: bash scripts/ensure-ci-user-cgroups.sh
       - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
