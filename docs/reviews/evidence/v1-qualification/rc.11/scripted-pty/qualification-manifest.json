@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "gate": "ACCEPTANCE.md \u00a75.2 installed RC scripted PTY scenarios",
+  "gate": "ACCEPTANCE.md §5.2 installed RC scripted PTY scenarios",
   "rcTag": "v1.0.0-rc.11",
   "sourceCommit": "8d4e5319f1a31ee67e31d3edb6b44c2e7d9ecb05",
   "artifact": {
@@ -26,9 +26,9 @@
     "s9NamedSurvivorReruns": {
       "completedAt": "2026-10-30T00:40:05Z",
       "trials": 3,
-      "result": "PASS 3/3; matching tool child observed before quit and no matching process remained after TUI exit",
-      "evidence": "raw/s9-named-survivor/",
-      "sourceInventory": "raw/s9-named-survivor/SOURCE-SHA256SUMS"
+      "result": "Historically reported 3/3; per-run logs are absent from this packet, so the result is not independently reviewable here.",
+      "evidence": "raw/s9-named-survivor/README.md (discloses missing per-run logs)",
+      "sourceInventory": "raw/s9-named-survivor/SOURCE-HASH-INVENTORY.md (historical, unverified hashes for absent logs)"
     },
     "s5CancelAckRerun": {
       "startedAt": "2026-10-30T02:48:12Z",
@@ -81,7 +81,7 @@
     "overallRcAcceptance": "not established"
   },
   "criteriaStatus": {
-    "s9ZeroSurvivingProcesses": "observed 3/3 named-survivor reruns",
+    "s9ZeroSurvivingProcesses": "historically reported 3/3; supporting per-run logs absent, not independently reviewable from this packet",
     "s4ToS6CancelAcknowledgementOneFrame": "observed 3/3; timestamped synthetic PTY first cancel-state output at 2.266-3.366ms after Ctrl-C write against exact installed RC11; 16.667ms frame budget",
     "s4ToS6IdleWithinFiveSeconds": "observed 3/3; 188.367-521.106ms after Ctrl-C write"
   }
