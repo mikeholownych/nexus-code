@@ -1,0 +1,12 @@
+case	environment	result	notes
+installer-version-switch-rollback-reinstall-repair-uninstall	Ubuntu 22.04 / Node 22	PASS	Installer-driven alpha.2 and RC11 transitions; state, config and adjacent user file preserved.
+installer-version-switch-rollback-reinstall-repair-uninstall	Ubuntu 24.04 / Node 22	PASS	Installer-driven alpha.2 and RC11 transitions; state, config and adjacent user file preserved.
+installer-version-switch-rollback-reinstall-repair-uninstall	Debian 12 / Node 22	PASS	Installer-driven alpha.2 and RC11 transitions; state, config and adjacent user file preserved.
+installer-version-switch-rollback-reinstall-repair-uninstall	Fedora 40 / Node 22	PASS	Installer-driven alpha.2 and RC11 transitions; state, config and adjacent user file preserved.
+successful-updater-upgrade	Ubuntu 22.04 / Node 22	PASS	RC10 to RC11 through nexus upgrade; state, config, adjacent file and old release retained.
+checksum-tamper	Ubuntu 22.04 / Node 22	PASS	Bad checksum rejected; existing launcher and state unchanged.
+broken-candidate-self-test	Ubuntu 22.04 / Node 22	PASS	Staging self-test rejected candidate; installed package and state unchanged.
+backup-restore	Ubuntu 22.04 / Node 22	PASS	Recognized state/config backup restored with private modes.
+synthetic-journal-recovery	Ubuntu 22.04 / Node 22	PASS	Staged/preparing cleaned, malformed journal refused, idempotent.
+incompatible-downgrade	Ubuntu 22.04 / Node 22	PASS	Schema-1 target refused against schema 2; installed package unchanged.
+updater-process-crash-recovery	Ubuntu 22.04 / Node 22	PASS	SIGKILL after switched state; recovered and rolled back; power loss not tested.

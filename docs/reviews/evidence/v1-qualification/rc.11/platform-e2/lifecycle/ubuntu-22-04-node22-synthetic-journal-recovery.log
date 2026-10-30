@@ -1,0 +1,8 @@
+== staged journal with staging directory
+✔ Recovery completed (cleaned_up): Restored verified source release v1.0.0-rc.11.
+Recovery check: No interrupted upgrade found in journal.
+== preparing journal without staging
+✔ Recovery completed (cleaned_up): Restored verified source release v1.0.0-rc.11.
+== malformed journal is refused; version, launcher target, and target directory checks follow
+Recovery check: Upgrade journal failed schema or path validation; no recovery action was taken.
+synthetic_journal_recovery=PASS staged_cleaned=true preparing_cleaned=true malformed_refused=true version_unchanged=true launcher_target_unchanged=true target_install_dir_absent=true

@@ -1,0 +1,24 @@
+uid=10001(nexus-e2) gid=10001(nexus-e2) groups=10001(nexus-e2)
+v22.23.3
+== install alpha.2
+Installed Nexus Code v0.1.0-alpha.2 in /home/nexus-e2/.local/lib/nexus/v0.1.0-alpha.2
+0.1.0-alpha.2 (a2e94f306640)
+alpha_version=0.1.0-alpha.2 (a2e94f306640)
+alpha_dirs=v0.1.0-alpha.2
+== upgrade to RC11
+Installed Nexus Code v1.0.0-rc.11 in /home/nexus-e2/.local/lib/nexus/v1.0.0-rc.11
+1.0.0-rc.11 (8d4e5319f1a3)
+rc_dirs=v0.1.0-alpha.2
+v1.0.0-rc.11
+== rollback to alpha.2
+Installed Nexus Code v0.1.0-alpha.2 in /home/nexus-e2/.local/lib/nexus/v0.1.0-alpha.2
+0.1.0-alpha.2 (a2e94f306640)
+== reinstall RC11
+Installed Nexus Code v1.0.0-rc.11 in /home/nexus-e2/.local/lib/nexus/v1.0.0-rc.11
+1.0.0-rc.11 (8d4e5319f1a3)
+== same-version repair
+Installed Nexus Code v1.0.0-rc.11 in /home/nexus-e2/.local/lib/nexus/v1.0.0-rc.11
+1.0.0-rc.11 (8d4e5319f1a3)
+repair_file=/home/nexus-e2/.local/lib/nexus/v1.0.0-rc.11/.provenance.json before=da45cbcb92597bfd3fb9ea15491bf96ac543d84727039a30e949a5d3150422a5 after=da45cbcb92597bfd3fb9ea15491bf96ac543d84727039a30e949a5d3150422a5
+== documented manual uninstall
+lifecycle=PASS upgrade_rollback_reinstall_repair_uninstall=true state_config_retained=true
