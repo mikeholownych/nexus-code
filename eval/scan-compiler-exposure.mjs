@@ -12,6 +12,12 @@ const MAX_ENUMERATION_OUTPUT = 64 * 1024 * 1024;
 const TIMEOUT_MS = 25_000;
 const MAX_ENTRIES = 500_000;
 const MAX_JOBS = 100_000;
+const MAX_ROOTS = 4_096;
+const MAX_ROOT_BYTES = 1024 * 1024;
+// Amortize GNU find startup cost across disjoint system roots without approaching
+// the per-process argv size limit on Linux.
+const MAX_ENUMERATION_ROOTS = 64;
+const MAX_ENUMERATION_ROOT_BYTES = 64 * 1024;
 // Bundle enough sibling directories to avoid spawning one `find` process for
 // every pair on large hosted system roots, while keeping independent jobs for
 // bounded parallel scanning.
@@ -45,8 +51,9 @@ function findArgs(roots) {
 }
 
 const roots = process.argv.slice(2);
-if (roots.length === 0 || roots.length > 128 || roots.some((root) => !root.startsWith("/"))) {
-  process.stderr.write("compiler inventory roots must be absolute\n");
+const rootBytes = roots.reduce((total, root) => total + Buffer.byteLength(root) + 1, 0);
+if (roots.length === 0 || roots.length > MAX_ROOTS || rootBytes > MAX_ROOT_BYTES || roots.some((root) => !root.startsWith("/"))) {
+  process.stderr.write("compiler inventory roots must be absolute and within bounded input limits\n");
   process.exit(2);
 }
 
@@ -54,8 +61,20 @@ async function* enumerateJobs() {
   let entryCount = 0;
   let jobCount = 0;
   let enumerationBytes = 0;
-  for (const root of roots) {
-    const child = spawn(FIND, ["-P", root, "-mindepth", "1", "-maxdepth", "3", "-printf", "%d\\0%y\\0%p\\0"], {
+  let rootOffset = 0;
+  let batchIndex = 0;
+  while (rootOffset < roots.length) {
+    const batch = [];
+    let batchBytes = 0;
+    while (rootOffset < roots.length && batch.length < MAX_ENUMERATION_ROOTS) {
+      const root = roots[rootOffset];
+      const rootBytes = Buffer.byteLength(root) + 1;
+      if (batch.length > 0 && batchBytes + rootBytes > MAX_ENUMERATION_ROOT_BYTES) break;
+      batch.push(root);
+      batchBytes += rootBytes;
+      rootOffset += 1;
+    }
+    const child = spawn(FIND, ["-P", ...batch, "-mindepth", "1", "-maxdepth", "3", "-printf", "%d\\0%y\\0%p\\0"], {
       env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -65,14 +84,14 @@ async function* enumerateJobs() {
     child.stderr.on("data", (chunk) => {
       stderrBytes += chunk.length;
       failed = true;
-      stopAll();
+      stopAll("enumeration_stderr");
     });
     child.on("error", (error) => {
       spawnError = error;
       failed = true;
-      stopAll();
+      stopAll("enumeration_spawn_error");
     });
-    const closed = new Promise((resolve) => child.once("close", (code) => resolve(code)));
+    const closed = new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
     let scanDirectories = [];
     let directEntries = [];
     let entryDepth = null;
@@ -83,7 +102,7 @@ async function* enumerateJobs() {
         enumerationBytes += chunk.length;
         if (enumerationBytes > MAX_ENUMERATION_OUTPUT) {
           failed = true;
-          stopAll();
+          stopAll("enumeration_output_limit");
           throw new Error("compiler inventory enumeration output limit exceeded");
         }
         const data = pending.length ? Buffer.concat([pending, chunk]) : chunk;
@@ -107,7 +126,7 @@ async function* enumerateJobs() {
           }
           if (++entryCount > MAX_ENTRIES) {
             failed = true;
-            stopAll();
+            stopAll("entry_limit");
             throw new Error("compiler inventory entry limit exceeded");
           }
           const item = field.toString("utf8");
@@ -137,7 +156,7 @@ async function* enumerateJobs() {
           if (job) {
             if (++jobCount > MAX_JOBS) {
               failed = true;
-              stopAll();
+              stopAll("job_limit");
               throw new Error("compiler inventory job limit exceeded");
             }
             yield job;
@@ -147,11 +166,12 @@ async function* enumerateJobs() {
       }
     } finally {
       if (child.exitCode === null && !child.killed) child.kill("SIGTERM");
-      const code = await closed;
+      const { code, signal } = await closed;
       children.delete(child);
       if (spawnError || code !== 0 || stderrBytes !== 0 || entryDepth !== null || entryType !== null || pending.length !== 0) {
         failed = true;
-        stopAll();
+        const exitStatus = signal ? `signal_${signal.toLowerCase()}` : `code_${code ?? "unknown"}`;
+        stopAll(stderrBytes ? "enumeration_stderr" : spawnError ? "enumeration_spawn_error" : `enumeration_exit_batch_${batchIndex}_${exitStatus}`);
       }
     }
     if (failed) throw new Error("compiler inventory enumeration failed");
@@ -161,6 +181,7 @@ async function* enumerateJobs() {
         yield remaining;
       }
     }
+    batchIndex += 1;
   }
 }
 
@@ -170,10 +191,12 @@ const children = new Set();
 const outputs = [];
 let outputBytes = 0;
 let failed = false;
+let failureReason = null;
 let killTimer;
 let stopping = false;
 
-function stopAll() {
+function stopAll(reason = "worker_error") {
+  failureReason ??= reason;
   if (stopping) return;
   stopping = true;
   for (const child of children) child.kill("SIGTERM");
@@ -186,16 +209,16 @@ function stopAll() {
 
 process.on("SIGTERM", () => {
   failed = true;
-  stopAll();
+  stopAll("terminated");
 });
 process.on("SIGINT", () => {
   failed = true;
-  stopAll();
+  stopAll("interrupted");
 });
 
 const deadline = setTimeout(() => {
   failed = true;
-  stopAll();
+  stopAll("deadline");
 }, TIMEOUT_MS);
 
 function scanRoots(roots) {
@@ -211,7 +234,7 @@ function scanRoots(roots) {
       outputBytes += chunk.length;
       if (outputBytes > MAX_OUTPUT) {
         failed = true;
-        stopAll();
+        stopAll("output_limit");
         return;
       }
       stdout.push(chunk);
@@ -219,17 +242,17 @@ function scanRoots(roots) {
     child.stderr.on("data", (chunk) => {
       stderrBytes += chunk.length;
       failed = true;
-      stopAll();
+      stopAll("find_stderr");
     });
     child.on("error", () => {
       failed = true;
-      stopAll();
+      stopAll("spawn_error");
     });
     child.on("close", (code) => {
       children.delete(child);
       if (code !== 0 || stderrBytes !== 0) {
         failed = true;
-        stopAll();
+        stopAll(stderrBytes ? "find_stderr" : "find_exit");
       }
       outputs.push(stdout);
       resolve();
@@ -255,7 +278,7 @@ await Promise.all(Array.from({ length: SCAN_WORKERS }, () => worker()));
 clearTimeout(deadline);
 clearTimeout(killTimer);
 if (failed) {
-  process.stderr.write("trusted compiler inventory could not complete\n");
+  process.stderr.write(`trusted compiler inventory could not complete: ${failureReason ?? "unknown"}\n`);
   process.exitCode = 1;
 } else {
   const output = Buffer.concat(outputs.flat(), outputBytes);

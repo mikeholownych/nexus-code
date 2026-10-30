@@ -14,9 +14,18 @@ const FIND = "/usr/bin/find";
 const SYSTEM_BINARIES = ["/usr/bin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share/git-core/templates", "/usr/share/terminfo", "/usr/share/zoneinfo", "/lib", "/lib64", "/usr/local/lib"];
 const SYSTEM_ETC_FILES = ["/etc/ld.so.cache", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/localtime"];
 const SYSTEM_ETC_DIRS = ["/etc/alternatives"];
-// The hosted Ubuntu image exposes the Android SDK under /usr/local/lib. It is not part of
-// the evaluator runtime; hide it from candidates and exclude it from compiler inventory.
-const SYSTEM_UNMOUNTED_DIRECTORIES = ["/usr/local/lib/android"];
+// Hosted images expose large, host-only SDK trees under otherwise useful system roots.
+// They are not part of the candidate runtime contract. Hide them in the candidate namespace
+// and exclude only those exact subtrees from compiler inventory; every other mounted path
+// remains scanned under the same 25-second fail-closed deadline.
+const SYSTEM_UNMOUNTED_DIRECTORIES = [
+  "/usr/local/lib/android",
+  "/usr/lib/firefox",
+  "/usr/lib/google-cloud-sdk",
+  "/usr/lib/heroku",
+  "/usr/lib/jvm",
+  "/usr/lib/mono",
+];
 const FORBIDDEN_RUNTIME_ROOTS = ["/etc", "/root", "/proc", "/sys", "/run", "/var", "/dev", "/tmp", "/mnt", "/media", "/srv"];
 const SENSITIVE_HOME_PARTS = [".ssh", ".config", ".aws", ".azure", ".gnupg", ".kube", ".nexus", ".cache"];
 const TOOLCHAIN_POLICY = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "toolchain-versions.json"), "utf8"));
@@ -193,10 +202,9 @@ function splitRootsAroundExcludedDirectories(roots, excludedDirectories) {
   return expanded;
 }
 
-function maskedSystemDirectoryPaths(systemDirectories) {
-  const masked = [];
-  for (const excluded of SYSTEM_UNMOUNTED_DIRECTORIES) {
-    if (!systemDirectories.some((root) => excluded === root || excluded.startsWith(`${root}${path.sep}`))) continue;
+export function maskedSystemDirectoryPaths(systemDirectories, excludedDirectories = SYSTEM_UNMOUNTED_DIRECTORIES) {
+  const masked = new Set();
+  for (const excluded of excludedDirectories) {
     let stat;
     try { stat = fs.lstatSync(excluded); }
     catch (error) {
@@ -206,9 +214,9 @@ function maskedSystemDirectoryPaths(systemDirectories) {
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(excluded) !== excluded) {
       throw new Error(`excluded system runtime path is not a real directory: ${excluded}`);
     }
-    masked.push(excluded);
+    for (const spelling of mountedSpellingsForTarget(excluded, systemDirectories)) masked.add(spelling);
   }
-  return masked;
+  return [...masked].sort();
 }
 
 function appendSystemDirectoryMasks(args, maskedDirectories) {
@@ -247,6 +255,7 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
 
   const exposed = new Set();
   const visited = new Set();
+  let inventoryFailureReason;
   const inspectExecutable = (item, isSymbolicLink) => {
     if (visited.has(item)) return;
     visited.add(item);
@@ -281,6 +290,18 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
     // standard system roots. Mask each visible spelling after all runtime mounts are added.
     for (const mountedPath of mountedSpellingsForTarget(target, roots)) exposed.add(mountedPath);
   };
+  const inspectInventoryPath = (item) => {
+    let stat;
+    try { stat = fs.lstatSync(item); }
+    catch (error) {
+      // A runner can remove an ephemeral path after GNU find reports it. The
+      // executable check below already treats ENOENT as no remaining exposure.
+      // Preserve fail-closed behavior for every other inspection error.
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    inspectExecutable(item, stat.isSymbolicLink());
+  };
   try {
     const directoryRoots = new Set();
     for (const root of roots) {
@@ -291,7 +312,7 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
         throw error;
       }
       if (stat.isDirectory()) directoryRoots.add(fs.realpathSync(root));
-      else if (stat.isFile()) inspectExecutable(root, fs.lstatSync(root).isSymbolicLink());
+      else if (stat.isFile()) inspectInventoryPath(root);
     }
 
     if (directoryRoots.size) {
@@ -324,14 +345,24 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
         env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       });
       if (result.error || result.status !== 0 || result.stderr?.length) {
+        const helperFailure = /^trusted compiler inventory could not complete: ([a-z_0-9]+)\n$/.exec(result.stderr?.toString("utf8") ?? "");
+        const spawnErrorCode = result.error?.code;
+        inventoryFailureReason = helperFailure?.[1]
+          ?? (spawnErrorCode === "ETIMEDOUT" ? "parent_timeout"
+            : spawnErrorCode ? "spawn_error"
+              : result.signal === "SIGKILL" ? "helper_sigkill"
+                : result.signal === "SIGTERM" ? "helper_sigterm"
+                  : result.status !== 0 ? "helper_nonzero_exit"
+                    : result.stderr?.length ? "unexpected_stderr" : "helper_exit");
         throw new Error("trusted compiler inventory could not complete");
       }
       for (const item of (result.stdout ?? Buffer.alloc(0)).toString("utf8").split("\0")) {
-        if (item) inspectExecutable(item, fs.lstatSync(item).isSymbolicLink());
+        if (item) inspectInventoryPath(item);
       }
     }
   } catch {
-    return { paths: [], problem: "compiler exposure could not be checked; refusing qualification" };
+    const reason = inventoryFailureReason ? ` (inventory ${inventoryFailureReason})` : "";
+    return { paths: [], problem: `compiler exposure could not be checked; refusing qualification${reason}` };
   }
 
   return { paths: [...exposed].sort(), problem: null };

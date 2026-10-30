@@ -478,7 +478,7 @@ test("black-box oracle keeps canary expectations outside the candidate process a
 
 test("Python black-box oracle uses only pinned offline Go and Rust toolchains, or fails preflight", { timeout: 60_000 }, async (t) => {
   const { blackBoxOracleProblem, runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
-  const { candidateToolchainRootProblem, candidateToolchainRootSources, candidateToolchainVersionProblem, selectCandidateToolchainSource, compilerExposureMaskArgs, scanOracleCompilerExposure, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { candidateToolchainRootProblem, candidateToolchainRootSources, candidateToolchainVersionProblem, selectCandidateToolchainSource, compilerExposureMaskArgs, maskedSystemDirectoryPaths, scanOracleCompilerExposure, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const toolchainPolicy = JSON.parse(fs.readFileSync(path.join(ROOT, "eval/toolchain-versions.json"), "utf8"));
   const rustToolchain = fs.readFileSync(path.join(ROOT, "rust-toolchain.toml"), "utf8");
   const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
@@ -518,7 +518,9 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
 
   const fakeSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-system-"));
   const batchedSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-batched-compiler-system-"));
+  const manyRootsSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-many-roots-system-"));
   const changingSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-changing-compiler-system-"));
+  const disappearingSystem = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-disappearing-compiler-system-"));
   const fakeSystemAlias = `${fakeSystem}-alias`;
   const fakeAlternatives = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-alternatives-"));
   const fakeSymlinkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "eval-oracle-unpinned-compiler-target-"));
@@ -531,6 +533,9 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   fs.mkdirSync(fakeLib, { recursive: true });
   fs.mkdirSync(path.dirname(fakeGoTarget), { recursive: true });
   const compilerCanary = "#!/bin/sh\nprintf '%s\\n' UNPINNED_COMPILER_CANARY\n";
+  const disappearingCompiler = path.join(disappearingSystem, "go");
+  fs.writeFileSync(disappearingCompiler, compilerCanary);
+  fs.chmodSync(disappearingCompiler, 0o755);
   const fakeGo = path.join(fakeSystem, "bin", "go");
   const fakeRustc = path.join(fakeLib, "rustc");
   const fakeCargo = path.join(fakeSystem, "bin", "cargo-1.94.0");
@@ -557,7 +562,9 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   t.after(() => {
     fs.rmSync(fakeSystem, { recursive: true, force: true });
     fs.rmSync(batchedSystem, { recursive: true, force: true });
+    fs.rmSync(manyRootsSystem, { recursive: true, force: true });
     fs.rmSync(changingSystem, { recursive: true, force: true });
+    fs.rmSync(disappearingSystem, { recursive: true, force: true });
     fs.rmSync(fakeSystemAlias, { recursive: true, force: true });
     fs.rmSync(fakeAlternatives, { recursive: true, force: true });
     fs.rmSync(fakeSymlinkTarget, { recursive: true, force: true });
@@ -581,6 +588,17 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const batchedExposure = scanOracleCompilerExposure([batchedSystem], [], []);
   assert.equal(batchedExposure.problem, null);
   assert.ok(batchedExposure.paths.includes(lateBatchedCompiler), "compiler binaries in later sibling batches remain discoverable and maskable");
+  const manyRoots = Array.from({ length: 129 }, (_, index) => {
+    const root = path.join(manyRootsSystem, `root-${String(index).padStart(3, "0")}`);
+    fs.mkdirSync(root);
+    return root;
+  });
+  const lateRootCompiler = path.join(manyRoots.at(-1), "rustc");
+  fs.writeFileSync(lateRootCompiler, compilerCanary);
+  fs.chmodSync(lateRootCompiler, 0o755);
+  const manyRootsExposure = scanOracleCompilerExposure(manyRoots, [], []);
+  assert.equal(manyRootsExposure.problem, null, "more than 128 disjoint system roots stay within the bounded scanner input contract");
+  assert.ok(manyRootsExposure.paths.includes(lateRootCompiler), "a compiler in the final root remains discoverable when the root list exceeds 128");
   assert.deepEqual(scanOracleCompilerExposure([changingSystem], [], []), { paths: [], problem: null }, "an initially clean mounted system has no compiler masks");
   const introducedCompiler = path.join(changingSystem, "go");
   fs.writeFileSync(introducedCompiler, compilerCanary);
@@ -589,6 +607,25 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   assert.equal(changedScan.problem, null);
   assert.ok(changedScan.paths.includes(introducedCompiler), "compiler exposure is rescanned after filesystem changes");
   assert.deepEqual(compilerExposureMaskArgs(changedScan), ["--ro-bind", "/dev/null", introducedCompiler], "the discovered compiler is converted to an actual sandbox mask");
+  const mutableFs = fs as unknown as { lstatSync: (...args: unknown[]) => unknown };
+  const originalLstatSync = mutableFs.lstatSync;
+  const callOriginalLstatSync = originalLstatSync.bind(fs);
+  let disappearedDuringInspection = false;
+  mutableFs.lstatSync = (...args) => {
+    if (args[0] === disappearingCompiler && !disappearedDuringInspection) {
+      disappearedDuringInspection = true;
+      fs.unlinkSync(disappearingCompiler);
+    }
+    return callOriginalLstatSync(...args);
+  };
+  let disappearanceExposure;
+  try {
+    disappearanceExposure = scanOracleCompilerExposure([disappearingSystem], [], []);
+  } finally {
+    mutableFs.lstatSync = originalLstatSync;
+  }
+  assert.equal(disappearedDuringInspection, true, "the fixture removes a compiler after inventory enumeration");
+  assert.deepEqual(disappearanceExposure, { paths: [], problem: null }, "a disappeared inventory path is ignored while other inspection failures remain fail-closed");
   const exposure = scanOracleCompilerExposure([fakeSystem], [fakeAlternatives]);
   assert.equal(exposure.problem, null);
   assert.ok(exposure.paths.some((item) => item.includes("rustlib/bin/rustc")));
@@ -620,6 +657,16 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const aliasedExposure = scanOracleCompilerExposure([fakeSystem, fakeSystemAlias], []);
   assert.ok(aliasedExposure.paths.includes(fakeGoTarget), "the canonical mounted spelling is scanned and masked");
   assert.ok(aliasedExposure.paths.includes(path.join(fakeSystemAlias, path.relative(fakeSystem, fakeGoTarget))), "every mounted spelling of a shared system directory is scanned and masked");
+  const fakeHostOnlySdk = path.join(fakeSystem, "host-only-sdk");
+  const fakeHostOnlySdkCompiler = path.join(fakeHostOnlySdk, "bin", "go");
+  fs.mkdirSync(path.dirname(fakeHostOnlySdkCompiler), { recursive: true });
+  fs.writeFileSync(fakeHostOnlySdkCompiler, compilerCanary);
+  fs.chmodSync(fakeHostOnlySdkCompiler, 0o755);
+  const fakeHostOnlySdkMasks = maskedSystemDirectoryPaths([fakeSystem, fakeSystemAlias], [fakeHostOnlySdk]);
+  assert.deepEqual(fakeHostOnlySdkMasks, [fakeHostOnlySdk, path.join(fakeSystemAlias, "host-only-sdk")].sort(), "each mounted spelling of an excluded SDK subtree is masked");
+  const fakeHostOnlySdkScan = scanOracleCompilerExposure([fakeSystem, fakeSystemAlias], [], [], [], fakeHostOnlySdkMasks);
+  assert.ok(fakeHostOnlySdkScan.paths.includes(fakeGoTarget), "unmasked compiler paths remain in the inventory");
+  assert.ok(!fakeHostOnlySdkScan.paths.some((candidate) => candidate === fakeHostOnlySdkCompiler || candidate === path.join(fakeSystemAlias, "host-only-sdk", "bin", "go")), "excluded SDK compiler paths are absent through every mounted spelling");
   const invalidUtf8Directory = Buffer.concat([Buffer.from(fakeSystem), Buffer.from([path.sep.charCodeAt(0), 0xff])]);
   const invalidUtf8Compiler = Buffer.concat([invalidUtf8Directory, Buffer.from("/rustc")]);
   fs.mkdirSync(invalidUtf8Directory);
@@ -678,16 +725,40 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const selectedToolchainRoots = Object.values(inactiveRustSource).filter(Boolean);
   const invalidRootExposure = scanOracleCompilerExposure([], [], [invalidRootCompiler], selectedToolchainRoots);
   assert.ok(invalidRootExposure.paths.includes(invalidRootCompiler), "compiler under an inactive configured Rust source remains masked when separately mounted as a runtime file");
-  if (sandboxAvailable() && fs.existsSync("/usr/local/lib/android")) {
+  const hostOnlySystemDirectories = [
+    "/usr/local/lib/android",
+    "/usr/lib/firefox",
+    "/usr/lib/google-cloud-sdk",
+    "/usr/lib/heroku",
+    "/usr/lib/jvm",
+    "/usr/lib/mono",
+  ];
+  const systemDirectories = ["/usr/local/lib", "/usr/lib", "/lib"].filter((directory) => fs.existsSync(directory));
+  if (sandboxAvailable() && hostOnlySystemDirectories.some((directory) => fs.existsSync(directory))) {
     const systemSdkMasked = isolatedProcessArgv({
       cwd: fakeSystem,
       command: "/usr/bin/true",
-      systemDirectories: ["/usr/local/lib"],
+      systemDirectories,
       systemEtcDirectories: [],
     });
-    const sdkMaskIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--tmpfs" && systemSdkMasked.argv[index + 1] === "/usr/local/lib/android");
-    const libBindIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--ro-bind" && systemSdkMasked.argv[index + 1] === "/usr/local/lib" && systemSdkMasked.argv[index + 2] === "/usr/local/lib");
-    assert.ok(libBindIndex >= 0 && sdkMaskIndex > libBindIndex, "the host-only Android SDK is hidden after its parent runtime directory is mounted");
+    for (const directory of hostOnlySystemDirectories.filter((candidate) => fs.existsSync(candidate))) {
+      const canonicalDirectory = fs.realpathSync(directory);
+      const mountedSpellings = new Set<string>();
+      for (const root of systemDirectories) {
+        const canonicalRoot = fs.realpathSync(root);
+        if (canonicalDirectory === canonicalRoot || canonicalDirectory.startsWith(`${canonicalRoot}${path.sep}`)) {
+          mountedSpellings.add(path.resolve(root, path.relative(canonicalRoot, canonicalDirectory)));
+        }
+      }
+      assert.ok(mountedSpellings.size > 0, `host-only SDK directory is nested under a mounted runtime root: ${directory}`);
+      for (const spelling of mountedSpellings) {
+        const parent = systemDirectories.find((root) => spelling === root || spelling.startsWith(`${root}/`));
+        assert.ok(parent, `host-only SDK mount spelling is nested under a mounted runtime root: ${spelling}`);
+        const sdkMaskIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--tmpfs" && systemSdkMasked.argv[index + 1] === spelling);
+        const parentBindIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--ro-bind" && systemSdkMasked.argv[index + 1] === parent && systemSdkMasked.argv[index + 2] === parent);
+        assert.ok(parentBindIndex >= 0 && sdkMaskIndex > parentBindIndex, `host-only SDK subtree spelling is hidden after its parent runtime directory is mounted: ${spelling}`);
+      }
+    }
   }
   if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives], additionalMountedPaths: [fakeExternalGoTarget] })) {
     const isolated = isolatedProcessArgv({
