@@ -1,0 +1,3 @@
+[   1.43s] SAW initial idle
+[   1.43s] SEND b'talk slowly\r'
+[   2.36s] SAW streaming response
