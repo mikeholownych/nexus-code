@@ -1,4 +1,4 @@
-fed5b6e7e6f1ba661cc46de7126a9962b7c6916668824f25d23ed4a1606d00a8  ./README.md
+4f1f0cd589954e36a02b0a8ddc9566916779809e3e957fd105f991ca4f8a9ca8  ./README.md
 19ecf8672092e3658ee899aeb1d2dd3c652c8e67326b20c8dc0750e7078d21e2  ./debian-12-node12.log
 fb352a2bf7282b041a75a6e78aa1a10788aa1a1d8a93035629e3efcc609a8dbe  ./debian-12-node20.log
 2c7fcfdb9665303eb272bf454e8631385da58ba446b4b2c54a42c1edf56d00d6  ./debian-12-node22.doctor.json
@@ -23,7 +23,7 @@ e1e10fbeb10628610a4993dd1e104d0996defdf4e70b808aedf574fd242b0b54  ./lifecycle/pr
 9adedecde009317d8358942e77d09a996e86b5ce7a7c9e554eb998cceebe29d8  ./lifecycle/prepare-lifecycle-fixtures.sh
 9f4a9b5a555ae955dcc9fc42089c38519fcbdd3c735aca475c5d277a4297eed5  ./lifecycle/process-crash-server.js
 747657d695f2afdaddf05f5e7ad74d9cb028dc18dd1c58470dfc1efc2d06b967  ./lifecycle/results.tsv
-bad2bc37c2a76584a1bcc898850f88d5f37c30cd36479bd32052f01f9961aa1f  ./lifecycle/run-checksum-tamper.sh
+06594fb3ab12e38c135551dcd5ee9a6cbfa62773121a81a43122eb0239d4deee  ./lifecycle/run-checksum-tamper.sh
 22ea1bc3a671b77a7f7e08a8424333173d686ce0958bf94e80b9154d8a84300f  ./lifecycle/run-incompatible-downgrade.sh
 64e9333f3964817eaf4f7da7b89b81aa3f366258f996dd90d493b6e99b1702d2  ./lifecycle/run-process-crash-recovery.sh
 df9b57b88d5139fb6e675bccc0d014b9701694d2b777f8595926d37289b36ce7  ./lifecycle/run-self-test-failure.sh
@@ -31,7 +31,7 @@ bd581b4d05db6f0234529eab9594cea29e54261e1bdeb782bd9d74f6a2242884  ./lifecycle/ru
 a315b9052c6031085a496f50f6366078333f293d82916fcd7deefebca24c11d2  ./lifecycle/run-synthetic-journal-recovery.sh
 5095b0a681535ea8ac0c0f2870686f8937ef1b60980f2b76febf49bdd387dbb9  ./lifecycle/static-fixture-server.js
 f209d31e1d23f5566837104097483f1bde10ce6c051d9f77d82e8255b5b734ac  ./lifecycle/ubuntu-22-04-node22-backup-restore.log
-9a6597edd543d13266ffed4360e906e699060fa8c9a7b7a7a35fea27c70bd5d0  ./lifecycle/ubuntu-22-04-node22-checksum-tamper.log
+d2222dcd65bc8132b9b0644171c1914307a307c22d373c1d75b7ac02c240e074  ./lifecycle/ubuntu-22-04-node22-checksum-tamper.log
 39fc76c7d13d449ab4c8aae0241fb5759be6022b2e309c00e64b3841c94b4178  ./lifecycle/ubuntu-22-04-node22-incompatible-downgrade.log
 9eb4d340876f0db661b4c75b3ddd2bbabff45f657b180d7adbab78ceb2a892fc  ./lifecycle/ubuntu-22-04-node22-lifecycle.log
 b8ce813e5d85ad68e56658949b714cbb8fc8053e712040723c7adc50df8c7830  ./lifecycle/ubuntu-22-04-node22-lifecycle.sh

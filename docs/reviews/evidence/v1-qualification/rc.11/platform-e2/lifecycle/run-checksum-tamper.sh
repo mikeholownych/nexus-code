@@ -10,6 +10,9 @@ docker run --rm --pull=never --network bridge \
     NEXUS_VERSION=v1.0.0-rc.11 sh /tmp/nexus-install.sh
     export PATH="$HOME/.local/bin:$PATH"
     link_before=$(readlink "$HOME/.local/bin/nexus")
+    package_file="$HOME/.local/lib/nexus/v1.0.0-rc.11/lib/cli/dist/index.js"
+    test -f "$package_file"
+    package_before=$(sha256sum "$package_file")
     mkdir -m 700 -p "$HOME/.nexus"
     printf "checksum-safety-marker\\n" > "$HOME/.nexus/marker"; chmod 600 "$HOME/.nexus/marker"
     state_before=$(sha256sum "$HOME/.nexus/marker")
@@ -24,7 +27,10 @@ docker run --rm --pull=never --network bridge \
     printf "%s" "$output" | grep -F "SHA-256 verification failed; no installation was changed." >/dev/null
     link_after=$(readlink "$HOME/.local/bin/nexus")
     test "$link_after" = "$link_before"
+    package_after=$(sha256sum "$package_file")
+    test "$package_after" = "$package_before"
     test "$(sha256sum "$HOME/.nexus/marker")" = "$state_before"
     test "$(nexus --version)" = "1.0.0-rc.11 (8d4e5319f1a3)"
-    echo "checksum_tamper=PASS existing_launcher_and_state_unchanged=true"
+    echo "package_file=$package_file sha256=${package_before%% *}"
+    echo "checksum_tamper=PASS same_version_existing_package_file_launcher_and_state_unchanged=true"
   '
