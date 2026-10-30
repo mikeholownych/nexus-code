@@ -256,6 +256,7 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
 
   const exposed = new Set();
   const visited = new Set();
+  let inventoryFailureReason;
   const inspectExecutable = (item, isSymbolicLink) => {
     if (visited.has(item)) return;
     visited.add(item);
@@ -333,6 +334,9 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
         env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       });
       if (result.error || result.status !== 0 || result.stderr?.length) {
+        const helperFailure = /^trusted compiler inventory could not complete: ([a-z_]+)\n$/.exec(result.stderr?.toString("utf8") ?? "");
+        inventoryFailureReason = helperFailure?.[1]
+          ?? (result.error?.code === "ETIMEDOUT" ? "parent_timeout" : "helper_failure");
         throw new Error("trusted compiler inventory could not complete");
       }
       for (const item of (result.stdout ?? Buffer.alloc(0)).toString("utf8").split("\0")) {
@@ -340,7 +344,8 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
       }
     }
   } catch {
-    return { paths: [], problem: "compiler exposure could not be checked; refusing qualification" };
+    const reason = inventoryFailureReason ? ` (inventory ${inventoryFailureReason})` : "";
+    return { paths: [], problem: `compiler exposure could not be checked; refusing qualification${reason}` };
   }
 
   return { paths: [...exposed].sort(), problem: null };
