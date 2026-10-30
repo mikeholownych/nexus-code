@@ -170,6 +170,9 @@ const compatible = data.schemaVersion === 1 && data.product === "nexus-code" &&
 if (!compatible) process.exit(1);
 NODE
   fi
+  # A rename persists the directory entry, not file data: flush the extracted
+  # package before it replaces anything, or a power loss can leave 0-byte files.
+  sync
   rm -rf "$VERSION_DIR"
   mv "$PACKAGE" "$VERSION_DIR"
 fi
@@ -195,9 +198,13 @@ const record = {
 fs.writeFileSync(output, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o644 });
 fs.chmodSync(output, 0o644);
 NODE
+# Make the package move and provenance durable before the launcher points at
+# them, then make the launcher switch itself durable.
+sync
 NEXT="$BIN_DIR/.nexus-link.$$"
 ln -s "$VERSION_DIR/bin/nexus" "$NEXT"
 mv -f "$NEXT" "$LINK"
+sync
 printf 'Installed Nexus Code %s in %s\n' "$VERSION" "$VERSION_DIR"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) printf 'Add this to your shell profile if needed: export PATH="%s:$PATH"\n' "$BIN_DIR" ;; esac
 "$LINK" --version
