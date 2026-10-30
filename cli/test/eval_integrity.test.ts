@@ -478,7 +478,7 @@ test("black-box oracle keeps canary expectations outside the candidate process a
 
 test("Python black-box oracle uses only pinned offline Go and Rust toolchains, or fails preflight", { timeout: 60_000 }, async (t) => {
   const { blackBoxOracleProblem, runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
-  const { candidateToolchainRootProblem, candidateToolchainRootSources, candidateToolchainVersionProblem, selectCandidateToolchainSource, compilerExposureMaskArgs, scanOracleCompilerExposure, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
+  const { candidateToolchainRootProblem, candidateToolchainRootSources, candidateToolchainVersionProblem, selectCandidateToolchainSource, compilerExposureMaskArgs, maskedSystemDirectoryPaths, scanOracleCompilerExposure, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
   const toolchainPolicy = JSON.parse(fs.readFileSync(path.join(ROOT, "eval/toolchain-versions.json"), "utf8"));
   const rustToolchain = fs.readFileSync(path.join(ROOT, "rust-toolchain.toml"), "utf8");
   const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
@@ -657,6 +657,16 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const aliasedExposure = scanOracleCompilerExposure([fakeSystem, fakeSystemAlias], []);
   assert.ok(aliasedExposure.paths.includes(fakeGoTarget), "the canonical mounted spelling is scanned and masked");
   assert.ok(aliasedExposure.paths.includes(path.join(fakeSystemAlias, path.relative(fakeSystem, fakeGoTarget))), "every mounted spelling of a shared system directory is scanned and masked");
+  const fakeHostOnlySdk = path.join(fakeSystem, "host-only-sdk");
+  const fakeHostOnlySdkCompiler = path.join(fakeHostOnlySdk, "bin", "go");
+  fs.mkdirSync(path.dirname(fakeHostOnlySdkCompiler), { recursive: true });
+  fs.writeFileSync(fakeHostOnlySdkCompiler, compilerCanary);
+  fs.chmodSync(fakeHostOnlySdkCompiler, 0o755);
+  const fakeHostOnlySdkMasks = maskedSystemDirectoryPaths([fakeSystem, fakeSystemAlias], [fakeHostOnlySdk]);
+  assert.deepEqual(fakeHostOnlySdkMasks, [fakeHostOnlySdk, path.join(fakeSystemAlias, "host-only-sdk")].sort(), "each mounted spelling of an excluded SDK subtree is masked");
+  const fakeHostOnlySdkScan = scanOracleCompilerExposure([fakeSystem, fakeSystemAlias], [], [], [], fakeHostOnlySdkMasks);
+  assert.ok(fakeHostOnlySdkScan.paths.includes(fakeGoTarget), "unmasked compiler paths remain in the inventory");
+  assert.ok(!fakeHostOnlySdkScan.paths.some((candidate) => candidate === fakeHostOnlySdkCompiler || candidate === path.join(fakeSystemAlias, "host-only-sdk", "bin", "go")), "excluded SDK compiler paths are absent through every mounted spelling");
   const invalidUtf8Directory = Buffer.concat([Buffer.from(fakeSystem), Buffer.from([path.sep.charCodeAt(0), 0xff])]);
   const invalidUtf8Compiler = Buffer.concat([invalidUtf8Directory, Buffer.from("/rustc")]);
   fs.mkdirSync(invalidUtf8Directory);
@@ -723,7 +733,7 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
     "/usr/lib/jvm",
     "/usr/lib/mono",
   ];
-  const systemDirectories = ["/usr/local/lib", "/usr/lib"].filter((directory) => fs.existsSync(directory));
+  const systemDirectories = ["/usr/local/lib", "/usr/lib", "/lib"].filter((directory) => fs.existsSync(directory));
   if (sandboxAvailable() && hostOnlySystemDirectories.some((directory) => fs.existsSync(directory))) {
     const systemSdkMasked = isolatedProcessArgv({
       cwd: fakeSystem,
@@ -732,11 +742,22 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
       systemEtcDirectories: [],
     });
     for (const directory of hostOnlySystemDirectories.filter((candidate) => fs.existsSync(candidate))) {
-      const parent = systemDirectories.find((root) => directory.startsWith(`${root}/`));
-      assert.ok(parent, `host-only SDK directory is nested under a mounted runtime root: ${directory}`);
-      const sdkMaskIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--tmpfs" && systemSdkMasked.argv[index + 1] === directory);
-      const parentBindIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--ro-bind" && systemSdkMasked.argv[index + 1] === parent && systemSdkMasked.argv[index + 2] === parent);
-      assert.ok(parentBindIndex >= 0 && sdkMaskIndex > parentBindIndex, `host-only SDK subtree is hidden after its parent runtime directory is mounted: ${directory}`);
+      const canonicalDirectory = fs.realpathSync(directory);
+      const mountedSpellings = new Set<string>();
+      for (const root of systemDirectories) {
+        const canonicalRoot = fs.realpathSync(root);
+        if (canonicalDirectory === canonicalRoot || canonicalDirectory.startsWith(`${canonicalRoot}${path.sep}`)) {
+          mountedSpellings.add(path.resolve(root, path.relative(canonicalRoot, canonicalDirectory)));
+        }
+      }
+      assert.ok(mountedSpellings.size > 0, `host-only SDK directory is nested under a mounted runtime root: ${directory}`);
+      for (const spelling of mountedSpellings) {
+        const parent = systemDirectories.find((root) => spelling === root || spelling.startsWith(`${root}/`));
+        assert.ok(parent, `host-only SDK mount spelling is nested under a mounted runtime root: ${spelling}`);
+        const sdkMaskIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--tmpfs" && systemSdkMasked.argv[index + 1] === spelling);
+        const parentBindIndex = systemSdkMasked.argv.findIndex((value, index) => value === "--ro-bind" && systemSdkMasked.argv[index + 1] === parent && systemSdkMasked.argv[index + 2] === parent);
+        assert.ok(parentBindIndex >= 0 && sdkMaskIndex > parentBindIndex, `host-only SDK subtree spelling is hidden after its parent runtime directory is mounted: ${spelling}`);
+      }
     }
   }
   if (sandboxAvailable() && !oracleToolchainsProblem({ systemDirectories: [fakeSystem, fakeSystemAlias], systemEtcDirectories: [fakeAlternatives], additionalMountedPaths: [fakeExternalGoTarget] })) {

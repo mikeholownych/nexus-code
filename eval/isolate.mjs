@@ -202,10 +202,9 @@ function splitRootsAroundExcludedDirectories(roots, excludedDirectories) {
   return expanded;
 }
 
-function maskedSystemDirectoryPaths(systemDirectories) {
-  const masked = [];
-  for (const excluded of SYSTEM_UNMOUNTED_DIRECTORIES) {
-    if (!systemDirectories.some((root) => excluded === root || excluded.startsWith(`${root}${path.sep}`))) continue;
+export function maskedSystemDirectoryPaths(systemDirectories, excludedDirectories = SYSTEM_UNMOUNTED_DIRECTORIES) {
+  const masked = new Set();
+  for (const excluded of excludedDirectories) {
     let stat;
     try { stat = fs.lstatSync(excluded); }
     catch (error) {
@@ -215,9 +214,9 @@ function maskedSystemDirectoryPaths(systemDirectories) {
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(excluded) !== excluded) {
       throw new Error(`excluded system runtime path is not a real directory: ${excluded}`);
     }
-    masked.push(excluded);
+    for (const spelling of mountedSpellingsForTarget(excluded, systemDirectories)) masked.add(spelling);
   }
-  return masked;
+  return [...masked].sort();
 }
 
 function appendSystemDirectoryMasks(args, maskedDirectories) {
