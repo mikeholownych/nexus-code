@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { confinedPath } from "./isolate.mjs";
-import { isolatedProcessArgv, runIsolatedProcess } from "./isolate.mjs";
+import { isolatedProcessArgv, oracleToolchainsProblem, runIsolatedProcess } from "./isolate.mjs";
 
 const RUNTIMES = Object.freeze({ node: process.execPath, python3: "/usr/bin/python3" });
 const MAX_ORACLE_BYTES = 1_048_576;
@@ -48,6 +48,10 @@ export function blackBoxOracleProblem(check, taskDir, candidateFixture = null) {
     return "hidden black-box oracle cases are unavailable or malformed";
   }
   if (!Object.hasOwn(RUNTIMES, check.runtime)) return "hidden black-box oracle runtime is not allowlisted";
+  if (check.runtime === "python3") {
+    const toolchainProblem = oracleToolchainsProblem();
+    if (toolchainProblem) return toolchainProblem;
+  }
   if (!Array.isArray(check.argv) || check.argv.length !== 1 || typeof check.argv[0] !== "string" || check.argv[0].includes("\0") || Buffer.byteLength(check.argv[0]) > 1024) {
     return "hidden black-box oracle argv must name only one candidate entrypoint";
   }
@@ -62,7 +66,7 @@ export function blackBoxOracleProblem(check, taskDir, candidateFixture = null) {
 }
 
 /** Run candidate code as a black box. Only bounded summaries leave this function; raw output is discarded. */
-export async function runBlackBoxOracle(task, workspace, check, { resources = null } = {}) {
+export async function runBlackBoxOracle(task, workspace, check, { resources = null, protectedCorpusPaths = [] } = {}) {
   const problem = blackBoxOracleProblem(check, task.dir, task.fixture ?? null);
   if (problem) throw new Error(problem);
   const casesPath = confinedPath(task.dir, check.casesFile);
@@ -106,6 +110,8 @@ export async function runBlackBoxOracle(task, workspace, check, { resources = nu
       allowedFiles: [command],
       workspaceReadOnly: true,
       timeoutMs: Math.min(check.timeoutMs, remainingMs),
+      protectedCorpusPaths,
+      oracleToolchains: check.runtime === "python3",
     });
     const result = await runIsolatedProcess(spec, {
       outputLimit: check.maxOutputBytes,
