@@ -11,6 +11,7 @@
  * - Verification of essential distribution layout
  */
 
+import { fsyncTree, type DurabilityIo } from "./durable_tree.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
@@ -359,7 +360,8 @@ function parsePax(paxData: Buffer): Record<string, string> {
 export async function safeExtractTar(
   archivePath: string,
   destinationDir: string,
-  expectedRoot: string = "nexus"
+  expectedRoot: string = "nexus",
+  options: { io?: DurabilityIo } = {}
 ): Promise<{ extractedDir: string; totalBytes: number; entryCount: number }> {
   // Pre-extraction structural audit
   const validation = await validateTarArchive(archivePath, expectedRoot);
@@ -408,6 +410,12 @@ export async function safeExtractTar(
   }
 
   verifyContainment(extractedPackage);
+
+  // Flush the payload before the caller renames the tree into place and points
+  // the launcher at it: a rename persists the directory entry, not the data, and
+  // a power loss in that window would leave the CLI unable to start, including
+  // the `upgrade --recover` path that repairs it.
+  fsyncTree(extractedPackage, options.io);
 
   return {
     extractedDir: extractedPackage,
