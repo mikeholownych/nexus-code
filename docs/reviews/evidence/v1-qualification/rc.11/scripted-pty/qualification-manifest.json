@@ -68,11 +68,11 @@
       "asserted": "72e80cdc07db7125aa7091856f122c7a94e67beac4de9ff6048bca3d337f6d15",
       "natural": "4e959a19086236f25521bdd2655b0c31ec666a5c918be8b113c1f57785e47a39"
     },
-    "legacyIndexExcluded": "SHA256SUMS",
+    "legacyIndexExcluded": "source-run legacy SHA256SUMS",
     "legacyIndexSha256": "0a711ef430a7f2531574c6f4f7fe650a3a7836890aa7ddcde4e3302cf37c0f94",
     "legacyIndexObservedMismatches": 57,
     "legacyIndexObservedMissingPaths": 245,
-    "curatedPacketIndex": "SHA256SUMS",
+    "curatedPacketIndex": "SHA256SUMS (regenerated from tracked packet files only)",
     "embeddedGitStoresExcluded": true,
     "pythonBytecodeExcluded": true
   },

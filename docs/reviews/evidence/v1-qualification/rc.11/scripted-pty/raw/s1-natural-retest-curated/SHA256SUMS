@@ -1,17 +1,7 @@
 fa31ba6583998cafc4c60dfa65c611bd43d2ebf8d03a61798935811652a47e7d  ./mockgw.py
 6fa0a982ae4eb255845f8927d4924d0fbb0c305e8b4782e03272bb636364cf3f  ./ptylib.py
-f97d227264aa4c6513570e99dc0d88bd5ac8c41e1ba845ddaff080034e0fc562  ./runs/s1-natural/home/.nexus/checkpoints/8ee67f521593/cp_1793320286495_79nr.json
-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./runs/s1-natural/home/.nexus/sessions/.nexus-state.guard
-0975917d970f0087f447b7d4b88cf9abcaf265f851ae0d10aa3b870c5b502399  ./runs/s1-natural/home/.nexus/sessions/index.json
-402adac25fb00854abb8b17563d46d327764bf58e63d894a127dcdb7d662a7a0  ./runs/s1-natural/home/.nexus/sessions/session_20261030_003123_4uko1lu8.json
-36f8d790c27447f0036a6fe296977dfbd0678ab008849a5d1d33e55320176d06  ./runs/s1-natural/home/.nexus/sessions/session_20261030_003123_4uko1lu8.messages.jsonl
-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./runs/s1-natural/home/.nexus/tasks/.nexus-state.guard
-0eaccbb343411f473064a747011f9d69e5630c1e44e110bb31ad8272e7c13384  ./runs/s1-natural/home/.nexus/tasks/task-231ec4a5.json
-d13101483206f5c392acac56df0a29e4c3926ada0b113edfc253cf055c6a797b  ./runs/s1-natural/home/.nexus/tasks/task-231ec4a5.messages.jsonl
-7280f0ec049641fdca699126430378df5035a07f78be763db693a6e11648d9e9  ./runs/s1-natural/ws/.nexus/inference_receipts.jsonl
 f34848ca92665c342abd5816c9e3eda0e82180671195362bcd0080544a3bc2ac  ./runs/s1-natural/ws/base.txt
 0b3f7c3255934132ed045407b1333a695b3a59d7a20ff2ab1982764f33c4dbf2  ./s1-natural.notes.txt
 56ab530b75878c116cfb66b8a5a5eb36e15be233c22c5b243960c84ffa59c2bc  ./s1-natural.raw
 223ce1c61d8869fe8e4aaee8521f5c865f6d9bb08b2d25a97696912eca933c4f  ./s1-natural.screens.txt
 a2c8cf53a45e4bff6aeca556127d969ffd06f7eaf4ebadeb73efb9ec3ac8e991  ./s1_natural.py
-dc412f6dea86cba847889b230c9bbe5b74fbde73cd47610bab385092857a2a91  ./s1_natural.run.log
