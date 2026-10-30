@@ -110,10 +110,12 @@ test("a standalone server-profile run discovers context instead of forcing the h
 });
 
 test("T4 smoke: an overloaded endpoint is waited out and the task still completes; the fault is recorded", { timeout: 300_000 }, async () => {
-  const { records, score } = await evaluate("exports.add = (a, b) => a + b;\n", { faults: [{ kind: "overloaded", atRequest: 1 }] });
+  const evaluation = await evaluate("exports.add = (a, b) => a + b;\n", { faults: [{ kind: "overloaded", atRequest: 1 }] });
+  const { records, score } = evaluation;
   const r = records[0];
-  assert.deepEqual(r.model.faultsInjected, [{ kind: "overloaded", atRequest: 1 }]);
-  assert.equal(r.hiddenPass, true, JSON.stringify(r.turn));
+  assert.ok(!r.error, `evaluation record failed before model telemetry was captured: ${JSON.stringify(r, null, 2)}`);
+  assert.deepEqual(r.model?.faultsInjected, [{ kind: "overloaded", atRequest: 1 }], `proxy telemetry: ${JSON.stringify(r.model, null, 2)}`);
+  assert.equal(r.hiddenPass, true, `${JSON.stringify(r, null, 2)}\nhidden=${evaluation.hiddenLog}\nagent=${evaluation.agentLog}\nagent-error=${evaluation.agentError}`);
   assert.equal(r.falseVerified, false);
   assert.equal(score.faults.length, 9, "the scorer always exposes all nine accepted T4 fault classes");
   assert.equal(score.t4.gate, "FAIL", "one smoke fault is not a nine-class qualification");
@@ -157,7 +159,7 @@ console.log(JSON.stringify({ turn: { execution: "COMPLETED", outcome: "NOT_REQUI
     assert.match(manifest.agentVersion.executableSha256, /^[0-9a-f]{64}$/);
     assert.deepEqual(record.agentVersion, manifest.agentVersion);
     assert.deepEqual(record.budget, { steps: 20, minutes: 5 });
-    assert.equal(record.hiddenPass, true);
+    assert.equal(record.hiddenPass, true, `peer evaluation record: ${JSON.stringify(record, null, 2)}`);
     const stdout = fs.readFileSync(path.join(runOut, record.logs, "agent.stdout.json"), "utf8");
     const observedConfig = stdout.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).find((value) => value.observed).observed;
     assert.equal(observedConfig.agent.steps, 20);
