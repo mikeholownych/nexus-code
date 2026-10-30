@@ -1,6 +1,6 @@
 # Nexus v1.0.0-rc.14 artifact verification
 
-This record binds to the published, signed `v1.0.0-rc.14` tag at source commit `16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99` and release workflow run [41035120551](https://github.com/mikeholownych/nexus-code/actions/runs/41035120551). It establishes artifact integrity and a clean install; it does **not** establish product qualification, RC acceptance, or stable-release readiness.
+This record binds to the published, signed `v1.0.0-rc.14` tag at source commit `16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99` and release workflow run [41035120551](https://github.com/mikeholownych/nexus-code/actions/runs/41035120551). It establishes artifact integrity, a clean install, and ACC-SUP-08 cross-runner reproducibility; it does **not** establish complete product qualification, RC acceptance, or stable-release readiness.
 
 ## Verified results
 
@@ -20,7 +20,7 @@ This record binds to the published, signed `v1.0.0-rc.14` tag at source commit `
 | ACC-SUP-02 | PASS | Workflow SBOM generation/count check and `sbom-counts.json` |
 | ACC-SUP-03 | PASS | `archive-attestation.json`, `checksums-attestation.json` |
 | ACC-SUP-06 | PASS | `release-body-comparison.txt` |
-| ACC-SUP-08 | IN PROGRESS | Exact-RC two-runner workflow [41038503854](https://github.com/mikeholownych/nexus-code/actions/runs/41038503854); not yet counted as a pass |
+| ACC-SUP-08 | PASS | Exact-RC two-runner workflow [41038503854](https://github.com/mikeholownych/nexus-code/actions/runs/41038503854) completed successfully, including the comparison of both runner builds with the published RC14 archive |
 | Clean installed-RC entrypoint check | PASS | `installer-run.log` |
 
 The installed-RC product qualification matrix remains in progress. Held-out T2/T3/T4 qualification has not started; it still requires independent custodian acceptance. Provider, standalone, lifecycle, fault-injection, installed-RC PTY, and independent acceptance gates remain outstanding. The manual five-terminal by three-size matrix is waived for v1.0.0 by DEC-20; automated CI PTY and scripted installed-RC PTY remain mandatory.

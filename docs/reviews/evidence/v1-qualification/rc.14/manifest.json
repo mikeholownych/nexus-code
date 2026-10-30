@@ -1,7 +1,14 @@
 {
   "schemaVersion": 1,
   "requirement": "RC artifact verification",
-  "acceptance": ["ACC-SUP-01", "ACC-SUP-02", "ACC-SUP-03", "ACC-SUP-06", "ACC-PKG-01"],
+  "acceptance": [
+    "ACC-SUP-01",
+    "ACC-SUP-02",
+    "ACC-SUP-03",
+    "ACC-SUP-06",
+    "ACC-PKG-01",
+    "ACC-SUP-08"
+  ],
   "status": "PARTIAL_PASS",
   "candidate": {
     "tag": "v1.0.0-rc.14",
@@ -38,10 +45,9 @@
     "ACC-SUP-02": "PASS: CycloneDX validation passed in workflow; SBOM has 142 components, matching 119 Cargo dependencies plus Cargo root and 21 production npm dependencies plus CLI root",
     "ACC-SUP-03": "PASS: independently verified archive and SHA256SUMS attestations with exact repository, workflow signer, RC tag, and commit",
     "ACC-SUP-06": "PASS: release body matches source release notes; GitHub adds one terminal LF",
-    "ACC-SUP-08": "IN_PROGRESS: exact-RC two-runner workflow 41038503854; not yet passed"
+    "ACC-SUP-08": "PASS: exact-RC two-runner workflow 41038503854 completed successfully; its compare job matched Ubuntu 22.04 and Ubuntu 24.04 builds byte-for-byte with the published RC14 archive"
   },
   "limitations": [
-    "This record verifies RC14 artifact integrity and clean installation only; it is not exact-RC product qualification or independent RC acceptance.",
-    "Held-out T2/T3/T4, live provider and standalone checks, fault injection, lifecycle matrix, installed-RC PTY, cross-runner reproducibility, and independent acceptance remain outstanding."
+    "This record verifies RC14 artifact integrity, clean installation, and cross-runner reproducibility only; it is not complete exact-RC product qualification or independent RC acceptance."
   ]
 }
