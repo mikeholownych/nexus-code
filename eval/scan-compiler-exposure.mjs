@@ -14,6 +14,10 @@ const MAX_ENTRIES = 500_000;
 const MAX_JOBS = 100_000;
 const MAX_ROOTS = 4_096;
 const MAX_ROOT_BYTES = 1024 * 1024;
+// Amortize GNU find startup cost across disjoint system roots without approaching
+// the per-process argv size limit on Linux.
+const MAX_ENUMERATION_ROOTS = 64;
+const MAX_ENUMERATION_ROOT_BYTES = 64 * 1024;
 // Bundle enough sibling directories to avoid spawning one `find` process for
 // every pair on large hosted system roots, while keeping independent jobs for
 // bounded parallel scanning.
@@ -57,8 +61,20 @@ async function* enumerateJobs() {
   let entryCount = 0;
   let jobCount = 0;
   let enumerationBytes = 0;
-  for (const [rootIndex, root] of roots.entries()) {
-    const child = spawn(FIND, ["-P", root, "-mindepth", "1", "-maxdepth", "3", "-printf", "%d\\0%y\\0%p\\0"], {
+  let rootOffset = 0;
+  let batchIndex = 0;
+  while (rootOffset < roots.length) {
+    const batch = [];
+    let batchBytes = 0;
+    while (rootOffset < roots.length && batch.length < MAX_ENUMERATION_ROOTS) {
+      const root = roots[rootOffset];
+      const rootBytes = Buffer.byteLength(root) + 1;
+      if (batch.length > 0 && batchBytes + rootBytes > MAX_ENUMERATION_ROOT_BYTES) break;
+      batch.push(root);
+      batchBytes += rootBytes;
+      rootOffset += 1;
+    }
+    const child = spawn(FIND, ["-P", ...batch, "-mindepth", "1", "-maxdepth", "3", "-printf", "%d\\0%y\\0%p\\0"], {
       env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -155,7 +171,7 @@ async function* enumerateJobs() {
       if (spawnError || code !== 0 || stderrBytes !== 0 || entryDepth !== null || entryType !== null || pending.length !== 0) {
         failed = true;
         const exitStatus = signal ? `signal_${signal.toLowerCase()}` : `code_${code ?? "unknown"}`;
-        stopAll(stderrBytes ? "enumeration_stderr" : spawnError ? "enumeration_spawn_error" : `enumeration_exit_root_${rootIndex}_${exitStatus}`);
+        stopAll(stderrBytes ? "enumeration_stderr" : spawnError ? "enumeration_spawn_error" : `enumeration_exit_batch_${batchIndex}_${exitStatus}`);
       }
     }
     if (failed) throw new Error("compiler inventory enumeration failed");
@@ -165,6 +181,7 @@ async function* enumerateJobs() {
         yield remaining;
       }
     }
+    batchIndex += 1;
   }
 }
 
