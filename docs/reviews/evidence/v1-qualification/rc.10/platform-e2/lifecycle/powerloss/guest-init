@@ -1,0 +1,149 @@
+#!/bin/busybox sh
+# Guest init for the RC10 power-loss durability cell. The phase comes from the
+# kernel command line (`phase=write` or `phase=verify`).
+set -eu
+/bin/busybox --install -s /bin
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev 2>/dev/null || true
+mkdir -p /tmp /mnt
+mount -t tmpfs tmpfs /tmp
+phase=$(cat /proc/cmdline | tr ' ' '\n' | sed -n 's/^phase=//p')
+echo "POWERLOSS_PHASE=$phase"
+mount -t ext4 /dev/vda /mnt
+export HOME=/mnt/home
+export PATH=/opt/node/bin:/mnt/home/.local/bin:/usr/bin:/bin:/sbin
+echo "NODE=$(node --version 2>&1) NEXUS=$(nexus --version 2>&1)"
+journal="$HOME/.local/lib/nexus/.upgrade-journal.json"
+fixedcli=$(cat /proc/cmdline | tr ' ' '\n' | sed -n 's/^fixedcli=//p')
+basever=$(cat /proc/cmdline | tr ' ' '\n' | sed -n 's/^basever=//p')     # e.g. v1.0.0-rc.9
+targetver=$(cat /proc/cmdline | tr ' ' '\n' | sed -n 's/^targetver=//p') # e.g. v1.0.0-rc.10
+baseplain=${basever#v}
+targetplain=${targetver#v}
+echo "POWERLOSS_BASE=$basever TARGET=$targetver"
+if [ -n "${fixedcli:-}" ] && [ "$fixedcli" != "none" ]; then
+  echo "BASELINE_CLI_DIST=patched dist_manifest_sha256=$fixedcli (fix demonstration, not release qualification)"
+fi
+lib="$HOME/.local/lib/nexus"
+
+ip link set lo up
+ip link set eth0 up
+ip addr add 10.0.2.15/24 dev eth0 2>/dev/null || true
+ip route add default via 10.0.2.2 dev eth0 2>/dev/null || true
+echo "net_addr=$(ip -4 addr show eth0 2>/dev/null | grep 'inet ' || true)"
+node -e 'const http=require("http");const r=http.get("http://10.0.2.2:18080/api/releases/tags/v1.0.0-rc.10",res=>{console.log("api_probe_status="+res.statusCode);res.resume();process.exit(0)});r.on("error",e=>{console.log("api_probe_error="+e.message);process.exit(0)});setTimeout(()=>{console.log("api_probe_timeout");process.exit(0)},5000)'
+
+if [ "$phase" = "write" ]; then
+  test "$(nexus --version | cut -d' ' -f1)" = "$baseplain" || { echo "POWERLOSS_BASELINE_UNEXPECTED"; poweroff -f; }
+  marker="powerloss-$(date -u +%s)-$$"
+  echo "$marker" > "$HOME/.nexus/tasks/powerloss-marker"
+  printf '{"marker":"%s","at":"%s"}\n' "$marker" "$(date -u +%FT%TZ)" > "$HOME/.nexus/tasks/state.json"
+  sync
+  echo "POWERLOSS_MARKER_SET=$marker"
+  NEXUS_RELEASES_API=http://10.0.2.2:18080/api/releases \
+  NEXUS_RELEASE_BASE_URL=http://10.0.2.2:18080 \
+  NEXUS_VERIFY_ATTESTATION=0 \
+    nexus upgrade --version "$targetver" --force --yes > /mnt/upgrade.log 2>&1 &
+  echo "POWERLOSS_UPGRADE_PID=$!"
+  # Cut power at a durable in-flight state. Nothing is synced or shut down:
+  # whatever reached the disk is what the second boot sees.
+  seen=""
+  for _ in $(seq 1 1800); do
+    if [ -f "$journal" ]; then
+      st=$(node -e 'try{const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(j.state||"")}catch(e){process.stdout.write("unparsable")}' "$journal" 2>/dev/null || echo "")
+      if [ -n "$st" ] && [ "$st" != "$seen" ]; then
+        seen="$st"
+        echo "POWERLOSS_JOURNAL_STATE=$st"
+      fi
+      case "$st" in
+        switched)
+          # Deterministic worst case: the new package is in place and the
+          # launcher points at it, but runtime verification has not run.
+          echo "POWERLOSS_CUT_AT=$st"
+          echo "POWERLOSS_CUT=now"
+          poweroff -f
+          ;;
+        verified|complete)
+          echo "POWERLOSS_CUT_MISSED=$st"
+          poweroff -f
+          ;;
+        rolled_back|recovery_required)
+          echo "POWERLOSS_UNEXPECTED_STATE=$st"
+          cat /mnt/upgrade.log 2>/dev/null || true
+          poweroff -f
+          ;;
+      esac
+    fi
+    sleep 0.05
+  done
+  echo "POWERLOSS_TIMEOUT last_state=$seen"
+  cat /mnt/upgrade.log 2>/dev/null || true
+  poweroff -f
+fi
+
+if [ "$phase" = "verify" ]; then
+  echo "POWERLOSS_VERIFY_START"
+  marker=$(cat "$HOME/.nexus/tasks/powerloss-marker" 2>/dev/null || true)
+  echo "MARKER=$marker"
+  echo "--- journal after power loss ---"
+  cat "$journal" 2>/dev/null || echo "NO_JOURNAL"
+  echo "--- upgrade.log after power loss ---"
+  cat /mnt/upgrade.log 2>/dev/null || echo "NO_UPGRADE_LOG"
+  echo "--- package dirs after power loss ---"
+  ls -a "$lib" | grep -vE '^\.$|^\.\.$' || true
+  for pkg in "$lib/$targetver" "$lib/$basever"; do
+    [ -d "$pkg" ] || continue
+    echo "payload $(basename "$pkg"): $(stat -c '%s bytes %n' "$pkg/bin/nexus" 2>/dev/null || echo 'bin/nexus missing')"
+  done
+  node -e '
+    const fs=require("fs"),path=require("path");
+    let bad=[], files=0;
+    function walk(d){ for(const e of fs.readdirSync(d,{withFileTypes:true})){ const p=path.join(d,e.name); if(e.isDirectory()) walk(p); else if(e.name.endsWith(".json")){ files++; try{JSON.parse(fs.readFileSync(p,"utf8"))}catch(err){bad.push(p+": "+err.message)} } } }
+    walk(process.env.HOME+"/.nexus");
+    console.log("JSON_FILES="+files+" TORN="+bad.length+(bad.length?" "+bad.join(";"):""));
+    if(bad.length) process.exit(1);
+  '
+  echo "VERSION_BEFORE=$(nexus --version 2>&1)"
+  set +e
+  nexus upgrade --recover > /mnt/recover.log 2>&1
+  recover_rc=$?
+  set -e
+  echo "--- recover output (exit $recover_rc) ---"
+  cat /mnt/recover.log
+  echo "RECOVER_RC=$recover_rc"
+  version_after=$(nexus --version 2>&1)
+  echo "VERSION_AFTER=$version_after"
+  echo "--- journal after recovery ---"
+  cat "$journal" 2>/dev/null || echo "NO_JOURNAL"
+  test -n "$marker"
+  test "$(printf '%s' "$version_after" | cut -d' ' -f1)" = "$baseplain"
+  test "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(j.state)' "$journal")" = "rolled_back"
+  test -z "$(ls -A "$lib" | grep -E '^\.tmp-upgrade-' || true)"
+  test ! -e "$lib/.upgrade.lock"
+  echo "--- package dirs after recovery ---"
+  ls -a "$lib" | grep -vE '^\.$|^\.\.$' || true
+  grep -F "Restored verified source release $basever" /mnt/recover.log >/dev/null
+  if nexus upgrade --recover > /mnt/recover2.log 2>&1; then
+    recover2_rc=0
+  else
+    recover2_rc=$?
+  fi
+  echo "--- second recovery ---"
+  cat /mnt/recover2.log
+  echo "RECOVER2_RC=$recover2_rc"
+  test "$recover2_rc" -eq 0
+  grep -F "No interrupted upgrade found" /mnt/recover2.log >/dev/null
+  echo "--- retry upgrade to completion ---"
+  NEXUS_RELEASES_API=http://10.0.2.2:18080/api/releases \
+  NEXUS_RELEASE_BASE_URL=http://10.0.2.2:18080 \
+  NEXUS_VERIFY_ATTESTATION=0 \
+    nexus upgrade --version "$targetver" --force --yes > /mnt/retry.log 2>&1
+  cat /mnt/retry.log
+  echo "VERSION_RETRY=$(nexus --version 2>&1)"
+  node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("JOURNAL_STATE_AFTER_RETRY="+j.state)' "$journal"
+  test "$(nexus --version 2>&1 | cut -d' ' -f1)" = "$targetplain"
+  echo "POWERLOSS_VERIFY=PASS marker_retained=true json_intact=true journal_rolled_back=true staging_removed=true stale_lock_reclaimed=true recovery_idempotent=true retry_completed=true install_functional=true"
+  poweroff -f
+fi
+echo "POWERLOSS_PHASE_UNKNOWN"
+poweroff -f
