@@ -334,7 +334,7 @@ export function scanOracleCompilerExposure(systemDirectories = SYSTEM_BINARIES, 
         env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       });
       if (result.error || result.status !== 0 || result.stderr?.length) {
-        const helperFailure = /^trusted compiler inventory could not complete: ([a-z_]+)\n$/.exec(result.stderr?.toString("utf8") ?? "");
+        const helperFailure = /^trusted compiler inventory could not complete: ([a-z_0-9]+)\n$/.exec(result.stderr?.toString("utf8") ?? "");
         const spawnErrorCode = result.error?.code;
         inventoryFailureReason = helperFailure?.[1]
           ?? (spawnErrorCode === "ETIMEDOUT" ? "parent_timeout"

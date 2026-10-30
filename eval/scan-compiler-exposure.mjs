@@ -57,7 +57,7 @@ async function* enumerateJobs() {
   let entryCount = 0;
   let jobCount = 0;
   let enumerationBytes = 0;
-  for (const root of roots) {
+  for (const [rootIndex, root] of roots.entries()) {
     const child = spawn(FIND, ["-P", root, "-mindepth", "1", "-maxdepth", "3", "-printf", "%d\\0%y\\0%p\\0"], {
       env: { HOME: "/nonexistent", LANG: "C", PATH: "/usr/bin:/bin" },
       stdio: ["ignore", "pipe", "pipe"],
@@ -75,7 +75,7 @@ async function* enumerateJobs() {
       failed = true;
       stopAll("enumeration_spawn_error");
     });
-    const closed = new Promise((resolve) => child.once("close", (code) => resolve(code)));
+    const closed = new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
     let scanDirectories = [];
     let directEntries = [];
     let entryDepth = null;
@@ -150,11 +150,12 @@ async function* enumerateJobs() {
       }
     } finally {
       if (child.exitCode === null && !child.killed) child.kill("SIGTERM");
-      const code = await closed;
+      const { code, signal } = await closed;
       children.delete(child);
       if (spawnError || code !== 0 || stderrBytes !== 0 || entryDepth !== null || entryType !== null || pending.length !== 0) {
         failed = true;
-        stopAll(stderrBytes ? "enumeration_stderr" : spawnError ? "enumeration_spawn_error" : "enumeration_exit");
+        const exitStatus = signal ? `signal_${signal.toLowerCase()}` : `code_${code ?? "unknown"}`;
+        stopAll(stderrBytes ? "enumeration_stderr" : spawnError ? "enumeration_spawn_error" : `enumeration_exit_root_${rootIndex}_${exitStatus}`);
       }
     }
     if (failed) throw new Error("compiler inventory enumeration failed");
