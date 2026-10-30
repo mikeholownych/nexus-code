@@ -1,0 +1,108 @@
+{
+  "sourceCommit": "16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99",
+  "rcTag": "v1.0.0-rc.14",
+  "artifactSha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+  "acceptanceCriterion": "ACC-PRV-LIVE",
+  "requirement": "REQ-PRV-111",
+  "capturedAt": "2026-10-30T11:46:00Z",
+  "candidate": {
+    "releaseWorkflowRun": "41035120551",
+    "installedVersionOutput": "1.0.0-rc.14 (16eeb6eeffe7)",
+    "sourceCiRun": "41029564419",
+    "sourceCodeqlRun": "41029564602"
+  },
+  "environment": {
+    "home": "private temporary HOME",
+    "xdgConfigHome": "inside temporary HOME",
+    "xdgDataHome": "inside temporary HOME",
+    "xdgStateHome": "inside temporary HOME",
+    "nexusStateDir": "separate private temporary directory",
+    "credentialSource": "existing operator connections via Crush and Codex CLI, read through their supported external-client integration; credential contents were not read, copied, or recorded",
+    "sandbox": "auto",
+    "workspace": "disposable local HTTP-classifier fixture; no held-out or user workspace content"
+  },
+  "providerVerification": [
+    {
+      "provider": "openrouter",
+      "pinnedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "passed": true,
+      "steps": [
+        "streamed completion",
+        "tool call",
+        "tool-result round trip"
+      ],
+      "completedReceiptCount": 3,
+      "requestIds": [
+        "ced8b79a-f9e9-41db-9763-eb627b18cd6f",
+        "6a37c6a4-3eab-4a82-bda9-755238139504",
+        "00859586-55fa-477c-b1da-31662c98b04c"
+      ],
+      "outputSha256": "5a77fb1e3a53ba0aa8a36b16860514b7bddb02b9af731cd8a41e761bf805c14a"
+    },
+    {
+      "provider": "chatgpt",
+      "pinnedModel": "gpt-6-luna",
+      "experimentalTier": true,
+      "passed": true,
+      "steps": [
+        "streamed completion",
+        "tool call",
+        "tool-result round trip"
+      ],
+      "completedReceiptCount": 3,
+      "requestIds": [
+        "ceb2f287-8a43-457c-abf7-26b90dc12e42",
+        "e098e844-6549-4536-9c60-76450ce746d2",
+        "b2733b99-983d-4e11-95c3-c5bde4779173"
+      ],
+      "outputSha256": "3975fefb41d9576d7f36baeb386c9fda59d6a5ca18ffc9a1c0b2cb062ba79989"
+    }
+  ],
+  "liveSmallTask": {
+    "provider": "openrouter",
+    "pinnedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "taskId": "task-7cf75046",
+    "workspaceBaselineCommit": "8a52fce8fa17c3bbee74e5dd5d4cbf420c5b3205",
+    "objective": "Make HTTP 429 rate-limit responses retryable while preserving 2xx success, 5xx retry, and other 4xx failure behavior.",
+    "baseline": {
+      "result": "Expected failure: 2 of 3 tests passed; only HTTP 429 classification failed.",
+      "testOutputSha256": "9e6b9b52b3722ddb0302b0648a477c67ad5b216129990d8c4dd8ed74d95beb30"
+    },
+    "nexusExecution": {
+      "status": "completed",
+      "outcome": "VERIFIED",
+      "configuredVerifier": "npm test",
+      "verifierExitSuccess": true,
+      "verificationOutputSha256": "84e678752bb8fe11b01f6f671c301ec7cfe5efcdde1c746cf27d3f34a3e3c399",
+      "finishedAt": "2026-10-30T11:45:35.229Z",
+      "taskRecordSha256": "0dc7484fb896e40211f7a7eb43e05bb1dd9c55ff22c3c504e044a78aa012f6cf",
+      "messageLogSha256": "fc33c93c27d6e773779b63f6de985da52e060040ff041685fb6b9a85ba3c8ee8",
+      "flightLogSha256": "2b83b83fe5920fa28d9683618cef02ab3df73c1bcfc5c0f9e39d371e5724d6f3"
+    },
+    "independentValidation": {
+      "reviewedChange": "Only src/status.js changed; the condition now classifies status 429 as retryable, with existing 2xx, 5xx, and other 4xx paths unchanged.",
+      "gitDiffCheck": "PASS",
+      "testCommand": "npm test",
+      "result": {
+        "tests": 3,
+        "passed": 3,
+        "failed": 0,
+        "skipped": 0
+      },
+      "testOutputSha256": "4934720a892cd3288d08ac37683700c90f499a66e36c05f90d8b78386167d4b7",
+      "sourceFileSha256": "721fe74265e44dae17de61dc2b9c711728ee501874d2dace4bdf94a8b7102d9f",
+      "patchSha256": "3b928ce7de6fc0522227a9db653eb8b10b2a6cbf675f3e312751cb98137567d1"
+    }
+  },
+  "evidencePacketReview": {
+    "disposition": "ACCEPT",
+    "reviewer": "independent read-only reviewer /root/review_rc14_e5_evidence",
+    "reviewedAt": "2026-10-30T11:49:00Z",
+    "scope": "Verified RC14 tag/source/artifact identity; provider output hashes and completed receipts; live-task baseline, exact workspace diff, independent test output and hashes; no credential files, raw audit/message logs, or held-out material accessed; no tests or inference run by reviewer."
+  },
+  "scopeLimitations": [
+    "This closes the installed-RC provider matrix criterion only; it is not the standalone profile matrix in ACC-PRV-STANDALONE.",
+    "No held-out tasks, private validators, or corpus payloads were accessed.",
+    "This evidence does not constitute overall exact-RC acceptance or stable-release approval."
+  ]
+}
