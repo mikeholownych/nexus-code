@@ -1,9 +1,9 @@
-3731e87a65f2aee333beeb7be783414ac22c36d3e41092d36ab7e5c23a522149  ./README.md
+46af8e2a78aafaa08e2d32630a8bb842089995b13485705146758ffab0432b78  ./README.md
 6b54366f6b6e27008a9a2b4b3f5dfd3d4adde9575e21f76215e964b854dd599a  ./chatgpt/inference_receipts.jsonl
 57ee85739349cac77a2b4adcd75271c6c40339ba2793184f6b77a8c0112873aa  ./chatgpt/verify.json
 2f4ebd1e0907b84b69c99a2b31ba79b64a46a10fc244eb8c0cb0d16070223ba2  ./chatgpt/verify.stderr
 fa0519924bbc21c8f724cc3b72a21f2f246efd8a91f8f34ed1fd9509cb865cc2  ./chatgpt/version.txt
-0ed4f5dca6326aa335970e098e62fbc051d2f3cd70315c73a00e1e08aa2eece1  ./install/.provenance.json
+16b519ed1a34f9fec943db81b6e2e86f8fc8ddbd4cca332086588a524f36cbdd  ./install/.provenance.json
 16456e1b464da958eff9f01af0cf04e81baa25db2d308ac964260e3756d4d50c  ./install/MANIFEST.sha256
 7d06cc70b06143cf220f619720ed074ce82e64a235cd2768f1cb468b06634b95  ./install/compatibility.json
 3bbaf0976d84388638ce5cd4a0b1fa221b8112545e483ba2bb365e69d5dfcc90  ./openrouter-attempt-1/inference_receipts.jsonl
@@ -18,5 +18,5 @@ fa0519924bbc21c8f724cc3b72a21f2f246efd8a91f8f34ed1fd9509cb865cc2  ./openrouter-a
 d24d97e45d4ccb7e1f46c8fc2537697623feed6e6e88d9476ef211856e06140a  ./openrouter-attempt-3/verify.json
 70edc78a133e5d798bda280c9ba70b2f80a5eaf52e9e27fcecca0e1093f38281  ./openrouter-attempt-3/verify.stderr
 fa0519924bbc21c8f724cc3b72a21f2f246efd8a91f8f34ed1fd9509cb865cc2  ./openrouter-attempt-3/version.txt
-7f4a12a4acd8b7d011044d39be42e6cf0afa6993d97e56b743fd6efd7d2293f3  ./openrouter-live-task/README.md
-1c2ba1cd373294ae1878c34e9063b1716fc771e179e151f378414643bc0fdba3  ./openrouter-live-task/retry.md
+e56d621dfdff4f16a4b0d1141b9dab1d50298eb5124d3ebfb05896cdf583d79f  ./openrouter-live-task/README.md
+af32e2061706f61405c7d94c048a0321504ce9ce18f5df78ba5fa072c367dddb  ./openrouter-live-task/retry.md
