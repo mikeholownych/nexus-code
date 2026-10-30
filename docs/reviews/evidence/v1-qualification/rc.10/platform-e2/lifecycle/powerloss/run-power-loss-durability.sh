@@ -76,7 +76,7 @@ tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
 [[ "$target_tag" =~ $tag_pattern ]] || die "invalid NEXUS_POWERLOSS_TARGET_TAG: expected a v-prefixed semantic version"
 
 # Serial console output carries CR bytes and trailing padding; normalize on copy.
-normalize() { tr -d '\r' | sed 's/[[:space:]]*$//'; }
+normalize() { tr -d '\r\000' | sed 's/[[:space:]]*$//'; }
 
 if [ "$(id -u)" -ne 0 ]; then
   [ -r /dev/kvm ] && [ -w /dev/kvm ] || die "/dev/kvm is not writable by $(id -un); rerun with sudo -E or grant access"
@@ -212,4 +212,4 @@ grep -q 'POWERLOSS_VERIFY=PASS' "$verify_log" || die "verification did not pass;
 grep -q 'journal_rolled_back=true' "$verify_log" || die "recovery did not roll back"
 grep -q 'retry_completed=true' "$verify_log" || die "retry did not complete"
 grep -q 'marker_retained=true' "$verify_log" || die "user state was lost"
-echo "power_loss_durability=PASS journal_recovered=true rolled_back_to_rc9=true retry_completed_rc10=true user_state_retained=true"
+echo "power_loss_durability=PASS journal_recovered=true rolled_back_to=$base_tag retry_completed=$target_tag user_state_retained=true"

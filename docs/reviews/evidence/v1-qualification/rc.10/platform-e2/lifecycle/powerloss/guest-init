@@ -91,8 +91,11 @@ if [ "$phase" = "verify" ]; then
   cat /mnt/upgrade.log 2>/dev/null || echo "NO_UPGRADE_LOG"
   echo "--- package dirs after power loss ---"
   ls -a "$lib" | grep -vE '^\.$|^\.\.$' || true
+  seen_pkg=""
   for pkg in "$lib/$targetver" "$lib/$basever"; do
     [ -d "$pkg" ] || continue
+    if [ "$pkg" = "$seen_pkg" ]; then continue; fi
+    seen_pkg="$pkg"
     echo "payload $(basename "$pkg"): $(stat -c '%s bytes %n' "$pkg/bin/nexus" 2>/dev/null || echo 'bin/nexus missing')"
   done
   node -e '
