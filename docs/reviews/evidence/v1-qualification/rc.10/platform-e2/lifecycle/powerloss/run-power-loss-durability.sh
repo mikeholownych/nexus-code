@@ -26,13 +26,17 @@ node_bin="${NEXUS_POWERLOSS_NODE:-$(command -v node)}"
 # Optional: replace the baseline CLI's dist with a local build to demonstrate a
 # fix under test. Release qualification must leave this unset.
 baseline_dist="${NEXUS_POWERLOSS_BASELINE_DIST:-}"
-write_log="$evidence/ubuntu-22-04-node22-power-loss-durability-write.log"
-verify_log="$evidence/ubuntu-22-04-node22-power-loss-durability-verify.log"
+suffix="${NEXUS_POWERLOSS_LOG_SUFFIX:-}"
+write_log="$evidence/ubuntu-22-04-node22-power-loss-durability${suffix:+-$suffix}-write.log"
+verify_log="$evidence/ubuntu-22-04-node22-power-loss-durability${suffix:+-$suffix}-verify.log"
 
 rc9_sha=35795d2b7639b68a541c512976d8bc7f251115ebdccf48f6b9cf5f98ef1af9bb
 rc10_sha=444d0812ad583b7f688890ac8536cb872e92364c977d9fbf298fa0408d98b3e7
 
 die() { echo "power-loss: $*" >&2; exit 1; }
+
+# Serial console output carries CR bytes and trailing padding; normalize on copy.
+normalize() { tr -d '\r' | sed 's/[[:space:]]*$//'; }
 
 if [ "$(id -u)" -ne 0 ]; then
   [ -r /dev/kvm ] && [ -w /dev/kvm ] || die "/dev/kvm is not writable by $(id -un); rerun with sudo -E or grant access"
@@ -83,11 +87,12 @@ sudo chown -R "$(id -u):$(id -g)" "$work/mnt"
 mkdir -p "$work/mnt/home/.local/lib/nexus" "$work/mnt/home/.local/bin" "$work/mnt/home/.nexus/tasks"
 tar -xzf "$assets/rc.9/nexus-linux-x86_64-v1.0.0-rc.9.tar.gz" -C "$work/mnt/home/.local/lib/nexus"
 mv "$work/mnt/home/.local/lib/nexus/nexus" "$work/mnt/home/.local/lib/nexus/v1.0.0-rc.9"
+dist_sha=""
 if [ -n "$baseline_dist" ]; then
   [ -f "$baseline_dist/index.js" ] || die "baseline dist not found at $baseline_dist"
+  dist_sha=$(sha256sum "$baseline_dist/index.js" | awk '{print $1}')
   rm -rf "$work/mnt/home/.local/lib/nexus/v1.0.0-rc.9/lib/cli/dist"
   cp -a "$baseline_dist" "$work/mnt/home/.local/lib/nexus/v1.0.0-rc.9/lib/cli/dist"
-  echo "BASELINE_CLI_DIST=$baseline_dist (fix demonstration, not release qualification)" | tee -a "$work/write.log"
 fi
 ln -sfn ../lib/nexus/v1.0.0-rc.9/bin/nexus "$work/mnt/home/.local/bin/nexus"
 printf 'baseline rc.9\n' > "$work/mnt/home/.nexus/tasks/marker"
@@ -106,7 +111,7 @@ boot() {
   local phase=$1 out=$2
   exec qemu-system-x86_64 -enable-kvm -cpu host -m 2048 -smp 2 \
     -kernel "$kernel" -initrd "$work/initrd.gz" \
-    -append "console=ttyS0 phase=$phase panic=-1" \
+    -append "console=ttyS0 phase=$phase panic=-1 fixedcli=${dist_sha:-none}" \
     -nographic -no-reboot \
     -drive "file=$work/disk.img,format=raw,if=virtio,cache=none" \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0 > "$out" 2>&1
@@ -127,7 +132,7 @@ kill -9 "$qemu_pid" 2>/dev/null || true
 wait "$qemu_pid" 2>/dev/null || true
 # The image lock is released when QEMU dies; give the kernel a moment.
 for _ in $(seq 1 50); do qemu-img check "$work/disk.img" >/dev/null 2>&1 && break; sleep 0.1; done
-[ "$cut" = 1 ] || { cp "$work/write.log" "$write_log"; die "no power cut occurred; see $write_log"; }
+[ "$cut" = 1 ] || { normalize < "$work/write.log" > "$write_log"; die "no power cut occurred; see $write_log"; }
 
 # Verify phase: recovery must restore rc.9, be idempotent, and allow a retry.
 boot verify "$work/verify.log" &
@@ -135,13 +140,13 @@ verify_pid=$!
 for _ in $(seq 1 6000); do kill -0 "$verify_pid" 2>/dev/null || break; sleep 0.1; done
 if kill -0 "$verify_pid" 2>/dev/null; then
   kill -9 "$verify_pid" 2>/dev/null || true
-  cp "$work/write.log" "$write_log"; cp "$work/verify.log" "$verify_log" 2>/dev/null || true
+  normalize < "$work/write.log" > "$write_log"; normalize < "$work/verify.log" > "$verify_log" 2>/dev/null || true
   die "verify boot timed out"
 fi
-wait "$verify_pid" || { cp "$work/write.log" "$write_log"; cp "$work/verify.log" "$verify_log" 2>/dev/null || true; die "verify boot failed"; }
+wait "$verify_pid" || { normalize < "$work/write.log" > "$write_log"; normalize < "$work/verify.log" > "$verify_log" 2>/dev/null || true; die "verify boot failed"; }
 
-cp "$work/write.log" "$write_log"
-cp "$work/verify.log" "$verify_log"
+normalize < "$work/write.log" > "$write_log"
+normalize < "$work/verify.log" > "$verify_log"
 
 grep -q 'POWERLOSS_VERIFY=PASS' "$verify_log" || die "verification did not pass; see $verify_log"
 grep -q 'journal_rolled_back=true' "$verify_log" || die "recovery did not roll back"

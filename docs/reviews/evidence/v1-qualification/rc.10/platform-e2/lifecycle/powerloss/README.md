@@ -32,7 +32,9 @@ is lost, while anything that reached the image stays.
 - A kernel image readable by the running user (`/boot/vmlinuz-*` is usually
   `0600`; copy it and pass `NEXUS_POWERLOSS_KERNEL`).
 - `busybox`, `/usr/bin/flock`, and a Node.js >= 22 binary.
-- Root, or a user with read/write access to `/dev/kvm`.
+- Root (the harness loop-mounts the image and calls `sudo mount`/`sudo umount`), or a
+  user with read/write access to `/dev/kvm` plus passwordless sudo for mounts.
+- `mkfs.ext4`, `cpio`, `qemu-img`, `gzip` and `ldd` on the host.
 - The published rc.9 and rc.10 assets (`fetch-assets.sh`).
 
 ```sh
@@ -43,15 +45,18 @@ sudo -E env NEXUS_POWERLOSS_KERNEL=/var/tmp/vmlinuz-readable \
 ```
 
 Logs are written to the platform-e2 directory as
-`ubuntu-22-04-node22-power-loss-durability-{write,verify}.log`.
+`ubuntu-22-04-node22-power-loss-durability{,-SUFFIX}-{write,verify}.log`, with
+serial console `CR` bytes stripped on copy.
 
 ## Result on the published RC10 artifact: FAIL
 
-`v1.0.0-rc.10/bin/nexus` is **0 bytes** after the cut. The package was renamed
-into place and the launcher switched, but its file data was never fsynced, so
-the power loss left the launcher pointing at empty files. `nexus --version`
-prints nothing and `nexus upgrade --recover` cannot run: the installation cannot
-repair itself from the CLI.
+`v1.0.0-rc.10/bin/nexus` is **0 bytes** after the cut (the verify log prints the
+size). The package was renamed into place and the launcher switched, but its
+file data was never fsynced, so the power loss left the launcher pointing at
+empty files. `nexus --version` prints nothing, and `nexus upgrade --recover`
+**exits 0 without doing anything** — a 0-byte launcher is an empty shell script,
+so the installation cannot repair itself and an automation check on the exit
+status would read the failed recovery as success.
 
 The fix is in `cli/src/durable_tree.ts` (PR #333): `safeExtractTar` flushes every
 file and directory of the extracted tree before the caller renames it and
@@ -61,8 +66,9 @@ switches the launcher.
 
 `NEXUS_POWERLOSS_BASELINE_DIST` replaces the baseline CLI's `lib/cli/dist` with a
 local build, so the same published artifacts are upgraded by a CLI that contains
-the fix. With it, the identical cut leaves a working launcher, recovery rolls
-back to rc.9, and a retry completes to rc.10
+the fix. `NEXUS_POWERLOSS_LOG_SUFFIX=fixed-cli` names the resulting logs, and the
+guest records the dist's SHA-256 in them. With it, the identical cut leaves a
+working launcher, recovery rolls back to rc.9, and a retry completes to rc.10
 (`...-power-loss-durability-fixed-cli-{write,verify}.log`).
 
 This demonstrates the fix; it is **not** release qualification. The cell can only

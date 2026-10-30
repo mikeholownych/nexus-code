@@ -15,6 +15,10 @@ export HOME=/mnt/home
 export PATH=/opt/node/bin:/mnt/home/.local/bin:/usr/bin:/bin:/sbin
 echo "NODE=$(node --version 2>&1) NEXUS=$(nexus --version 2>&1)"
 journal="$HOME/.local/lib/nexus/.upgrade-journal.json"
+fixedcli=$(cat /proc/cmdline | tr ' ' '\n' | sed -n 's/^fixedcli=//p')
+if [ -n "${fixedcli:-}" ] && [ "$fixedcli" != "none" ]; then
+  echo "BASELINE_CLI_DIST=patched sha256=$fixedcli (fix demonstration, not release qualification)"
+fi
 lib="$HOME/.local/lib/nexus"
 
 ip link set lo up
@@ -82,6 +86,10 @@ if [ "$phase" = "verify" ]; then
   cat /mnt/upgrade.log 2>/dev/null || echo "NO_UPGRADE_LOG"
   echo "--- package dirs after power loss ---"
   ls -a "$lib" | grep -vE '^\.$|^\.\.$' || true
+  for pkg in "$lib"/v1.0.0-rc.10 "$lib"/v1.0.0-rc.9; do
+    [ -d "$pkg" ] || continue
+    echo "payload $(basename "$pkg"): $(stat -c '%s bytes %n' "$pkg/bin/nexus" 2>/dev/null || echo 'bin/nexus missing')"
+  done
   node -e '
     const fs=require("fs"),path=require("path");
     let bad=[], files=0;
@@ -91,9 +99,13 @@ if [ "$phase" = "verify" ]; then
     if(bad.length) process.exit(1);
   '
   echo "VERSION_BEFORE=$(nexus --version 2>&1)"
-  nexus upgrade --recover > /mnt/recover.log 2>&1 || true
-  echo "--- recover output ---"
+  set +e
+  nexus upgrade --recover > /mnt/recover.log 2>&1
+  recover_rc=$?
+  set -e
+  echo "--- recover output (exit $recover_rc) ---"
   cat /mnt/recover.log
+  echo "RECOVER_RC=$recover_rc"
   version_after=$(nexus --version 2>&1)
   echo "VERSION_AFTER=$version_after"
   echo "--- journal after recovery ---"
@@ -103,6 +115,8 @@ if [ "$phase" = "verify" ]; then
   test "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(j.state)' "$journal")" = "rolled_back"
   test -z "$(ls -A "$lib" | grep -E '^\.tmp-upgrade-' || true)"
   test ! -e "$lib/.upgrade.lock"
+  echo "--- package dirs after recovery ---"
+  ls -a "$lib" | grep -vE '^\.$|^\.\.$' || true
   grep -F "Restored verified source release v1.0.0-rc.9" /mnt/recover.log >/dev/null
   nexus upgrade --recover > /mnt/recover2.log 2>&1 || true
   echo "--- second recovery ---"
