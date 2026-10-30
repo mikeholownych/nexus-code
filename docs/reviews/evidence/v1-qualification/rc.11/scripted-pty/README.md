@@ -18,4 +18,4 @@ The initial s1 attempt was interrupted and is retained as an incomplete attempt.
 
 ## Disposition
 
-Observed outcomes are recorded per criterion, with incomplete attempts preserved. Independent review of this archived packet is pending. Until that review accepts the exact packet and the evidence is integrated, §5.2 remains pending. The §5.3 manual terminal matrix is waived for v1.0.0 by DEC-20; §5.1 remains mandatory.
+Observed outcomes are recorded per criterion, with incomplete attempts preserved. Independent review accepted this corrected packet on 2026-10-30. The evidence is not yet integrated with the required exact-head checks, so §5.2 remains pending. The §5.3 manual terminal matrix is waived for v1.0.0 by DEC-20; §5.1 remains mandatory.
