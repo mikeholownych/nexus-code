@@ -1,0 +1,31 @@
+$using-entire
+
+---
+
+entire should be run after "export ENTIRE_TOKEN_STORE=file" is run in the environmn.
+
+---
+
+ensure AGENTS.md reflects that requirement.
+
+---
+
+continue
+
+---
+
+<send_user_message_question_reply>
+[{"answer":"5x3 matrix is waived for v1.0.0","question":"Claude’s PR #323 review reports a direct owner decision at 11:52 UTC to waive the manual terminal matrix and reinstate DEC-19. That conflicts with your earlier instruction to keep all five terminals × three sizes mandatory. Which decision should govern the release notes and gate?","questionItemId":"[\"request_user_input_async\",\"call_884efda6d659426581e663cbca8f9121\",0]"}]
+</send_user_message_question_reply>
+
+---
+
+<send_user_message_question_reply>
+[{"answer":"if toolchain is genuinely missing, install it.","question":"Python oracle toolchains","questionItemId":"[\"request_user_input_async\",\"call_1cf32c5a7590497c94e89a6a0f945979\",0]"}]
+</send_user_message_question_reply>
+
+---
+
+<send_user_message_question_reply>
+[{"answer":"Continue; I’ll provide reviewer access later","question":"Can you arrange an authorized independent reviewer to inspect exact PR #318 head `477aaa9b` and approve Entire trail 33? The Entire gate requires an identity different from the author. Both available agents resolve to the author’s Mike Holownych account, and GitHub lists no other repository collaborators. I’ll continue other release work while you arrange this.","questionItemId":"[\"request_user_input_async\",\"call_1a09d3cf5af643bb948bf06b0b71de19\",0]"}]
+</send_user_message_question_reply>
