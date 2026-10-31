@@ -1,0 +1,1 @@
+[nexus] Cloud inference: OpenRouter (https://openrouter.ai, locality: hostname_external), model nvidia/nemotron-3-ultra-550b-a55b:free. Task content — prompts, tool results and file excerpts — is sent to this provider.
