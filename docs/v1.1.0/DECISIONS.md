@@ -325,9 +325,9 @@ bury v1.1 rows in a deferral list.
 
 | # | Question | Blocks | Owner |
 |---|---|---|---|
-| Q1 | Does the owner authorize a stable v1.1.0 while the v1.0.0 qualification gaps (held-out custody, cross-runner, independent acceptance) remain open? | Release gate only | Owner |
-| Q2 | Should the published v1.0.0 release notes and CHANGELOG be corrected as a v1.0.0.x documentation hotfix, or folded into v1.1.0? | Release preparation | Owner |
+| Q1 | **Resolved 2026-10-31:** the owner directed release to proceed after the inherited v1.0.0 gaps were disclosed. Stable publication is authorized with those items open and named; this does not waive any v1.1.0 gate or constitute v1.0.0 acceptance. | Closed with disclosure | Owner |
+| Q2 | **Resolved 2026-10-31:** correct the current-tree v1.0.0 notes and published release body to distinguish artifact publication from unfinished qualification; preserve the v1.0.0 tag and artifact and fold the correction into v1.1.0 preparation. | Closed | Owner |
 | Q3 | Should `resource.maxConcurrentUnits` be auto-populated from provider discovery? | Future design | Lead, v1.2 |
 | Q4 | Should units be able to send messages directly (a `send_unit_message` tool)? | Future design | Lead, v1.2 |
-| Q5 | Should `repro.yml`'s tag regex be generalised to `^v\d+\.\d+\.\d+-rc\.\d+$` or pinned per release line? | RC stage 5 | Lead |
-| Q6 | Two documents on `main` claim "v1.1.0" with different contents: the four implemented proposals (this directory) and the merged post-v1 roadmap (`ROADMAP.md`, WP-1101..1108). Which is v1.1.0, and what does the other ship as? | Release naming and the release notes | Owner |
+| Q5 | **Resolved 2026-10-31:** `repro.yml` accepts `vX.Y.Z-rc.N` tags across release lines and rejects stable or malformed tags, with a regression test. | Closed | Release lead |
+| Q6 | **Resolved 2026-10-31:** the four implemented operation proposals are v1.1.0. The WP-11xx observability/evaluation roadmap is deferred and is not claimed by this release. | Closed | Owner |

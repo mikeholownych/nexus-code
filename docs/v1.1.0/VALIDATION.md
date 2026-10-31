@@ -30,7 +30,7 @@ Spec: [`SPEC.md`](SPEC.md). Acceptance IDs: [`SPEC.md`](SPEC.md) §10. Traceabil
 | G1d | Version metadata | `node scripts/sync-version.mjs --check --tag <tag>` | `all components at <version>` |
 | G1e | Requirements | `node scripts/check_requirements.mjs --enforce` (v1.0) and `--ledger docs/v1.1.0/REQUIREMENTS.md --enforce` (v1.1) | exit 0; no row below threshold except documented deferrals |
 | G1f | Security gates | `bash scripts/security_gates.sh` | exit 0, fails closed on a scan error |
-| G1g | Focused v1.1 suites | `node scripts/run_tests.mjs test/operation_schema.test.ts test/v11_scheduler_concurrency.test.ts test/v11_runner_concurrency.test.ts test/v11_messages.test.ts test/operation_view.test.ts` | exit 0 |
+| G1g | Focused v1.1 suites | `node scripts/run_tests.mjs test/operation_schema.test.ts test/operation_concurrency.test.ts test/operation_messages.test.ts test/operation_view.test.ts test/operation_release_acceptance.test.ts test/operation_release_review.test.ts` | exit 0 |
 | G1h | Packaging | `bash scripts/package-linux.sh` twice + byte comparison | identical tarball, `SHA256SUMS`, notices, SBOM, installer |
 | G1i | SBOM | `cyclonedx validate --fail-on-errors` | exit 0 |
 | G1j | Package smoke | `bash scripts/smoke-package.sh` && `bash scripts/installer-smoke.sh` | exit 0 |
@@ -99,11 +99,11 @@ process-level test: it spawns a child runner and kills it, so it is marked slow 
 | Future-version refusal | `schemaVersion: 3` | `UnsupportedOperationSchemaError`; record readable by a v3 build (unchanged on disk) |
 | Invalid-field quarantine | `contextBudget: 0`, `maxConcurrentUnits: 0` | Quarantined as corrupt, not silently accepted |
 | Backup refusal | Backup path exists with different content | Save fails closed; no partial write |
-| Rollback | Check out the previous build; open the migrated record | v1.0.0 refuses with a clear unsupported-version error rather than misinterpreting it |
+| Rollback | Before opening the record with a v1.0.0 build, restore the `.pre-migration-v1` copy and remove the live v2 record | v1.0.0 reads only the restored v1 record; no v2 fields are silently discarded |
 
-Rollback is not "downgrade the record". The supported rollback is: run the previous binary, which refuses the v2
-record, and restore the `.pre-migration-v1` backup only with an explicit operator action. This is documented in the
-release notes.
+Rollback is not an automatic downgrade. A v1.0.0 binary has no operation-document version gate and can silently drop
+v2 fields on save, so it must not open the live v2 record. The supported rollback is the explicit backup restoration
+above, documented in the release notes.
 
 ## 7. Inherited v1.0.0 qualification gaps
 
