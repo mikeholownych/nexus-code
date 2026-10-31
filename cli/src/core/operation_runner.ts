@@ -39,7 +39,7 @@ export interface UnitRunContext {
   operatorDecision?: { label: string; note?: string; restart?: boolean };
   /** Durably records the unit's conversation task before execution, so a crash mid-run can be reconciled. */
   bindAgentTask(taskId: string): void;
-  /** Messages owed to this unit, marked delivered by the same save that started it. Advisory context only. */
+  /** Messages owed to this unit, marked delivered when the task is bound or the executor accepts them. Advisory only. */
   messages?: OperationMessage[];
   /** Isolated operations: the unit's worktree. Absent means the executor's configured workspace. */
   workspace?: string;
@@ -108,6 +108,20 @@ export class OperationRunner {
   }
 
   async run(signal?: AbortSignal): Promise<DurableOperationState> {
+    const onAbort = () => {
+      this.scheduler.cancel();
+      this.save();
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      return await this.runOperation(signal);
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  private async runOperation(signal?: AbortSignal): Promise<DurableOperationState> {
     if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED") {
       this.git?.disposeAllUnits();
       return this.state;
@@ -132,9 +146,8 @@ export class OperationRunner {
     }
     this.reconcileIntegrated();
     this.scheduler.reconcileInterruptedRuns();
-    // Persist the interrupted-run accounting before the revalidation awaits: a crash in that window would otherwise
-    // lose an increment and let a repeatedly interrupted unit resume without ever reaching its budget.
-    if (this.state.units.some((unit) => unit.status === "RUNNABLE" && unit.unknownResumes > 0)) this.save();
+    // Persist every interrupted-run accounting transition before the first revalidation await.
+    this.save();
     if (this.state.status === "WAITING" && this.state.wait && Date.parse(this.state.wait.wakeAt) <= this.clock.now()) {
       await this.revalidator.revalidate(signal);
     } else await this.revalidator.refresh(signal);
@@ -142,7 +155,26 @@ export class OperationRunner {
     const maxIterations = this.opts.maxIterations ?? 10_000;
     for (let i = 0; i < maxIterations; i++) {
       if (signal?.aborted) return this.cancelled();
-      const d = this.scheduler.decide();
+      let d: Decision;
+      try {
+        d = this.scheduler.decide();
+      } catch (error: any) {
+        this.scheduler.finish({
+          kind: "blocked",
+          decisions: [{
+            id: "operation#not-converging",
+            unitId: "*",
+            cause: "NOT_CONVERGING",
+            question: `The scheduler could not compute the next transition (${String(error?.message ?? error)}). Resume, or stop the operation?`,
+            options: [
+              { id: "1", label: "resume the operation", action: { kind: "keep_waiting" } },
+              { id: "2", label: "stop the operation", action: { kind: "cancel_operation" } },
+            ],
+          }],
+        });
+        this.save();
+        return this.state;
+      }
       if (d.kind === "run") {
         // Prepare every assignment before starting any: a unit whose isolated worktree vanished, or whose resource
         // needs revalidation, is handled here without leaving its batch-mates half-started.
@@ -170,24 +202,14 @@ export class OperationRunner {
           ready.push(assignment);
         }
         if (!ready.length) continue;
-        // Delivery is recorded with the RUNNING transition: a crash either delivers with the start or not at all.
         const owed = new Map<string, OperationMessage[]>();
-        const at = new Date(this.clock.now()).toISOString();
         for (const assignment of ready) {
           const messages = undeliveredFor(this.state, assignment.unit.id);
-          if (messages.length) {
-            owed.set(assignment.unit.id, messages);
-            markDelivered(this.state, messages.map((message) => message.id), assignment.unit.id, at);
-          }
+          if (messages.length) owed.set(assignment.unit.id, messages);
         }
         for (const assignment of ready) this.scheduler.start(assignment);
         this.save();
-        const results = await this.executeBatch(ready, owed, signal);
-        for (const { assignment, result } of results) {
-          this.scheduler.apply(assignment.unit.id, result);
-          if (result.kind === "completed") this.publishCompletion(assignment.unit);
-        }
-        this.save();
+        await this.executeBatch(ready, owed, signal);
         if (signal?.aborted) return this.cancelled();
         continue;
       }
@@ -230,31 +252,32 @@ export class OperationRunner {
   }
 
   /**
-   * Runs one due-set. Every unit settles before the batch returns, so the next `decide()` sees a complete picture.
-   * A rejected unit promise is turned into a unit failure rather than aborting its batch-mates.
+   * Runs one due-set, applying and durably saving each result as it settles. The next `decide()` still waits for every
+   * member, and a rejected unit promise becomes a unit failure rather than aborting its batch-mates.
    */
   private async executeBatch(
     assignments: Assignment[],
     owed: Map<string, OperationMessage[]>,
     signal?: AbortSignal,
-  ): Promise<Array<{ assignment: Assignment; result: UnitRunResult }>> {
-    const settled = await Promise.allSettled(
-      assignments.map(async (assignment) => ({ assignment, result: await this.execute(assignment, owed.get(assignment.unit.id), signal) })),
-    );
-    return settled.map((outcome, index) => {
-      if (outcome.status === "fulfilled") return outcome.value;
-      const reason = (outcome.reason as any)?.message ?? String(outcome.reason);
-      return {
-        assignment: assignments[index],
-        result: {
+  ): Promise<void> {
+    await Promise.all(assignments.map(async (assignment) => {
+      let result: UnitRunResult;
+      try {
+        result = await this.execute(assignment, owed.get(assignment.unit.id), signal);
+      } catch (error: any) {
+        const reason = error?.message ?? String(error);
+        result = {
           kind: "failed",
           cause: "EXECUTION_FAILED",
           reason: `executor error: ${reason}`,
-          question: `${assignments[index].unit.title} failed with an internal error (${reason}). Retry it, or stop?`,
+          question: `${assignment.unit.title} failed with an internal error (${reason}). Retry it, or stop?`,
           options: [{ label: "retry", action: { kind: "retry" } }],
-        } satisfies UnitRunResult,
-      };
-    });
+        };
+      }
+      this.scheduler.apply(assignment.unit.id, result);
+      if (result.kind === "completed") this.publishCompletion(assignment.unit);
+      this.save();
+    }));
   }
 
   private async execute(d: Assignment, messages?: OperationMessage[], signal?: AbortSignal): Promise<UnitRunResult> {
@@ -296,8 +319,8 @@ export class OperationRunner {
         : {}),
       ...(unit.pendingDecision ? { operatorDecision: unit.pendingDecision } : {}),
       bindAgentTask: (taskId) => {
-        if (unit.agentTaskId === taskId) return;
-        unit.agentTaskId = taskId;
+        if (unit.agentTaskId !== taskId) unit.agentTaskId = taskId;
+        this.recordDelivery(unit.id, messages);
         this.save();
       },
       ...(messages?.length ? { messages } : {}),
@@ -319,6 +342,8 @@ export class OperationRunner {
         };
       }
       const result: UnitRunResult = await this.opts.executor.run(unit, resource, ctx);
+      this.recordDelivery(unit.id, messages);
+      this.save();
       if (result.kind !== "completed" || !this.git) return result;
       return this.enqueueIntegration(unit, result);
     } catch (err: any) {
@@ -333,6 +358,11 @@ export class OperationRunner {
     }
   }
 
+  private recordDelivery(unitId: string, messages?: OperationMessage[]): void {
+    if (!messages?.length) return;
+    markDelivered(this.state, messages.map((message) => message.id), unitId, new Date(this.clock.now()).toISOString());
+  }
+
   /**
    * Publishes what a completed unit produced, so downstream units and the operator can see it. Only a unit that
    * actually completed publishes: an unverified or blocked unit has nothing to publish. The body is the unit's own
@@ -344,6 +374,10 @@ export class OperationRunner {
     const receipts = this.state.integrations ?? [];
     const receipt = receipts.length ? [...receipts].reverse().find((entry) => entry.unitId === unit.id) : undefined;
     const kind = unit.role === "reviewer" ? "verdict" : "artifact";
+    const alreadyPublished = (this.state.messages ?? []).some((message) =>
+      message.from === unit.id && message.kind === kind && message.refs?.some((ref) => ref.kind === "unit" && ref.ref === unit.id),
+    );
+    if (alreadyPublished) return;
     try {
       const { message, dropped } = publishMessage(
         this.state,
@@ -389,7 +423,7 @@ export class OperationRunner {
           unitId: unit.id,
           detail: { reason: current.dropped ? "dropped" : "cancelled" },
         });
-        return result;
+        return { kind: "cancelled" };
       }
       return this.integrateUnit(unit, result);
     };
@@ -522,6 +556,7 @@ export class OperationRunner {
         unitId: unit.id,
         detail: { integration: receipt },
       });
+      this.publishCompletion(unit);
     }
   }
 

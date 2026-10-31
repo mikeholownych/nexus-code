@@ -16,7 +16,7 @@ import type { Command } from "commander";
 import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { ConvergenceScheduler, DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
-import { validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
+import { UnsupportedOperationSchemaError, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
@@ -133,7 +133,7 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
       throw new OperationSpecError(`work unit '${unit.id}' 'dependsOn' must be an array of unit ids`);
     }
     if (unit.required !== undefined && typeof unit.required !== "boolean") throw new OperationSpecError(`work unit '${unit.id}' 'required' must be true or false`);
-    if (unit.role !== undefined && !(unit.role in ROLE_PROFILES)) {
+    if (unit.role !== undefined && (typeof unit.role !== "string" || !Object.hasOwn(ROLE_PROFILES, unit.role))) {
       throw new OperationSpecError(`work unit '${unit.id}' has unknown role '${unit.role}' (known: ${Object.keys(ROLE_PROFILES).join(", ")})`);
     }
     if (unit.contextBudget !== undefined && (!Number.isInteger(unit.contextBudget) || unit.contextBudget <= 0)) {
@@ -222,7 +222,7 @@ function operationAction<T extends unknown[]>(action: (...args: T) => void | Pro
     } catch (error: any) {
       console.error(pc.red(safeTerminal(String(error?.message ?? error))));
       // A spec the operator must fix is a usage error, not an internal failure.
-      process.exitCode = error instanceof OperationSpecError || error instanceof MessageRejected ? 2 : 1;
+      process.exitCode = error instanceof OperationSpecError || error instanceof MessageRejected || error instanceof UnsupportedOperationSchemaError ? 2 : 1;
     }
   };
 }
@@ -336,11 +336,12 @@ export function registerOperationCommands(program: Command): void {
           process.exitCode = 2;
           return;
         }
-        // The view path never takes the operation lock, so it can inspect an operation another process is driving.
-        // The state loader may still migrate or quarantine a legacy/corrupt record, exactly as `status` does.
+        // Views never take the operation lock. Replay also avoids migration, redaction and quarantine writes.
         let ops: DurableOperationState[];
         try {
-          ops = id ? [store.load(id)] : store.list();
+          ops = options.replay
+            ? (id ? [store.loadForReplay(id)] : store.listForReplay())
+            : (id ? [store.load(id)] : store.list());
         } catch (error: any) {
           console.error(pc.red(`Cannot read operation ${safeTerminal(id ?? "(all)")}: ${safeTerminal(String(error?.message ?? error))}`));
           process.exitCode = 2;

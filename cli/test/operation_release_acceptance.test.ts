@@ -443,7 +443,6 @@ test("ACC-V11-GIT-04: cancellation between enqueue and drain skips integration a
       if (event.type !== "INTEGRATION_QUEUED" || event.unitId !== "u1") return;
       cancelledAtQueue = true;
       controller.abort();
-      runner.scheduler.cancel();
     },
   });
 

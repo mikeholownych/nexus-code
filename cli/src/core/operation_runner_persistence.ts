@@ -10,6 +10,8 @@ import { writePrivateFile } from "./durable_file.js";
 import { DurableStateManager, type DurableTaskState } from "./state.js";
 import { WorkspacePath } from "./workspace_path.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
+import { withStateStoreGuard } from "./state_store_guard.js";
+import { redactTaskStateForPersistence } from "./persistence_protection.js";
 
 // ---------------------------------------------------------------- persistence
 
@@ -93,6 +95,34 @@ export class OperationStore {
       throw new Error(`Operation ${id} is invalid: ${error.message} (quarantined to ${quarantined})`);
     }
     return migrateLegacyAccountIdentities(migrated, createOperationAccountIdentity(this.accountIdentityHome));
+  }
+
+  /** Replay-only read: migrate and protect in memory under the store guard, never publish or quarantine the record. */
+  loadForReplay(id: string): DurableOperationState {
+    return withStateStoreGuard(this.manager.getBaseDir(), () => {
+      const raw = JSON.parse(fs.readFileSync(this.manager.getStateFilePath(id), "utf8"));
+      if (!raw?.operation) throw new Error(`Task ${id} is not an operation`);
+      const protectedRecord = redactTaskStateForPersistence(raw as DurableTaskState, [this.workspace]);
+      return migrateOperationState(protectedRecord.operation);
+    });
+  }
+
+  /** Replay-only listing with the same no-publication guarantee as loadForReplay. */
+  listForReplay(): DurableOperationState[] {
+    const ids = withStateStoreGuard(this.manager.getBaseDir(), () =>
+      fs.readdirSync(this.manager.getBaseDir())
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => name.slice(0, -".json".length)),
+    );
+    const out: DurableOperationState[] = [];
+    for (const id of ids) {
+      try {
+        out.push(this.loadForReplay(id));
+      } catch (error) {
+        if (error instanceof UnsupportedOperationSchemaError) throw error;
+      }
+    }
+    return out;
   }
 
   /** Status/export callers migrate legacy IDs on disk only when they can hold the operation lock. */
