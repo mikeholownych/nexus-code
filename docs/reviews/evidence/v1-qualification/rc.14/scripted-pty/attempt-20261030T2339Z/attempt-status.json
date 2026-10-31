@@ -1,0 +1,28 @@
+{
+  "disposition": "INVALID_HARNESS",
+  "artifact": {
+    "tag": "v1.0.0-rc.14",
+    "sourceCommit": "16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99",
+    "archiveSha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+    "installedVersion": "1.0.0-rc.14 (16eeb6eeffe7)"
+  },
+  "runnerSourceCommit": "d4a0aa721bf615e242fd74d32fdd7dcabdeed874",
+  "reason": "The adapted legacy PTY driver invoked the installed nexus-tui binary directly but omitted NEXUS_HOME, which the official installed launcher exports. The captured Rust core RPC daemon disconnect is therefore a runner configuration failure; this attempt is not evidence for or against RC14 behavior.",
+  "attemptedScenarios": [
+    "s1_startup",
+    "s2_approval",
+    "s3_complete",
+    "s4_cancel",
+    "s5_ctrlc",
+    "s6_steer_cancel",
+    "s6n",
+    "s7_resume",
+    "s8_cancel_tool",
+    "s9_quit_tool",
+    "r1_repl",
+    "r1d"
+  ],
+  "scenarioProcessExitCodes": "All driver scripts exited 0; that is not an acceptance verdict because they did not assert the required behavioral predicates.",
+  "preservedEvidence": "runner-capture/",
+  "cleanup": "No matching PTY runner, mock gateway, or sleep child remained after the attempt."
+}

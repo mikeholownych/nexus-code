@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T03:51:26.747Z",
+  "sessions": {
+    "session_20261031_035121_x2st2hlk": {
+      "id": "session_20261031_035121_x2st2hlk",
+      "cleanId": "session_20261031_035121_x2st2hlk",
+      "title": "run it",
+      "updatedAt": "2026-10-31T03:51:26.059Z",
+      "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s8-cancel-tool/ws",
+      "messageCount": 4,
+      "mtime": 1793418686747,
+      "pinned": false
+    }
+  }
+}

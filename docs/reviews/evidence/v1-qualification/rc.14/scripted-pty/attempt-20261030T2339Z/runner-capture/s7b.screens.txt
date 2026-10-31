@@ -1,0 +1,64 @@
+
+===== resumed-start @ 2.26s (100x30) =====
+ NEXUS   ws  ⎇ main ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+  · Earlier conversation of session session_20261030_233933_x77p4bh1 (2 messages)
+
+› remember the word 宽字符 please
+
+宽字符测试 全角ＡＢＣ emoji 👩 🎉 combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was nothing to verify.
+  · Resumed session session_20261030_233933_x77p4bh1.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== sessions @ 5.47s (100x30) =====
+ NEXUS   ws  ⎇ main ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+  · Earlier conversation of session session_20261030_233933_x77p4bh1 (2 messages)
+
+› remember the word 宽字符 please
+
+宽字符测试 全角ＡＢＣ emoji 👩 🎉 combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was nothing to verify.
+  · Resumed session session_20261030_233933_x77p4bh1.
+
+› /sessions
+  * session_20261030_233933_x77p4bh1  2026-10-30T23:39:38  Active Session · 3 messages
+
+  Load one with /resume <id>.
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

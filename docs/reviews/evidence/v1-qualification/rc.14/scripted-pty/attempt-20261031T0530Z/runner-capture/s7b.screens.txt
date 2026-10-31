@@ -1,0 +1,64 @@
+
+===== resumed-start @ 1.85s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+  · Earlier conversation of session session_20261031_033539_uy2jhh5c (2 messages)
+
+› remember the word 宽字符 please
+
+宽字符测试 全角ＡＢＣ emoji 👩 🎉 combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was nothing to verify.
+  · Resumed session session_20261031_033539_uy2jhh5c.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== sessions @ 5.06s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+  · Earlier conversation of session session_20261031_033539_uy2jhh5c (2 messages)
+
+› remember the word 宽字符 please
+
+宽字符测试 全角ＡＢＣ emoji 👩 🎉 combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was nothing to verify.
+  · Resumed session session_20261031_033539_uy2jhh5c.
+
+› /sessions
+  * session_20261031_033539_uy2jhh5c  2026-10-31T03:35:42  Active Session · 3 messages
+
+  Load one with /resume <id>.
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

@@ -1,0 +1,38 @@
+{
+  "limitSeconds": 60,
+  "homeIsolated": true,
+  "initialPrompt": true,
+  "runningProcessObserved": true,
+  "runningProcessSnapshot": [
+    "1114836 1114811 Sat Oct 31 03:50:17 2026       0 bash -c sleep 23.7; echo finished",
+    "1114842 1114836 Sat Oct 31 03:50:17 2026       0 sleep 23.7"
+  ],
+  "steerVisibleOrQueued": true,
+  "finished": true,
+  "elapsedSeconds": 26.905,
+  "gatewayRecords": [
+    {
+      "n": 1,
+      "t": 1793418617.3868873,
+      "tools": 0,
+      "stream": true,
+      "last": "run it\n\n[Git Status: master (0 uncommitted dirty files)]",
+      "user_messages": [
+        "run it\n\n[Git Status: master (0 uncommitted dirty files)]"
+      ]
+    },
+    {
+      "n": 2,
+      "t": 1793418642.026459,
+      "tools": 1,
+      "stream": true,
+      "last": "[Operator steering g1101f870b956a9-1]: also mention cats",
+      "user_messages": [
+        "run it\n\n[Git Status: master (0 uncommitted dirty files)]",
+        "[Operator steering g1101f870b956a9-1]: also mention cats"
+      ]
+    }
+  ],
+  "steerInFollowup": true,
+  "finalScreen": " NEXUS   ws  \u2387 master  model m  mode: auto \u00b7 sandbox: off \u00b7 workspace: trusted\n\u203a run it\n  \u2713 Run sleep 23.7; echo finished \u00b7 exit 0 \u00b7 1 line \u00b7 23.7s\n    \u258e finished\n\n\u21b3 also mention cats\n  steering \u00b7 applied\n\nDone.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n \u2838 thinking \u00b7 0:25 \u00b7 step 2 \u00b7 esc cancels \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u203a type to steer the running turn \u00b7 esc cancels it"
+}

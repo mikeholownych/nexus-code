@@ -1,0 +1,12 @@
+[   0.63s] SAW idle
+[   0.63s] SEND b'run it\r'
+[   1.25s] SAW tool-running
+tui pid 1029821
+before:
+1029821 1029811       2 /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/core/nexus-tui --live --sidecar /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js --node node -- -w /tmp/nexus-rc14-pty-run-env-20261031T0530Z/tmp/nexus-rc14-pty-run.2r6XOS/runs/s9/ws -e http://127.0.0.1:23733/v1 -m m
+1029823 1029821       2 node /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js -w /tmp/nexus-rc14-pty-run-env-20261031T0530Z/tmp/nexus-rc14-pty-run.2r6XOS/runs/s9/ws -e http://127.0.0.1:23733/v1 -m m
+[   2.82s] SEND Ctrl-C
+[   3.52s] SEND Ctrl-C again -> quit
+tui alive: False
+after quit +6s:
+

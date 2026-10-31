@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T03:50:42.703Z",
+  "sessions": {
+    "session_20261031_035016_n5hmfm4c": {
+      "id": "session_20261031_035016_n5hmfm4c",
+      "cleanId": "session_20261031_035016_n5hmfm4c",
+      "title": "run it",
+      "updatedAt": "2026-10-31T03:50:42.594Z",
+      "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0900Z/runner-capture/runs/steer-approved-tool/ws",
+      "messageCount": 6,
+      "mtime": 1793418642702,
+      "pinned": false
+    }
+  }
+}

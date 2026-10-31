@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-30T23:40:01.826Z",
+  "sessions": {
+    "session_20261030_233957_q7y40b5x": {
+      "id": "session_20261030_233957_q7y40b5x",
+      "cleanId": "session_20261030_233957_q7y40b5x",
+      "title": "run it",
+      "updatedAt": "2026-10-30T23:40:01.786Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/s9/ws",
+      "messageCount": 4,
+      "mtime": 1793403601826,
+      "pinned": false
+    }
+  }
+}

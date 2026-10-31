@@ -1,0 +1,19 @@
+{
+  "status": "PARTIAL_NOT_ACCEPTED",
+  "artifact": "v1.0.0-rc.14 (16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99)",
+  "archive_sha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+  "runner": "repository legacy docs/v1.0.0/evidence/D_pty scripts, executed against installed package with isolated HOME and local mock gateway",
+  "observations": {
+    "s1": "PASS on supplementary attempt-20261031T0600Z: naturally returned to the prompt at 117.874s with the exact endpoint and a repair hint; within 150s.",
+    "s2": "stray typing, paste, burst and y did not create file; approval panel remained; deliberate Right+Enter caused denial and the write stayed absent",
+    "s3": "completion stated 'not verified'; strict required status token UNVERIFIED/VERIFIED/REGRESSION_FREE was not observed, so criterion not met by this run",
+    "s4": "s4b Esc during tool returned idle in 0.93s; prior s4a showed cancel acknowledgement and preserved queued steering in composer. Steering-application check and exact process scope still require dedicated evidence.",
+    "s5": "Ctrl-C returned to idle in 2.21s",
+    "s6": "Ctrl-C returned to idle in 0.41s / 0.30s; queued steer remained in composer after cancellation",
+    "s7": "resume screen showed earlier conversation and prior session ID",
+    "s8_s9": "s9 process scan after quit +6s was empty and PTY child exited. s8 legacy script did not capture full process inventory; dedicated process-tree evidence still needed.",
+    "r1a_r1d": "legacy scripts invalid: positional repl launch; separate corrected exact-asset tests recorded in attempt-20261031T0450Z PASS both cases"
+  },
+  "process_cleanup": "runner and all its uniquely identified mock gateway/TUI processes exited; no attempt-specific process remained. Unrelated pre-existing RC11 upgrade process was left untouched.",
+  "runner_finalization": "All 14 legacy scenario scripts completed and scenario evidence was copied. Wrapper did not retain its runner-manifest.txt, so this attempt remains partial and not a full acceptance pass."
+}

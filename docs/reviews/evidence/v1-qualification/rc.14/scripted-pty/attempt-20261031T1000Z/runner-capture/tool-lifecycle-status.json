@@ -1,0 +1,111 @@
+{
+  "artifact": "v1.0.0-rc.14 (16eeb6eeffe7), archive SHA-256 52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+  "results": [
+    {
+      "scenario": "s8-cancel-tool",
+      "frameBudgetSeconds": 0.016666666666666666,
+      "idleBudgetSeconds": 5,
+      "isolatedHome": true,
+      "initialPrompt": true,
+      "toolProcessTreeBefore": [
+        {
+          "pid": 1119051,
+          "ppid": 1118554,
+          "cmd": "/tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/core/nexus-tui --live --sidecar /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js --node node -- -w /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s8-cancel-tool/ws -e http://127.0.0.1:17637/v1 -m m --yes"
+        },
+        {
+          "pid": 1119060,
+          "ppid": 1119051,
+          "cmd": "node /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js -w /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s8-cancel-tool/ws -e http://127.0.0.1:17637/v1 -m m --yes"
+        },
+        {
+          "pid": 1119262,
+          "ppid": 1119060,
+          "cmd": "/tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/core/harness-core --workspace /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s8-cancel-tool/ws rpc"
+        },
+        {
+          "pid": 1119286,
+          "ppid": 1119262,
+          "cmd": "bash -c sleep 23.7; echo finished"
+        },
+        {
+          "pid": 1119293,
+          "ppid": 1119286,
+          "cmd": "sleep 23.7"
+        }
+      ],
+      "toolStarted": true,
+      "tuiPid": 1119051,
+      "cancelKey": "Esc",
+      "cancelAcknowledged": false,
+      "cancelAckSeconds": null,
+      "idleAfterCancel": true,
+      "idleSeconds": 2.7509474019752815,
+      "survivingBeforeTreePids": [
+        {
+          "pid": 1119051,
+          "ppid": 1118554,
+          "cmd": "/tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/core/nexus-tui --live --sidecar /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js --node node -- -w /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s8-cancel-tool/ws -e http://127.0.0.1:17637/v1 -m m --yes"
+        },
+        {
+          "pid": 1119060,
+          "ppid": 1119051,
+          "cmd": "node /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js -w /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s8-cancel-tool/ws -e http://127.0.0.1:17637/v1 -m m --yes"
+        },
+        {
+          "pid": 1119262,
+          "ppid": 1119060,
+          "cmd": "/tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/core/harness-core --workspace /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s8-cancel-tool/ws rpc"
+        }
+      ],
+      "tuiStayedOpen": true,
+      "passed": false,
+      "finalScreen": " NEXUS   ws  \u2387 master \u25cf1 changed  model m  mode: auto \u00b7 sandbox: off \u00b7 workspace: trusted\n\u203a run it\n  \u2713 Run sleep 23.7; echo finished \u00b7 no exit code \u00b7 no output\n\n\u25cc Cancelled  You stopped the turn during tool settling.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n enter send \u00b7 shift+enter newline \u00b7 ? help \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u203a ask Nexus \u00b7 / for commands \u00b7 ? for keys"
+    },
+    {
+      "scenario": "s9-quit-during-tool",
+      "frameBudgetSeconds": 0.016666666666666666,
+      "idleBudgetSeconds": 5,
+      "isolatedHome": true,
+      "initialPrompt": true,
+      "toolProcessTreeBefore": [
+        {
+          "pid": 1119574,
+          "ppid": 1118554,
+          "cmd": "/tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/core/nexus-tui --live --sidecar /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js --node node -- -w /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s9-quit-during-tool/ws -e http://127.0.0.1:12999/v1 -m m --yes"
+        },
+        {
+          "pid": 1119577,
+          "ppid": 1119574,
+          "cmd": "node /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js -w /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s9-quit-during-tool/ws -e http://127.0.0.1:12999/v1 -m m --yes"
+        },
+        {
+          "pid": 1119815,
+          "ppid": 1119577,
+          "cmd": "/tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/core/harness-core --workspace /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s9-quit-during-tool/ws rpc"
+        },
+        {
+          "pid": 1119840,
+          "ppid": 1119815,
+          "cmd": "bash -c sleep 23.7; echo finished"
+        },
+        {
+          "pid": 1119844,
+          "ppid": 1119840,
+          "cmd": "sleep 23.7"
+        }
+      ],
+      "toolStarted": true,
+      "tuiPid": 1119574,
+      "cancelKey": "Ctrl-C",
+      "cancelAcknowledged": true,
+      "cancelAckSeconds": 0.9376424869988114,
+      "idleAfterCancel": false,
+      "idleSeconds": null,
+      "survivingBeforeTreePids": [],
+      "tuiExited": true,
+      "passed": false,
+      "finalScreen": " NEXUS   ws  \u2387 master \u25cf1 changed  model m  mode: auto \u00b7 sandbox: off \u00b7 workspace: trusted\n\u203a run it\n  \u2713 Run sleep 23.7; echo finished \u00b7 no exit code \u00b7 no output\n\n\u25cc Cancelled  You stopped the turn during tool settling.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n enter send \u00b7 shift+enter newline \u00b7 ? help \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u203a ask Nexus \u00b7 / for commands \u00b7 ? for keys"
+    }
+  ]
+}

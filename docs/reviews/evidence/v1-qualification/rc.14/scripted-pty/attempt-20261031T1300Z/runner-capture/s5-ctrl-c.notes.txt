@@ -1,0 +1,5 @@
+[   1.09s] SAW idle
+[   1.09s] SEND b'talk slowly\r'
+[   1.95s] SAW streaming
+[   2.43s] SAW idle after cancel
+[   2.45s] SCREEN cancel-ack-review (100x30)

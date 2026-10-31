@@ -1,0 +1,31 @@
+{
+  "acceptance": "ACCEPTANCE \u00a75.2",
+  "artifact": "v1.0.0-rc.14 (16eeb6eeffe7), archive SHA-256 52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+  "results": [
+    {
+      "scenario": "r1a",
+      "typedAheadY": false,
+      "initialPrompt": true,
+      "approvalPrompt": true,
+      "denialMessage": false,
+      "fileExists": false,
+      "gatewayRequests": 1,
+      "homeIsolated": true,
+      "verdict": "FAIL"
+    },
+    {
+      "scenario": "r1d",
+      "typedAheadY": true,
+      "initialPrompt": true,
+      "approvalPrompt": true,
+      "typedAheadDiscarded": true,
+      "denialMessage": false,
+      "fileExists": false,
+      "gatewayRequests": 2,
+      "homeIsolated": true,
+      "verdict": "FAIL"
+    }
+  ],
+  "status": "PARTIAL_BEHAVIORAL_EVIDENCE_DRIVER_ASSERTION_INCOMPLETE",
+  "note": "Typed-ahead y was visibly discarded and the gateway later recorded execution rejected by user in r1d; r1a Enter was sent during the 400ms grace window. Neither case is counted as a complete acceptance pass because the driver did not capture the rejection text and r1a did not send Enter after grace."
+}

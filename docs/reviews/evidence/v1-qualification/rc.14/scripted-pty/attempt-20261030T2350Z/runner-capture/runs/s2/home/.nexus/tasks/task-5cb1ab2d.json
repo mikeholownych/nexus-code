@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-5cb1ab2d",
+  "sessionId": "task-5cb1ab2d",
+  "id": "task-5cb1ab2d",
+  "title": "Task task-5cb1ab2d",
+  "workspacePath": "/tmp/nexus-rc14-pty-run.sh5bQP/runs/s2/ws",
+  "workspace": "/tmp/nexus-rc14-pty-run.sh5bQP/runs/s2/ws",
+  "model": "m",
+  "createdAt": "2026-10-30T23:43:58.549Z",
+  "updatedAt": "2026-10-30T23:44:15.056Z",
+  "status": "completed",
+  "lastTurn": {
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "FINAL_TEXT",
+    "finalOutputComplete": true,
+    "verification": null,
+    "interruption": null,
+    "inferenceFailure": null,
+    "steps": {
+      "used": 1,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": false,
+    "finishedAt": "2026-10-30T23:44:15.040Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 1
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unsupported",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 1,
+        "promptTokens": 4789,
+        "source": "client_estimate",
+        "clientEstimate": 4789,
+        "uncertainty": "the connection advertises no request counting"
+      }
+    },
+    "execution": "COMPLETED",
+    "outcome": "NOT_REQUIRED"
+  },
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "validationReceipts": [],
+  "unverifiedChangesPending": false,
+  "providerRecovery": null,
+  "objective": {
+    "version": 1,
+    "objective": "yes y y please yy",
+    "objectiveSha256": "6bed5b239638a4b4f4f503c9a5180bce743ce452f6c134f030969f7a5c688271",
+    "startedAt": "2026-10-30T23:44:14.887Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "yes y y please yy",
+        "detail": "yes y y please yy",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-30T23:44:14.887Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "26f5a307c7f2b82e"
+      ],
+      "seenObservations": [],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "completed",
+      "reason": "COMPLETED/NOT_REQUIRED",
+      "remaining": [],
+      "at": "2026-10-30T23:44:15.040Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "tokenStats": {
+    "prompt": 14195,
+    "completion": 67,
+    "total": 14262,
+    "requests": 3,
+    "reportedRequests": 0,
+    "estimatedRequests": 3
+  },
+  "cognitiveRouting": {
+    "activeTier": "planner",
+    "tokenStats": {
+      "prompt": 0,
+      "completion": 0,
+      "total": 0
+    }
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "99913f667e536a57c9ca636243e92feb7c2fc06f313b86bfead24a2f46246c73",
+    "offset": 4683,
+    "bytes": 338,
+    "count": 7
+  }
+}

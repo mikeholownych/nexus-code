@@ -1,0 +1,5 @@
+[   0.63s] SAW idle
+[   0.63s] SEND b'run it\r'
+[   1.25s] SAW tool-running
+[   2.82s] SEND Ctrl-C
+[   3.52s] SEND Ctrl-C again -> quit

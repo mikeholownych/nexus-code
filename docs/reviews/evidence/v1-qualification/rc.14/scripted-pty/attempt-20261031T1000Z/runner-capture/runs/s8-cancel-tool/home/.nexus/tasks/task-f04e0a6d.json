@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-f04e0a6d",
+  "sessionId": "task-f04e0a6d",
+  "id": "task-f04e0a6d",
+  "title": "Task task-f04e0a6d",
+  "workspacePath": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s8-cancel-tool/ws",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1000Z/runner-capture/runs/s8-cancel-tool/ws",
+  "model": "m",
+  "createdAt": "2026-10-31T03:51:20.128Z",
+  "updatedAt": "2026-10-31T03:51:25.186Z",
+  "status": "interrupted",
+  "lastTurn": {
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "NONE",
+    "finalOutputComplete": false,
+    "verification": null,
+    "interruption": {
+      "requestedAt": "2026-10-31T03:51:24.173Z",
+      "phase": "tool_settling",
+      "undispatchedToolCalls": 0,
+      "outstandingTool": "run_command",
+      "outstandingToolSettled": true
+    },
+    "inferenceFailure": null,
+    "steps": {
+      "used": 1,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": true,
+    "finishedAt": "2026-10-31T03:51:25.149Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 1
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unsupported",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 1,
+        "promptTokens": 4719,
+        "source": "client_estimate",
+        "clientEstimate": 4719,
+        "uncertainty": "the connection advertises no request counting"
+      }
+    },
+    "execution": "INTERRUPTED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "OPERATOR_INTERRUPT"
+  },
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "validationReceipts": [],
+  "unverifiedChangesPending": true,
+  "providerRecovery": null,
+  "objective": {
+    "version": 1,
+    "objective": "run it",
+    "objectiveSha256": "9dc5c61d793b51ed7b77d8439715a2569ea086d16288e95d7ffe0798225560aa",
+    "startedAt": "2026-10-31T03:51:22.267Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "run it",
+        "detail": "run it",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-31T03:51:22.267Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [
+        {
+          "key": "85c572479f4f7ca3",
+          "action": "run_command {\"command\":\"sleep 23.7; echo finished\"}",
+          "actionId": "b70d74cf649d8d26",
+          "actionKind": "external",
+          "outcomeClass": "success",
+          "state": "7bf989aecc83d391",
+          "count": 1,
+          "firstStep": 1,
+          "lastStep": 1,
+          "outcome": "{\n \"cancelled\": true,\n \"command\": \"sleep 23.7; echo finished\",\n \"duration_ms\": <dur>,\n \"exit_code\": null,\n \"shell\": \"bash\",\n \"stderr\": \"\",\n \"stdout\": \"\",\n \"timed_out\": false\n}"
+        }
+      ],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "7bf989aecc83d391"
+      ],
+      "seenObservations": [
+        "85c572479f4f7ca3"
+      ],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "incomplete",
+      "reason": "OPERATOR_INTERRUPT",
+      "remaining": [],
+      "at": "2026-10-31T03:51:25.149Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "changeBaseline": null,
+  "tokenStats": {
+    "prompt": 4719,
+    "completion": 39,
+    "total": 4758,
+    "requests": 1,
+    "reportedRequests": 0,
+    "estimatedRequests": 1
+  },
+  "cognitiveRouting": {
+    "activeTier": "planner",
+    "tokenStats": {
+      "prompt": 0,
+      "completion": 0,
+      "total": 0
+    }
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "b628f3cfe33d1264a9018ac3b51ada03f1372259d60530addb3e87cfc383b21d",
+    "offset": 3624,
+    "bytes": 545,
+    "count": 4
+  }
+}

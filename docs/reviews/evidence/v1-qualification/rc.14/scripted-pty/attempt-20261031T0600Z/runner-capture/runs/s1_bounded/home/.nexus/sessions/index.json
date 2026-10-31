@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T03:42:00.895Z",
+  "sessions": {
+    "session_20261031_034004_dy80ndqn": {
+      "id": "session_20261031_034004_dy80ndqn",
+      "cleanId": "session_20261031_034004_dy80ndqn",
+      "title": "say hello",
+      "updatedAt": "2026-10-31T03:42:00.868Z",
+      "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0600Z/runner-capture/runs/s1_bounded/ws",
+      "messageCount": 2,
+      "mtime": 1793418120895,
+      "pinned": false
+    }
+  }
+}

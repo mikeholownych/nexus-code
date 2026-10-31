@@ -1,0 +1,14 @@
+{
+  "id": "cp_1793419167193_swso",
+  "name": "Turn: yes y y please yy",
+  "timestamp": "2026-10-31T03:59:27.193Z",
+  "workspace": "/tmp/nexus-rc14-pty-run.d1b645/runs/s2/ws",
+  "gitRef": "f892898f498dd8dfc45b31e9604e3cba1746a47f",
+  "snapshotDir": "/tmp/nexus-rc14-pty-run.d1b645/runs/s2/home/.nexus/checkpoints/ca60a499651f/snapshots/cp_1793419167193_swso",
+  "untrackedFiles": [
+    ".nexus/inference_receipts.jsonl"
+  ],
+  "untrackedFileModes": {
+    ".nexus/inference_receipts.jsonl": 384
+  }
+}

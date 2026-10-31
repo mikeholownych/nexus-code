@@ -1,0 +1,5 @@
+[   1.07s] SAW idle
+[   1.07s] SEND start real synthetic command
+[   3.69s] SEND Ctrl-C
+[   5.13s] SEND second Ctrl-C exits
+[   6.04s] SCREEN final (100x30)

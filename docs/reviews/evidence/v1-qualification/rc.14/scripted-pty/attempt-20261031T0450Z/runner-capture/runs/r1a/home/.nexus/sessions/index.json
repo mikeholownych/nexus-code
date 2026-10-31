@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T03:33:06.817Z",
+  "sessions": {
+    "session_20261031_033302_ivevqwng": {
+      "id": "session_20261031_033302_ivevqwng",
+      "cleanId": "session_20261031_033302_ivevqwng",
+      "title": "create hello.txt",
+      "updatedAt": "2026-10-31T03:33:06.720Z",
+      "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0450Z/runner-capture/runs/r1a/ws",
+      "messageCount": 5,
+      "mtime": 1793417586817,
+      "pinned": false
+    }
+  }
+}

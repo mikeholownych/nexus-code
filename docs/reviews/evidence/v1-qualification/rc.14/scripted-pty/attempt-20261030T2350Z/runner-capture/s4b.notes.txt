@@ -1,0 +1,8 @@
+[   1.37s] SAW idle
+[   1.37s] SEND b'run it\r'
+[  11.60s] TIMEOUT waiting for tool-running
+[  11.60s] SCREEN timeout-tool-running (100x30)
+[  13.10s] SCREEN tool-running (100x30)
+[  13.11s] SEND Esc during tool
+[  13.52s] SAW idle-after-esc
+[  13.52s] SCREEN after-esc-tool (100x30)

@@ -1,0 +1,47 @@
+{
+  "artifact": "v1.0.0-rc.14 (16eeb6eeffe7)",
+  "archiveSha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+  "node": "v24.11.1",
+  "results": [
+    {
+      "scenario": "s4-esc",
+      "frameBudgetSeconds": 0.016666666666666666,
+      "key": "Esc",
+      "steerQueued": false,
+      "cancelKeySentAtMonotonic": 1001137.83173556,
+      "firstVisibleAckSeconds": 0.00756211404222995,
+      "firstVisibleAckText": " NEXUS   ws  \u2387 master  model m  mode: review \u00b7 sandbox: off \u00b7 workspace: trusted\n\u203a talk slowly\n\nThinking about it. Thinking about it.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n \u2807 cancelling\u2026 ctrl-c again to quit \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u203a type to steer the running turn \u00b7 esc cancels it",
+      "ackWithinOne60HzFrame": true,
+      "idleWithinFiveSeconds": true,
+      "idleSecondsFromKey": 0.32945876801386476,
+      "composerAfterCancel": "\u203a ask Nexus \u00b7 / for commands \u00b7 ? for keys"
+    },
+    {
+      "scenario": "s5-ctrl-c",
+      "frameBudgetSeconds": 0.016666666666666666,
+      "key": "Ctrl-C",
+      "steerQueued": false,
+      "cancelKeySentAtMonotonic": 1001140.974370571,
+      "firstVisibleAckSeconds": 0.008889490040019155,
+      "firstVisibleAckText": " NEXUS   ws  \u2387 master  model m  mode: review \u00b7 sandbox: off \u00b7 workspace: trusted\n\u203a talk slowly\n\nThinking about it. Thinking about it.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n \u280b cancelling\u2026 ctrl-c again to quit \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u203a type to steer the running turn \u00b7 esc cancels it",
+      "ackWithinOne60HzFrame": true,
+      "idleWithinFiveSeconds": true,
+      "idleSecondsFromKey": 0.33345009002368897,
+      "composerAfterCancel": "\u203a ask Nexus \u00b7 / for commands \u00b7 ? for keys"
+    },
+    {
+      "scenario": "s6-queued-steer-then-cancel",
+      "frameBudgetSeconds": 0.016666666666666666,
+      "key": "Ctrl-C",
+      "steerQueued": true,
+      "steerVisibleBeforeCancel": true,
+      "cancelKeySentAtMonotonic": 1001143.906200527,
+      "firstVisibleAckSeconds": 0.019384160987101495,
+      "firstVisibleAckText": " NEXUS   ws  \u2387 master  model m  mode: review \u00b7 sandbox: off \u00b7 workspace: trusted\n\u203a talk slowly\n\nThinking about it. Thinking about it. Thinking about it.\n\n\u21b3 also mention cats\n  steering \u00b7 queued for the next step\n\nThinking about it.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n \u2819 cancelling\u2026 ctrl-c again to quit \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u203a type to steer the running turn \u00b7 esc cancels it",
+      "ackWithinOne60HzFrame": false,
+      "idleWithinFiveSeconds": true,
+      "idleSecondsFromKey": 0.3504533839877695,
+      "composerAfterCancel": "\u203a also mention cats"
+    }
+  ]
+}

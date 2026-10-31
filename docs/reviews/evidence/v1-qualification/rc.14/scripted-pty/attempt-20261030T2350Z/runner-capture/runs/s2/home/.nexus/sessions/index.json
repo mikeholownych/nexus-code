@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-30T23:44:15.181Z",
+  "sessions": {
+    "session_20261030_234359_tlxu7dm7": {
+      "id": "session_20261030_234359_tlxu7dm7",
+      "cleanId": "session_20261030_234359_tlxu7dm7",
+      "title": "yes y y please yy",
+      "updatedAt": "2026-10-30T23:44:15.128Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.sh5bQP/runs/s2/ws",
+      "messageCount": 7,
+      "mtime": 1793403855181,
+      "pinned": false
+    }
+  }
+}

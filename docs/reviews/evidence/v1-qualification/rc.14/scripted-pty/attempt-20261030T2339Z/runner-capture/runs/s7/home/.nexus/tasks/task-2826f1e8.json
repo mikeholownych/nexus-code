@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-2826f1e8",
+  "sessionId": "task-2826f1e8",
+  "id": "task-2826f1e8",
+  "title": "Task task-2826f1e8",
+  "workspacePath": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/s7/ws",
+  "workspace": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/s7/ws",
+  "model": "m",
+  "createdAt": "2026-10-30T23:39:37.840Z",
+  "updatedAt": "2026-10-30T23:39:38.080Z",
+  "status": "in_progress",
+  "activePlan": [],
+  "milestones": [],
+  "validationReceipts": [],
+  "currentOperation": null,
+  "unverifiedChangesPending": true,
+  "messageLog": null
+}

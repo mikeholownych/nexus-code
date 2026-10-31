@@ -1,0 +1,6 @@
+[   0.63s] SAW idle
+[   0.63s] SEND b'talk slowly\r'
+[   3.83s] SEND Ctrl-C mid-stream
+[   6.04s] SCREEN 2s-after-ctrl-c (100x30)
+[   6.05s] SAW idle-after-ctrl-c
+[   6.05s] SCREEN idle-after-ctrl-c (100x30)

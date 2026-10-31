@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T04:00:32.070Z",
+  "sessions": {
+    "session_20261031_040029_wp95i2ig": {
+      "id": "session_20261031_040029_wp95i2ig",
+      "cleanId": "session_20261031_040029_wp95i2ig",
+      "title": "Active Session",
+      "updatedAt": "2026-10-31T04:00:32.041Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.d1b645/runs/s7/ws",
+      "messageCount": 3,
+      "mtime": 1793419232070,
+      "pinned": false
+    }
+  }
+}

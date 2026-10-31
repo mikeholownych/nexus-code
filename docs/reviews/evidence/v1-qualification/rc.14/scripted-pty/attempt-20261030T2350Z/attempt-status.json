@@ -1,0 +1,23 @@
+{
+  "disposition": "SUPPLEMENTAL_DIAGNOSTIC_NOT_COUNTED",
+  "artifact": {
+    "tag": "v1.0.0-rc.14",
+    "sourceCommit": "16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99",
+    "archiveSha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+    "installedVersion": "1.0.0-rc.14 (16eeb6eeffe7)"
+  },
+  "runnerSourceCommit": "d4a0aa721bf615e242fd74d32fdd7dcabdeed874",
+  "reason": "This duplicate diagnostic run used the current checkout's legacy D_pty driver, whose assumptions do not match the installed RC14 prompt flow in the REPL cases and whose s4/s6 scripts cancel immediately after queuing steering. Earlier targeted RC14 reruns and an independent review are already recorded in nexus-claims.log; this capture does not supersede or invalidate that accepted evidence and is not counted toward §5.2.",
+  "observations": {
+    "s1": "Endpoint and fix guidance appeared; user-scripted cancellation ended the turn at about 35 seconds.",
+    "s2": "Stray typing, paste, and burst did not decide; deliberate Right+Enter produced a denial.",
+    "s3": "Completion screen displayed 'Done · not verified'.",
+    "s4a_s6": "The scripts queued steering and then immediately canceled; the product reported steering not applied because cancellation arrived before the next step. This does not assess the separately targeted second-request steering scenario.",
+    "r1a_r1d": "Legacy prompt-string detection timed out against the installed REPL flow. File writes were absent, but these captures do not independently establish the explicit DENIED disposition required by §5.2.",
+    "s7": "Resumed session displayed earlier conversation.",
+    "s8_s9": "The RC14 task processes exited. Process snapshots also contained an unrelated pre-existing RC11 session, which was left untouched."
+  },
+  "scenarioDriverExitCodes": "All drivers exited 0; this is not an acceptance verdict.",
+  "preservedEvidence": "runner-capture/",
+  "cleanup": "The RC14 PTY runner, scenario processes, and mock gateways exited. The unrelated long-running RC11 session was not modified."
+}

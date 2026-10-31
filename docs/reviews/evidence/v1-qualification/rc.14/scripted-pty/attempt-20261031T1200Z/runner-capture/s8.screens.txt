@@ -1,0 +1,32 @@
+
+===== 3s-after-esc @ 6.06s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› run it
+  × denied Run sleep 23.7; echo finished
+  × Run sleep 23.7; echo finished — Error: Execution was rejected by the user. Ask the user for
+    clarification or proceed with an alternative approach. · 1.7s
+
+Done.
+
+✓ Done  No files changed, so there was nothing to verify.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

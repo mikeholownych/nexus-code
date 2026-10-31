@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-2553e96e",
+  "sessionId": "task-2553e96e",
+  "id": "task-2553e96e",
+  "title": "Task task-2553e96e",
+  "workspacePath": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0350Z/runner-capture/runs/r1a/ws",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0350Z/runner-capture/runs/r1a/ws",
+  "model": "m",
+  "createdAt": "2026-10-31T03:29:37.500Z",
+  "updatedAt": "2026-10-31T03:29:40.264Z",
+  "status": "in_progress",
+  "activePlan": [],
+  "milestones": [],
+  "validationReceipts": [],
+  "currentOperation": null,
+  "unverifiedChangesPending": false,
+  "findings": [],
+  "objective": {
+    "version": 1,
+    "objective": "create hello.txt",
+    "objectiveSha256": "7d2def4bc6c0a4166f9f347271dc7a6e22b06d1da72b26b2079bef7b0d2e4fb9",
+    "startedAt": "2026-10-31T03:29:37.964Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "create hello.txt",
+        "detail": "create hello.txt",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-31T03:29:37.964Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "a48e4b0e26ef7f85"
+      ],
+      "seenObservations": [],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    }
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "b4c75ee1333458a2d3c2dd81e281288197b787f0c3bc4f732ff8718cef834fe0",
+    "offset": 3191,
+    "bytes": 438,
+    "count": 3
+  }
+}

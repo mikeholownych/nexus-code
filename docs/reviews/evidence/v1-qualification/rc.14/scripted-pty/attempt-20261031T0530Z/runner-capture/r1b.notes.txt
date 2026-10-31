@@ -1,0 +1,7 @@
+[   0.63s] SAW prompt
+[   0.64s] SEND b'create hello.txt\r'
+[   0.94s] TYPE typing during turn: text, Enter, Enter gap=0.1
+[  19.69s] TIMEOUT waiting for approval-prompt
+[  19.69s] SCREEN timeout-approval-prompt (100x30)
+[  20.70s] SEND Enter (user thinks it's a newline)
+[  26.90s] SCREEN after (100x30)

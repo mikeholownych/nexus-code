@@ -1,0 +1,21 @@
+{
+  "limit_seconds": 60,
+  "isolatedHome": true,
+  "initialPrompt": true,
+  "toolRunning": true,
+  "steerInputSeconds": 1.211,
+  "steerQueued": false,
+  "naturalCompletion": false,
+  "elapsedSeconds": 60.161,
+  "gatewayRequests": [
+    {
+      "n": 1,
+      "t": 1793418320.619236,
+      "tools": 0,
+      "stream": true,
+      "last": "run it\n\n[Git Status: master (0 uncommitted dirty files)]"
+    }
+  ],
+  "steerInFollowup": false,
+  "finalScreen": " NEXUS   ws  \u2387 master  model m  mode: review \u00b7 sandbox: off \u00b7 workspace: trusted\n\u256d Approval needed \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502Run sleep 23.7; echo finished                                                                     \u2502\n\u2502Proposed: run a shell command in the workspace                                                    \u2502\n\u2502                                                                                                  \u2502\n\u2502$ sleep 23.7; echo finished                                                                       \u2502\n\u2502                                                                                                  \u2502\n\u2502 Approve   Approve all later actions   Deny                                                       \u2502\n\u2502typing ignored \u00b7 \u2190\u2192 approve/deny, pause, enter \u00b7 esc denies                                       \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n approval needed \u00b7 \u2190\u2192 then enter (typing is ignored) \u00b7 esc denies \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u203a"
+}

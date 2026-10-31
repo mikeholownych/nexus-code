@@ -1,0 +1,32 @@
+
+===== timeout-repl-prompt @ 20.06s (100x30) =====
+
+Trust this folder?
+↑↓ navigate · Enter select · Esc exit
+…iews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0340Z/runner-capture/runs/r1d/ws
+Load project instructions
+No project instruction file found
+Trust remembered for this folder.
+Includes future project config changes.
+Trust loads project instructions and
+workspace integrations.
+Tool approvals use permission settings.
+Folder trust doesn't change approvals.
+
+› Trust and continue
+  Continue without trusting
+  Exit
+
+
+
+
+
+
+
+
+
+
+
+
+
+

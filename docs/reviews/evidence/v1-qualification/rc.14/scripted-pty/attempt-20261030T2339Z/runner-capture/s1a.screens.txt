@@ -1,0 +1,128 @@
+
+===== startup-unreachable @ 4.01s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  mode: review · sandbox: off · workspace: trusted
+  · Endpoint http://127.0.0.1:9/v1 is unreachable (fetch failed (cause: bad port)). Run `nexus
+doctor`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== after-prompt-unreachable @ 12.77s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  mode: review · sandbox: off · workspace: trusted
+  · Endpoint http://127.0.0.1:9/v1 is unreachable (fetch failed (cause: bad port)). Run `nexus
+doctor`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.
+
+› say hello
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 1s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 1s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 3s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 8s
+before checking again. Work is preserved.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠋ waiting for the inference provider 0:06 · 0:08 · step 1 · esc cancels ───────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== after-prompt-unreachable-28s @ 32.77s (100x30) =====
+ NEXUS   ws  ⎇ main  model m  mode: review · sandbox: off · workspace: trusted
+  · Endpoint http://127.0.0.1:9/v1 is unreachable (fetch failed (cause: bad port)). Run `nexus
+doctor`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.
+
+› say hello
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 1s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 1s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 3s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 8s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 11s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 8s
+before checking again. Work is preserved.
+
+
+
+
+
+
+
+
+
+
+
+ ⠸ waiting for the inference provider 0:26 · 0:28 · step 1 · esc cancels ───────────────────────────
+› type to steer the running turn · esc cancels it
+
+===== after-ctrl-c @ 34.48s (100x30) =====
+ NEXUS   ws  ⎇ main ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+  · Endpoint http://127.0.0.1:9/v1 is unreachable (fetch failed (cause: bad port)). Run `nexus
+doctor`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.
+
+› say hello
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 1s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 1s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 3s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 8s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 11s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 8s
+before checking again. Work is preserved.
+  · Provider recovery cancelled: operator cancelled while waiting for the provider
+
+◌ Cancelled  You stopped the turn during provider wait.
+
+
+
+
+
+
+
+
+ shutting down the agent… ──────────────────────────────────────────────────────────────────────────
+›

@@ -1,0 +1,5 @@
+[   1.57s] SAW idle
+[   1.57s] SEND start synthetic command
+[   2.73s] TYPE steer while child process is running gap=0.05
+[  26.91s] SAW turn-complete
+[  26.91s] SCREEN final (100x30)

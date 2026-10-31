@@ -1,0 +1,7 @@
+[   1.51s] SAW idle
+[   1.51s] SEND start synthetic tool
+[   3.38s] SAW tool-running
+[   3.88s] TYPE steer during running tool gap=0.05
+[  60.16s] TIMEOUT waiting for completion
+[  60.16s] SCREEN timeout-completion (100x30)
+[  60.16s] SCREEN final (100x30)

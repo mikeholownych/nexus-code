@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 2,
+  "taskId": "session_20261030_233916_eq0lyb61",
+  "sessionId": "session_20261030_233916_eq0lyb61",
+  "id": "session_20261030_233916_eq0lyb61",
+  "title": "talk slowly",
+  "workspacePath": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/s6/ws",
+  "workspace": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/s6/ws",
+  "model": "m",
+  "createdAt": "2026-10-30T23:39:23.126Z",
+  "updatedAt": "2026-10-30T23:39:23.157Z",
+  "status": "interrupted",
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "candidateIdentity": null,
+  "validationReceipts": [],
+  "currentOperation": null,
+  "unverifiedChangesPending": false,
+  "tokenStats": {
+    "prompt": 0,
+    "completion": 0,
+    "total": 0,
+    "requests": 0,
+    "reportedRequests": 0,
+    "estimatedRequests": 0
+  },
+  "lastTurn": {
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "NONE",
+    "finalOutputComplete": false,
+    "verification": null,
+    "interruption": {
+      "requestedAt": "2026-10-30T23:39:22.910Z",
+      "phase": "inference",
+      "undispatchedToolCalls": 0
+    },
+    "inferenceFailure": null,
+    "steps": {
+      "used": 1,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": false,
+    "finishedAt": "2026-10-30T23:39:22.921Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 1
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unsupported",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 1,
+        "promptTokens": 4656,
+        "source": "client_estimate",
+        "clientEstimate": 4656,
+        "uncertainty": "the connection advertises no request counting"
+      }
+    },
+    "execution": "INTERRUPTED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "OPERATOR_INTERRUPT"
+  },
+  "objective": {
+    "version": 1,
+    "objective": "talk slowly",
+    "objectiveSha256": "4e2e05ba8aa88132146b36db035da6b2dc3cb1eface2f7b2f34a57640fb0d819",
+    "startedAt": "2026-10-30T23:39:17.508Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "talk slowly",
+        "detail": "talk slowly",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-30T23:39:17.508Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [
+      {
+        "id": "g2214d9e9c4bfc-1",
+        "text": "also mention cats",
+        "receivedAt": "2026-10-30T23:39:21.360Z",
+        "status": "cancelled"
+      }
+    ],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "15aebc77955b4ff9"
+      ],
+      "seenObservations": [],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "incomplete",
+      "reason": "OPERATOR_INTERRUPT",
+      "remaining": [],
+      "at": "2026-10-30T23:39:22.921Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "a9b84859f593b2d49dd18c9628a9615f2372414d7b5e69bd257dd398ba7e4b9f",
+    "offset": 1,
+    "bytes": 3087,
+    "count": 2
+  }
+}

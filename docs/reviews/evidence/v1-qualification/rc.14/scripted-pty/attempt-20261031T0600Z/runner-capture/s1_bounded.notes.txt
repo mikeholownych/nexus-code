@@ -1,0 +1,5 @@
+[   1.00s] SAW startup-prompt
+[   1.00s] SEND start unreachable endpoint scenario
+[ 117.88s] SAW natural-end-guidance
+[ 117.88s] SCREEN bounded-final (100x30)
+[ 117.89s] SEND cancel after bounded observation

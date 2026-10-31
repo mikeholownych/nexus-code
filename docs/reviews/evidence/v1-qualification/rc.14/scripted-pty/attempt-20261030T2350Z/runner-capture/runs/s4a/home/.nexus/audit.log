@@ -1,0 +1,2 @@
+{"timestamp":"2026-10-30T23:44:33.358Z","workspace":"/tmp/nexus-rc14-pty-run.sh5bQP/runs/s4a/ws","tool":"turn_cancel","args":{"reason":"external signal","phase":"inference","step":1},"success":true,"duration_ms":0}
+{"timestamp":"2026-10-30T23:44:38.760Z","workspace":"/tmp/nexus-rc14-pty-run.sh5bQP/runs/s4a/ws","tool":"turn_cancel","args":{"reason":"external signal","phase":"inference","step":1},"success":true,"duration_ms":0}

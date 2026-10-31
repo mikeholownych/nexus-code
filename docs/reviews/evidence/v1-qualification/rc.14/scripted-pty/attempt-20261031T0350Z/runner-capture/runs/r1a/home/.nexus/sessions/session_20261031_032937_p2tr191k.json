@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 2,
+  "taskId": "session_20261031_032937_p2tr191k",
+  "sessionId": "session_20261031_032937_p2tr191k",
+  "id": "session_20261031_032937_p2tr191k",
+  "title": "create hello.txt",
+  "workspacePath": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0350Z/runner-capture/runs/r1a/ws",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0350Z/runner-capture/runs/r1a/ws",
+  "model": "m",
+  "createdAt": "2026-10-31T03:29:40.420Z",
+  "updatedAt": "2026-10-31T03:29:40.429Z",
+  "status": "in_progress",
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "candidateIdentity": null,
+  "validationReceipts": [],
+  "currentOperation": null,
+  "unverifiedChangesPending": false,
+  "tokenStats": {
+    "prompt": 4713,
+    "completion": 41,
+    "total": 4754,
+    "requests": 1,
+    "reportedRequests": 0,
+    "estimatedRequests": 1
+  },
+  "objective": {
+    "version": 1,
+    "objective": "create hello.txt",
+    "objectiveSha256": "7d2def4bc6c0a4166f9f347271dc7a6e22b06d1da72b26b2079bef7b0d2e4fb9",
+    "startedAt": "2026-10-31T03:29:37.964Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "create hello.txt",
+        "detail": "create hello.txt",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-31T03:29:37.964Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "a48e4b0e26ef7f85"
+      ],
+      "seenObservations": [],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "5bdfa768f21998936fc1a1686dcaeaf4c17cabf669d48862535c6057dde40c8b",
+    "offset": 3210,
+    "bytes": 457,
+    "count": 3
+  }
+}

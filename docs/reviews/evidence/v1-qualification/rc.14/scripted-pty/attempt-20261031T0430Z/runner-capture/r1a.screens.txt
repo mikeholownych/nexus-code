@@ -1,0 +1,64 @@
+
+===== approval-prompt @ 4.88s (100x30) =====
+
+ NEXUS  local engineering agent
+Describe the outcome you want. Nexus will show meaningful activity and keep full evidence in the ses
+sion.
+Type /help for commands · /tui for the session view
+
+mode: review · sandbox: off · workspace: trusted
+WORKSPACE  ws [git: master]  /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1
+-qualification/rc.14/scripted-pty/attempt-20261031T0430Z/runner-capture/runs/r1a/ws
+MODEL      m  · review mode
+session session_20261031_033218_q4jmp83k · 1 messages · bash
+
+
+[Notice] Nexus retention: automatic daily GC keeps state for 90 days or up to 2 GB (0 items / 0.0 MB
+ reclaimable). Run 'nexus gc --ack' or set NEXUS_GC=auto to enable automatic background cleanup.
+
+nexus ws:master ❯ create hello.txt
+✔ Nexus is considering the next step
+  · Writing file  hello.txt
+
+⚠
+  Action: Create/overwrite hello.txt (9 bytes)
+  Approve [y]es, [n]o, [d]iff preview, [a]lways allow session? [y/N/d/a]:
+
+
+
+
+
+
+
+
+===== after-denial @ 6.74s (100x30) =====
+Describe the outcome you want. Nexus will show meaningful activity and keep full evidence in the ses
+sion.
+Type /help for commands · /tui for the session view
+
+mode: review · sandbox: off · workspace: trusted
+WORKSPACE  ws [git: master]  /home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1
+-qualification/rc.14/scripted-pty/attempt-20261031T0430Z/runner-capture/runs/r1a/ws
+MODEL      m  · review mode
+session session_20261031_033218_q4jmp83k · 1 messages · bash
+
+
+[Notice] Nexus retention: automatic daily GC keeps state for 90 days or up to 2 GB (0 items / 0.0 MB
+ reclaimable). Run 'nexus gc --ack' or set NEXUS_GC=auto to enable automatic background cleanup.
+
+nexus ws:master ❯ create hello.txt
+✔ Nexus is considering the next step
+  · Writing file  hello.txt
+
+⚠
+  Action: Create/overwrite hello.txt (9 bytes)
+
+⚠
+✔ Nexus is considering the next step
+
+💭 Assistant: Wrote hello.txt. 完成 ✅ — naïve café 🎉
+
+
+✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+
+nexus ws:master *1 ❯

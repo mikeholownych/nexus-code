@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T03:59:03.898Z",
+  "sessions": {
+    "session_20261031_035831_neflenty": {
+      "id": "session_20261031_035831_neflenty",
+      "cleanId": "session_20261031_035831_neflenty",
+      "title": "say hello",
+      "updatedAt": "2026-10-31T03:59:03.878Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.d1b645/runs/s1a/ws",
+      "messageCount": 2,
+      "mtime": 1793419143898,
+      "pinned": false
+    }
+  }
+}

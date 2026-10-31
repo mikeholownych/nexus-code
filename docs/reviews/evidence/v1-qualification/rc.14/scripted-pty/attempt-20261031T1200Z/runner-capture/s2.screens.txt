@@ -1,0 +1,240 @@
+
+===== idle-review-mode @ 0.64s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+
+
+
+
+
+
+
+
+
+
+
+
+                                              N E X U S
+
+                 Understand the work. Inspect the evidence. Keep the decision yours.
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== panel-after-typing @ 3.56s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Write hello.txt                                                                                   │
+│Proposed: create hello.txt · +1 −0                                                                │
+│                                                                                                  │
+│ ▎ @@ −0,0 +1,1 @@                                                                                │
+│ ▎   1 + hi there                                                                                 │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+› yes y y please yy
+
+===== after-paste @ 4.77s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Write hello.txt                                                                                   │
+│Proposed: create hello.txt · +1 −0                                                                │
+│                                                                                                  │
+│ ▎ @@ −0,0 +1,1 @@                                                                                │
+│ ▎   1 + hi there                                                                                 │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+› yes y y please yy
+
+===== approval-40x14 @ 6.97s (40x14) =====
+ NEXUS   ws  model m  mode: review
+╭ Approval needed ─────────────────────╮
+│Write hello.txt                       │
+│Proposed: create hello.txt · +1 −0    │
+│                                      │
+│ ▎ @@ −0,0 +1,1 @@                    │
+│ ▎   1 + hi there                     │
+│                                      │
+│ Approve   All later   Deny           │
+│←→ choose, enter · esc denies         │
+╰──────────────────────────────────────╯
+
+ approval needed · ←→ then enter (t…────
+› yes y y please yy
+
+===== approval-back-100x30 @ 9.18s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Write hello.txt                                                                                   │
+│Proposed: create hello.txt · +1 −0                                                                │
+│                                                                                                  │
+│ ▎ @@ −0,0 +1,1 @@                                                                                │
+│ ▎   1 + hi there                                                                                 │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+› yes y y please yy
+
+===== after-deliberate-y @ 12.88s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Write hello.txt                                                                                   │
+│Proposed: create hello.txt · +1 −0                                                                │
+│                                                                                                  │
+│ ▎ @@ −0,0 +1,1 @@                                                                                │
+│ ▎   1 + hi there                                                                                 │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+› yes y y please yy
+
+===== after-enter1 @ 16.19s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› create hello.txt
+  × denied Write hello.txt
+  × Write hello.txt — Error: Execution was rejected by the user. Ask the user for clarification or
+    proceed with an alternative approach. · 12.3s
+
+Wrote hello.txt. 完成 ✅ — naïve café 🎉
+
+✓ Done  No files changed, so there was nothing to verify.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› yes y y please yy
+
+===== after-enter2 @ 19.39s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› create hello.txt
+  × denied Write hello.txt
+  × Write hello.txt — Error: Execution was rejected by the user. Ask the user for clarification or
+    proceed with an alternative approach. · 12.3s
+
+Wrote hello.txt. 完成 ✅ — naïve café 🎉
+
+✓ Done  No files changed, so there was nothing to verify.
+
+› yes y y please yy
+
+Wrote hello.txt. 完成 ✅ — naïve café 🎉
+
+✓ Done  No files changed, so there was nothing to verify.
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

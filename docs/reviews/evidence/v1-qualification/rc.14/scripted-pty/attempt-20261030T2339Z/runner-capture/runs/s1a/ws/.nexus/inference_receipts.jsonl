@@ -1,0 +1,1 @@
+{"at":"2026-10-30T23:37:24.197Z","requestId":"8d7641bd-5deb-44d2-8eaf-e7816e031f10","role":"main","providerId":"local","selectedModel":"m","endpointOrigin":"http://127.0.0.1:9","protocol":"openai-chat","disclosure":"local","origin_class":"local","costConfidence":"unknown","outcome":"failed","failureKind":"network_error","usageConfidence":"uncertain"}

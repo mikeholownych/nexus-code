@@ -1,0 +1,32 @@
+
+===== bounded-final @ 117.88s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 12s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 12s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 12s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 9s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 12s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 13s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 8s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 11s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 8s
+before checking again. Work is preserved.
+  · Inference provider at http://127.0.0.1:9/v1 temporarily unavailable (network_error); waiting 8s
+before checking again. Work is preserved.
+  · Provider recovery exhausted: provider (http://127.0.0.1:9/v1) did not recover within 120s (next
+wait 13s would exceed it) — run `nexus doctor`, check LOCAL_LLM_ENDPOINT in
+~/.config/nexus/config.env, or use /connect
+
+× Model request failed
+  → next: send again, or choose another model with /model · v receipt
+Inference request failed: fetch failed (cause: bad port)
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
