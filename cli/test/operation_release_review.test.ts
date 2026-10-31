@@ -978,11 +978,15 @@ test("only a genuine submitted unit prompt suppresses message reinjection", asyn
     const { message } = publishMessage(state, { from: "operator", to: "b", kind: "request", body: "provenance body" }, Date.now());
     store.save(state);
     const prompts: string[] = [];
+    let recoveryRan = false;
     const agent: any = {
       durable: true,
       getTaskId: () => "task-b",
       getMessages: () => history,
-      recoverFromTaskState: async () => ({ success: true, interrupted: false, obligationRecordPresent: true, state: { currentOperation: null } }),
+      recoverFromTaskState: async () => {
+        recoveryRan = true;
+        return { success: true, interrupted: false, obligationRecordPresent: true, state: { currentOperation: null } };
+      },
       getObjective: () => ({ verification: [] }),
       getCompletionSummary: () => ({ summary: "done" }),
       setProviderRecoveryHooks: () => {},
@@ -1013,6 +1017,7 @@ test("only a genuine submitted unit prompt suppresses message reinjection", asyn
         createAgent: () => agent,
       }),
     });
+    assert.equal(recoveryRan, true, `${label}: recovery hook must run`);
     assert.equal(resumed.status, "COMPLETE", `${label}: ${JSON.stringify(resumed.blocked)}`);
     assert.deepEqual(resumed.messages![0].deliveredTo, ["b"], `${label}: submission is acknowledged after the turn`);
     assert.equal(prompts.length, 1);
@@ -1023,6 +1028,9 @@ test("only a genuine submitted unit prompt suppresses message reinjection", asyn
   const marker = messagesBlock([{ id: "msg-1", at: new Date().toISOString(), from: "operator", to: "b", kind: "request", body: "provenance body" }]);
   const assistant = await promptFor([{ role: "system", content: "system" }, { role: "user", content: authorized }, { role: "assistant", content: marker }], "assistant");
   assert.match(assistant, /provenance body/, "assistant output is not submission evidence");
+
+  const toolResult = await promptFor([{ role: "system", content: "system" }, { role: "user", content: authorized }, { role: "tool", content: marker, tool_call_id: "call-1" }], "tool-result");
+  assert.match(toolResult, /provenance body/, "tool output is not submission evidence");
 
   const unrelatedUser = await promptFor([{ role: "system", content: "system" }, { role: "user", content: authorized }, { role: "user", content: `Unrelated user note\n${marker}` }], "unrelated-user");
   assert.match(unrelatedUser, /provenance body/, "an unrelated user message is not submission evidence");
