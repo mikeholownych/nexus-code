@@ -6,7 +6,6 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import { pathToFileURL } from "node:url";
 import {
   DurableStateManager,
   DurableTaskState,
@@ -191,18 +190,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     let replacement: ReturnType<typeof spawnSync> | undefined;
     let quarantinedPath: string | undefined;
     (fsDefault as any).renameSync = (from: fs.PathLike, to: fs.PathLike) => {
-      const guardUrl = pathToFileURL(path.resolve("src/core/state_store_guard.ts")).href;
-      const script = `
-        import fs from "node:fs";
-        import { withStateStoreGuard } from ${JSON.stringify(guardUrl)};
-        try {
-          withStateStoreGuard(${JSON.stringify(tasksDir)}, () => fs.writeFileSync(${JSON.stringify(corruptPath)}, JSON.stringify({ taskId: "newer", schemaVersion: 2, messageLog: {}, messages: undefined })));
-        } catch (error) {
-          console.error(error.name);
-          process.exit(23);
-        }
-      `;
-      replacement = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+      replacement = spawnSync(process.execPath, ["--import", "tsx", path.resolve("test/helpers/state_store_replacement_child.ts"), tasksDir, corruptPath], {
         cwd: path.resolve("."),
         env: { ...process.env, HOME: tmpDir, XDG_CONFIG_HOME: path.join(tmpDir, ".config") },
         encoding: "utf8",

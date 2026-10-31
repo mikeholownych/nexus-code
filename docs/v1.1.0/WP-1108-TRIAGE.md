@@ -164,6 +164,31 @@ the relevant final heads. The new CI job above provides that validation path
 for the top-level experiment and compiles the fixture; nested worker packages
 remain outside it as described above.
 
+## Current alert-remediation checkpoint
+
+The owner reports CodeQL alert #51 (`js/bad-code-sanitization`) on
+`cli/test/state.test.ts:199` and Dependabot alerts #23 (`glob`) and #24
+(`minimatch`) in the release-tools lockfile. This branch replaces the test's
+interpolated JavaScript `--eval` source with a static child test module and
+passes temporary paths as ordinary process arguments. This removes generated
+code from the test path. The alert remains pending until a CodeQL scan of the
+integrated commit reports it closed.
+
+The two dependency updates are blocked on compatibility review, not lack of a
+patched version. The lock currently resolves minimatch 10.2.6, with dependent
+ranges `^10.0.3`/`^10.1.1`; the advisory's patched version is 11.0.1. It resolves
+glob 13.0.6 across eight nested locations, with direct parent ranges including
+`^13.0.0`; the advisory's patched version is 14.0.2. Forcing either patched
+major through overrides would violate the recorded consumer ranges. The graph
+comes from `license-checker-rseidelsohn` 5.0.1 and its `@npmcli` dependencies.
+That release requires Node 24 and npm 11, while release and reproducibility
+workflows pin Node 22.22.1 and npm 10.9.4 (`release.yml:60-68`,
+`repro.yml:37-40,90-98`). The upstream checker only has a 6.0.0 release
+candidate describing a move to another package; the available `@lizenz/checker`
+replacement is version 0.0.2. A checker migration or dependency-major override
+therefore needs a separate compatibility/reproducibility decision and runtime
+validation; no lockfile version is changed here. Sources: [minimatch advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249), [glob advisory](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4), [checker releases](https://github.com/RSeidelsohn/license-checker-rseidelsohn/releases), [replacement checker](https://www.npmjs.com/package/@lizenz/checker).
+
 ## Evidence limits
 
 The GitHub Dependabot alerts endpoint was unavailable through the connected
