@@ -24,7 +24,7 @@ import { TaskStateNotFoundError } from "./core/state.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
-import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, redactDiagnostic, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
+import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
 import { safeTerminal } from "./ui.js";
 import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
@@ -597,7 +597,7 @@ async function doctorCommand(_options: any, cmd?: Command): Promise<void> {
     exitAfterFlush(doctorExitCode(report));
   } catch (err: any) {
     // The doctor itself failed (not a finding): exit 3 with a redacted message, JSON when asked for.
-    const message = redactDiagnostic(err?.message ?? String(err));
+    const message = formatCliDiagnostic(err);
     if (options.json) console.log(JSON.stringify({ schemaVersion: DOCTOR_SCHEMA_VERSION, tool: "nexus doctor", error: message }, null, 2));
     else console.error(`nexus doctor could not run: ${message}`);
     exitAfterFlush(DOCTOR_EXIT.error);
