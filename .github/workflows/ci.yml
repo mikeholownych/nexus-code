@@ -57,6 +57,16 @@ jobs:
           test "$(env PATH=/usr/bin:/bin /usr/bin/npm --version)" = "$(npm --version)"
       - run: node scripts/sync-version.mjs --check
       - run: node scripts/check_requirements.mjs
+      - name: Reject deprecated packages in supported npm lockfiles
+        run: |
+          for lockfile in \
+            cli/package-lock.json \
+            demo/package-lock.json \
+            experiments/cloudflare-artifacts-vertical-slice/package-lock.json \
+            experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/package-lock.json \
+            scripts/release-tools/package-lock.json; do
+            node scripts/check_deprecated_lock.mjs "$lockfile"
+          done
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - run: git diff --exit-code -- cli/dist

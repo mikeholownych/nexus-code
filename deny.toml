@@ -19,3 +19,4 @@ unused-allowed-license = "allow"
 
 [advisories]
 ignore = []
+yanked = "deny"
