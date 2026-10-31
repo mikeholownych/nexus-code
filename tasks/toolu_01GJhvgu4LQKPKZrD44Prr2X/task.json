@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GJhvgu4LQKPKZrD44Prr2X",
+  "agent_id": "a77d3f9d40ba629c6",
+  "subagent_type": "reviewer",
+  "task_description": "Independent review of PR 341",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 43227,
+    "cache_read_tokens": 257022,
+    "output_tokens": 5182,
+    "api_call_count": 9
+  },
+  "started_at": "2026-10-30T04:25:27.166447873Z",
+  "completed_at": "2026-10-30T04:26:21.771872781Z"
+}

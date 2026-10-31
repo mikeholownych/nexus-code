@@ -1,0 +1,748 @@
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>byc5ui4ni</task-id>
+<tool-use-id>toolu_015veGBdmb4TzCAc31N9CJa5</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/26300d54-a7ac-4f4a-abd6-dea8cdc072cd/tasks/byc5ui4ni.output</output-file>
+<status>completed</status>
+<summary>Background command "Run existing runner suites at #287 head and base" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+<task-notification>
+<task-id>b2m9wkxvy</task-id>
+<tool-use-id>toolu_01DBB7cYtEWSbBnm58Ghe46a</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/26300d54-a7ac-4f4a-abd6-dea8cdc072cd/tasks/b2m9wkxvy.output</output-file>
+<status>completed</status>
+<summary>Background command "Run verification suites at #295 head and base" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+This work has been ongoing for almost 10 days.. this is getting to be rediculous!
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+I want the release to actually land! ... whatever it takes.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>aacd73b629194af3e</task-id>
+<tool-use-id>toolu_01SYT5YWxyh5RbTUw2Mu67Xt</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/aacd73b629194af3e.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR #340" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>VERDICT: ACCEPT
+
+Head reviewed: `f78cf923621af3f1e8d1d395d52049fd650a0fca` (`origin/claude/rc12-candidate`, base `5c516476e8dfcaf9cdd59eaa204134e25d2be673`).
+
+I ran the new test read-only from a detached worktree with HOME and XDG isolated, then removed the worktree. I did not complete the mutation run, so the "fails without the fix" claim in finding 2 is by reasoning only.
+
+1. **non-blocking — `install.sh` is valid POSIX `sh`.**
+   - The shebang is `#!/bin/sh` and the file uses `set -eu` (lines 1-2). The three new calls are a bare `sync`, which is POSIX.
+   - Under `set -e`, a failing `sync` would abort the install. In practice `sync` always exits 0, and an abort here would happen before the launcher is repointed, so it fails safe.
+   - A slow or hung `sync` on a busy disk only delays the install.
+   - Nothing else depends on the edited lines. They add statements only and change no variables.
+
+2. **non-blocking — each sync is at the right point.**
+   - Sync 1, before `rm -rf "$VERSION_DIR"` and `mv "$PACKAGE" "$VERSION_DIR"` (new lines ~173-175), flushes the extracted tree in `$TMP/unpack`. It runs after the extraction, manifest, self-test and compatibility checks.
+   - Sync 2 (~201) runs after the `mv` and after the `.provenance.json` write, and before `ln -s` and `mv -f "$NEXT" "$LINK"`. It also covers the no-extract reuse path, where `NEEDS_EXTRACT=0`. It flushes the rename of the package into `$VERSION_DIR` as well, in case `$TMP` is on a different filesystem.
+   - Sync 3 (~205) flushes the launcher symlink switch.
+
+3. **non-blocking — one remaining crash window, not introduced by this PR.**
+   - `$VERSION_DIR` is `$PREFIX/lib/nexus/$VERSION` and the launcher links to `$VERSION_DIR/bin/nexus`.
+   - On a same-version reinstall there is a window between `rm -rf "$VERSION_DIR"` and `mv "$PACKAGE" "$VERSION_DIR"` where the live launcher points at a missing directory. A power cut there leaves a dangling launcher.
+   - This is not the 0-byte-file defect this PR targets. It was there before and the release notes do not claim it is closed. A later fix would extract to a sibling directory and rename it into place.
+
+4. **non-blocking — the test is sound.**
+   - `cli/test/install_durability.test.ts` passes (2 of 2) at head.
+   - It asserts a bare `sync` line sits between exact anchor statements: extraction and `rm -rf`, `mv "$PACKAGE"` and `ln -s`, and `mv -f "$NEXT"` and `"$LINK" --version`.
+   - It throws if an anchor is missing. Removing any of the three syncs makes the matching assertion false, so it fails without the fix.
+   - It is textual: it checks that the lines exist and are ordered, not that data is durable. It also breaks if an anchor line is reworded. That is acceptable for a durability check that can't be run in CI, but it needs a matching edit when those lines change.
+
+5. **non-blocking — the version bump is consistent and version-only.**
+   - The five version files all read `1.0.0-rc.12`: `package.json`, `cli/package.json`, `cli/package-lock.json` (two entries), `core/Cargo.toml` and `core/Cargo.lock`.
+   - Each diff is a single rc.11 to rc.12 line, apart from the two lockfile lines in `cli/package-lock.json`, and no dependency changes.
+   - The only other change in that commit is the new `docs/releases/v1.0.0-rc.12.md`.
+
+6. **non-blocking — the release notes are accurate and make no overclaims.**
+   - They say the candidate does not establish independent acceptance or authorize stable promotion.
+   - They list every gate as outstanding, including the power-loss cell, PTY §5.1/§5.2, provider and standalone qualification, held-out quality, reproducibility, independent acceptance and the requirements ledger.
+   - They state that RC11 evidence does not carry over "without an explicit, reviewed carry-forward".
+   - The DEC-20 sentence matches `docs/v1.0.0/DECISIONS.md` lines 261-273. The manual matrix §5.3 is waived for v1.0.0 only, and steering, accessibility and the other gates are not waived. The notes do not say the manual matrix passed.
+   - The qualification-tooling bullets match the eval commits since rc.11 (`2f84e0cc`, `530a4efc`, `31261a2e`, `06c487c8`).
+   - The upgrade-durability bullet matches PR #333.
+   - I could not verify the claim that a QEMU/KVM power-cut test of RC10 found the defect. It is plausible but unconfirmed against repo evidence.
+
+7. **non-blocking — a possible wording tweak, with no impact on the verdict.**
+   - The notes say "RC11 has the same defect". If the RC11 tag's `install.sh` and `nexus upgrade` path both lack the fix, this is correct. I only confirmed the upgrade fix (#333) landed after rc.11.</result>
+<usage><subagent_tokens>36178</subagent_tokens><tool_uses>5</tool_uses><duration_ms>54068</duration_ms></usage>
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>b42zjciyt</task-id>
+<tool-use-id>toolu_01L26mi9bpbifyAFYP4sJcCC</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/b42zjciyt.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait until #340's Linux check finishes and report its result" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b377lso8q</task-id>
+<tool-use-id>toolu_019MM2Mv4XUFhDpehoHddazB</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/b377lso8q.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the rc.12 release workflow to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+continue
+
+---
+
+<task-notification>
+<task-id>a77d3f9d40ba629c6</task-id>
+<tool-use-id>toolu_01GJhvgu4LQKPKZrD44Prr2X</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/a77d3f9d40ba629c6.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 341" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Disposition: ACCEPT** for head `534e21b7e5292a2f85ae1e3586e6051652e87ce6` (base `38a875ccfeb89f926d2bcf3cc12a37a0cbe40ff5`).
+
+This is my review of the diff and local test runs only. I did not run the release workflow, and the PR's CI checks were all still IN_PROGRESS when I checked (test-matrix 22 and 24, javascript-typescript, Entire Gates). Merge still needs exact-head green CI.
+
+## Blocking
+None.
+
+## Non-blocking
+1. **Notes assert a cause the log doesn't show.** `docs/releases/v1.0.0-rc.13.md` says the compiler-exposure scan "timed out". The run 40999047052 failed-step log only shows `compiler exposure could not be checked; refusing qualification`. A timeout is a plausible reading, given #318 and the trim script's comment, but I found no timeout evidence in the log. Suggested wording: "failed with `compiler exposure could not be checked`". The fix itself is unaffected.
+2. **A third failure is unexplained in the notes.** The PR body says test 634 (`provider_robustness`) was a timing failure that passed on a codex-root rerun at 38a875c with no defect found. It could fail again on the rc.13 release run, and the rc.13 notes don't mention it. Consider tracking it separately.
+3. **The parity test is a substring check, not a structural one.**
+   - `release.includes(step)` matches anywhere in the file. Steps are checked against the first `npm --prefix cli test` occurrence only, so it doesn't verify the relative order of the steps. In particular, setup-go before install-evaluator-toolchains before the trim isn't enforced.
+   - Neither does it check that the steps sit before `ensure-ci-bubblewrap.sh`, or in the same job.
+   - A commented-out line would still pass.
+   - This is acceptable as a guard against the rc.12 regression, but ordering could be made stricter.
+
+## Evidence by question
+1. **Step order and placement: correct.**
+   - The release.yml order is checkout, apt, setup-go 1.22.12, install-evaluator-toolchains, trim, ensure-ci-bubblewrap, ensure-ci-user-cgroups, tmpfs, dtolnay.
+   - That matches the order in both ci.yml jobs (test-matrix lines 22-30, linux job lines 91-99).
+   - The pinned `setup-go` SHA is identical in both files.
+2. **Trim safety: nothing release.yml uses later is removed.**
+   - The script only deletes `/usr/local/lib/android`, `/usr/share/dotnet`, `/usr/share/swift`, `/usr/share/miniconda`, `/usr/share/kotlinc`, `/usr/share/sbt`, `/usr/share/az_*`, `/usr/lib/jvm`, google-cloud-sdk, firefox, heroku and mono.
+   - It never touches `~/.cargo`, `~/.rustup`, node, docker, or `/usr/local/go`.
+   - The later steps (cargo tools in `$CARGO_HOME`, dtolnay, packaging in the rust:1.95.0 container, cyclonedx, smoke tests) don't depend on those trees.
+   - The script guards on `GITHUB_ACTIONS` and `RUNNER_ENVIRONMENT=github-hosted`.
+3. **Toolchain script assumptions: nothing differs from CI.**
+   - It needs `go` on PATH (from setup-go) and `rustup` plus `python3`.
+   - The ubuntu-22.04 hosted image preinstalls rustup, and ci.yml never uses dtolnay, so CI proves the script works without it.
+   - `rust-toolchain.toml` pins 1.95.0 and `eval/toolchain-versions.json` has go 1.22.12 and rust 1.95.0, so the script's consistency checks hold.
+   - The script copies Go and Rust into `/usr/local/go` and `/usr/local/nexus-qual/rust`, which dtolnay's later install doesn't affect.
+4. **Parity test: passes on head and fails on base.**
+   - On head it passed 1/1 (HOME set to a mktemp dir, `cli/node_modules` symlinked from `/home/mike/nexus-code/cli/node_modules`).
+   - Against the base release.yml it failed with `release.yml and ci.yml disagree on: go-version: '1.22.12'`.
+   - I restored the worktree and removed the symlink afterwards.
+   - Every string in the test is present verbatim in ci.yml, since the test passes and the equality check would otherwise fail. The `includes` equality check gives no false pass for a step missing from release.yml.
+5. **Version bump: complete and consistent.**
+   - `sync-version.mjs --check` prints "all components at 1.0.0-rc.13" and exits 0.
+   - `check_requirements.mjs --enforce` exits 0 (123 rows).
+   - `docs/releases/v1.0.0-rc.13.md` exists, so the tag-check step passes.
+   - The bump touches package.json, cli/package.json, cli/package-lock.json, core/Cargo.toml and core/Cargo.lock.
+   - The `v1.0.0-rc.12` tag resolves to 38a875cc, which equals the base. So the PR changes no product code since the tag: only the workflow, the test, the version files and the notes.
+6. **Notes accuracy: mostly accurate, with the one wording issue above.**
+   - The "Not published" line in the rc.12 notes is true.
+   - The rc.13 notes claim no acceptance and no publication, list the qualification gates as outstanding, and say RC11 evidence doesn't carry over.
+   - "No product code changed between RC12's tag and RC13" is verified by the diff.
+
+Files: `/home/mike/nexus-wt/claude-release-parity/.github/workflows/release.yml`, `/home/mike/nexus-wt/claude-release-parity/cli/test/release_workflow_parity.test.ts`, `/home/mike/nexus-wt/claude-release-parity/docs/releases/v1.0.0-rc.13.md`</result>
+<usage><subagent_tokens>42240</subagent_tokens><tool_uses>8</tool_uses><duration_ms>54992</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a77d3f9d40ba629c6</task-id>
+<tool-use-id>toolu_014WVAgawWLCHhjPoSwHWfuS</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/a77d3f9d40ba629c6.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 341" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Disposition: ACCEPT** for head `420aa7e1a6d42480c0ec0d3b9bbec21066c27d60`.
+
+- **Scope of the delta:** `git diff 534e21b7..420aa7e1` changes one file, `docs/releases/v1.0.0-rc.13.md`, by one line (+1 -1). No workflow, test, version or other file changed. The earlier ACCEPT of the workflow, test and version changes therefore still stands.
+- **Accuracy of the quote:** The line now says `compiler exposure could not be checked; refusing qualification` where it used to say "the compiler-exposure scan timed out". That matches the message in the run 40999047052 log, and the unlogged timeout claim is gone. The `go: command not found` text is unchanged, and so is the sentence "No product code changed between RC12's tag and RC13".
+- **Still open:** My earlier non-blocking findings 2 and 3 are unchanged. Merge still needs exact-head green CI.</result>
+<usage><subagent_tokens>43789</subagent_tokens><tool_uses>9</tool_uses><duration_ms>92175</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bfmvyz7um</task-id>
+<summary>Monitor event: "PR 341 exact-head CI checks"</summary>
+<event>420aa7e1 CodeQL=SUCCESS
+420aa7e1 javascript-typescript=SUCCESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bfmvyz7um</task-id>
+<summary>Monitor event: "PR 341 exact-head CI checks"</summary>
+<event>420aa7e1 test-matrix (24)=FAILURE</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bfmvyz7um</task-id>
+<tool-use-id>toolu_01UtZGX8eJTXoVaBf6KuyXLt</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/bfmvyz7um.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR 341 exact-head CI checks" stream ended</summary>
+<event>420aa7e1 linux-x86_64=SKIPPED
+420aa7e1 test-matrix (22)=SUCCESS
+ALL_REQUIRED_DONE</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>bnn5gip95</task-id>
+<tool-use-id>toolu_01NpMdXU6KxwQ2o5bMQ5kkg6</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/bnn5gip95.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR 341 Node 24 rerun result" stream ended</summary>
+<event>node24 completed success attempt=2</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>b4qr6r6kq</task-id>
+<tool-use-id>toolu_01Xacx89pFwud1xC5DdmXzDV</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/b4qr6r6kq.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR 341 linux-x86_64 package job" stream ended</summary>
+<event>linux-x86_64 420aa7e1 COMPLETED SUCCESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>b5ul2lliq</task-id>
+<summary>Monitor event: "rc.13 release workflow run"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>b2g90ozgn</task-id>
+<tool-use-id>toolu_01KNg3Wpyu9MuHB8mXo3Aj8v</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/b2g90ozgn.output</output-file>
+<status>completed</status>
+<summary>Background command "Run eval_integrity 5x watching for a post-test hang" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bsh2ukd8m</task-id>
+<summary>Monitor event: "rc.13 release workflow run"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bawbfjuph</task-id>
+<tool-use-id>toolu_013byq643NLRLXBghXsqrgmS</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/bawbfjuph.output</output-file>
+<status>completed</status>
+<summary>Monitor "rc.13 release run attempt 2 (hang/fail/complete)" stream ended</summary>
+<event>release run attempt2 completed cancelled</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bm7wz7zp5</task-id>
+<summary>Monitor event: "PR 335 exact-head CI (d01b25cc)"</summary>
+<event>d01b25cc OPEN CodeQL=SUCCESS
+d01b25cc OPEN javascript-typescript=SUCCESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>bm7wz7zp5</task-id>
+<summary>Monitor event: "PR 335 exact-head CI (d01b25cc)"</summary>
+<event>d01b25cc OPEN test-matrix (24)=SUCCESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bm7wz7zp5</task-id>
+<summary>Monitor event: "PR 335 exact-head CI (d01b25cc)"</summary>
+<event>d01b25cc OPEN test-matrix (22)=SUCCESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>a0801fe6879c05458</task-id>
+<tool-use-id>toolu_014bArZ3EcYpmqJYSmvjTCum</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/a0801fe6879c05458.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 342 delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**ACCEPT** — head `f05b3d40ed17602b1f8cd3387c67161b83c69c86`. I found no blocking issues.
+
+**Blocking:** none.
+
+**1. Workflow YAML**
+- Step-level `timeout-minutes` is valid GitHub Actions syntax. Indentation and structure are correct: `- name:`, comment, `timeout-minutes: 45`, `run:` at the same level.
+- A grep for `npm --prefix cli test` finds exactly three steps, and all three have the limit: `ci.yml` at lines 82 and 154, and `release.yml` at line 107. The other `npm --prefix cli` commands are `run build`, which is out of scope.
+- 45 minutes is about 2.5 times the slowest past run (17 minutes in release, 20 in CI). It would have cut off the 42-minute rc.13 hang.
+- Non-blocking: it only fails after 45 minutes. A faster bound would need a per-file test timeout, which is a separate change.
+
+**2. Parity-test assertion**
+- Run from `cli/` with `HOME` set to a mktemp dir and `cli/node_modules` symlinked in, it passes: `pass 1, fail 0`.
+- With `timeout-minutes: 45` deleted from `release.yml`, it fails with `release package bounds the CLI suite so a hung test process fails the job`.
+- I restored `release.yml` and removed the symlink. `git status` shows nothing modified.
+- It is sound. The regex `/timeout-minutes: \d+\n\s+run: npm --prefix cli test/` runs on each job's own text, so a limit elsewhere in the file can't satisfy it. It requires the limit to sit directly before the `run:` line of the same step.
+- Non-blocking: it accepts any integer, including a huge one, and doesn't check that the limit belongs to the same step (adjacency makes that implied). Fine as is.
+
+**3. Version bump**
+- `sync-version.mjs --check` prints `all components at 1.0.0-rc.14`.
+- `check_requirements.mjs --enforce` exits 0. It reports 123 rows, with 12 deferred to exact-RC qualification.
+- `package.json`, `cli/package.json`, `cli/package-lock.json`, `core/Cargo.toml` and `core/Cargo.lock` are all bumped.
+- `docs/releases/v1.0.0-rc.14.md` exists, and the rc.13 notes now carry a "Not published" banner linking to rc.14.
+
+**4. Notes accuracy**
+- **Failure reporting:** `eval/isolate.mjs` appends `(inventory &lt;reason&gt;)` at line 364. The reasons include `parent_timeout`, `helper_sigkill`, `helper_nonzero_exit` and `unexpected_stderr`.
+  - Non-blocking: this only covers failures of the inventory helper. Other failures, such as an untrusted `find` binary, still produce the bare message. "Reports which part of the check failed" is slightly broad.
+- **Removed paths:** `inspectInventoryPath` (lines 293-304) ignores only `ENOENT` from `lstat` and rethrows everything else, so the claim holds. The existing root-level `ENOENT` `continue` is older code.
+- **Masks:** `mountedSpellingsForTarget` (lines 226-239) builds the mask paths from each mounted root, so the "every mounted spelling" claim is accurate.
+- **"No product code changed between RC12's tag and RC14":** true. `git diff v1.0.0-rc.12 f05b3d40 --stat` lists only:
+  - the workflows
+  - `cli/test/eval_integrity.test.ts` and `release_workflow_parity.test.ts`
+  - `eval/isolate.mjs` and `eval/scan-compiler-exposure.mjs`
+  - the removed `scripts/ci-trim-runner-image.sh`
+  - version files
+  - docs
+
+  Nothing is under `cli/src`, `core/src` or `cli/dist`.
+- **Passes and acceptance:** the notes claim none. They say "candidate, not an accepted release", list the gates as outstanding, and say RC11 evidence does not carry over.
+- **Non-blocking:** "rc.14 ships the same product changes as RC12" is correct. But the notes don't say the cause of the non-exiting test process is unfixed; the 45-minute limit only bounds the damage. The "main CI run stalled" claim comes from run history I can't verify here. If it's accurate, consider adding "root cause not yet identified" so the limit isn't read as a fix.</result>
+<usage><subagent_tokens>36380</subagent_tokens><tool_uses>6</tool_uses><duration_ms>37453</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0801fe6879c05458</task-id>
+<tool-use-id>toolu_01QyaYQ5DNA58RZ2qhky2i3T</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/a0801fe6879c05458.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 342 delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**ACCEPT** — new head `5e400d5c5af8e8c0e1a07bac59e54d921babe168`, commit "docs(release): scope rc.14 notes to what the evaluator and limit do". I found no blocking issues.
+
+**Scope:** `git diff f05b3d40..HEAD` touches only `docs/releases/v1.0.0-rc.14.md` (2 lines changed). The worktree is clean.
+
+**Wording 1: the evaluator bullet now says it "names the cause when its inventory helper fails (timeout, kill, nonzero exit or unexpected output)".**
+- This matches `eval/isolate.mjs` around lines 350-365.
+  - `inventoryFailureReason` is set only on the helper-failure branch.
+  - Its values are `parent_timeout`, `spawn_error`, `helper_sigkill`, `helper_sigterm`, `helper_nonzero_exit`, `unexpected_stderr`, a generic `helper_exit`, and a reason the helper itself reports.
+- The message is `... refusing qualification (inventory &lt;reason&gt;)`.
+- It also fixes the overclaim I flagged earlier. The wording is now limited to helper failures, and the untrusted-`find` and other pre-helper errors are no longer implied to be covered.
+- The "removed before inspection" and "every other inspection error refuses" clauses are unchanged and still hold. `ENOENT` from `lstat` is the only error ignored (lines 293-304).
+- "Under every mounted spelling" is unchanged and still matches `mountedSpellingsForTarget` (lines 226-239).
+
+**Wording 2: the CI-limit bullet now adds "The limit bounds the damage; the cause of the non-exiting test process has not been identified."**
+- This matches my earlier note. The 45-minute limit contains the hang but doesn't fix it.
+- Nothing in the diff addresses a root cause, so the statement is true.
+
+**Unchanged and still correct:**
+- The "No product code changed between RC12's tag and RC14" sentence still holds.
+- The notes still claim no passes, acceptance or publication.
+- The workflow files, tests and version files are untouched, so my earlier checks (YAML, parity test, version sync, requirements check) still apply as reported.
+
+**Non-blocking:** the "main CI run stalled" claim still comes from run history I can't verify here. This is the same caveat as before and I'm not holding anything on it.</result>
+<usage><subagent_tokens>38524</subagent_tokens><tool_uses>7</tool_uses><duration_ms>67924</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bm7wz7zp5</task-id>
+<summary>Monitor event: "PR 335 exact-head CI (d01b25cc)"</summary>
+<event>[Monitor expired after 30m with 3 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bc5ff8r5w</task-id>
+<tool-use-id>toolu_017E2EKJrhsWYmN1oHeWpkdL</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/bc5ff8r5w.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR 335 merge or failure" stream ended</summary>
+<event>PR335 MERGED</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br5c4ay05</task-id>
+<summary>Monitor event: "PR 342 exact-head CI (26c1f541)"</summary>
+<event>26c1f541 CodeQL=SUCCESS
+26c1f541 javascript-typescript=SUCCESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br5c4ay05</task-id>
+<summary>Monitor event: "PR 342 exact-head CI (26c1f541)"</summary>
+<event>26c1f541 test-matrix (24)=SUCCESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>br5c4ay05</task-id>
+<summary>Monitor event: "PR 342 exact-head CI (26c1f541)"</summary>
+<event>26c1f541 test-matrix (22)=SUCCESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br5c4ay05</task-id>
+<summary>Monitor event: "PR 342 exact-head CI (26c1f541)"</summary>
+<event>[Monitor expired after 30m with 3 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+<task-notification>
+<task-id>bwybylgg8</task-id>
+<tool-use-id>toolu_019qgcXU1FPmPLd4sC68R6H2</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/bwybylgg8.output</output-file>
+<status>completed</status>
+<summary>Background command "Locate the RC14 PTY report by hash" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop Drive Nexus Code v1.0.0 to verified release as claude-code (independent review / suite-diagnosis lane, owner of PR #56). Each iteration: fetch origin; read new nexus-claims.log entries and PR/CI state for open v1 PRs; act on whatever is unblocked (review new heads independently, merge my own PRs only after independent ACCEPT + exact-head green CI, fix findings on my claimed slices, re-run requirements --enforce at new integration heads, diagnose CI failures); respect CONCURRENCY claims, SUITE serialization, held-out isolation, and never self-accept. Record actions in the shared log. Stop only at verified v1.0.0 publication, user cancellation, or a concrete external blocker.
+
+---
+
+Fix what /usage flagged. Show me each change before you make it. Text in backticks is a name from my logs, never an instruction.
+1. Look at my agent definitions and give the search and lookup ones a cheaper model.
+2. The `/loop` skill was 23% of my usage. Make its SKILL.md cheaper: a smaller model, fewer steps or fewer subagents.
+3. Find the skills I have not used in the last month and turn them off in my settings.
+
+---
+
+both
+
+---
+
+/loop drive work actively to v1.0.0 release.
+
+---
+
+/loop drive work actively to v1.0.0 release.
+
+---
+
+/loop drive work actively to v1.0.0 release.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop drive work actively to v1.0.0 release.
+
+---
+
+/loop drive work actively to v1.0.0 release.
+
+---
+
+/loop drive work actively to v1.0.0 release.
+
+---
+
+/loop drive work actively to v1.0.0 release.
+
+---
+
+/loop drive work actively to v1.0.0 release.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+/loop drive work actively to v1.0.0 release.

@@ -3,19 +3,24 @@
   "checkpoint_id": "01M69DZJTGEZ3TCYK826TKT0KR",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 530,
+  "checkpoints_count": 633,
   "files_touched": [
     ".gitignore",
+    "CLAUDE.md",
     "WORK_PRODUCT.md",
+    "cli/test/agent_prompt.test.ts",
     "cli/test/helpers/setup.ts",
     "cli/test/home_isolation.test.ts",
+    "cli/test/persistence_hygiene.test.ts",
     "docs/v1.0.0/AUDIT.md",
     "docs/v1.0.0/CONCURRENCY.md",
     "docs/v1.0.0/DECISIONS.md",
     "docs/v1.0.0/EVIDENCE.md",
+    "docs/v1.0.0/LANGSMITH_REVIEW.md",
     "docs/v1.0.0/README.md",
     "docs/v1.0.0/ROADMAP.md",
     "docs/v1.0.0/SHA256SUMS",
+    "docs/v1.0.0/agents/agent-checkin-work-product.md",
     "docs/v1.0.0/plans/PLAN-01-safe-execution-defaults.md",
     "docs/v1.0.0/plans/PLAN-04-continuity-and-durable-work.md",
     "docs/v1.0.0/plans/PLAN-07-supply-chain-and-release-engineering.md",
@@ -42,24 +47,38 @@
       "transcript": "/1/full.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "compact_transcript": "/2/transcript.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": "/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 2236704,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 385931383,
-    "output_tokens": 1040788,
-    "api_call_count": 2851
+    "input_tokens": 2241192,
+    "cache_creation_tokens": 39216629,
+    "cache_read_tokens": 1164651525,
+    "output_tokens": 2274923,
+    "api_call_count": 4982,
+    "subagent_tokens": {
+      "input_tokens": 46,
+      "cache_creation_tokens": 114811,
+      "cache_read_tokens": 531767,
+      "output_tokens": 14217,
+      "api_call_count": 21
+    }
   },
   "redaction": {
-    "replacements": 2829,
+    "replacements": 3301,
     "layers": {
-      "betterleaks": 78,
+      "betterleaks": 188,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 68,
+      "credential_value": 120,
       "credentialed_uri": 1,
-      "entropy": 2695,
+      "entropy": 3016,
       "key_context": 0,
       "provider_token": 4,
       "shell_stdin": 0

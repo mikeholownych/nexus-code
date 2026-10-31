@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014bArZ3EcYpmqJYSmvjTCum",
+  "agent_id": "a0801fe6879c05458",
+  "subagent_type": "reviewer",
+  "task_description": "Independent review of PR 342 delta",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 37573,
+    "cache_read_tokens": 171612,
+    "output_tokens": 4683,
+    "api_call_count": 7
+  },
+  "started_at": "2026-10-30T07:14:37.631019695Z",
+  "completed_at": "2026-10-30T07:15:14.811890837Z"
+}
