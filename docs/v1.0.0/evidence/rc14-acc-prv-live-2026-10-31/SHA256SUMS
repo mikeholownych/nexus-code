@@ -1,4 +1,4 @@
-15da18d8be4481230a95f4ab2c268673e8a7418a40d4a6798ef159c6393d1c03  ./README.md
+c3281330ebc0aabf80618a2140fe9062bfbb18bf8ac13c35f92e918801b7057c  ./README.md
 4a42bb7e698cacd7d4b260f84a11df05d8f27cdf23f313a3229feeed14e81cc6  ./fixture/baseline-test.log
 3faae8bf7996f94485374d933efce258ead7a274a71d547f0909a9c881b2e379  ./fixture/baseline/package.json
 6254bdc552d1a150494e2bd88efb67cc6d2b718ec575dde0d5039799306b3c09  ./fixture/baseline/src/status.js

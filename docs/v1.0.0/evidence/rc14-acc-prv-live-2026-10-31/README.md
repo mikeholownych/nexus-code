@@ -41,4 +41,4 @@ No held-out tasks, hidden answers, private validators, or user workspace content
 
 ## Scope disposition
 
-This packet supports `ACC-PRV-LIVE` for the two providers required by ACCEPTANCE §4.3 and one independently validated OpenRouter task. Standalone stripped-proxy profiles, held-out qualification, other provider tiers, exact-RC overall acceptance, and stable release remain separate gates.
+This packet supports the required OpenRouter provider verification and one independently validated OpenRouter task. It also records the RC repeat verification for experimental ChatGPT sign-in described in ACCEPTANCE §4.3; it does not treat ChatGPT as a supported required provider. Standalone stripped-proxy profiles, held-out qualification, other provider tiers, exact-RC overall acceptance, and stable release remain separate gates.
