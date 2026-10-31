@@ -15,15 +15,16 @@ import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
-import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
+import { ConvergenceScheduler, DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { validateOperationPolicy } from "./core/operation_schema.js";
+import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
-import { buildOperationView, renderOperationView, watchOperation } from "./operation_view.js";
+import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
 import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
 import { safeTerminal } from "./ui.js";
-import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
+import { credentialFingerprint, ResourceRegistry, type ResourceDescriptor } from "./core/resources.js";
 import { createOperationAccountIdentity } from "./core/account_identity.js";
 import { credentialStorageHome, operatorSetting } from "./client.js";
 import { baseUrlSetting, originOf, providerDefinition } from "./providers.js";
@@ -216,7 +217,7 @@ function operationAction<T extends unknown[]>(action: (...args: T) => void | Pro
     } catch (error: any) {
       console.error(pc.red(safeTerminal(String(error?.message ?? error))));
       // A spec the operator must fix is a usage error, not an internal failure.
-      process.exitCode = error instanceof OperationSpecError ? 2 : 1;
+      process.exitCode = error instanceof OperationSpecError || error instanceof MessageRejected ? 2 : 1;
     }
   };
 }
@@ -312,11 +313,17 @@ export function registerOperationCommands(program: Command): void {
     .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
     .option("-j, --json", "JSON output")
     .option("--dag", "Read-only view: work-unit DAG, resource eligibility and the open decision")
+    .option("--replay", "Read-only replay: the recorded event timeline, oldest first")
     .option("--events <count>", "Events to include with --dag (newest kept)", "20")
     .description("Show operation state, parked work, wake time and pending decisions")
     .action(operationAction((id: string | undefined, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
-      if (options.dag) {
+      if (options.dag && options.replay) {
+        console.error(pc.red("--dag and --replay are separate read-only views; pass one of them."));
+        process.exitCode = 2;
+        return;
+      }
+      if (options.dag || options.replay) {
         const eventsText = String(options.events);
         const eventLimit = Number(eventsText);
         if (!eventsText.trim() || !Number.isFinite(eventLimit) || eventLimit < 0) {
@@ -334,17 +341,60 @@ export function registerOperationCommands(program: Command): void {
           process.exitCode = 2;
           return;
         }
-        const views = ops.map((state) => buildOperationView(state, { events: Math.floor(eventLimit) }));
+        const views = ops.map((state) => buildOperationView(state, { events: Math.floor(eventLimit), ...(options.replay ? { replay: true } : {}) }));
         if (options.json) return void console.log(JSON.stringify(views, null, 2));
         if (!views.length) return void console.log("No operations in this workspace.");
         const width = process.stdout.isTTY ? process.stdout.columns ?? 0 : 0;
-        views.forEach((view) => console.log(renderOperationView(view, { width })));
+        views.forEach((view) =>
+          console.log(options.replay && view.replay ? renderReplay(view.replay, { width }) : renderOperationView(view, { width })),
+        );
         return;
       }
       const ops = id ? [store.loadForInspection(id)] : store.listForInspection();
       if (options.json) return void console.log(JSON.stringify(ops, null, 2));
       if (!ops.length) return void console.log("No operations in this workspace.");
       ops.forEach(printStatus);
+    }));
+
+  op.command("message")
+    .argument("<id>", "Operation id")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .option("--from <sender>", "Sender (a unit id, or 'operator')", "operator")
+    .option("--to <recipient>", "Recipient unit id, or '*' for the whole operation")
+    .option("--kind <kind>", "request | observation | artifact | verdict", "observation")
+    .option("--body <text>", "Message body (advisory context; pointers, not content)")
+    .description("Publish a typed message to an operation's work units")
+    .action(operationAction((id: string, options: any) => {
+      const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      if (!options.to) throw new MessageRejected("--to is required: a unit id, or '*' for the whole operation");
+      if (!options.body) throw new MessageRejected("--body is required");
+      const release = store.acquire(id);
+      try {
+        const state = store.load(id);
+        const now = Date.now();
+        const registry = new ResourceRegistry(state.resources, state.conditions, { now: () => now, random: Math.random });
+        const scheduler = new ConvergenceScheduler(state, registry, () => now);
+        const { message, dropped } = publishMessage(
+          state,
+          { from: String(options.from), to: String(options.to), kind: String(options.kind) as any, body: String(options.body) },
+          now,
+        );
+        scheduler.emit("OPERATION_MESSAGE", `${message.from} published a ${message.kind} to ${message.to}.`, {
+          unitId: message.from,
+          detail: { to: message.to, kind: message.kind, id: message.id },
+        });
+        for (const lost of dropped) {
+          scheduler.emit("OPERATION_MESSAGE_DROPPED", `Dropped message ${lost.id} from ${lost.from} to keep the record bounded.`, {
+            unitId: lost.from,
+            detail: { id: lost.id, to: lost.to, kind: lost.kind },
+          });
+        }
+        state.updatedAt = new Date(now).toISOString();
+        store.save(state);
+        console.log(`Message ${message.id} published to ${message.to}.`);
+      } finally {
+        release();
+      }
     }));
 
   op.command("checkpoint")

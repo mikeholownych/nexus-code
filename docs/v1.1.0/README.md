@@ -9,12 +9,18 @@ inside a stable release. Each proposal states what exists today, what changes, w
 
 ## Sequence
 
-| Order | Proposal | Why first |
-|---|---|---|
-| 1 | [Operation observability](OPERATION_OBSERVABILITY.md) | Read-only: no scheduler or state change, and it makes every later proposal debuggable. |
-| 2 | [Git-aware operations](GIT_AWARE_OPERATIONS.md) | Bounded change to unit execution and integration; independent of parallelism. |
-| 3 | [Context management for long operations](CONTEXT_MANAGEMENT.md) | Extends existing compaction/admission; needs the observability view to be trustworthy. |
-| 4 | [Multi-agent orchestration](MULTI_AGENT_ORCHESTRATION.md) | Largest change: parallel scheduling, persistence and recovery. Builds on 2 and 3. |
+| Order | Proposal | State at v1.1.0 | Remaining |
+|---|---|---|---|
+| 1 | [Operation observability](OPERATION_OBSERVABILITY.md) | View and replay shipped; terminal safety and schema validation completed | TUI pane, in-view decisions (v1.2) |
+| 2 | [Git-aware operations](GIT_AWARE_OPERATIONS.md) | Isolation, integration queue, conflict policy, recovery and evidenced receipts shipped | PR publication (v1.2), fail-closed until then |
+| 3 | [Context management](CONTEXT_MANAGEMENT.md) | Per-unit budget (with estimate source), checkpoints, and cross-unit sharing through the message channel | Semantic retrieval (v1.2) |
+| 4 | [Multi-agent orchestration](MULTI_AGENT_ORCHESTRATION.md) | Deterministic parallel due-sets, serialised integration, typed channel, failure semantics | Unit-authored messages (v1.2) |
+
+Documents for this release: [`ROADMAP-REVIEW.md`](ROADMAP-REVIEW.md) (baseline, reconciliation, traceability),
+[`SPEC.md`](SPEC.md) (normative specification and acceptance criteria), [`REQUIREMENTS.md`](REQUIREMENTS.md) (enforced
+ledger), [`COLLABORATION.md`](COLLABORATION.md) (work packages and contracts), [`VALIDATION.md`](VALIDATION.md) (gates
+and execution record), [`DECISIONS.md`](DECISIONS.md) (xerj research log and decisions), [`STATUS.md`](STATUS.md)
+(resumable programme state).
 
 ## Ground rules
 
@@ -26,6 +32,9 @@ inside a stable release. Each proposal states what exists today, what changes, w
 - Every slice must state its effect on the v1.0.0 qualification evidence (`docs/v1.0.0/ACCEPTANCE.md`): which E2 cells,
   provider checks, and reproducibility runs must be repeated, and which ledger rows it touches.
 - Anything that changes `DurableOperationState` needs a schema version and a tested migration from a v1.0.0 record.
+  v1.1.0 finally enforces this: `CURRENT_OPERATION_SCHEMA_VERSION = 2`, a pure v1→v2 migration, a
+  `.pre-migration-v1` backup of the whole record, and a fail-closed refusal of a newer record. The earlier slices had
+  changed the document without bumping its version; that omission is repaired, not repeated.
 
 ## Not in v1.1
 

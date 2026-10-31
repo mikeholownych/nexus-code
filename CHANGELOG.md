@@ -6,7 +6,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
-## [v1.0.0] - Unreleased (Release Candidate)
+## [v1.1.0] - Unreleased
+
+See [`docs/releases/v1.1.0.md`](docs/releases/v1.1.0.md) for full release notes. Scope and acceptance:
+[`docs/v1.1.0/SPEC.md`](docs/v1.1.0/SPEC.md), [`docs/v1.1.0/REQUIREMENTS.md`](docs/v1.1.0/REQUIREMENTS.md).
+
+### Added
+- **Deterministic parallel work units:** `policy.maxConcurrentUnits` (default 1, bounded at 64) and
+  `resources[].maxConcurrentUnits` (default 1). The scheduler returns an ordered due-set — required units first, then
+  the longest unfinished dependent chain, then declaration order — and reserves per-resource slots. A unit whose
+  qualified slots are busy stays runnable instead of being parked or blocked.
+- **Serialised git integration queue:** concurrent isolated units merge one at a time into the operation branch, with
+  `INTEGRATION_QUEUED` / `INTEGRATION_SKIPPED` events and receipts that now name the candidate digest, the executed
+  tests and the 1-based merge sequence.
+- **Typed inter-agent channel:** `request`, `observation`, `artifact` and `verdict` messages persisted in the operation
+  record, delivered at most once to a unit or the whole operation; completed units publish their verified summary, and
+  `nexus operation message` lets the operator publish one.
+- **Operation replay:** `nexus operation status --replay [--json]` renders the recorded timeline, oldest first, with
+  contiguous step indices. The view document is now schema version 2.
+- **Context-budget provenance:** a `CONTEXT_BUDGET` block names the binding bound, the estimate and its source
+  (`operator-budget` or `agent-estimate`), and `unit.context` records the source.
+
+### Changed
+- **Operation document schema 2:** a v1.0.0 operation record migrates in memory, gains `schemaVersion: 2`, and is
+  copied byte-for-byte to `<record>.pre-migration-v1` before its first v2 write. A record from a newer build is refused
+  with a one-line error and is **not** quarantined.
+- **Strict operation specs:** unknown top-level, unit, `requires`, `policy`, `git` and resource keys are rejected with
+  exit 2 and a suggested key. `git.publish` is rejected explicitly instead of being silently ignored.
+- **View schema 2:** the checked-in `operation-view.schema.json` version and its test validator now agree; the
+  validator enforces `minimum`, `maximum`, `minItems`, `pattern` and `maxLength` as well as the structural keywords.
+
+### Fixed
+- **Terminal safety in the operation view:** `view.status` and `unit.status` are rendered through `safeTerminal`, so a
+  tampered or corrupt record cannot emit control or OSC sequences through a status field.
+
+### Deferred
+- PR publication (`git.publish`), the TUI operation pane, in-view decision interaction, semantic retrieval over
+  operation records, and a unit-authored message tool. Each has a dated rationale in
+  [`docs/v1.1.0/DECISIONS.md`](docs/v1.1.0/DECISIONS.md).
+
+## [v1.0.0] - 2026-10-31
 
 See [`docs/releases/v1.0.0.md`](docs/releases/v1.0.0.md) for full release notes.
 

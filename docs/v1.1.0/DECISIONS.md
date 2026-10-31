@@ -158,20 +158,27 @@ bounded-worker precedent. The cap is a cost bound: parallel agents multiply prov
 a discovered number is an observation, and the risk note in the proposal says changing the model shifts every
 qualification timing.
 
-### DEC-V11-03 — Deterministic order: required, critical path, id
+### DEC-V11-03 — Deterministic order: required, critical path, declaration order
 
-**Decision.** Sort by required-first, then longest unfinished dependency chain descending, then unit id ascending.
+**Decision.** Sort by required-first, then longest unfinished dependent chain descending, then the operation's declared
+unit order.
 
 **Evidence.** SPEC §3.2; the view already computes the same chain (`operation_view.ts:265-304`) and the task requires
 that concurrency not change outcomes for independent units, which needs a total order that ignores arrival timing.
 `localeCompare` is banned because it is locale-dependent.
 
-**Alternative rejected.** Completion order or submission order. Both make the same state produce different choices
-on different runs, breaking reproducibility evidence.
+**Alternatives rejected.** (a) Completion order — arrival timing would change the choice between runs. (b) Unit id as
+the final tie-break — equally deterministic, but it reorders an existing v1.0.0 operation's independent units after
+upgrade with no benefit; declaration order is durable state and preserves the pre-v1.1 order. `localeCompare` is
+banned in the comparator because it is locale-dependent.
 
-**Known cost.** The scheduler gets its own critical-path length function rather than importing the view's. A shared
-helper would invert the module dependency (`operation_view.ts` already imports `operation.ts`). Divergence is caught
-by comparing both on the same fixture.
+**Known cost.** The scheduler has its own chain-length function rather than importing the view's. A shared helper would
+invert the module dependency (`operation_view.ts` already imports `operation.ts`). The two measure different things on
+purpose: the view reports the chain of *unfinished* units for display, the scheduler measures the unfinished chain
+*downstream* of a candidate. Divergence in the scheduler's version is caught by the ordering test.
+**Revision (2026-10-31):** the first implementation measured the chain *upstream* (dependencies), which made a unit
+with a long tail tie with an unrelated leaf. The test "the longest unfinished dependency chain is scheduled before
+independent work" caught it and the direction was corrected before the slice was committed.
 
 ### DEC-V11-04 — Resource slots are reserved per batch
 
@@ -180,6 +187,11 @@ retried next iteration; it is never parked or blocked for being busy.
 
 **Evidence.** SPEC §3.4; R-1 (keyed serialisation, busy is not failure); the acceptance requirement that two units on
 one single-slot resource serialise.
+
+**Revision (2026-10-31):** the first implementation took the registry's single best resource and skipped the unit when
+that slot was busy. That serialised two units even when a second qualified resource was free — caught by the
+concurrency test before commit. Selection is now reservation-aware: a unit takes its next qualified, eligible resource
+whose slot is free.
 
 **Alternative rejected.** Letting `registry.select` be concurrency-aware. Rejected: the registry models resources, not
 run state; teaching it about running units would put scheduling policy in the wrong component.

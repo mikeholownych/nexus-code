@@ -156,7 +156,14 @@ export interface WorkUnit {
    */
   contextBudget?: number;
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
-  context?: { estimatedPromptTokens: number; budgetTokens: number; contextLimit: number; at: string };
+  context?: {
+    estimatedPromptTokens: number;
+    budgetTokens: number;
+    contextLimit: number;
+    at: string;
+    /** Which bound decided the check. Absent on records written before v1.1. */
+    source?: "agent-estimate" | "operator-budget";
+  };
 }
 
 export type OperationEventType =
@@ -177,7 +184,9 @@ export type OperationEventType =
   | "DECISION_APPLIED"
   | "CONCURRENCY_LIMIT"
   | "INTEGRATION_QUEUED"
-  | "INTEGRATION_SKIPPED";
+  | "INTEGRATION_SKIPPED"
+  | "OPERATION_MESSAGE"
+  | "OPERATION_MESSAGE_DROPPED";
 
 export interface OperationEvent {
   type: OperationEventType;

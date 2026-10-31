@@ -6,7 +6,8 @@
 import { credentialStorageHome, storedCredentialFor } from "../client.js";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
-import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { markDelivered, publishMessage, undeliveredFor } from "./operation_messages.js";
 import { OperationGit, ensureIntegrationWorktree, type OperationGitPlan } from "./operation_git.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
 import {
@@ -20,7 +21,7 @@ import { createOperationAccountIdentity } from "./account_identity.js";
 import { computeCandidateIdentitySync } from "./candidate.js";
 import type { InferenceFailure } from "./turn.js";
 import { OperationRevalidator } from "./operation_runner_revalidation.js";
-import type { OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
+import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 import type { OperationStore } from "./operation_runner_persistence.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
@@ -38,6 +39,8 @@ export interface UnitRunContext {
   operatorDecision?: { label: string; note?: string; restart?: boolean };
   /** Durably records the unit's conversation task before execution, so a crash mid-run can be reconciled. */
   bindAgentTask(taskId: string): void;
+  /** Messages owed to this unit, marked delivered by the same save that started it. Advisory context only. */
+  messages?: OperationMessage[];
   /** Isolated operations: the unit's worktree. Absent means the executor's configured workspace. */
   workspace?: string;
   observeFailure(failure: InferenceFailure): ResourceConditionRecord | null;
@@ -164,10 +167,23 @@ export class OperationRunner {
           ready.push(assignment);
         }
         if (!ready.length) continue;
+        // Delivery is recorded with the RUNNING transition: a crash either delivers with the start or not at all.
+        const owed = new Map<string, OperationMessage[]>();
+        const at = new Date(this.clock.now()).toISOString();
+        for (const assignment of ready) {
+          const messages = undeliveredFor(this.state, assignment.unit.id);
+          if (messages.length) {
+            owed.set(assignment.unit.id, messages);
+            markDelivered(this.state, messages.map((message) => message.id), assignment.unit.id, at);
+          }
+        }
         for (const assignment of ready) this.scheduler.start(assignment);
         this.save();
-        const results = await this.executeBatch(ready, signal);
-        for (const { assignment, result } of results) this.scheduler.apply(assignment.unit.id, result);
+        const results = await this.executeBatch(ready, owed, signal);
+        for (const { assignment, result } of results) {
+          this.scheduler.apply(assignment.unit.id, result);
+          if (result.kind === "completed") this.publishCompletion(assignment.unit);
+        }
         this.save();
         if (signal?.aborted) return this.cancelled();
         continue;
@@ -213,10 +229,11 @@ export class OperationRunner {
    */
   private async executeBatch(
     assignments: Assignment[],
+    owed: Map<string, OperationMessage[]>,
     signal?: AbortSignal,
   ): Promise<Array<{ assignment: Assignment; result: UnitRunResult }>> {
     const settled = await Promise.allSettled(
-      assignments.map(async (assignment) => ({ assignment, result: await this.execute(assignment, signal) })),
+      assignments.map(async (assignment) => ({ assignment, result: await this.execute(assignment, owed.get(assignment.unit.id), signal) })),
     );
     return settled.map((outcome, index) => {
       if (outcome.status === "fulfilled") return outcome.value;
@@ -234,7 +251,7 @@ export class OperationRunner {
     });
   }
 
-  private async execute(d: Assignment, signal?: AbortSignal): Promise<UnitRunResult> {
+  private async execute(d: Assignment, messages?: OperationMessage[], signal?: AbortSignal): Promise<UnitRunResult> {
     const { unit, resource } = d;
     let workspace: string | undefined;
     let recoverMerged = false;
@@ -277,6 +294,7 @@ export class OperationRunner {
         unit.agentTaskId = taskId;
         this.save();
       },
+      ...(messages?.length ? { messages } : {}),
       observeFailure: (f) => this.registry.observeFailure(resource, f),
       observeSuccess: () => this.registry.observeSuccess(resource),
       shouldYield: (_f, delay) => this.shouldYield(unit, resource, delay),
@@ -306,6 +324,48 @@ export class OperationRunner {
         question: `${unit.title} failed with an internal error (${err?.message ?? err}). Retry it, or stop?`,
         options: [{ label: "retry", action: { kind: "retry" } }],
       };
+    }
+  }
+
+  /**
+   * Publishes what a completed unit produced, so downstream units and the operator can see it. Only a unit that
+   * actually completed publishes: an unverified or blocked unit has nothing to publish. The body is the unit's own
+   * verified summary; pointers, not content, travel with it.
+   */
+  private publishCompletion(unit: WorkUnit): void {
+    const result = unit.result;
+    if (!result || unit.dropped) return;
+    const receipts = this.state.integrations ?? [];
+    const receipt = receipts.length ? [...receipts].reverse().find((entry) => entry.unitId === unit.id) : undefined;
+    const kind = unit.role === "reviewer" ? "verdict" : "artifact";
+    try {
+      const { message, dropped } = publishMessage(
+        this.state,
+        {
+          from: unit.id,
+          to: "*",
+          kind,
+          body: `${result.outcome}: ${result.summary}`,
+          refs: [
+            ...(receipt ? [{ kind: "receipt" as const, ref: receipt.integratedCommit }] : []),
+            { kind: "unit" as const, ref: unit.id },
+          ],
+        },
+        this.clock.now(),
+      );
+      this.scheduler.emit("OPERATION_MESSAGE", `${unit.id} published a ${kind} to the operation.`, {
+        unitId: unit.id,
+        detail: { to: message.to, kind: message.kind, id: message.id },
+      });
+      for (const lost of dropped) {
+        this.scheduler.emit("OPERATION_MESSAGE_DROPPED", `Dropped message ${lost.id} from ${lost.from} to keep the record bounded.`, {
+          unitId: lost.from,
+          detail: { id: lost.id, to: lost.to, kind: lost.kind },
+        });
+      }
+    } catch (error: any) {
+      // A message is advisory: failing to publish one must never fail the unit or the operation.
+      reportOperationDiagnostic(this.opts.onDiagnostic, "runner", "message_publish_failed");
     }
   }
 

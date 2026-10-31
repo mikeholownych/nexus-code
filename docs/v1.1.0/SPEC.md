@@ -111,13 +111,12 @@ one process ─ one operation lock ─ one scheduler ─ one due-set per iterati
 
 ### 3.1 Decision type
 
-`Decision` gains a batch form. The existing `run` form is retained as the degenerate batch of one so that no caller
-needs a special case; the scheduler MAY emit either, and the runner MUST accept both.
+`Decision` has exactly one run form: an ordered batch. A single unit is a batch of length 1, so no caller needs a
+special case and there is no second shape to keep in sync.
 
 ```ts
 export type Decision =
-  | { kind: "run"; unit: WorkUnit; resource: ResourceDescriptor; reroutedFrom?: Reroute }
-  | { kind: "run"; units: Assignment[] }                    // v1.1 batch form
+  | { kind: "run"; assignments: Assignment[] }   // length >= 1, deterministic order, no shared single-slot resource
   | { kind: "wait"; wakeAt: number; reason: string; parked: string[] }
   | { kind: "complete" }
   | { kind: "blocked"; decisions: EscalationDecision[] };
@@ -125,14 +124,12 @@ export type Decision =
 export interface Assignment {
   unit: WorkUnit;
   resource: ResourceDescriptor;
-  reroutedFrom?: Reroute;
+  reroutedFrom?: { resourceId: string; reason: string };
 }
 ```
 
-Implementation note: because TypeScript cannot discriminate two variants with the same `kind`, the batch form is
-`{ kind: "run"; assignments: Assignment[] }` and the single form is normalised at the boundary. `decide()` returns
-`{ kind: "run", assignments }`; a single assignment is a batch of length 1. The runner's existing
-`d.unit`/`d.resource` accesses are replaced by iteration over `d.assignments`.
+This is a breaking change to the `Decision` type for any direct `ConvergenceScheduler` consumer (the runner and the
+tests); it is not a persisted format, so no migration is needed.
 
 Invariants (asserted in tests):
 
@@ -149,10 +146,16 @@ Order is a total order over the runnable set, computed from state + observations
 2. **Critical path length descending.** The length is the number of unfinished units on the longest dependency chain
    that starts at the candidate, counting only units that are not `COMPLETE` (the same rule the view uses,
    `operation_view.ts:265-304`).
-3. Unit `id` ascending (byte-wise `localeCompare` with `"en"` is forbidden: use `<` on the string).
+3. The operation's **declared unit order** (the index in `state.units`, which is durable state).
+
+Unit id was considered as the tie-break and rejected: it is equally deterministic, but it would reorder the
+independent units of an existing v1.0.0 operation after upgrade for no benefit. `localeCompare` is banned anywhere in
+this order because it is locale-dependent.
 
 The same `(state, conditions, now)` MUST produce the same list. The list is truncated to the concurrency limit
-(§3.3) *after* reservation-aware selection (§3.4), so truncation never changes which unit is first.
+(§3.3) *after* reservation-aware selection (§3.4), so truncation never changes which unit is first. Determinism is
+asserted by repeating `decide()` over one state (ACC-V11-MAO-04); it is deliberately **not** asserted to be invariant
+under reordering the declaration, because declaration order is an input.
 
 ### 3.3 Concurrency limit and configuration
 
@@ -173,18 +176,30 @@ message naming the field and the allowed range. The cap of 64 is a cost bound, n
 The scheduler selects assignments greedily over the deterministic order:
 
 ```
-reserved = Map<resourceId, count>
+reserved = Map<resourceId, count>          // seeded with the slots already held by RUNNING units
 for candidate in orderedRunnable:
-    choice = candidate.override ? overrideSelection(candidate) : registry.select(candidate.requires, excludedModels(candidate))
-    if !choice.chosen: (park/block as today) continue
-    if reserved[choice.chosen.id] >= (choice.chosen.maxConcurrentUnits ?? 1): continue   // eligible but busy
-    reserve(choice.chosen)
-    assignments.push({unit: candidate, resource: choice.chosen})
+    sel = candidate.override ? overrideSelection(candidate) : registry.select(candidate.requires, excludedModels(candidate))
+    if !sel.chosen: (park/block as today) continue
+    // Preference order: the registry's chosen resource, then the rest of its qualified list in registry order.
+    resource = first r in [sel.chosen, ...sel.qualified] where r.eligibility.eligible and reserved[r.id] < (r.maxConcurrentUnits ?? 1)
+    if !resource: continue                 // qualified but every slot is busy: stay RUNNABLE
+    reserve(resource)
+    assignments.push({unit: candidate, resource, reroutedFrom: resource.id === sel.chosen.id ? sel.reroute : undefined})
     if assignments.length === effectiveLimit: break
 ```
 
-A unit skipped because its resource is busy stays `RUNNABLE` and is considered on the next iteration; it MUST NOT
-be parked or blocked. This is the mechanism that makes two units pinned to one single-slot resource serialise.
+Two details matter:
+
+- **Selection is reservation-aware.** Asking the registry for "the best" resource and then skipping a busy one would
+  serialise two units even when a second qualified resource is free. The unit takes its next qualified, eligible
+  resource instead.
+- **A busy slot is not a condition story.** `reroutedFrom` is recorded only when the assigned resource is the one the
+  registry preferred, so a unit displaced to a second resource by a full slot does not emit a misleading
+  `WORK_REROUTED` event.
+
+A unit skipped because every qualified slot is busy stays `RUNNABLE` and is considered on the next iteration; it MUST
+NOT be parked or blocked. If nothing can start while units are `RUNNING`, `decide()` returns `wait` with the reason
+"every runnable unit's qualified resource is busy" — never `blocked`.
 
 `overrideSelection` (operator assignment) is subject to the same reservation rule: an operator-assigned resource
 with one slot still runs one unit at a time.
@@ -348,15 +363,17 @@ export interface IntegrationReceipt {
   verification: "PASSED" | "PASSED_POSTHOC" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
   candidate?: { digest: string; scope: "tree" | "commit" };                    // NEW
   tests?: { command: string; status: string; hasExecutedTests: boolean };      // NEW
-  sequence: number;                                                            // NEW: 1-based integration order
+  sequence?: number;                                                           // NEW: 1-based merge order
 }
 ```
 
-`candidate.digest` is the content-addressed view already computed by `CandidateIdentity` (`cli/src/core/candidate.ts`)
-for the unit's worktree at merge time; `scope: "commit"` records the merged commit id, `scope: "tree"` the tree
-digest. `tests` is copied from `UnitRunResult.completed.verification` when present, and omitted when the unit
-produced none — an absent field is honest evidence, a fabricated one is not. `sequence` is monotonic within an
-operation and is what a reviewer reads to reconstruct merge order.
+`candidate.digest` is `computeCandidateIdentitySync(worktree).candidateId` for the unit's worktree at merge time
+(`cli/src/core/candidate.ts`); `scope: "commit"` records the merged commit id, `scope: "tree"` the tree digest. `tests`
+is copied from `UnitRunResult.completed.verification` when present, and omitted when the unit produced none — an absent
+field is honest evidence, a fabricated one is not. `sequence` is monotonic within an operation, assigned by the runner
+when the merge queue reaches the unit; it is optional in the type because `OperationGit.integrate` is also callable
+outside an operation (tests, direct use), where inventing an order would be false. A runner-produced receipt always
+carries it.
 
 ### 5.3 Integration queue (new)
 
@@ -482,9 +499,11 @@ mirrors the event ring (`scheduler.ts:24,54`) and keeps a long operation's recor
   to this unit or to `"*"` (excluding the unit's own), oldest first, capped at 20 per turn.
 - Those messages are marked `deliveredAt`/`deliveredTo` in the same `save()` that records the unit's `RUNNING`
   transition, so a crash cannot deliver twice.
-- The prompt renders them under a fixed heading (`Messages from other units:`) with the sender, kind and body, each
-  passed through `safeTerminal`. On a **resume**, the undelivered set is re-rendered; a message already delivered is
-  not repeated.
+- The prompt renders them under a fixed heading (`Messages from other units (advisory; read the referenced artifact
+  before relying on it):`) with the sender, kind, body and pointers. Control characters are impossible here because
+  `publishMessage` rejects them at write time, so the prompt is safe by construction rather than by sanitising agent
+  content (which would corrupt it). Anything that renders a message to a **terminal** goes through `safeTerminal`. On a
+  **resume**, the undelivered set is re-rendered; a message already delivered is not repeated.
 - A message is advisory context. It is never verification evidence and MUST NOT change `TurnResult`, the verifier,
   or an independence decision.
 
@@ -648,7 +667,7 @@ Each criterion is executable and names its evidence. `VALIDATION.md` maps them t
 | ACC-V11-MAO-01 | Two independent units on two single-slot resources run concurrently: both are `RUNNING` before either completes, and the event log contains two `WORK_STARTED` rows before the first `WORK_COMPLETED` |
 | ACC-V11-MAO-02 | The same two units with `maxConcurrentUnits: 1` are strictly serialised: exactly one `RUNNING` at any time |
 | ACC-V11-MAO-03 | Running the same fixture sequentially and with concurrency 2 yields the same set of unit outcomes, summaries and integration receipts |
-| ACC-V11-MAO-04 | The due-set order is stable across 1,000 shuffles of the input array for the same logical state, and matches required-first → critical-path-desc → id-asc |
+| ACC-V11-MAO-04 | One thousand `decide()` calls over the same state return the same due-set, and the order matches required-first → critical-path-desc → declared-order |
 | ACC-V11-MAO-05 | A message published by unit A is present in unit B's `UnitRunContext.messages` exactly once, is marked delivered in the saved state, and is absent from a second turn's context |
 | ACC-V11-MAO-06 | `implementer → tester → reviewer` with a failing review ends the operation `BLOCKED` with a decision and never `COMPLETE` |
 | ACC-V11-MAO-07 | Killing the runner with two units `RUNNING` and resuming leaves both resumable, with `unknownResumes` incremented once each and no duplicated tool result |
@@ -691,7 +710,7 @@ Each criterion is executable and names its evidence. `VALIDATION.md` maps them t
 |---|---|
 | ACC-V11-REG-01 | The full CLI suite and the Rust suite pass at the candidate commit |
 | ACC-V11-REG-02 | Every v1.0.0 operation test that passes before the change passes after it, unchanged |
-| ACC-V11-REG-03 | A default (concurrency 1) operation produces the same unit outcomes and events as v1.0.0 modulo the schema version and the new event types |
+| ACC-V11-REG-03 | A default (concurrency 1) operation produces the same outcomes and the same set of events as v1.0.0; event ordering may differ only where two units are independent, and the deterministic order is declared in §3.2 |
 | ACC-V11-REG-04 | `check_requirements.mjs --enforce` passes with the v1.1 rows added |
 | ACC-V11-REG-05 | `sync-version.mjs --check` passes at the candidate version |
 
