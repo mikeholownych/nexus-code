@@ -10,8 +10,12 @@ G1.1-5 release gate is complete.
   `scripts/check_deprecated_lock.mjs`: CLI, demo, the Cloudflare experiment,
   its trusted broker bundle, and release tools. Held-out evaluation fixtures
   and private material are excluded.
-- `deny.toml` sets `advisories.yanked = "deny"`, so the existing CI cargo-deny
-  advisory check rejects yanked crates instead of emitting a warning.
+- `deny.toml` sets `advisories.unmaintained = "all"` and
+  `advisories.yanked = "deny"`. The existing CI cargo-deny advisory check
+  rejects all crates covered by unmaintained advisories and rejects yanked
+  crates instead of emitting a warning. The unmaintained setting is cargo-deny
+  0.20.2's default, made explicit here as a maintained invariant ([advisory
+  configuration reference](https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html)).
 - The deprecation checker’s messages now describe a generic lockfile; its
   fail-closed registry behavior is unchanged.
 
@@ -27,8 +31,28 @@ At audit time, the GitHub PR history showed these 15 PRs merged: #103, #104,
 #116, #117, #118, #121, #122, and #123. A closed PR is not treated as an
 accepted dependency upgrade, and its patch was not cherry-picked.
 
-Two closed PRs have a specific compatibility disposition in their history:
+The closed PR updates are classified against the current base tree and the
+current Dependabot proposals as follows:
 
+- #105 (Tokio 1.53.1 → 1.53.3) is superseded. Main already raised the manifest
+  floor to 1.53.3 in `core/Cargo.toml` (commit `863fc188`), then resolved
+  `core/Cargo.lock` to 1.54.1 (commit `c881cbf7`). No additional #105 patch is
+  needed.
+- #106 (download-artifact 8.0.2) remains unresolved. The reproducibility
+  workflow still pins download-artifact v4 at `.github/workflows/repro.yml`
+  (lines 172 and 176); the PR's available history contains no compatibility
+  rationale or replacement update. Do not classify this as incompatible until
+  the v8 behavior is reviewed and the artifact consumer is validated.
+- #109, #122, and #123 (cf 1.0.0-beta.18) are superseded by cf 1.0.0-beta.20
+  already present in, respectively, the trusted broker bundle manifest and
+  lockfile, the fork worker manifest, and the shared reference worker manifest.
+- #116 (root cf) and #121 (agent-collab worker cf) have stale beta.18 targets.
+  Their current manifests remain at beta.10; newer beta.24 proposals are open
+  as #223 and #225. These are candidates only and remain unvalidated.
+- #115 (agent-collab worker Cloudflare Vite plugin beta.v.1) is superseded by
+  beta.v.3 already in its manifest. #117 (fork worker) and #118 (shared
+  reference worker) still use the old SHA prerelease; newer beta.v.6 proposals
+  are open as #221 and #224. Those open proposals have not been validated.
 - #111 (dotenv 18) was closed because its startup output wrote an env-injection
   notice to stderr, violating the healthy `doctor` empty-stderr contract
   (`REQ-DX-101` / `ACC-PKG-06`). The CLI remains on dotenv 16.
@@ -36,10 +60,10 @@ Two closed PRs have a specific compatibility disposition in their history:
   “too many arguments” instead of the required unknown-command error. The CLI
   remains on Commander 12 pending an explicit compatibility fix and review.
 
-For the other ten closed, unmerged PRs, this audit established only their
-closed/unmerged status; it did not establish a specific rejection rationale.
-They remain unadopted pending fresh compatibility evidence. In particular,
-closed Cloudflare beta updates were not applied to the isolated experiment.
+For the closed PRs whose targets are superseded, the newer manifest/lock
+versions or newer open PRs establish that the old target is stale; they do not
+establish that the replacement is compatible. Cloudflare changes remain
+unadopted until their experiment-specific typecheck/build validation can run.
 
 ## Evidence limits
 
