@@ -601,3 +601,188 @@ test("replay leaves a legacy redaction-changing record byte-identical and still 
   assert.deepEqual(fs.readFileSync(file), futureBytes);
   assert.equal(fs.statSync(file).mtimeMs, futureMtime);
 });
+
+test("an early recovery failure leaves a message owed until a later submitted turn", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-early-recovery-message-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-early-recovery-message", "do not consume before submission", [{ id: "b", title: "b", prompt: "b", agentTaskId: "task-b" }], [resource], Date.now());
+  const { message } = publishMessage(state, { from: "operator", to: "b", kind: "request", body: "still owed" }, Date.now());
+  store.save(state);
+  const earlyAgent: any = {
+    durable: true,
+    getTaskId: () => "task-b",
+    recoverFromTaskState: async () => ({
+      success: true,
+      interrupted: true,
+      interruptedOperation: { toolName: "read_file", status: "in_flight" },
+      obligationRecordPresent: true,
+      state: { currentOperation: { toolName: "read_file", status: "in_flight" } },
+    }),
+    runTurn: async () => { throw new Error("early recovery must not construct or submit a prompt"); },
+    setProviderRecoveryHooks: () => {},
+    shutdown: () => {},
+  };
+  const earlyExecutor = new AgentWorkUnitExecutor({
+    baseConfig: { endpoint: resource.endpoint, model: "m", workspace: root } as HarnessConfig,
+    createAgent: () => earlyAgent,
+  });
+  const first = new OperationRunner(store.load(state.id), { executor: earlyExecutor, persist: (current) => store.save(current) });
+  await first.run();
+  assert.equal(first.state.units[0].status, "BLOCKED");
+  assert.equal(first.state.messages![0].deliveredTo, undefined, "early failure must leave the message owed");
+
+  const decision = first.state.units[0].blocked!.decision;
+  first.scheduler.resolve(decision.id, decision.options[0].id);
+  store.save(first.state);
+  const seen: string[][] = [];
+  const retryExecutor: WorkUnitExecutor = {
+    run: async (_unit, _resource, ctx) => {
+      seen.push((ctx.messages ?? []).map((entry) => entry.id));
+      return completed("submitted on retry");
+    },
+  };
+  const resumed = await driveOperation(store.load(state.id), { store, executor: retryExecutor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.deepEqual(seen, [[message.id]]);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});
+
+test("a post-bind pre-submission crash leaves the message owed", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-post-bind-message-"));
+  const env = testEnv(root);
+  const store = new OperationStore(root, env.RELEASE_STATE_DIR, env.HOME);
+  const initial = newOperation("op-post-bind-message", "acknowledge only after submission", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
+  const { message } = publishMessage(initial, { from: "operator", to: "b", kind: "request", body: "not yet submitted" }, Date.now());
+  store.save(initial);
+  const script = `
+    import { driveOperation, OperationStore } from "./src/core/operation_runner.ts";
+    const store = new OperationStore(process.env.RELEASE_WORKSPACE, process.env.RELEASE_STATE_DIR);
+    const state = store.load("op-post-bind-message");
+    const executor = { run: async (_unit, _resource, ctx) => {
+      ctx.bindAgentTask("task-b");
+      process.kill(process.pid, "SIGKILL");
+    } };
+    await driveOperation(state, { store, executor });
+    process.exit(4);
+  `;
+  const run = childRun(script, env);
+  t.after(async () => {
+    await stopChild(run);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const exit = await run.exited;
+  assert.equal(exit.signal, "SIGKILL", run.output());
+  const crashed = store.load(initial.id);
+  assert.equal(crashed.units[0].agentTaskId, "task-b");
+  assert.equal(crashed.messages![0].deliveredTo, undefined);
+
+  const seen: string[][] = [];
+  const executor: WorkUnitExecutor = {
+    run: async (_unit, _resource, ctx) => {
+      seen.push((ctx.messages ?? []).map((entry) => entry.id));
+      return completed("submitted after restart");
+    },
+  };
+  const resumed = await driveOperation(store.load(initial.id), { store, executor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.deepEqual(seen, [[message.id]]);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});
+
+test("a post-prompt crash suppresses duplicate history injection and acknowledges once after resume", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-post-prompt-message-"));
+  const env = testEnv(root);
+  const historyFile = path.join(root, "history.json");
+  const store = new OperationStore(root, env.RELEASE_STATE_DIR, env.HOME);
+  const initial = newOperation("op-post-prompt-message", "deduplicate submitted messages", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
+  const { message } = publishMessage(initial, { from: "operator", to: "b", kind: "request", body: "submit exactly once" }, Date.now());
+  store.save(initial);
+  const script = `
+    import fs from "node:fs";
+    import { AgentWorkUnitExecutor } from "./src/core/operation_runner_execution.ts";
+    import { driveOperation, OperationStore } from "./src/core/operation_runner.ts";
+    const messages = [{ role: "system", content: "system" }];
+    const agent = {
+      durable: true,
+      getTaskId: () => "task-b",
+      getMessages: () => messages,
+      getObjective: () => ({ verification: [] }),
+      getCompletionSummary: () => ({ summary: "done" }),
+      setProviderRecoveryHooks: () => {},
+      checkpointDurableState: () => {},
+      estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
+      runTurn: async (prompt) => {
+        messages.push({ role: "user", content: prompt });
+        fs.writeFileSync(process.env.RELEASE_HISTORY_FILE, JSON.stringify(messages));
+        process.kill(process.pid, "SIGKILL");
+      },
+      shutdown: () => {},
+    };
+    const store = new OperationStore(process.env.RELEASE_WORKSPACE, process.env.RELEASE_STATE_DIR);
+    const executor = new AgentWorkUnitExecutor({
+      baseConfig: { endpoint: "https://provider.invalid/v1", model: "m", workspace: process.env.RELEASE_WORKSPACE },
+      createAgent: () => agent,
+    });
+    await driveOperation(store.load("op-post-prompt-message"), { store, executor });
+    process.exit(4);
+  `;
+  const run = childRun(script, { ...env, RELEASE_HISTORY_FILE: historyFile });
+  t.after(async () => {
+    await stopChild(run);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const exit = await run.exited;
+  assert.equal(exit.signal, "SIGKILL", run.output());
+  assert.equal(store.load(initial.id).messages![0].deliveredTo, undefined, "submission without a result cannot be acknowledged yet");
+
+  const messages = JSON.parse(fs.readFileSync(historyFile, "utf8")) as Array<{ role: string; content: string }>;
+  const resumePrompts: string[] = [];
+  const resumedAgent: any = {
+    durable: true,
+    getTaskId: () => "task-b",
+    getMessages: () => messages,
+    recoverFromTaskState: async () => ({
+      success: true,
+      interrupted: false,
+      obligationRecordPresent: true,
+      state: { currentOperation: null },
+    }),
+    getObjective: () => ({ verification: [] }),
+    getCompletionSummary: () => ({ summary: "done" }),
+    setProviderRecoveryHooks: () => {},
+    checkpointDurableState: () => {},
+    estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
+    runTurn: async (prompt: string) => {
+      resumePrompts.push(prompt);
+      messages.push({ role: "user", content: prompt });
+      fs.writeFileSync(historyFile, JSON.stringify(messages));
+      return {
+        execution: "COMPLETED",
+        outcome: "NOT_REQUIRED",
+        acceptance: "NOT_REQUESTED",
+        modelStop: "TASK_COMPLETED_TOOL",
+        finalOutputComplete: true,
+        verification: null,
+        interruption: null,
+        inferenceFailure: null,
+        steps: { used: 1, max: 5, limitReached: false },
+        unverifiedChangesPending: false,
+        finishedAt: new Date().toISOString(),
+      };
+    },
+    shutdown: () => {},
+  };
+  const resumedExecutor = new AgentWorkUnitExecutor({
+    baseConfig: { endpoint: resource.endpoint, model: "m", workspace: root } as HarnessConfig,
+    createAgent: () => resumedAgent,
+  });
+  const resumed = await driveOperation(store.load(initial.id), { store, executor: resumedExecutor });
+  assert.equal(resumed.status, "COMPLETE", JSON.stringify(resumed.blocked));
+  assert.equal(resumePrompts.length, 1);
+  assert.doesNotMatch(resumePrompts[0], /submit exactly once/);
+  const durableHistory = fs.readFileSync(historyFile, "utf8");
+  assert.equal(durableHistory.split("submit exactly once").length - 1, 1);
+  assert.equal(durableHistory.split(message.id).length - 1, 1);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});

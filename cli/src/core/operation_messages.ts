@@ -116,7 +116,7 @@ export function undeliveredFor(state: DurableOperationState, unitId: string): Op
     .slice(0, MAX_MESSAGES_PER_TURN);
 }
 
-/** Records delivery. Called in the same save that starts the unit, so a crash cannot deliver twice. */
+/** Records delivery after prompt submission or a completed simple-executor result; repeated marks are idempotent. */
 export function markDelivered(state: DurableOperationState, ids: string[], unitId: string, at: string): void {
   const wanted = new Set(ids);
   for (const message of state.messages ?? []) {
@@ -129,14 +129,14 @@ export function markDelivered(state: DurableOperationState, ids: string[], unitI
 }
 
 /**
- * The prompt fragment for an undelivered set. Messages are advisory context, so the heading says where they came from
- * and nothing more; the recipient must still read what it relies on.
+ * The prompt fragment for an undelivered set. Stable IDs let recovery avoid injecting a message already in history.
+ * Messages are advisory context; the recipient must still read what it relies on.
  */
 export function messagesBlock(messages: OperationMessage[] | undefined): string {
   if (!messages?.length) return "";
   const lines = messages.map((message) => {
     const refs = message.refs?.length ? ` (${message.refs.map((ref) => `${ref.kind}: ${ref.ref}`).join("; ")})` : "";
-    return `- [${message.kind}] ${message.from}: ${message.body}${refs}`;
+    return `- [${message.kind}] ${message.from}: ${message.body}${refs} [message id: ${message.id}]`;
   });
   return `\nMessages from other units (advisory; read the referenced artifact before relying on it):\n${lines.join("\n")}\n`;
 }

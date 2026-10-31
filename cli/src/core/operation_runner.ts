@@ -37,9 +37,11 @@ export interface UnitRunContext {
   resumeReason?: string;
   /** Operator decision applied since the unit last ran (told to the unit). `restart` authorizes starting it over. */
   operatorDecision?: { label: string; note?: string; restart?: boolean };
-  /** Durably records the unit's conversation task before execution, so a crash mid-run can be reconciled. */
+  /** Durably records the unit's conversation task before execution, without acknowledging prompt messages. */
   bindAgentTask(taskId: string): void;
-  /** Messages owed to this unit, marked delivered when the task is bound or the executor accepts them. Advisory only. */
+  /** Acknowledges messages only after a turn containing them has been submitted and persisted. */
+  messagesSubmitted?(): void;
+  /** Messages owed to this unit, acknowledged after submission or a completed simple-executor result. */
   messages?: OperationMessage[];
   /** Isolated operations: the unit's worktree. Absent means the executor's configured workspace. */
   workspace?: string;
@@ -320,6 +322,9 @@ export class OperationRunner {
       ...(unit.pendingDecision ? { operatorDecision: unit.pendingDecision } : {}),
       bindAgentTask: (taskId) => {
         if (unit.agentTaskId !== taskId) unit.agentTaskId = taskId;
+        this.save();
+      },
+      messagesSubmitted: () => {
         this.recordDelivery(unit.id, messages);
         this.save();
       },
@@ -342,8 +347,10 @@ export class OperationRunner {
         };
       }
       const result: UnitRunResult = await this.opts.executor.run(unit, resource, ctx);
-      this.recordDelivery(unit.id, messages);
-      this.save();
+      if (result.kind === "completed") {
+        this.recordDelivery(unit.id, messages);
+        this.save();
+      }
       if (result.kind !== "completed" || !this.git) return result;
       return this.enqueueIntegration(unit, result);
     } catch (err: any) {

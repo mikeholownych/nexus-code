@@ -8,7 +8,7 @@ import { providerDefinition } from "../providers.js";
 import { providerApiKey } from "../credentials.js";
 import type { ChatMessage, HarnessConfig } from "../types.js";
 import type { TaskRecoveryResult } from "./state.js";
-import { unitBaseTask, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { unitBaseTask, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { messagesBlock } from "./operation_messages.js";
 import { redactForPersistence } from "./persistence_protection.js";
 import { ROLE_PROFILES, isReadOnlyRole, type AgentRole } from "./roles.js";
@@ -90,6 +90,12 @@ function resumeHistoryProblem(messages: ChatMessage[], unit: WorkUnit): string |
 
 /** Nothing happened in the conversation yet (for example, its first prompt was withdrawn before inference). */
 const conversationNotStarted = (messages: ChatMessage[]): boolean => messages.length === 1 && messages[0].role === "system";
+
+function unsubmittedMessages(history: ChatMessage[], messages?: OperationMessage[]): OperationMessage[] | undefined {
+  if (!messages?.length) return messages;
+  const text = history.map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "")).join("\n");
+  return messages.filter((message) => !text.includes(`[message id: ${message.id}]`));
+}
 
 /**
  * Runs a work unit as one truthful agent turn pinned to the chosen resource. The unit's conversation is its own
@@ -288,6 +294,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     let lastCondition: ResourceConditionRecord | null = null;
     try {
       let prompt: string;
+      let promptMessages = ctx.messages;
       let unusable: string | undefined;
       if (unit.agentTaskId) {
         let recovered: TaskRecoveryResult | undefined;
@@ -319,7 +326,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           // conversation describes discarded files, so never resume that history on the fresh worktree.
           agent.restartConversation(!recovered?.obligationRecordPresent);
           prompt =
-            `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
+            `${this.initialPrompt(unit, ctx, promptMessages)}\n\n${decision}` +
             "Note: this unit was explicitly restarted after recovery. Its earlier conversation is not being continued. " +
             "Earlier workspace history may be incomplete; inspect any changes that remain, because they remain unverified.";
         } else if (unusable) {
@@ -337,25 +344,26 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           // changes are unknown, so they count as unverified.
           agent.restartConversation(!recovered || !recovered.obligationRecordPresent);
           prompt =
-            `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
+            `${this.initialPrompt(unit, ctx, promptMessages)}\n\n${decision}` +
             `Note: earlier task history was unusable (${unusable}). Prior workspace changes may be unknown and remain unverified; inspect the workspace before relying on them.`;
         } else if (notStarted) {
           const restartNotice = ctx.operatorDecision?.restart
             ? "\n\nNote: this unit was explicitly restarted after recovery. Earlier workspace history may be incomplete, and any prior changes remain unverified; inspect the workspace before relying on them."
             : "";
-          prompt = `${this.initialPrompt(unit, ctx)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
+          prompt = `${this.initialPrompt(unit, ctx, promptMessages)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
         } else {
           const op = recovered?.state.currentOperation;
           const stopped = op?.status === "interrupted"
             ? `Nexus stopped while ${op.toolName} ${op.argsSummary ?? ""} was running or before its result was saved; it may have partially run. Check its effects before relying on them.\n`
             : "";
+          promptMessages = unsubmittedMessages(agent.getMessages(), ctx.messages);
           prompt =
             `[Work unit resumed on ${resource.id} (${resource.model}) after: ${ctx.resumeReason ?? "a resource change"}]\n${decision}` +
-            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${stopped}${messagesBlock(ctx.messages)}` +
+            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${stopped}${messagesBlock(promptMessages)}` +
             `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
         }
       } else {
-        prompt = this.initialPrompt(unit, ctx);
+        prompt = this.initialPrompt(unit, ctx, promptMessages);
       }
       ctx.bindAgentTask(agent.getTaskId());
       if (agent.durable && !unit.agentTaskId) {
@@ -387,6 +395,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt);
         if (budgetFailure) return budgetFailure;
         const redTurn = await agent.runTurn(redPrompt, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
+        ctx.messagesSubmitted?.();
         const afterRed = this.tddTestSnapshot(agent, config.workspace);
         const testPaths = [...afterRed]
           .filter(([file, hash]) => !beforeRed.has(file) || beforeRed.get(file) !== hash)
@@ -456,6 +465,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       const budgetFailure = this.contextBudgetFailure(agent, unit, greenPrompt);
       if (budgetFailure) return budgetFailure;
       const turn = await agent.runTurn(greenPrompt, undefined, { signal: ctx.signal, resume: isResume || (tdd && redEvidence !== undefined) });
+      ctx.messagesSubmitted?.();
       const configuredVerifier = config.authoritativeVerifierCommand?.trim();
       const testerVerifiedThisTurn = unit.role === "tester" &&
         (agent.getObjective()?.verification.slice(priorVerificationAttempts).some((attempt) => {
@@ -489,13 +499,13 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     }
   }
 
-  private initialPrompt(unit: WorkUnit, ctx: UnitRunContext): string {
+  private initialPrompt(unit: WorkUnit, ctx: UnitRunContext, messages?: OperationMessage[]): string {
     const role = unit.role ? ROLE_PROFILES[unit.role]?.systemPromptAddendum ?? "" : "";
     const deps = ctx.dependencies.length
       ? `\nCompleted prerequisite work:\n${ctx.dependencies.map((d) => `- ${d.title}: ${d.summary}`).join("\n")}\n`
       : "";
     return (
-      `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${deps}${messagesBlock(ctx.messages)}\n` +
+      `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${deps}${messagesBlock(messages)}\n` +
       `Task:\n${unit.prompt}\n\nCall task_completed with a concise summary when done.`
     );
   }
