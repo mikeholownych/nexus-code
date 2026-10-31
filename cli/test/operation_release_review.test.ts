@@ -786,3 +786,74 @@ test("a post-prompt crash suppresses duplicate history injection and acknowledge
   assert.equal(durableHistory.split(message.id).length - 1, 1);
   assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
 });
+
+test("a context-admission withdrawal does not acknowledge a message and retry submits it", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-withdrawn-message-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-withdrawn-message", "retain delivery after withdrawal", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
+  const { message } = publishMessage(state, { from: "operator", to: "b", kind: "request", body: "withdrawn prompt" }, Date.now());
+  store.save(state);
+  const history: Array<{ role: string; content: string }> = [{ role: "system", content: "system" }];
+  const agent: any = {
+    durable: true,
+    getTaskId: () => "task-b",
+    getMessages: () => history,
+    getObjective: () => ({ verification: [] }),
+    getCompletionSummary: () => undefined,
+    setProviderRecoveryHooks: () => {},
+    checkpointDurableState: () => {},
+    estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
+    runTurn: async () => ({
+      execution: "BLOCKED",
+      outcome: "UNVERIFIED",
+      acceptance: "NOT_REQUESTED",
+      modelStop: "NONE",
+      finalOutputComplete: true,
+      verification: null,
+      interruption: null,
+      inferenceFailure: null,
+      capacity: {
+        estimatedPromptTokens: 100,
+        completionReserveTokens: 1,
+        toolResponseReserveTokens: 1,
+        contextLimit: 10,
+        step: 1,
+        modelCalled: false,
+        pendingMessageRetained: false,
+        pendingMessageChars: 42,
+      },
+      steps: { used: 0, max: 5, limitReached: false },
+      unverifiedChangesPending: false,
+      finishedAt: new Date().toISOString(),
+    }),
+    shutdown: () => {},
+  };
+  const first = new OperationRunner(store.load(state.id), {
+    executor: new AgentWorkUnitExecutor({
+      baseConfig: { endpoint: resource.endpoint, model: "m", workspace: root } as HarnessConfig,
+      createAgent: () => agent,
+    }),
+    persist: (current) => store.save(current),
+  });
+  await first.run();
+  assert.equal(first.state.units[0].status, "BLOCKED");
+  assert.equal(history.some((entry) => entry.content.includes("withdrawn prompt")), false, "the fixture withdraws the durable prompt");
+  assert.equal(first.state.messages![0].deliveredTo, undefined, "a withdrawn prompt must not acknowledge delivery");
+
+  const decision = first.state.units[0].blocked!.decision;
+  const revise = decision.options.find((option) => option.action.kind === "revise")!;
+  first.scheduler.resolve(decision.id, revise.id, "retry with a larger context allowance");
+  store.save(first.state);
+  const seen: string[][] = [];
+  const retryExecutor: WorkUnitExecutor = {
+    run: async (_unit, _resource, ctx) => {
+      seen.push((ctx.messages ?? []).map((entry) => entry.id));
+      return completed("submitted after admission retry");
+    },
+  };
+  const resumed = await driveOperation(store.load(state.id), { store, executor: retryExecutor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.deepEqual(seen, [[message.id]]);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});

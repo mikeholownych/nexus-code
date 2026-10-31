@@ -395,7 +395,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt);
         if (budgetFailure) return budgetFailure;
         const redTurn = await agent.runTurn(redPrompt, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
-        ctx.messagesSubmitted?.();
+        if (redTurn.capacity?.pendingMessageRetained !== false) ctx.messagesSubmitted?.();
         const afterRed = this.tddTestSnapshot(agent, config.workspace);
         const testPaths = [...afterRed]
           .filter(([file, hash]) => !beforeRed.has(file) || beforeRed.get(file) !== hash)
@@ -465,7 +465,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       const budgetFailure = this.contextBudgetFailure(agent, unit, greenPrompt);
       if (budgetFailure) return budgetFailure;
       const turn = await agent.runTurn(greenPrompt, undefined, { signal: ctx.signal, resume: isResume || (tdd && redEvidence !== undefined) });
-      ctx.messagesSubmitted?.();
+      if (turn.capacity?.pendingMessageRetained !== false) ctx.messagesSubmitted?.();
       const configuredVerifier = config.authoritativeVerifierCommand?.trim();
       const testerVerifiedThisTurn = unit.role === "tester" &&
         (agent.getObjective()?.verification.slice(priorVerificationAttempts).some((attempt) => {
