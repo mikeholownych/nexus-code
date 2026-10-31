@@ -1,0 +1,12 @@
+# Synthetic RC14 E2 fixture inputs
+
+The four scenarios use local release fixtures rather than task or held-out data. The scenario scripts mount the copies in this directory read-only. `fixtures/SHA256SUMS` binds every fixture file; the packet-level `SHA256SUMS` binds the fixture manifest and the rest of the packet.
+
+## Origins and contents
+
+- `fixtures/broken-release/` was copied from `/var/tmp/nexus-rc14-e2-fixtures/broken-release/fixture`. Its `v1.0.0-rc.14` archive is a synthetic package whose CLI entrypoint reports version `9.9.9`, used to trigger staging self-test refusal. Archive SHA-256: `c8c6c1f3e5749d03499ad191a0aed45e1b815a980d3b039cbd86110330b78a41`; the included release `SHA256SUMS` contains that digest.
+- `fixtures/process-crash-release/` was copied from `/var/tmp/nexus-rc14-e2-fixtures/process-crash-release`. It includes a synthetic RC14 replacement archive whose CLI entrypoint reports `9.9.9` and delays loading the original entrypoint, plus the original and broken entrypoint digests used by the crash/recovery script. Archive SHA-256: `fc0ac534c0ab4356a5520cff3987e50d1d85b479e3f47ed25247cbf4f9d3c14f`; the included release `SHA256SUMS` contains that digest. The original entrypoint digest is `08f3970bece31880df497e4eb75b048bb7568d1cbf57e950d60bb3760c4794fa`; the synthetic replacement digest is `c826ffc5955bf561afc06be8d73a00d82ee582480d7b1314283aa0f52babfa5e`.
+- `fixtures/incompatible-downgrade/` was copied from `/var/tmp/nexus-rc14-incompat-fixture/release`. Its API response is synthetic; the packaged RC4 archive is paired with a compatibility descriptor that declares `stateSchemaVersion: 1` and synthetic revision `1111111111111111111111111111111111111111`. Archive SHA-256: `4d583399984c806f29c8b3b8b4203cd67a8890c151335795d458530ce2594b35`; compatibility descriptor SHA-256: `3539c4a0020e9dcbd3dcede59fbb70667371583e037a89fa0883236ecda31897`. The included `SHA256SUMS` binds both.
+- The backup/restore scenario creates its state and backup contents inside the disposable container; those values are synthetic literals in `backup-restore-run.sh`.
+
+The origins identify the staging directories used for these runs; the actual fixture bytes consumed by the updated scripts are included here. The external fixture generators are not included, so this packet preserves and verifies the inputs but does not claim that the generator process itself is reproducible.

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "product": "nexus-code",
+  "version": "1.0.0-rc.4",
+  "revision": "1111111111111111111111111111111111111111",
+  "builtAt": "2026-10-01T00:00:00Z",
+  "minimumUpdaterVersion": "0.1.0-alpha.2",
+  "components": {
+    "cli": "1.0.0-rc.4",
+    "core": "1.0.0-rc.4",
+    "tui": "1.0.0-rc.4",
+    "harness": "1.0.0-rc.4"
+  },
+  "compatibility": {
+    "configSchemaVersion": 1,
+    "stateSchemaVersion": 1,
+    "minSupportedConfigVersion": 1,
+    "minSupportedStateVersion": 0
+  },
+  "platforms": {
+    "linux-x86_64": {
+      "archive": "nexus-linux-x86_64-v1.0.0-rc.4.tar.gz",
+      "os": "linux",
+      "arch": "x86_64",
+      "libc": "glibc-2.35",
+      "sha256": "4d583399984c806f29c8b3b8b4203cd67a8890c151335795d458530ce2594b35"
+    }
+  }
+}

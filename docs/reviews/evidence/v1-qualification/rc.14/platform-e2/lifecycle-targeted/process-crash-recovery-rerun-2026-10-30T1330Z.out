@@ -1,0 +1,7 @@
+pre-kill durable journal state=switched backup_exists=true
+updater_sigkill_rc=137
+after_sigkill_durable_state=switched target_installed=true user_state_preserved=true
+✔ Recovery completed (rolled_back): Restored verified source release v1.0.0-rc.14.
+post-recovery journal=rolled_back failed_target_retained=true staging_removed=true
+Recovery check: No interrupted upgrade found in journal.
+updater_process_crash_recovery=PASS original_cli_entrypoint_restored=true staging_cleanup_asserted=true idempotent=true; POWER_LOSS_NOT_TESTED
