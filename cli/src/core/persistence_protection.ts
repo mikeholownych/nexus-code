@@ -109,9 +109,40 @@ function withStableToolCallIds<T>(value: T): T {
   return { ...(value as any), messages } as T;
 }
 
+const OPERATION_GIT_PATH_PLACEHOLDER = "[NEXUS_VALIDATED_OPERATION_GIT_PATH]";
+
+function hasValidatedOperationGitPaths(value: { operation?: any }, selectedWorkspace: WorkspacePath): boolean {
+  const git = value.operation?.git;
+  if (!git?.isolate) return false;
+  const units = Object.values(git.units ?? {}) as Array<{ worktree?: unknown }>;
+  const paths = [git.repoRoot, git.baseDir, git.integrationWorktree, ...units.map((unit) => unit.worktree)];
+  if (paths.some((candidate) => typeof candidate !== "string")) return false;
+  for (const candidate of paths as string[]) {
+    if (classifyPathComponents(candidate).some((finding) => finding.classificationType !== "UNCERTAIN")) {
+      throw new Error("Operation git path contains positively classified sensitive material");
+    }
+  }
+  try {
+    const repoRoot = path.resolve(git.repoRoot);
+    const baseDir = path.resolve(git.baseDir);
+    const actualRoot = execFileSync("git", ["-C", selectedWorkspace.value, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return path.resolve(actualRoot) === repoRoot &&
+      fs.realpathSync(repoRoot) === repoRoot &&
+      baseDir === path.join(repoRoot, ".nexus", "worktrees", path.basename(baseDir)) &&
+      path.resolve(git.integrationWorktree) === path.join(baseDir, "integration") &&
+      units.every((unit) => path.resolve(unit.worktree as string) === path.join(baseDir, "units", path.basename(unit.worktree as string)));
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Protect a task-state record while preserving only the WorkspacePath supplied
- * by the selected workspace model. Arbitrary objects receive no path exception.
+ * Protect a task-state record while preserving WorkspacePath values supplied by
+ * the selected workspace model and operation Git paths validated against that
+ * repository. Arbitrary objects receive no path exception.
  */
 export function redactTaskStateForPersistence<T extends {
   taskId: string;
@@ -157,7 +188,9 @@ export function redactTaskStateForPersistence<T extends {
     }
   }
 
-  // Mask only schema fields whose values match a validated WorkspacePath.
+  const preserveOperationGitPaths = hasValidatedOperationGitPaths(value as any, selectedWorkspace);
+  const operationGit = (value as any).operation?.git;
+  // Mask validated path fields before classification, then restore their exact values.
   const masked = {
     ...value,
     workspacePath: "[NEXUS_TYPED_WORKSPACE_PATH]",
@@ -165,6 +198,21 @@ export function redactTaskStateForPersistence<T extends {
     ...(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0)
       ? { worktreeBinding: { ...value.worktreeBinding, worktreePath: "[NEXUS_TYPED_WORKSPACE_PATH]" } }
       : {}),
+    ...(preserveOperationGitPaths ? {
+      operation: {
+        ...(value as any).operation,
+        git: {
+          ...operationGit,
+          repoRoot: OPERATION_GIT_PATH_PLACEHOLDER,
+          baseDir: OPERATION_GIT_PATH_PLACEHOLDER,
+          integrationWorktree: OPERATION_GIT_PATH_PLACEHOLDER,
+          units: Object.fromEntries(Object.entries(operationGit.units ?? {}).map(([id, unit]: [string, any]) => [
+            id,
+            { ...unit, worktree: OPERATION_GIT_PATH_PLACEHOLDER },
+          ])),
+        },
+      },
+    } : {}),
   };
   const protectedValue = redactForPersistence(masked);
   return {
@@ -174,6 +222,21 @@ export function redactTaskStateForPersistence<T extends {
     ...(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0)
       ? { worktreeBinding: { ...protectedValue.worktreeBinding, worktreePath } }
       : {}),
+    ...(preserveOperationGitPaths ? {
+      operation: {
+        ...protectedValue.operation,
+        git: {
+          ...protectedValue.operation.git,
+          repoRoot: operationGit.repoRoot,
+          baseDir: operationGit.baseDir,
+          integrationWorktree: operationGit.integrationWorktree,
+          units: Object.fromEntries(Object.entries(operationGit.units ?? {}).map(([id, unit]: [string, any]) => [
+            id,
+            { ...protectedValue.operation.git.units[id], worktree: unit.worktree },
+          ])),
+        },
+      },
+    } : {}),
   };
 }
 

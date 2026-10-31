@@ -36,7 +36,19 @@ export class OperationStore {
     this.accountIdentityHome = accountIdentityHome;
   }
 
+  private preflightFutureVersion(id: string): void {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.manager.getStateFilePath(id), "utf8"));
+      const version = raw?.operation?.schemaVersion;
+      if (typeof version === "number" && version > CURRENT_OPERATION_SCHEMA_VERSION) throw new UnsupportedOperationSchemaError(version);
+    } catch (error) {
+      if (error instanceof UnsupportedOperationSchemaError) throw error;
+      // Missing, unreadable and malformed records retain the state manager's established error and quarantine paths.
+    }
+  }
+
   save(op: DurableOperationState): void {
+    this.preflightFutureVersion(op.id);
     op = migrateLegacyAccountIdentities(op, createOperationAccountIdentity(this.accountIdentityHome));
     const existing = this.manager.hasTaskState(op.id) ? this.manager.loadTaskState(op.id) : undefined;
     // A newer operation document is never overwritten by an older build. Writing over it would destroy the only copy
@@ -71,6 +83,7 @@ export class OperationStore {
   }
 
   load(id: string): DurableOperationState {
+    this.preflightFutureVersion(id);
     const state = this.manager.loadTaskState(id, this.workspace.value, [this.workspace]);
     if (!state.operation) throw new Error(`Task ${id} is not an operation`);
     let migrated: DurableOperationState;

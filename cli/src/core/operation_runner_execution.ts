@@ -97,9 +97,6 @@ const conversationNotStarted = (messages: ChatMessage[]): boolean => messages.le
  * whichever qualified resource the scheduler picks next.
  */
 export class AgentWorkUnitExecutor implements WorkUnitExecutor {
-  /** Workspace of the unit currently running (its isolated worktree when the operation isolates units). */
-  private runWorkspace: string | undefined;
-
   constructor(private readonly opts: AgentExecutorOptions) {}
 
   configFor(resource: ResourceDescriptor, unit?: WorkUnit, workspace?: string): HarnessConfig {
@@ -211,7 +208,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   }
 
   /** Verified RED evidence for this exact unit task, or undefined when absent or stale. */
-  private readTddEvidence(agent: AutonomousAgent, unit: WorkUnit): TddRedEvidence | undefined {
+  private readTddEvidence(agent: AutonomousAgent, unit: WorkUnit, workspace: string): TddRedEvidence | undefined {
     const file = this.tddStateFile(agent);
     if (!file) return undefined;
     try {
@@ -221,7 +218,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       if (typeof parsed.command !== "string" || !parsed.command) return undefined;
       if (!Array.isArray(parsed.tests) || parsed.tests.some((entry: unknown) => typeof entry !== "string")) return undefined;
       if (!parsed.testHashes || typeof parsed.testHashes !== "object" || Array.isArray(parsed.testHashes)) return undefined;
-      const current = this.tddTestSnapshot(agent);
+      const current = this.tddTestSnapshot(agent, workspace);
       for (const test of parsed.tests) {
         if (typeof parsed.testHashes[test] !== "string" || current.get(test) !== parsed.testHashes[test]) return undefined;
       }
@@ -264,10 +261,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   }
 
   /** Content hashes of test files currently changed against HEAD. */
-  private tddTestSnapshot(agent: AutonomousAgent): Map<string, string> {
+  private tddTestSnapshot(agent: AutonomousAgent, workspace: string): Map<string, string> {
     const snapshot = new Map<string, string>();
     try {
-      const identity = agent.getCandidateTracker().computeCandidateIdentitySync(this.runWorkspace ?? this.opts.baseConfig.workspace);
+      const identity = agent.getCandidateTracker().computeCandidateIdentitySync(workspace);
       for (const entry of [...identity.trackedChanges, ...identity.untrackedFiles]) {
         if (entry.status !== "deleted" && isTestPath(entry.path)) snapshot.set(entry.path, entry.contentHash);
       }
@@ -280,7 +277,6 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   async run(unit: WorkUnit, resource: ResourceDescriptor, ctx: UnitRunContext): Promise<UnitRunResult> {
     const config = this.configFor(resource, unit, ctx.workspace);
-    this.runWorkspace = config.workspace;
     const agent = this.opts.createAgent
       ? this.opts.createAgent(config, 1, { durable: true, role: unit.role, unitId: unit.id })
       : new AutonomousAgent(config, 1, undefined, { durable: true, role: unit.role, unitId: unit.id });
@@ -383,15 +379,15 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       const tddEnabled = this.opts.tdd === true || this.opts.baseConfig.tdd === true || process.env.NEXUS_TDD === "1";
       const tdd = tddEnabled && (unit.role === undefined || unit.role === "implementer");
       if (tdd && (ctx.operatorDecision?.restart || unusable)) this.clearTddEvidence(agent);
-      let redEvidence = tdd ? this.readTddEvidence(agent, unit) : undefined;
+      let redEvidence = tdd ? this.readTddEvidence(agent, unit, config.workspace) : undefined;
       let redVerifiedNow = false;
       if (tdd && !redEvidence) {
-        const beforeRed = this.tddTestSnapshot(agent);
+        const beforeRed = this.tddTestSnapshot(agent, config.workspace);
         const redPrompt = `${prompt}\n\n${TDD_RED_PROTOCOL}`;
         const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt);
         if (budgetFailure) return budgetFailure;
         const redTurn = await agent.runTurn(redPrompt, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
-        const afterRed = this.tddTestSnapshot(agent);
+        const afterRed = this.tddTestSnapshot(agent, config.workspace);
         const testPaths = [...afterRed]
           .filter(([file, hash]) => !beforeRed.has(file) || beforeRed.get(file) !== hash)
           .map(([file]) => file)
