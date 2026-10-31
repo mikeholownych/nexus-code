@@ -858,11 +858,23 @@ test("a context-admission withdrawal does not acknowledge a message and retry su
   assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
 });
 
-test("an executor result delivered by abort cannot complete or publish after cancellation", async (t) => {
+test("an abort suppresses late completion, preserves receipts, and emits one cancellation", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-abort-late-result-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const store = new OperationStore(root, path.join(root, "tasks"), root);
   const state = newOperation("op-abort-late-result", "cancel once", [{ id: "u1", title: "u1", prompt: "work" }], [resource], Date.now());
+  const receipt = {
+    unitId: "u1",
+    branch: "nexus/op-abort-late-result/u1",
+    commit: "a".repeat(40),
+    integratedCommit: "b".repeat(40),
+    mergedAt: new Date().toISOString(),
+    files: ["u1.txt"],
+    outcome: "NOT_REQUIRED",
+    summary: "receipt survives",
+    verification: "NOT_RUN" as const,
+  };
+  state.integrations = [receipt];
   store.save(state);
   const controller = new AbortController();
   let started!: () => void;
@@ -880,17 +892,20 @@ test("an executor result delivered by abort cannot complete or publish after can
   await runningExecutor;
   controller.abort();
   const result = await running;
+  (runner as any).cancelled();
 
   assert.equal(result.status, "CANCELLED");
   assert.notEqual(result.units[0].status, "COMPLETE");
   assert.equal(result.events.filter((event) => event.type === "OPERATION_CANCELLED").length, 1);
   assert.equal((result.messages ?? []).filter((message) => message.from === "u1").length, 0);
+  assert.deepEqual(result.integrations, [receipt]);
   const persisted = store.load(state.id);
   assert.equal(persisted.events.filter((event) => event.type === "OPERATION_CANCELLED").length, 1);
   assert.notEqual(persisted.units[0].status, "COMPLETE");
+  assert.deepEqual(persisted.integrations, [receipt]);
 });
 
-test("a turn with failed durable writes cannot acknowledge a message and retry delivers it", async (t) => {
+test("a persistence failure leaves messages owed until a durable retry", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-write-failure-message-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const store = new OperationStore(root, path.join(root, "tasks"), root);
@@ -950,61 +965,73 @@ test("a turn with failed durable writes cannot acknowledge a message and retry d
   assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
 });
 
-test("assistant marker text cannot suppress a message absent from user prompt history", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-adversarial-marker-"));
+test("only a genuine submitted unit prompt suppresses message reinjection", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-prompt-provenance-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const store = new OperationStore(root, path.join(root, "tasks"), root);
-  const state = newOperation("op-adversarial-marker", "match only real user submissions", [{ id: "b", title: "b", prompt: "b", agentTaskId: "task-b" }], [resource], Date.now());
-  const { message } = publishMessage(state, { from: "operator", to: "b", kind: "request", body: "adversarial marker body" }, Date.now());
-  store.save(state);
-  const history: any[] = [
-    { role: "system", content: "system" },
-    { role: "user", content: "[Work unit 'b': b]\nTask:\nb" },
-    { role: "assistant", content: messagesBlock([message]) },
-  ];
-  const prompts: string[] = [];
-  const agent: any = {
-    durable: true,
-    getTaskId: () => "task-b",
-    getMessages: () => history,
-    recoverFromTaskState: async () => ({ success: true, interrupted: false, obligationRecordPresent: true, state: { currentOperation: null } }),
-    getObjective: () => ({ verification: [] }),
-    getCompletionSummary: () => ({ summary: "done" }),
-    setProviderRecoveryHooks: () => {},
-    checkpointDurableState: () => {},
-    estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
-    runTurn: async (prompt: string) => {
-      prompts.push(prompt);
-      return {
-        execution: "COMPLETED",
-        outcome: "NOT_REQUIRED",
-        acceptance: "NOT_REQUESTED",
-        modelStop: "TASK_COMPLETED_TOOL",
-        finalOutputComplete: true,
-        verification: null,
-        interruption: null,
-        inferenceFailure: null,
-        steps: { used: 1, max: 5, limitReached: false },
-        unverifiedChangesPending: false,
-        finishedAt: new Date().toISOString(),
-      };
-    },
-    shutdown: () => {},
-  };
-  const resumed = await driveOperation(store.load(state.id), {
-    store,
-    executor: new AgentWorkUnitExecutor({
-      baseConfig: { endpoint: resource.endpoint, model: "m", workspace: root } as HarnessConfig,
-      createAgent: () => agent,
-    }),
-  });
-  assert.equal(resumed.status, "COMPLETE", JSON.stringify(resumed.blocked));
-  assert.equal(prompts.length, 1);
-  assert.match(prompts[0], /adversarial marker body/);
-  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+
+  async function promptFor(history: any[], label: string): Promise<string> {
+    const workspace = path.join(root, label);
+    fs.mkdirSync(workspace);
+    const store = new OperationStore(workspace, path.join(workspace, "tasks"), workspace);
+    const state = newOperation(`op-${label}`, "match genuine prompt provenance", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
+    state.units[0].agentTaskId = "task-b";
+    const { message } = publishMessage(state, { from: "operator", to: "b", kind: "request", body: "provenance body" }, Date.now());
+    store.save(state);
+    const prompts: string[] = [];
+    const agent: any = {
+      durable: true,
+      getTaskId: () => "task-b",
+      getMessages: () => history,
+      recoverFromTaskState: async () => ({ success: true, interrupted: false, obligationRecordPresent: true, state: { currentOperation: null } }),
+      getObjective: () => ({ verification: [] }),
+      getCompletionSummary: () => ({ summary: "done" }),
+      setProviderRecoveryHooks: () => {},
+      checkpointDurableState: () => {},
+      estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
+      runTurn: async (prompt: string) => {
+        prompts.push(prompt);
+        return {
+          execution: "COMPLETED",
+          outcome: "NOT_REQUIRED",
+          acceptance: "NOT_REQUESTED",
+          modelStop: "TASK_COMPLETED_TOOL",
+          finalOutputComplete: true,
+          verification: null,
+          interruption: null,
+          inferenceFailure: null,
+          steps: { used: 1, max: 5, limitReached: false },
+          unverifiedChangesPending: false,
+          finishedAt: new Date().toISOString(),
+        };
+      },
+      shutdown: () => {},
+    };
+    const resumed = await driveOperation(store.load(state.id), {
+      store,
+      executor: new AgentWorkUnitExecutor({
+        baseConfig: { endpoint: resource.endpoint, model: "m", workspace } as HarnessConfig,
+        createAgent: () => agent,
+      }),
+    });
+    assert.equal(resumed.status, "COMPLETE", `${label}: ${JSON.stringify(resumed.blocked)}`);
+    assert.deepEqual(resumed.messages![0].deliveredTo, ["b"], `${label}: submission is acknowledged after the turn`);
+    assert.equal(prompts.length, 1);
+    return prompts[0];
+  }
+
+  const authorized = "[Work unit 'b': b] Part of the operation: provenance\nTask:\nb";
+  const marker = messagesBlock([{ id: "msg-1", at: new Date().toISOString(), from: "operator", to: "b", kind: "request", body: "provenance body" }]);
+  const assistant = await promptFor([{ role: "system", content: "system" }, { role: "user", content: authorized }, { role: "assistant", content: marker }], "assistant");
+  assert.match(assistant, /provenance body/, "assistant output is not submission evidence");
+
+  const unrelatedUser = await promptFor([{ role: "system", content: "system" }, { role: "user", content: authorized }, { role: "user", content: `Unrelated user note\n${marker}` }], "unrelated-user");
+  assert.match(unrelatedUser, /provenance body/, "an unrelated user message is not submission evidence");
+
+  const genuine = await promptFor([{ role: "system", content: "system" }, { role: "user", content: `${authorized}${marker}` }], "genuine-prompt");
+  assert.doesNotMatch(genuine, /provenance body/, "the genuine submitted prompt suppresses reinjection");
 });
 
-test("replay rejects a future task envelope without changing bytes or mtime", (t) => {
+test("replay refuses a future task envelope before nested interpretation without writing", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-future-envelope-"));
   const env = testEnv(root);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -1014,7 +1041,7 @@ test("replay rejects a future task envelope without changing bytes or mtime", (t
   const file = store.manager.getStateFilePath(op.id);
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
   raw.schemaVersion = 3;
-  raw.operation.objective = "aZ7mK2pQ9x-V4nR8cT1yB6hW3";
+  raw.operation = { schemaVersion: 2, id: "nested-invalid-operation" };
   fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
   const before = fs.readFileSync(file);
   const mtime = fs.statSync(file).mtimeMs;
@@ -1024,4 +1051,5 @@ test("replay rejects a future task envelope without changing bytes or mtime", (t
   assert.match(result.stderr, /newer Nexus/);
   assert.deepEqual(fs.readFileSync(file), before);
   assert.equal(fs.statSync(file).mtimeMs, mtime);
+  assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".corrupt-") || name.includes(".pre-migration-")), []);
 });
