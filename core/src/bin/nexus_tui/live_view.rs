@@ -156,8 +156,8 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
             layout.anchored = drawn.anchored;
         }
     }
-    let raw_hint = composer_hint(state);
     let max_hint = usize::from(area.width.saturating_sub(4));
+    let raw_hint = composer_hint(state, max_hint);
     let hint_text = if raw_hint.chars().count() > max_hint && max_hint > 3 {
         let mut s: String = raw_hint.chars().take(max_hint - 1).collect();
         s.push('…');
@@ -1085,12 +1085,18 @@ fn render_composer(frame: &mut Frame, area: Rect, state: &LiveState, layout: &Co
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
     if state.composer.is_empty() && state.overlay.is_none() && state.focus == Focus::Composer && state.link == Link::Ready && !state.closing {
+        let room = usize::from(area.width.saturating_sub(PREFIX_WIDTH));
         let placeholder = if state.session.busy {
-            "type to steer the running turn · esc cancels it"
+            if room < "type to steer the running turn · esc cancels it".chars().count() {
+                "type to steer · esc cancels"
+            } else {
+                "type to steer the running turn · esc cancels it"
+            }
+        } else if room < "ask Nexus · / for commands · ? for keys".chars().count() {
+            "ask Nexus · / commands · ? keys"
         } else {
             "ask Nexus · / for commands · ? for keys"
         };
-        let room = usize::from(area.width.saturating_sub(PREFIX_WIDTH));
         let placeholder: Cow<str> = if placeholder.chars().count() > room && room > 1 {
             Cow::Owned(format!("{}…", placeholder.chars().take(room - 1).collect::<String>()))
         } else {
@@ -1831,7 +1837,7 @@ fn diagnostic_lines(stderr: &[String]) -> Vec<String> {
     kept
 }
 
-fn composer_hint(state: &LiveState) -> Cow<'static, str> {
+fn composer_hint(state: &LiveState, max_hint: usize) -> Cow<'static, str> {
     let hint = match (&state.link, state.session.busy) {
         _ if state.closing => " shutting down the agent… ",
         (Link::Crashed { .. }, _) => " r restart · q quit ",
@@ -1865,6 +1871,9 @@ fn composer_hint(state: &LiveState) -> Cow<'static, str> {
             return Cow::Owned(format!("{}· enter steers ", activity_line(state)));
         }
         (_, true) => return Cow::Owned(activity_line(state)),
+        (_, false) if " enter send · shift+enter newline · ? help ".chars().count() > max_hint => {
+            " enter send · ⇧↵ newline · ? help "
+        }
         (_, false) => " enter send · shift+enter newline · ? help ",
     };
     Cow::Borrowed(hint)
@@ -3858,6 +3867,22 @@ mod surface_tests {
     }
 
     #[test]
+    fn narrow_composer_hints_are_complete_at_forty_columns() {
+        let mut idle = state(false);
+        let (rows, _) = screen(&mut idle, 40, 14);
+        let all = rows.join("\n");
+        assert!(all.contains("enter send · ⇧↵ newline · ? help"), "{all}");
+        assert!(all.contains("ask Nexus · / commands · ? keys"), "{all}");
+        assert!(!all.contains("shift+enter newline ·…"), "{all}");
+        assert!(!all.contains("? for ke…"), "{all}");
+        let mut busy = state(true);
+        let (rows, _) = screen(&mut busy, 40, 14);
+        let all = rows.join("\n");
+        assert!(all.contains("type to steer · esc cancels"), "{all}");
+        assert!(!all.contains("type to steer the running turn ·…"), "{all}");
+    }
+
+    #[test]
     fn approval_decisions_have_a_visible_focus_that_arrows_move_and_enter_takes() {
         let mut state = state(true);
         feed(&mut state, &[r#"{"v":1,"type":"approval.request","id":"a1","turn_id":"t1","tool":"run_command","subject":"rm -rf build","preview":"","review":{"kind":"command","command":"rm -rf build"}}"#]);
@@ -4235,13 +4260,13 @@ mod surface_tests {
     }
 
     #[test]
-    fn narrow_windows_keep_the_mode_and_cut_the_placeholder_with_an_ellipsis_and_resume_reads_as_a_notice() {
+    fn narrow_windows_keep_the_mode_and_show_complete_placeholder_and_resume_reads_as_a_notice() {
         let mut state = state(false);
         for width in [40u16, 50, 60] {
             let (rows, _) = screen(&mut state, width, 12);
             assert!(rows[0].contains("auto"), "{width}: {}", rows[0]);
             let last = rows.last().unwrap();
-            assert!(last.contains('…') || last.contains("? for keys"), "{width}: {last}");
+            assert!(last.contains("? keys") || last.contains("? for keys"), "{width}: {last}");
         }
         feed(&mut state, &[r#"{"v":1,"type":"slash.result","id":"s1","command":"resume","success":true,"output":"Resumed session s1."}"#]);
         assert_eq!(state.transcript.last(), Some(&Entry::Info("Resumed session s1.".into())));
