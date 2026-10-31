@@ -230,9 +230,9 @@ export function redactTaskStateForPersistence<T extends {
           repoRoot: operationGit.repoRoot,
           baseDir: operationGit.baseDir,
           integrationWorktree: operationGit.integrationWorktree,
-          units: Object.fromEntries(Object.entries(operationGit.units ?? {}).map(([id, unit]: [string, any]) => [
+          units: Object.fromEntries(Object.entries(protectedValue.operation.git.units ?? {}).map(([id, unit]: [string, any], index) => [
             id,
-            { ...protectedValue.operation.git.units[id], worktree: unit.worktree },
+            { ...unit, worktree: (Object.values(operationGit.units ?? {})[index] as any).worktree },
           ])),
         },
       },

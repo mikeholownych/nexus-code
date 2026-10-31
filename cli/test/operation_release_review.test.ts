@@ -9,6 +9,7 @@ import { OperationStore } from "../src/core/operation_runner.js";
 import { newOperation, type WorkUnit } from "../src/core/operation.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
 import { UnsupportedOperationSchemaError } from "../src/core/operation_schema.js";
+import { STATE_RESTORE_PENDING_FILE } from "../src/core/state_store_guard.js";
 import type { ResourceDescriptor } from "../src/core/resources.js";
 import type { UnitRunContext } from "../src/core/operation_runner.js";
 import type { HarnessConfig } from "../src/types.js";
@@ -184,4 +185,79 @@ test("operation Git paths round-trip exactly but sensitive path components are r
 
   loaded.git!.repoRoot = path.join(workspace, `ghp_${"A".repeat(36)}`);
   assert.throws(() => store.save(loaded), /sensitive/i);
+});
+
+test("Git unit restoration keeps protected keys and branches while restoring only worktree paths", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-git-unit-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+  execFileSync("git", ["config", "user.email", "t@t.invalid"], { cwd: workspace });
+  execFileSync("git", ["config", "user.name", "t"], { cwd: workspace });
+  fs.writeFileSync(path.join(workspace, "base.txt"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["commit", "-qm", "base"], { cwd: workspace });
+
+  const store = new OperationStore(workspace, path.join(workspace, "tasks"), workspace);
+  const op = newOperation("op-unit-redaction", "protect unit identity", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  const plan = planOperationGit(workspace, op.id);
+  op.git = newOperationGitState(plan);
+  const sensitive = `ghp_${"A".repeat(36)}`;
+  const worktree = path.join(plan.baseDir, "units", "safe-unit");
+  op.git.units = {
+    [sensitive]: {
+      branch: `nexus/${sensitive}`,
+      worktree,
+      baseCommit: plan.baseCommit,
+    },
+  };
+  store.save(op);
+
+  const file = store.manager.getStateFilePath(op.id);
+  assert.equal(fs.readFileSync(file, "utf8").includes(sensitive), false, "the sensitive unit id must not return to disk");
+  const loaded = store.load(op.id);
+  assert.equal(JSON.stringify(loaded.git).includes(sensitive), false, "no sensitive key or branch may be restored");
+  const entries = Object.entries(loaded.git!.units);
+  assert.equal(entries.length, 1);
+  const [protectedId, unit] = entries[0];
+  assert.notEqual(protectedId, sensitive);
+  assert.match(unit.branch, /REDACTED/);
+  assert.equal(unit.worktree, worktree);
+  assert.equal(unit.baseCommit, plan.baseCommit);
+});
+
+test("operation version preflight honors a pending restore barrier for load and save", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-restore-barrier-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
+  const op = newOperation("op-restore-barrier", "guard raw preflight", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.operation.schemaVersion = 3;
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+  const before = fs.readFileSync(file);
+  fs.writeFileSync(path.join(store.manager.getBaseDir(), STATE_RESTORE_PENDING_FILE), "pending\n", { mode: 0o600 });
+
+  assert.throws(() => store.load(op.id), /restore is pending/);
+  assert.throws(() => store.save(op), /restore is pending/);
+  assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test("a fractional operation version follows invalid-record quarantine instead of future-version refusal", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-fractional-version-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
+  const op = newOperation("op-fractional", "invalid version", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.operation.schemaVersion = 2.5;
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+
+  let thrown: unknown;
+  try { store.load(op.id); } catch (error) { thrown = error; }
+  assert.equal(thrown instanceof UnsupportedOperationSchemaError, false);
+  assert.match(String(thrown), /invalid:[\s\S]*quarantined/);
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".corrupt-")).length, 1);
 });

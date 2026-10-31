@@ -37,13 +37,9 @@ export class OperationStore {
   }
 
   private preflightFutureVersion(id: string): void {
-    try {
-      const raw = JSON.parse(fs.readFileSync(this.manager.getStateFilePath(id), "utf8"));
-      const version = raw?.operation?.schemaVersion;
-      if (typeof version === "number" && version > CURRENT_OPERATION_SCHEMA_VERSION) throw new UnsupportedOperationSchemaError(version);
-    } catch (error) {
-      if (error instanceof UnsupportedOperationSchemaError) throw error;
-      // Missing, unreadable and malformed records retain the state manager's established error and quarantine paths.
+    const version = this.manager.readRawOperationSchemaVersion(id);
+    if (typeof version === "number" && Number.isInteger(version) && version > CURRENT_OPERATION_SCHEMA_VERSION) {
+      throw new UnsupportedOperationSchemaError(version);
     }
   }
 
