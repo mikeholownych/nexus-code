@@ -3,9 +3,10 @@
   "checkpoint_id": "01M69DZJTGEZ3TCYK826TKT0KR",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 2,
+  "checkpoints_count": 530,
   "files_touched": [
     ".gitignore",
+    "WORK_PRODUCT.md",
     "cli/test/helpers/setup.ts",
     "cli/test/home_isolation.test.ts",
     "docs/v1.0.0/AUDIT.md",
@@ -35,26 +36,32 @@
       "transcript": "/0/full.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 154804,
+    "input_tokens": 2236704,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 12192671,
-    "output_tokens": 35979,
-    "api_call_count": 123
+    "cache_read_tokens": 385931383,
+    "output_tokens": 1040788,
+    "api_call_count": 2851
   },
   "redaction": {
-    "replacements": 15,
+    "replacements": 2829,
     "layers": {
-      "betterleaks": 0,
+      "betterleaks": 78,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 0,
-      "credentialed_uri": 0,
-      "entropy": 15,
+      "credential_value": 68,
+      "credentialed_uri": 1,
+      "entropy": 2695,
       "key_context": 0,
-      "provider_token": 0,
+      "provider_token": 4,
       "shell_stdin": 0
     }
   }
