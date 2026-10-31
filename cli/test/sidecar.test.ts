@@ -292,6 +292,39 @@ describe("SidecarServer: cancellation", () => {
       assert.equal(events.find((e) => e.type === "turn.result").turn.execution, "INTERRUPTED");
     });
   });
+
+  test("cancel during an approved run_command settles the process and turn promptly", async () => {
+    const script = (): Reply => ({ kind: "tools", calls: [{
+      name: "run_command",
+      args: { command: 'echo "$$" > command.pid; touch started.txt; sleep 30; touch finished.txt' },
+    }] });
+    await withSidecar(script, "review", async ({ server, events, repo, send }) => {
+      await send({ type: "prompt.submit", id: "t-run-command-cancel", text: "run the long command" });
+      const approval = await waitForEvent(events, (e) => e.type === "approval.request");
+      await send({ type: "approve", id: approval.id });
+      await waitUntil(() => fs.existsSync(path.join(repo, "started.txt")));
+      const commandPid = Number(fs.readFileSync(path.join(repo, "command.pid"), "utf8").trim());
+      assert.ok(Number.isInteger(commandPid) && commandPid > 0);
+
+      const cancelAt = Date.now();
+      await send({ type: "cancel" });
+      await server.idle();
+      assert.ok(Date.now() - cancelAt < 5000, "cancelled run_command and turn settle inside the accepted bound");
+      const result = events.find((e) => e.type === "turn.result" && e.turn_id === "t-run-command-cancel");
+      assert.equal(result.turn.execution, "INTERRUPTED");
+      assert.equal(result.turn.interruption?.outstandingTool, "run_command");
+      assert.equal(result.turn.interruption?.outstandingToolSettled, true);
+      assert.equal(fs.existsSync(path.join(repo, "finished.txt")), false, "cancelled command does not reach its post-sleep mutation");
+      await waitUntil(() => {
+        try {
+          process.kill(commandPid, 0);
+          return false;
+        } catch (error: any) {
+          return error?.code === "ESRCH";
+        }
+      });
+    });
+  });
 });
 
 describe("SidecarServer: slash and shutdown", () => {
