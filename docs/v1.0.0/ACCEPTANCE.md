@@ -45,7 +45,6 @@ The post-RC closure requirements listed below may remain `open`, `partial`, or `
 | REQ-REL-005 | ACC-SUP-04, ACC-SUP-05 | Exact-RC security and dependency artifact checks |
 | REQ-AGT-110 | ACC-CONT-10, ACC-GOV-06 | Installed-RC continuity and independent acceptance |
 | REQ-PRV-111 | ACC-PRV-LIVE | Installed-RC provider verification |
-| REQ-REL-114 | ACC-SUP-08 | Exact-RC cross-runner reproducibility |
 | REQ-QUAL-101 | ACC-QUAL-T2 | Installed-RC held-out T2 qualification |
 | REQ-QUAL-107 | ACC-PRV-STANDALONE, ACC-PRV-LIVE | Installed-RC standalone and provider matrix |
 | REQ-QUAL-108 | ACC-TUI-STEER, ACC-TUI-A11Y | Installed-RC automated and scripted PTY acceptance; the manual E3 matrix is waived by DEC-20 |
