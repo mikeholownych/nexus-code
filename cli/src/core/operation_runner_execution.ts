@@ -91,10 +91,20 @@ function resumeHistoryProblem(messages: ChatMessage[], unit: WorkUnit): string |
 /** Nothing happened in the conversation yet (for example, its first prompt was withdrawn before inference). */
 const conversationNotStarted = (messages: ChatMessage[]): boolean => messages.length === 1 && messages[0].role === "system";
 
+function isSubmittedUnitPrompt(message: ChatMessage): boolean {
+  if (message.role !== "user" || typeof message.content !== "string") return false;
+  const initial = message.content.startsWith("[Work unit ") &&
+    message.content.includes("Part of the operation:") &&
+    message.content.includes("Task:\n");
+  const resumed = message.content.startsWith("[Work unit resumed on ") &&
+    message.content.includes("The unit's authorized task");
+  return initial || resumed;
+}
+
 function unsubmittedMessages(history: ChatMessage[], messages?: OperationMessage[]): OperationMessage[] | undefined {
   if (!messages?.length) return messages;
-  const text = history.map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "")).join("\n");
-  return messages.filter((message) => !text.includes(`[message id: ${message.id}]`));
+  const prompts = history.filter(isSubmittedUnitPrompt).map((message) => message.content as string);
+  return messages.filter((message) => !prompts.some((prompt) => prompt.includes(messagesBlock([message]))));
 }
 
 /**

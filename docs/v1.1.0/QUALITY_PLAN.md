@@ -35,3 +35,15 @@
 - Envelope version field and refusal behavior — retrieval query: `nexus-cli-docs` / `CURRENT_STATE_SCHEMA_VERSION migrateIfLegacy`.
 
 FRICTION: full repository regression and independent quality approval remain open. The premature remote `v1.1.0` tag is unpublished; no later tag may be created until all release gates pass.
+
+## Plan review and retrieval record
+
+Plan review: APPROVED_WITH_CHANGES by independent reviewer agent-0; all four requested test-contract changes incorporated before retrieval.
+
+- RETRIEVAL 2026-10-31T21:55Z — corpus/index: `nexus-cli-*`, query: `operation_runner cancelled scheduler.cancel late result apply cleanup`, returned: `core/scheduler.ts:497`, symbol: `cancel`, contract: cancellation changes state once and emits the cancellation event; late result handling must preserve that transition.
+- RETRIEVAL 2026-10-31T21:55Z — corpus/index: `nexus-cli-*`, query: `TurnResult persistence durable failures pendingMessageRetained`, returned: `core/turn.ts:237` and `core/turn.ts:287`, symbol: `TurnResult`, contract: `persistence.durable === false` explicitly names failed durable writes and must block acknowledgment.
+- RETRIEVAL 2026-10-31T21:55Z — corpus/index: `nexus-cli-*`, query: `ChatMessage role user content structured prompt message history`, returned: `types.ts:25`, symbol: `ChatMessage`, contract: role distinguishes user from assistant; unrelated user content is not itself Nexus submission provenance.
+- RETRIEVAL 2026-10-31T21:55Z — corpus/index: `nexus-cli-*`, query: `CURRENT_STATE_SCHEMA_VERSION migrateIfLegacy unsupported future envelope`, returned: `core/state_schema.ts:2` and `core/state.ts:1112`, symbol: `migrateIfLegacy`, contract: the current envelope is version 2 and legacy interpretation requires an explicit supported-version check.
+- RETRIEVAL 2026-10-31T21:55Z — corpus: `opencode`, query: `cancellation durable outbox abort late completion`, returned: `packages/client/src/solid/data.ts:1739`, symbol: `prompt`, contract: fresh-id deduplication avoids duplicate prompt admission; Nexus will use its own structured submitted-prompt evidence, not opencode's storage model.
+
+FRICTION: commit 76a6b1ca included a one-line idempotence guard in `scheduler.ts` before that file was claimed. No conflicting owner existed. PearlOtter recorded the miss and claimed the file for subsequent review; no further scheduler edit is planned.
