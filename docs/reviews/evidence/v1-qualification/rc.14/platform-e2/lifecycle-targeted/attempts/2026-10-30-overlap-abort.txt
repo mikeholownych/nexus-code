@@ -1,0 +1,1 @@
+2026-10-30 13:20 UTC: A rerun of `bash ./run-self-test-failure.sh` against the packet-contained fixture was interrupted with SIGINT (exit 130) after discovery of a concurrent local RC14 E2 platform matrix on the same host. It produced no counted result. The disposable Docker container was no longer present after interruption. No user HOME, gateway, or held-out data was involved.

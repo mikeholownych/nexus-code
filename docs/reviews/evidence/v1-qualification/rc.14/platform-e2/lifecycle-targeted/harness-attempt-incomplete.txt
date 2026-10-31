@@ -1,0 +1,2 @@
+Attempt classification: INCOMPLETE, excluded from scenario results.
+The copied backup-restore runner attempted to expand `$here` without defining it and exited before `docker run`. No container was started and no test assertion ran. The copied script was then changed to mount `$PWD/install.sh`, whose SHA-256 matches the published RC14 installer, and the backup scenario was rerun successfully.
