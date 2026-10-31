@@ -1,0 +1,2 @@
+nexus installer: Node.js 22 or newer is required (found v12.22.12).
+preflight=PASS home_content_metadata_links_unchanged=true
