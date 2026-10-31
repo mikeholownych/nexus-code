@@ -611,6 +611,7 @@ export class ConvergenceScheduler {
   }
 
   cancel(): void {
+    if (this.state.status === "CANCELLED") return;
     for (const u of this.state.units) if (u.status === "RUNNING") u.status = "RUNNABLE";
     this.state.status = "CANCELLED";
     this.emit("OPERATION_CANCELLED", "Operation cancelled; work units and their history are preserved.");

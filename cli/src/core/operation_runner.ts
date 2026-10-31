@@ -276,6 +276,7 @@ export class OperationRunner {
           options: [{ label: "retry", action: { kind: "retry" } }],
         };
       }
+      if (signal?.aborted || this.state.status === "CANCELLED") return;
       this.scheduler.apply(assignment.unit.id, result);
       if (result.kind === "completed") this.publishCompletion(assignment.unit);
       this.save();

@@ -395,7 +395,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt);
         if (budgetFailure) return budgetFailure;
         const redTurn = await agent.runTurn(redPrompt, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
-        if (redTurn.capacity?.pendingMessageRetained !== false) ctx.messagesSubmitted?.();
+        if (redTurn.capacity?.pendingMessageRetained !== false && redTurn.persistence?.durable !== false) ctx.messagesSubmitted?.();
         const afterRed = this.tddTestSnapshot(agent, config.workspace);
         const testPaths = [...afterRed]
           .filter(([file, hash]) => !beforeRed.has(file) || beforeRed.get(file) !== hash)
@@ -465,7 +465,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       const budgetFailure = this.contextBudgetFailure(agent, unit, greenPrompt);
       if (budgetFailure) return budgetFailure;
       const turn = await agent.runTurn(greenPrompt, undefined, { signal: ctx.signal, resume: isResume || (tdd && redEvidence !== undefined) });
-      if (turn.capacity?.pendingMessageRetained !== false) ctx.messagesSubmitted?.();
+      if (turn.capacity?.pendingMessageRetained !== false && turn.persistence?.durable !== false) ctx.messagesSubmitted?.();
       const configuredVerifier = config.authoritativeVerifierCommand?.trim();
       const testerVerifiedThisTurn = unit.role === "tester" &&
         (agent.getObjective()?.verification.slice(priorVerificationAttempts).some((attempt) => {
@@ -520,6 +520,19 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     testerVerifiedThisTurn = false,
   ): UnitRunResult {
     if (turn.execution === "INTERRUPTED") return { kind: "cancelled" };
+    if (turn.persistence?.durable === false) {
+      const why = turn.persistence.failures?.length ? turn.persistence.failures.join("; ") : "durable state persistence failed";
+      return {
+        kind: "failed",
+        cause: "EXECUTION_FAILED",
+        reason: `persistence failure: ${why}`,
+        question: `${unit.title}: durable state persistence failed (${why}). Retry it, or revise it?`,
+        options: [
+          { label: "retry", action: { kind: "retry" } },
+          { label: "revise the unit (note required)", action: { kind: "revise" } },
+        ],
+      };
+    }
     if (turnSucceeded(turn)) {
       if (
         (turn.modelStop === "FINAL_TEXT" ||
