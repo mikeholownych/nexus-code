@@ -57,7 +57,7 @@ jobs:
           mv "$RUNNER_TEMP/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx" "$CARGO_HOME/bin/"
           curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
           chmod +x "$CARGO_HOME/bin/cyclonedx"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.22.1
           cache: npm
