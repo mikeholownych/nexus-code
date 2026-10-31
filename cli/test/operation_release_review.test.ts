@@ -1,0 +1,603 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { AgentWorkUnitExecutor } from "../src/core/operation_runner_execution.js";
+import { driveOperation, OperationRunner, OperationStore, type WorkUnitExecutor } from "../src/core/operation_runner.js";
+import { newOperation, type DurableOperationState, type UnitRunResult, type WorkUnit } from "../src/core/operation.js";
+import { publishMessage } from "../src/core/operation_messages.js";
+import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
+import { UnsupportedOperationSchemaError } from "../src/core/operation_schema.js";
+import { STATE_RESTORE_PENDING_FILE } from "../src/core/state_store_guard.js";
+import type { ResourceDescriptor } from "../src/core/resources.js";
+import type { UnitRunContext } from "../src/core/operation_runner.js";
+import type { HarnessConfig } from "../src/types.js";
+
+const resource: ResourceDescriptor = {
+  id: "primary",
+  provider: "https://provider.invalid",
+  endpoint: "https://provider.invalid/v1",
+  model: "m",
+  capabilities: ["tools"],
+  rank: 0,
+};
+
+function context(): UnitRunContext {
+  return {
+    objective: "exercise release fixes",
+    dependencies: [],
+    bindAgentTask: () => {},
+    observeFailure: () => null,
+    observeSuccess: () => {},
+    shouldYield: () => false,
+  };
+}
+
+function workUnit(id: string, agentTaskId?: string): WorkUnit {
+  return {
+    id,
+    title: id,
+    role: "implementer",
+    prompt: `do ${id}`,
+    dependsOn: [],
+    requires: {},
+    status: "RUNNABLE",
+    reroutes: [],
+    runs: 0,
+    unknownResumes: 0,
+    modelsUsed: [],
+    ...(agentTaskId ? { agentTaskId } : {}),
+  };
+}
+
+function redTurn(): any {
+  return {
+    execution: "COMPLETED",
+    outcome: "UNVERIFIED",
+    acceptance: "NOT_REQUESTED",
+    modelStop: "NONE",
+    finalOutputComplete: true,
+    verification: { status: "FAILED", command: "npm test", hasExecutedTests: true },
+    interruption: null,
+    inferenceFailure: null,
+    steps: { used: 1, max: 5, limitReached: false },
+    unverifiedChangesPending: true,
+    finishedAt: new Date().toISOString(),
+  };
+}
+
+test("concurrent TDD snapshots use each invocation's own isolated workspace", async () => {
+  const calls: Array<{ unit: string; workspace: string }> = [];
+  let releaseRecovery!: () => void;
+  const recoveryBlocked = new Promise<void>((resolve) => (releaseRecovery = resolve));
+  let recoveryStarted!: () => void;
+  const recovering = new Promise<void>((resolve) => (recoveryStarted = resolve));
+
+  const agentFor = (unit: string, workspace: string): any => ({
+    durable: true,
+    role: "implementer",
+    unitId: unit,
+    getTaskId: () => `task-${unit}`,
+    getMessages: () => [
+      { role: "system", content: "system" },
+      { role: "user", content: `[Work unit '${unit}': ${unit}]\nTask:\ndo ${unit}` },
+    ],
+    recoverFromTaskState: async () => {
+      recoveryStarted();
+      await recoveryBlocked;
+      return {
+        success: true,
+        interrupted: false,
+        obligationRecordPresent: true,
+        state: { currentOperation: null },
+      };
+    },
+    getCandidateTracker: () => ({
+      computeCandidateIdentitySync: (candidateWorkspace: string) => {
+        calls.push({ unit, workspace: candidateWorkspace });
+        return {
+          trackedChanges: [],
+          untrackedFiles: [{ path: `test/${unit}.test.ts`, status: "added", contentHash: `hash-${workspace}` }],
+        };
+      },
+    }),
+    getStateManager: () => undefined,
+    getObjective: () => ({ verification: [] }),
+    getCompletionSummary: () => undefined,
+    setProviderRecoveryHooks: () => {},
+    checkpointDurableState: () => {},
+    estimateTurnAdmission: () => ({
+      estimatedPromptTokens: 1,
+      contextLimit: 100,
+      completionReserve: 1,
+      toolResponseReserve: 1,
+      admissible: true,
+    }),
+    runTurn: async () => redTurn(),
+    shutdown: () => {},
+  });
+
+  const executor = new AgentWorkUnitExecutor({
+    baseConfig: {
+      endpoint: resource.endpoint,
+      model: "m",
+      workspace: "/unused",
+      tdd: true,
+    } as HarnessConfig,
+    createAgent: (config) => agentFor(path.basename(config.workspace), config.workspace),
+  });
+
+  const first = executor.run(workUnit("a", "task-a"), resource, { ...context(), workspace: "/isolated/a" });
+  await recovering;
+  await executor.run(workUnit("b"), resource, { ...context(), workspace: "/isolated/b" });
+  releaseRecovery();
+  await first;
+
+  assert.deepEqual(calls.filter((call) => call.unit === "a").map((call) => call.workspace), ["/isolated/a", "/isolated/a"]);
+  assert.deepEqual(calls.filter((call) => call.unit === "b").map((call) => call.workspace), ["/isolated/b", "/isolated/b"]);
+});
+
+test("a future nested operation version is refused before load or save can rewrite protected bytes", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-future-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
+  const op = newOperation("op-future", "current operation", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.operation.schemaVersion = 3;
+  raw.operation.objective = "aZ7mK2pQ9x-V4nR8cT1yB6hW3";
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+  const before = fs.readFileSync(file);
+  const mtime = fs.statSync(file).mtimeMs;
+
+  assert.throws(() => store.load(op.id), UnsupportedOperationSchemaError);
+  assert.deepEqual(fs.readFileSync(file), before, "load must not redact or migrate the future record");
+  assert.equal(fs.statSync(file).mtimeMs, mtime, "load must not touch the future record's mtime");
+
+  assert.throws(() => store.save(op), UnsupportedOperationSchemaError);
+  assert.deepEqual(fs.readFileSync(file), before, "save must not replace the future record");
+  assert.equal(fs.statSync(file).mtimeMs, mtime, "save must not touch the future record's mtime");
+});
+
+test("operation Git paths round-trip exactly but sensitive path components are refused", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-git-paths-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+  execFileSync("git", ["config", "user.email", "t@t.invalid"], { cwd: workspace });
+  execFileSync("git", ["config", "user.name", "t"], { cwd: workspace });
+  fs.writeFileSync(path.join(workspace, "base.txt"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["commit", "-qm", "base"], { cwd: workspace });
+
+  const store = new OperationStore(workspace, path.join(workspace, "tasks"), workspace);
+  const op = newOperation("op-paths", "preserve operation git paths", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  const plan = planOperationGit(workspace, op.id);
+  op.git = newOperationGitState(plan);
+  ensureIntegrationWorktree(plan, op.git);
+  store.save(op);
+
+  const loaded = store.load(op.id);
+  assert.equal(loaded.git!.repoRoot, plan.repoRoot);
+  assert.equal(loaded.git!.baseDir, plan.baseDir);
+  assert.equal(loaded.git!.integrationWorktree, plan.integrationWorktree);
+
+  loaded.git!.repoRoot = path.join(workspace, `ghp_${"A".repeat(36)}`);
+  assert.throws(() => store.save(loaded), /sensitive/i);
+});
+
+test("Git unit restoration keeps protected keys and branches while restoring only worktree paths", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-git-unit-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+  execFileSync("git", ["config", "user.email", "t@t.invalid"], { cwd: workspace });
+  execFileSync("git", ["config", "user.name", "t"], { cwd: workspace });
+  fs.writeFileSync(path.join(workspace, "base.txt"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["commit", "-qm", "base"], { cwd: workspace });
+
+  const store = new OperationStore(workspace, path.join(workspace, "tasks"), workspace);
+  const op = newOperation("op-unit-redaction", "protect unit identity", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  const plan = planOperationGit(workspace, op.id);
+  op.git = newOperationGitState(plan);
+  const sensitive = `ghp_${"A".repeat(36)}`;
+  const worktree = path.join(plan.baseDir, "units", "safe-unit");
+  op.git.units = {
+    [sensitive]: {
+      branch: `nexus/${sensitive}`,
+      worktree,
+      baseCommit: plan.baseCommit,
+    },
+  };
+  store.save(op);
+
+  const file = store.manager.getStateFilePath(op.id);
+  assert.equal(fs.readFileSync(file, "utf8").includes(sensitive), false, "the sensitive unit id must not return to disk");
+  const loaded = store.load(op.id);
+  assert.equal(JSON.stringify(loaded.git).includes(sensitive), false, "no sensitive key or branch may be restored");
+  const entries = Object.entries(loaded.git!.units);
+  assert.equal(entries.length, 1);
+  const [protectedId, unit] = entries[0];
+  assert.notEqual(protectedId, sensitive);
+  assert.match(unit.branch, /REDACTED/);
+  assert.equal(unit.worktree, worktree);
+  assert.equal(unit.baseCommit, plan.baseCommit);
+});
+
+test("Git unit restoration fails closed when protected unit IDs collide", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-git-collision-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+  execFileSync("git", ["config", "user.email", "t@t.invalid"], { cwd: workspace });
+  execFileSync("git", ["config", "user.name", "t"], { cwd: workspace });
+  fs.writeFileSync(path.join(workspace, "base.txt"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["commit", "-qm", "base"], { cwd: workspace });
+
+  const store = new OperationStore(workspace, path.join(workspace, "tasks"), workspace);
+  const op = newOperation("op-unit-collision", "reject protected collisions", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  const plan = planOperationGit(workspace, op.id);
+  op.git = newOperationGitState(plan);
+  const first = `ghp_${"A".repeat(36)}`;
+  const second = `ghp_${"B".repeat(36)}`;
+  op.git.units = {
+    [first]: { branch: "nexus/first", worktree: path.join(plan.baseDir, "units", "first"), baseCommit: plan.baseCommit },
+    [second]: { branch: "nexus/second", worktree: path.join(plan.baseDir, "units", "second"), baseCommit: plan.baseCommit },
+  };
+
+  assert.throws(() => store.save(op), /Sensitive-data protection|collid|protected unit/i);
+  assert.equal(fs.existsSync(store.manager.getStateFilePath(op.id)), false, "a colliding record must not be published");
+});
+
+test("operation version preflight honors a pending restore barrier for load and save", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-restore-barrier-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
+  const op = newOperation("op-restore-barrier", "guard raw preflight", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.operation.schemaVersion = 3;
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+  const before = fs.readFileSync(file);
+  fs.writeFileSync(path.join(store.manager.getBaseDir(), STATE_RESTORE_PENDING_FILE), "pending\n", { mode: 0o600 });
+
+  assert.throws(() => store.load(op.id), /restore is pending/);
+  assert.throws(() => store.save(op), /restore is pending/);
+  assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test("a fractional operation version follows invalid-record quarantine instead of future-version refusal", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-fractional-version-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
+  const op = newOperation("op-fractional", "invalid version", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.operation.schemaVersion = 2.5;
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+
+  let thrown: unknown;
+  try { store.load(op.id); } catch (error) { thrown = error; }
+  assert.equal(thrown instanceof UnsupportedOperationSchemaError, false);
+  assert.match(String(thrown), /invalid:[\s\S]*quarantined/);
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".corrupt-")).length, 1);
+});
+
+function completed(summary = "done"): UnitRunResult {
+  return { kind: "completed", summary, outcome: "NOT_REQUIRED" };
+}
+
+const cliRoot = fileURLToPath(new URL("..", import.meta.url));
+const tsxLoader = fileURLToPath(new URL("../node_modules/tsx/dist/esm/index.mjs", import.meta.url));
+
+interface ChildRun {
+  child: ChildProcess;
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  output(): string;
+}
+
+function childRun(script: string, env: NodeJS.ProcessEnv): ChildRun {
+  const child = spawn(process.execPath, ["--import", tsxLoader, "--input-type=module", "--eval", script], {
+    cwd: cliRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout?.on("data", (chunk) => (output += chunk));
+  child.stderr?.on("data", (chunk) => (output += chunk));
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  return { child, exited, output: () => output };
+}
+
+async function stopChild(run: ChildRun): Promise<void> {
+  if (run.child.exitCode === null && run.child.signalCode === null) run.child.kill("SIGKILL");
+  await Promise.race([run.exited.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref())]);
+}
+
+async function waitFor(condition: () => boolean, description: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      if (condition()) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for ${description}${lastError ? `: ${String(lastError)}` : ""}`);
+}
+
+function testEnv(root: string): NodeJS.ProcessEnv {
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { recursive: true });
+  return {
+    ...process.env,
+    HOME: home,
+    XDG_CONFIG_HOME: path.join(home, ".config"),
+    XDG_STATE_HOME: path.join(home, ".state"),
+    NEXUS_STATE_DIR: path.join(root, "state"),
+    RELEASE_STATE_DIR: path.join(root, "tasks"),
+    RELEASE_WORKSPACE: root,
+  };
+}
+
+test("a completed batch member is durable before its batch-mate settles and is not rerun after a crash", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-batch-durability-"));
+  const env = testEnv(root);
+  const script = `
+    import { newOperation } from "./src/core/operation.ts";
+    import { driveOperation, OperationStore } from "./src/core/operation_runner.ts";
+    const store = new OperationStore(process.env.RELEASE_WORKSPACE, process.env.RELEASE_STATE_DIR);
+    const resources = ["r1", "r2"].map((id) => ({ id, provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/v1", model: "m", capabilities: ["tools"], rank: 0 }));
+    const state = newOperation("op-batch-durable", "persist each result", [
+      { id: "a", title: "a", prompt: "a" },
+      { id: "b", title: "b", prompt: "b" },
+    ], resources, Date.now(), { maxConcurrentUnits: 2 });
+    const executor = { run: async (unit) => unit.id === "a"
+      ? { kind: "completed", summary: "a done", outcome: "NOT_REQUIRED" }
+      : new Promise(() => {}) };
+    setInterval(() => {}, 1000);
+    await driveOperation(state, { store, executor });
+    process.exit(4);
+  `;
+  const run = childRun(script, env);
+  t.after(async () => {
+    await stopChild(run);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const store = new OperationStore(root, env.RELEASE_STATE_DIR, env.HOME);
+  await waitFor(() => store.load("op-batch-durable").units[0].status === "COMPLETE", `first result to persist\n${run.output()}`);
+  const beforeKill = store.load("op-batch-durable");
+  assert.equal(beforeKill.units[0].status, "COMPLETE");
+  assert.equal(beforeKill.units[1].status, "RUNNING");
+
+  run.child.kill("SIGKILL");
+  const exit = await run.exited;
+  assert.equal(exit.signal, "SIGKILL", run.output());
+  const resumedRuns: string[] = [];
+  const executor: WorkUnitExecutor = {
+    run: async (unit) => {
+      resumedRuns.push(unit.id);
+      return completed(`${unit.id} resumed`);
+    },
+  };
+  const resumed = await driveOperation(store.load("op-batch-durable"), { store, executor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.deepEqual(resumedRuns, ["b"], "the durably completed member must not execute again");
+});
+
+test("a crash before task binding does not consume a message and resume delivers it once", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-delivery-crash-"));
+  const env = testEnv(root);
+  const store = new OperationStore(root, env.RELEASE_STATE_DIR, env.HOME);
+  const initial = newOperation("op-delivery-crash", "deliver after binding", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
+  const { message } = publishMessage(initial, { from: "operator", to: "b", kind: "request", body: "deliver once" }, Date.now());
+  store.save(initial);
+  const script = `
+    import { driveOperation, OperationStore } from "./src/core/operation_runner.ts";
+    const store = new OperationStore(process.env.RELEASE_WORKSPACE, process.env.RELEASE_STATE_DIR);
+    const state = store.load("op-delivery-crash");
+    const executor = { run: async () => { process.kill(process.pid, "SIGKILL"); } };
+    await driveOperation(state, { store, executor });
+    process.exit(4);
+  `;
+  const run = childRun(script, env);
+  t.after(async () => {
+    await stopChild(run);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const exit = await run.exited;
+  assert.equal(exit.signal, "SIGKILL", run.output());
+  const crashed = store.load("op-delivery-crash");
+  assert.equal(crashed.messages![0].deliveredTo, undefined, "the early crash must not mark delivery");
+
+  const seen: string[][] = [];
+  const executor: WorkUnitExecutor = {
+    run: async (_unit, _resource, ctx) => {
+      seen.push((ctx.messages ?? []).map((entry) => entry.id));
+      return completed("message received");
+    },
+  };
+  const resumed = await driveOperation(store.load("op-delivery-crash"), { store, executor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.deepEqual(seen, [[message.id]]);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});
+
+test("integrated recovery publishes a recovered completion once", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-recovered-publication-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-recovered-publication", "publish recovered work", [{ id: "u1", title: "u1", prompt: "work" }], [resource], Date.now());
+  state.units[0].status = "RUNNING";
+  state.units[0].assignment = { resourceId: resource.id, model: resource.model, since: new Date().toISOString() };
+  state.integrations = [{
+    unitId: "u1",
+    branch: "nexus/op-recovered-publication/u1",
+    commit: "a".repeat(40),
+    integratedCommit: "b".repeat(40),
+    mergedAt: new Date().toISOString(),
+    files: ["u1.txt"],
+    outcome: "NOT_REQUIRED",
+    summary: "recovered artifact",
+    verification: "NOT_RUN",
+  }];
+  store.save(state);
+  const executor: WorkUnitExecutor = { run: async () => { throw new Error("recovered unit must not rerun"); } };
+
+  const resumed = await driveOperation(store.load(state.id), { store, executor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.equal(resumed.messages?.filter((entry) => entry.from === "u1" && entry.kind === "artifact").length, 1);
+  assert.match(resumed.messages![0].body, /recovered artifact/);
+
+  const again = await driveOperation(store.load(state.id), { store, executor });
+  assert.equal(again.messages?.filter((entry) => entry.from === "u1" && entry.kind === "artifact").length, 1);
+});
+
+test("unknown-run accounting is durable for blocked units while refresh is still pending", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-accounting-refresh-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-accounting-refresh", "persist before refresh", [{ id: "u1", title: "u1", prompt: "work" }], [resource], Date.now(), { unknownResumeBudget: 1 });
+  state.units[0].status = "RUNNING";
+  state.units[0].unknownResumes = 1;
+  store.save(state);
+  let refreshStarted!: () => void;
+  const started = new Promise<void>((resolve) => (refreshStarted = resolve));
+  let releaseRefresh!: () => void;
+  const blockedRefresh = new Promise<void>((resolve) => (releaseRefresh = resolve));
+  const executor: WorkUnitExecutor = {
+    run: async () => completed(),
+    refresh: async () => {
+      refreshStarted();
+      await blockedRefresh;
+    },
+  };
+  const runner = new OperationRunner(store.load(state.id), { executor, persist: (current) => store.save(current) });
+  const running = runner.run();
+  try {
+    await started;
+    const duringRefresh = store.load(state.id);
+    assert.equal(duringRefresh.units[0].unknownResumes, 2);
+    assert.equal(duringRefresh.units[0].status, "BLOCKED");
+    assert.equal(duringRefresh.units[0].blocked?.decision.cause, "INTERRUPTED");
+  } finally {
+    releaseRefresh();
+    await running;
+  }
+});
+
+test("a scheduler decide exception becomes a durable NOT_CONVERGING decision", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-decide-error-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-decide-error", "persist scheduler failure", [{ id: "u1", title: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(state);
+  const runner = new OperationRunner(store.load(state.id), {
+    executor: { run: async () => completed() },
+    persist: (current) => store.save(current),
+  });
+  runner.scheduler.decide = () => { throw new Error("synthetic decide failure"); };
+
+  return runner.run().then((result) => {
+    assert.equal(result.status, "BLOCKED");
+    const persisted = store.load(state.id);
+    assert.equal(persisted.status, "BLOCKED");
+    assert.equal(persisted.blocked?.decisions[0].id, "operation#not-converging");
+    assert.equal(persisted.blocked?.decisions[0].cause, "NOT_CONVERGING");
+  });
+});
+
+function runOperationCli(args: string[], env: NodeJS.ProcessEnv, workspace: string): { status: number; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync(process.execPath, ["--import", "tsx", path.join(cliRoot, "src/index.ts"), ...args, "-w", workspace], {
+      cwd: cliRoot,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 60_000,
+    });
+    return { status: 0, stdout, stderr: "" };
+  } catch (error: any) {
+    return { status: Number(error?.status ?? -1), stdout: String(error?.stdout ?? ""), stderr: String(error?.stderr ?? "") };
+  }
+}
+
+test("CLI spec validation rejects inherited constructor and toString roles", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-strict-roles-"));
+  const env = testEnv(root);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const role of ["constructor", "toString"]) {
+    const spec = path.join(root, `${role}.json`);
+    fs.writeFileSync(spec, JSON.stringify({
+      objective: "reject inherited roles",
+      units: [{ id: "u1", role, prompt: "work" }],
+      resources: [{ id: "primary", provider: "https://provider.invalid", endpoint: "https://provider.invalid/v1", model: "m", capabilities: ["tools"] }],
+    }));
+    const result = runOperationCli(["operation", "run", spec, "--json"], env, root);
+    assert.equal(result.status, 2, `${role}: ${result.stderr}`);
+    assert.match(result.stderr, /unknown role/);
+  }
+});
+
+test("CLI resume returns exit 2 for an unsupported operation schema", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-cli-future-"));
+  const env = testEnv(root);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(env.NEXUS_STATE_DIR!, "tasks"), env.HOME);
+  const op = newOperation("op-cli-future", "future schema", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.operation.schemaVersion = 3;
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+
+  const result = runOperationCli(["operation", "resume", op.id], env, root);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /newer than this build supports/);
+});
+
+test("replay leaves a legacy redaction-changing record byte-identical and still refuses future versions", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-replay-readonly-"));
+  const env = testEnv(root);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(env.NEXUS_STATE_DIR!, "tasks"), env.HOME);
+  const op = newOperation("op-replay-readonly", "read only replay", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.schemaVersion = 1;
+  raw.messages = [];
+  delete raw.messageLog;
+  raw.operation.objective = "aZ7mK2pQ9x-V4nR8cT1yB6hW3";
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+  const before = fs.readFileSync(file);
+  const mtime = fs.statSync(file).mtimeMs;
+
+  const replay = runOperationCli(["operation", "status", "--replay", "--json", op.id], env, root);
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.equal(JSON.parse(replay.stdout)[0].replay.schemaVersion, 1);
+  assert.deepEqual(fs.readFileSync(file), before, "replay must not migrate or redact the record on disk");
+  assert.equal(fs.statSync(file).mtimeMs, mtime);
+  assert.equal(fs.existsSync(`${file}.pre-migration-v1`), false);
+
+  raw.operation.schemaVersion = 3;
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+  const futureBytes = fs.readFileSync(file);
+  const futureMtime = fs.statSync(file).mtimeMs;
+  const future = runOperationCli(["operation", "status", "--replay", "--json", op.id], env, root);
+  assert.equal(future.status, 2, future.stderr);
+  assert.match(future.stderr, /newer than this build supports/);
+  assert.deepEqual(fs.readFileSync(file), futureBytes);
+  assert.equal(fs.statSync(file).mtimeMs, futureMtime);
+});

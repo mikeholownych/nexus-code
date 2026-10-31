@@ -1,17 +1,16 @@
 # v1.1 proposal: git-aware operations
 
-Status: slices 1–3 and recovery implemented (`v1/feature-git-aware-operations`); PR publication (4) remains proposed.
+Status (reconciled 2026-10-31): slices 1–3, recovery, the deterministic integration queue and evidenced receipts are
+implemented; PR publication (4) is deferred to v1.2 and is now **rejected fail-closed** rather than silently ignored
+(DEC-V11-12). See [`ROADMAP-REVIEW.md`](ROADMAP-REVIEW.md) §2.2 and [`REQUIREMENTS.md`](REQUIREMENTS.md) REQ-V-07.
 Owner: unclaimed. Depends on: observability (for integration visibility). Size: medium (2–3 weeks).
 
 ## What exists today
 
-- `WorktreeManager` creates and disposes per-task worktrees; an agent turn can run in its own worktree, and `/merge`,
-  `/discard` and merge receipts already exist for interactive sessions (`cli/src/worktree.ts`).
-- Durable units run against the operation's workspace. A unit's conversation is durable, and the runner checkpoints after
-  every transition, but the *repository history* is not part of the unit model: there is no per-unit branch, no
-  integration step, and no conflict policy.
-- `CandidateIdentity` already computes a content-addressed view of the working tree, which is the natural unit boundary
-  for a branch.
+Historical context (kept for the record; superseded by the shipped slices below): before this work, an agent turn
+could run in its own worktree via `WorktreeManager`, but a durable unit had no branch, no integration step and no
+conflict policy. `CandidateIdentity` already computed a content-addressed view of the working tree, which is the
+natural unit boundary for a branch. All of that now exists for operations; see "What slice 2 ships".
 
 ## What slice 2 ships
 
@@ -25,18 +24,28 @@ Still proposed below: PR publication, and conflict policies beyond "stop and ask
 
 ## What to build
 
-1. **Opt-in per-unit isolation** in the operation spec: `git: { isolate: true }` (operation level) or per unit. A write
-   unit runs in a worktree on a branch named for the operation and unit; read-only and tester units may share the
-   integration worktree (configurable).
-2. **Integration queue**: after a unit completes, its branch is integrated into the operation branch in a deterministic
-   order (dependency order, then completion order). Each integration is a merge commit (or fast-forward) with a receipt
-   that records the unit, the candidate identity, the tests run, and the merge tree.
-3. **Conflict policy**: a textual conflict parks the operation with an escalation decision whose options are exactly the
-   existing kinds (`retry`, `revise`, `assign`, `drop`, `cancel`). There is no automatic model-driven conflict
-   resolution in this slice; "resolve in the workspace and retry" is the operator path.
-4. **PR publication** (not in slice 2): an opt-in `git: { publish: "pr" }` creates one branch for the operation and a PR
-   whose body is generated from unit summaries, verification evidence, and the requirement ledger. Creating a PR is an
-   egress action: it requires explicit operator authorization and is recorded as such.
+1. **Opt-in per-unit isolation** in the operation spec: operation-level `git: { isolate: true, baseRef? }`. Every unit
+   runs in its own worktree on a branch named for the operation and unit. Per-unit `git` and role-based sharing of the
+   integration worktree are **not** implemented; every unit gets its own worktree, which is the safer default under
+   concurrency.
+2. **Integration queue**: after a unit completes, its integration is queued and merged into the operation branch one at
+   a time, in arrival order (v1.1.0: `OperationRunner.enqueueIntegration`). Dependency order is already guaranteed by
+   the scheduler, since a dependent unit cannot start before its dependency is `COMPLETE`. Each integration is a merge
+   commit (`--no-ff`; there is no fast-forward path) with a receipt that records the unit, the branch and commit, the
+   merge tree, the **candidate digest**, the **executed tests** and the 1-based merge **sequence**. A receipt omits
+   `candidate`/`tests` when the worktree was already gone or the unit produced no verifier — an absent field is honest
+   evidence.
+3. **Conflict policy**: a textual conflict parks the unit with an escalation decision whose options are `retry`
+   (resolve in the workspace and try again) and `revise`, plus the scheduler's terminal "stop the operation". A
+   required unit cannot be dropped and assignment cannot resolve a textual conflict, so neither is offered. There is no
+   automatic model-driven conflict resolution; "resolve in the workspace and retry" is the operator path. Verified by
+   `cli/test/operation_git.test.ts` ("a conflict parks the unit with retry and revise and leaves both branches intact").
+4. **PR publication** (deferred to v1.2): an opt-in `git: { publish: "pr" }` creates one branch for the operation and
+   a PR whose body is generated from unit summaries, verification evidence and the requirement ledger. Creating a PR is
+   an egress action. It needs an operation-level decision (a dedicated `publish_pr` action) whose payload passes
+   `InformationFlowBoundary`, plus an egress recorder proving no request is made without an applied authorization. A
+   shell `git push`/`gh` from `run_command` is **not** an acceptable implementation: it runs under the `exec` effect
+   and bypasses the egress boundary. Until then the spec validator rejects the key with exit 2.
 5. **Recovery**: the operation records the integration state (branch tip per unit, integrated commits) so a restart can
    resume integration without re-merging.
 
@@ -52,17 +61,22 @@ Still proposed below: PR publication, and conflict policies beyond "stop and ask
 
 ## Acceptance
 
-- Two dependent units, each on its own worktree, integrate in dependency order; the operation branch contains both and
-  the receipts name the commits.
+- Two units, each on its own worktree, integrate serially even when they complete in the same scheduling iteration; the
+  operation branch contains both commits and the receipts name them, with distinct sequence numbers and the candidate
+  and tests each was accepted with (`cli/test/operation_concurrency.test.ts`, ACC-V11-GIT-01/03).
 - A forced conflict parks the operation with a decision; resolving in the workspace and retrying completes it.
 - A crash between "unit complete" and "integrated" resumes to the same integration decision, with no duplicated merge.
 - `publish: pr` with no authorization makes no network call (asserted by a local egress recorder).
-- The full lifecycle (create, complete, cancel, crash/resume) leaves no worktree behind.
+- The full lifecycle leaves **no unit worktree** behind when the worktree is clean. This is deliberately narrower than
+  the earlier claim: a unit worktree with uncommitted or ignored files is preserved rather than destroyed, and the
+  integration worktree is retained as the operator's inspection surface. Every retained worktree is named with its
+  reason in the event log. Dirty-worktree preservation is asserted by `cli/test/operation_git.test.ts`.
 
 ## Qualification impact
 
 - Re-run the E2 lifecycle cell on at least one platform per runtime, and the durability cells (power-loss, synthetic
-  journal) because integration adds durable transitions.
+  journal) because integration adds durable transitions — in particular the in-memory integration queue, whose
+  crash-between-enqueue-and-merge behaviour is not yet demonstrated (see `REQUIREMENTS.md` §2).
 - No provider or reproducibility re-qualification.
 
 ## Risks

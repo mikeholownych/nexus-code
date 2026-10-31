@@ -25,6 +25,18 @@ const ledgerPath = ledgerArg >= 0 ? path.resolve(args[ledgerArg + 1]) : path.joi
 
 const read = (p) => fs.readFileSync(p, "utf8");
 const specs = fs.readdirSync(path.join(pkg, "specs")).map((f) => read(path.join(pkg, "specs", f)));
+// A ledger outside the v1.0.0 package documents its own acceptance criteria. Read the Markdown beside it so
+// `ACC-...` ids it cites are resolved against the document that defines them, never against an unrelated package.
+if (ledgerArg >= 0) {
+  const ownDir = path.dirname(ledgerPath);
+  if (path.resolve(ownDir) !== path.resolve(pkg)) {
+    for (const file of fs.readdirSync(ownDir).filter((name) => name.endsWith(".md"))) {
+      // Never treat the ledger itself as the document that defines its own acceptance criteria.
+      if (path.resolve(path.join(ownDir, file)) === path.resolve(ledgerPath)) continue;
+      specs.push(read(path.join(ownDir, file)));
+    }
+  }
+}
 const acceptance = read(path.join(pkg, "ACCEPTANCE.md"));
 const decisions = read(path.join(pkg, "DECISIONS.md"));
 

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { OperationStore } from "../src/core/operation_runner.js";
 import { newOperation, type DurableOperationState } from "../src/core/operation.js";
 import { scopeKey, type ResourceDescriptor } from "../src/core/resources.js";
-import { OPERATION_VIEW_SCHEMA_VERSION, buildOperationView, renderOperationView, watchOperation } from "../src/operation_view.js";
+import { OPERATION_VIEW_SCHEMA_VERSION, buildOperationView, buildReplay, renderOperationView, renderReplay, watchOperation } from "../src/operation_view.js";
 
 const NOW = Date.parse("2026-10-28T12:00:00.000Z");
 
@@ -620,6 +620,11 @@ type JsonSchema = {
   additionalProperties?: boolean;
   properties?: Record<string, JsonSchema>;
   items?: JsonSchema;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  pattern?: string;
+  maxLength?: number;
 };
 
 /** Minimal draft-2020-12 checker for the keywords the checked-in schema uses (with local $ref resolution). */
@@ -652,11 +657,27 @@ function validate(value: unknown, schema: JsonSchema, at: string, root: JsonSche
       errors.push(...validate(child, property, `${at}.${key}`, root));
     }
   }
-  if (schema.type === "array" && Array.isArray(value) && schema.items) {
-    value.forEach((item, index) => errors.push(...validate(item, schema.items!, `${at}[${index}]`, root)));
+  if (typeof value === "number") {
+    if (schema.minimum !== undefined && value < schema.minimum) errors.push(`${at}: ${value} is below the minimum ${schema.minimum}`);
+    if (schema.maximum !== undefined && value > schema.maximum) errors.push(`${at}: ${value} is above the maximum ${schema.maximum}`);
+  }
+  if (typeof value === "string") {
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) errors.push(`${at}: ${value.length} characters exceeds maxLength ${schema.maxLength}`);
+    if (schema.pattern !== undefined && !new RegExp(schema.pattern).test(value)) errors.push(`${at}: does not match ${schema.pattern}`);
+  }
+  if (schema.type === "array" && Array.isArray(value)) {
+    if (schema.minItems !== undefined && value.length < schema.minItems) errors.push(`${at}: ${value.length} items is below minItems ${schema.minItems}`);
+    if (schema.items) value.forEach((item, index) => errors.push(...validate(item, schema.items!, `${at}[${index}]`, root)));
   }
   return errors;
 }
+
+test("the schema checker enforces every keyword the schema uses", () => {
+  // A validator that ignored `minimum` would silently accept a zero context budget the schema forbids.
+  const schema: JsonSchema = { type: "object", properties: { n: { type: "number", minimum: 1 }, s: { type: "string", maxLength: 3 }, a: { type: "array", minItems: 1 } } };
+  assert.deepEqual(validate({ n: 0, s: "abcd", a: [] }, schema, "$"), ["$.n: 0 is below the minimum 1", "$.s: 4 characters exceeds maxLength 3", "$.a: 0 items is below minItems 1"]);
+  assert.deepEqual(validate({ n: 1, s: "ab", a: [1] }, schema, "$"), []);
+});
 
 test("the --json document satisfies the checked-in JSON schema", () => {
   const schemaPath = fileURLToPath(new URL("../../docs/v1.1.0/operation-view.schema.json", import.meta.url));
@@ -810,4 +831,66 @@ test("projects the operation's git isolation and unit integration receipts", () 
   const rendered = renderOperationView(view, { width: 120 });
   assert.match(rendered, /isolated: nexus\/op-op-view-123456\/integration/);
   assert.match(rendered, /u1 \[implementer\] Implement the projector\s+COMPLETE.*integrated cccccccccccc/);
+});
+
+test("ACC-V11-OBS-01: replay renders every event once, oldest first, with contiguous indices", () => {
+  const op = state();
+  // Out-of-order recording with a shared timestamp proves the stable tie-break, not just an array copy.
+  op.events = [
+    { type: "WORK_COMPLETED", at: "2026-10-28T11:00:00.000Z", message: "second", unitId: "u1" },
+    { type: "WORK_STARTED", at: "2026-10-28T10:59:00.000Z", message: "first", unitId: "u1", resourceId: "primary" },
+    { type: "WORK_BLOCKED", at: "2026-10-28T11:00:00.000Z", message: "third", unitId: "u2" },
+  ];
+  const replay = buildReplay(op);
+  assert.deepEqual(replay.entries.map((e) => e.index), [1, 2, 3]);
+  assert.deepEqual(replay.entries.map((e) => e.message), ["first", "second", "third"], "equal timestamps keep recording order");
+  assert.equal(replay.schemaVersion, 1);
+  const rendered = renderReplay(replay);
+  assert.match(rendered, /^ {2}1\. 10:59:00 WORK_STARTED u1 — first$/m);
+  assert.equal(rendered.split("\n").length, 3);
+});
+
+test("replay of an operation with no events says so instead of rendering nothing", () => {
+  const op = state();
+  op.events = [];
+  assert.equal(renderReplay(buildReplay(op)), "No events were recorded for this operation.");
+});
+
+test("ACC-V11-OBS-02/03: --replay --json carries the timeline and leaves the record byte-identical", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  const file = saveFixture(fixture, "op-cli-replay");
+  const before = { hash: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), mtime: fs.statSync(file).mtimeMs };
+
+  const json = runCli(["operation", "status", "--replay", "--json", "op-cli-replay"], fixture);
+  assert.equal(json.status, 0, json.stderr);
+  const views = JSON.parse(json.stdout);
+  assert.equal(views[0].schemaVersion, 2);
+  assert.equal(views[0].replay.schemaVersion, 1);
+  assert.equal(views[0].replay.entries.length, 3);
+  assert.deepEqual(views[0].replay.entries.map((e: any) => e.index), [1, 2, 3]);
+
+  const schemaPath = fileURLToPath(new URL("../../docs/v1.1.0/operation-view.schema.json", import.meta.url));
+  const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8")) as JsonSchema;
+  assert.deepEqual(validate(views, schema, "$"), []);
+
+  const text = runCli(["operation", "status", "--replay", "op-cli-replay"], fixture);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /WORK_STARTED u1/);
+
+  const after = { hash: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), mtime: fs.statSync(file).mtimeMs };
+  assert.deepEqual(after, before, "the replay path wrote the operation");
+});
+
+test("ACC-V11-OBS-04: --dag and --replay together are refused and write nothing", (t) => {
+  const fixture = createCliFixture();
+  t.after(fixture.cleanup);
+  const file = saveFixture(fixture, "op-cli-exclusive");
+  const before = { hash: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), mtime: fs.statSync(file).mtimeMs };
+  const both = runCli(["operation", "status", "--replay", "--dag", "op-cli-exclusive"], fixture);
+  assert.equal(both.status, 2);
+  assert.match(both.stderr, /separate read-only views/);
+  assert.equal(both.stdout, "");
+  const after = { hash: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), mtime: fs.statSync(file).mtimeMs };
+  assert.deepEqual(after, before);
 });

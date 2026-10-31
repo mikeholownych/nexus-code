@@ -9,6 +9,7 @@ import { providerApiKey } from "../credentials.js";
 import type { ChatMessage, HarnessConfig } from "../types.js";
 import type { TaskRecoveryResult } from "./state.js";
 import { unitBaseTask, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { messagesBlock } from "./operation_messages.js";
 import { redactForPersistence } from "./persistence_protection.js";
 import { ROLE_PROFILES, isReadOnlyRole, type AgentRole } from "./roles.js";
 import { applyProviderCatalog, ResourceRegistry, type ResourceConditionRecord, type ResourceDescriptor } from "./resources.js";
@@ -96,9 +97,6 @@ const conversationNotStarted = (messages: ChatMessage[]): boolean => messages.le
  * whichever qualified resource the scheduler picks next.
  */
 export class AgentWorkUnitExecutor implements WorkUnitExecutor {
-  /** Workspace of the unit currently running (its isolated worktree when the operation isolates units). */
-  private runWorkspace: string | undefined;
-
   constructor(private readonly opts: AgentExecutorOptions) {}
 
   configFor(resource: ResourceDescriptor, unit?: WorkUnit, workspace?: string): HarnessConfig {
@@ -157,6 +155,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       budgetTokens: unit.contextBudget,
       contextLimit: estimate.contextLimit,
       at: new Date().toISOString(),
+      source: unit.contextBudget < estimate.contextLimit ? "operator-budget" : "agent-estimate",
     };
     // If the prompt does not fit the resource, admission/compaction owns it (it may compact and continue): the
     // operator's cap is only the binding constraint when the prompt would otherwise be admitted.
@@ -179,7 +178,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       question:
         `${unit.title} needs about ${total} tokens (prompt ${estimate.estimatedPromptTokens}, completion ` +
         `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over its ${unit.contextBudget}-token ` +
-        `budget. Assign it to a resource with more context, revise it, or stop?`,
+        `operator budget (resource limit ${estimate.contextLimit}; the binding bound is ` +
+        `${unit.contextBudget < estimate.contextLimit ? "the operator cap" : "the resource limit"}, ` +
+        `source ${unit.contextBudget < estimate.contextLimit ? "operator-budget" : "agent-estimate"}). ` +
+        `Lift the budget, or stop?`,
       // Reassigning cannot clear a cap (the cap travels with the unit) and revise only grows the prompt, so the offered
       // remedy changes the thing that blocks: the budget itself.
       options: [{ label: "lift this unit's context budget", action: { kind: "lift_context_budget" } }],
@@ -206,7 +208,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   }
 
   /** Verified RED evidence for this exact unit task, or undefined when absent or stale. */
-  private readTddEvidence(agent: AutonomousAgent, unit: WorkUnit): TddRedEvidence | undefined {
+  private readTddEvidence(agent: AutonomousAgent, unit: WorkUnit, workspace: string): TddRedEvidence | undefined {
     const file = this.tddStateFile(agent);
     if (!file) return undefined;
     try {
@@ -216,7 +218,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       if (typeof parsed.command !== "string" || !parsed.command) return undefined;
       if (!Array.isArray(parsed.tests) || parsed.tests.some((entry: unknown) => typeof entry !== "string")) return undefined;
       if (!parsed.testHashes || typeof parsed.testHashes !== "object" || Array.isArray(parsed.testHashes)) return undefined;
-      const current = this.tddTestSnapshot(agent);
+      const current = this.tddTestSnapshot(agent, workspace);
       for (const test of parsed.tests) {
         if (typeof parsed.testHashes[test] !== "string" || current.get(test) !== parsed.testHashes[test]) return undefined;
       }
@@ -259,10 +261,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   }
 
   /** Content hashes of test files currently changed against HEAD. */
-  private tddTestSnapshot(agent: AutonomousAgent): Map<string, string> {
+  private tddTestSnapshot(agent: AutonomousAgent, workspace: string): Map<string, string> {
     const snapshot = new Map<string, string>();
     try {
-      const identity = agent.getCandidateTracker().computeCandidateIdentitySync(this.runWorkspace ?? this.opts.baseConfig.workspace);
+      const identity = agent.getCandidateTracker().computeCandidateIdentitySync(workspace);
       for (const entry of [...identity.trackedChanges, ...identity.untrackedFiles]) {
         if (entry.status !== "deleted" && isTestPath(entry.path)) snapshot.set(entry.path, entry.contentHash);
       }
@@ -275,7 +277,6 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   async run(unit: WorkUnit, resource: ResourceDescriptor, ctx: UnitRunContext): Promise<UnitRunResult> {
     const config = this.configFor(resource, unit, ctx.workspace);
-    this.runWorkspace = config.workspace;
     const agent = this.opts.createAgent
       ? this.opts.createAgent(config, 1, { durable: true, role: unit.role, unitId: unit.id })
       : new AutonomousAgent(config, 1, undefined, { durable: true, role: unit.role, unitId: unit.id });
@@ -350,7 +351,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
             : "";
           prompt =
             `[Work unit resumed on ${resource.id} (${resource.model}) after: ${ctx.resumeReason ?? "a resource change"}]\n${decision}` +
-            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${stopped}` +
+            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${stopped}${messagesBlock(ctx.messages)}` +
             `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
         }
       } else {
@@ -378,15 +379,15 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       const tddEnabled = this.opts.tdd === true || this.opts.baseConfig.tdd === true || process.env.NEXUS_TDD === "1";
       const tdd = tddEnabled && (unit.role === undefined || unit.role === "implementer");
       if (tdd && (ctx.operatorDecision?.restart || unusable)) this.clearTddEvidence(agent);
-      let redEvidence = tdd ? this.readTddEvidence(agent, unit) : undefined;
+      let redEvidence = tdd ? this.readTddEvidence(agent, unit, config.workspace) : undefined;
       let redVerifiedNow = false;
       if (tdd && !redEvidence) {
-        const beforeRed = this.tddTestSnapshot(agent);
+        const beforeRed = this.tddTestSnapshot(agent, config.workspace);
         const redPrompt = `${prompt}\n\n${TDD_RED_PROTOCOL}`;
         const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt);
         if (budgetFailure) return budgetFailure;
         const redTurn = await agent.runTurn(redPrompt, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
-        const afterRed = this.tddTestSnapshot(agent);
+        const afterRed = this.tddTestSnapshot(agent, config.workspace);
         const testPaths = [...afterRed]
           .filter(([file, hash]) => !beforeRed.has(file) || beforeRed.get(file) !== hash)
           .map(([file]) => file)
@@ -494,7 +495,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       ? `\nCompleted prerequisite work:\n${ctx.dependencies.map((d) => `- ${d.title}: ${d.summary}`).join("\n")}\n`
       : "";
     return (
-      `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${deps}\n` +
+      `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${deps}${messagesBlock(ctx.messages)}\n` +
       `Task:\n${unit.prompt}\n\nCall task_completed with a concise summary when done.`
     );
   }

@@ -5,9 +5,13 @@ import * as path from "node:path";
 import { credentialStorageHome } from "../client.js";
 import { AccountIdentityError, createOperationAccountIdentity, isLegacyCredentialFingerprint, type OperationAccountIdentity } from "./account_identity.js";
 import type { DurableOperationState } from "./operation.js";
+import { CURRENT_OPERATION_SCHEMA_VERSION, InvalidOperationStateError, LEGACY_OPERATION_SCHEMA_VERSION, migrateOperationState, needsMigrationBackup, UnsupportedOperationSchemaError } from "./operation_schema.js";
+import { writePrivateFile } from "./durable_file.js";
 import { DurableStateManager, type DurableTaskState } from "./state.js";
 import { WorkspacePath } from "./workspace_path.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
+import { withStateStoreGuard } from "./state_store_guard.js";
+import { redactTaskStateForPersistence } from "./persistence_protection.js";
 
 // ---------------------------------------------------------------- persistence
 
@@ -34,9 +38,27 @@ export class OperationStore {
     this.accountIdentityHome = accountIdentityHome;
   }
 
+  private preflightFutureVersion(id: string): void {
+    const version = this.manager.readRawOperationSchemaVersion(id);
+    if (typeof version === "number" && Number.isInteger(version) && version > CURRENT_OPERATION_SCHEMA_VERSION) {
+      throw new UnsupportedOperationSchemaError(version);
+    }
+  }
+
   save(op: DurableOperationState): void {
+    this.preflightFutureVersion(op.id);
     op = migrateLegacyAccountIdentities(op, createOperationAccountIdentity(this.accountIdentityHome));
     const existing = this.manager.hasTaskState(op.id) ? this.manager.loadTaskState(op.id) : undefined;
+    // A newer operation document is never overwritten by an older build. Writing over it would destroy the only copy
+    // a later build can read, which is exactly what the load gate refuses to do.
+    const onDisk = existing?.operation?.schemaVersion;
+    if (typeof onDisk === "number" && onDisk > CURRENT_OPERATION_SCHEMA_VERSION) throw new UnsupportedOperationSchemaError(onDisk);
+    // A v1.0.0 operation document is upgraded by this write. Keep the record this build cannot re-create, once,
+    // before the first v2 write, so an operator can diff or restore it. The envelope's own migration backup is a
+    // different file and a different concern.
+    if (existing?.operation && needsMigrationBackup(onDisk)) {
+      this.backupBeforeMigration(op.id, typeof onDisk === "number" ? onDisk : LEGACY_OPERATION_SCHEMA_VERSION);
+    }
     const state: DurableTaskState = {
       schemaVersion: 1,
       taskId: op.id,
@@ -59,9 +81,48 @@ export class OperationStore {
   }
 
   load(id: string): DurableOperationState {
+    this.preflightFutureVersion(id);
     const state = this.manager.loadTaskState(id, this.workspace.value, [this.workspace]);
     if (!state.operation) throw new Error(`Task ${id} is not an operation`);
-    return migrateLegacyAccountIdentities(state.operation, createOperationAccountIdentity(this.accountIdentityHome));
+    let migrated: DurableOperationState;
+    try {
+      migrated = migrateOperationState(state.operation);
+    } catch (error) {
+      if (!(error instanceof InvalidOperationStateError)) throw error;
+      // Structurally invalid is the operation-document analogue of an unparseable envelope: quarantine it and report
+      // where it went, rather than leaving a record that will keep failing every later load.
+      const quarantined = this.manager.quarantineFile(this.manager.getStateFilePath(id));
+      throw new Error(`Operation ${id} is invalid: ${error.message} (quarantined to ${quarantined})`);
+    }
+    return migrateLegacyAccountIdentities(migrated, createOperationAccountIdentity(this.accountIdentityHome));
+  }
+
+  /** Replay-only read: migrate and protect in memory under the store guard, never publish or quarantine the record. */
+  loadForReplay(id: string): DurableOperationState {
+    return withStateStoreGuard(this.manager.getBaseDir(), () => {
+      const raw = JSON.parse(fs.readFileSync(this.manager.getStateFilePath(id), "utf8"));
+      if (!raw?.operation) throw new Error(`Task ${id} is not an operation`);
+      const protectedRecord = redactTaskStateForPersistence(raw as DurableTaskState, [this.workspace]);
+      return migrateOperationState(protectedRecord.operation);
+    });
+  }
+
+  /** Replay-only listing with the same no-publication guarantee as loadForReplay. */
+  listForReplay(): DurableOperationState[] {
+    const ids = withStateStoreGuard(this.manager.getBaseDir(), () =>
+      fs.readdirSync(this.manager.getBaseDir())
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => name.slice(0, -".json".length)),
+    );
+    const out: DurableOperationState[] = [];
+    for (const id of ids) {
+      try {
+        out.push(this.loadForReplay(id));
+      } catch (error) {
+        if (error instanceof UnsupportedOperationSchemaError) throw error;
+      }
+    }
+    return out;
   }
 
   /** Status/export callers migrate legacy IDs on disk only when they can hold the operation lock. */
@@ -88,7 +149,8 @@ export class OperationStore {
       try {
         out.push(this.load(t.taskId));
       } catch (error) {
-        if (error instanceof AccountIdentityError) throw error;
+        // A record from a newer build is a real condition the operator must see, not a record to skip silently.
+        if (error instanceof AccountIdentityError || error instanceof UnsupportedOperationSchemaError) throw error;
       }
     }
     return out;
@@ -102,7 +164,7 @@ export class OperationStore {
       try {
         out.push(this.loadForInspection(task.taskId));
       } catch (error) {
-        if (error instanceof AccountIdentityError) throw error;
+        if (error instanceof AccountIdentityError || error instanceof UnsupportedOperationSchemaError) throw error;
       }
     }
     return out;
@@ -145,6 +207,33 @@ export class OperationStore {
   /** Most recently updated operation in this workspace that is waiting or running (to resume after restart). */
   latestResumable(): DurableOperationState | undefined {
     return this.list().find((op) => op.status === "WAITING" || op.status === "RUNNING");
+  }
+
+  /**
+   * Keeps the record this build is about to upgrade, once. Refuses to overwrite an existing copy whose bytes differ:
+   * an earlier migration already produced it, and silently replacing it would destroy the only v1 evidence.
+   */
+  private backupBeforeMigration(id: string, fromVersion: unknown): void {
+    const record = path.join(this.manager.getBaseDir(), `${id}.json`);
+    const backup = `${record}.pre-migration-v${String(fromVersion)}`;
+    let bytes: Buffer;
+    try {
+      bytes = fs.readFileSync(record);
+    } catch (error: any) {
+      // The record was just read to decide this backup was needed; its absence is a real problem, not a reason to skip.
+      throw new Error(`Operation ${id}: cannot read ${record} to keep a pre-migration copy (${String(error?.message ?? error)})`);
+    }
+    if (fs.existsSync(backup)) {
+      const existing = fs.readFileSync(backup);
+      if (!existing.equals(bytes)) {
+        throw new Error(
+          `Operation ${id}: cannot migrate the operation record because ${backup} already exists with different content. ` +
+            `Move it aside to continue, or restore it to read the record with the build that wrote it.`,
+        );
+      }
+      return;
+    }
+    writePrivateFile(backup, bytes, { durable: true, mode: 0o600 });
   }
 }
 
