@@ -497,7 +497,7 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
   const lines: string[] = [];
   const counts = view.counts;
   lines.push(
-    `Operation ${text(view.id, width)}: ${view.status} (${counts.complete}/${counts.total} complete` +
+    `Operation ${text(view.id, width)}: ${text(view.status, width)} (${counts.complete}/${counts.total} complete` +
       `${counts.running ? `, ${counts.running} running` : ""}` +
       `${counts.ready ? `, ${counts.ready} ready` : ""}` +
       `${counts.blocked ? `, ${counts.blocked} blocked` : ""}` +
@@ -525,7 +525,7 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
           ? ` · budget ${unit.contextBudget}`
           : "";
       lines.push(
-        `${indent}${mark} ${text(unit.id, width)}${role} ${text(unit.title, width)}  ${unit.status}${runs}${durable}${integrated}${budget}`,
+        `${indent}${mark} ${text(unit.id, width)}${role} ${text(unit.title, width)}  ${text(unit.status, width)}${runs}${durable}${integrated}${budget}`,
       );
       if (unit.detail) lines.push(`${indent}  ${text(unit.detail, width)}`);
       if (unit.dependsOn.length) lines.push(`${indent}  after: ${unit.dependsOn.map((id) => text(id, width)).join(", ")}`);

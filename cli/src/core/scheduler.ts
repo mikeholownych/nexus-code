@@ -3,6 +3,7 @@
  */
 import type {
   AppliedDecision,
+  Assignment,
   BlockSpec,
   Decision,
   DecisionAction,
@@ -16,8 +17,9 @@ import type {
   WorkUnit,
   WorkUnitStatus,
 } from "./operation.js";
-import type { ResourceDescriptor, ResourceRegistry } from "./resources.js";
+import type { ResourceDescriptor, ResourceRegistry, Selection } from "./resources.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
+import { effectiveConcurrency } from "./operation_schema.js";
 
 /** Separates a unit's original task from operator revisions appended to it. */
 export const REVISION_MARKER = "\n\nOperator revision: ";
@@ -71,7 +73,10 @@ export class ConvergenceScheduler {
     const now = this.now();
     if (this.state.status === "CANCELLED") return { kind: "blocked", decisions: [] };
     const previous = new Map(this.state.units.map((u) => [u.id, u.status]));
-    const choices = new Map<string, { resource: ResourceDescriptor; reroutedFrom?: { resourceId: string; reason: string } }>();
+    // The whole selection is kept, not just the preferred resource: a unit whose preferred resource is reserved by
+    // an earlier assignment in the same batch may use its next qualified, eligible resource instead of waiting.
+    const choices = new Map<string, Selection>();
+    const reroutes = new Map<string, { resourceId: string; reason: string }>();
 
     for (const u of this.state.units) {
       if (TERMINAL.includes(u.status) || u.status === "RUNNING") continue;
@@ -98,7 +103,8 @@ export class ConvergenceScheduler {
                 : `${sel.chosen.id} is the preferred qualified resource`;
           reroutedFrom = { resourceId: from, reason };
         }
-        choices.set(u.id, { resource: sel.chosen, ...(reroutedFrom ? { reroutedFrom } : {}) });
+        choices.set(u.id, sel);
+        if (reroutedFrom) reroutes.set(u.id, reroutedFrom);
         continue;
       }
       const temporary = sel.qualified.filter((c) => !c.eligibility.permanent && c.eligibility.eligibleAt !== undefined);
@@ -134,13 +140,30 @@ export class ConvergenceScheduler {
     }
 
     // Required work first; advisory work runs when it can but never ahead of the objective.
-    const runnable = this.state.units
-      .filter((u) => u.status === "RUNNABLE" && choices.has(u.id))
-      .sort((a, b) => Number(!isRequired(a)) - Number(!isRequired(b)));
-    if (runnable.length) {
-      const unit = runnable[0];
-      const choice = choices.get(unit.id)!;
-      return { kind: "run", unit, resource: choice.resource, ...(choice.reroutedFrom ? { reroutedFrom: choice.reroutedFrom } : {}) };
+    const runnable = this.state.units.filter((u) => u.status === "RUNNABLE" && choices.has(u.id));
+    const ordered = this.orderRunnable(runnable);
+    const assignments = this.assign(ordered, choices, reroutes);
+    if (assignments.length) {
+      const limit = effectiveConcurrency(this.state);
+      if (ordered.length > assignments.length && assignments.length >= limit) {
+        this.emit(
+          "CONCURRENCY_LIMIT",
+          `${ordered.length} units are runnable; starting ${assignments.length} (limit ${limit}).`,
+          { detail: { limit, eligible: ordered.length } },
+        );
+      }
+      return { kind: "run", assignments };
+    }
+
+    // Every runnable unit's qualified slots are held by work already in flight: nothing can start now, and the batch
+    // that holds them will re-enter decide() when it settles. This is not a block and not a wait on a resource window.
+    if (assignments.length === 0 && this.state.units.some((u) => u.status === "RUNNING")) {
+      return {
+        kind: "wait",
+        wakeAt: now + this.state.policy.minWaitMs,
+        reason: "every runnable unit's qualified resource is busy",
+        parked: [],
+      };
     }
 
     if (this.state.units.filter(isRequired).every((u) => u.status === "COMPLETE")) return { kind: "complete" };
@@ -163,6 +186,87 @@ export class ConvergenceScheduler {
 
     const decisions = this.state.units.filter((u) => u.status === "BLOCKED" && u.blocked).map((u) => u.blocked!.decision);
     return { kind: "blocked", decisions };
+  }
+
+  /**
+   * Total order over the runnable set: required first, then the longest unfinished dependency chain, then the
+   * operation's declared unit order. Arrival order and iteration order never participate, so the same persisted state
+   * and observations always produce the same batch. Declaration order is used rather than unit id as the tie-break so
+   * an operation authored for v1.0.0 keeps running its independent units in the same order after upgrade.
+   */
+  private orderRunnable(runnable: WorkUnit[]): WorkUnit[] {
+    // Length of the longest unfinished chain that starts at each unit and runs forward through its dependents. A unit
+    // that gates a long tail is started before one that gates nothing, so concurrency does not delay the objective.
+    const unfinished = new Set(this.state.units.filter((unit) => unit.status !== "COMPLETE").map((unit) => unit.id));
+    const dependents = new Map<string, string[]>();
+    for (const unit of this.state.units) {
+      for (const dependency of unit.dependsOn) {
+        const list = dependents.get(dependency) ?? [];
+        list.push(unit.id);
+        dependents.set(dependency, list);
+      }
+    }
+    const depth = new Map<string, number>();
+    const chain = (id: string, seen: Set<string>): number => {
+      const memo = depth.get(id);
+      if (memo !== undefined) return memo;
+      if (!unfinished.has(id) || seen.has(id)) return 0;
+      seen.add(id);
+      let longest = 0;
+      for (const dependent of dependents.get(id) ?? []) longest = Math.max(longest, chain(dependent, seen));
+      seen.delete(id);
+      const total = 1 + longest;
+      depth.set(id, total);
+      return total;
+    };
+    const declared = new Map(this.state.units.map((unit, index) => [unit.id, index]));
+    return [...runnable].sort((a, b) => {
+      const required = Number(!isRequired(a)) - Number(!isRequired(b));
+      if (required) return required;
+      const depthDelta = chain(b.id, new Set()) - chain(a.id, new Set());
+      if (depthDelta) return depthDelta;
+      return declared.get(a.id)! - declared.get(b.id)!;
+    });
+  }
+
+  /**
+   * Reserves resource slots for the ordered runnable set, up to the operation's concurrency limit. A unit whose
+   * resource is already fully reserved stays RUNNABLE and is considered again after the batch; being busy is not a
+   * failure, so it is never parked or blocked here.
+   */
+  private assign(
+    ordered: WorkUnit[],
+    choices: Map<string, Selection>,
+    reroutes: Map<string, { resourceId: string; reason: string }>,
+  ): Assignment[] {
+    const limit = Math.max(1, effectiveConcurrency(this.state));
+    const used = new Map<string, number>();
+    for (const running of this.state.units) {
+      if (running.status !== "RUNNING") continue;
+      const id = running.assignment?.resourceId;
+      if (id) used.set(id, (used.get(id) ?? 0) + 1);
+    }
+    const free = (resourceId: string): boolean => {
+      const resource = this.registry.get(resourceId);
+      const capacity = Math.max(1, resource?.maxConcurrentUnits ?? 1);
+      return (used.get(resourceId) ?? 0) < capacity;
+    };
+    const out: Assignment[] = [];
+    for (const unit of ordered) {
+      if (out.length >= limit) break;
+      const sel = choices.get(unit.id);
+      if (!sel) continue;
+      // Preference order: the registry's chosen resource first, then the rest of its qualified list in registry order.
+      const preferred = sel.chosen ? [sel.chosen, ...sel.qualified.map((c) => c.resource).filter((r) => r.id !== sel.chosen!.id)] : sel.qualified.map((c) => c.resource);
+      const eligible = new Set(sel.qualified.filter((c) => c.eligibility.eligible).map((c) => c.resource.id));
+      const resource = preferred.find((candidate) => (eligible.has(candidate.id) || candidate.id === sel.chosen?.id) && free(candidate.id));
+      if (!resource) continue; // eligible but every qualified slot is busy: stay RUNNABLE, do not park or block
+      used.set(resource.id, (used.get(resource.id) ?? 0) + 1);
+      // A reroute is a condition story about the preferred resource; being displaced by a busy slot is not one.
+      const reroutedFrom = sel.chosen?.id === resource.id ? reroutes.get(unit.id) : undefined;
+      out.push({ unit, resource, ...(reroutedFrom ? { reroutedFrom } : {}) });
+    }
+    return out;
   }
 
   /** The operator-assigned resource, if eligible; parks on it when temporarily unavailable. */
@@ -361,8 +465,8 @@ export class ConvergenceScheduler {
     return applied;
   }
 
-  /** Marks the unit RUNNING on `resource`, recording the reroute and the operation resuming if it was waiting. */
-  start(d: Extract<Decision, { kind: "run" }>): void {
+  /** Marks the unit RUNNING on its assigned resource, recording the reroute and the operation resuming if waiting. */
+  start(d: Assignment): void {
     const { unit, resource, reroutedFrom } = d;
     const at = new Date(this.now()).toISOString();
     const wasParked = this.state.units.some((u) => u.status === "PARKED");

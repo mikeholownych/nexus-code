@@ -101,6 +101,21 @@ export type IntegrateResult =
   | { kind: "conflict"; files: string[]; tip: string }
   | { kind: "failed"; reason: string };
 
+/** What the runner observed about the unit it is integrating; omitted fields are omitted from the receipt. */
+export interface IntegrationEvidence {
+  sequence?: number;
+  candidate?: { digest: string; scope: "tree" | "commit" };
+  tests?: { command: string; status: string; hasExecutedTests: boolean };
+}
+
+function evidenceFields(evidence: IntegrationEvidence): Pick<IntegrationReceipt, "sequence" | "candidate" | "tests"> {
+  return {
+    ...(evidence.sequence !== undefined ? { sequence: evidence.sequence } : {}),
+    ...(evidence.candidate ? { candidate: evidence.candidate } : {}),
+    ...(evidence.tests ? { tests: evidence.tests } : {}),
+  };
+}
+
 /**
  * Create the integration worktree/branch if it is not there yet. Recovery reuses an existing checkout; a worktree that
  * exists while its branch is gone, or vice versa, is a broken pair and fails closed.
@@ -232,7 +247,16 @@ export class OperationGit {
    * Commit the unit's working tree, merge its branch into the integration branch, and re-run its verifier on the merged
    * tree before the receipt is recorded. A conflict aborts the merge; a verification failure resets it.
    */
-  async integrate(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<IntegrateResult> {
+  /**
+   * Merges a completed unit's branch into the operation branch. `evidence` is supplied by the runner: the merge
+   * order and the candidate/tests the unit was accepted with. Direct callers (tests) may omit it; the receipt then
+   * honestly omits the fields rather than inventing them.
+   */
+  async integrate(
+    unit: WorkUnit,
+    result: Extract<UnitRunResult, { kind: "completed" }>,
+    evidence: IntegrationEvidence = {},
+  ): Promise<IntegrateResult> {
     const entry = this.state.units[unit.id];
     if (!entry) return { kind: "failed", reason: `unit ${unit.id} has no worktree recorded` };
     if (entry.integratedCommit) {
@@ -248,6 +272,7 @@ export class OperationGit {
           outcome: result.outcome,
           summary: result.summary,
           verification: "ALREADY_INTEGRATED",
+          ...evidenceFields(evidence),
         },
       };
     }
@@ -292,6 +317,7 @@ export class OperationGit {
           outcome: result.outcome,
           summary: result.summary,
           verification: "NO_CHANGES",
+          ...evidenceFields(evidence),
         },
       };
     }
@@ -328,6 +354,7 @@ export class OperationGit {
           outcome: result.outcome,
           summary: result.summary,
           verification: posthoc ? "PASSED_POSTHOC" : "ALREADY_MERGED",
+          ...evidenceFields(evidence),
         },
       };
     }
@@ -376,6 +403,7 @@ export class OperationGit {
       outcome: result.outcome,
       summary: result.summary,
       verification: verification ? "PASSED" : "NOT_RUN",
+      ...evidenceFields(evidence),
     };
     this.state.units[unit.id] = { ...entry, integratedCommit };
     return { kind: "integrated", receipt };
