@@ -1,0 +1,15 @@
+15da18d8be4481230a95f4ab2c268673e8a7418a40d4a6798ef159c6393d1c03  ./README.md
+877f95d1842e70479c392468da6a648601e7e2d631356431250884db2e7bd834  ./fixture/baseline-test.log
+3faae8bf7996f94485374d933efce258ead7a274a71d547f0909a9c881b2e379  ./fixture/baseline/package.json
+6254bdc552d1a150494e2bd88efb67cc6d2b718ec575dde0d5039799306b3c09  ./fixture/baseline/src/status.js
+43bf2229bbfa63a60199c1ae6477d1f6c76ee647456220f2bceb8596a6ac987f  ./fixture/baseline/test/status.test.js
+cc317f6e3377acec37e0bf33db48fa005ee1619e8394f2379965d86148f1d38b  ./fixture/independent-test.log
+cc856371e70a5f18075b6512f81c366d093602f66c1486aa3df3a2ac35ca7907  ./fixture/package.json
+e44905e3c338b944009f84cc67e79486cfa6de2b9114250a641aa4770f98e620  ./fixture/result.patch
+5f0b8e91f8a6b841a91b244fc4e34a227433a69a42db11ab032743301e0d73c4  ./fixture/src/status.js
+43bf2229bbfa63a60199c1ae6477d1f6c76ee647456220f2bceb8596a6ac987f  ./fixture/test/status.test.js
+0ccf357ea4f6bd854708646a03ea68b8db33d8590e0de4ffa463ea218f4a2ee5  ./live-small-task-event-summary.json
+a9598bbbfa77fb829a73a21875977e0aff9b33b0d79979635cc88ef28d7d9ad9  ./live-small-task.json
+085f84c0180e8e9e04b59d8945d316e5b6c037ae1a80dda55132d82bcd1ce702  ./live-task-inference-receipts.jsonl
+452d1b363f09cbac8ddb30d9c00975e3a26ea79f83ff9362befd3beda4a7201d  ./provider-verification/chatgpt-verify.json
+4d373e8151bf7b6509b8d7401115b642a9a27c4035095d8be2ded7547c33003b  ./provider-verification/openrouter-verify.json
