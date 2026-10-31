@@ -7,7 +7,7 @@ import { AccountIdentityError, createOperationAccountIdentity, isLegacyCredentia
 import type { DurableOperationState } from "./operation.js";
 import { CURRENT_OPERATION_SCHEMA_VERSION, InvalidOperationStateError, LEGACY_OPERATION_SCHEMA_VERSION, migrateOperationState, needsMigrationBackup, UnsupportedOperationSchemaError } from "./operation_schema.js";
 import { writePrivateFile } from "./durable_file.js";
-import { DurableStateManager, type DurableTaskState } from "./state.js";
+import { CURRENT_STATE_SCHEMA_VERSION, DurableStateManager, type DurableTaskState, UnsupportedSchemaVersionError } from "./state.js";
 import { WorkspacePath } from "./workspace_path.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
@@ -101,7 +101,16 @@ export class OperationStore {
   loadForReplay(id: string): DurableOperationState {
     return withStateStoreGuard(this.manager.getBaseDir(), () => {
       const raw = JSON.parse(fs.readFileSync(this.manager.getStateFilePath(id), "utf8"));
-      if (!raw?.operation) throw new Error(`Task ${id} is not an operation`);
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`Task ${id} is invalid`);
+      const version = raw.schemaVersion ?? 0;
+      if (typeof version === "number" && Number.isInteger(version) && version > CURRENT_STATE_SCHEMA_VERSION) {
+        throw new UnsupportedSchemaVersionError(version);
+      }
+      if (!raw.operation) throw new Error(`Task ${id} is not an operation`);
+      const opVersion = raw.operation.schemaVersion;
+      if (typeof opVersion === "number" && Number.isInteger(opVersion) && opVersion > CURRENT_OPERATION_SCHEMA_VERSION) {
+        throw new UnsupportedOperationSchemaError(opVersion);
+      }
       const protectedRecord = redactTaskStateForPersistence(raw as DurableTaskState, [this.workspace]);
       return migrateOperationState(protectedRecord.operation);
     });

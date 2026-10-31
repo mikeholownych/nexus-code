@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { AgentWorkUnitExecutor } from "../src/core/operation_runner_execution.js";
 import { driveOperation, OperationRunner, OperationStore, type WorkUnitExecutor } from "../src/core/operation_runner.js";
 import { newOperation, type DurableOperationState, type UnitRunResult, type WorkUnit } from "../src/core/operation.js";
-import { publishMessage } from "../src/core/operation_messages.js";
+import { messagesBlock, publishMessage } from "../src/core/operation_messages.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
 import { UnsupportedOperationSchemaError } from "../src/core/operation_schema.js";
 import { STATE_RESTORE_PENDING_FILE } from "../src/core/state_store_guard.js";
@@ -600,4 +600,428 @@ test("replay leaves a legacy redaction-changing record byte-identical and still 
   assert.match(future.stderr, /newer than this build supports/);
   assert.deepEqual(fs.readFileSync(file), futureBytes);
   assert.equal(fs.statSync(file).mtimeMs, futureMtime);
+});
+
+test("an early recovery failure leaves a message owed until a later submitted turn", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-early-recovery-message-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-early-recovery-message", "do not consume before submission", [{ id: "b", title: "b", prompt: "b", agentTaskId: "task-b" }], [resource], Date.now());
+  const { message } = publishMessage(state, { from: "operator", to: "b", kind: "request", body: "still owed" }, Date.now());
+  store.save(state);
+  const earlyAgent: any = {
+    durable: true,
+    getTaskId: () => "task-b",
+    recoverFromTaskState: async () => ({
+      success: true,
+      interrupted: true,
+      interruptedOperation: { toolName: "read_file", status: "in_flight" },
+      obligationRecordPresent: true,
+      state: { currentOperation: { toolName: "read_file", status: "in_flight" } },
+    }),
+    runTurn: async () => { throw new Error("early recovery must not construct or submit a prompt"); },
+    setProviderRecoveryHooks: () => {},
+    shutdown: () => {},
+  };
+  const earlyExecutor = new AgentWorkUnitExecutor({
+    baseConfig: { endpoint: resource.endpoint, model: "m", workspace: root } as HarnessConfig,
+    createAgent: () => earlyAgent,
+  });
+  const first = new OperationRunner(store.load(state.id), { executor: earlyExecutor, persist: (current) => store.save(current) });
+  await first.run();
+  assert.equal(first.state.units[0].status, "BLOCKED");
+  assert.equal(first.state.messages![0].deliveredTo, undefined, "early failure must leave the message owed");
+
+  const decision = first.state.units[0].blocked!.decision;
+  first.scheduler.resolve(decision.id, decision.options[0].id);
+  store.save(first.state);
+  const seen: string[][] = [];
+  const retryExecutor: WorkUnitExecutor = {
+    run: async (_unit, _resource, ctx) => {
+      seen.push((ctx.messages ?? []).map((entry) => entry.id));
+      return completed("submitted on retry");
+    },
+  };
+  const resumed = await driveOperation(store.load(state.id), { store, executor: retryExecutor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.deepEqual(seen, [[message.id]]);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});
+
+test("a post-bind pre-submission crash leaves the message owed", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-post-bind-message-"));
+  const env = testEnv(root);
+  const store = new OperationStore(root, env.RELEASE_STATE_DIR, env.HOME);
+  const initial = newOperation("op-post-bind-message", "acknowledge only after submission", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
+  const { message } = publishMessage(initial, { from: "operator", to: "b", kind: "request", body: "not yet submitted" }, Date.now());
+  store.save(initial);
+  const script = `
+    import { driveOperation, OperationStore } from "./src/core/operation_runner.ts";
+    const store = new OperationStore(process.env.RELEASE_WORKSPACE, process.env.RELEASE_STATE_DIR);
+    const state = store.load("op-post-bind-message");
+    const executor = { run: async (_unit, _resource, ctx) => {
+      ctx.bindAgentTask("task-b");
+      process.kill(process.pid, "SIGKILL");
+    } };
+    await driveOperation(state, { store, executor });
+    process.exit(4);
+  `;
+  const run = childRun(script, env);
+  t.after(async () => {
+    await stopChild(run);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const exit = await run.exited;
+  assert.equal(exit.signal, "SIGKILL", run.output());
+  const crashed = store.load(initial.id);
+  assert.equal(crashed.units[0].agentTaskId, "task-b");
+  assert.equal(crashed.messages![0].deliveredTo, undefined);
+
+  const seen: string[][] = [];
+  const executor: WorkUnitExecutor = {
+    run: async (_unit, _resource, ctx) => {
+      seen.push((ctx.messages ?? []).map((entry) => entry.id));
+      return completed("submitted after restart");
+    },
+  };
+  const resumed = await driveOperation(store.load(initial.id), { store, executor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.deepEqual(seen, [[message.id]]);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});
+
+test("a post-prompt crash suppresses duplicate history injection and acknowledges once after resume", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-post-prompt-message-"));
+  const env = testEnv(root);
+  const historyFile = path.join(root, "history.json");
+  const store = new OperationStore(root, env.RELEASE_STATE_DIR, env.HOME);
+  const initial = newOperation("op-post-prompt-message", "deduplicate submitted messages", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
+  const { message } = publishMessage(initial, { from: "operator", to: "b", kind: "request", body: "submit exactly once" }, Date.now());
+  store.save(initial);
+  const script = `
+    import fs from "node:fs";
+    import { AgentWorkUnitExecutor } from "./src/core/operation_runner_execution.ts";
+    import { driveOperation, OperationStore } from "./src/core/operation_runner.ts";
+    const messages = [{ role: "system", content: "system" }];
+    const agent = {
+      durable: true,
+      getTaskId: () => "task-b",
+      getMessages: () => messages,
+      getObjective: () => ({ verification: [] }),
+      getCompletionSummary: () => ({ summary: "done" }),
+      setProviderRecoveryHooks: () => {},
+      checkpointDurableState: () => {},
+      estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
+      runTurn: async (prompt) => {
+        messages.push({ role: "user", content: prompt });
+        fs.writeFileSync(process.env.RELEASE_HISTORY_FILE, JSON.stringify(messages));
+        process.kill(process.pid, "SIGKILL");
+      },
+      shutdown: () => {},
+    };
+    const store = new OperationStore(process.env.RELEASE_WORKSPACE, process.env.RELEASE_STATE_DIR);
+    const executor = new AgentWorkUnitExecutor({
+      baseConfig: { endpoint: "https://provider.invalid/v1", model: "m", workspace: process.env.RELEASE_WORKSPACE },
+      createAgent: () => agent,
+    });
+    await driveOperation(store.load("op-post-prompt-message"), { store, executor });
+    process.exit(4);
+  `;
+  const run = childRun(script, { ...env, RELEASE_HISTORY_FILE: historyFile });
+  t.after(async () => {
+    await stopChild(run);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const exit = await run.exited;
+  assert.equal(exit.signal, "SIGKILL", run.output());
+  assert.equal(store.load(initial.id).messages![0].deliveredTo, undefined, "submission without a result cannot be acknowledged yet");
+
+  const messages = JSON.parse(fs.readFileSync(historyFile, "utf8")) as Array<{ role: string; content: string }>;
+  const resumePrompts: string[] = [];
+  const resumedAgent: any = {
+    durable: true,
+    getTaskId: () => "task-b",
+    getMessages: () => messages,
+    recoverFromTaskState: async () => ({
+      success: true,
+      interrupted: false,
+      obligationRecordPresent: true,
+      state: { currentOperation: null },
+    }),
+    getObjective: () => ({ verification: [] }),
+    getCompletionSummary: () => ({ summary: "done" }),
+    setProviderRecoveryHooks: () => {},
+    checkpointDurableState: () => {},
+    estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
+    runTurn: async (prompt: string) => {
+      resumePrompts.push(prompt);
+      messages.push({ role: "user", content: prompt });
+      fs.writeFileSync(historyFile, JSON.stringify(messages));
+      return {
+        execution: "COMPLETED",
+        outcome: "NOT_REQUIRED",
+        acceptance: "NOT_REQUESTED",
+        modelStop: "TASK_COMPLETED_TOOL",
+        finalOutputComplete: true,
+        verification: null,
+        interruption: null,
+        inferenceFailure: null,
+        steps: { used: 1, max: 5, limitReached: false },
+        unverifiedChangesPending: false,
+        finishedAt: new Date().toISOString(),
+      };
+    },
+    shutdown: () => {},
+  };
+  const resumedExecutor = new AgentWorkUnitExecutor({
+    baseConfig: { endpoint: resource.endpoint, model: "m", workspace: root } as HarnessConfig,
+    createAgent: () => resumedAgent,
+  });
+  const resumed = await driveOperation(store.load(initial.id), { store, executor: resumedExecutor });
+  assert.equal(resumed.status, "COMPLETE", JSON.stringify(resumed.blocked));
+  assert.equal(resumePrompts.length, 1);
+  assert.doesNotMatch(resumePrompts[0], /submit exactly once/);
+  const durableHistory = fs.readFileSync(historyFile, "utf8");
+  assert.equal(durableHistory.split("submit exactly once").length - 1, 1);
+  assert.equal(durableHistory.split(message.id).length - 1, 1);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});
+
+test("a context-admission withdrawal does not acknowledge a message and retry submits it", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-withdrawn-message-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-withdrawn-message", "retain delivery after withdrawal", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
+  const { message } = publishMessage(state, { from: "operator", to: "b", kind: "request", body: "withdrawn prompt" }, Date.now());
+  store.save(state);
+  const history: Array<{ role: string; content: string }> = [{ role: "system", content: "system" }];
+  const agent: any = {
+    durable: true,
+    getTaskId: () => "task-b",
+    getMessages: () => history,
+    getObjective: () => ({ verification: [] }),
+    getCompletionSummary: () => undefined,
+    setProviderRecoveryHooks: () => {},
+    checkpointDurableState: () => {},
+    estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
+    runTurn: async () => ({
+      execution: "BLOCKED",
+      outcome: "UNVERIFIED",
+      acceptance: "NOT_REQUESTED",
+      modelStop: "NONE",
+      finalOutputComplete: true,
+      verification: null,
+      interruption: null,
+      inferenceFailure: null,
+      capacity: {
+        estimatedPromptTokens: 100,
+        completionReserveTokens: 1,
+        toolResponseReserveTokens: 1,
+        contextLimit: 10,
+        step: 1,
+        modelCalled: false,
+        pendingMessageRetained: false,
+        pendingMessageChars: 42,
+      },
+      steps: { used: 0, max: 5, limitReached: false },
+      unverifiedChangesPending: false,
+      finishedAt: new Date().toISOString(),
+    }),
+    shutdown: () => {},
+  };
+  const first = new OperationRunner(store.load(state.id), {
+    executor: new AgentWorkUnitExecutor({
+      baseConfig: { endpoint: resource.endpoint, model: "m", workspace: root } as HarnessConfig,
+      createAgent: () => agent,
+    }),
+    persist: (current) => store.save(current),
+  });
+  await first.run();
+  assert.equal(first.state.units[0].status, "BLOCKED");
+  assert.equal(history.some((entry) => entry.content.includes("withdrawn prompt")), false, "the fixture withdraws the durable prompt");
+  assert.equal(first.state.messages![0].deliveredTo, undefined, "a withdrawn prompt must not acknowledge delivery");
+
+  const decision = first.state.units[0].blocked!.decision;
+  const revise = decision.options.find((option) => option.action.kind === "revise")!;
+  first.scheduler.resolve(decision.id, revise.id, "retry with a larger context allowance");
+  store.save(first.state);
+  const seen: string[][] = [];
+  const retryExecutor: WorkUnitExecutor = {
+    run: async (_unit, _resource, ctx) => {
+      seen.push((ctx.messages ?? []).map((entry) => entry.id));
+      return completed("submitted after admission retry");
+    },
+  };
+  const resumed = await driveOperation(store.load(state.id), { store, executor: retryExecutor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.deepEqual(seen, [[message.id]]);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});
+
+test("an executor result delivered by abort cannot complete or publish after cancellation", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-abort-late-result-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-abort-late-result", "cancel once", [{ id: "u1", title: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(state);
+  const controller = new AbortController();
+  let started!: () => void;
+  const runningExecutor = new Promise<void>((resolve) => (started = resolve));
+  const executor: WorkUnitExecutor = {
+    run: async (_unit, _resource, ctx) => {
+      started();
+      return new Promise<UnitRunResult>((resolve) => {
+        ctx.signal?.addEventListener("abort", () => resolve(completed("late completion")), { once: true });
+      });
+    },
+  };
+  const runner = new OperationRunner(store.load(state.id), { executor, persist: (current) => store.save(current) });
+  const running = runner.run(controller.signal);
+  await runningExecutor;
+  controller.abort();
+  const result = await running;
+
+  assert.equal(result.status, "CANCELLED");
+  assert.notEqual(result.units[0].status, "COMPLETE");
+  assert.equal(result.events.filter((event) => event.type === "OPERATION_CANCELLED").length, 1);
+  assert.equal((result.messages ?? []).filter((message) => message.from === "u1").length, 0);
+  const persisted = store.load(state.id);
+  assert.equal(persisted.events.filter((event) => event.type === "OPERATION_CANCELLED").length, 1);
+  assert.notEqual(persisted.units[0].status, "COMPLETE");
+});
+
+test("a turn with failed durable writes cannot acknowledge a message and retry delivers it", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-write-failure-message-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-write-failure-message", "acknowledge only durable submissions", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
+  const { message } = publishMessage(state, { from: "operator", to: "b", kind: "request", body: "durable submission required" }, Date.now());
+  store.save(state);
+  const agent: any = {
+    durable: true,
+    getTaskId: () => "task-b",
+    getMessages: () => [{ role: "system", content: "system" }],
+    getObjective: () => ({ verification: [] }),
+    getCompletionSummary: () => ({ summary: "not durably submitted" }),
+    setProviderRecoveryHooks: () => {},
+    checkpointDurableState: () => {},
+    estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
+    runTurn: async () => ({
+      execution: "COMPLETED",
+      outcome: "NOT_REQUIRED",
+      acceptance: "NOT_REQUESTED",
+      modelStop: "TASK_COMPLETED_TOOL",
+      finalOutputComplete: true,
+      verification: null,
+      interruption: null,
+      inferenceFailure: null,
+      steps: { used: 1, max: 5, limitReached: false },
+      unverifiedChangesPending: false,
+      persistence: { durable: false, failures: ["synthetic durable write failure"] },
+      finishedAt: new Date().toISOString(),
+    }),
+    shutdown: () => {},
+  };
+  const first = new OperationRunner(store.load(state.id), {
+    executor: new AgentWorkUnitExecutor({
+      baseConfig: { endpoint: resource.endpoint, model: "m", workspace: root } as HarnessConfig,
+      createAgent: () => agent,
+    }),
+    persist: (current) => store.save(current),
+  });
+  await first.run();
+  assert.equal(first.state.messages![0].deliveredTo, undefined, "failed durable writes must not acknowledge delivery");
+  assert.notEqual(first.state.status, "COMPLETE");
+
+  const decision = first.state.units[0].blocked!.decision;
+  const retry = decision.options.find((option) => option.action.kind === "retry")!;
+  first.scheduler.resolve(decision.id, retry.id);
+  store.save(first.state);
+  const seen: string[][] = [];
+  const retryExecutor: WorkUnitExecutor = {
+    run: async (_unit, _resource, ctx) => {
+      seen.push((ctx.messages ?? []).map((entry) => entry.id));
+      return completed("durably submitted on retry");
+    },
+  };
+  const resumed = await driveOperation(store.load(state.id), { store, executor: retryExecutor });
+  assert.equal(resumed.status, "COMPLETE");
+  assert.deepEqual(seen, [[message.id]]);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});
+
+test("assistant marker text cannot suppress a message absent from user prompt history", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-adversarial-marker-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(root, "tasks"), root);
+  const state = newOperation("op-adversarial-marker", "match only real user submissions", [{ id: "b", title: "b", prompt: "b", agentTaskId: "task-b" }], [resource], Date.now());
+  const { message } = publishMessage(state, { from: "operator", to: "b", kind: "request", body: "adversarial marker body" }, Date.now());
+  store.save(state);
+  const history: any[] = [
+    { role: "system", content: "system" },
+    { role: "user", content: "[Work unit 'b': b]\nTask:\nb" },
+    { role: "assistant", content: messagesBlock([message]) },
+  ];
+  const prompts: string[] = [];
+  const agent: any = {
+    durable: true,
+    getTaskId: () => "task-b",
+    getMessages: () => history,
+    recoverFromTaskState: async () => ({ success: true, interrupted: false, obligationRecordPresent: true, state: { currentOperation: null } }),
+    getObjective: () => ({ verification: [] }),
+    getCompletionSummary: () => ({ summary: "done" }),
+    setProviderRecoveryHooks: () => {},
+    checkpointDurableState: () => {},
+    estimateTurnAdmission: () => ({ estimatedPromptTokens: 1, contextLimit: 100, completionReserve: 1, toolResponseReserve: 1, admissible: true }),
+    runTurn: async (prompt: string) => {
+      prompts.push(prompt);
+      return {
+        execution: "COMPLETED",
+        outcome: "NOT_REQUIRED",
+        acceptance: "NOT_REQUESTED",
+        modelStop: "TASK_COMPLETED_TOOL",
+        finalOutputComplete: true,
+        verification: null,
+        interruption: null,
+        inferenceFailure: null,
+        steps: { used: 1, max: 5, limitReached: false },
+        unverifiedChangesPending: false,
+        finishedAt: new Date().toISOString(),
+      };
+    },
+    shutdown: () => {},
+  };
+  const resumed = await driveOperation(store.load(state.id), {
+    store,
+    executor: new AgentWorkUnitExecutor({
+      baseConfig: { endpoint: resource.endpoint, model: "m", workspace: root } as HarnessConfig,
+      createAgent: () => agent,
+    }),
+  });
+  assert.equal(resumed.status, "COMPLETE", JSON.stringify(resumed.blocked));
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /adversarial marker body/);
+  assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+});
+
+test("replay rejects a future task envelope without changing bytes or mtime", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-future-envelope-"));
+  const env = testEnv(root);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(env.NEXUS_STATE_DIR!, "tasks"), env.HOME);
+  const op = newOperation("op-future-envelope", "future envelope", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.schemaVersion = 3;
+  raw.operation.objective = "aZ7mK2pQ9x-V4nR8cT1yB6hW3";
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+  const before = fs.readFileSync(file);
+  const mtime = fs.statSync(file).mtimeMs;
+
+  const result = runOperationCli(["operation", "status", "--replay", "--json", op.id], env, root);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /newer Nexus/);
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.equal(fs.statSync(file).mtimeMs, mtime);
 });

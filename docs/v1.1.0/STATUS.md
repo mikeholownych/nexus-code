@@ -3,25 +3,29 @@
 Durable state of the v1.1.0 programme. A new lead agent can resume from this file alone. Update it at every
 checkpoint; never record a state the evidence does not support.
 
-Last updated: 2026-10-31T18:50Z
-Branch: `v1/v11-lead-program` · Worktree: `/home/mike/nexus-wt/v11-lead`
-Baseline: `origin/main` `7b49e6ff` (moved from `c7d0b003` mid-review; see §5) ·
+Last updated: 2026-10-31T21:45Z
+Branch: `v1/v11-release` · Worktree: `/home/mike/nexus-wt/v11-release`
+Baseline: `origin/main` `7b49e6ff`; candidate under repair: `3c727547` plus V11-QUALITY-04 ·
 `v1.0.0` tag `501eab68` (published 2026-10-31T11:22Z)
 
 ---
 
 ## 1. Current gate
 
-**Gates 1–3 complete for the v1.1.0 scope; gate 4 (full regression + RC qualification) in progress.**
-Gate 5 (release preparation) is deliberately not started: no RC tag, no artifact, no publication.
+**Gates 1–2 complete. Gate 3 is in final review: persistence fixes are approved; V11-QUALITY-04 remains
+open. Gate 4 (full regression + RC qualification) has not started on the repaired candidate.**
+Remote annotated tags `v1.1.0-rc.1` and `v1.1.0` exist prematurely at `ba9764bc` and `4789bb7c`. Both Release
+workflows failed the main-ancestry gate (runs 41234889855 and 41234889861), and no GitHub release was created.
+They are unqualified and must not be published. PR #372 is draft. A later qualified RC requires a new RC number;
+the stable-tag collision requires an owner-safe resolution and must not be bypassed by publishing defective code.
 
 | Gate | State |
 |---|---|
 | 1. Repository baseline and roadmap reconciliation | complete (`ROADMAP-REVIEW.md`) |
 | 2. Specification, xerj research, collaboration plan | complete (`SPEC.md`, `DECISIONS.md`, `COLLABORATION.md`) |
-| 3. Implementation in reviewable increments | complete for WP-1…WP-7; WP-8/9 deferred (below) |
-| 4. Full regression and RC qualification | source regression **executed**; installed-RC qualification **not run** |
-| 5. Release preparation and publication | **not started** — awaits gate 4 and an owner decision (Q1) |
+| 3. Implementation in reviewable increments | persistence approved; V11-QUALITY-04 pending plan review/implementation and final quality approval |
+| 4. Full regression and RC qualification | not started on the repaired candidate |
+| 5. Release preparation and publication | draft metadata exists; publication blocked by gates 3–4 and the premature stable tag |
 
 ## 2. Documents
 
@@ -37,7 +41,7 @@ Gate 5 (release preparation) is deliberately not started: no RC tag, no artifact
 
 ## 3. Commits and work packages
 
-Branch `v1/v11-lead-program`, based on `origin/main` `c7d0b003`.
+Branch `v1/v11-release`, based on `v1/v11-lead-program` at `853c6333`.
 
 | Commit | Contents |
 |---|---|
@@ -48,7 +52,9 @@ Branch `v1/v11-lead-program`, based on `origin/main` `c7d0b003`.
 | `ade106b4` | Real v1.0.0 migration fixture; defect dispositions |
 | `fa63a482` | Merge of `origin/main` `7b49e6ff`; README conflict resolved; competing scope recorded |
 | `003d5f7e` | §2.5 dispositions for the parallel post-v1 roadmap; Q6 |
-| (this commit) | STATUS/execution record update |
+| `853c6333` | lead-programme execution record; independent reviews subsequently requested changes |
+| `d44e7a87`..`3c727547` | release acceptance tests and real crash evidence; generalized RC repro; persistence and runner review fixes; premature RC1/stable metadata preserved without qualification; acceptance ledger bound to evidence |
+| `V11-QUALITY-04` | four final quality edge cases in spec/plan review; no implementation commit yet |
 
 | WP | Title | State | Evidence |
 |---|---|---|---|
@@ -123,26 +129,24 @@ evidence — the numbers must be copied here when it finishes).
 
 ## 6. Claims held
 
-`$(git rev-parse --git-common-dir)/nexus-claims/`: `V11_PROGRAM`, `DOCS_V11_PROGRAM`, and `FILE_` claims for
-`cli/src/core/operation.ts`, `scheduler.ts`, `operation_runner.ts`, `operation_view.ts`, `operation_cli.ts`,
-`cli/test/operation_concurrency.test.ts`.
+`$(git rev-parse --git-common-dir)/nexus-claims/`: `V11_RELEASE_20261031`, `DOCS_V11_RELEASE`, and `FILE_`
+claims for `cli/src/core/operation_runner.ts`, `operation_runner_execution.ts`, `operation_runner_persistence.ts`,
+`operation_messages.ts`, and `cli/src/operation_cli.ts`. The v11-lead program claims were released before this lane
+started. Completed state/repro/v1.0-notes claims were released and logged.
 
-Broken stale claims (logged): `FILE_cli_src_core_scheduler.ts`, `FILE_cli_src_core_operation_runner.ts` (previously held
-by `codex-root-recovery-fix`; its commits are ancestors of `origin/main` and the files had no diff against it).
-
-**Not claimed and not used:** `GATEWAY` (no inference run), `SUITE` (full suites ran on snapshot worktrees without
-holding the suite claim; the claim's owner PID was gone but the claim was left for its owner to release).
+**Not claimed and not used:** `GATEWAY` (no inference run). The repaired full suite must run alone on a snapshot;
+the two earlier concurrent runs are not accepted evidence.
 
 ## 7. Next action
 
-1. Record the full-suite results for `d2de3941` and `e22ed4c9` in §4.1.
-2. Re-run the full suite on a snapshot of the final commit; if green, the source gates in `VALIDATION.md` §2 are met
-   except Rust/security/packaging, which must be run before an RC.
-3. Run `cargo test --locked`, `scripts/security_gates.sh`, and the packaging smoke.
-4. Prepare the RC candidate (version bump to `1.1.0-rc.1`, `docs/releases/v1.1.0-rc.1.md`) **without tagging**.
-5. Request the owner decisions Q1 (stable release under inherited v1.0.0 gaps), Q2 (v1.0.0 documentation hotfix) and
-   Q6 (which document set is v1.1.0) with the candidate and evidence in hand. Do not tag, publish or deploy without
-   them.
+1. Obtain V11-QUALITY-04 plan approval, retrieve the four runtime contracts with XERJ, complete RED/GREEN, and get
+   independent spec and quality approval on the exact repaired head.
+2. Run the full CLI suite alone on a snapshot of that head, plus TypeScript, the v1.1 ledger, Rust and security gates.
+3. Prepare `1.1.0-rc.2` metadata and notes without tagging; run pinned packaging, SBOM, package and installer smoke.
+4. Merge the reviewed RC through draft PR #372, tag the exact main commit, and run installed-RC and cross-runner
+   qualification with independent acceptance.
+5. Resolve the premature stable-tag collision through the documented owner-safe repair path. Do not publish the
+   existing unqualified tag and do not create a replacement tag without that resolution.
 
 ## 8. Resumption checklist
 
