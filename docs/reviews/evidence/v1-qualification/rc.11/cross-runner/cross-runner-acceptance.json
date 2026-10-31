@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "requirementId": "REQ-REL-114",
+  "acceptanceId": "ACC-SUP-08",
+  "status": "PASS",
+  "sourceCommit": "8d4e5319f1a31ee67e31d3edb6b44c2e7d9ecb05",
+  "rcTag": "v1.0.0-rc.11",
+  "artifactSha256": "72d73f3565a48fb83d0c9a13a93fe38c2a3ae8af75184dab3af73c0b749c4053",
+  "workflow": {
+    "url": "https://github.com/mikeholownych/nexus-code/actions/runs/40980085377",
+    "runId": "40980085377",
+    "attempt": 1,
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "build (ubuntu-22.04)",
+        "jobId": "123817779281",
+        "conclusion": "success",
+        "url": "https://github.com/mikeholownych/nexus-code/actions/runs/40980085377/job/123817779281"
+      },
+      {
+        "name": "build (ubuntu-24.04)",
+        "jobId": "123817779361",
+        "conclusion": "success",
+        "url": "https://github.com/mikeholownych/nexus-code/actions/runs/40980085377/job/123817779361"
+      },
+      {
+        "name": "compare",
+        "jobId": "123818859689",
+        "conclusion": "success",
+        "url": "https://github.com/mikeholownych/nexus-code/actions/runs/40980085377/job/123818859689"
+      }
+    ]
+  },
+  "comparison": {
+    "runnerArtifactSetsMatchedEachOther": true,
+    "runnerArtifactSetsMatchedPublishedRc": true,
+    "assets": {
+      "SHA256SUMS": "80e4a1475e242382f84f6164ef7197bde71f1af93abeb9a831c71c8d59b9b73d",
+      "THIRD_PARTY_NOTICES.txt": "6feffa89a43a37ad0e2d21f36864528564bb1bfefd2da930e5adcee283d0500c",
+      "compatibility.json": "8269af9a8757c43c03ec93907ad99d8bf3f1924146e822c3b02bbdeb4a5e31ba",
+      "install.sh": "5620d56ef6f8d637fc102ae2c8ea3b055effbc4069243a2df68b67520b1e2302",
+      "nexus-linux-x86_64-v1.0.0-rc.11.tar.gz": "72d73f3565a48fb83d0c9a13a93fe38c2a3ae8af75184dab3af73c0b749c4053",
+      "sbom.cdx.json": "a98ee809f8d8aa0fa4d07f4708598fa18804bfa157dfa289ac9b2da73df84ff5"
+    }
+  },
+  "evidence": {
+    "repro-evidence.json": "workflow-produced exact-RC comparison record",
+    "ubuntu-22.04/repro-identity.json": "runner-produced source, toolchain, and artifact identity",
+    "ubuntu-24.04/repro-identity.json": "runner-produced source, toolchain, and artifact identity"
+  },
+  "review": {
+    "disposition": "ACCEPT",
+    "reviewer": "plan05_readonly_review",
+    "reviewedBase": "5c516476e8dfcaf9cdd59eaa204134e25d2be673",
+    "reviewedDiffSha256": "32d127ef6ebc10635f9c8f2a8e95132a0839b233c0e25947dd2dced848c038b4",
+    "scope": "Evidence identity, cross-runner workflow results, all six asset digests, checksum manifest, and REQ-REL-114 traceability; no tests run by reviewer."
+  }
+}
