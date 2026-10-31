@@ -3,7 +3,7 @@
   "checkpoint_id": "01M69K8NCNHEA7JFR8PGPY57P9",
   "strategy": "manual-commit",
   "branch": "v1/v11-lead-program",
-  "checkpoints_count": 528,
+  "checkpoints_count": 531,
   "files_touched": [
     "cli/package.json"
   ],
@@ -13,8 +13,22 @@
       "transcript": "/0/full.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 84155,
+    "cache_read_tokens": 1394058,
+    "output_tokens": 10231,
+    "api_call_count": 21
+  },
   "redaction": {
     "replacements": 2814,
     "layers": {
