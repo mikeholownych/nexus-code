@@ -174,29 +174,43 @@ passes temporary paths as ordinary process arguments. This removes generated
 code from the test path. The alert remains pending until a CodeQL scan of the
 integrated commit reports it closed.
 
-The two dependency updates are blocked on compatibility review, not lack of a
-patched version. The lock currently resolves minimatch 10.2.6, with dependent
-ranges `^10.0.3`/`^10.1.1`; the advisory's patched version is 11.0.1. It resolves
-glob 13.0.6 across eight nested locations, with direct parent ranges including
-`^13.0.0`; the advisory's patched version is 14.0.2. Forcing either patched
-major through overrides would violate the recorded consumer ranges. The graph
-comes from `license-checker-rseidelsohn` 5.0.1 and its `@npmcli` dependencies.
-That release requires Node 24 and npm 11, while release and reproducibility
-workflows pin Node 22.22.1 and npm 10.9.4 (`release.yml:60-68`,
-`repro.yml:37-40,90-98`). The upstream checker only has a 6.0.0 release
-candidate describing a move to another package; the available `@lizenz/checker`
-replacement is version 0.0.2. A checker migration or dependency-major override
-therefore needs a separate compatibility/reproducibility decision and runtime
-validation; no lockfile version is changed here. Sources: [minimatch advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249), [glob advisory](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4), [checker releases](https://github.com/RSeidelsohn/license-checker-rseidelsohn/releases), [replacement checker](https://www.npmjs.com/package/@lizenz/checker).
+The release-tools lock previously resolved minimatch 10.2.6 and glob 13.0.6;
+the patched advisory versions are minimatch 11.0.1 and glob 14.0.2. npm root
+`overrides` are a supported way to select patched transitive versions, even
+when parent package ranges do not include those versions. This candidate adds
+those two lock-only overrides and resolves the release-tools lock to the
+patched versions. A static consumer/API audit found current visible callsites
+use `minimatch()`, `Minimatch`, `.match()`, `.negate`, `.globParts`, and the
+top-level `glob()` API; the patched packages retain those entry points. Some
+behavior still needs runtime compatibility evidence: in particular, glob 14
+changes matching behavior toward Bash semantics, and `cacache` passes the
+`nosort` option which glob 14 no longer documents. The override is therefore a
+proposed compatibility path pending tests and notice-output comparison, not a
+validated fix.
+
+The graph comes from `license-checker-rseidelsohn` 5.0.1 and its `@npmcli`
+dependencies. That release requires Node 24 and npm 11, while product/release
+builds pin Node 22.22.1 and npm 10.9.4 (`release.yml:60-68`,
+`repro.yml:37-40,90-98`). The candidate keeps those product/build pins and
+runs only release-tools installation and notice generation in
+`node:24.22.2-bookworm-slim@sha256:a43f7fc3e52e87d12a905f46eea0275def84ca8f2981a5b53fed44d7fb398ee0`
+(Node 24.22.2/npm 11.19.1). The existing release and reproducibility jobs
+compare package archive, checksum, notices, SBOM, and installer outputs; those
+comparisons must pass on the integrated candidate to establish that the runtime
+split preserves output semantics. The candidate now requires Docker for local
+notice generation as well as CI; CI already uses Docker for the pinned Rust
+build image, but local packaging environments without Docker need an explicit
+compatibility decision. No tests or builds were run while SUITE was held.
+Sources: [minimatch advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249), [glob advisory](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4), [checker releases](https://github.com/RSeidelsohn/license-checker-rseidelsohn/releases), [npm overrides documentation](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#overrides).
 
 ## Evidence limits
 
-The GitHub Dependabot alerts endpoint was unavailable through the connected
-GitHub interface during this audit. Therefore, alert count and alert closure
-state are unknown; the empty-alert condition is not verified. Isolated npm
-audit scans reported zero vulnerabilities for the five supported npm locks,
-and cargo-deny reported advisories OK, but these checks do not substitute for
-GitHub alert visibility or the full WP-1108 / G1.1-5 acceptance evidence.
+Dependabot alerts #23 and #24 remain pending integrated remediation and a
+subsequent GitHub alert/scan check; this branch has not been pushed or scanned,
+so no alert closure is claimed. Isolated npm audit scans reported zero
+vulnerabilities for the five supported npm locks, and cargo-deny reported
+advisories OK, but these checks do not substitute for GitHub alert visibility
+or the full WP-1108 / G1.1-5 acceptance evidence.
 
 SUITE was held during this work. No tests or builds were run. The checks above
 were isolated policy scans only; the GitHub Actions workflow itself has not

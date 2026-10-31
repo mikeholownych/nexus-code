@@ -16,6 +16,7 @@ fi
 VERSION=${1:?usage: package-linux.sh VERSION OUTPUT_DIR}
 OUT=${2:?usage: package-linux.sh VERSION OUTPUT_DIR}
 APPROVED_RUST_BUILD_IMAGE='rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb'
+APPROVED_RELEASE_TOOLS_IMAGE='node:24.22.2-bookworm-slim@sha256:a43f7fc3e52e87d12a905f46eea0275def84ca8f2981a5b53fed44d7fb398ee0'
 case "$VERSION" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "version must look like v1.2.3" >&2; exit 2 ;; esac
 if [[ -z "${NEXUS_BUILD_CONTAINER_IMAGE:-}" ]]; then
   if [[ "${NEXUS_ALLOW_HOST_RUST_BUILD:-}" != "1" ]]; then
@@ -126,14 +127,26 @@ EOF
 node "$ROOT/scripts/validate_compatibility.mjs" "$PKG/compatibility.json"
 
 cargo about generate -m "$ROOT/core/Cargo.toml" -c "$ROOT/about.toml" "$ROOT/about.hbs" > "$WORK/notices-rust.txt"
-# Keep the full release-tool dependency graph fixed across the RC builds.
+# Keep the full release-tool dependency graph and runtime fixed across RC builds.
+# Product npm builds above continue to use the workflow's pinned Node 22/npm 10.
 RELEASE_TOOLS="$WORK/release-tools"
 mkdir -p "$RELEASE_TOOLS"
 cp "$ROOT/scripts/release-tools/package.json" "$ROOT/scripts/release-tools/package-lock.json" "$RELEASE_TOOLS/"
 node "$ROOT/scripts/check_deprecated_lock.mjs" "$ROOT/scripts/release-tools/package-lock.json"
-npm ci --ignore-scripts --prefix "$RELEASE_TOOLS"
-RELEASE_TOOLS_BIN="$RELEASE_TOOLS/node_modules/.bin"
-"$RELEASE_TOOLS_BIN/license-checker-rseidelsohn" --production --plainVertical --start "$PKG/lib/cli" > "$WORK/notices-npm.txt"
+command -v docker >/dev/null || { echo "docker is required for the isolated, digest-pinned Node 24 release-tools runtime" >&2; exit 2; }
+docker run --rm --pull=always --platform linux/amd64 \
+  --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$RELEASE_TOOLS,dst=/release-tools" \
+  --mount "type=bind,src=$PKG/lib/cli,dst=/package,readonly" \
+  --workdir /release-tools \
+  --env HOME=/tmp \
+  "$APPROVED_RELEASE_TOOLS_IMAGE" \
+  sh -ec '
+    test "$(node --version)" = "v24.22.2"
+    test "$(npm --version)" = "11.19.1"
+    npm ci --ignore-scripts >&2
+    exec ./node_modules/.bin/license-checker-rseidelsohn --production --plainVertical --start /package
+  ' > "$WORK/notices-npm.txt"
 cat > "$PKG/THIRD_PARTY_NOTICES.txt" <<'EOF'
 ================================================================================
 Nexus Code Third-Party Software Notices and Licenses
