@@ -1,0 +1,1 @@
+nexus installer: build provenance was not verified: no trusted GitHub CLI at /usr/bin/gh or /usr/local/bin/gh; the SHA-256 checksum was verified. Set NEXUS_VERIFY_ATTESTATION=1 to require provenance.
