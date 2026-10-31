@@ -1,0 +1,2 @@
+E2_PREREQUISITE_REFUSAL_PASS node=v20.20.2 exit=1 HOME_tree_and_files_unchanged=true network=none
+nexus installer: Node.js 22 or newer is required (found v20.20.2).
