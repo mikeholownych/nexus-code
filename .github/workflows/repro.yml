@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Published v1.0.0 RC tag with lock-pinned release tools (for example v1.0.0-rc.4)
+        description: Published RC tag with lock-pinned release tools (for example v1.1.0-rc.1)
         required: true
         type: string
 
@@ -40,8 +40,8 @@ jobs:
       - id: resolve
         name: Resolve published RC tag to an immutable commit
         run: |
-          if [[ ! "$TARGET_TAG" =~ ^v1\.0\.0-rc\.[1-9][0-9]*$ ]]; then
-            echo "Expected a v1.0.0-rc.N tag; received an invalid tag." >&2
+          if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$ ]]; then
+            echo "Expected a vX.Y.Z-rc.N tag; received an invalid tag." >&2
             exit 1
           fi
           git fetch origin main --no-tags
