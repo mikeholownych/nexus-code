@@ -1053,3 +1053,33 @@ test("replay refuses a future task envelope before nested interpretation without
   assert.equal(fs.statSync(file).mtimeMs, mtime);
   assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".corrupt-") || name.includes(".pre-migration-")), []);
 });
+
+test("no-ID replay propagates a future envelope without writing either record", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-list-future-envelope-"));
+  const env = testEnv(root);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(env.NEXUS_STATE_DIR!, "tasks"), env.HOME);
+  const valid = newOperation("op-replay-valid", "valid replay", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  const future = newOperation("op-replay-future", "future replay", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  store.save(valid);
+  store.save(future);
+  const validFile = store.manager.getStateFilePath(valid.id);
+  const futureFile = store.manager.getStateFilePath(future.id);
+  const raw = JSON.parse(fs.readFileSync(futureFile, "utf8"));
+  raw.schemaVersion = 3;
+  raw.operation = { schemaVersion: 2, id: "nested-invalid-operation" };
+  fs.writeFileSync(futureFile, JSON.stringify(raw), { mode: 0o600 });
+  const validBefore = fs.readFileSync(validFile);
+  const futureBefore = fs.readFileSync(futureFile);
+  const validMtime = fs.statSync(validFile).mtimeMs;
+  const futureMtime = fs.statSync(futureFile).mtimeMs;
+
+  const result = runOperationCli(["operation", "status", "--replay", "--json"], env, root);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /newer Nexus/);
+  assert.deepEqual(fs.readFileSync(validFile), validBefore);
+  assert.deepEqual(fs.readFileSync(futureFile), futureBefore);
+  assert.equal(fs.statSync(validFile).mtimeMs, validMtime);
+  assert.equal(fs.statSync(futureFile).mtimeMs, futureMtime);
+  assert.deepEqual(fs.readdirSync(path.dirname(futureFile)).filter((name) => name.includes(".corrupt-") || name.includes(".pre-migration-")), []);
+});

@@ -128,7 +128,7 @@ export class OperationStore {
       try {
         out.push(this.loadForReplay(id));
       } catch (error) {
-        if (error instanceof UnsupportedOperationSchemaError) throw error;
+        if (error instanceof UnsupportedOperationSchemaError || error instanceof UnsupportedSchemaVersionError) throw error;
       }
     }
     return out;
