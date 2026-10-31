@@ -1,0 +1,91 @@
+{
+  "date": "2026-10-30T23:59:44.884Z",
+  "passed": true,
+  "provider": "openrouter",
+  "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "steps": [
+    {
+      "step": "streamed completion",
+      "ok": true,
+      "requestId": "b78c6e1e-7069-4613-83d6-d04904634b8c",
+      "detail": "streamed completion received (5 chars)"
+    },
+    {
+      "step": "tool call",
+      "ok": true,
+      "requestId": "227c99f6-b314-424b-bd37-9abc87d3d74f",
+      "detail": "echo_token tool call completed (1 call(s))"
+    },
+    {
+      "step": "tool result round trip",
+      "ok": true,
+      "requestId": "d393b870-a34e-4cde-aa31-55dea90c6dd8",
+      "detail": "tool result round trip completed"
+    }
+  ],
+  "receipts": [
+    {
+      "at": "2026-10-30T23:59:18.628Z",
+      "requestId": "b78c6e1e-7069-4613-83d6-d04904634b8c",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "effectiveModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 24,
+        "outputTokens": 62,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 61,
+        "costUsd": 0
+      },
+      "usageConfidence": "provider",
+      "costConfidence": "provider-reported"
+    },
+    {
+      "at": "2026-10-30T23:59:20.329Z",
+      "requestId": "227c99f6-b314-424b-bd37-9abc87d3d74f",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "effectiveModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 321,
+        "outputTokens": 72,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 37,
+        "costUsd": 0
+      },
+      "usageConfidence": "provider",
+      "costConfidence": "provider-reported"
+    },
+    {
+      "at": "2026-10-30T23:59:44.882Z",
+      "requestId": "d393b870-a34e-4cde-aa31-55dea90c6dd8",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "effectiveModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 380,
+        "outputTokens": 42,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 20,
+        "costUsd": 0
+      },
+      "usageConfidence": "provider",
+      "costConfidence": "provider-reported"
+    }
+  ]
+}

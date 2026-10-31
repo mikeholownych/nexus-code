@@ -1,0 +1,88 @@
+{
+  "date": "2026-10-30T23:59:49.790Z",
+  "passed": true,
+  "provider": "chatgpt",
+  "model": "gpt-6-luna",
+  "steps": [
+    {
+      "step": "streamed completion",
+      "ok": true,
+      "requestId": "6c1acacc-3b53-4407-9856-1a58f415c85d",
+      "detail": "streamed completion received (5 chars)"
+    },
+    {
+      "step": "tool call",
+      "ok": true,
+      "requestId": "5d55c222-a899-4c31-a6eb-3d5b09f86727",
+      "detail": "echo_token tool call completed (1 call(s))"
+    },
+    {
+      "step": "tool result round trip",
+      "ok": true,
+      "requestId": "4078e59f-5bc3-49f7-897e-8a009e9f04a6",
+      "detail": "tool result round trip completed"
+    }
+  ],
+  "receipts": [
+    {
+      "at": "2026-10-30T23:59:46.738Z",
+      "requestId": "6c1acacc-3b53-4407-9856-1a58f415c85d",
+      "role": "qualification",
+      "providerId": "chatgpt",
+      "selectedModel": "gpt-6-luna",
+      "effectiveModel": "gpt-6-luna",
+      "endpointOrigin": "https://chatgpt.com",
+      "protocol": "openai-responses",
+      "disclosure": "cloud",
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 13,
+        "outputTokens": 5,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 0
+      },
+      "usageConfidence": "provider",
+      "costConfidence": "unknown"
+    },
+    {
+      "at": "2026-10-30T23:59:48.222Z",
+      "requestId": "5d55c222-a899-4c31-a6eb-3d5b09f86727",
+      "role": "qualification",
+      "providerId": "chatgpt",
+      "selectedModel": "gpt-6-luna",
+      "effectiveModel": "gpt-6-luna",
+      "endpointOrigin": "https://chatgpt.com",
+      "protocol": "openai-responses",
+      "disclosure": "cloud",
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 96,
+        "outputTokens": 23,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 0
+      },
+      "usageConfidence": "provider",
+      "costConfidence": "unknown"
+    },
+    {
+      "at": "2026-10-30T23:59:49.788Z",
+      "requestId": "4078e59f-5bc3-49f7-897e-8a009e9f04a6",
+      "role": "qualification",
+      "providerId": "chatgpt",
+      "selectedModel": "gpt-6-luna",
+      "effectiveModel": "gpt-6-luna",
+      "endpointOrigin": "https://chatgpt.com",
+      "protocol": "openai-responses",
+      "disclosure": "cloud",
+      "outcome": "completed",
+      "usage": {
+        "inputTokens": 138,
+        "outputTokens": 16,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 0
+      },
+      "usageConfidence": "provider",
+      "costConfidence": "unknown"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+diff --git a/src/status.js b/src/status.js
+index 7ba0208..a45967e 100644
+--- a/src/status.js
++++ b/src/status.js
+@@ -1,6 +1,7 @@
+ export function classifyStatus(status) {
+   if (status >= 200 && status < 300) return "success";
+   if (status >= 500) return "retry";
++  if (status === 429) return "retry";
+   if (status >= 400) return "failure";
+   return "unknown";
+ }

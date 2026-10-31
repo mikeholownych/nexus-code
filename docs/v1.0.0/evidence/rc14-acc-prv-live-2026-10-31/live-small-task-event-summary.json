@@ -1,0 +1,32 @@
+{
+  "taskId": "task-db8af731",
+  "flightLogSha256": "d8cf266d6d1edfd866bd62a6963d038ecc3abca6c0e872cdf235114ab35733c9",
+  "eventCount": 28,
+  "eventTypeCounts": {
+    "file_diff": 1,
+    "session_end": 2,
+    "session_start": 1,
+    "thought": 6,
+    "tool_call": 6,
+    "tool_result": 6,
+    "turn_start": 6
+  },
+  "toolCalls": [
+    "file_tree",
+    "read_file",
+    "read_file",
+    "edit_file",
+    "run_command",
+    "task_completed"
+  ],
+  "toolResults": [
+    {"tool": "file_tree", "success": true, "outputBytes": 162},
+    {"tool": "read_file", "success": true, "outputBytes": 358},
+    {"tool": "read_file", "success": true, "outputBytes": 758},
+    {"tool": "edit_file", "success": true, "outputBytes": 320},
+    {"tool": "run_command", "success": true, "outputBytes": 1563},
+    {"tool": "task_completed", "success": true, "outputBytes": 300}
+  ],
+  "changedFiles": [{"path": "src/status.js", "replacementCount": 1}],
+  "contentPolicy": "No task prompt transcript, model reasoning, tool arguments, or output snippets are included."
+}

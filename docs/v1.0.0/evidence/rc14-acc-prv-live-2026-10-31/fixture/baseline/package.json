@@ -1,0 +1,1 @@
+{"name":"nexus-rc14-e5-task-fixture-baseline","version":"1.0.0","private":true,"scripts":{"test":"node --test test/*.test.js"}}

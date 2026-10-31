@@ -1,0 +1,83 @@
+{
+  "acceptanceCriterion": "ACC-PRV-LIVE",
+  "requirement": "REQ-PRV-111",
+  "capturedAt": "2026-10-31T00:01:17.589Z",
+  "candidate": {
+    "rcTag": "v1.0.0-rc.14",
+    "sourceCommit": "16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99",
+    "artifactSha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+    "installedVersionOutput": "1.0.0-rc.14 (16eeb6eeffe7)"
+  },
+  "environment": {
+    "host": "ubuntu-desktop",
+    "os": "Ubuntu 26.04.1 LTS",
+    "kernel": "Linux 7.0.0-38-generic",
+    "node": "v22.22.1",
+    "npm": "9.2.0",
+    "workspaceKind": "fresh synthetic JavaScript fixture",
+    "providerCredentials": "existing host credential store; contents not read or copied",
+    "heldOutOrUserWorkspaceAccess": false
+  },
+  "task": {
+    "taskId": "task-db8af731",
+    "workspaceBaselineCommit": "8b115a4f3a9cfa9d02a1b5efc7e485387a72feb8",
+    "objective": "Classify HTTP 429 as retryable while preserving 2xx success, 5xx retry, and other 4xx failure behavior.",
+    "baseline": {
+      "command": "npm test",
+      "exitCode": 1,
+      "tests": 3,
+      "passed": 2,
+      "failed": 1,
+      "failure": "429 classification",
+      "outputSha256": "877f95d1842e70479c392468da6a648601e7e2d631356431250884db2e7bd834",
+      "sourceSha256": "6254bdc552d1a150494e2bd88efb67cc6d2b718ec575dde0d5039799306b3c09"
+    },
+    "nexusExecution": {
+      "provider": "openrouter",
+      "pinnedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "mode": "auto",
+      "sandbox": "auto",
+      "authoritativeVerifier": "npm test",
+      "status": "completed",
+      "agentReportedOutcome": "VERIFIED",
+      "stepsUsed": 6,
+      "configuredVerifierStatus": "PASSED",
+      "configuredVerifierOutputSha256": "e7a000aa7020ba57104ac6d54062570fbee0a0c8403bef6f368b077ae87ccb39",
+      "candidateId": "6164d02a3faf66bb2a91eeb68b67242f73887b1be4d43923ebf44ded5478c2c9"
+    },
+    "change": {
+      "filesChanged": ["src/status.js"],
+      "testsChanged": false,
+      "finalSourceSha256": "5f0b8e91f8a6b841a91b244fc4e34a227433a69a42db11ab032743301e0d73c4",
+      "patchSha256": "e44905e3c338b944009f84cc67e79486cfa6de2b9114250a641aa4770f98e620"
+    },
+    "independentValidation": {
+      "command": "npm test",
+      "exitCode": 0,
+      "tests": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "outputSha256": "cc317f6e3377acec37e0bf33db48fa005ee1619e8394f2379965d86148f1d38b"
+    },
+    "liveTaskInferenceReceipts": {
+      "path": "live-task-inference-receipts.jsonl",
+      "count": 6,
+      "sha256": "085f84c0180e8e9e04b59d8945d316e5b6c037ae1a80dda55132d82bcd1ce702"
+    },
+    "originalRunRecordDigests": {
+      "nexusRunJsonSha256": "8f3febe813dc4cef10d2c9749f327dd385dc43d83fd2b421c58af373dba9c6ef",
+      "taskRecordSha256": "8fb01a616017024e08be7e5160e3c2f30edd8ceeac904b776f4a8f5708d472b3",
+      "sessionRecordSha256": "4fc7f3da2bfcb9351596ef1c7ddd41dd8414f8992b818f0cf7a674d6752335c0",
+      "taskMessageLogFileSha256": "df135d4788dee6485625e5b7c7ec109288dd8bceff01fdaea554c0b462815a68",
+      "sessionMessageLogFileSha256": "47521eed254c33502c06bf90ad350d88a3e42dd74ab54b547a14cb07a7e6be47",
+      "taskMessageLogContentSha256": "27ccf536a8d17c4e4b0bd73b91aae8f4e594df0f7892bce741f47d3347d3173c",
+      "flightLogSha256": "d8cf266d6d1edfd866bd62a6963d038ecc3abca6c0e872cdf235114ab35733c9"
+    }
+  },
+  "scopeLimitations": [
+    "This is ACC-PRV-LIVE evidence only; it is not overall exact-RC acceptance.",
+    "No standalone profile, held-out, private-validator, or terminal-manual result is claimed.",
+    "ChatGPT sign-in remains experimental and provider cost is not asserted by its receipt."
+  ]
+}
