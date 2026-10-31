@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
-import { formatReplDiagnostic } from "../src/repl.js";
+import { formatIgnoredInputExcerpt, formatReplDiagnostic } from "../src/repl.js";
 
 test("redacts and terminal-escapes REPL turn error output", () => {
   const original = InformationFlowBoundary.getGlobalInstance();
@@ -27,6 +27,35 @@ test("suppresses REPL turn errors when credential classification fails", () => {
     const output = formatReplDiagnostic(new Error(`turn failed with ${secret}`));
     assert.match(output, /diagnostic suppressed/);
     assert.equal(output.includes(secret), false);
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
+
+test("redacts ignored pasted input before making the bounded REPL excerpt", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  const secret = "synthetic_ignored_input_secret_63da";
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary({ explicitSecrets: [secret] }));
+  try {
+    const excerpt = formatIgnoredInputExcerpt(`${secret} ${"x".repeat(80)}`);
+    assert.equal(excerpt.includes(secret), false);
+    assert.ok(excerpt.length <= 61);
+    assert.ok(excerpt.endsWith("…"));
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
+
+test("suppresses ignored input excerpts when credential classification fails", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  const boundary = new InformationFlowBoundary();
+  boundary.classifyText = () => { throw new Error("synthetic classifier failure"); };
+  InformationFlowBoundary.setGlobalInstance(boundary);
+  try {
+    const secret = "synthetic_ignored_input_secret_63da";
+    const excerpt = formatIgnoredInputExcerpt(secret);
+    assert.match(excerpt, /diagnostic suppressed/);
+    assert.equal(excerpt.includes(secret), false);
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
   }

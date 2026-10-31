@@ -74,6 +74,12 @@ export function formatReplDiagnostic(error: unknown): string {
   return safeTerminal(redactDiagnosticForOutput(message));
 }
 
+/** Return a bounded, credential-safe excerpt when reporting input that arrived outside a prompt. */
+export function formatIgnoredInputExcerpt(line: string): string {
+  const safe = formatReplDiagnostic(line);
+  return `${safe.slice(0, 60)}${line.length > 60 ? "…" : ""}`;
+}
+
 /**
  * Slash commands a read-only REPL may run: an explicit --read-only launch, or a session whose effective mode is
  * read-only (mode-selected). Kept deliberately conservative: writes, provider/model changes, scaffolding, test
@@ -738,7 +744,7 @@ export class InteractiveRepl {
       const first = lines.find((l) => l.trim()) ?? "";
       console.error(pc.yellow(
         `⚠ ${n} line${n === 1 ? "" : "s"} arrived while no prompt was waiting and ${n === 1 ? "was" : "were"} ignored` +
-        `${first ? ` (first: "${first.slice(0, 60)}${first.length > 60 ? "…" : ""}")` : ""}. ` +
+        `${first ? ` (first: "${formatIgnoredInputExcerpt(first)}")` : ""}. ` +
         `This REPL reads one line at a time: wrap multi-line input in """ … """, or use the default TUI (\`harness\`).`,
       ));
     };

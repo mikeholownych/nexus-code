@@ -16,7 +16,7 @@ import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn 
 import { getGitInfo } from "./git.js";
 import { redactSecrets } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
-import { EvidenceLedger, LastTurn, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson, safeDiffText } from "./evidence.js";
+import { EvidenceLedger, LastTurn, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
 import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
 import type { ChatMessage, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
@@ -54,7 +54,6 @@ import {
   parseCommand,
   projectTurn,
   providerRecoveryNotice,
-  stripEscapes,
   toolSubject,
   toolSummary,
 } from "./protocol.js";
@@ -131,16 +130,16 @@ export class SidecarServer {
     try {
       resumed = this.resume ? this.resumeSession(this.resume) : undefined;
     } catch (err) {
-      resumed = { ok: false, message: `Could not resume ${this.resume}: ${redactSecrets(errorText(err))}` };
+      resumed = { ok: false, message: `Could not resume ${formatSafeSidecarText(this.resume ?? "latest")}: ${formatSafeSidecarText(errorText(err))}` };
     }
     this.emitSessionState();
-    if (resumed) this.emit({ type: "notice", text: resumed.message });
+    if (resumed) this.emit({ type: "notice", text: formatSafeSidecarText(resumed.message) });
     if (isNexusDirPermissive()) {
       this.emit({ type: "notice", text: "your Nexus state is readable by other users; run `nexus doctor --fix`" });
     }
     void this.app.getAgent().probeStartupEndpoint(this.startupProbeAbort.signal).then((warning) => {
       if (warning && !this.shutdownPromise) {
-        this.emit({ type: "notice", text: redactSecrets(warning) });
+        this.emit({ type: "notice", text: formatSafeSidecarText(warning) });
       }
     }).catch(() => {});
   }
@@ -157,7 +156,7 @@ export class SidecarServer {
       command = parseCommand(line);
     } catch (err) {
       const id = err instanceof ProtocolError ? err.id : undefined;
-      this.emit({ type: "error", ...(id ? { id } : {}), code: "BAD_REQUEST", message: (err as Error).message });
+      this.emit({ type: "error", ...(id ? { id } : {}), code: "BAD_REQUEST", message: formatSafeSidecarText((err as Error).message) });
       return;
     }
     switch (command.type) {
@@ -188,7 +187,7 @@ export class SidecarServer {
           if (command.type === "tool.detail") this.toolDetail(command.id, command.evidence);
           else this.emit({ type: "receipt", id: command.id, sections: this.receipt() });
         } catch (err) {
-          const message = capText(redactSecrets(stripEscapes((err as Error).message ?? String(err))));
+          const message = capText(formatSafeSidecarText(errorText(err)));
           this.emit({ type: "error", id: command.id, code: "INTERNAL", message });
         }
         return;
@@ -227,7 +226,7 @@ export class SidecarServer {
           return;
         }
         const r = disconnect(command.provider);
-        this.emit({ type: "provider.result", id: command.id, provider: command.provider, success: r.ok, message: r.message });
+        this.emit({ type: "provider.result", id: command.id, provider: formatSafeSidecarText(command.provider), success: r.ok, message: formatSafeSidecarText(r.message) });
         return;
       }
       case "shutdown":
@@ -244,7 +243,7 @@ export class SidecarServer {
       const catalog = await buildCatalog(this.app.getConfig());
       this.emit({ type: "models.catalog", id, ...catalog });
     } catch (err) {
-      this.emit({ type: "error", id, code: "INTERNAL", message: capText(redactSecrets(String((err as Error).message ?? err))) });
+      this.emit({ type: "error", id, code: "INTERNAL", message: capText(formatSafeSidecarText(errorText(err))) });
     }
   }
 
@@ -253,13 +252,13 @@ export class SidecarServer {
     if (this.rejectBusy(id)) return;
     const r = selectModel(this.app.getAgent(), this.app.getConfig(), { provider, model });
     if (!r.ok && provider === "appliance") clearLocalEndpointSetupAfterSelectionFailure();
-    this.emit({ type: "model.result", id, success: r.ok, message: r.message });
+    this.emit({ type: "model.result", id, success: r.ok, message: formatSafeSidecarText(r.message) });
     if (r.ok) this.emitSessionState();
   }
 
   private async providerConnect(id: string, provider: string, method: string, key?: string, endpoint?: string): Promise<void> {
     const result = (success: boolean, message: string) =>
-      this.emit({ type: "provider.result", id, provider, success, message: capText(redactSecrets(message)) });
+      this.emit({ type: "provider.result", id, provider: formatSafeSidecarText(provider), success, message: capText(formatSafeSidecarText(message)) });
     try {
       if (provider === "appliance" && method === "local-endpoint") {
         if (!endpoint) {
@@ -399,7 +398,7 @@ export class SidecarServer {
   }
 
   private compactionResult(ids: string[], ok: boolean, message: string): void {
-    for (const id of ids) this.emit({ type: "slash.result", id, command: "compact", success: ok, output: capText(redactSecrets(stripEscapes(message)), MAX_SLASH_OUTPUT) });
+    for (const id of ids) this.emit({ type: "slash.result", id, command: "compact", success: ok, output: capText(formatSafeSidecarText(message), MAX_SLASH_OUTPUT) });
   }
 
   /** Ends waiting /compact requests that will not run. */
@@ -419,7 +418,7 @@ export class SidecarServer {
     });
     this.emitSessionState();
     void body(abort.signal)
-      .catch((err) => this.emit({ type: "error", id, code: "INTERNAL", message: redactSecrets(errorText(err)) }))
+      .catch((err) => this.emit({ type: "error", id, code: "INTERNAL", message: formatSafeSidecarText(errorText(err)) }))
       .finally(() => {
         this.activeTurn = undefined;
         this.turnAbort = undefined;
@@ -457,9 +456,9 @@ export class SidecarServer {
 
   private observerFor(turnId: string): AgentObserver {
     const open = new Map<number, string>();
-    const toolName = (tool: string) => capText(redactSecrets(stripEscapes(tool)), 200);
+    const toolName = (tool: string) => capText(formatSafeSidecarText(tool), 200);
     return {
-      onAssistantDelta: (delta) => this.emit({ type: "assistant.delta", turn_id: turnId, text: redactSecrets(delta) }),
+      onAssistantDelta: (delta) => this.emit({ type: "assistant.delta", turn_id: turnId, text: formatSafeSidecarText(delta) }),
       onToolStart: ({ dispatch, callId, tool: rawTool, args }) => {
         const tool = toolName(rawTool);
         const subject = toolSubject(args);
@@ -472,11 +471,17 @@ export class SidecarServer {
         const evidence = open.get(dispatch) ?? "";
         open.delete(dispatch);
         this.evidence.end(evidence, success, output, error);
-        this.emit({ type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence, ...toolSummary(success, output, error) });
+        const summary = toolSummary(success, output, error);
+        this.emit({
+          type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence,
+          ...summary,
+          summary: formatSafeSidecarText(summary.summary),
+          ...(summary.preview !== undefined ? { preview: formatSafeSidecarText(summary.preview) } : {}),
+        });
       },
       onProviderRecovery: ({ record, discardedPartialOutput }) => {
         const text = providerRecoveryNotice(record, discardedPartialOutput);
-        if (text) this.emit({ type: "notice", text });
+        if (text) this.emit({ type: "notice", text: formatSafeSidecarText(text) });
       },
       onActivity: ({ phase, step, segment, tool, subject }) =>
         this.emit({
@@ -487,11 +492,11 @@ export class SidecarServer {
           segment,
           ...this.budget(),
           ...(tool ? { tool: toolName(tool) } : {}),
-          ...(subject ? { subject: capText(redactSecrets(stripEscapes(subject)), 200) } : {}),
+          ...(subject ? { subject: capText(formatSafeSidecarText(subject), 200) } : {}),
         }),
       onFileChange: ({ dispatch, callId, path: file, change }) => {
         const evidence = open.get(dispatch) ?? "";
-        const safe = safeDiffText(change.diff);
+        const safe = formatSafeSidecarText(change.diff);
         const fullPath = this.keepOperationDiff(evidence, callId, safe);
         this.evidence.attachDiff(evidence, safe, fullPath);
         const { preview, truncated, totalLines } = previewDiff(safe, DIFF_PREVIEW_LINES, DIFF_PREVIEW_CHARS);
@@ -500,7 +505,7 @@ export class SidecarServer {
           turn_id: turnId,
           call_id: callId,
           evidence,
-          path: capText(visibleControls(redactSecrets(file)), 400),
+          path: capText(formatSafeSidecarText(file), 400),
           kind: change.kind,
           added: change.added,
           removed: change.removed,
@@ -516,11 +521,11 @@ export class SidecarServer {
       onContinuation: ({ kind, n, max, detail }) => {
         const text =
           kind === "requirements"
-            ? `Requirements still open (${capText(redactSecrets(detail), 120)}): Nexus asked the agent to continue (${n} of ${max}).`
+            ? `Requirements still open (${capText(formatSafeSidecarText(detail), 120)}): Nexus asked the agent to continue (${n} of ${max}).`
             : `The agent repeated ${toolName(detail)} with an unchanged result: Nexus told it to change approach (${n} of ${max}).`;
-        this.emit({ type: "notice", text });
+        this.emit({ type: "notice", text: formatSafeSidecarText(text) });
       },
-      onNotice: (text) => this.emit({ type: "notice", text: redactSecrets(text) }),
+      onNotice: (text) => this.emit({ type: "notice", text: formatSafeSidecarText(text) }),
       onCompaction: ({ id, ok, message }) => this.compactionResult([id], ok, message),
       onSteering: ({ id, status, step, text, reason }) => {
         if (status === "applied") this.steerAck(id, "applied", `Applied at step ${step}.`);
@@ -570,7 +575,7 @@ export class SidecarServer {
         } catch (err) {
           const sensitiveContentBlocked = err instanceof SensitivePersistenceError;
           const failure = capText(
-            redactSecrets(errorText(err))
+            formatSafeSidecarText(errorText(err))
               .replace(/\s+/g, " ")
               .trim()
               .replace(/;\s*no checkpoint was written\.?$/i, ""),
@@ -635,7 +640,7 @@ export class SidecarServer {
     try {
       withDurableSync(() => this.saveSession(label, turn));
     } catch (err) {
-      this.emit({ type: "notice", text: `The session could not be saved: ${redactSecrets(errorText(err))}` });
+      this.emit({ type: "notice", text: formatSafeSidecarText(`The session could not be saved: ${errorText(err)}`) });
     }
     const { heading, line } = summarizeTurn(turn);
     const projected = projectTurn(turn);
@@ -644,11 +649,11 @@ export class SidecarServer {
     this.emit({
       type: "turn.result",
       turn_id: turnId,
-      heading,
-      line: redactSecrets(line),
+      heading: formatSafeSidecarText(heading),
+      line: formatSafeSidecarText(line),
       turn: projected,
       model_summary: summary
-        ? { summary: redactSecrets(summary.summary), ...(summary.notes ? { notes: redactSecrets(summary.notes) } : {}) }
+        ? { summary: formatSafeSidecarText(summary.summary), ...(summary.notes ? { notes: formatSafeSidecarText(summary.notes) } : {}) }
         : null,
     });
   }
@@ -765,7 +770,7 @@ export class SidecarServer {
       }
       if (outcome.kind === "turn") {
         this.activeSpec = undefined;
-        this.emit({ type: "slash.result", id, command: outcome.command, success: true, output: "", prompt: capText(redactSecrets(stripEscapes(outcome.label))) });
+        this.emit({ type: "slash.result", id, command: outcome.command, success: true, output: "", prompt: capText(formatSafeSidecarText(outcome.label)) });
         await this.turn(id, outcome.prompt, outcome.label, outcome.checkpoint, signal);
         return;
       }
@@ -776,7 +781,7 @@ export class SidecarServer {
         command: outcome.command,
         success: outcome.success,
         // A diff keeps what the files say: control characters are made visible rather than removed.
-        output: capText(outcome.format === "diff" ? safeDiffText(outcome.output) : redactSecrets(stripEscapes(outcome.output)), MAX_SLASH_OUTPUT),
+        output: capText(formatSafeSidecarText(outcome.output), MAX_SLASH_OUTPUT),
         ...(outcome.format ? { format: outcome.format } : {}),
         ...(outcome.composer !== undefined ? { composer: outcome.composer } : {}),
       });
@@ -792,10 +797,10 @@ export class SidecarServer {
         id,
         command: outcome.command,
         success: outcome.success,
-        output: capText(redactSecrets(stripEscapes(outcome.output)), MAX_SLASH_OUTPUT),
+        output: capText(formatSafeSidecarText(outcome.output), MAX_SLASH_OUTPUT),
       });
     } catch (err) {
-      this.emit({ type: "error", id, code: "INTERNAL", message: capText(redactSecrets(errorText(err))) });
+      this.emit({ type: "error", id, code: "INTERNAL", message: capText(formatSafeSidecarText(errorText(err))) });
     }
   }
 
@@ -870,7 +875,7 @@ export class SidecarServer {
       }
     }
     if (!record) {
-      const message = `No record of tool call ${capText(redactSecrets(stripEscapes(evidence)))}; only the latest ${MAX_EVIDENCE} are kept.`;
+      const message = `No record of tool call ${capText(formatSafeSidecarText(evidence))}; only the latest ${MAX_EVIDENCE} are kept.`;
       this.emit({ type: "error", id, code: "NOT_FOUND", message });
       return;
     }
@@ -950,7 +955,7 @@ export class SidecarServer {
     this.sessionId = session.id;
     // What compaction replaced stays searchable after a resume (read_archive): only compactions this record committed.
     const archiveNotice = this.app.getAgent().restoreConversation(session, (committed) => this.app.getSessionManager().readArchivedHistory(session.id, committed));
-    if (archiveNotice) this.emit({ type: "notice", text: archiveNotice });
+    if (archiveNotice) this.emit({ type: "notice", text: formatSafeSidecarText(archiveNotice) });
     if (Array.isArray(session.activePlan)) this.app.getAgent().setActivePlan(session.activePlan);
     this.lastTurn = null;
     this.emitHistory(session.id, session.messages, session.lastTurn);
@@ -966,7 +971,7 @@ export class SidecarServer {
    */
   private emitHistory(sessionId: string, messages: ChatMessage[], lastTurn?: TurnResult | null): void {
     const text = (m: ChatMessage) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("") : "");
-    const safe = (value: string, max = HISTORY_CHARS) => capText(visibleControls(redactSecrets(value)), max);
+    const safe = (value: string, max = HISTORY_CHARS) => capText(formatSafeSidecarText(value), max);
     const entries: HistoryEntry[] = [];
     for (const m of messages) {
       const body = text(m);
@@ -989,7 +994,7 @@ export class SidecarServer {
     }
     if (lastTurn) {
       const { heading, line } = summarizeTurn(lastTurn);
-      entries.push({ role: "outcome", heading, text: redactSecrets(line), turn: projectTurn(lastTurn) });
+      entries.push({ role: "outcome", heading: formatSafeSidecarText(heading), text: formatSafeSidecarText(line), turn: projectTurn(lastTurn) });
     }
     const conversation = entries.filter((e) => e.role !== "tool" && e.role !== "outcome").length;
     this.emit({ type: "history", session: sessionId, total: conversation, messages: entries.slice(-HISTORY_ENTRIES) });
@@ -1031,7 +1036,8 @@ export class SidecarServer {
   }
 
   private emit(event: SidecarEvent): void {
-    this.write(encodeEvent(event));
+    const safe = formatSafeSidecarEvent(event);
+    if (safe) this.write(encodeEvent(safe));
   }
 }
 
@@ -1056,6 +1062,27 @@ export function formatSafeSidecarStdoutSummary(chunk: string | Uint8Array): stri
   const bytes = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
   // Chunks may split a credential across calls. Keep content out of debug logs entirely.
   return `[sidecar debug] stdout chunk suppressed (${bytes} bytes)\n`;
+}
+
+/** Sanitize sidecar messages and durable debug artifacts with fail-closed canonical redaction. */
+export function formatSafeSidecarText(value: string): string {
+  try {
+    const safe = redactForPersistence(value);
+    if (typeof safe !== "string") throw new Error("unexpected sanitized value type");
+    return visibleControls(safe);
+  } catch {
+    return "[diagnostic suppressed: credential sanitization failed]";
+  }
+}
+
+/** Apply canonical redaction to every protocol field, including nested projected turn/history records. */
+export function formatSafeSidecarEvent(event: SidecarEvent): SidecarEvent | undefined {
+  try {
+    return redactForPersistence(event);
+  } catch {
+    // Drop the complete event if classification fails; never serialize a partially sanitized structure.
+    return undefined;
+  }
 }
 
 /** Milestones the agent recorded in its own durable task state (update_plan completions); empty when unreadable. */
