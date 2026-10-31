@@ -1,0 +1,6 @@
+Installed Nexus Code v1.0.0-rc.14 in /home/nexus-e2/.local/lib/nexus/v1.0.0-rc.14
+Add this to your shell profile if needed: export PATH="/home/nexus-e2/.local/bin:$PATH"
+1.0.0-rc.14 (16eeb6eeffe7)
+launcher_version=1.0.0-rc.14 (16eeb6eeffe7)
+doctor_exit=2
+E2_FRESH_INSTALL_PASS node=v24.21.0 stderr_bytes=0 no_version_warning=true
