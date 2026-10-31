@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6A50T0YYH13AJ5Q3VAVPCJ2",
+  "strategy": "manual-commit",
+  "branch": "v1/v11-docs-status",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/v1.1.0/STATUS.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "redaction": {
+    "replacements": 47,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 48,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

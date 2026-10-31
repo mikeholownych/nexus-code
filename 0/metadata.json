@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6A50T0YYH13AJ5Q3VAVPCJ2",
+  "session_id": "512070ca-5530-41ec-ab5f-9575eb06063c",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-31T23:34:21.398105966Z",
+  "branch": "v1/v11-docs-status",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/v1.1.0/STATUS.md"
+  ],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-medium",
+  "turn_id": "eeae71892872",
+  "checkpoint_transcript_start": 2011,
+  "transcript_lines_at_start": 2011,
+  "redaction": {
+    "replacements": 47,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 48,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 2
+  }
+}
