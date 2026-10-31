@@ -1,0 +1,9 @@
+RUN_BINDING runner=docker:nexus-e2/ubuntu-22-04-node22:prep-182e8addeee0 node=v22.23.3 nexus=1.0.0-rc.14 (16eeb6eeffe7) archive_sha256_expected=52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7 installer_sha256_expected=b243cda661eb0a57890435cfa2170fb50ea8e507aeec595d364d3f2ce71c8125
+== staged journal with staging directory
+✔ Recovery completed (cleaned_up): Restored verified source release v1.0.0-rc.14.
+Recovery check: No interrupted upgrade found in journal.
+== preparing journal without staging
+✔ Recovery completed (cleaned_up): Restored verified source release v1.0.0-rc.14.
+== malformed journal is refused, installation untouched
+Recovery check: Upgrade journal failed schema or path validation; no recovery action was taken.
+synthetic_journal_recovery=PASS staged_cleaned=true preparing_cleaned=true malformed_refused=true installation_unchanged=true
