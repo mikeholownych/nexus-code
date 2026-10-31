@@ -35,3 +35,8 @@ The runner refuses to overwrite an existing attempt directory. Retain failed and
 The exact-asset run and per-scenario predicate review are recorded in `run-manifest.json`. The recorded evidence meets each §5.2 predicate, using supplemental attempts where a legacy helper was interrupted or used an obsolete prompt matcher. Independent review is still pending, so the scripted-PTY gate is not yet marked accepted. This packet does not establish full RC acceptance or stable-release acceptance.
 
 The synthetic workspaces' 84 nested Git metadata directories are preserved as per-workspace `.git-metadata.tar.gz` archives; `fixture-git-archives.json` records each archive's size, member count, and digest. This keeps the public packet self-contained without Git submodule pointers.
+
+Per-attempt `SHA256SUMS` cover the files retained in Git. Regenerable
+`__pycache__` bytecode and the raw workspace `.git` internals are not committed;
+the latter are retained inside the `.git-metadata.tar.gz` archives described
+above.
