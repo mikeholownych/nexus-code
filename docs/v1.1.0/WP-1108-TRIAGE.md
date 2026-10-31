@@ -24,6 +24,14 @@ The current Rust dependency graph passed `cargo deny check advisories` with the
 new yanked policy. No npm or Rust package versions were changed in the policy
 batch; the separately reviewed #106 workflow-action update is recorded below.
 
+CI now has a dedicated `cloudflare-experiment` job on Node 22 and 24. It runs
+`npm ci`, then the experiment package's existing `typecheck` and `build` scripts,
+matching the roadmap's Cloudflare verification commands. This adds automated
+coverage only: no CI run has executed this job at this branch head while SUITE is
+held, so a passing result is still required before these updates are accepted.
+The job covers the top-level experiment package and its lockfile; it does not
+validate the separate nested worker manifests/packages.
+
 ## PR disposition review
 
 At audit time, the GitHub PR history showed these 15 PRs merged: #103, #104,
@@ -140,7 +148,9 @@ current Dependabot proposals as follows:
 For the closed PRs whose targets are superseded, the newer manifest/lock
 versions or newer open PRs establish that the old target is stale; they do not
 establish that the replacement is compatible. Cloudflare changes remain
-unadopted until their experiment-specific typecheck/build validation can run.
+unadopted until their experiment-specific typecheck/build validation passes on
+the relevant final heads. The new CI job above provides that validation path
+for the top-level experiment only; nested worker packages remain outside it.
 
 ## Evidence limits
 
