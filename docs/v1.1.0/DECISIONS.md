@@ -330,3 +330,4 @@ bury v1.1 rows in a deferral list.
 | Q3 | Should `resource.maxConcurrentUnits` be auto-populated from provider discovery? | Future design | Lead, v1.2 |
 | Q4 | Should units be able to send messages directly (a `send_unit_message` tool)? | Future design | Lead, v1.2 |
 | Q5 | Should `repro.yml`'s tag regex be generalised to `^v\d+\.\d+\.\d+-rc\.\d+$` or pinned per release line? | RC stage 5 | Lead |
+| Q6 | Two documents on `main` claim "v1.1.0" with different contents: the four implemented proposals (this directory) and the merged post-v1 roadmap (`ROADMAP.md`, WP-1101..1108). Which is v1.1.0, and what does the other ship as? | Release naming and the release notes | Owner |

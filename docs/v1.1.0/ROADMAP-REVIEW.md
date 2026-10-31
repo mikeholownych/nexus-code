@@ -177,6 +177,32 @@ Every roadmap item above resolves to exactly one disposition. Nothing is left as
 user-visible scope (TUI pane, `publish: "pr"`) are the only items that stay unimplemented in v1.1.0, and both have a
 dated rationale and a v1.2 target in [`DECISIONS.md`](DECISIONS.md).
 
+## 2.5 The parallel v1.1.0 draft merged after this review
+
+`origin/main` moved from `c7d0b003` to `7b49e6ff` during this work. PR #371 merged a post-v1.0.0 roadmap
+(`docs/v1.1.0/ROADMAP.md`, `SPEC-EVALUATION.md`, `SPEC-OBSERVABILITY.md`, `POSITIONING.md`, `LANGSMITH_REVIEW.md`) that
+also calls itself **v1.1.0**. It is a second, unreconciled scope: none of its work packages exist in the source.
+
+| Item | Intent | Overlap with the implemented scope | Disposition |
+|---|---|---|---|
+| WP-1101 | OpenTelemetry-shaped local tracing (`trace.jsonl`) | None with `OperationEvent`; a separate trace format | **Defer**: needs its own spec and privacy review (trace content is agent output) |
+| WP-1102 | Flight-recorder credential redaction | Redaction already exists (`redactForPersistence`, `safeTerminal`) | **Investigate**: verify the existing redaction against the CRED003 fixtures before adding a second mechanism |
+| WP-1103 | Versioned eval datasets (`eval/datasets/`) | None | **Defer**: held-out custody (issue #1) is still unresolved; restructuring datasets now would disturb it |
+| WP-1104 | `nexus eval` command | None | **Defer**: depends on WP-1103 and the frozen thresholds |
+| WP-1105 | Modular code evaluators | The evaluator lives in `eval/` | **Defer**: depends on WP-1103 |
+| WP-1106 | `--step` single-step loop | None | **Investigate**: small and independent; needs a decision on interaction with durable turns |
+| WP-1107 | GBNF tool grammar engine | None (provider request shapes change) | **Defer**: changes provider request patterns, which the v1.1 ground rules forbid inside this release |
+| WP-1108 | Dependency modernization (27 Dependabot PRs) | `origin/main` already merged several (#103–#129 partially) | **Partly already satisfied**; the rest is dependency work, not a v1.1 feature |
+
+Consequences recorded now:
+
+1. **The release name is contested.** Two documents on `main` claim "v1.1.0" with different contents. This branch calls
+   its work "the v1.1.0 scope" and does not claim the WP-11xx roadmap has shipped; the owner decides the naming
+   (DECISIONS Q6).
+2. **The v1.0.0 `REQUIREMENTS.md` backlog section** is the other recorded list of post-v1 work; it was not edited here.
+3. **No item from the parallel draft is marked implemented in [`REQUIREMENTS.md`](REQUIREMENTS.md).** The ledger is
+   scoped to the four proposals, and a row is only `tested` when a test in this repository asserts it.
+
 ## 5. Omissions and dependencies the proposals did not state
 
 1. **The schema rule was already violated.** `docs/v1.1.0/README.md:28` requires a schema version and migration for
