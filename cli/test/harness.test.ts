@@ -657,9 +657,24 @@ error[E0308]: mismatched types
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
       agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
+      const journaledTaskIds: string[] = [];
+      const stateManager = agent.getStateManager();
+      const recordOperationStart = stateManager.recordOperationStart.bind(stateManager);
+      const recordOperationEnd = stateManager.recordOperationEnd.bind(stateManager);
+      stateManager.recordOperationStart = (taskId, operation) => {
+        journaledTaskIds.push(taskId);
+        return recordOperationStart(taskId, operation);
+      };
+      stateManager.recordOperationEnd = (taskId, invocationId, result, seq) => {
+        journaledTaskIds.push(taskId);
+        return recordOperationEnd(taskId, invocationId, result, seq);
+      };
       await agent.runTurn("write from an interactive turn");
       const active = agent.getActiveWorktree();
       const failures: string[] = [];
+      if (journaledTaskIds.length !== 2 || journaledTaskIds.some((taskId) => taskId !== agent?.getTaskId())) {
+        failures.push("durable operation journal did not use the parent session task identity");
+      }
       if (!active) failures.push("interactive runTurn did not establish a worktree");
       if (fs.existsSync(path.join(repo, "repl-turn.txt"))) failures.push("interactive mutation reached the original workspace");
       if (active && !fs.existsSync(path.join(active.worktreePath, "repl-turn.txt"))) failures.push("isolated worktree lacks the interactive write");
