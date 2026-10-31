@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M69S1MMS6TXNV1KQJ3ERDYHT",
+  "session_id": "512070ca-5530-41ec-ab5f-9575eb06063c",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-31T20:05:06.203244568Z",
+  "branch": "v1/v11-release",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cli/test/team_convergence.test.ts",
+    "cli/test/upgrade_tui.test.ts",
+    "docs/v1.1.0/DECISIONS.md",
+    "docs/v1.1.0/VALIDATION.md"
+  ],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-medium",
+  "turn_id": "ddf81352d873",
+  "checkpoint_transcript_start": 783,
+  "transcript_lines_at_start": 783,
+  "redaction": {
+    "replacements": 34,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 34,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 2
+  }
+}

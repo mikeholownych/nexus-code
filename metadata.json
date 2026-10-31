@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M69S1MMS6TXNV1KQJ3ERDYHT",
+  "strategy": "manual-commit",
+  "branch": "v1/v11-release",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cli/test/team_convergence.test.ts",
+    "cli/test/upgrade_tui.test.ts",
+    "docs/v1.1.0/DECISIONS.md",
+    "docs/v1.1.0/VALIDATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "redaction": {
+    "replacements": 34,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 34,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
