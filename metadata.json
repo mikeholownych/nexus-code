@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M69SP57T17AGWBWF87J8SDDQ",
+  "strategy": "manual-commit",
+  "branch": "v1/v11-release",
+  "checkpoints_count": 528,
+  "files_touched": [
+    "cli/src/core/persistence_protection.ts",
+    "cli/src/core/state.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "redaction": {
+    "replacements": 2814,
+    "layers": {
+      "betterleaks": 78,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 68,
+      "credentialed_uri": 1,
+      "entropy": 2680,
+      "key_context": 0,
+      "provider_token": 4,
+      "shell_stdin": 0
+    }
+  }
+}
