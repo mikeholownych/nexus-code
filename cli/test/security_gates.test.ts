@@ -13,10 +13,11 @@ describe("WP-11: Security Lifecycle Gates & Segregation (INC-12, SCAN-001..005, 
     const scriptPath = path.join(scriptsDir, "security_gates.sh");
     assert.strictEqual(fs.existsSync(scriptPath), true, "security_gates.sh must exist");
 
-    const out = execFileSync("bash", [scriptPath], {
-      cwd: rootDir,
-      encoding: "utf-8",
-    });
+    // Keep the gate test deterministic: the live npm advisory service is exercised by CI's
+    // security-gates step, while this test verifies the gate's clean-result handling.
+    const res = runGate(stubNpm("clean", true));
+    assert.equal(res.status, 0, res.stderr);
+    const out = res.stdout;
 
     assert.ok(out.includes("NEXUS CODE LIFECYCLE SECURITY SCANNING GATES"));
     assert.ok(out.includes("Gate 1"));
@@ -63,7 +64,7 @@ describe("WP-11: Security Lifecycle Gates & Segregation (INC-12, SCAN-001..005, 
    * A stand-in `npm` first on PATH, so Gate 1's outcome is fixed and a later gate's assertion cannot be masked by a
    * network or npm configuration problem. Like npm 11, it refuses an inherited npm_config_allow_scripts.
    */
-  function stubNpm(report: "clean" | "findings" | "error"): string {
+  function stubNpm(report: "clean" | "findings" | "error", rustScannerAvailable = false): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-stub-npm-"));
     const bodies = {
       clean: `echo '{"metadata":{"vulnerabilities":{"info":0,"low":1,"moderate":0,"high":0,"critical":0}}}'; exit 0`,
@@ -72,7 +73,7 @@ describe("WP-11: Security Lifecycle Gates & Segregation (INC-12, SCAN-001..005, 
     };
     fs.writeFileSync(
       path.join(dir, "npm"),
-      `#!/usr/bin/env bash
+      `#!/bin/bash
 if [[ -n "\${npm_config_allow_scripts:-}" ]]; then
   echo '{"error":{"code":"EALLOWSCRIPTS","summary":"--allow-scripts is not allowed in project-scoped installs."}}'
   exit 1
@@ -81,6 +82,26 @@ ${bodies[report]}
 `,
       { mode: 0o755 },
     );
+    fs.symlinkSync(process.execPath, path.join(dir, "node"));
+    for (const utility of ["bash", "dirname", "env", "mktemp", "rm", "sed"]) {
+      const source = (process.env.PATH || "")
+        .split(path.delimiter)
+        .map((entry) => path.join(entry, utility))
+        .find((candidate) => {
+          try {
+            fs.accessSync(candidate, fs.constants.X_OK);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+      assert.ok(source, `Required test utility ${utility} must be available`);
+      fs.symlinkSync(fs.realpathSync(source), path.join(dir, utility));
+    }
+    if (rustScannerAvailable) {
+      fs.writeFileSync(path.join(dir, "cargo-deny"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+      fs.writeFileSync(path.join(dir, "cargo"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+    }
     return dir;
   }
 
@@ -124,35 +145,15 @@ ${bodies[report]}
     assert.ok(!res.stderr.includes("EALLOWSCRIPTS"), res.stderr);
   });
 
-  test("SCAN-002: Rust dependency vulnerability detection on fixture fails closed", () => {
-    const auditScript = path.join(scriptsDir, "audit_rust_deps.py");
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vuln-cargo-"));
-    try {
-      const lockContent = `version = 3
-
-[[package]]
-name = "smallvec"
-version = "0.6.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-`;
-      const lockPath = path.join(tmpDir, "Cargo.lock");
-      fs.writeFileSync(lockPath, lockContent);
-
-      assert.throws(
-        () => {
-          execFileSync("python3", [auditScript, lockPath], {
-            cwd: rootDir,
-            stdio: "pipe",
-          });
-        },
-        (err: any) => {
-          const stderr = err.stderr ? err.stderr.toString() : "";
-          return stderr.includes("vulnerability/vulnerabilities detected") && stderr.includes("smallvec@0.6.13");
-        }
-      );
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+  test("ACC-SUP-04: PATH without cargo-audit or cargo-deny makes security_gates.sh exit non-zero", () => {
+    // Use only the test stubs and required shell utilities; this cannot expose Rust scanners or call npm's service.
+    const npmDir = stubNpm("clean");
+    const res = runGate(npmDir, { PATH: npmDir, SIMULATE_RUST_SCANNER_UNAVAILABLE: "0" });
+    assert.notEqual(res.status, 0);
+    assert.ok(
+      res.stderr.includes("Rust vulnerability scanner unavailable"),
+      `Expected scanner unavailable message, got: ${res.stderr}`
+    );
   });
 
   test("SCAN-003 & TEST-003: Secret scanning detects synthetic credentials in workspace", () => {
@@ -191,6 +192,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     execFileSync("bash", [scriptPath], {
       cwd: rootDir,
       encoding: "utf-8",
+      env: {
+        ...process.env,
+        npm_config_local_prefix: path.join(rootDir, "cli"),
+        npm_config_prefix: path.join(rootDir, "cli"),
+      },
     });
 
     const sbomPath = path.join(rootDir, "dist", "sbom.json");
@@ -213,6 +219,54 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     const componentNames = sbom.components.map((c: any) => c.name);
     assert.ok(componentNames.includes("commander"), "Must include commander from cli/package.json");
     assert.ok(componentNames.includes("serde"), "Must include serde from core/Cargo.toml");
+
+    // The release SBOM must describe the lockfile production closure that the
+    // shipped Linux binaries use, not every compile-only Cargo component.
+    const cargoTree = execFileSync(
+      "cargo",
+      [
+        "tree",
+        "--locked",
+        "--manifest-path",
+        path.join(rootDir, "core/Cargo.toml"),
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--edges",
+        "normal,build",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}",
+      ],
+      { cwd: rootDir, encoding: "utf-8" }
+    );
+    const rustIdentity = (name: string, version: string) =>
+      `${name.replaceAll("-", "_").toLowerCase()}@${version}`;
+    const cargoTreeEntries = cargoTree
+      .trim()
+      .split(/\r?\n/)
+      .map((entry) => {
+        const match = entry.match(/^(.+?) v([^\s]+)(?:\s|$)/);
+        assert.ok(match, `Unparseable Cargo production dependency: ${entry}`);
+        return rustIdentity(match[1], match[2]);
+      });
+    const cargoRoot = cargoTreeEntries[0];
+    assert.ok(cargoRoot, "Cargo production tree must identify the root package");
+    const expectedCargoClosure = new Set(cargoTreeEntries.slice(1));
+    const actualCargoEntries = sbom.components
+      .filter((component: any) => component.purl?.startsWith("pkg:cargo/"))
+      .map((component: any) => rustIdentity(component.name, component.version));
+    assert.strictEqual(
+      actualCargoEntries.filter((identity: string) => identity === cargoRoot).length,
+      1,
+      "Merged SBOM must contain exactly one Cargo root package component"
+    );
+    const actualCargoClosure = new Set(actualCargoEntries.filter((identity: string) => identity !== cargoRoot));
+    assert.deepStrictEqual(
+      [...actualCargoClosure].sort(),
+      [...expectedCargoClosure].sort(),
+      "Cargo SBOM components must exactly match the locked shipped-target normal/build closure"
+    );
 
     // Verify checksum
     const checksumLine = fs.readFileSync(checksumPath, "utf-8").trim();

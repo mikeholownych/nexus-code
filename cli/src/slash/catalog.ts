@@ -6,6 +6,7 @@ import type { ConfirmHandler } from "../agent.js";
 import type { CheckpointManager } from "../checkpoint.js";
 import type { ApplicationCore } from "../core/app.js";
 import type { ReceiptSection } from "../evidence.js";
+import type { ApprovalMode } from "../types.js";
 
 export interface SlashSpec {
   name: string;
@@ -19,8 +20,8 @@ export interface SlashSpec {
 /** What the sidecar lets a command read and change. */
 export interface SlashHost {
   readonly app: ApplicationCore;
-  mode(): "auto" | "review";
-  setMode(mode: "auto" | "review"): void;
+  mode(): ApprovalMode;
+  setMode(mode: ApprovalMode): void;
   sessionId(): string;
   setSessionId(id: string): void;
   checkpoints(): CheckpointManager;
@@ -31,6 +32,8 @@ export interface SlashHost {
   history(): string[];
   /** Approval callback for agent runs a command starts; undefined in auto mode. */
   confirm(signal: AbortSignal): ConfirmHandler | undefined;
+  /** Direct deliberate approval request for gated actions (such as in-place upgrades). */
+  requestApproval?(tool: string, args: Record<string, any>, signal: AbortSignal): Promise<boolean>;
   /** Receipt sections for the last turn and the active validation receipt. */
   receipt(): ReceiptSection[];
 }
@@ -121,10 +124,11 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "plugins", usage: "/plugins", summary: "Loaded plugins" },
   { name: "browse", usage: "/browse <url>", summary: "Open a URL in the headless browser" },
   { name: "image", usage: "/image <path> [prompt]", summary: "Send an image to the vision model", cancellable: true },
-  { name: "tdd", usage: "/tdd <issue>", summary: "Run a RED → GREEN → REFACTOR cycle", cancellable: true },
-  { name: "team", usage: "/team <role|full> [--independent-review] <objective>", summary: "Run a role or the full team as a durable operation (researcher, architect, implementer, tester, reviewer)" },
+  { name: "tdd", usage: "/tdd <issue>", summary: "[experimental] Run a RED → GREEN → REFACTOR cycle", cancellable: true },
+  { name: "team", usage: "/team <role|full> [--independent-review] <objective>", summary: "[experimental] Run a role or the full team as a durable operation (researcher, architect, implementer, tester, reviewer)" },
   { name: "theme", usage: "/theme [name]", summary: "Show or save the colour theme" },
   { name: "recover", usage: "/recover [task-id]", summary: "Recover durable task state" },
+  { name: "upgrade", usage: "/upgrade [--check] [--version <v>] [--yes] [--force]", summary: "Check for updates or safely upgrade Nexus to the latest stable or pinned release" },
   { name: "exit", usage: "/exit", summary: "Quit Nexus", aliases: ["quit", "q"] },
 ];
 

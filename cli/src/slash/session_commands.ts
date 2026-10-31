@@ -87,16 +87,27 @@ function sizingRows(agent: AutonomousAgent): Array<[string, string]> {
   const last = agent.getLastRequestCount();
   const tracking = agent.getObjective()?.execution;
   const rows: Array<[string, string]> = [];
-  rows.push(["context", caps ? `${caps.contextLimit} (${caps.contextSource}) · output ${caps.outputAllowance} (${caps.outputSource})` : "not yet discovered (next request reads the provider's limits, if it advertises them)"]);
-  if (caps) rows.push(["provider", `limits discovery ${caps.discovery}${caps.advertised?.limitsVersion ? ` · limits_version ${caps.advertised.limitsVersion}` : ""} · request counting ${caps.tokenCounting}`]);
+  const via = caps?.advertised?.via ? ` via ${caps.advertised.via}` : "";
+  rows.push(["context", caps ? `${caps.contextLimit} (${caps.contextSource}${via}) · output ${caps.outputAllowance} (${caps.outputSource})` : "not yet discovered (next request reads the provider's limits, if it advertises them)"]);
+  if (caps) rows.push(["provider", `limits discovery ${caps.discovery}${caps.advertised?.serverKind ? ` · server_kind ${caps.advertised.serverKind}` : ""}${caps.advertised?.limitsVersion ? ` · limits_version ${caps.advertised.limitsVersion}` : ""} · request counting ${caps.tokenCounting}`]);
   if (last) rows.push(["last req", `${last.promptTokens} tokens (${last.source}${last.workerId ? ` on ${last.workerId}` : ""}); client estimate ${last.estimate}${last.admitted?.promptTokens !== undefined ? `; admitted ${last.admitted.promptTokens} (${last.admitted.source}${last.admitted.workerId ? ` on ${last.admitted.workerId}` : ""})` : ""}`]);
   if (tracking) rows.push(["progress", `${tracking.cumulativeSteps} steps on this objective · ${tracking.stepsWithoutProgress} since last progress · ${tracking.compactions.filter((c) => c.committed).length} compaction(s)`]);
   return rows;
 }
 
-function status({ host }: SlashContext): SlashOutcome {
+async function status({ host }: SlashContext): Promise<SlashOutcome> {
   const config = host.app.getConfig();
   const git = getGitInfo(config.workspace);
+  let servicesStr = "none";
+  try {
+    const services = await host.app.getAgent().getBridge().listServices();
+    if (services && services.length > 0) {
+      servicesStr = services.map((s) => `${s.name} (pgid ${s.pgid})`).join(", ");
+    }
+  } catch {
+    servicesStr = "none";
+  }
+
   const rows: Array<[string, string]> = [
     ["workspace", config.workspace],
     ["git", git.isRepo ? git.formattedBadge : "not a repository"],
@@ -106,6 +117,7 @@ function status({ host }: SlashContext): SlashOutcome {
     ["shell", config.shell],
     ["messages", String(host.app.getAgent().getHistoryCount())],
     ["session", host.sessionId()],
+    ["services", servicesStr],
     ...sizingRows(host.app.getAgent()),
   ];
   return reply("status", rows.map(([label, value]) => `${label.padEnd(10)}${value}`).join("\n"));
@@ -126,10 +138,12 @@ function mode({ host, args }: SlashContext): SlashOutcome {
   const wanted = args.trim().toLowerCase();
   if (wanted === "auto" || wanted === "autonomous") {
     host.setMode("auto");
+    if (host.mode() === "read-only") return reply("mode", "Mode: read-only. Auto mode will take effect after a safe workspace checkpoint.");
     return reply("mode", "Mode: auto. Edits and commands run without asking.");
   }
   if (wanted === "review" || wanted === "ask") {
     host.setMode("review");
+    if (host.mode() === "read-only") return reply("mode", "Mode: read-only. Review mode will take effect after a safe workspace checkpoint.");
     return reply("mode", "Mode: review. Edits and commands wait for your approval.");
   }
   return reply("mode", `Current mode: ${host.mode()}. Use /mode auto or /mode review.`, !wanted);
@@ -301,5 +315,123 @@ export const SESSION_HANDLERS: Record<string, SlashHandler> = {
   onboard,
   theme,
   receipt: ({ host }) => reply("receipt", receiptText(host.receipt())),
+  upgrade: upgradeSlash,
   exit: () => reply("exit", "Press q, or ctrl+c with an empty composer, to quit."),
 };
+
+/**
+ * `/upgrade [--check] [--version <v>] [--yes] [--force]`: compare the installed version with a published
+ * release and safely upgrade using the canonical installer and deliberate operator approval.
+ */
+async function upgradeSlash({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
+  const {
+    detectInstallation,
+    resolveTargetRelease,
+    compareInstallationWithRelease,
+    performUpgrade,
+  } = await import("../upgrade.js");
+
+  const tokens = args.split(/\s+/).filter(Boolean);
+  let isCheck = false;
+  let isForce = false;
+  let isYes = false;
+  let allowDowngrade = false;
+  let pinnedVersion: string | undefined;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--check") isCheck = true;
+    else if (t === "--force" || t === "-f") isForce = true;
+    else if (t === "--yes" || t === "-y") isYes = true;
+    else if (t === "--allow-downgrade") allowDowngrade = true;
+    else if (t === "--version" || t === "-v") {
+      pinnedVersion = tokens[++i];
+    } else if (!t.startsWith("-") && !pinnedVersion) {
+      pinnedVersion = t;
+    }
+  }
+
+  const installed = detectInstallation();
+  let targetRelease;
+  try {
+    targetRelease = await resolveTargetRelease(pinnedVersion, { signal });
+  } catch (err: any) {
+    return reply("upgrade", `Failed to resolve release: ${err.message || String(err)}`, false);
+  }
+
+  const comparison = compareInstallationWithRelease(installed, targetRelease, { force: isForce });
+
+  if (isCheck) {
+    const lines = [
+      `Installed version:  ${installed.version} (${installed.provenance})`,
+      `Target release:     ${targetRelease.tag_name}${targetRelease.prerelease ? " (prerelease)" : " (stable)"}${targetRelease.published_at ? ` [published ${targetRelease.published_at}]` : ""}`,
+    ];
+    if (installed.prefix) lines.push(`Install prefix:     ${installed.prefix}`);
+    if (comparison.reasons.length > 0) {
+      for (const r of comparison.reasons) lines.push(`Note:               ${r}`);
+    }
+    if (comparison.action === "upgrade") {
+      lines.push(`\nUpdate available: ${installed.version} -> ${comparison.targetVersion}. Run /upgrade to install.`);
+    } else if (comparison.action === "downgrade") {
+      lines.push(`\nTarget ${comparison.targetVersion} is older than current ${installed.version}. Run /upgrade --version ${comparison.targetVersion} --allow-downgrade to downgrade.`);
+    } else {
+      lines.push(`\nNexus is already up to date (${installed.version}).`);
+    }
+    return reply("upgrade", lines.join("\n"), true);
+  }
+
+  if (!comparison.canUpgrade) {
+    return reply("upgrade", `Cannot upgrade: ${comparison.reasons.join("\n")}`, false);
+  }
+
+  if (comparison.action === "none" && !isForce) {
+    return reply("upgrade", `Nexus is already up to date (${installed.version}). Use /upgrade --force to reinstall.`, true);
+  }
+
+  if (comparison.action === "downgrade" && !allowDowngrade && !isYes) {
+    return reply("upgrade", `Target version ${comparison.targetVersion} is a downgrade from ${installed.version}. Specify --allow-downgrade to proceed.`, false);
+  }
+
+  // Deliberate confirmation
+  if (!isYes) {
+    const confirmFn = host.requestApproval
+      ? (tool: string, a: Record<string, any>) => host.requestApproval!(tool, a, signal)
+      : host.confirm(signal);
+
+    if (!confirmFn) {
+      return reply(
+        "upgrade",
+        `Proposed ${comparison.action}: ${installed.version} -> ${comparison.targetVersion}.\nConfirmation required: run /upgrade --yes to apply, or review in interactive mode.`,
+        false
+      );
+    }
+
+    const targetDest = path.join(installed.prefix || "", "lib/nexus", comparison.targetVersion);
+    const approved = await confirmFn("nexus_upgrade", {
+      action: comparison.action,
+      installedVersion: installed.version,
+      targetVersion: comparison.targetVersion,
+      destination: targetDest,
+      notice: "Installs the release package and atomically swaps the launcher symlink. The running session continues safely on the current version until restart."
+    });
+
+    if (!approved) {
+      return reply("upgrade", `Upgrade to ${comparison.targetVersion} was declined.`, false);
+    }
+  }
+
+  try {
+    const result = await performUpgrade(comparison, {
+      force: isForce,
+      allowDowngrade,
+      signal,
+    });
+    return reply(
+      "upgrade",
+      `✔ Nexus successfully upgraded to ${result.newVersion}.\nDestination: ${result.installedPath}\nLauncher:    ${result.binPath}\n\nNotice: ${result.restartNotice}`,
+      true
+    );
+  } catch (err: any) {
+    return reply("upgrade", `Upgrade failed: ${err.message || String(err)}`, false);
+  }
+}

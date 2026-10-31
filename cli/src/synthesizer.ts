@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { detectTestCommand, runTestSuiteWithExecutor, TestCommandExecutor, TestRunResult } from "./tester.js";
+import { discoverVerifier, runTestSuiteWithExecutor, TestCommandExecutor, TestRunResult } from "./tester.js";
 import { AutonomousAgent } from "./agent.js";
 import type { ConfirmHandler } from "./agent.js";
 import { HarnessConfig } from "./types.js";
@@ -62,7 +62,7 @@ export class SynthesizerEngine {
   }
 
   private runTests(filterPattern?: string): Promise<TestRunResult> {
-    const command = detectTestCommand(this.workspace, filterPattern);
+    const command = discoverVerifier(this.workspace, filterPattern)?.command ?? "none";
     return runTestSuiteWithExecutor(this.workspace, this.executeTestCommand, command);
   }
 

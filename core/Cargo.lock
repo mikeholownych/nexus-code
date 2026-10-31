@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "1.2.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "clap",
  "crossterm",
@@ -449,6 +449,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "shell-words",
  "similar",
  "tokio",
  "unicode-segmentation",

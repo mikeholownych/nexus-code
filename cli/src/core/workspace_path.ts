@@ -12,6 +12,8 @@ export class WorkspacePath {
   private constructor(
     public readonly value: string,
     private readonly canonicalPath: string,
+    private readonly device: number,
+    private readonly inode: number,
   ) {}
 
   /** Establish workspace identity from the application workspace model. */
@@ -23,7 +25,7 @@ export class WorkspacePath {
     if (normalized !== input) throw new Error("Workspace identity must be normalized");
     const stat = fs.statSync(normalized);
     if (!stat.isDirectory()) throw new Error("Workspace identity must name a directory");
-    const identity = new WorkspacePath(normalized, fs.realpathSync(normalized));
+    const identity = new WorkspacePath(normalized, fs.realpathSync(normalized), stat.dev, stat.ino);
     workspacePathCapabilities.add(identity);
     Object.freeze(identity);
     return identity;
@@ -33,7 +35,12 @@ export class WorkspacePath {
   public assertCurrent(): void {
     if (!workspacePathCapabilities.has(this)) throw new Error("Workspace identity lacks trusted runtime provenance");
     const stat = fs.statSync(this.value);
-    if (!stat.isDirectory() || fs.realpathSync(this.value) !== this.canonicalPath) {
+    if (
+      !stat.isDirectory() ||
+      fs.realpathSync(this.value) !== this.canonicalPath ||
+      stat.dev !== this.device ||
+      stat.ino !== this.inode
+    ) {
       throw new Error("Workspace identity changed after validation");
     }
   }

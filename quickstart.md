@@ -4,10 +4,10 @@ Nexus Code is a local coding client. It is separate from the Cloudflare Workers 
 
 ## Install
 
-On Linux x86-64 with glibc 2.35 or newer and Node.js 20 or newer:
+On Linux x86-64 with glibc 2.35 or newer and Node.js 20 or newer (use a maintained release such as Node.js 22 or 24; Node.js 20 reached upstream end of life on 2026-03-24 per the [Node.js EOL schedule](https://nodejs.org/en/about/eol)):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.2 sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | sh
 ```
 
 The installer downloads the matching versioned client archive and `SHA256SUMS` from this repository's GitHub Release, verifies the archive, and installs under `~/.local/lib/nexus`. It adds a `nexus` symlink in `~/.local/bin`; it does not edit shell startup files or use root. If `~/.local/bin` is not in `PATH`, add it yourself:
@@ -16,10 +16,10 @@ The installer downloads the matching versioned client archive and `SHA256SUMS` f
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The command above pins the current published prerelease. To follow the latest stable release after one is published, omit `NEXUS_VERSION`. To install another specific version, including a prerelease, set the desired tag:
+Without `NEXUS_VERSION`, the installer follows the latest stable release. If no stable release has been published yet, the installer exits with a hint to select a prerelease tag from [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases). To install a prerelease or pin a version, set `NEXUS_VERSION` to its published tag. The `v1.0.0-rc.1` example below works after that tag appears on [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases); before then, replace it with a prerelease tag already listed there:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v0.1.0-alpha.2 sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.0.0-rc.1 sh
 ```
 
 For inspect-before-running, download [install.sh](https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh), read it, then run `sh install.sh`.
@@ -41,7 +41,7 @@ EOF
 chmod 600 "$HOME/.config/nexus/config.env"
 ```
 
-Use your endpoint's actual model ID. Do not put real credentials in a project `.env`, shell history, or this example. For a cloud provider and credential handling, see [Cloud providers](docs/CLOUD_PROVIDERS.md).
+Use your endpoint's actual model ID. Nexus automatically discovers the loaded context window from LM Studio (`/api/v0/models`), llama.cpp (`/props`), vLLM (`/v1/models`), and Ollama (`/api/show`), or you can override it with `--context-limit` (`NEXUS_CONTEXT_LIMIT`). For HTTPS servers using a private certificate authority, set `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` in `~/.config/nexus/config.env`. Do not put real credentials in a project `.env`, shell history, or this example. See [Local servers](docs/LOCAL_SERVERS.md) for per-server setup and [Cloud providers](docs/CLOUD_PROVIDERS.md) for cloud provider and credential handling.
 
 ## First run
 
@@ -52,13 +52,53 @@ nexus doctor
 nexus
 ```
 
-Enter a small task, review requested actions, and inspect the reported turn outcome. Use `nexus --help` and `/help` for implemented commands. To require human approval for edits and shell commands, start with `nexus repl --approve`.
+Enter a small task, review requested actions, and inspect the reported turn outcome. On a terminal, running `nexus` with no arguments opens the live TUI; in non-interactive environments or with `nexus repl`, it opens the interactive REPL. For non-interactive tasks, run `nexus run "<task>"`. Use `nexus --help` and `/help` for implemented commands.
 
-Nexus reports `VERIFIED` only when its selected verifier passes. `UNVERIFIED`, `BLOCKED`, and `LIMIT_REACHED` are distinct outcomes; a completed model response alone does not mean the work is correct.
+### Trust your own repository
+
+By default, an untrusted workspace opens in `review` posture, asking for your explicit confirmation before executing shell commands, file modifications, network egress, or test suites.
+
+If this is your own repository and you want autonomous execution, trust it:
+
+```sh
+nexus trust .
+```
+
+Once trusted, Nexus runs in `auto` posture. To force review mode regardless of trust, pass `--approve`. To run autonomously in CI or scripts without trusting the workspace permanently, pass `--yes` (or `--mode auto`, or set `NEXUS_APPROVAL_MODE=auto`).
+
+Nexus reports `VERIFIED` only when its selected verifier passes and the operator has declared the product files for that task before it starts. For example: `nexus run --deliverable-file src/math.ts "Fix the addition defect"`; repeat `--deliverable-file` for each expected product file. The scope must use literal workspace-relative paths and cannot name tests. A passing suite without a declared scope is regression evidence (`REGRESSION_FREE`), not proof that the requested product change was verified. `UNVERIFIED`, `BLOCKED`, and `LIMIT_REACHED` remain distinct outcomes; a completed model response alone does not mean the work is correct.
+
+Resuming a saved session or durable task keeps verification pending because local session and task files do not authenticate their own history. No generic verifier is currently trusted to clear that obligation after recovery: even an external test runner can execute workspace-controlled tests. A resumed task may continue, but it remains `UNVERIFIED`. Before starting a new task to establish a new baseline, the operator must review the workspace state, including ignored and untracked files and verifier/test definitions, and restore or remove any state that is not trusted. A clean Git status alone does not establish that ignored files or external acceptance inputs are trustworthy. A future verifier could replace this manual boundary only after its implementation and acceptance inputs are independently bound outside candidate control. A current-invocation `--authoritative-verifier` alone does not clear recovered obligations.
 
 ## Upgrade and remove
 
-Run the same installer to reinstall or upgrade. Pin an upgrade with the `NEXUS_VERSION` pipeline form above. Removal is manual and limited to Nexus-owned paths:
+Check whether a newer release is published:
+
+```sh
+nexus upgrade --check
+```
+
+To upgrade in-place to the latest stable release:
+
+```sh
+nexus upgrade
+```
+
+To target or reinstall an exact pinned version:
+
+```sh
+nexus upgrade --version v1.0.0
+```
+
+Inside the interactive live TUI, run `/upgrade` or `/upgrade --check`. An upgrade requires deliberate modal confirmation before modifying the installation. In scripts or CI, non-interactive upgrades require `--yes`.
+
+Alternatively, run the installer pipeline to reinstall or upgrade:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.0.0 sh
+```
+
+Removal is manual and limited to Nexus-owned paths:
 
 ```sh
 rm "$HOME/.local/bin/nexus"

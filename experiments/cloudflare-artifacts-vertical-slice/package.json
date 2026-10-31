@@ -12,6 +12,9 @@
 		"@cloudflare/vite-plugin": "beta",
 		"cf": "^1.0.0-beta.10",
 		"typescript": "^7.0.2",
-		"vite": "^8.3.0"
+		"vite": "^8.3.4"
+	},
+	"overrides": {
+		"sharp": "0.35.5"
 	}
 }

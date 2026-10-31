@@ -1,0 +1,248 @@
+TAP version 13
+# Subtest: schema two stores a small progress envelope and returns the complete conversation
+ok 1 - schema two stores a small progress envelope and returns the complete conversation # SKIP test name does not match pattern
+  ---
+  duration_ms: 1.019999
+  ...
+# Subtest: v1 migration backs up exact bytes privately and preserves every envelope field
+ok 2 - v1 migration backs up exact bytes privately and preserves every envelope field # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.1824
+  ...
+# Subtest: a conflicting migration backup fails before modifying the old primary or creating a message log
+ok 3 - a conflicting migration backup fails before modifying the old primary or creating a message log # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0907
+  ...
+# Subtest: operation-only updates leave the committed conversation log unchanged
+ok 4 - operation-only updates leave the committed conversation log unchanged # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.1717
+  ...
+# Subtest: compaction and shorter histories recover their selected conversation after restart
+ok 5 - compaction and shorter histories recover their selected conversation after restart # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0954
+  ...
+# Subtest: failed progress publication cannot expose an appended but unpublished conversation
+ok 6 - failed progress publication cannot expose an appended but unpublished conversation # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0768
+  ...
+# Subtest: failed message synchronization leaves the previous progress envelope authoritative
+ok 7 - failed message synchronization leaves the previous progress envelope authoritative # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0815
+  ...
+# Subtest: missing committed messages are reported as corruption, quarantined, and never returned as empty
+ok 8 - missing committed messages are reported as corruption, quarantined, and never returned as empty # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.096
+  ...
+# Subtest: permission or I/O error reading message journal fails without quarantining primary state
+ok 9 - permission or I/O error reading message journal fails without quarantining primary state # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.1737
+  ...
+# Subtest: future message schemas fail without changing or quarantining either component
+ok 10 - future message schemas fail without changing or quarantining either component # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.1335
+  ...
+# Subtest: saving cannot replace a future primary schema or write a sidecar beside it
+ok 11 - saving cannot replace a future primary schema or write a sidecar beside it # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0895
+  ...
+# Subtest: deleting an explicit task removes its conversation sidecar
+ok 12 - deleting an explicit task removes its conversation sidecar # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.092
+  ...
+# Subtest: deleting an explicit task removes orphaned message journal, history, and migration backups without envelope
+ok 13 - deleting an explicit task removes orphaned message journal, history, and migration backups without envelope # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0972
+  ...
+# Subtest: read-modify-save classifies the complete state once with fresh environment secrets before publication and return
+ok 14 - read-modify-save classifies the complete state once with fresh environment secrets before publication and return # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.1865
+  ...
+# Subtest: process death at after-log-sync resumes exactly the published conversation and releases its store guard
+ok 15 - process death at after-log-sync resumes exactly the published conversation and releases its store guard # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0815
+  ...
+# Subtest: process death at before-progress-rename resumes exactly the published conversation and releases its store guard
+ok 16 - process death at before-progress-rename resumes exactly the published conversation and releases its store guard # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0704
+  ...
+# Subtest: process death at after-progress-rename resumes exactly the published conversation and releases its store guard
+ok 17 - process death at after-progress-rename resumes exactly the published conversation and releases its store guard # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0674
+  ...
+# Subtest: process death during legacy migration preserves exact original and backup bytes for retry
+ok 18 - process death during legacy migration preserves exact original and backup bytes for retry # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.310199
+  ...
+# Subtest: two real processes preserve independent progress fields across a contended read-modify-save
+ok 19 - two real processes preserve independent progress fields across a contended read-modify-save # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.1719
+  ...
+# Subtest: a schema-one record with missing conversation cannot silently migrate to an empty history
+ok 20 - a schema-one record with missing conversation cannot silently migrate to an empty history # SKIP test name does not match pattern
+  ---
+  duration_ms: 0.0704
+  ...
+# Subtest: recordMilestone keeps snapshot and publication atomic against a separate message writer
+not ok 21 - recordMilestone keeps snapshot and publication atomic against a separate message writer
+  ---
+  duration_ms: 242.5291
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:40:1213'
+  failureType: 'testCodeFailure'
+  error: |-
+    a concurrent successful message commit must not be truncated by the stale snapshot
+    + actual - expected
+    
+      [
+        {
+          content: 'original conversation',
+          role: 'user'
+    -   },
+    -   {
+    -     content: 'separate process committed this message',
+    -     role: 'assistant'
+        }
+      ]
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      role: 'user'
+      content: 'original conversation'
+    1:
+      role: 'assistant'
+      content: 'separate process committed this message'
+  actual:
+    0:
+      role: 'user'
+      content: 'original conversation'
+  operator: 'deepStrictEqual'
+  stack: |-
+    <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:383:14)
+    fixture (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:24:9)
+    TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:339:103)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+    Test.run (node:internal/test_runner/test:796:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:527:18)
+    Test.postRun (node:internal/test_runner/test:889:19)
+    Test.run (node:internal/test_runner/test:835:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+  ...
+# writer_exit=0 published_messages=1
+# Subtest: recordCandidateAndReceipt keeps snapshot and publication atomic against a separate message writer
+not ok 22 - recordCandidateAndReceipt keeps snapshot and publication atomic against a separate message writer
+  ---
+  duration_ms: 207.259641
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:40:1213'
+  failureType: 'testCodeFailure'
+  error: |-
+    a concurrent successful message commit must not be truncated by the stale snapshot
+    + actual - expected
+    
+      [
+        {
+          content: 'original conversation',
+          role: 'user'
+    -   },
+    -   {
+    -     content: 'separate process committed this message',
+    -     role: 'assistant'
+        }
+      ]
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      role: 'user'
+      content: 'original conversation'
+    1:
+      role: 'assistant'
+      content: 'separate process committed this message'
+  actual:
+    0:
+      role: 'user'
+      content: 'original conversation'
+  operator: 'deepStrictEqual'
+  stack: |-
+    <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:383:14)
+    fixture (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:24:9)
+    TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:339:103)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+    Test.run (node:internal/test_runner/test:796:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:527:18)
+    Test.postRun (node:internal/test_runner/test:889:19)
+    Test.run (node:internal/test_runner/test:835:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+  ...
+# writer_exit=0 published_messages=1
+# Subtest: recoverTaskState keeps snapshot and publication atomic against a separate message writer
+not ok 23 - recoverTaskState keeps snapshot and publication atomic against a separate message writer
+  ---
+  duration_ms: 234.473708
+  location: '/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:40:1213'
+  failureType: 'testCodeFailure'
+  error: |-
+    a concurrent successful message commit must not be truncated by the stale snapshot
+    + actual - expected
+    
+      [
+        {
+          content: 'original conversation',
+          role: 'user'
+    -   },
+    -   {
+    -     content: 'separate process committed this message',
+    -     role: 'assistant'
+        }
+      ]
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      role: 'user'
+      content: 'original conversation'
+    1:
+      role: 'assistant'
+      content: 'separate process committed this message'
+  actual:
+    0:
+      role: 'user'
+      content: 'original conversation'
+  operator: 'deepStrictEqual'
+  stack: |-
+    <anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:383:14)
+    fixture (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:24:9)
+    TestContext.<anonymous> (/var/tmp/nexus-persistence-recovery-mh_bj0rw/source/cli/test/task_state_v2.test.ts:339:103)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+    Test.run (node:internal/test_runner/test:796:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:527:18)
+    Test.postRun (node:internal/test_runner/test:889:19)
+    Test.run (node:internal/test_runner/test:835:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:527:7)
+  ...
+# writer_exit=0 published_messages=1
+1..23
+# tests 23
+# suites 0
+# pass 0
+# fail 3
+# cancelled 0
+# skipped 20
+# todo 0
+# duration_ms 1067.907475

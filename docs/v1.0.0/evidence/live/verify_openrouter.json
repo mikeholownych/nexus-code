@@ -1,0 +1,94 @@
+{
+  "provider": "openrouter",
+  "model": "openrouter/free",
+  "date": "2026-10-14T23:21:14.034Z",
+  "passed": true,
+  "steps": [
+    {
+      "step": "streamed completion",
+      "ok": true,
+      "detail": "reply \"READY\", 5 chars streamed",
+      "requestId": "49b71fc3-3879-4ce8-bd64-dbaffa300b36"
+    },
+    {
+      "step": "tool call",
+      "ok": true,
+      "detail": "echo_token({\"token\": \"nc7e2ceef\"}) complete, 1 call(s)",
+      "requestId": "b05711f6-1c4a-47c1-865f-24357d50f5dc"
+    },
+    {
+      "step": "tool result round trip",
+      "ok": true,
+      "detail": "final answer cites the tool result",
+      "requestId": "2b9cc6c5-bac9-42da-816c-8e5672454717"
+    }
+  ],
+  "receipts": [
+    {
+      "at": "2026-10-14T23:21:10.877Z",
+      "requestId": "49b71fc3-3879-4ce8-bd64-dbaffa300b36",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "openrouter/free",
+      "effectiveModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "providerRequestId": "gen-1792020070-qVQAsD5pcsLoVxgygVFh",
+      "usage": {
+        "inputTokens": 24,
+        "outputTokens": 19,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 14,
+        "costUsd": 0
+      },
+      "costConfidence": "provider-reported",
+      "outcome": "completed",
+      "usageConfidence": "provider"
+    },
+    {
+      "at": "2026-10-14T23:21:11.306Z",
+      "requestId": "b05711f6-1c4a-47c1-865f-24357d50f5dc",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "openrouter/free",
+      "effectiveModel": "poolside/laguna-xs-2.1:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "providerRequestId": "gen-1792020070-pFOII4flqKxOf8HNpylR",
+      "usage": {
+        "inputTokens": 156,
+        "outputTokens": 27,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 0,
+        "costUsd": 0
+      },
+      "costConfidence": "provider-reported",
+      "outcome": "completed",
+      "usageConfidence": "provider"
+    },
+    {
+      "at": "2026-10-14T23:21:14.033Z",
+      "requestId": "2b9cc6c5-bac9-42da-816c-8e5672454717",
+      "role": "qualification",
+      "providerId": "openrouter",
+      "selectedModel": "openrouter/free",
+      "effectiveModel": "poolside/laguna-s-2.1:free",
+      "endpointOrigin": "https://openrouter.ai",
+      "protocol": "openai-chat",
+      "disclosure": "cloud",
+      "providerRequestId": "gen-1792020071-2xXlD9JRo0dQtwNcQ2sM",
+      "usage": {
+        "inputTokens": 205,
+        "outputTokens": 20,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 0,
+        "costUsd": 0
+      },
+      "costConfidence": "provider-reported",
+      "outcome": "completed",
+      "usageConfidence": "provider"
+    }
+  ]
+}

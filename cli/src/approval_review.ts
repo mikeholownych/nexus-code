@@ -12,6 +12,7 @@ export type ApprovalReview =
   | { kind: "change"; path: string; before: string | null; after: string; created: boolean; truncated: boolean }
   | { kind: "patch"; path: string; patch: string; truncated: boolean }
   | { kind: "command"; command: string }
+  | { kind: "verifier"; command: string; script?: string; detail?: string }
   | { kind: "args"; text: string; truncated: boolean };
 
 function capped(text: string): { text: string; truncated: boolean } {
@@ -70,6 +71,12 @@ export function approvalReview(tool: string, args: Record<string, any>, workspac
     }
     case "run_command":
       return { kind: "command", command: redactSecrets(String(args.command ?? "")) };
+    case "verifier": {
+      const command = redactSecrets(String(args.command ?? ""));
+      const script = args.script !== undefined ? capped(String(args.script)).text : undefined;
+      const detail = args.detail !== undefined ? redactSecrets(String(args.detail)) : undefined;
+      return { kind: "verifier", command, script, detail };
+    }
     default: {
       const text = capped(JSON.stringify(args, null, 2));
       return { kind: "args", text: text.text, truncated: text.truncated };

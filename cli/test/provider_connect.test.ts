@@ -248,6 +248,21 @@ describe("signed-in providers in the client", () => {
     } finally { await exchange.close(); await api.close(); }
   });
 
+  test("Copilot credential discovery matches the exact GitHub host key", () => {
+    const apps = write(".config/github-copilot/apps.json", {
+      "github.com.attacker:session": { oauth_token: "gho_UNTRUSTED" },
+    });
+    assert.equal(resolveCredential("copilot"), undefined, "a lookalike host must not supply the GitHub exchange token");
+
+    fs.writeFileSync(apps, JSON.stringify({
+      "github.com:session": { oauth_token: "gho_TRUSTED" },
+      "github.com.attacker:session": { oauth_token: "gho_UNTRUSTED" },
+    }));
+    const credential = resolveCredential("copilot");
+    assert.equal(credential?.credential.type, "oauth");
+    assert.equal(credential?.credential.type === "oauth" ? credential.credential.refresh : undefined, "gho_TRUSTED");
+  });
+
   test("a 401 from a signed-in provider forces one refresh and one retry", async () => {
     let issued = 0;
     const tokens = await mock((_s, res) => json(res, 200, { access_token: `at-${++issued}`, refresh_token: "rt", expires_in: 3600 }));

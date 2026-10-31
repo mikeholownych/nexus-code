@@ -105,7 +105,8 @@ function assemble(output: any[], status: string | undefined, incompleteReason: s
     }
   }
   let finish: NativeFinish = toolCalls.length ? "tool_calls" : refused ? "refusal" : "stop";
-  if (status === "incomplete") finish = incompleteReason === "max_output_tokens" ? "length" : "incomplete";
+  // A content filter stopping the response is a refusal, not an interrupted stream to retry (PRV-16).
+  if (status === "incomplete") finish = incompleteReason === "max_output_tokens" ? "length" : incompleteReason === "content_filter" ? "refusal" : "incomplete";
   const message: ChatMessage = {
     role: "assistant",
     content: text || null,

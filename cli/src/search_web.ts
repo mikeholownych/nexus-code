@@ -1,12 +1,22 @@
+import { htmlToReadableText } from "./core/html_text.js";
+
 export interface SearchResult {
   title: string;
   url: string;
   snippet: string;
 }
 
+let announcedSearchDestination = false;
+
+/** Reset destination announcement (used in tests). */
+export function resetSearchWebAnnouncements(): void {
+  announcedSearchDestination = false;
+}
+
 /**
- * Perform technical web search (Candidate #45)
- * Supports SearXNG, DuckDuckGo JSON & HTML endpoints
+ * Perform technical web search (Candidate #45, REQ-PRV-108).
+ * Supports SearXNG (via SEARXNG_URL/SEARX_URL) and DuckDuckGo JSON & HTML endpoints.
+ * Never fabricates search results when none are returned. Discloses destination on first use.
  */
 export async function executeWebSearch(
   query: string,
@@ -17,8 +27,21 @@ export async function executeWebSearch(
     return { success: false, results: [], error: "Empty query provided." };
   }
 
+  // Disclosure gate: allow policy to disable outbound search
+  if (process.env.NEXUS_DISABLE_WEB_SEARCH === "1") {
+    return { success: false, results: [], error: "Web search is disabled by policy (NEXUS_DISABLE_WEB_SEARCH=1)." };
+  }
+
   // 1. Try SearXNG if configured
   const searxUrl = process.env.SEARXNG_URL || process.env.SEARX_URL;
+
+  // Disclose default or configured search destination on first use in this process
+  if (!announcedSearchDestination) {
+    announcedSearchDestination = true;
+    const dest = searxUrl ? `${searxUrl} (SearXNG)` : "https://duckduckgo.com (DuckDuckGo)";
+    console.error(`[nexus] Web search: sending query to ${dest} (default search provider; configure SEARXNG_URL for self-hosted search).`);
+  }
+
   if (searxUrl) {
     try {
       const target = `${searxUrl.replace(/\/+$/, "")}/search?q=${encodeURIComponent(cleanQuery)}&format=json`;
@@ -30,13 +53,15 @@ export async function executeWebSearch(
         const data = (await res.json()) as { results?: Array<{ title?: string; url?: string; content?: string }> };
         if (data.results && Array.isArray(data.results)) {
           const results = data.results.slice(0, maxResults).map((r) => ({
-            title: r.title || "Untitled",
+            // SearXNG has no markup-free output contract: extract like the HTML path.
+            title: (r.title && htmlToReadableText(r.title)) || "Untitled",
             url: r.url || "",
-            snippet: r.content || "",
+            snippet: r.content ? htmlToReadableText(r.content) : "",
           }));
           if (results.length > 0) {
             return { success: true, results };
           }
+          return { success: false, results: [], error: "No web results found." };
         }
       }
     } catch {
@@ -120,7 +145,7 @@ export async function executeWebSearch(
             } catch {}
           }
 
-          const stripHtml = (s: string) => s.replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&amp;/g, "&").trim();
+          const stripHtml = (s: string) => htmlToReadableText(s);
           const title = stripHtml(titleMatch[2] || "Result");
           const snippet = snippetMatch ? stripHtml(snippetMatch[1]) : "";
 
@@ -141,13 +166,8 @@ export async function executeWebSearch(
   }
 
   return {
-    success: true,
-    results: [
-      {
-        title: `Search Query: ${cleanQuery}`,
-        url: `https://duckduckgo.com/?q=${encodeURIComponent(cleanQuery)}`,
-        snippet: "No live web results returned. Check internet connection or configure SEARXNG_URL.",
-      },
-    ],
+    success: false,
+    results: [],
+    error: "No web results found.",
   };
 }

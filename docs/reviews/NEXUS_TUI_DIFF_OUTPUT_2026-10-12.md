@@ -1,5 +1,7 @@
 # Live TUI diff output — implementation and validation (2026-10-12)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Request: bring the live TUI's diff output to a polished, readable standard, validated through the real TUI and
 sidecar in a pseudo-terminal. Code commit: `35ef104` on branch `feat/tui-diff-review` (not merged, not published).
 

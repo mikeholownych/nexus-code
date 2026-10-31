@@ -81,18 +81,18 @@ if [[ -n "${SIMULATE_RUST_SCANNER_UNAVAILABLE:-}" && "${SIMULATE_RUST_SCANNER_UN
   exit 1
 fi
 
-if command -v cargo-audit &>/dev/null; then
+if command -v cargo-deny &>/dev/null; then
+  if ! cargo deny --config "${ROOT_DIR}/deny.toml" check licenses advisories; then
+    echo "[-] FAIL [SCAN-002]: cargo deny reported policy failure (licenses or advisories) in Rust core dependencies." >&2
+    exit 1
+  fi
+elif command -v cargo-audit &>/dev/null; then
   if ! cargo audit; then
     echo "[-] FAIL [SCAN-002]: cargo audit reported vulnerability in Rust core dependencies." >&2
     exit 1
   fi
-elif [[ -f "${SCRIPT_DIR}/audit_rust_deps.py" ]]; then
-  if ! python3 "${SCRIPT_DIR}/audit_rust_deps.py" "${ROOT_DIR}/core/Cargo.lock"; then
-    echo "[-] FAIL [SCAN-002]: Vulnerability audit detected issue in Rust core dependencies." >&2
-    exit 1
-  fi
 else
-  echo "[-] FAIL [SCAN-001]: Rust vulnerability scanner unavailable. Security gates cannot establish dependency safety." >&2
+  echo "[-] FAIL [SCAN-001]: Rust vulnerability scanner unavailable (neither cargo-audit nor cargo-deny found in PATH). Security gates cannot establish dependency safety." >&2
   exit 1
 fi
 echo "[+] [Gate 1] Rust core dependencies verified (zero High/Critical vulnerabilities)."
@@ -138,7 +138,18 @@ if ! git diff --check; then
   echo "[-] FAIL [SCAN-001]: Git diff check failed (whitespace or conflict markers)." >&2
   exit 1
 fi
-echo "[+] [Gate 3] Git diff hygiene clean."
+# -----------------------------------------------------------------------------
+# Gate 4: Documentation Truthfulness & Forbidden Identifiers (ACC-GOV-04)
+# -----------------------------------------------------------------------------
+echo "[*] [Gate 4] Scanning documentation for forbidden homelab/parity identifiers (ACC-GOV-04)..."
+cd "${ROOT_DIR}"
+FORBIDDEN_MATCHES=$(grep -rnE "t5820|engineering/b0|A770|18010|parity with" README.md quickstart.md docs/*.md 2>/dev/null || true)
+if [[ -n "${FORBIDDEN_MATCHES}" ]]; then
+  echo "[-] FAIL [ACC-GOV-04]: Forbidden identifier or unsupported parity claim found in docs:" >&2
+  echo "${FORBIDDEN_MATCHES}" >&2
+  exit 1
+fi
+echo "[+] [Gate 4] Documentation clean of forbidden identifiers (ACC-GOV-04)."
 
 echo "========================================================"
 echo "  ALL SECURITY LIFECYCLE GATES PASSED CLEANLY (INC-12)  "

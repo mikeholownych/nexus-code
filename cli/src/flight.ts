@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { InformationFlowBoundary } from "./core/egress.js";
+import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
+import { ensureGitExclude } from "./core/git_exclude.js";
 
 export type FlightEventType =
   | "session_start"
@@ -12,6 +14,7 @@ export type FlightEventType =
   | "tool_result"
   | "durable_state"
   | "file_diff"
+  | "middleware_rewrite"
   | "turn_end"
   | "session_end";
 
@@ -52,10 +55,9 @@ export class FlightRecorder {
   constructor(workspace: string, flightId?: string) {
     this.workspace = path.resolve(workspace);
     this.flightId = flightId || `flight-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 6)}`;
+    ensureGitExclude(this.workspace);
     const flightsDir = path.join(this.workspace, ".nexus", "flights");
-    if (!fs.existsSync(flightsDir)) {
-      fs.mkdirSync(flightsDir, { recursive: true });
-    }
+    ensurePrivateDir(flightsDir);
     this.flightLogPath = path.join(flightsDir, `${this.flightId}.flightlog`);
   }
 
@@ -98,7 +100,7 @@ export class FlightRecorder {
       payload: sanitizedPayload,
     };
     try {
-      fs.appendFileSync(this.flightLogPath, JSON.stringify(event) + "\n", "utf-8");
+      appendPrivateFile(this.flightLogPath, JSON.stringify(event) + "\n");
     } catch {
       // Ignore flightlog append errors in restricted environments
     }
@@ -205,6 +207,20 @@ export class FlightRecorder {
       durationMs,
       tokenStats,
     });
+  }
+
+  public recordMiddlewareRewrite(
+    step: number | undefined,
+    payload: {
+      kind: "middleware_rewrite";
+      plugin: string;
+      tool: string;
+      phase: "pre" | "post";
+      before_digest: string;
+      after_digest: string;
+    }
+  ): FlightEvent {
+    return this.appendEvent("middleware_rewrite", step, payload);
   }
 }
 

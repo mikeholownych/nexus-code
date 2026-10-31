@@ -1,139 +1,216 @@
 #!/usr/bin/env bash
-# Nexus Code Software Bill of Materials (SBOM) Generator (REL-001..REL-004)
-# Generates a standard CycloneDX-compatible JSON SBOM and SHA-256 checksum manifest.
+# Nexus Code Software Bill of Materials (SBOM) Generator (REQ-REL-108, ACC-SUP-02)
+# Generates a merged, lockfile-derived CycloneDX 1.5 JSON SBOM for Rust and Node production dependencies.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-OUT_DIR="${ROOT_DIR}/dist"
+OUT_FILE="${1:-${ROOT_DIR}/dist/sbom.cdx.json}"
 
-mkdir -p "${OUT_DIR}"
+mkdir -p "$(dirname "$OUT_FILE")"
+WORK=$(mktemp -d)
+RUST_TARGET="x86_64-unknown-linux-gnu"
+cleanup() {
+  rm -rf "$WORK"
+  rm -f "${ROOT_DIR}/core/harness-core.cdx.json"
+}
+trap cleanup EXIT
 
-GIT_COMMIT="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo "UNKNOWN_COMMIT")"
-GIT_BRANCH="$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "UNKNOWN_BRANCH")"
-TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-SERIAL_UUID="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "urn:uuid:00000000-0000-0000-0000-000000000000")"
+# 1. Generate Rust SBOM for the exact platform shipped by package-linux.sh.
+(cd "${ROOT_DIR}/core" && cargo cyclonedx --format json --spec-version 1.5 --target "$RUST_TARGET")
+mv "${ROOT_DIR}/core/harness-core.cdx.json" "$WORK/cargo.cdx.json"
 
-echo "[*] Generating Software Bill of Materials (SBOM)..."
-
-python3 - <<EOF
+# cargo-cyclonedx can include compile-only dependencies in its package graph.
+# ACC-SUP-02 is defined over the lockfile production closure for the shipped
+# binaries, so retain normal and build edges for the shipped target and remove
+# components outside that closure before merging the npm BOM.
+cargo tree \
+  --locked \
+  --manifest-path "${ROOT_DIR}/core/Cargo.toml" \
+  --target "$RUST_TARGET" \
+  --edges normal,build \
+  --prefix none \
+  --format '{p}' > "$WORK/cargo-production-tree.txt"
+CARGO_SBOM="$WORK/cargo.cdx.json" \
+CARGO_TREE="$WORK/cargo-production-tree.txt" \
+python3 - <<'PY'
 import json
 import os
-import hashlib
-from datetime import datetime
+import re
+from urllib.parse import unquote
 
-root_dir = "${ROOT_DIR}"
-out_dir = "${OUT_DIR}"
-git_commit = "${GIT_COMMIT}"
-timestamp = "${TIMESTAMP}"
-serial_number = "urn:uuid:${SERIAL_UUID}"
+sbom_path = os.environ["CARGO_SBOM"]
+tree_path = os.environ["CARGO_TREE"]
+with open(sbom_path, encoding="utf-8") as f:
+    bom = json.load(f)
 
-# 1. Parse Node dependencies from cli/package.json
-cli_pkg_path = os.path.join(root_dir, "cli", "package.json")
-with open(cli_pkg_path, "r", encoding="utf-8") as f:
-    cli_pkg = json.load(f)
+def identity(name, version):
+    # Cargo treats hyphens and underscores as equivalent crate-name spelling.
+    return (name.replace("-", "_").lower(), version)
 
-components = []
+expected = set()
+with open(tree_path, encoding="utf-8") as f:
+    for line in f:
+        match = re.match(r"^(.+?) v([^ ]+)(?: |$)", line.strip())
+        if not match:
+            raise SystemExit(f"Cannot parse Cargo production dependency identity: {line.rstrip()!r}")
+        expected.add(identity(match.group(1), match.group(2)))
 
-# Primary CLI component
-components.append({
-    "type": "application",
-    "name": cli_pkg.get("name", "local-code-harness"),
-    "version": cli_pkg.get("version", "0.0.0"),
-    "description": cli_pkg.get("description", ""),
-    "licenses": [{"license": {"id": cli_pkg.get("license", "MIT")}}],
-    "purl": f"pkg:npm/{cli_pkg.get('name')}@{cli_pkg.get('version')}"
-})
+root = bom.get("metadata", {}).get("component", {})
+root_purl = root.get("purl", "")
+root_match = re.match(r"^pkg:cargo/([^@?]+)@([^?]+)", root_purl)
+if not root_match:
+    raise SystemExit("Cargo SBOM has no parseable root package identity")
+root_identity = identity(unquote(root_match.group(1)), root_match.group(2))
+if root_identity not in expected:
+    raise SystemExit("Cargo production dependency graph does not contain the SBOM root package")
+expected.remove(root_identity)
 
-for dep_name, dep_ver in cli_pkg.get("dependencies", {}).items():
-    clean_ver = dep_ver.lstrip("^~")
-    components.append({
-        "type": "library",
-        "name": dep_name,
-        "version": clean_ver,
-        "scope": "required",
-        "purl": f"pkg:npm/{dep_name}@{clean_ver}"
-    })
-
-# 2. Parse Rust dependencies from core/Cargo.toml
-cargo_path = os.path.join(root_dir, "core", "Cargo.toml")
-with open(cargo_path, "r", encoding="utf-8") as f:
-    cargo_lines = f.readlines()
-
-in_deps = False
-for line in cargo_lines:
-    line = line.strip()
-    if line.startswith("[dependencies]"):
-        in_deps = True
+components_by_identity = {}
+non_cargo_components = []
+for component in bom.get("components", []):
+    purl = component.get("purl", "")
+    if not purl.startswith("pkg:cargo/"):
+        non_cargo_components.append(component)
         continue
-    elif line.startswith("[") and in_deps:
-        in_deps = False
+    match = re.match(r"^pkg:cargo/([^@?]+)@([^?]+)", purl)
+    if not match:
+        raise SystemExit(f"Cargo SBOM component has an invalid package URL: {purl!r}")
+    key = identity(unquote(match.group(1)), match.group(2))
+    components_by_identity.setdefault(key, []).append(component)
+
+ambiguous = sorted(key for key, values in components_by_identity.items() if len(values) != 1)
+if ambiguous:
+    raise SystemExit(f"Cargo SBOM has ambiguous source identities for: {ambiguous}")
+actual = set(components_by_identity)
+missing = sorted(expected - actual)
+if missing:
+    raise SystemExit(f"Cargo SBOM omits production dependencies: {missing}")
+
+kept_cargo = [components_by_identity[key][0] for key in sorted(expected)]
+kept_refs = {component["bom-ref"] for component in kept_cargo}
+root_ref = root.get("bom-ref")
+if not root_ref:
+    raise SystemExit("Cargo SBOM root has no bom-ref")
+metadata_refs = set()
+def add_component_refs(component):
+    ref = component.get("bom-ref")
+    if ref:
+        if ref in metadata_refs:
+            raise SystemExit(f"Cargo SBOM metadata has duplicate bom-ref: {ref}")
+        metadata_refs.add(ref)
+    for child in component.get("components", []):
+        add_component_refs(child)
+add_component_refs(root)
+if root_ref not in metadata_refs:
+    raise SystemExit("Cargo SBOM metadata root reference is missing")
+kept_refs.update(metadata_refs)
+
+# Refuse to rewrite a malformed or incomplete graph. Edges to known components
+# excluded by the production-closure selection are intentional compile-only
+# edges; unknown refs indicate that the input graph cannot be safely pruned.
+all_refs = set()
+for component in bom.get("components", []):
+    ref = component.get("bom-ref")
+    if ref:
+        if ref in all_refs or ref in metadata_refs:
+            raise SystemExit(f"Cargo SBOM has duplicate bom-ref: {ref}")
+        all_refs.add(ref)
+all_refs.update(metadata_refs)
+for dependency in bom.get("dependencies", []):
+    ref = dependency.get("ref")
+    if ref not in all_refs:
+        raise SystemExit(f"Cargo SBOM dependency record refers to unknown bom-ref: {ref}")
+    for target_ref in dependency.get("dependsOn", []):
+        if target_ref not in all_refs:
+            raise SystemExit(f"Cargo SBOM dependency edge refers to unknown bom-ref: {target_ref}")
+
+removed = actual - expected
+removed_edges = 0
+bom["components"] = non_cargo_components + kept_cargo
+filtered_dependencies = []
+for dependency in bom.get("dependencies", []):
+    if dependency.get("ref") not in kept_refs:
         continue
+    removed_edges += sum(1 for ref in dependency.get("dependsOn", []) if ref not in kept_refs)
+    dependency["dependsOn"] = [ref for ref in dependency.get("dependsOn", []) if ref in kept_refs]
+    filtered_dependencies.append(dependency)
+bom["dependencies"] = filtered_dependencies
 
-    if in_deps and "=" in line and not line.startswith("#"):
-        parts = line.split("=", 1)
-        crate_name = parts[0].strip()
-        ver_part = parts[1].strip()
-        # Parse simple version string or table
-        if ver_part.startswith('"'):
-            crate_ver = ver_part.strip('"')
-        elif "version" in ver_part:
-            import re
-            m = re.search(r'version\s*=\s*"([^"]+)"', ver_part)
-            crate_ver = m.group(1) if m else "unknown"
-        else:
-            crate_ver = "unknown"
-
-        components.append({
-            "type": "library",
-            "name": crate_name,
-            "version": crate_ver,
-            "scope": "required",
-            "purl": f"pkg:cargo/{crate_name}@{crate_ver}"
-        })
-
-sbom = {
-    "bomFormat": "CycloneDX",
-    "specVersion": "1.5",
-    "serialNumber": serial_number,
-    "version": 1,
-    "metadata": {
-        "timestamp": timestamp,
-        "tools": [
-            {
-                "vendor": "Nexus",
-                "name": "nexus-sbom-generator",
-                "version": cli_pkg.get("version", "0.0.0")
-            }
-        ],
-        "component": {
-            "type": "application",
-            "name": "nexus-code",
-            "version": cli_pkg.get("version", "0.0.0"),
-            "properties": [
-                {"name": "git:commit", "value": git_commit},
-                {"name": "architecture", "value": "x86_64-linux"}
-            ]
-        }
-    },
-    "components": components
-}
-
-sbom_path = os.path.join(out_dir, "sbom.json")
 with open(sbom_path, "w", encoding="utf-8") as f:
-    json.dump(sbom, f, indent=2)
+    json.dump(bom, f, indent=2)
+    f.write("\n")
+print(
+    f"Retained {len(expected)} Cargo production dependencies; "
+    f"removed {len(removed)} compile-only components and {removed_edges} compile-only edges"
+)
+PY
 
-# Compute SHA-256
-with open(sbom_path, "rb") as f:
-    digest = hashlib.sha256(f.read()).hexdigest()
+# 2. Generate Node production SBOM from cli/package-lock.json using cyclonedx-npm
+# `npm --prefix cli test` exports these values. If they reach npm exec, npm's
+# Arborist treats cli/lib as part of the local prefix tree and fails when it is
+# absent, even though the package-lock-only SBOM can otherwise be generated.
+env -u npm_config_local_prefix \
+  -u npm_config_prefix \
+  -u NPM_CONFIG_LOCAL_PREFIX \
+  -u NPM_CONFIG_PREFIX \
+  npx --yes @cyclonedx/cyclonedx-npm \
+  --package-lock-only \
+  --omit dev \
+  --spec-version 1.5 \
+  --output-format JSON \
+  --output-file "$WORK/npm.cdx.json" \
+  "${ROOT_DIR}/cli/package.json"
 
-checksum_path = os.path.join(out_dir, "sbom.json.sha256")
-with open(checksum_path, "w", encoding="utf-8") as f:
-    f.write(f"{digest}  sbom.json\n")
+# 3. Merge Cargo and npm SBOMs using cyclonedx-cli
+cyclonedx merge \
+  --input-files "$WORK/cargo.cdx.json" "$WORK/npm.cdx.json" \
+  --output-file "$OUT_FILE" \
+  --output-version v1_5
 
-print(f"[+] SBOM successfully written to {sbom_path} (Components: {len(components)})")
-print(f"[+] SHA-256: {digest}")
+# 4. Normalize metadata for reproducible builds if SOURCE_DATE_EPOCH or git commit is available
+python3 - <<EOF
+import json, uuid, datetime, os
+
+out_path = "$OUT_FILE"
+root_dir = "$ROOT_DIR"
+
+epoch_str = os.environ.get("SOURCE_DATE_EPOCH")
+if not epoch_str:
+    try:
+        import subprocess
+        epoch_str = subprocess.check_output(
+            ["git", "-C", root_dir, "log", "-1", "--format=%ct"],
+            text=True
+        ).strip()
+    except Exception:
+        epoch_str = "1700000000"
+
+epoch = int(epoch_str)
+with open(out_path, "r+", encoding="utf-8") as f:
+    data = json.load(f)
+    if "metadata" not in data:
+        data["metadata"] = {}
+    data["metadata"]["timestamp"] = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+    data["serialNumber"] = f"urn:uuid:{uuid.uuid5(namespace, str(epoch))}"
+    if "component" not in data["metadata"]:
+        data["metadata"]["component"] = {"type": "application", "name": "nexus-code"}
+    else:
+        data["metadata"]["component"]["name"] = "nexus-code"
+    f.seek(0)
+    json.dump(data, f, indent=2)
+    f.truncate()
 EOF
 
-echo "[+] Software Bill of Materials (SBOM) generation complete."
+# 5. Validate the merged CycloneDX SBOM
+cyclonedx validate --input-file "$OUT_FILE" --fail-on-errors
+echo "Generated and validated CycloneDX SBOM: $OUT_FILE"
+
+# 6. Generate SHA-256 checksum and backwards-compatible sbom.json
+(cd "$(dirname "$OUT_FILE")" && sha256sum "$(basename "$OUT_FILE")" > "$(basename "$OUT_FILE").sha256")
+if [[ "$(basename "$OUT_FILE")" == "sbom.cdx.json" ]]; then
+  cp "$OUT_FILE" "$(dirname "$OUT_FILE")/sbom.json"
+  (cd "$(dirname "$OUT_FILE")" && sha256sum "sbom.json" > "sbom.json.sha256")
+fi

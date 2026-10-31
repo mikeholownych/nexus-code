@@ -13,6 +13,13 @@ pub struct GitInfo {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct PostureInfo {
+    pub mode: String,
+    pub sandbox: String,
+    pub trusted: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct ModelSummary {
     pub summary: String,
     #[serde(default)]
@@ -118,6 +125,14 @@ pub enum Review {
     },
     #[serde(rename = "command")]
     Shell { command: String },
+    #[serde(rename = "verifier")]
+    Verifier {
+        command: String,
+        #[serde(default)]
+        script: Option<String>,
+        #[serde(default)]
+        detail: Option<String>,
+    },
     #[serde(rename = "args")]
     Args { text: String, truncated: bool },
     /// A review kind this client does not know; the modal still asks, without a preview.
@@ -159,6 +174,8 @@ pub enum Event {
         /// The id the session is saved under (absent from older sidecars).
         #[serde(default)]
         session: Option<String>,
+        #[serde(default)]
+        posture: Option<PostureInfo>,
     },
     #[serde(rename = "assistant.delta")]
     AssistantDelta { turn_id: String, text: String },
@@ -252,6 +269,8 @@ pub enum Event {
         #[serde(default)]
         review: Option<Review>,
     },
+    #[serde(rename = "checkpoint.choice.request")]
+    CheckpointChoiceRequest { id: String, message: String },
     #[serde(rename = "turn.result")]
     TurnResult {
         heading: String,
@@ -363,6 +382,8 @@ pub enum Command {
     Approve { id: String, always: bool },
     #[serde(rename = "deny")]
     Deny { id: String },
+    #[serde(rename = "checkpoint.choice")]
+    CheckpointChoice { id: String, choice: String },
     #[serde(rename = "slash")]
     Slash {
         id: String,
@@ -482,6 +503,25 @@ mod tests {
                 }),
                 busy: false,
                 session: None,
+                posture: None,
+            })
+        );
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"review","git":null,"busy":false,"posture":{"mode":"review","sandbox":"off","trusted":false}}"#
+            ),
+            Ok(Event::SessionState {
+                workspace_name: "app".into(),
+                model: "m".into(),
+                mode: "review".into(),
+                git: None,
+                busy: false,
+                session: None,
+                posture: Some(PostureInfo {
+                    mode: "review".into(),
+                    sandbox: "off".into(),
+                    trusted: false,
+                }),
             })
         );
         assert!(matches!(
@@ -538,6 +578,10 @@ mod tests {
                 subject: "x.txt".into(),
                 review: None,
             })
+        );
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-1","turn_id":"t1","message":"Sensitive content prevents checkpointing."}"#),
+            Ok(Event::CheckpointChoiceRequest { id: "choice-1".into(), message: "Sensitive content prevents checkpointing.".into() })
         );
         assert_eq!(
             parse_event(
@@ -776,6 +820,10 @@ mod tests {
                 serde_json::json!({"v":1,"type":"deny","id":"approval-1"}),
             ),
             (
+                Command::CheckpointChoice { id: "choice-1".into(), choice: "without_checkpoint".into() },
+                serde_json::json!({"v":1,"type":"checkpoint.choice","id":"choice-1","choice":"without_checkpoint"}),
+            ),
+            (
                 Command::Slash {
                     id: "s1".into(),
                     command: "diff".into(),
@@ -838,6 +886,14 @@ mod tests {
             review(r#"{"kind":"command","command":"npm test"}"#),
             Some(Review::Shell {
                 command: "npm test".into()
+            })
+        );
+        assert_eq!(
+            review(r#"{"kind":"verifier","command":"npm test","script":"jest","detail":"package.json:scripts.test"}"#),
+            Some(Review::Verifier {
+                command: "npm test".into(),
+                script: Some("jest".into()),
+                detail: Some("package.json:scripts.test".into()),
             })
         );
         assert_eq!(

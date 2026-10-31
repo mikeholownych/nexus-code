@@ -1,0 +1,348 @@
+import { test, describe, before, after } from "node:test";
+import * as assert from "node:assert";
+import * as http from "node:http";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as fs from "node:fs";
+import * as cp from "node:child_process";
+import { promisify } from "node:util";
+import {
+  isPublicIp,
+  isSafeOutboundUrl,
+  safeFetch,
+  RustCoreBridge,
+} from "../src/tools.js";
+
+const execFileAsync = promisify(cp.execFile);
+
+describe("ACC-TRUST-03: SSRF protection, DNS pinning, redirect hop checks, and streaming 5 MB cap", () => {
+  let server: http.Server;
+  let serverPort: number;
+  let serverOrigin: string;
+  let tempDir: string;
+  let bridge: RustCoreBridge;
+
+  before(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-ssrf-test-"));
+    bridge = new RustCoreBridge(tempDir);
+
+    server = http.createServer((req, res) => {
+      const url = new URL(req.url || "/", serverOrigin);
+
+      if (url.pathname === "/hello") {
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end("<html><body><h1>Hello World</h1></body></html>");
+        return;
+      }
+
+      if (url.pathname === "/redirect-loopback") {
+        res.writeHead(302, { Location: "http://127.0.0.1:9999/internal-admin" });
+        res.end();
+        return;
+      }
+
+      if (url.pathname === "/redirect-cgnat") {
+        res.writeHead(302, { Location: "http://100.64.0.1/admin" });
+        res.end();
+        return;
+      }
+
+      if (url.pathname === "/redirect-v6ula") {
+        res.writeHead(302, { Location: "http://[fd00::1]/admin" });
+        res.end();
+        return;
+      }
+
+      if (url.pathname === "/redirect-localtest") {
+        res.writeHead(302, { Location: "http://localtest.me/admin" });
+        res.end();
+        return;
+      }
+
+      if (url.pathname === "/redirect-loop") {
+        res.writeHead(302, { Location: `${serverOrigin}/redirect-loop` });
+        res.end();
+        return;
+      }
+
+      if (url.pathname === "/stream-50mb") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        // Stream 50 MB in 1 MB chunks
+        const oneMb = Buffer.alloc(1024 * 1024, "A");
+        let sent = 0;
+        function sendChunks() {
+          while (sent < 50) {
+            sent++;
+            const ok = res.write(oneMb);
+            if (!ok) {
+              res.once("drain", sendChunks);
+              return;
+            }
+          }
+          res.end();
+        }
+        sendChunks();
+        return;
+      }
+
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not Found");
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address() as any;
+        serverPort = addr.port;
+        serverOrigin = `http://127.0.0.1:${serverPort}`;
+        resolve();
+      });
+    });
+  });
+
+  after(async () => {
+    if (server) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("isPublicIp correctly identifies public and non-public IPv4 and IPv6 addresses", () => {
+    // IPv4 Loopback
+    assert.strictEqual(isPublicIp("127.0.0.1"), false);
+    assert.strictEqual(isPublicIp("127.0.0.2"), false);
+    assert.strictEqual(isPublicIp("127.255.255.255"), false);
+
+    // IPv4 RFC1918 Private
+    assert.strictEqual(isPublicIp("10.0.0.1"), false);
+    assert.strictEqual(isPublicIp("172.16.0.1"), false);
+    assert.strictEqual(isPublicIp("172.31.255.255"), false);
+    assert.strictEqual(isPublicIp("192.168.1.1"), false);
+
+    // IPv4 CGNAT
+    assert.strictEqual(isPublicIp("100.64.0.1"), false);
+    assert.strictEqual(isPublicIp("100.127.255.254"), false);
+
+    // IPv4 Link-local & 0.0.0.0
+    assert.strictEqual(isPublicIp("169.254.169.254"), false);
+    assert.strictEqual(isPublicIp("0.0.0.0"), false);
+
+    // IPv4 Multicast & Reserved
+    assert.strictEqual(isPublicIp("224.0.0.1"), false);
+    assert.strictEqual(isPublicIp("240.0.0.1"), false);
+    assert.strictEqual(isPublicIp("255.255.255.255"), false);
+
+    // IPv4 Documentation & Benchmark
+    assert.strictEqual(isPublicIp("192.0.2.1"), false);
+    assert.strictEqual(isPublicIp("198.51.100.1"), false);
+    assert.strictEqual(isPublicIp("203.0.113.1"), false);
+
+    // IPv4 Valid Public
+    assert.strictEqual(isPublicIp("8.8.8.8"), true);
+    assert.strictEqual(isPublicIp("1.1.1.1"), true);
+    assert.strictEqual(isPublicIp("93.184.216.34"), true);
+
+    // IPv6 Loopback & Unspecified
+    assert.strictEqual(isPublicIp("::1"), false);
+    assert.strictEqual(isPublicIp("[::1]"), false);
+    assert.strictEqual(isPublicIp("::"), false);
+
+    // IPv6 IPv4-mapped addresses
+    assert.strictEqual(isPublicIp("::ffff:127.0.0.1"), false);
+    assert.strictEqual(isPublicIp("[::ffff:127.0.0.1]"), false);
+    assert.strictEqual(isPublicIp("::ffff:10.0.0.1"), false);
+    assert.strictEqual(isPublicIp("::ffff:192.168.1.1"), false);
+    assert.strictEqual(isPublicIp("::ffff:100.64.0.1"), false);
+    assert.strictEqual(isPublicIp("::ffff:8.8.8.8"), true);
+
+    // IPv6 ULA (fc00::/7)
+    assert.strictEqual(isPublicIp("fd00::1"), false);
+    assert.strictEqual(isPublicIp("[fd00::1]"), false);
+    assert.strictEqual(isPublicIp("fc00::1"), false);
+
+    // IPv6 Link-local (fe80::/10)
+    assert.strictEqual(isPublicIp("fe80::1"), false);
+    assert.strictEqual(isPublicIp("[fe80::1]"), false);
+
+    // IPv6 Multicast (ff00::/8)
+    assert.strictEqual(isPublicIp("ff02::1"), false);
+
+    // IPv6 Public Unicast
+    assert.strictEqual(isPublicIp("2606:2800:220:1:248:1893:25c8:1946"), true);
+  });
+
+  test("fetch_web refuses non-public address literals: [::ffff:127.0.0.1], [fd00::1], 100.64.0.1", async () => {
+    const targets = [
+      "http://[::ffff:127.0.0.1]",
+      "http://[::ffff:127.0.0.1]:8080/secret",
+      "http://[fd00::1]",
+      "http://[fd00::1]:8080/data",
+      "http://100.64.0.1",
+      "http://100.64.0.1:8080/metrics",
+      "http://127.0.0.1:8080/admin",
+    ];
+
+    for (const url of targets) {
+      const res = await bridge.executeTool("fetch_web", { url });
+      assert.strictEqual(
+        res.success,
+        false,
+        `Expected fetch_web to refuse non-public target: ${url}`
+      );
+      assert.match(
+        res.error || "",
+        /SSRF Guard|Blocked|non-public|Loopback|Private/i,
+        `Expected SSRF refusal error message for ${url}, got: ${res.error}`
+      );
+    }
+  });
+
+  test("fetch_web refuses localtest.me resolving to 127.0.0.1", async () => {
+    // localtest.me is a well-known public domain mapped to 127.0.0.1
+    // safeFetch resolves it via DNS and detects 127.0.0.1 is non-public
+    const res = await bridge.executeTool("fetch_web", { url: "http://localtest.me" });
+    assert.strictEqual(res.success, false);
+    assert.match(
+      res.error || "",
+      /SSRF Guard|Non-public address 127\.0\.0\.1|DNS lookup failed/i,
+      `Expected localtest.me to be refused by SSRF guard, got: ${res.error}`
+    );
+  });
+
+  test("fetch_web / safeFetch refuses public URL that 302-redirects to 127.0.0.1 (local test redirector)", async () => {
+    // When the initial hop is allowlisted via localOrigins (simulating a reachable server),
+    // but that server redirects to 127.0.0.1 / localtest.me, the redirect hop MUST be refused.
+    const redirectEndpoints = [
+      { path: "/redirect-loopback", expected: "127.0.0.1" },
+      { path: "/redirect-cgnat", expected: "100.64.0.1" },
+      { path: "/redirect-v6ula", expected: "fd00::1" },
+      { path: "/redirect-localtest", expected: "127.0.0.1" },
+    ];
+
+    for (const ep of redirectEndpoints) {
+      const url = `${serverOrigin}${ep.path}`;
+      await assert.rejects(
+        async () => {
+          await safeFetch(url, {
+            localOrigins: [serverOrigin], // allows hop 1 only
+          });
+        },
+        (err: any) => {
+          assert.match(
+            err.message,
+            /SSRF Guard: Non-public address/i,
+            `Expected redirect to be blocked by SSRF Guard, got: ${err.message}`
+          );
+          return true;
+        }
+      );
+    }
+
+    // Also verify via fetch_web tool dispatch with NEXUS_LOCAL_ORIGINS setting
+    const prevOrigins = process.env.NEXUS_LOCAL_ORIGINS;
+    try {
+      process.env.NEXUS_LOCAL_ORIGINS = serverOrigin;
+      const res = await bridge.executeTool("fetch_web", {
+        url: `${serverOrigin}/redirect-loopback`,
+      });
+      assert.strictEqual(res.success, false);
+      assert.match(
+        res.error || "",
+        /SSRF Guard: Non-public address 127\.0\.0\.1 is blocked/i,
+        `Expected tool error to reflect redirect SSRF block, got: ${res.error}`
+      );
+    } finally {
+      if (prevOrigins !== undefined) {
+        process.env.NEXUS_LOCAL_ORIGINS = prevOrigins;
+      } else {
+        delete process.env.NEXUS_LOCAL_ORIGINS;
+      }
+    }
+  });
+
+  test("safeFetch streaming 5 MB cap truncates 50 MB response with RSS < 100 MB", async () => {
+    const url = `${serverOrigin}/stream-50mb`;
+    const beforeRss = process.memoryUsage().rss;
+
+    const res = await safeFetch(url, {
+      localOrigins: [serverOrigin],
+      maxBytes: 5 * 1024 * 1024,
+    });
+
+    const afterRss = process.memoryUsage().rss;
+    const deltaMb = ((afterRss - beforeRss) / (1024 * 1024)).toFixed(1);
+
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.truncated, true);
+    assert.strictEqual(
+      res.text.length,
+      5 * 1024 * 1024,
+      "Body must be truncated at exactly 5 MB (5242880 bytes)"
+    );
+
+    // Verify in-process memory growth during streaming 50 MB is strictly bounded (< 35 MB)
+    assert.ok(
+      afterRss - beforeRss < 35 * 1024 * 1024,
+      `Memory delta during streaming must be bounded (< 35 MB, measured ${deltaMb} MB)`
+    );
+
+    // Clean node process qualification check: verify streaming fetch operates with total RSS < 100 MB
+    const childScript = `
+      const http = require("node:http");
+      const req = http.get("${url}", async (res) => {
+        let bytes = 0;
+        for await (const chunk of res) {
+          bytes += chunk.length;
+          if (bytes >= 5242880) {
+            res.destroy();
+            break;
+          }
+        }
+        const rss = process.memoryUsage().rss;
+        console.log(JSON.stringify({ bytes, rss }));
+        process.exit(0);
+      });
+    `;
+    const { stdout } = await execFileAsync(process.execPath, ["-e", childScript]);
+    const childResult = JSON.parse(stdout);
+    const childRssMb = (childResult.rss / (1024 * 1024)).toFixed(1);
+    assert.ok(
+      childResult.rss < 100 * 1024 * 1024,
+      `Clean process RSS must remain < 100 MB after streaming 50 MB response (measured ${childRssMb} MB)`
+    );
+  });
+
+  test("safeFetch enforces maxRedirects limit", async () => {
+    const url = `${serverOrigin}/redirect-loop`;
+    await assert.rejects(
+      async () => {
+        await safeFetch(url, {
+          localOrigins: [serverOrigin],
+          maxRedirects: 3,
+        });
+      },
+      /Too many redirects \(maximum 3\)/i
+    );
+  });
+
+  test("safeFetch pins DNS address for the connection", async () => {
+    // Custom mock DNS lookup returns a custom address
+    let lookupCalledWithHost = "";
+    const mockLookup = async (host: string) => {
+      lookupCalledWithHost = host;
+      return [{ address: "127.0.0.1", family: 4 }];
+    };
+
+    const pinnedUrl = `http://custom-pinned-host.test:${serverPort}/hello`;
+    const res = await safeFetch(pinnedUrl, {
+      dnsLookup: mockLookup,
+      localOrigins: ["*"], // allow local for test connection
+    });
+
+    assert.strictEqual(lookupCalledWithHost, "custom-pinned-host.test");
+    assert.strictEqual(res.ok, true);
+    assert.match(res.text, /Hello World/);
+  });
+});

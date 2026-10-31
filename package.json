@@ -1,6 +1,6 @@
 {
   "name": "nexus-code-harness",
-  "version": "0.1.0-alpha.2",
+  "version": "1.0.0-rc.2",
   "description": "High-Performance Autonomous Local AI Coding Harness (Codex / Claude-Code style) powered by Rust + TypeScript",
   "scripts": {
     "build:core": "cargo build --release --manifest-path core/Cargo.toml",
@@ -26,5 +26,8 @@
     "lm-studio"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
 }

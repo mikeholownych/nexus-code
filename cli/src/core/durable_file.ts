@@ -14,8 +14,24 @@
  * every surviving record also holds in its messages, and readers set them aside as uncommitted rather than duplicate.
  */
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+
+/**
+ * Returns true if ~/.nexus exists and is more permissive than 0700 (mode & 0o077 !== 0).
+ * Used for the startup banner in REPL, TUI sidecar, and UI (SPEC-08 §4).
+ */
+export function isNexusDirPermissive(home = os.homedir()): boolean {
+  try {
+    const nexusDir = path.join(home, ".nexus");
+    if (!fs.existsSync(nexusDir)) return false;
+    const stat = fs.statSync(nexusDir);
+    return (stat.mode & 0o077) !== 0;
+  } catch {
+    return false;
+  }
+}
 
 function fsyncDirectory(dir: string): void {
   let fd: number | undefined;
@@ -26,6 +42,20 @@ function fsyncDirectory(dir: string): void {
     // Some filesystems do not support fsync on directories; the rename itself is still atomic.
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/**
+ * Fsyncs a directory and propagates unsupported-operation and I/O failures.
+ * Deletion code uses this before removing dependent files so it never reports
+ * a durable primary removal when the containing directory cannot be synced.
+ */
+export function fsyncDirectoryDurably(dir: string): void {
+  const fd = fs.openSync(dir, "r");
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -46,19 +76,77 @@ export function withDurableSync<T>(fn: () => T): T {
   }
 }
 
-export function writeFileDurably(target: string, data: string, mode = 0o600): void {
-  const sync = syncDepth > 0;
+/**
+ * Ensures that `dirPath` and any missing parent directories exist with private permissions (0700),
+ * regardless of the process umask (REQ-PER-101).
+ *
+ * Only newly created directories have their mode explicitly set to 0700; existing directories
+ * are left untouched so that `doctor --fix` can opt-in to tightening existing installations.
+ */
+export function ensurePrivateDir(dirPath: string): void {
+  const resolved = path.resolve(dirPath);
+  if (fs.existsSync(resolved)) {
+    return;
+  }
+  const toCreate: string[] = [];
+  let curr = resolved;
+  while (curr && !fs.existsSync(curr)) {
+    toCreate.push(curr);
+    const parent = path.dirname(curr);
+    if (parent === curr) break;
+    curr = parent;
+  }
+  fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
+  for (const d of toCreate) {
+    try {
+      fs.chmodSync(d, 0o700);
+    } catch {
+      // Ignore on filesystems that do not support POSIX chmod
+    }
+  }
+}
+
+export interface WritePrivateFileOptions {
+  durable?: boolean;
+  mode?: number;
+  encoding?: BufferEncoding;
+}
+
+/**
+ * Writes a private file with mode 0600 (or specified mode), ensuring parent directory is 0700 (REQ-PER-101).
+ * Writes atomically via temporary file and rename.
+ * When `durable` is true (or during withDurableSync), the file and directory are fsynced.
+ */
+export function writePrivateFile(
+  target: string,
+  data: string | NodeJS.ArrayBufferView,
+  options?: WritePrivateFileOptions
+): void {
   const dir = path.dirname(target);
-  fs.mkdirSync(dir, { recursive: true });
+  ensurePrivateDir(dir);
+  const mode = options?.mode ?? 0o600;
+  const isDurable = options?.durable ?? false;
+  const sync = isDurable || syncDepth > 0;
+
   const temp = `${target}.${randomUUID()}.tmp`;
   let fd: number | undefined;
   try {
     fd = fs.openSync(temp, "w", mode);
-    fs.writeSync(fd, data);
+    try {
+      fs.chmodSync(temp, mode);
+    } catch {}
+    if (typeof data === "string") {
+      fs.writeSync(fd, data, undefined, options?.encoding ?? "utf8");
+    } else {
+      fs.writeSync(fd, data);
+    }
     if (sync) fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = undefined;
     fs.renameSync(temp, target);
+    try {
+      fs.chmodSync(target, mode);
+    } catch {}
     if (sync) fsyncDirectory(dir);
   } catch (err) {
     if (fd !== undefined) {
@@ -67,24 +155,75 @@ export function writeFileDurably(target: string, data: string, mode = 0o600): vo
       } catch {}
     }
     try {
-      fs.unlinkSync(temp);
+      if (fs.existsSync(temp)) fs.unlinkSync(temp);
     } catch {}
     throw err;
   }
 }
 
+export interface AppendPrivateFileOptions {
+  mode?: number;
+  encoding?: BufferEncoding;
+  durable?: boolean;
+}
+
+/**
+ * Appends data to a private file with mode 0600 (or specified mode), ensuring parent directory is 0700 (REQ-PER-101).
+ * If the file is newly created, it is explicitly chmodded to `mode`.
+ */
+export function appendPrivateFile(
+  target: string,
+  data: string | NodeJS.ArrayBufferView,
+  options?: AppendPrivateFileOptions
+): void {
+  const dir = path.dirname(target);
+  ensurePrivateDir(dir);
+  const mode = options?.mode ?? 0o600;
+  const isDurable = options?.durable ?? false;
+  const sync = isDurable || syncDepth > 0;
+  const created = !fs.existsSync(target);
+
+  const fd = fs.openSync(target, "a", mode);
+  try {
+    if (created) {
+      try {
+        fs.chmodSync(target, mode);
+      } catch {}
+    }
+    if (typeof data === "string") {
+      fs.writeSync(fd, data, undefined, options?.encoding ?? "utf8");
+    } else {
+      fs.writeSync(fd, data);
+    }
+    if (sync) fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (created && sync) fsyncDirectory(dir);
+}
+
+export function writeFileDurably(target: string, data: string, mode = 0o600): void {
+  writePrivateFile(target, data, { durable: true, mode });
+}
+
 export function appendLinesDurably(target: string, lines: string[], mode = 0o600): void {
   if (!lines.length) return;
   const created = !fs.existsSync(target);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const dir = path.dirname(target);
+  ensurePrivateDir(dir);
   const fd = fs.openSync(target, "a", mode);
   try {
+    if (created) {
+      try {
+        fs.chmodSync(target, mode);
+      } catch {}
+    }
     fs.writeSync(fd, `${lines.join("\n")}\n`);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
-  if (created) fsyncDirectory(path.dirname(target));
+  if (created) fsyncDirectory(dir);
 }
 
 export interface ArchiveLine<M> {

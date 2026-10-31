@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
-import { parseAdmissionHeaders, parseAdvertisement, parseTokenizeResponse, type AdmissionReport, type Advertisement, type RequestCount } from "./core/provider_capabilities.js";
+import { parseAdmissionHeaders, parseAdvertisement, parseServerContext, parseTokenizeResponse, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
@@ -18,12 +18,14 @@ import type {
 import {
   classifyHttpFailure,
   classifyTransportFailure,
+  isTlsVerificationError,
   providerHints,
   TEMPORARY_CONDITIONS,
   type ProbeResult,
   type ProviderClassification,
 } from "./core/provider_recovery.js";
 import { redactSecrets } from "./ui.js";
+import { classifyLocality, setLocalityAuthorityResolver } from "./core/egress.js";
 import { connectionFor, disclosureClass, operatorSettingKeyForAuth, type ResolvedConnection } from "./providers.js";
 import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResult } from "./protocols/common.js";
 import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./protocols/anthropic.js";
@@ -60,9 +62,17 @@ function readConfigEnv(): Record<string, string> {
   return out;
 }
 
+/**
+ * The stored gateway token: the file named by the operator's NEXUS_GATEWAY_TOKEN_FILE (environment or config.env, never
+ * a project .env), else ~/.config/nexus/gateway-token. It is sent only to the origin config.env names (see credentialOriginOf).
+ */
 function readGatewayTokenFile(): string | undefined {
+  const configured = operatorSetting("NEXUS_GATEWAY_TOKEN_FILE");
+  const file = configured
+    ? path.resolve(credentialStorageHome(), configured.replace(/^~(?=\/)/, credentialStorageHome()))
+    : path.join(credentialStorageHome(), ".config/nexus/gateway-token");
   try {
-    return fs.readFileSync(path.join(credentialStorageHome(), ".config/opencode/t5820-client-token"), "utf-8").trim() || undefined;
+    return fs.readFileSync(file, "utf-8").trim() || undefined;
   } catch {
     return undefined;
   }
@@ -99,6 +109,8 @@ function authoritySetting(key: string): string | undefined {
 export function operatorSetting(key: string): string | undefined {
   return authoritySetting(key);
 }
+
+setLocalityAuthorityResolver(operatorSetting);
 
 /** Origins that stored credentials belong to, and the operator-environment key with its own origin. */
 function storedCredentialHomes(): { gateway?: string; listed: Set<string>; envKey?: string; envKeyOrigin?: string } {
@@ -210,7 +222,7 @@ function chatUsage(u: any): UsageReport | undefined {
 }
 
 /** What the provider reported about the request in progress (for its receipt). */
-interface PendingRequest { usage?: UsageReport; providerRequestId?: string; effectiveModel?: string; endpoint?: string }
+interface PendingRequest { usage?: UsageReport; providerRequestId?: string; effectiveModel?: string; endpoint?: string; executions?: number }
 
 /** Model ids from a `/models` answer: OpenAI-style `data[].id`, or the ChatGPT backend's listed `models[].slug`. */
 function modelIds(body: any): string[] {
@@ -235,7 +247,83 @@ export function unsupportedParameter(message: string): string | undefined {
 /** Cloud destinations announced in this process (the disclosure notice is shown once per origin). */
 const announcedDestinations = new Set<string>();
 /** Provider error bodies are bounded and redacted before they reach messages, logs or the UI. */
+/** An information-flow denial: nothing was sent, and no other endpoint may be tried with the same content (PRV-12). */
+function egressDenied(message: string): InferenceError {
+  return new InferenceError("policy_denied", "client", message, { failoverEligible: false });
+}
+
 const MAX_PROVIDER_ERROR_CHARS = 2_000;
+/** Limit for requests that carry no task content (model lists, catalogs, embeddings): a silent server never hangs them. */
+const METADATA_TIMEOUT_MS = 15_000;
+
+/** Provider or endpoint error text as shown and stored: secrets redacted, at most MAX_PROVIDER_ERROR_CHARS (REQ-PRV-103). */
+export function boundedProviderText(text: string): string {
+  const clean = redactSecrets(text);
+  return clean.length > MAX_PROVIDER_ERROR_CHARS ? `${clean.slice(0, MAX_PROVIDER_ERROR_CHARS)}… [${clean.length - MAX_PROVIDER_ERROR_CHARS} more characters]` : clean;
+}
+
+const metadataSignal = (signal?: AbortSignal): AbortSignal =>
+  signal ? AbortSignal.any([signal, AbortSignal.timeout(METADATA_TIMEOUT_MS)]) : AbortSignal.timeout(METADATA_TIMEOUT_MS);
+
+/**
+ * Watchdog for inference requests (first-byte, idle between chunks, and optional total timeout).
+ * Reset on each streamed chunk (REQ-PRV-104).
+ */
+export class StreamWatchdog {
+  private readonly ac = new AbortController();
+  private timer?: NodeJS.Timeout;
+  private totalTimer?: NodeJS.Timeout;
+  private readonly callerAbortListener?: () => void;
+
+  constructor(
+    private readonly firstByteMs: number,
+    private readonly idleMs: number,
+    private readonly totalMs: number,
+    private readonly callerSignal?: AbortSignal,
+  ) {
+    if (this.callerSignal) {
+      if (this.callerSignal.aborted) {
+        this.ac.abort(this.callerSignal.reason);
+      } else {
+        this.callerAbortListener = () => this.ac.abort(this.callerSignal!.reason);
+        this.callerSignal.addEventListener("abort", this.callerAbortListener, { once: true });
+      }
+    }
+    if (this.totalMs > 0) {
+      this.totalTimer = setTimeout(() => {
+        this.ac.abort(new DOMException(`Total inference timeout of ${this.totalMs / 1000}s exceeded`, "TimeoutError"));
+      }, this.totalMs);
+      this.totalTimer.unref?.();
+    }
+    this.arm(this.firstByteMs, "First-byte");
+  }
+
+  get signal(): AbortSignal {
+    return this.ac.signal;
+  }
+
+  private arm(ms: number, phase: string): void {
+    clearTimeout(this.timer);
+    if (ms > 0) {
+      this.timer = setTimeout(() => {
+        this.ac.abort(new DOMException(`${phase} inference timeout of ${ms / 1000}s exceeded`, "TimeoutError"));
+      }, ms);
+      this.timer.unref?.();
+    }
+  }
+
+  onChunk(): void {
+    this.arm(this.idleMs, "Idle");
+  }
+
+  done(): void {
+    clearTimeout(this.timer);
+    clearTimeout(this.totalTimer);
+    if (this.callerSignal && this.callerAbortListener) {
+      this.callerSignal.removeEventListener("abort", this.callerAbortListener);
+    }
+  }
+}
 
 /**
  * Typed inference failure. `condition` is what the failure says about the provider; `execution` is what is known
@@ -378,7 +466,10 @@ function classifyTransportError(err: any, operatorSignal: AbortSignal | undefine
   if (timedOut) {
     return new InferenceError("timeout", "transport", `Inference request timed out: ${err.message}${formatCause(transportCause)}`, { requestId, partialText, transportCause, ...classification });
   }
-  const msg = `${err?.message || String(err)}${formatCause(transportCause)}`;
+  const tlsHint = isTlsVerificationError(transportCause)
+    ? " — for a private or self-signed CA, set NODE_EXTRA_CA_CERTS=/path/to/ca.pem in ~/.config/nexus/config.env"
+    : "";
+  const msg = `${err?.message || String(err)}${formatCause(transportCause)}${tlsHint}`;
   return phase === "stream"
     ? new InferenceError("stream_interrupted", "transport", `Inference stream interrupted before completion: ${msg}`, { requestId, partialText, transportCause, ...classification })
     : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId, transportCause, ...classification });
@@ -387,6 +478,8 @@ function classifyTransportError(err: any, operatorSignal: AbortSignal | undefine
 export class LocalLlmClient {
   private endpoints: string[] = [];
   private activeEndpointIndex: number = 0;
+  /** Endpoints that have answered HTTP 2xx at least once in this session (REQ-TUI-105). */
+  private readonly everSucceededEndpoints = new Set<string>();
   /** Explicitly configured key and the origin it belongs to (config.credentialOrigin, else the primary endpoint). */
   private explicitKey?: string;
   private explicitOrigin?: string;
@@ -420,6 +513,7 @@ export class LocalLlmClient {
   private lastAdmission?: AdmissionReport;
   private readonly reasoningEffort?: string;
   private readonly thinkingBudget?: number;
+  private readonly diagnosticHandler?: (level: "error" | "warn", message: string) => void;
   /** Usage the provider reported for the most recent completed request on this client (provider connections only). */
   private lastUsageReport?: UsageReport;
   private pending?: PendingRequest;
@@ -435,13 +529,16 @@ export class LocalLlmClient {
       taskClass?: string;
       /** Receipt label: main, planner, coder, subagent, work-unit. */
       role?: string;
+      /** Optional diagnostic sink for bounded command surfaces that must sanitize provider-controlled labels. */
+      diagnosticHandler?: (level: "error" | "warn", message: string) => void;
     }
   ) {
     this.conn = connectionFor(config.provider, config.model);
     this.unsupportedParams = new Set(this.conn.omitParams);
     // A provider's base URL already carries its API path and version; only the legacy endpoint path appends /v1.
     const normalizeEp = (urlStr: string) => {
-      let ep = urlStr.trim().replace(/\/+$/, "");
+      let ep = urlStr.trim();
+      while (ep.length > 0 && ep.endsWith("/")) ep = ep.slice(0, -1);
       if (!this.conn.providerId && !ep.endsWith("/v1")) {
         ep = `${ep}/v1`;
       }
@@ -473,6 +570,7 @@ export class LocalLlmClient {
     this.model = config.model;
     this.temperature = config.temperature ?? 0.2;
     this.boundary = options?.boundary || InformationFlowBoundary.getGlobalInstance();
+    this.diagnosticHandler = options?.diagnosticHandler;
     this.taskId = options?.taskId;
     this.sessionId = options?.sessionId;
     this.taskClass = options?.taskClass ?? config.taskClass;
@@ -500,9 +598,27 @@ export class LocalLlmClient {
     return this.lastUsageReport;
   }
 
+  /** Whether the connection supports native tool calling (Responses, Anthropic, or OpenAI-compatible accepting tools). */
+  public supportsNativeTools(): boolean {
+    if (this.conn.protocol === "openai-responses" || this.conn.protocol === "anthropic-messages") {
+      return true;
+    }
+    return !this.unsupportedParams.has("tools");
+  }
+
   /** "cloud" when `url` (default: the active endpoint) receives content outside the operator's machines/network. */
   public disclosureOf(url: string = this.endpoint): "local" | "cloud" {
     return disclosureClass(url, this.conn.providerId, this.cloudRoutedOrigins);
+  }
+
+  private emitDiagnostic(level: "error" | "warn", message: string): void {
+    if (this.diagnosticHandler) {
+      this.diagnosticHandler(level, message);
+    } else if (level === "warn") {
+      console.warn(message);
+    } else {
+      console.error(message);
+    }
   }
 
   /** Why task content may not be sent to `url`, or undefined when it may. */
@@ -547,7 +663,8 @@ export class LocalLlmClient {
     const origin = originOf(url) ?? url;
     if (!announcedDestinations.has(origin)) {
       announcedDestinations.add(origin);
-      console.error(pc.dim(`[nexus] Cloud inference: ${this.conn.label} (${origin}), model ${this.model || "(unset)"}. Task content — prompts, tool results and file excerpts — is sent to this provider.`));
+      const locality = classifyLocality(url);
+      this.emitDiagnostic("error", pc.dim(`[nexus] Cloud inference: ${this.conn.label} (${origin}, locality: ${locality.reason}), model ${this.model || "(unset)"}. Task content — prompts, tool results and file excerpts — is sent to this provider.`));
     }
   }
 
@@ -556,35 +673,30 @@ export class LocalLlmClient {
     return this.conn.providerId === "compatible" && authoritySetting("NEXUS_COMPATIBLE_AUTH") === "none";
   }
 
-  /** Records a receipt for a provider-connection request (appliance requests keep their existing records only). */
+  /** Records a receipt for an inference request (local endpoint or provider connection). */
   private async withReceipt<T>(requestId: string, purpose: string | undefined, run: () => Promise<T>): Promise<T> {
-    if (!this.conn.providerId) {
-      // No receipt, but usage the local server reported (with cached-token counts) replaces the local estimate.
-      this.pending = undefined;
-      this.lastUsageReport = undefined;
-      const result = await run();
-      // Set by run(); read through a function so the narrowing from the assignment above does not apply.
-      this.lastUsageReport = ((): PendingRequest | undefined => this.pending)()?.usage;
-      return result;
-    }
     this.pending = undefined;
     this.reservations = [];
     const pending = (): PendingRequest | undefined => this.pending;
     const base = () => {
       const p = pending();
+      const ep = p?.endpoint ?? this.endpoint;
+      const disclosure = this.disclosureOf(ep);
       return {
-      at: new Date().toISOString(),
-      requestId,
-      role: purpose ?? this.role,
-      providerId: this.conn.providerId!,
-      selectedModel: this.model,
-      ...(p?.effectiveModel ? { effectiveModel: p.effectiveModel } : {}),
-      endpointOrigin: originOf(p?.endpoint ?? this.endpoint) ?? "",
-      protocol: this.conn.protocol,
-      disclosure: this.disclosureOf(p?.endpoint ?? this.endpoint),
-      ...(p?.providerRequestId ? { providerRequestId: p.providerRequestId } : {}),
-      ...(p?.usage ? { usage: p.usage } : {}),
-      costConfidence: p?.usage?.costUsd !== undefined ? ("provider-reported" as const) : ("unknown" as const),
+        at: new Date().toISOString(),
+        requestId,
+        role: purpose ?? this.role,
+        providerId: this.conn.providerId ?? "local",
+        selectedModel: this.model,
+        ...(p?.effectiveModel ? { effectiveModel: p.effectiveModel } : {}),
+        endpointOrigin: originOf(ep) ?? "",
+        protocol: this.conn.protocol,
+        disclosure,
+        origin_class: (disclosure === "cloud" ? "cloud" : "local") as "local" | "cloud",
+        ...(p?.executions ? { executions: p.executions } : {}),
+        ...(p?.providerRequestId ? { providerRequestId: p.providerRequestId } : {}),
+        ...(p?.usage ? { usage: p.usage } : {}),
+        costConfidence: p?.usage?.costUsd !== undefined ? ("provider-reported" as const) : ("unknown" as const),
       };
     };
     const releaseAll = () => {
@@ -594,6 +706,7 @@ export class LocalLlmClient {
     try {
       const result = await run();
       releaseAll();
+      this.markSucceeded(pending()?.endpoint ?? this.endpoint);
       this.lastUsageReport = pending()?.usage;
       UsageLedger.global().record({ ...base(), outcome: "completed", usageConfidence: pending()?.usage ? "provider" : "uncertain" }, this.workspace);
       return result;
@@ -609,6 +722,15 @@ export class LocalLlmClient {
       }, notSent ? undefined : this.workspace);
       throw err;
     }
+  }
+
+  /** True once `ep` has completed a request or healthy probe in this session (REQ-TUI-105). */
+  public hasEverSucceeded(ep: string = this.endpoint): boolean {
+    return this.everSucceededEndpoints.has(ep);
+  }
+
+  public markSucceeded(ep: string = this.endpoint): void {
+    this.everSucceededEndpoints.add(ep);
   }
 
   /** Hint the gateway's route table (sent as X-Task-Class); undefined sends none. */
@@ -643,6 +765,16 @@ export class LocalLlmClient {
 
   private routingHeaders(): Record<string, string> {
     if (!this.conn.sendTaskClass) return {};
+    const kind = LocalLlmClient.serverKindCache.get(this.endpoint);
+    if (
+      kind &&
+      kind !== "gateway" &&
+      kind !== "unknown" &&
+      !operatorSetting("NEXUS_TASK_CLASS") &&
+      !operatorSetting("LOCAL_LLM_TASK_CLASS")
+    ) {
+      return {};
+    }
     return this.taskClass && /^[A-Za-z0-9_.-]{1,64}$/.test(this.taskClass) ? { "X-Task-Class": this.taskClass } : {};
   }
 
@@ -674,7 +806,7 @@ export class LocalLlmClient {
         const droppable = this.conn.providerId ? DROPPABLE_PARAMS : LOCAL_DROPPABLE_PARAMS;
         if (!param || !droppable.has(param) || this.unsupportedParams.has(param)) throw err;
         this.unsupportedParams.add(param);
-        console.error(pc.dim(`[nexus] ${this.conn.label} rejected '${param}' for ${this.model}; resending without it.`));
+        this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} rejected '${param}' for ${this.model}; resending without it.`));
       }
     }
   }
@@ -741,9 +873,19 @@ export class LocalLlmClient {
     return {};
   }
 
-  private requestTimeoutMs(): number {
-    const raw = Number(process.env.LOCAL_LLM_TIMEOUT_MS);
-    return Number.isFinite(raw) && raw > 0 ? raw : 900_000;
+  private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string): StreamWatchdog {
+    const disclosure = this.disclosureOf(currentEp ?? this.endpoint);
+    const parseNum = (k: string) => {
+      const raw = process.env[k];
+      if (raw === undefined || raw === "") return undefined;
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : undefined;
+    };
+    const firstByteMs = parseNum("LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS") ?? 120_000;
+    const idleMs = parseNum("LOCAL_LLM_IDLE_TIMEOUT_MS") ?? 120_000;
+    const defaultTotal = disclosure === "cloud" ? 900_000 : 0;
+    const totalMs = parseNum("LOCAL_LLM_TIMEOUT_MS") ?? defaultTotal;
+    return new StreamWatchdog(firstByteMs, idleMs, totalMs, operatorSignal);
   }
 
   public setTaskId(taskId?: string): void {
@@ -783,6 +925,8 @@ export class LocalLlmClient {
   }
 
   public addFallbackEndpoint(endpoint: string): void {
+    // A provider connection is pinned to its own endpoint: task content never fails over elsewhere (PRV-13).
+    if (this.conn.providerId) return;
     let ep = endpoint.trim().replace(/\/+$/, "");
     if (!ep.endsWith("/v1")) {
       ep = `${ep}/v1`;
@@ -854,7 +998,7 @@ export class LocalLlmClient {
       try {
         const result = await operation(currentEp);
         if (idx !== this.activeEndpointIndex) {
-          console.warn(
+          this.emitDiagnostic("warn",
             pc.yellow(`\n⚡ Failover: Active inference endpoint switched to ${currentEp}`)
           );
           this.activeEndpointIndex = idx;
@@ -865,7 +1009,7 @@ export class LocalLlmClient {
         if (err instanceof InferenceError && !err.failoverEligible) throw err;
         if (total > 1 && attempt < total - 1) {
           const nextIdx = (idx + 1) % total;
-          console.warn(
+          this.emitDiagnostic("warn",
             pc.dim(
               `⚠️ [Failover] ${operationName} failed on ${currentEp} (${err.message}). Trying backup endpoint ${this.endpoints[nextIdx]}...`
             )
@@ -889,18 +1033,22 @@ export class LocalLlmClient {
       const url = `${currentEp}/models${query}`;
       const res = await fetch(url, {
         headers: this.authorization(url),
+        signal: metadataSignal(),
         ...this.fetchPolicy(),
       });
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
         const retryRes = await fetch(url, {
           headers: this.authorization(url),
+          signal: metadataSignal(),
+          ...this.fetchPolicy(),
         });
         if (retryRes.ok) return modelIds(await retryRes.json());
       }
 
       if (!res.ok) {
-        throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+        const text = await res.text().catch(() => "");
+        throw new Error(`Server returned HTTP ${res.status}: ${boundedProviderText(text || res.statusText)}`);
       }
 
       return modelIds(await res.json());
@@ -910,8 +1058,11 @@ export class LocalLlmClient {
   /** Raw `/models` entries. Providers that publish capability metadata let the scheduler qualify resources. */
   async listModelCatalog(signal?: AbortSignal): Promise<Array<Record<string, any>>> {
     return this.executeWithFailover("listModelCatalog", async (currentEp) => {
-      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal, ...this.fetchPolicy() });
-      if (!res.ok) throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal: metadataSignal(signal), ...this.fetchPolicy() });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`Server returned HTTP ${res.status}: ${boundedProviderText(text || res.statusText)}`);
+      }
       const data = (await res.json()) as { data?: Array<Record<string, any>> };
       return Array.isArray(data.data) ? data.data : [];
     });
@@ -954,7 +1105,16 @@ export class LocalLlmClient {
       const entry = Array.isArray(data?.data) ? data.data.find((e) => e?.id === this.model) : undefined;
       if (!entry) return { state: "unsupported", detail: `model ${this.model} not listed` };
       const advertised = parseAdvertisement(entry);
+      const entryKind = advertised?.serverKind ?? serverKindOf(entry);
+      LocalLlmClient.serverKindCache.set(ep, entryKind);
       if (!advertised || (advertised.contextLength === undefined && advertised.maxCompletionTokens === undefined)) {
+        // An OpenAI-style catalog without limits (llama.cpp, LM Studio, Ollama): ask the server itself what it loaded.
+        // Only for a plain endpoint: cloud provider connections have no such endpoints.
+        const local = this.conn.providerId ? undefined : await this.discoverServerContext(entry, signal);
+        if (local) {
+          if (local.serverKind) LocalLlmClient.serverKindCache.set(ep, local.serverKind);
+          return { state: "supported", advertised: local };
+        }
         return { state: "unsupported", advertised, detail: "catalog lists no limits" };
       }
       return { state: "supported", advertised };
@@ -962,6 +1122,48 @@ export class LocalLlmClient {
       if (signal?.aborted) throw abortedError(randomUUID());
       return { state: "unavailable", detail: redactSecrets(String(err?.message ?? err)).slice(0, 160) };
     }
+  }
+
+  private static serverContextCache = new Map<string, Advertisement>();
+  private static serverKindCache = new Map<string, ServerKind>();
+
+  /**
+   * The loaded context of a local server that lists no limits in its catalog, from that server's own endpoint (llama.cpp
+   * `/props`, LM Studio `/api/v0/models`, Ollama `/api/show`) on the endpoint's origin with the same credential and a 2 s
+   * limit. The server is recognised from its catalog entry first, so an unrecognised server is never probed. Not
+   * content-bearing. Undefined when the server is not recognised or does not answer with a context size.
+   */
+  private async discoverServerContext(entry: Record<string, any>, signal?: AbortSignal): Promise<Advertisement | undefined> {
+    const kind = serverKindOf(entry);
+    if (kind !== "llamacpp" && kind !== "lmstudio" && kind !== "ollama") return undefined;
+    const cacheKey = `${this.endpoint}::${this.model}`;
+    const cached = LocalLlmClient.serverContextCache.get(cacheKey);
+    if (cached) return cached;
+    const root = this.endpoint.replace(/\/v1\/?$/, "");
+    const probes: Array<{ kind: "llamacpp" | "lmstudio" | "ollama"; url: string; init?: RequestInit }> = [
+      { kind: "llamacpp" as const, url: `${root}/props` },
+      { kind: "lmstudio" as const, url: `${root}/api/v0/models` },
+      { kind: "ollama" as const, url: `${root}/api/show`, init: { method: "POST", body: JSON.stringify({ model: this.model }), headers: { "content-type": "application/json" } } },
+    ].filter((p) => p.kind === kind);
+    for (const probe of probes) {
+      try {
+        const res = await fetch(probe.url, {
+          ...probe.init,
+          headers: { ...(probe.init?.headers as Record<string, string> | undefined), ...this.authorization(probe.url), "X-Nexus-Purpose": "capabilities" },
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(2_000)]) : AbortSignal.timeout(2_000),
+          ...this.fetchPolicy(),
+        });
+        if (!res.ok) continue;
+        const found = parseServerContext(probe.kind, await res.json(), this.model);
+        if (found) {
+          LocalLlmClient.serverContextCache.set(cacheKey, found);
+          return found;
+        }
+      } catch {
+        if (signal?.aborted) throw abortedError(randomUUID());
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -979,34 +1181,48 @@ export class LocalLlmClient {
     const denial = this.disclosureDenial(ep, requestId);
     if (denial) throw new TokenCountError("denied", denial.message);
     if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
-    const url = `${ep}/tokenize`;
+    const kind = LocalLlmClient.serverKindCache.get(ep);
+    const root = ep.replace(/\/v1\/?$/, "");
+    const urls = (kind === "llamacpp" || kind === "vllm") && root !== ep ? [`${ep}/tokenize`, `${root}/tokenize`] : [`${ep}/tokenize`];
     let body: any;
     try {
       await this.prepareCredential(ep, requestId);
       this.preflight(ep, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
       body = this.outboundChatBody(ep, messages, tools);
     } catch (err: any) {
-      throw new TokenCountError("denied", redactSecrets(String(err?.message ?? err)).slice(0, 200));
+      throw new TokenCountError("denied", boundedProviderText(String(err?.message ?? err)).slice(0, 200));
     }
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders() },
-        body: JSON.stringify(body),
-        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
-        ...this.fetchPolicy(),
-      });
-    } catch (err: any) {
-      if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
-      throw new TokenCountError("unavailable", redactSecrets(String(err?.message ?? err)).slice(0, 160));
+    let res: Response | undefined;
+    let text = "";
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      const reqBody = kind === "llamacpp" && url === `${root}/tokenize`
+        ? { content: JSON.stringify({ messages: body.messages, ...(body.tools ? { tools: body.tools } : {}) }), ...body }
+        : body;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders() },
+          body: JSON.stringify(reqBody),
+          signal: metadataSignal(signal),
+          ...this.fetchPolicy(),
+        });
+      } catch (err: any) {
+        if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
+        throw new TokenCountError("unavailable", boundedProviderText(String(err?.message ?? err)).slice(0, 160));
+      }
+      text = await res.text().catch(() => "");
+      if ((res.status === 404 || res.status === 405) && i + 1 < urls.length && !/blocked|capacity/i.test(text)) {
+        continue;
+      }
+      break;
     }
-    const text = await res.text().catch(() => "");
+    if (!res) throw new TokenCountError("unsupported", "no tokenize endpoint");
     if (res.status === 401 || res.status === 403) throw new TokenCountError("denied", `HTTP ${res.status}`);
     // The gateway answers 404 both for an unknown model and when every worker of the alias is blocked.
-    if (res.status === 404) throw new TokenCountError(/blocked|capacity/i.test(text) ? "unavailable" : "unsupported", `HTTP 404 ${text.slice(0, 120)}`);
+    if (res.status === 404) throw new TokenCountError(/blocked|capacity/i.test(text) ? "unavailable" : "unsupported", `HTTP 404 ${boundedProviderText(text).slice(0, 120)}`);
     if (res.status === 405 || res.status === 501) throw new TokenCountError("unsupported", `HTTP ${res.status}`);
-    if (!res.ok) throw new TokenCountError("unavailable", `HTTP ${res.status}`);
+    if (!res.ok) throw new TokenCountError("unavailable", `HTTP ${res.status} ${boundedProviderText(text).slice(0, 120)}`);
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -1089,7 +1305,7 @@ export class LocalLlmClient {
       );
 
       if (!egressEvaluation.allowed) {
-        throw new Error(
+        throw egressDenied(
           egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
         );
       }
@@ -1108,7 +1324,7 @@ export class LocalLlmClient {
           }
         );
         if (!toolsEgress.allowed) {
-          throw new Error(
+          throw egressDenied(
             toolsEgress.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
           );
         }
@@ -1126,6 +1342,8 @@ export class LocalLlmClient {
         })),
         temperature: this.temperature,
       };
+      // The same output allowance as a streamed request (PRV-09: the empty-stream re-request used to be uncapped).
+      if (!this.conn.providerId) payload.max_tokens = this.maxOutputTokens;
 
       if (outboundTools.length > 0) {
         payload.tools = outboundTools;
@@ -1134,6 +1352,7 @@ export class LocalLlmClient {
       if (this.conn.usage === "openrouter") payload.usage = { include: true };
       this.omitUnsupported(payload);
 
+      const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
       let data: ChatCompletionResponse;
       try {
@@ -1147,30 +1366,47 @@ export class LocalLlmClient {
             ...this.routingHeaders(),
           },
           body: JSON.stringify(payload),
-          signal: this.combinedSignal(signal),
+          signal: watchdog.signal,
           ...this.fetchPolicy(),
         });
 
         if (res.status === 401 && this.reloadAuthToken(url)) {
+          watchdog.done();
           return this.chatCompletion(messages, tools, requestId, signal);
         }
 
         if (!res.ok) {
+          watchdog.done();
           const errText = await res.text();
           throw this.httpError(res.status, errText, requestId, res.headers);
         }
         data = (await res.json()) as ChatCompletionResponse;
       } catch (err: any) {
+        watchdog.done();
         throw classifyTransportError(err, signal, requestId, "connect");
+      } finally {
+        watchdog.done();
       }
-      if (this.conn.providerId) {
-        this.pending = { usage: chatUsage(data.usage), providerRequestId: data.id, effectiveModel: (data as any).model, endpoint: currentEp };
-      }
+      const executions = this.pending?.executions;
+      this.pending = {
+        usage: chatUsage(data.usage),
+        providerRequestId: data.id,
+        effectiveModel: (data as any).model,
+        endpoint: currentEp,
+        ...(executions !== undefined ? { executions } : {}),
+      };
       if (!data.choices || data.choices.length === 0) {
         throw new InferenceError("protocol_error", "provider", "Model returned empty choices array", { requestId, failoverEligible: false });
       }
 
       const choice = data.choices[0] as { message: ChatMessage; finish_reason?: string };
+      if (choice.message?.tool_calls && Array.isArray(choice.message.tool_calls)) {
+        for (const tc of choice.message.tool_calls) {
+          if (tc.function && typeof tc.function.arguments === "object" && tc.function.arguments !== null) {
+            tc.function.arguments = JSON.stringify(tc.function.arguments);
+          }
+        }
+      }
       if (this.conn.providerId && choice.finish_reason === "error") {
         throw new InferenceError("provider_error_frame", "provider", "Provider ended the response with finish_reason=error.", { requestId, partialText: typeof choice.message?.content === "string" ? choice.message.content : "" });
       }
@@ -1224,7 +1460,7 @@ export class LocalLlmClient {
     );
 
     if (!egressEvaluation.allowed) {
-      throw new Error(
+      throw egressDenied(
         egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
       );
     }
@@ -1243,7 +1479,7 @@ export class LocalLlmClient {
         }
       );
       if (!toolsEgress.allowed) {
-        throw new Error(
+        throw egressDenied(
           toolsEgress.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
         );
       }
@@ -1292,6 +1528,7 @@ export class LocalLlmClient {
 
       const payload = this.outboundChatBody(currentEp, messages, tools);
 
+      const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
       try {
         res = await fetch(url, {
@@ -1304,29 +1541,33 @@ export class LocalLlmClient {
             ...this.routingHeaders(),
           },
           body: JSON.stringify(payload),
-          signal: this.combinedSignal(signal),
+          signal: watchdog.signal,
           ...this.fetchPolicy(),
         });
       } catch (err: any) {
+        watchdog.done();
         // No resend here: a rejected fetch does not prove the gateway never admitted the request, and a
         // second attempt would replace this error with its own. Recovery belongs to the agent loop.
         throw classifyTransportError(err, signal, requestId, "connect");
       }
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
+        watchdog.done();
         return this.chatCompletionStream(messages, tools, onToken, requestId, signal);
       }
 
       if (!res.ok || !res.body) {
+        watchdog.done();
         const errText = await res.text().catch(() => res.statusText);
         throw this.httpError(res.status, errText, requestId, res.headers);
       }
 
       this.lastAdmission = parseAdmissionHeaders((name) => res.headers.get(name));
       let fullContent = "";
+      let reasoningContent = "";
       let finishReason: string | undefined;
       let sawDone = false;
-      this.pending = { endpoint: currentEp };
+      this.pending = { endpoint: currentEp, executions: this.pending?.executions };
       const toolCallsMap: Map<number, { id: string; name: string; args: string }> = new Map();
 
       const reader = res.body.getReader();
@@ -1385,6 +1626,10 @@ export class LocalLlmClient {
             onToken(delta.content);
           }
         }
+        const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
+        if (typeof reasoningDelta === "string") {
+          reasoningContent += reasoningDelta;
+        }
 
         // 2. Tool call chunks
         if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
@@ -1403,8 +1648,21 @@ export class LocalLlmClient {
             const current = toolCallsMap.get(idx) || { id: "", name: "", args: "" };
 
             if (tc.id) current.id = tc.id;
-            if (tc.function?.name) current.name += tc.function.name;
-            if (tc.function?.arguments) current.args += tc.function.arguments;
+            // The name arrives once in spec streams. Some servers repeat it in later deltas, or send it cumulatively;
+            // only a genuinely new fragment is appended (PRV-04: a repeated name became "read_fileread_file").
+            const fragment = tc.function?.name;
+            if (fragment) {
+              if (!current.name) current.name = fragment;
+              else if (fragment !== current.name) current.name = fragment.startsWith(current.name) ? fragment : current.name + fragment;
+            }
+            const rawArgs = tc.function?.arguments;
+            if (rawArgs !== undefined && rawArgs !== null) {
+              if (typeof rawArgs === "object") {
+                current.args = JSON.stringify(rawArgs);
+              } else {
+                current.args += String(rawArgs);
+              }
+            }
 
             toolCallsMap.set(idx, current);
           }
@@ -1415,6 +1673,7 @@ export class LocalLlmClient {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          watchdog.onChunk();
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
@@ -1428,6 +1687,8 @@ export class LocalLlmClient {
         // A transport error after the terminal event cannot change the (already complete) response.
         const postCompletionTransportError = (finishReason || sawDone) && !(streamErr instanceof InferenceError) && classified.kind !== "aborted";
         if (!postCompletionTransportError) throw classified;
+      } finally {
+        watchdog.done();
       }
 
       if (this.conn.providerId && finishReason === "error") {
@@ -1469,16 +1730,21 @@ export class LocalLlmClient {
 
       // The stream completed with nothing in it; the non-streaming re-request is a new operation with its own
       // X-Request-ID so the provider's records never show two executions under one request ID.
-      if (!fullContent && assembledToolCalls.length === 0) {
-        // Provider connections stay under this request's single receipt.
-        if (this.conn.providerId) return this.chatCompletionOnce(messages, tools, randomUUID(), signal);
-        return this.chatCompletion(messages, tools, randomUUID(), signal);
+      if (!fullContent && !reasoningContent && assembledToolCalls.length === 0) {
+        if (this.pending) this.pending.executions = 2;
+        else this.pending = { endpoint: currentEp, executions: 2 };
+        this.emitDiagnostic("error", pc.dim(`[nexus] Empty stream from ${this.conn.label}; re-requesting non-streaming completion (executions: 2).`));
+        const res = await this.chatCompletionOnce(messages, tools, randomUUID(), signal);
+        if (this.pending) this.pending.executions = 2;
+        else this.pending = { endpoint: currentEp, executions: 2 };
+        return res;
       }
 
       return {
         role: "assistant",
         content: fullContent || null,
         ...(assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {}),
+        ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
       };
     });
   }
@@ -1487,11 +1753,11 @@ export class LocalLlmClient {
   private egress(messages: ChatMessage[], tools: ToolDefinition[], currentEp: string): { messages: ChatMessage[]; tools: ToolDefinition[] } {
     const ctx = { taskId: this.taskId, sessionId: this.sessionId, sourceBoundary: "HOST_LOCAL" as const };
     const m = this.boundary.evaluateEgress(messages, currentEp, ctx);
-    if (!m.allowed) throw new Error(m.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+    if (!m.allowed) throw egressDenied(m.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
     let outTools = tools;
     if (tools.length > 0) {
       const t = this.boundary.evaluateEgress(tools, currentEp, ctx);
-      if (!t.allowed) throw new Error(t.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
+      if (!t.allowed) throw egressDenied(t.reason || `Egress of tools to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`);
       outTools = t.sanitizedPayload || tools;
     }
     return { messages: this.sanitizeHistory(m.sanitizedPayload || messages), tools: outTools };
@@ -1550,23 +1816,26 @@ export class LocalLlmClient {
       const req = anthropic ? buildAnthropicRequest(input) : buildResponsesRequest(input);
       this.omitUnsupported(req.body);
       if (req.droppedState) {
-        console.error(pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
+        this.emitDiagnostic("error", pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
       }
       const url = `${currentEp}${req.path}`;
       this.pending = { endpoint: currentEp };
+      const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
       try {
         res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...this.authorization(url), ...this.providerHeaders(outbound.messages), "X-Request-ID": requestId },
           body: JSON.stringify(req.body),
-          signal: this.combinedSignal(signal),
+          signal: watchdog.signal,
           ...this.fetchPolicy(),
         });
       } catch (err: any) {
+        watchdog.done();
         throw classifyTransportError(err, signal, requestId, "connect");
       }
       if (!res.ok || (stream && !res.body)) {
+        watchdog.done();
         const errText = await res.text().catch(() => res.statusText);
         throw this.httpError(res.status, errText, requestId, res.headers);
       }
@@ -1579,6 +1848,8 @@ export class LocalLlmClient {
         } catch (err: any) {
           if (err?.name === "SyntaxError") throw new InferenceError("malformed_event", "provider", "Provider returned a non-JSON response body.", { requestId, failoverEligible: false });
           throw classifyTransportError(err, signal, requestId, "stream");
+        } finally {
+          watchdog.done();
         }
         try {
           result = anthropic ? parseAnthropicResponse(data, owner) : parseResponsesResponse(data, owner, keepReasoning);
@@ -1588,22 +1859,28 @@ export class LocalLlmClient {
       } else {
         const parser = anthropic ? anthropicStreamParser(owner, onToken) : responsesStreamParser(owner, keepReasoning, onToken);
         try {
-          await readSse(res.body!, (name, raw) => {
-            let data: any;
-            try {
-              data = JSON.parse(raw);
-            } catch {
-              throw new ProviderStreamError(`Malformed stream event: ${raw.slice(0, 120)}`, undefined, parser.text(), true);
-            }
-            parser.event(name, data);
-          });
+          await readSse(
+            res.body!,
+            (name, raw) => {
+              let data: any;
+              try {
+                data = JSON.parse(raw);
+              } catch {
+                throw new ProviderStreamError(`Malformed stream event: ${raw.slice(0, 120)}`, undefined, parser.text(), true);
+              }
+              parser.event(name, data);
+            },
+            () => watchdog.onChunk(),
+          );
         } catch (err: any) {
           if (err instanceof ProviderStreamError) throw this.fromStreamError(err, requestId);
           throw classifyTransportError(err, signal, requestId, "stream", parser.text());
+        } finally {
+          watchdog.done();
         }
         result = parser.result();
       }
-      this.pending = { endpoint: currentEp, usage: result.usage, providerRequestId: result.providerRequestId, effectiveModel: result.effectiveModel };
+      this.pending = { endpoint: currentEp, usage: result.usage, providerRequestId: result.providerRequestId, effectiveModel: result.effectiveModel, executions: this.pending?.executions };
       if (result.finish === "incomplete") {
         throw new InferenceError("stream_incomplete", "transport", "Inference stream ended before the provider's terminal event; response is incomplete and no tool call from it runs.", {
           requestId,
@@ -1625,15 +1902,14 @@ export class LocalLlmClient {
   }
 
   private combinedSignal(operatorSignal?: AbortSignal): AbortSignal {
-    const timeout = AbortSignal.timeout(this.requestTimeoutMs());
-    return operatorSignal ? AbortSignal.any([timeout, operatorSignal]) : timeout;
+    return this.createWatchdog(operatorSignal).signal;
   }
 
   /** HTTP 5xx/429/408 are provider-side; other 4xx are request faults (client origin). */
   private httpError(status: number, body: string, requestId: string, headers?: Headers): InferenceError {
     const providerSide = status >= 500 || status === 429 || status === 408;
     const hints = providerHints(headers, body);
-    const shown = this.conn.providerId ? redactSecrets(body).slice(0, MAX_PROVIDER_ERROR_CHARS) : body;
+    const shown = boundedProviderText(body);
     return new InferenceError("http_error", providerSide ? "provider" : "client", `Inference error (HTTP ${status}): ${shown}`, {
       httpStatus: status,
       requestId,
@@ -1646,11 +1922,15 @@ export class LocalLlmClient {
     return this.model;
   }
 
+  /** Set when the endpoint answered that it has no embeddings: later calls fail at once instead of per chunk. */
+  private embeddingsUnsupported?: string;
+
   async generateEmbedding(text: string, model?: string): Promise<number[]> {
     // Bulk repository indexing is not a disclosure any provider selection authorizes; search stays lexical instead.
     if (this.conn.providerId && this.disclosureOf() === "cloud") {
       throw new Error(`Embeddings are not sent to cloud provider '${this.conn.providerId}'.`);
     }
+    if (this.embeddingsUnsupported) throw new Error(this.embeddingsUnsupported);
     return this.executeWithFailover("generateEmbedding", async (currentEp) => {
       const url = `${currentEp}/embeddings`;
 
@@ -1666,7 +1946,7 @@ export class LocalLlmClient {
       );
 
       if (!egressEvaluation.allowed) {
-        throw new Error(
+        throw egressDenied(
           egressEvaluation.reason || `Egress to endpoint '${currentEp}' denied by InformationFlowBoundary [FAIL-003].`
         );
       }
@@ -1683,10 +1963,14 @@ export class LocalLlmClient {
           model: model || this.model,
           input: outboundText,
         }),
+        signal: metadataSignal(),
+        ...this.fetchPolicy(),
       });
 
       if (!res.ok) {
-        throw new Error(`Embedding request failed (${res.status}): ${await res.text()}`);
+        const message = `Embedding request failed (${res.status}): ${boundedProviderText(await res.text())}`;
+        if (res.status === 404 || res.status === 501) this.embeddingsUnsupported = `${message} (embeddings are off for this session)`;
+        throw new Error(message);
       }
 
       const data: any = await res.json();

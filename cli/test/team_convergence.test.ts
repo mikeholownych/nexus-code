@@ -44,6 +44,15 @@ function makeRepo(): string {
   return repo;
 }
 
+/** A committed, independently verifiable coding task used by engineering-completion fixtures. */
+function seedMathProject(repo: string, initiallyCorrect = false): void {
+  fs.writeFileSync(path.join(repo, "Makefile"), ".PHONY: test\ntest:\n\tenv -u NODE_TEST_CONTEXT node --test test/math.test.mjs\n");
+  fs.writeFileSync(path.join(repo, "math.js"), `export const add = (a, b) => a ${initiallyCorrect ? "+" : "-"} b;\n`);
+  fs.mkdirSync(path.join(repo, "test"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "test/math.test.mjs"), 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { add } from "../math.js";\ntest("addition", () => assert.equal(add(2, 3), 5));\n');
+  execSync("git add Makefile math.js test/math.test.mjs && git commit -qm 'seed verifiable team fixture'", { cwd: repo, stdio: "ignore" });
+}
+
 /** Isolated HOME (task store, stored credentials) and gateway env vars for the duration of `fn`. */
 async function withHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-team-home-"));
@@ -168,12 +177,13 @@ function scriptedTeam(resources: ResourceDescriptor[], script: Script, o: Partia
   const clock = fakeClock();
   const { executor, calls } = scripted(script);
   const config: HarnessConfig = { endpoint: "https://p1.test/v1", model: "m", maxSteps: 5, temperature: 0, workspace: ws, shell: "bash" };
-  const team = new TeamOrchestrator(config, { store, executor, clock, resources, ...o });
+  const createTeam = (teamStore = store) => new TeamOrchestrator(config, { store: teamStore, executor, clock, resources, ...o });
+  const team = createTeam();
   const cleanup = () => {
     fs.rmSync(ws, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });
   };
-  return { team, store, saved, clock, calls, cleanup };
+  return { team, store, saved, clock, calls, load: (id: string) => new OperationStore(ws, dir).load(id), restartTeam: () => createTeam(new OperationStore(ws, dir)), cleanup };
 }
 
 const sres = (id: string, o: Partial<ResourceDescriptor> = {}): ResourceDescriptor => ({ id, provider: "https://p1.test", endpoint: "https://p1.test/v1", model: id, capabilities: ["tools"], rank: 0, ...o });
@@ -203,15 +213,42 @@ describe("/team truthful outcome", () => {
   });
 
   test("3. a successful team completes, roles in dependency order", async () => {
-    const gw = await startGateway(byUnit);
-    await withSlash(gw, async (config) => {
-      const out = await slashTeam(config, "full summarise notes.txt");
-      assert.equal(out.success, true, out.output);
-      assert.match(out.output, /Result: COMPLETE/);
+    const gw = await startGateway((n, body) => {
+      const unit = unitOf(body);
+      if (unit === "implement") return n === 3
+        ? { kind: "tools", calls: [{ name: "edit_file", args: { path: "math.js", old_content: "export const add = (a, b) => a - b;", new_content: "export const add = (a, b) => a + b;" } }] }
+        : complete("implemented the addition fix");
+      if (unit === "verify") return n === 5
+        ? { kind: "tools", calls: [{ name: "run_tests", args: {} }] }
+        : complete("verified the implementation");
+      return complete(`${unit} done`);
+    });
+    await withTeam([gw], async (env) => {
+      seedMathProject(env.repo);
+      const executor = new AgentWorkUnitExecutor({
+        baseConfig: {
+          ...env.config,
+          approvalMode: "auto",
+          fullAccess: true,
+          authoritativeVerifierCommand: "make test",
+          trustedDeliverableFiles: ["math.js"],
+        },
+        createAgent: (c, depth, options) => {
+          const agent = new AutonomousAgent(c, depth, undefined, options);
+          const a = agent as any;
+          a.recoveryClock = env.clock;
+          a.stateManager = new DurableStateManager({ baseDir: env.stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+          return agent;
+        },
+      });
+      const out = await env.team([resource("primary", gw)], { executor }).run("full", "Fix add(a, b) so it returns the sum and verify the regression test.");
+      assert.equal(out.success, true, out.report);
+      assert.equal(out.operation.status, "COMPLETE", out.report);
       const firstSeen = [...new Set(gw.requests.map((r) => unitOf(r.body)))];
       assert.deepEqual(firstSeen, ["research", "design", "implement", "verify"]);
-      assert.match(out.output, /Completed prerequisite work|implement done/);
-      assert.match(out.output, /◆ Objective complete: 4 required work units done\./);
+      assert.equal(out.operation.units.find((u) => u.id === "implement")?.result?.outcome, "VERIFIED");
+      assert.equal(out.operation.units.find((u) => u.id === "verify")?.result?.outcome, "VERIFIED");
+      assert.match(out.report, /Result: COMPLETE/);
     });
   });
 
@@ -279,7 +316,7 @@ describe("/team roles share the lower execution path", () => {
     });
   });
 
-  test("8. preferred model unavailable: the role reroutes to a qualified alternate", async () => {
+  test("8. rerouting after a rejected research turn preserves the unverified recovery block", async () => {
     const gwP = await startGateway(() => limited(600));
     const gwQ = await startGateway(byUnit);
     await withTeam([gwP, gwQ], async (env) => {
@@ -287,12 +324,13 @@ describe("/team roles share the lower execution path", () => {
         resource("primary", gwQ, { rank: 0 }),
         resource("planner", gwP, { rank: 2, preferredFor: ["research", "architecture", "review"] }),
       ]).run("researcher", "survey notes.txt");
-      assert.equal(out.operation.status, "COMPLETE", out.report);
+      assert.equal(out.operation.status, "BLOCKED", out.report);
       const u = out.operation.units[0];
       assert.deepEqual(u.reroutes.map((r) => [r.from, r.to]), [["planner", "primary"]], "preferred first, then the alternate");
       assert.equal(gwP.requests.length, 1);
       assert.equal(gwQ.requests.length, 1);
       assert.ok(out.operation.events.some((e) => e.type === "WORK_REROUTED"));
+      assert.match(u.blocked?.reason ?? "", /NO_APPLICABLE_VERIFIER/);
     });
   });
 
@@ -311,20 +349,67 @@ describe("/team roles share the lower execution path", () => {
     });
   });
 
-  test("10. the independence constraint survives rerouting", async () => {
-    const gw1 = await startGateway(byUnit);
-    const gw2 = await startGateway(() => limited(600));
-    const gw3 = await startGateway(byUnit);
-    await withTeam([gw1, gw2, gw3], async (env) => {
-      const out = await env.team([resource("m1", gw1), resource("m2", gw2, { rank: 1 }), resource("m3", gw3, { rank: 2 })], { independentReview: true }).run("full", "change notes.txt");
+  test("10a. scheduler preserves the independence constraint on reroute", async () => {
+    const h = scriptedTeam(
+      [sres("m1"), sres("m2", { rank: 1 }), sres("m3", { rank: 2 })],
+      (unit, r, ctx) => unit.id === "review" && r.id === "m2" ? displaced(ctx, f429(600)) : doneResult(unit),
+      { independentReview: true },
+    );
+    try {
+      const out = await h.team.run("full", "change notes.txt");
       assert.equal(out.operation.status, "COMPLETE", out.report);
       const implement = out.operation.units.find((u) => u.id === "implement")!;
       const review = out.operation.units.find((u) => u.id === "review")!;
       assert.deepEqual(implement.modelsUsed, ["m1"]);
       assert.deepEqual(review.reroutes.map((r) => [r.from, r.to]), [["m2", "m3"]], "rerouted to another independent model, not back to m1");
       assert.ok(!review.modelsUsed.includes("m1"));
-      assert.ok(!gw1.requests.some((r) => unitOf(r.body) === "review"));
+      assert.ok(!h.calls.some((call) => call.unit === "review" && call.resource === "m1"));
       assert.match(out.report, /\[REVIEWER\] COMPLETE on m3 .* independent of implement \(m2, m3 vs m1\)/);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("10b. real work-unit rerouting preserves reviewer independence and the recovery block", async () => {
+    const gw1 = await startGateway((_n, body) => {
+      const unit = unitOf(body);
+      const toolMessages = body.messages.filter((message: any) => message.role === "tool");
+      if (unit === "implement" && !toolMessages.some((message: any) => message.name === "edit_file")) {
+        return { kind: "tools", calls: [{ name: "edit_file", args: {
+          path: "math.js",
+          old_content: "export const add = (a, b) => a - b;",
+          new_content: "export const add = (a, b) => a + b;",
+        } }] };
+      }
+      if (unit === "verify" && !toolMessages.some((message: any) => message.name === "run_tests")) {
+        return { kind: "tools", calls: [{ name: "run_tests", args: {} }] };
+      }
+      return complete(`${unit} done`);
+    });
+    const gw2 = await startGateway(() => limited(600));
+    const gw3 = await startGateway(byUnit);
+    await withTeam([gw1, gw2, gw3], async (env) => {
+      seedMathProject(env.repo);
+      const out = await env.team([
+        resource("m1", gw1),
+        resource("m2", gw2, { rank: 1 }),
+        resource("m3", gw3, { rank: 2 }),
+      ], { independentReview: true }).run("full", "Fix add(a, b) to return the sum and verify the regression test.");
+      const implement = out.operation.units.find((u) => u.id === "implement")!;
+      const review = out.operation.units.find((u) => u.id === "review")!;
+      assert.deepEqual(implement.modelsUsed, ["m1"]);
+      assert.deepEqual(review.reroutes.map((r) => [r.from, r.to]), [["m2", "m3"]], "rerouted to another independent model, not back to m1");
+      assert.ok(!review.modelsUsed.includes("m1"));
+      assert.ok(!gw1.requests.some((r) => unitOf(r.body) === "review"));
+      assert.ok(gw3.requests.some((r) => unitOf(r.body) === "review"), "the real executor sent the review to the independent alternate");
+      assert.equal(review.status, "BLOCKED", "recovered work cannot complete from an unauthenticated verifier baseline");
+      assert.notEqual(review.result?.outcome, "VERIFIED");
+      assert.equal(out.operation.status, "BLOCKED");
+    }, {
+      approvalMode: "auto",
+      fullAccess: true,
+      authoritativeVerifierCommand: "make test",
+      trustedDeliverableFiles: ["math.js"],
     });
   });
 
@@ -344,20 +429,25 @@ describe("/team roles share the lower execution path", () => {
   });
 });
 
-// ---------------------------------------------------------------- park, continue, wait, wake (shared real run)
+// ---------------------------------------------------------------- park, continue, wait, wake (scripted scheduler run)
 
-let parkContinueRun: Promise<{ out: Awaited<ReturnType<TeamOrchestrator["run"]>>; requests: Array<{ gw: string; unit?: string }> }> | undefined;
+let parkContinueRun: Promise<{ out: Awaited<ReturnType<TeamOrchestrator["run"]>>; requests: Array<{ gw: string; unit?: string }>; cleanup: () => void }> | undefined;
 function parkContinue() {
   parkContinueRun ??= (async () => {
     const requests: Array<{ gw: string; unit?: string }> = [];
-    const gw1 = await startGateway((n, body) => (requests.push({ gw: "m1", unit: unitOf(body) }), byUnit(n, body)));
-    const gw2 = await startGateway((n, body) => (requests.push({ gw: "m2", unit: unitOf(body) }), byUnit(n, body)));
-    return withTeam([gw1, gw2], async (env) => {
-      const team = env.team([resource("m1", gw1), resource("m2", gw2, { rank: 1 })], { independentReview: true });
-      const state = team.plan("full", "change notes.txt");
-      seedLimited(state, "m2", env.clock, 600);
-      return { out: await team.drive(state), requests };
-    });
+    const h = scriptedTeam(
+      [sres("m1"), sres("m2", { rank: 1 })],
+      (unit, r) => (requests.push({ gw: r.id, unit: unit.id }), doneResult(unit)),
+      { independentReview: true },
+    );
+    try {
+      const state = h.team.plan("full", "change notes.txt");
+      seedLimited(state, "m2", h.clock, 600);
+      const out = await h.team.drive(state);
+      return { out, requests };
+    } finally {
+      h.cleanup();
+    }
   })();
   return parkContinueRun;
 }
@@ -479,26 +569,29 @@ describe("/team dependencies and completion", () => {
 
   test("19. durable team state survives a process restart while waiting", async () => {
     const counts: Record<string, number> = {};
-    const gwP = await startGateway((n, body) => ((counts[unitOf(body)!] = (counts[unitOf(body)!] ?? 0) + 1), byUnit(n, body)));
-    const gwA = await startGateway(byUnit);
-    await withTeam([gwP, gwA], async (env) => {
-      const resources = [resource("primary", gwP, { qualifications: ["research", "implementation", "verification"] }), resource("arch", gwA, { qualifications: ["architecture"] })];
-      const team = env.team(resources, { maxInProcessWaitMs: 0 });
-      const state = team.plan("full", "change notes.txt");
-      seedLimited(state, "arch", env.clock, 120);
-      const first = await team.drive(state);
+    const h = scriptedTeam(
+      [sres("primary", { qualifications: ["research", "implementation", "verification"] }), sres("arch", { rank: 1, qualifications: ["architecture"] })],
+      (unit, r) => ((counts[unit.id] = (counts[unit.id] ?? 0) + 1), doneResult(unit)),
+      { maxInProcessWaitMs: 0 },
+    );
+    try {
+      const state = h.team.plan("full", "change notes.txt");
+      seedLimited(state, "arch", h.clock, 120);
+      const first = await h.team.drive(state);
       assert.equal(first.operation.status, "WAITING");
       assert.equal(first.operation.units.find((u) => u.id === "research")!.status, "COMPLETE");
 
-      // A new process: nothing in memory, only the durable store.
-      const reloaded = new OperationStore(env.repo, env.stateDir).load(first.operation.id);
+      // A new orchestration object has no in-memory state; only the durable operation is reloaded.
+      const reloaded = h.load(first.operation.id);
       assert.equal(reloaded.status, "WAITING");
-      await env.clock.sleep(121_000);
-      const second = await new TeamOrchestrator(env.config, { store: new OperationStore(env.repo, env.stateDir), executor: env.executor(), clock: env.clock }).drive(reloaded);
+      await h.clock.sleep(121_000);
+      const second = await h.restartTeam().drive(reloaded);
       assert.equal(second.operation.status, "COMPLETE", second.report);
       assert.equal(counts.research, 1, "completed roles are not re-run after the restart");
       assert.equal(second.operation.units.find((u) => u.id === "design")!.result!.resourceId, "arch");
-    });
+    } finally {
+      h.cleanup();
+    }
   });
 
   test("20. UNKNOWN replay semantics hold for roles: no automatic resubmission elsewhere", async () => {
@@ -508,7 +601,7 @@ describe("/team dependencies and completion", () => {
       const out = await env.team([resource("a", gwA), resource("b", gwB, { rank: 1 })]).run("researcher", "survey notes.txt");
       assert.equal(out.operation.status, "BLOCKED", out.report);
       assert.equal(gwB.requests.length, 0, "a request that may have executed is never resubmitted to another resource");
-      assert.equal(gwA.requests.length, 3, "the original plus the bounded replays");
+      assert.equal(gwA.requests.length, 2, "the original plus the bounded replays");
       const d = out.operation.units[0].blocked!.decision;
       assert.equal(d.cause, "EXECUTION_UNKNOWN");
       assert.deepEqual(d.options.map((o) => o.action.kind), ["retry", "cancel_operation"]);
@@ -579,6 +672,37 @@ describe("/team dependencies and completion", () => {
 // ---------------------------------------------------------------- in-turn delegation
 
 describe("spawn_subagent truthful result", () => {
+  test("a non-durable subagent captures an in-memory verifier baseline before its file edit", async () => {
+    const repo = {
+      "package.json": JSON.stringify({ private: true, scripts: { test: "node -e \"process.exit(1)\"" } }),
+      "math.js": "export const add = (a, b) => a - b;\n",
+      "test/math.test.js": 'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { add } from "../math.js";\ntest("addition", () => assert.equal(add(2, 3), 5));\n',
+    };
+    await withTeam([], async (env) => {
+      for (const [name, content] of Object.entries(repo)) {
+        const target = path.join(env.repo, name);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, content);
+      }
+      const agent = new AutonomousAgent({ ...env.config, trustedDeliverableFiles: ["math.js"] }, 1, undefined, { durable: false });
+      try {
+        const dispatched = await (agent as any).dispatchToolCall(
+          { id: "subagent-edit", function: { name: "write_file", arguments: JSON.stringify({ path: "math.js", content: "export const add = (a, b) => a + b;\n", overwrite: true }) } },
+          1,
+          "subagent",
+        );
+        assert.equal(dispatched.receipt.success, true, dispatched.receipt.error);
+        const baseline = (agent as any).changeBaseline;
+        assert.equal(baseline?.failed, true, `the pre-change verifier failure was retained in memory: ${JSON.stringify({ command: baseline?.command, tests: baseline?.tests && [...baseline.tests.keys()], verifier: baseline?.verifier, deliverables: baseline?.trustedDeliverables })}`);
+        assert.ok(baseline?.tests?.has("test/math.test.js"), "the executed test baseline was captured");
+        assert.ok(baseline?.trustedDeliverables?.includes("math.js"), "the operator-declared deliverable scope was captured");
+        assert.equal(fs.readFileSync(path.join(env.repo, "math.js"), "utf8"), "export const add = (a, b) => a + b;\n");
+      } finally {
+        agent.shutdown();
+      }
+    }, { approvalMode: "auto", fullAccess: true, trustedDeliverableFiles: ["math.js"] });
+  });
+
   test("a subagent whose inference fails is a failed tool call for the parent, not a report", async () => {
     let parent = 0;
     const gw = await startGateway((_n, body) => {
@@ -613,9 +737,8 @@ const FOREIGN_KEY = "k-FOREIGN-secret-0002";
 async function withStoredCredential<T>(gatewayUrl: string, fn: (home: string) => Promise<T>): Promise<T> {
   return withHome(async (home) => {
     fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
-    fs.mkdirSync(path.join(home, ".config/opencode"), { recursive: true });
     fs.writeFileSync(path.join(home, ".config/nexus/config.env"), `LOCAL_LLM_ENDPOINT=${gatewayUrl}\nLOCAL_LLM_MODEL=engineering/lead\n`);
-    fs.writeFileSync(path.join(home, ".config/opencode/t5820-client-token"), `${AIHOST_TOKEN}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(home, ".config/nexus/gateway-token"), `${AIHOST_TOKEN}\n`, { mode: 0o600 });
     return fn(home);
   });
 }
@@ -793,11 +916,11 @@ describe("BLOCKED decision application", () => {
     });
   });
 
-  test("34/35. after acceptance the scheduler re-evaluates and the role resumes with its engineering state", async () => {
+  test("34/35. operator retry resumes history but unverified recovered work stays blocked", async () => {
     await blockedTeam(async (env, gw) => {
       applyOperatorDecision(env.store, "team-dec", "research#1", "2", undefined, { now: env.clock.now });
       const out = await new TeamOrchestrator(env.config, { store: env.store, executor: env.executor(), clock: env.clock }).drive(env.store.load("team-dec"));
-      assert.equal(out.operation.status, "COMPLETE", out.report);
+      assert.equal(out.operation.status, "BLOCKED", out.report);
       const resumed = gw.requests.at(-1)!.body;
       const toolResults = resumed.messages.filter((m: any) => m.role === "tool");
       assert.equal(toolResults.length, 1, "the earlier read_file result is carried over, not re-run");
@@ -805,6 +928,201 @@ describe("BLOCKED decision application", () => {
       assert.match(userText(resumed), /operator decision "retry after fixing primary"/);
       assert.ok(out.operation.events.some((e) => e.type === "WORK_RESUMED"));
       assert.equal(out.operation.units[0].runs, 2);
+      assert.match(out.operation.units[0].blocked?.reason ?? "", /NO_APPLICABLE_VERIFIER/);
+    });
+  });
+
+  test("36. ACC-CONT-07: implementer replying in prose only gives BLOCKED(no_change) with three options", async () => {
+    const gw = await startGateway(() => ({ kind: "text", text: "I looked at the code but did not make any edits." }));
+    await withTeam([gw], async (env) => {
+      const out = await env.team([resource("primary", gw)], { id: "team-prose" }).run("implementer", "write a feature");
+      assert.equal(out.operation.status, "BLOCKED");
+      const persisted = env.store.load("team-prose");
+      assert.equal(persisted.status, "BLOCKED");
+      const u = persisted.units[0];
+      assert.equal(u.status, "BLOCKED");
+      assert.ok(u.blocked?.reason.startsWith("no_change"));
+      const d = u.blocked!.decision;
+      assert.equal(d.cause, "EXECUTION_FAILED");
+      assert.deepEqual(d.options.map((o) => [o.id, o.label, o.action.kind]), [
+        ["1", "retry", "retry"],
+        ["2", "accept as no-op", "accept_no_change"],
+        ["3", "stop the operation", "cancel_operation"],
+      ]);
+
+      // Applying option 2 (accept as no-op) marks unit COMPLETE and completes operation
+      applyOperatorDecision(env.store, "team-prose", d.id, "2", "operator confirms no code change needed", { now: env.clock.now });
+      const resumed = env.store.load("team-prose");
+      const unitAfter = resumed.units[0];
+      assert.equal(unitAfter.status, "COMPLETE");
+      assert.equal(unitAfter.result?.outcome, "NOT_REQUIRED");
+      assert.equal(unitAfter.result?.summary, "accepted as no-op by operator");
+
+      const driveOut = await new TeamOrchestrator(env.config, { store: env.store, executor: env.executor(), clock: env.clock }).drive(resumed);
+      assert.equal(driveOut.operation.status, "COMPLETE");
+    });
+  });
+
+  test("REQ-AGT-107: implementer and tester task_completed no-ops are blocked", async () => {
+    for (const role of ["implementer", "tester"] as const) {
+      const gw = await startGateway(() => complete(`${role} reported done without work`));
+      await withTeam([gw], async (env) => {
+        const id = `team-noop-${role}`;
+        const out = await env.team([resource("primary", gw)], { id }).run(role, "complete without changing or validating anything");
+        assert.equal(out.operation.status, "BLOCKED", out.report);
+        const unit = out.operation.units[0];
+        assert.equal(unit.status, "BLOCKED");
+        assert.equal(unit.blocked?.reason, "no_change: implementer or tester completed with prose only (no changes made)");
+        assert.deepEqual(unit.blocked?.decision.options.map((option) => option.action.kind), ["retry", "accept_no_change", "cancel_operation"]);
+      });
+    }
+  });
+
+  test("a tester completes only after a fresh, unfiltered, operator-scoped verifier pass", async () => {
+    const gw = await startGateway((n) => n === 1
+      ? { kind: "tools", calls: [{ name: "run_tests", args: {} }] }
+      : complete("ran the project suite and confirmed it passes"));
+    await withTeam([gw], async (env) => {
+      seedMathProject(env.repo, true);
+      const out = await env.team([resource("primary", gw)]).run("tester", "Run the existing regression suite and report its result.");
+      assert.equal(out.operation.status, "COMPLETE", out.report);
+      assert.equal(out.operation.units[0].result?.outcome, "VERIFIED");
+      assert.equal(gw.requests.length, 2, "the tester ran the suite then reported the result");
+    }, {
+      approvalMode: "auto",
+      fullAccess: true,
+      authoritativeVerifierCommand: "make test",
+      trustedDeliverableFiles: ["math.js"],
+    });
+  });
+
+  test("a discovered verifier qualifies only with fail-before/pass-after evidence", async () => {
+    const gw = await startGateway((n) => {
+      if (n === 1) return { kind: "tools", calls: [{ name: "edit_file", args: {
+        path: "math.js",
+        old_content: "export const add = (a, b) => a - b;",
+        new_content: "export const add = (a, b) => a + b;",
+      } }] };
+      if (n === 2) return { kind: "tools", calls: [{ name: "run_tests", args: {} }] };
+      return complete("fixed the addition defect and ran the discovered project verifier");
+    });
+    await withTeam([gw], async (env) => {
+      seedMathProject(env.repo);
+      const out = await env.team([resource("primary", gw)]).run("tester", "Repair the broken addition implementation and verify it.");
+      assert.equal(out.operation.status, "COMPLETE", out.report);
+      assert.equal(out.operation.units[0].result?.outcome, "VERIFIED");
+      assert.equal(gw.requests.length, 3, "tester repaired the defect, ran the discovered verifier, then completed");
+    }, {
+      approvalMode: "auto",
+      fullAccess: true,
+      trustedDeliverableFiles: ["math.js"],
+    });
+  });
+
+  test("a passing discovered verifier without fail-before evidence cannot qualify a tester unit", async () => {
+    const gw = await startGateway((n) => {
+      if (n === 1) return { kind: "tools", calls: [{ name: "edit_file", args: {
+        path: "math.js",
+        old_content: "export const add = (a, b) => a + b;",
+        new_content: "// formatting-only change\nexport const add = (a, b) => a + b;",
+      } }] };
+      if (n === 2) return { kind: "tools", calls: [{ name: "run_tests", args: {} }] };
+      return complete("the discovered project verifier passed");
+    });
+    await withTeam([gw], async (env) => {
+      seedMathProject(env.repo, true);
+      const out = await env.team([resource("primary", gw)]).run("tester", "Verify the implementation after a formatting-only edit.");
+      assert.equal(out.operation.status, "BLOCKED", out.report);
+      assert.equal(out.operation.units[0].result, undefined, "a passing suite without independent fail-before evidence stays unverified");
+      assert.match(out.operation.units[0].blocked?.reason ?? "", /REGRESSION_FREE/);
+    }, {
+      approvalMode: "auto",
+      fullAccess: true,
+      trustedDeliverableFiles: ["math.js"],
+    });
+  });
+
+  test("a generic passing suite cannot satisfy an unscoped tester unit", async () => {
+    const gw = await startGateway((n) => n === 1
+      ? { kind: "tools", calls: [{ name: "run_tests", args: {} }] }
+      : complete("ran the project suite and confirmed it passes"));
+    await withTeam([gw], async (env) => {
+      seedMathProject(env.repo, true);
+      const out = await env.team([resource("primary", gw)]).run("tester", "Run the existing regression suite and report its result.");
+      assert.equal(out.operation.status, "BLOCKED", out.report);
+      assert.equal(out.operation.units[0].blocked?.reason, "no_change: implementer or tester completed with prose only (no changes made)");
+      assert.equal(out.operation.units[0].result, undefined, "the unbound pass must not be converted into VERIFIED");
+      assert.equal(gw.requests.length, 2, "the test suite ran, but its unscoped evidence did not satisfy the unit");
+    }, { approvalMode: "auto", fullAccess: true });
+  });
+
+  test("a filtered tester run cannot satisfy the tester verification gate", async () => {
+    const gw = await startGateway((n) => n === 1
+      ? { kind: "tools", calls: [{ name: "run_tests", args: { filter: "addition" } }] }
+      : complete("ran the filtered test and confirmed it passes"));
+    await withTeam([gw], async (env) => {
+      seedMathProject(env.repo, true);
+      const out = await env.team([resource("primary", gw)]).run("tester", "Run the addition test and report its result.");
+      assert.equal(out.operation.status, "BLOCKED", out.report);
+      assert.equal(out.operation.units[0].result, undefined, "filtered evidence must not be converted into VERIFIED");
+    }, {
+      approvalMode: "auto",
+      fullAccess: true,
+      trustedDeliverableFiles: ["math.js"],
+    });
+  });
+
+  test("37. REQ-AGT-107: implementer and tester get read_objective and update_requirements, unit ledgers have unitId", async () => {
+    let capturedAgent: AutonomousAgent | undefined;
+    const gw = await startGateway((n, body) => byUnit(n, body));
+    await withTeam([gw], async (env) => {
+      const exec = new AgentWorkUnitExecutor({
+        baseConfig: env.config,
+        createAgent: (c, depth, opts) => {
+          const agent = new AutonomousAgent(c, depth, undefined, opts);
+          capturedAgent = agent;
+          (agent as any).recoveryClock = env.clock;
+          (agent as any).stateManager = new DurableStateManager({ baseDir: env.stateDir, workspacePaths: [(agent as any).primaryWorkspacePathIdentity] });
+          return agent;
+        },
+      });
+      const orch = new TeamOrchestrator(env.config, { store: env.store, executor: exec, clock: env.clock, resources: [resource("primary", gw)], id: "team-roles" });
+      const out = await orch.run("implementer", "implement unit ledger test");
+      assert.equal(out.operation.status, "BLOCKED", "the fixture deliberately provides no implementation or validation");
+      assert.ok(capturedAgent);
+      assert.equal(capturedAgent.role, "implementer");
+      assert.equal(capturedAgent.unitId, "implement");
+      assert.ok((capturedAgent as any).capabilityRegistry.hasTool("read_objective"));
+      assert.ok((capturedAgent as any).capabilityRegistry.hasTool("update_requirements"));
+      assert.equal(capturedAgent.getObjective()?.unitId, "implement");
+    });
+  });
+
+  test("38. AGT-12: 10,000-transition stop offers resume or cancel typed options, unblocks on resume", async () => {
+    const gw = await startGateway((n, body) => byUnit(n, body));
+    await withTeam([gw], async (env) => {
+      const op = newOperation("op-bound", "task", teamUnits("researcher", "task"), [resource("primary", gw)], env.clock.now());
+      env.store.save(op);
+      const runner = new OperationRunner(op, {
+        executor: env.executor(),
+        clock: env.clock,
+        persist: (s) => env.store.save(s),
+        maxIterations: 0,
+      });
+      const res = await runner.run();
+      assert.equal(res.status, "BLOCKED");
+      const persisted = env.store.load("op-bound");
+      const d = persisted.blocked?.decisions?.find((x) => x.id === "operation#not-converging");
+      assert.ok(d);
+      assert.deepEqual(d.options.map((o) => [o.id, o.label, o.action.kind]), [
+        ["1", "resume the operation", "keep_waiting"],
+        ["2", "stop the operation", "cancel_operation"],
+      ]);
+      // Resolving with option 1 unblocks the operation
+      applyOperatorDecision(env.store, "op-bound", d.id, "1", "continue", { now: env.clock.now });
+      const resumed = env.store.load("op-bound");
+      assert.equal(resumed.status, "RUNNING");
+      assert.equal(resumed.blocked, undefined);
     });
   });
 });

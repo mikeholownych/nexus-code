@@ -1,0 +1,12 @@
+{
+  "name": "nexus@standalone-llamacpp/engineering/b0",
+  "agent": "nexus",
+  "endpoint": "https://10.0.8.5:8443/v1",
+  "model": "engineering/b0",
+  "apiKey": { "file": "~/.config/nexus/config.env", "var": "LOCAL_LLM_API_KEY" },
+  "caFile": "~/.config/nexus/t5820-gateway-ca.crt",
+  "serverProfile": "llamacpp",
+  "runs": 1,
+  "steps": 60,
+  "minutes": 20
+}

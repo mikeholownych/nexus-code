@@ -82,7 +82,7 @@ describe("D3 timeout lifecycle", () => {
     execSync("git init -q && git config user.name t && git config user.email t@t.invalid && git add . && git commit -qm base", { cwd: ws, stdio: "ignore" });
     // step 1 writes a file, step 2 asks to complete, step 3 fails fast so no streamed answer pollutes the test stream
     const gw = await gateway((n) => (n === 1 ? { tool: { name: "write_file", args: { path: "x.txt", content: "x" } } } : n === 2 ? { tool: { name: "task_completed", args: { summary: "done" } } } : { fail: true }));
-    const agent = mute(new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 5, temperature: 0, workspace: ws, shell: "bash", verifierTimeoutSecs: deadline } as any));
+    const agent = mute(new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 5, temperature: 0, workspace: ws, shell: "bash", verifierTimeoutSecs: deadline, approvalMode: "auto", fullAccess: true } as any));
     const started = Date.now();
     const origErr = console.error; console.error = () => {};
     try {

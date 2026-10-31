@@ -50,11 +50,16 @@ export type SidecarEvent =
       workspace: string;
       workspace_name: string;
       model: string;
-      mode: "auto" | "review";
+      mode: "auto" | "review" | "read-only";
       git: { branch: string; dirty: number } | null;
       busy: boolean;
       /** The id the session is saved under (shown so it can be resumed or referred to). */
       session?: string;
+      posture?: {
+        mode: "auto" | "review" | "read-only";
+        sandbox: string;
+        trusted: boolean;
+      };
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
   /** What the running turn is doing; sent on every phase change, independent of model output. */
@@ -108,6 +113,7 @@ export type SidecarEvent =
       timed_out?: boolean;
     }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
+  | { type: "checkpoint.choice.request"; id: string; turn_id: string; message: string }
   | { type: "turn.result"; turn_id: string; heading: string; line: string; turn: TurnResult; model_summary: ModelSummary | null }
   | {
       type: "slash.result";
@@ -160,6 +166,7 @@ export type SidecarCommand =
   | { type: "cancel" }
   | { type: "approve"; id: string; always: boolean }
   | { type: "deny"; id: string }
+  | { type: "checkpoint.choice"; id: string; choice: "read_only" | "without_checkpoint" | "allow_sensitive" | "cancel" | "other" }
   | { type: "slash"; id: string; command: string; args: string }
   | { type: "tool.detail"; id: string; evidence: string }
   | { type: "receipt"; id: string }
@@ -220,6 +227,12 @@ export function parseCommand(line: string): SidecarCommand {
       return { type: "approve", id: requireId("approve"), always: msg.always === true };
     case "deny":
       return { type: "deny", id: requireId("deny") };
+    case "checkpoint.choice": {
+      const requestId = requireId("checkpoint.choice");
+      const choices = ["read_only", "without_checkpoint", "allow_sensitive", "cancel", "other"] as const;
+      if (!choices.includes(msg.choice as typeof choices[number])) throw new ProtocolError("checkpoint.choice requires a supported choice", requestId);
+      return { type: "checkpoint.choice", id: requestId, choice: msg.choice as typeof choices[number] };
+    }
     case "slash": {
       const requestId = requireId("slash");
       const command = msg.command;
@@ -308,10 +321,11 @@ export function providerRecoveryNotice(record: ProviderRecoveryRecord, discarded
   const last = record.submissions[record.submissions.length - 1];
   const condition = record.condition.toLowerCase().replace(/_/g, " ");
   const discarded = discardedPartialOutput ? " The partial response was discarded." : "";
+  const where = record.endpoint ? ` at ${record.endpoint}` : "";
   switch (record.state) {
     case "WAITING": {
       const secs = record.nextAttemptAt ? Math.max(0, Math.round((Date.parse(record.nextAttemptAt) - Date.parse(record.updatedAt)) / 1000)) : 0;
-      return `Inference provider ${condition} (${last?.httpStatus ? `HTTP ${last.httpStatus}` : last?.kind ?? "failure"}); waiting ${secs}s before checking again. Work is preserved.${discarded}`;
+      return `Inference provider${where} ${condition} (${last?.httpStatus ? `HTTP ${last.httpStatus}` : last?.kind ?? "failure"}); waiting ${secs}s before checking again. Work is preserved.${discarded}`;
     }
     case "RESUMED":
       return `Inference provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} resumed.`;

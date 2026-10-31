@@ -72,7 +72,7 @@ Output:
 ### Checking Server Status in Interactive REPL
 Type `/mcp` at the REPL prompt:
 ```text
-nexus (engineering/b0) my-app ❯ /mcp
+nexus (qwen2.5-coder) my-app ❯ /mcp
 ```
 All discovered tools are immediately accessible to both the user and the autonomous model.
 

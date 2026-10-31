@@ -2,6 +2,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { redactForPersistence, writeProtectedTextFile } from "./core/persistence_protection.js";
+import { ensurePrivateDir } from "./core/durable_file.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
+import pc from "picocolors";
 
 export type KnowledgeCategory = "idiom" | "architecture" | "dependency" | "troubleshooting" | "rule";
 
@@ -22,6 +25,11 @@ export interface KnowledgeGraphData {
   entries: KnowledgeEntry[];
 }
 
+export interface KnowledgeOptions {
+  readOnly?: boolean;
+  trusted?: boolean;
+}
+
 /**
  * Persistent Project Knowledge Graph
  * Retains project idioms, architectural decisions, and conventions across sessions.
@@ -29,17 +37,24 @@ export interface KnowledgeGraphData {
 export class KnowledgeGraph {
   private workspace: string;
   private dbPath: string;
+  private readOnly: boolean;
+  private explicitTrusted?: boolean;
   private entries: Map<string, KnowledgeEntry> = new Map();
 
-  constructor(workspace: string = process.cwd()) {
+  constructor(workspace: string = process.cwd(), options: KnowledgeOptions = {}) {
     this.workspace = path.resolve(workspace);
-    const nexusDir = path.join(this.workspace, ".nexus");
-    if (!fs.existsSync(nexusDir)) {
-      try {
-        fs.mkdirSync(nexusDir, { recursive: true });
-      } catch {}
-    }
-    this.dbPath = path.join(nexusDir, "knowledge.json");
+    this.readOnly = Boolean(options.readOnly);
+    this.explicitTrusted = options.trusted;
+    this.dbPath = path.join(this.workspace, ".nexus", "knowledge.json");
+    // LAZY: no mkdir in constructor (REQ-SEC-114)
+    this.load();
+  }
+
+  public setWorkspace(workspace: string, options: KnowledgeOptions = {}): void {
+    this.workspace = path.resolve(workspace);
+    if (options.readOnly !== undefined) this.readOnly = options.readOnly;
+    if (options.trusted !== undefined) this.explicitTrusted = options.trusted;
+    this.dbPath = path.join(this.workspace, ".nexus", "knowledge.json");
     this.load();
   }
 
@@ -82,6 +97,8 @@ export class KnowledgeGraph {
    * Persists knowledge entries to disk.
    */
   public save(): void {
+    if (this.readOnly) return;
+
     const data: KnowledgeGraphData = {
       version: 1,
       updatedAt: new Date().toISOString(),
@@ -90,9 +107,7 @@ export class KnowledgeGraph {
 
     try {
       const nexusDir = path.dirname(this.dbPath);
-      if (!fs.existsSync(nexusDir)) {
-        fs.mkdirSync(nexusDir, { recursive: true });
-      }
+      ensurePrivateDir(nexusDir);
       const protectedData = redactForPersistence(data);
       writeProtectedTextFile(this.dbPath, JSON.stringify(protectedData, null, 2));
     } catch {
@@ -109,6 +124,9 @@ export class KnowledgeGraph {
     category: KnowledgeCategory = "rule",
     options?: { confidence?: number; tags?: string[] }
   ): KnowledgeEntry {
+    if (this.readOnly) {
+      throw new Error("Read-only mode violation: mutating knowledge graph is blocked");
+    }
     const existing = this.entries.get(key);
     const now = new Date().toISOString();
     const entry: KnowledgeEntry = {
@@ -138,6 +156,9 @@ export class KnowledgeGraph {
    * Deletes an entry by key or ID.
    */
   public delete(keyOrId: string): boolean {
+    if (this.readOnly) {
+      throw new Error("Read-only mode violation: mutating knowledge graph is blocked");
+    }
     if (this.entries.has(keyOrId)) {
       this.entries.delete(keyOrId);
       this.save();
@@ -187,12 +208,23 @@ export class KnowledgeGraph {
 
   /**
    * Renders knowledge entries as a markdown prompt section for agent system prompts.
+   * Gated by workspace trust: returns empty string if workspace is untrusted (REQ-SEC-113).
+   * Injected block is annotated with source path and trust state (partial CTX-001).
    */
   public exportPromptSection(): string {
+    const isTrusted =
+      this.explicitTrusted !== undefined
+        ? this.explicitTrusted
+        : isWorkspaceTrusted(this.workspace, this.readOnly);
+    if (!isTrusted) {
+      return "";
+    }
     const list = this.list();
     if (list.length === 0) return "";
 
-    const lines: string[] = ["### Persistent Project Knowledge & Conventions:"];
+    const lines: string[] = [
+      `### Persistent Project Knowledge & Conventions [source: ${this.dbPath}] [trust: trusted]:`,
+    ];
     for (const entry of list) {
       lines.push(`- [${entry.category.toUpperCase()}] **${entry.key}**: ${entry.value}`);
     }
@@ -202,8 +234,21 @@ export class KnowledgeGraph {
 
   /**
    * Automatically extracts and learns project rules and conventions from conversation turns.
+   * Opt-in only via NEXUS_KNOWLEDGE_AUTOEXTRACT=1 (REQ-SEC-114).
+   * Gated by workspace trust and read-only mode.
    */
   public autoExtract(prompt: string, outcome: string): KnowledgeEntry[] {
+    if (this.readOnly || process.env.NEXUS_KNOWLEDGE_AUTOEXTRACT !== "1") {
+      return [];
+    }
+    const isTrusted =
+      this.explicitTrusted !== undefined
+        ? this.explicitTrusted
+        : isWorkspaceTrusted(this.workspace, this.readOnly);
+    if (!isTrusted) {
+      return [];
+    }
+
     const learned: KnowledgeEntry[] = [];
     const combined = `${prompt}\n${outcome}`;
 
@@ -214,7 +259,9 @@ export class KnowledgeGraph {
         const clean = phrase.trim();
         const key = `rule-${clean.slice(0, 30).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
         if (!this.entries.has(key)) {
-          learned.push(this.set(key, clean, "rule", { confidence: 0.7 }));
+          const entry = this.set(key, clean, "rule", { confidence: 0.7 });
+          learned.push(entry);
+          console.log(pc.yellow(`[knowledge] Learned project rule: ${clean}`));
         }
       }
     }
@@ -226,7 +273,9 @@ export class KnowledgeGraph {
         const clean = phrase.trim();
         const key = `idiom-${clean.slice(0, 25).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
         if (!this.entries.has(key)) {
-          learned.push(this.set(key, clean, "idiom", { confidence: 0.8 }));
+          const entry = this.set(key, clean, "idiom", { confidence: 0.8 });
+          learned.push(entry);
+          console.log(pc.yellow(`[knowledge] Learned project idiom: ${clean}`));
         }
       }
     }

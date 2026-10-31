@@ -1,5 +1,7 @@
 # Recovered `/doctor` request (verbatim)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Source: `nexus-session-session_20261011_162349_6lvu.json`, message 1 (structured context memory),
 note prefixed `Earlier task requests:`. The follow-up request in the same session was `proceed with implementation.`
 Historical evidence of scope; the matrix in `NEXUS_MATURITY_FIXES_2026-10-11.md` tracks each item.

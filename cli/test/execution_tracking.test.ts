@@ -16,7 +16,7 @@ import {
   normalizeTracking,
   outcomeIdentity,
 } from "../src/core/execution_tracking.js";
-import { createLedger, isContinuationPrompt, isNewObjective, renderPinnedLedger, trackingOf } from "../src/core/objective.js";
+import { createLedger, isContinuationPrompt, isNewObjective, recordAttempt, renderPinnedLedger, trackingOf } from "../src/core/objective.js";
 
 const obs = (name: string, args: unknown, text: string, state: string, success = true) => ({ name, args, text, success, stateBefore: state });
 
@@ -168,6 +168,34 @@ describe("progress", () => {
     assert.equal(t.loops().length, 1);
     assert.equal(t.observe(5, obs("read_file", { path: "a" }, "A", "S")).loop, true, "the loop is still recognized after the follow-up");
   });
+
+  test("ACC-CONT-09 / REQ-AGT-108: distinct workspace mutations on unknown state count as progress; identical writes stagnate", () => {
+    const t = ExecutionTracker.fresh();
+    // 14 distinct writes on unknown state: each step counts as progress, stepsWithoutProgress never reaches 12
+    for (let i = 1; i <= 14; i++) {
+      const v = t.observe(i, obs("write_file", { path: `f${i}.ts`, content: `code ${i}` }, "ok", "unknown"));
+      const ev = t.evaluateStep(i, { stateBefore: "unknown", stateAfter: "unknown", verdicts: [v] });
+      assert.equal(ev.progressed, true, `step ${i} distinct write progressed`);
+      assert.equal(t.data.stepsWithoutProgress, 0);
+    }
+
+    // Inverse test: 13 identical writes on unknown state
+    const tStagnant = ExecutionTracker.fresh();
+    // Step 1: initial write progresses (stepsWithoutProgress = 0)
+    const vFirst = tStagnant.observe(1, obs("write_file", { path: "same.ts", content: "same" }, "ok", "unknown"));
+    const evFirst = tStagnant.evaluateStep(1, { stateBefore: "unknown", stateAfter: "unknown", verdicts: [vFirst] });
+    assert.equal(evFirst.progressed, true, "first write progressed");
+    assert.equal(tStagnant.data.stepsWithoutProgress, 0);
+
+    // Steps 2 through 13: 12 identical writes with no progress
+    for (let i = 2; i <= 13; i++) {
+      const vRepeat = tStagnant.observe(i, obs("write_file", { path: "same.ts", content: "same" }, "ok", "unknown"));
+      const evRepeat = tStagnant.evaluateStep(i, { stateBefore: "unknown", stateAfter: "unknown", verdicts: [vRepeat] });
+      assert.equal(evRepeat.progressed, false, `step ${i} repeat did not progress`);
+    }
+    // After 13 steps (1 initial + 12 repeated without progress), stepsWithoutProgress is 12 (hits default stagnationSteps of 12)
+    assert.equal(tStagnant.data.stepsWithoutProgress, 12);
+  });
 });
 
 describe("bounded storage does not hide a loop", () => {
@@ -244,5 +272,20 @@ describe("the ledger carries tracking", () => {
     }
     ledger.outcome = { status: "completed", reason: "done", remaining: [], at: "x" };
     assert.equal(isNewObjective(ledger, "continue"), true, "a completed objective is never continued");
+  });
+
+  test("AGT-13: recordAttempt counter is monotonic beyond 50 attempts", () => {
+    const ledger = createLedger("Verify monotonic counter");
+    for (let i = 1; i <= 60; i++) {
+      const attempt = recordAttempt(ledger, {
+        command: "npm test",
+        inputs: `candidate-${i}`,
+        status: "FAILED",
+      });
+      assert.equal(attempt.n, i, `attempt ${i} has n=${i}`);
+    }
+    assert.equal(ledger.verification.length, 50, "verification array bounded at 50");
+    assert.equal(ledger.verification[0].n, 11, "first retained attempt is n=11");
+    assert.equal(ledger.verification[ledger.verification.length - 1].n, 60, "last attempt is n=60");
   });
 });

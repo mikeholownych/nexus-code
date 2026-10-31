@@ -1,0 +1,841 @@
+TAP version 13
+# Subtest: invocation-local reuse preserves contextual, key and serialized redaction
+ok 1 - invocation-local reuse preserves contextual, key and serialized redaction
+  ---
+  duration_ms: 10.321485
+  ...
+# Subtest: redaction reuse never crosses an environment or policy change
+ok 2 - redaction reuse never crosses an environment or policy change
+  ---
+  duration_ms: 1.928984
+  ...
+# Subtest: all contextual key aliases retain classification with case and identifier prefixes
+ok 3 - all contextual key aliases retain classification with case and identifier prefixes
+  ---
+  duration_ms: 12.008147
+  ...
+# Subtest: independent descriptors contend and release permits reacquisition
+ok 4 - independent descriptors contend and release permits reacquisition
+  ---
+  duration_ms: 36.132252
+  ...
+# Subtest: duplicate release cannot close an unrelated reused descriptor
+ok 5 - duplicate release cannot close an unrelated reused descriptor
+  ---
+  duration_ms: 9.204979
+  ...
+# Subtest: unsafe guards and missing lock utility fail closed
+ok 6 - unsafe guards and missing lock utility fail closed
+  ---
+  duration_ms: 7.687534
+  ...
+# Subtest: state store supports synchronous nesting and releases after exceptions
+ok 7 - state store supports synchronous nesting and releases after exceptions
+  ---
+  duration_ms: 18.8394
+  ...
+# Subtest: background collection skips an externally held store
+ok 8 - background collection skips an externally held store
+  ---
+  duration_ms: 21.683971
+  ...
+# Subtest: kernel ownership is released when the owning process is killed
+ok 9 - kernel ownership is released when the owning process is killed
+  ---
+  duration_ms: 90.599754
+  ...
+# Subtest: session persistence scrubs nested credential plaintext and keeps recoverable safe state
+ok 10 - session persistence scrubs nested credential plaintext and keeps recoverable safe state
+  ---
+  duration_ms: 57.621104
+  ...
+# Subtest: loading an older plaintext session rewrites protected bytes before successful recovery
+ok 11 - loading an older plaintext session rewrites protected bytes before successful recovery
+  ---
+  duration_ms: 47.613448
+  ...
+# Subtest: persisted session workspace cannot mint WorkspacePath provenance or expand selected workspace
+ok 12 - persisted session workspace cannot mint WorkspacePath provenance or expand selected workspace
+  ---
+  duration_ms: 1.927384
+  ...
+# Subtest: caller-supplied WorkspacePath cannot override selected SessionManager or state-manager identity
+ok 13 - caller-supplied WorkspacePath cannot override selected SessionManager or state-manager identity
+  ---
+  duration_ms: 7.716737
+  ...
+# Subtest: legacy state with a classified identity fails recovery without writing a sanitized shadow record
+ok 14 - legacy state with a classified identity fails recovery without writing a sanitized shadow record
+  ---
+  duration_ms: 6.942363
+  ...
+# Subtest: knowledge persistence does not write credential plaintext and reloads a redacted entry
+ok 15 - knowledge persistence does not write credential plaintext and reloads a redacted entry
+  ---
+  duration_ms: 13.801519
+  ...
+# Subtest: git checkpoint refuses to persist modified files containing classified credentials
+ok 16 - git checkpoint refuses to persist modified files containing classified credentials
+  ---
+  duration_ms: 124.064351
+  ...
+# Subtest: git checkpoint retains ordinary tracked state without changing the worktree
+ok 17 - git checkpoint retains ordinary tracked state without changing the worktree
+  ---
+  duration_ms: 174.962046
+  ...
+# Subtest: git checkpoint permits a staged deletion with no index blob to inspect
+ok 18 - git checkpoint permits a staged deletion with no index blob to inspect
+  ---
+  duration_ms: 141.22498
+  ...
+# Subtest: non-git checkpoint refuses to copy sensitive workspace files
+ok 19 - non-git checkpoint refuses to copy sensitive workspace files
+  ---
+  duration_ms: 15.98026
+  ...
+# Subtest: non-git checkpoint preserves an ordinary workspace snapshot
+ok 20 - non-git checkpoint preserves an ordinary workspace snapshot
+  ---
+  duration_ms: 36.538766
+  ...
+# Subtest: structured session export text is redacted before a durable file write
+ok 21 - structured session export text is redacted before a durable file write
+  ---
+  duration_ms: 11.343107
+  ...
+# Subtest: REPL history appends a redacted durable copy while retaining the live input in memory
+ok 22 - REPL history appends a redacted durable copy while retaining the live input in memory
+  ---
+  duration_ms: 1.440941
+  ...
+# Subtest: REPL history loading scrubs legacy plaintext on disk before returning recovered history
+ok 23 - REPL history loading scrubs legacy plaintext on disk before returning recovered history
+  ---
+  duration_ms: 6.953979
+  ...
+# Subtest: durable task state refuses a write if the persistence classifier fails
+ok 24 - durable task state refuses a write if the persistence classifier fails
+  ---
+  duration_ms: 5.985584
+  ...
+# Subtest: durable task state refuses a credential embedded in workspace identity
+ok 25 - durable task state refuses a credential embedded in workspace identity
+  ---
+  duration_ms: 4.465336
+  ...
+# Subtest: durable task state refuses a high-entropy path component rather than preserving it unclassified
+ok 26 - durable task state refuses a high-entropy path component rather than preserving it unclassified
+  ---
+  duration_ms: 5.949381
+  ...
+# Subtest: selected typed WorkspacePath survives durable serialization and restart recovery
+ok 27 - selected typed WorkspacePath survives durable serialization and restart recovery
+  ---
+  duration_ms: 22.280574
+  ...
+# Subtest: typed WorkspacePath does not override a positively identified credential
+ok 28 - typed WorkspacePath does not override a positively identified credential
+  ---
+  duration_ms: 4.347324
+  ...
+# Subtest: canonical positive credential findings block typed WorkspacePath persistence
+ok 29 - canonical positive credential findings block typed WorkspacePath persistence
+  ---
+  duration_ms: 37.954703
+  ...
+# Subtest: typed WorkspacePath may resolve only an UNCERTAIN path entropy finding
+ok 30 - typed WorkspacePath may resolve only an UNCERTAIN path entropy finding
+  ---
+  duration_ms: 10.395414
+  ...
+# Subtest: typed WorkspacePath does not exempt arbitrary high-entropy message content
+ok 31 - typed WorkspacePath does not exempt arbitrary high-entropy message content
+  ---
+  duration_ms: 21.734121
+  ...
+# Subtest: workspacePath property name alone does not grant typed-path preservation
+ok 32 - workspacePath property name alone does not grant typed-path preservation
+  ---
+  duration_ms: 4.191209
+  ...
+# Subtest: WorkspacePath rejects normalization changes and detects a changed symlink target
+ok 33 - WorkspacePath rejects normalization changes and detects a changed symlink target
+  ---
+  duration_ms: 5.367924
+  ...
+# Subtest: a reminted WorkspacePath cannot authorize a retargeted selected symlink
+ok 34 - a reminted WorkspacePath cannot authorize a retargeted selected symlink
+  ---
+  duration_ms: 6.317516
+  ...
+# Subtest: selected WorkspacePath capability is immutable and rejects forged instances
+ok 35 - selected WorkspacePath capability is immutable and rejects forged instances
+  ---
+  duration_ms: 4.277617
+  ...
+# Subtest: PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PER-102, DEC-11, ACC-PER-02)
+    # Subtest: Session indexing with rebuild-on-miss and performance (1k sessions lists in < 500 ms)
+    ok 1 - Session indexing with rebuild-on-miss and performance (1k sessions lists in < 500 ms)
+      ---
+      duration_ms: 247.548046
+      ...
+    # Subtest: ACC-PER-02: seed 10k tasks and 2k sessions; gc --dry-run reports and gc brings store under cap
+    ok 2 - ACC-PER-02: seed 10k tasks and 2k sessions; gc --dry-run reports and gc brings store under cap
+      ---
+      duration_ms: 5102.482582
+      ...
+    # Subtest: Checkpoints git ref and snapshot pruning, flights pruning
+    ok 3 - Checkpoints git ref and snapshot pruning, flights pruning
+      ---
+      duration_ms: 141.026209
+      ...
+    # Subtest: Background daily GC: first-run acknowledgement, NEXUS_GC=auto, and 2s timeout bounding
+    ok 4 - Background daily GC: first-run acknowledgement, NEXUS_GC=auto, and 2s timeout bounding
+      ---
+      duration_ms: 3.686281
+      ...
+    # Subtest: Background daily GC: enforces single end-to-end deadline across planning, identity capture, and execution
+    ok 5 - Background daily GC: enforces single end-to-end deadline across planning, identity capture, and execution
+      ---
+      duration_ms: 10.266764
+      ...
+    # Subtest: Planning candidate selection and size cap sorting respects expired deadline
+    ok 6 - Planning candidate selection and size cap sorting respects expired deadline
+      ---
+      duration_ms: 3.788192
+      ...
+    # Subtest: Background daily GC: persists summary and lastRunAt even when work budget expires
+    ok 7 - Background daily GC: persists summary and lastRunAt even when work budget expires
+      ---
+      duration_ms: 10.899829
+      ...
+    # Subtest: Planning: bounded metadata streaming respects deadline and preserves pin protection on large legacy state envelopes
+    ok 8 - Planning: bounded metadata streaming respects deadline and preserves pin protection on large legacy state envelopes
+      ---
+      duration_ms: 68.717919
+      ...
+    1..8
+ok 36 - PLAN-08 PR-8c: Persistence retention, GC, and indexed sessions (REQ-PER-102, DEC-11, ACC-PER-02)
+  ---
+  duration_ms: 5592.172904
+  type: 'suite'
+  ...
+# Subtest: GC accounts for and removes message journals, history logs, and exact migration backups
+ok 37 - GC accounts for and removes message journals, history logs, and exact migration backups
+  ---
+  duration_ms: 36.725809
+  ...
+# Subtest: GC preserves all components of a record modified after planning
+ok 38 - GC preserves all components of a record modified after planning
+  ---
+  duration_ms: 13.004642
+  ...
+# Subtest: GC skips a store while its writer owns the kernel guard
+ok 39 - GC skips a store while its writer owns the kernel guard
+  ---
+  duration_ms: 11.269976
+  ...
+# Subtest: orphan journals and migration backups count toward the size cap and are collected together
+ok 40 - orphan journals and migration backups count toward the size cap and are collected together
+  ---
+  duration_ms: 18.091128
+  ...
+# Subtest: a newly published envelope cancels an orphan deletion plan
+ok 41 - a newly published envelope cancels an orphan deletion plan
+  ---
+  duration_ms: 13.552894
+  ...
+# Subtest: companion removal failure propagates into deletion disposition and preserves record status
+ok 42 - companion removal failure propagates into deletion disposition and preserves record status
+  ---
+  duration_ms: 9.143873
+  ...
+# Subtest: GC reads pin protection from the current envelope rather than a stale newer index
+ok 43 - GC reads pin protection from the current envelope rather than a stale newer index
+  ---
+  duration_ms: 6.571728
+  ...
+# Subtest: current and pinned tasks remain protected even during test-pollution cleanup
+ok 44 - current and pinned tasks remain protected even during test-pollution cleanup
+  ---
+  duration_ms: 7.936858
+  ...
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: is subject to change. To configure the initial branch name to use in all
+# hint: of your new repositories, which will suppress this warning, call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# Subtest: WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PERS-001..PERS-004)
+    # Subtest: PERS-001: Durable milestone state round-trip with atomic persistence
+    ok 1 - PERS-001: Durable milestone state round-trip with atomic persistence
+      ---
+      duration_ms: 161.881163
+      ...
+    # Subtest: PERS-001 & Multi-task: Task identity isolation
+    ok 2 - PERS-001 & Multi-task: Task identity isolation
+      ---
+      duration_ms: 151.374659
+      ...
+    # Subtest: PERS-002 & F-07: In-flight operation detected as interrupted on recovery (no false completion)
+    ok 3 - PERS-002 & F-07: In-flight operation detected as interrupted on recovery (no false completion)
+      ---
+      duration_ms: 165.29576
+      ...
+    # Subtest: PERS-003 & CAND-002: Candidate modified while offline invalidates validation receipt
+    ok 4 - PERS-003 & CAND-002: Candidate modified while offline invalidates validation receipt
+      ---
+      duration_ms: 171.87257
+      ...
+    # Subtest: PERS-003: Candidate unchanged while offline preserves valid receipt
+    ok 5 - PERS-003: Candidate unchanged while offline preserves valid receipt
+      ---
+      duration_ms: 116.086128
+      ...
+    # Subtest: PERS-004: Worktree binding recovery and missing worktree detection
+    ok 6 - PERS-004: Worktree binding recovery and missing worktree detection
+      ---
+      duration_ms: 75.381955
+      ...
+    # Subtest: PERS-004 & Authority Invariance: Prior authority flags do not resurrect live authority
+    ok 7 - PERS-004 & Authority Invariance: Prior authority flags do not resurrect live authority
+      ---
+      duration_ms: 70.626291
+      ...
+    # Subtest: Corrupt state and unsupported schema fail closed
+    ok 8 - Corrupt state and unsupported schema fail closed
+      ---
+      duration_ms: 77.620773
+      ...
+    # Subtest: Restart idempotence: Repeated recovery produces stable deterministic state
+    ok 9 - Restart idempotence: Repeated recovery produces stable deterministic state
+      ---
+      duration_ms: 90.656746
+      ...
+    # Subtest: SessionManager migration: Legacy session files transparently upgrade to DurableTaskState
+    ok 10 - SessionManager migration: Legacy session files transparently upgrade to DurableTaskState
+      ---
+      duration_ms: 70.444074
+      ...
+    # Subtest: AutonomousAgent integration: Milestones, in-flight operations, and task recovery
+    ok 11 - AutonomousAgent integration: Milestones, in-flight operations, and task recovery
+      ---
+      duration_ms: 194.31096
+      ...
+    1..11
+ok 45 - WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PERS-001..PERS-004)
+  ---
+  duration_ms: 1347.50857
+  type: 'suite'
+  ...
+# Subtest: ACC-PER-04 & ACC-PER-07: State Compatibility, Migration & Corruption Reporting
+    # Subtest: ACC-PER-07: docs/STATE_COMPATIBILITY.md exists and documents schema evolution & stores
+    ok 1 - ACC-PER-07: docs/STATE_COMPATIBILITY.md exists and documents schema evolution & stores
+      ---
+      duration_ms: 20.716079
+      ...
+    # Subtest: ACC-PER-07: Valid V1 task and session fixtures load correctly
+    ok 2 - ACC-PER-07: Valid V1 task and session fixtures load correctly
+      ---
+      duration_ms: 137.97078
+      ...
+    # Subtest: ACC-PER-07: Legacy V0 unversioned state migrates with pre-migration backup copy (mode 0600)
+    ok 3 - ACC-PER-07: Legacy V0 unversioned state migrates with pre-migration backup copy (mode 0600)
+      ---
+      duration_ms: 76.639921
+      ...
+    # Subtest: ACC-PER-04: Truncated state file gives explicit corrupt message and is quarantined to .corrupt-<ts>, never deleted
+    ok 4 - ACC-PER-04: Truncated state file gives explicit corrupt message and is quarantined to .corrupt-<ts>, never deleted
+      ---
+      duration_ms: 15.089342
+      ...
+    # Subtest: ACC-PER-04: Future schema version fails closed with explicit upgrade requirement
+    ok 5 - ACC-PER-04: Future schema version fails closed with explicit upgrade requirement
+      ---
+      duration_ms: 15.340566
+      ...
+    # Subtest: ACC-PER-04: Exact match wins, unique prefix resolves, and ambiguous prefix is refused with candidate list
+    ok 6 - ACC-PER-04: Exact match wins, unique prefix resolves, and ambiguous prefix is refused with candidate list
+      ---
+      duration_ms: 95.317105
+      ...
+    1..6
+ok 46 - ACC-PER-04 & ACC-PER-07: State Compatibility, Migration & Corruption Reporting
+  ---
+  duration_ms: 362.447321
+  type: 'suite'
+  ...
+# Subtest: message log appends new messages and leaves every previous commit readable
+ok 47 - message log appends new messages and leaves every previous commit readable
+  ---
+  duration_ms: 70.094696
+  ...
+# Subtest: unchanged or initially empty conversations do not append unnecessary data
+ok 48 - unchanged or initially empty conversations do not append unnecessary data
+  ---
+  duration_ms: 34.078055
+  ...
+# Subtest: edits, shortened history and compaction select a new branch without deleting originals
+ok 49 - edits, shortened history and compaction select a new branch without deleting originals
+  ---
+  duration_ms: 29.165986
+  ...
+# Subtest: torn and complete unpublished appends cannot become part of a later committed branch
+ok 50 - torn and complete unpublished appends cannot become part of a later committed branch
+  ---
+  duration_ms: 31.738231
+  ...
+# Subtest: a displaced byte hint resolves by committed digest instead of returning another append
+ok 51 - a displaced byte hint resolves by committed digest instead of returning another append
+  ---
+  duration_ms: 15.543285
+  ...
+# Subtest: a writer cannot claim a prefix different from its committed parent
+ok 52 - a writer cannot claim a prefix different from its committed parent
+  ---
+  duration_ms: 11.083359
+  ...
+# Subtest: corrupt committed data fails closed, including damage to an ancestor
+ok 53 - corrupt committed data fails closed, including damage to an ancestor
+  ---
+  duration_ms: 18.098029
+  ...
+# Subtest: a different task identity or incorrect committed count is refused
+ok 54 - a different task identity or incorrect committed count is refused
+  ---
+  duration_ms: 13.959033
+  ...
+# Subtest: future cursor schemas fail before touching the named file
+ok 55 - future cursor schemas fail before touching the named file
+  ---
+  duration_ms: 2.165607
+  ...
+# Subtest: future message-record schemas are preserved and reported without mutation
+ok 56 - future message-record schemas are preserved and reported without mutation
+  ---
+  duration_ms: 3.883071
+  ...
+# Subtest: redirected and hard-linked logs cannot redirect either reads or writes
+ok 57 - redirected and hard-linked logs cannot redirect either reads or writes
+  ---
+  duration_ms: 12.302275
+  ...
+# Subtest: new message logs and their directories remain private under a permissive umask
+ok 58 - new message logs and their directories remain private under a permissive umask
+  ---
+  duration_ms: 7.050774
+  ...
+# Subtest: decoded reuse still detects same-size ancestor tampering with an unchanged committed head
+ok 59 - decoded reuse still detects same-size ancestor tampering with an unchanged committed head
+  ---
+  duration_ms: 33.765826
+  ...
+# Subtest: decoded reuse is isolated from caller mutation and validates the complete cursor
+ok 60 - decoded reuse is isolated from caller mutation and validates the complete cursor
+  ---
+  duration_ms: 14.13515
+  ...
+# Subtest: append-heavy ancestry recovery visits introduced messages without repeatedly traversing retained prefixes
+ok 61 - append-heavy ancestry recovery visits introduced messages without repeatedly traversing retained prefixes
+  ---
+  duration_ms: 225.130295
+  ...
+# revisions=6000 message_iterator_visits=6000
+# Subtest: displaced-offset recovery scans oversized orphan lines without accumulating or recopying their chunks
+ok 62 - displaced-offset recovery scans oversized orphan lines without accumulating or recopying their chunks
+  ---
+  duration_ms: 84.882582
+  ...
+# orphan_bytes_per_scan=12582912 scans=2 concatenated_bytes=0
+# Subtest: schema two stores a small progress envelope and returns the complete conversation
+ok 63 - schema two stores a small progress envelope and returns the complete conversation
+  ---
+  duration_ms: 100.631412
+  ...
+# Subtest: v1 migration backs up exact bytes privately and preserves every envelope field
+ok 64 - v1 migration backs up exact bytes privately and preserves every envelope field
+  ---
+  duration_ms: 59.483682
+  ...
+# Subtest: a conflicting migration backup fails before modifying the old primary or creating a message log
+ok 65 - a conflicting migration backup fails before modifying the old primary or creating a message log
+  ---
+  duration_ms: 10.760928
+  ...
+# Subtest: operation-only updates leave the committed conversation log unchanged
+ok 66 - operation-only updates leave the committed conversation log unchanged
+  ---
+  duration_ms: 73.625333
+  ...
+# Subtest: compaction and shorter histories recover their selected conversation after restart
+ok 67 - compaction and shorter histories recover their selected conversation after restart
+  ---
+  duration_ms: 64.381149
+  ...
+# Subtest: failed progress publication cannot expose an appended but unpublished conversation
+ok 68 - failed progress publication cannot expose an appended but unpublished conversation
+  ---
+  duration_ms: 126.847578
+  ...
+# Subtest: failed message synchronization leaves the previous progress envelope authoritative
+ok 69 - failed message synchronization leaves the previous progress envelope authoritative
+  ---
+  duration_ms: 51.663942
+  ...
+# Subtest: missing committed messages are reported as corruption, quarantined, and never returned as empty
+ok 70 - missing committed messages are reported as corruption, quarantined, and never returned as empty
+  ---
+  duration_ms: 33.750494
+  ...
+# Subtest: permission or I/O error reading message journal fails without quarantining primary state
+ok 71 - permission or I/O error reading message journal fails without quarantining primary state
+  ---
+  duration_ms: 27.929926
+  ...
+# Subtest: future message schemas fail without changing or quarantining either component
+ok 72 - future message schemas fail without changing or quarantining either component
+  ---
+  duration_ms: 37.903798
+  ...
+# Subtest: saving cannot replace a future primary schema or write a sidecar beside it
+ok 73 - saving cannot replace a future primary schema or write a sidecar beside it
+  ---
+  duration_ms: 10.437718
+  ...
+# Subtest: deleting an explicit task removes its conversation sidecar
+ok 74 - deleting an explicit task removes its conversation sidecar
+  ---
+  duration_ms: 31.006626
+  ...
+# Subtest: deleting an explicit task removes orphaned message journal, history, and migration backups without envelope
+ok 75 - deleting an explicit task removes orphaned message journal, history, and migration backups without envelope
+  ---
+  duration_ms: 8.409421
+  ...
+# Subtest: read-modify-save classifies the complete state once with fresh environment secrets before publication and return
+ok 76 - read-modify-save classifies the complete state once with fresh environment secrets before publication and return
+  ---
+  duration_ms: 47.468232
+  ...
+# Subtest: durable same-version transaction recovery
+    # Subtest: preserves the only working package after crash before-old-move
+    ok 1 - preserves the only working package after crash before-old-move
+      ---
+      duration_ms: 617.728515
+      ...
+    # Subtest: preserves the only working package after crash after-old-move
+    ok 2 - preserves the only working package after crash after-old-move
+      ---
+      duration_ms: 659.504161
+      ...
+    # Subtest: preserves the only working package after crash after-new-move
+    ok 3 - preserves the only working package after crash after-new-move
+      ---
+      duration_ms: 525.747046
+      ...
+    # Subtest: preserves the only working package after crash after-provenance
+    ok 4 - preserves the only working package after crash after-provenance
+      ---
+      duration_ms: 532.658631
+      ...
+    # Subtest: preserves the only working package after crash after-link
+    ok 5 - preserves the only working package after crash after-link
+      ---
+      duration_ms: 581.281487
+      ...
+    # Subtest: preserves the only working package after crash after-failed-displacement
+    ok 6 - preserves the only working package after crash after-failed-displacement
+      ---
+      duration_ms: 573.843864
+      ...
+    # Subtest: retains backups and truthful journal when restoring the link fails
+    ok 7 - retains backups and truthful journal when restoring the link fails
+      ---
+      duration_ms: 366.870061
+      ...
+    # Subtest: admits only one recovery when two contenders both observe the same stale lock
+    ok 8 - admits only one recovery when two contenders both observe the same stale lock
+      ---
+      duration_ms: 770.43761
+      ...
+    # Subtest: reclaims a stale lock through the kernel guard without contention
+    ok 9 - reclaims a stale lock through the kernel guard without contention
+      ---
+      duration_ms: 190.651749
+      ...
+    # Subtest: reports the guard path and stays back while a live reclaimer holds the kernel guard
+    ok 10 - reports the guard path and stays back while a live reclaimer holds the kernel guard
+      ---
+      duration_ms: 426.183147
+      ...
+    # Subtest: acquires the kernel guard after its holder is killed
+    ok 11 - acquires the kernel guard after its holder is killed
+      ---
+      duration_ms: 375.946812
+      ...
+    # Subtest: does not leak descriptors across repeated guard contention
+    ok 12 - does not leak descriptors across repeated guard contention
+      ---
+      duration_ms: 248.091261
+      ...
+    # Subtest: fails closed when the flock utility is unavailable
+    ok 13 - fails closed when the flock utility is unavailable
+      ---
+      duration_ms: 8.740815
+      ...
+    # Subtest: rejects a symlinked reclaim guard
+    ok 14 - rejects a symlinked reclaim guard
+      ---
+      duration_ms: 5.823009
+      ...
+    # Subtest: rejects a FIFO reclaim guard
+    ok 15 - rejects a FIFO reclaim guard
+      ---
+      duration_ms: 16.688447
+      ...
+    # Subtest: rejects a reclaim guard with unsafe permissions
+    ok 16 - rejects a reclaim guard with unsafe permissions
+      ---
+      duration_ms: 4.780401
+      ...
+    # Subtest: does not touch the lock for a completed journal in a read-only package directory
+    ok 17 - does not touch the lock for a completed journal in a read-only package directory
+      ---
+      duration_ms: 517.255466
+      ...
+    # Subtest: does not finalize a launcher that reports the wrong release
+    ok 18 - does not finalize a launcher that reports the wrong release
+      ---
+      duration_ms: 419.313865
+      ...
+    # Subtest: refuses missing runtime components despite a successful version shim
+    ok 19 - refuses missing runtime components despite a successful version shim
+      ---
+      duration_ms: 17.14311
+      ...
+    # Subtest: uses the actual previous same-version package for explicit binary rollback
+    ok 20 - uses the actual previous same-version package for explicit binary rollback
+      ---
+      duration_ms: 415.016612
+      ...
+    # Subtest: rejects a redirected backup without touching outside data
+    ok 21 - rejects a redirected backup without touching outside data
+      ---
+      duration_ms: 13.984488
+      ...
+    # Subtest: check-only leaves a pending transaction byte-for-byte unchanged
+    ok 22 - check-only leaves a pending transaction byte-for-byte unchanged
+      ---
+      duration_ms: 404.515228
+      ...
+    # Subtest: explicit recovery rejects invalid journals with an operational exit
+    ok 23 - explicit recovery rejects invalid journals with an operational exit
+      ---
+      duration_ms: 432.656722
+      ...
+    # Subtest: bounds hung probes and kills their process group
+    ok 24 - bounds hung probes and kills their process group
+      ---
+      duration_ms: 199.451854
+      ...
+    1..24
+ok 77 - durable same-version transaction recovery
+  ---
+  duration_ms: 8327.453076
+  type: 'suite'
+  ...
+# Subtest: complete private state/config backup restore
+    # Subtest: restores session payloads and config rather than copying an archive into config.env
+    ok 1 - restores session payloads and config rather than copying an archive into config.env
+      ---
+      duration_ms: 20.203964
+      ...
+    1..1
+ok 78 - complete private state/config backup restore
+  ---
+  duration_ms: 20.328077
+  type: 'suite'
+  ...
+# Subtest: live transaction exceptions after each destructive boundary
+    # Subtest: restores the real previous same-version package after package_preserved
+    ok 1 - restores the real previous same-version package after package_preserved
+      ---
+      duration_ms: 1195.564983
+      ...
+    # Subtest: restores the real previous same-version package after package_moved
+    ok 2 - restores the real previous same-version package after package_moved
+      ---
+      duration_ms: 863.643281
+      ...
+    # Subtest: restores the real previous same-version package after provenance_written
+    ok 3 - restores the real previous same-version package after provenance_written
+      ---
+      duration_ms: 823.66849
+      ...
+    # Subtest: restores the real previous same-version package after launcher_switched
+    ok 4 - restores the real previous same-version package after launcher_switched
+      ---
+      duration_ms: 749.239587
+      ...
+    # Subtest: restores the real previous same-version package after verifying_install
+    ok 5 - restores the real previous same-version package after verifying_install
+      ---
+      duration_ms: 800.331106
+      ...
+    # Subtest: restores the real previous same-version package after installed_wrong_version
+    ok 6 - restores the real previous same-version package after installed_wrong_version
+      ---
+      duration_ms: 781.895529
+      ...
+    # Subtest: restores the real previous same-version package after kill_after_package_move
+    ok 7 - restores the real previous same-version package after kill_after_package_move
+      ---
+      duration_ms: 946.696259
+      ...
+    1..7
+ok 79 - live transaction exceptions after each destructive boundary
+  ---
+  duration_ms: 6161.776759
+  type: 'suite'
+  ...
+# Subtest: rollback preserves permanent state guard inodes absent from an older snapshot
+ok 80 - rollback preserves permanent state guard inodes absent from an older snapshot
+  ---
+  duration_ms: 13.483303
+  ...
+1..80
+# tests 131
+# suites 6
+# pass 131
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 15512.093536

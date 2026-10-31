@@ -1,5 +1,7 @@
 # Truthful, Interruptible Turns — Implementation & Qualification (2026-10-03)
 
+> **Historical record.** This document is kept for provenance. Current requirements and status: [docs/v1.0.0/REQUIREMENTS.md](../v1.0.0/REQUIREMENTS.md). Statuses here may have been superseded or contradicted since it was written.
+
 Bounded slice: structured turn outcomes, reliable cancellation, stream integrity, verifier-backed completion.
 Inputs: `docs/reviews/NEXUS_DOGFOODING_READINESS_REVIEW_2026-10-03.md` (evidence input, not authority).
 Evidence harness: `docs/reviews/evidence/turn-semantics-2026-10-03/` (+ the earlier `nexus-dogfooding-2026-10-03/`).
