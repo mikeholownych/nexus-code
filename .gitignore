@@ -2,8 +2,10 @@ node_modules/
 core/target/
 .env
 *.log
-# RC14 logs restored by the checksum-bound evidence repair. Keep this allowlist narrow.
+# RC14 evidence logs pinned by SHA-256 manifests. Keep this allowlist narrow.
 !docs/reviews/evidence/v1-qualification/rc.14/platform-e2/assets-check.log
+!docs/reviews/evidence/v1-qualification/rc.14/ubuntu-22-04-node22-checksum-tamper.log
+!docs/reviews/evidence/v1-qualification/rc.14/ubuntu-22-04-node22-synthetic-journal-recovery.log
 !docs/reviews/evidence/v1-qualification/rc.14/platform-e2/lifecycle-targeted/ubuntu-22-04-node22-incompatible-downgrade.log
 !docs/reviews/evidence/v1-qualification/rc.14/platform-e2/node22/debian-12-doctor-full.log
 !docs/reviews/evidence/v1-qualification/rc.14/platform-e2/node22/debian-12/stderr.log

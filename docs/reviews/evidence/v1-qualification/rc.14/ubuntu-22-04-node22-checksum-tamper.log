@@ -1,0 +1,3 @@
+RUN_BINDING runner=docker:nexus-e2/ubuntu-22-04-node22:prep-182e8addeee0 node=v22.23.3 nexus=1.0.0-rc.14 (16eeb6eeffe7) fixture_archive_sha256_measured=52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7 installer_sha256_expected=b243cda661eb0a57890435cfa2170fb50ea8e507aeec595d364d3f2ce71c8125
+nexus installer: SHA-256 verification failed; no installation was changed.
+checksum_tamper=PASS existing_launcher_and_state_unchanged=true
