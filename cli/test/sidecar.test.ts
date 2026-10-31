@@ -296,7 +296,7 @@ describe("SidecarServer: cancellation", () => {
   test("cancel during an approved run_command settles the process and turn promptly", async () => {
     const script = (): Reply => ({ kind: "tools", calls: [{
       name: "run_command",
-      args: { command: 'echo "$$" > shell.pid; sleep 30 & child=$!; echo "$child" > child.pid; touch started.txt; wait "$child"; touch finished.txt' },
+      args: { command: 'echo "$$" > shell.pid; sleep 8 & child=$!; echo "$child" > child.pid; touch started.txt; wait "$child"; touch finished.txt' },
     }] });
     await withSidecar(script, "review", async ({ server, events, repo, send }) => {
       let shellPid: number | undefined;
@@ -305,8 +305,10 @@ describe("SidecarServer: cancellation", () => {
         await send({ type: "prompt.submit", id: "t-run-command-cancel", text: "run the long command" });
         const approval = await waitForEvent(events, (e) => e.type === "approval.request");
         await send({ type: "approve", id: approval.id });
-        await waitUntil(() => fs.existsSync(path.join(repo, "started.txt")));
+        // Read the group leader as soon as the command creates its PID file so all later failure paths can clean it up.
+        await waitUntil(() => fs.existsSync(path.join(repo, "shell.pid")), 5000);
         shellPid = Number(fs.readFileSync(path.join(repo, "shell.pid"), "utf8").trim());
+        await waitUntil(() => fs.existsSync(path.join(repo, "started.txt")) && fs.existsSync(path.join(repo, "child.pid")), 5000);
         const childPid = Number(fs.readFileSync(path.join(repo, "child.pid"), "utf8").trim());
         assert.ok(Number.isInteger(shellPid) && shellPid > 0);
         assert.ok(Number.isInteger(childPid) && childPid > 0);
