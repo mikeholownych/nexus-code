@@ -21,7 +21,8 @@ G1.1-5 release gate is complete.
 
 The current supported npm locks passed the deprecation scan at this checkpoint.
 The current Rust dependency graph passed `cargo deny check advisories` with the
-new yanked policy. No dependency versions were changed in this batch.
+new yanked policy. No npm or Rust package versions were changed in the policy
+batch; the separately reviewed #106 workflow-action update is recorded below.
 
 ## PR disposition review
 
@@ -30,6 +31,73 @@ At audit time, the GitHub PR history showed these 15 PRs merged: #103, #104,
 #129. These 12 were closed without merge: #105, #106, #109, #111, #114, #115,
 #116, #117, #118, #121, #122, and #123. A closed PR is not treated as an
 accepted dependency upgrade, and its patch was not cherry-picked.
+
+### PR #103–129 evidence matrix
+
+The PR/check status below is from GitHub's PR metadata and workflow runs on each
+merged PR head. “CI” and “CodeQL” refer to the observed workflows, not a claim
+that every WP-1108 acceptance gate passed.
+
+| PR | GitHub result | Head CI / CodeQL | Current manifest or lock state |
+| --- | --- | --- | --- |
+| #103 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39630584512) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39630584555) success | Attest action pin `ef244123…` (`release.yml:120`) |
+| #104 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/40152152337) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/40152152400) success | Checkout v7.0.1 |
+| #105 | closed, unmerged | n/a | Tokio manifest floor 1.53.3; lock resolves 1.54.1 |
+| #106 | closed, unmerged | n/a | Main still had v4; this branch retargets current named downloads to v8.0.2 (`repro.yml:172,176`; not yet on main) |
+| #107 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39980051280) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39980051747) success | `similar` lock 3.2.0 |
+| #108 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39630617007) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39630616742) success | `action-gh-release` v3.0.3 |
+| #109 | closed, unmerged | n/a | Trusted bundle manifest/lock use cf 1.0.0-beta.20 |
+| #110 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39980060168) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39980060431) success | `libc` manifest floor 0.2.189; lock 0.2.191 |
+| #111 | closed, unmerged | n/a | dotenv manifest `^16.4.5`, lock 16.6.1; v18 blocker below |
+| #112 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/40201046535) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/40201046572) success | setup-node v7.1.0 |
+| #113 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39630636997) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39630637004) success | `serde_json` manifest `1.0`, lock 1.0.154 |
+| #114 | closed, unmerged | n/a | Commander manifest `^12.1.0`, lock 12.1.0; v15 behavior blocker below |
+| #115 | closed, unmerged | n/a | Agent-collab plugin is beta.v.3 via merged #230, superseding beta.v.1 |
+| #116 | closed, unmerged | n/a | Root experiment cf lock remains beta.10; #223 proposes beta.24 |
+| #117 | closed, unmerged | n/a | Fork plugin remains SHA prerelease; #221 proposes beta.v.6 |
+| #118 | closed, unmerged | n/a | Shared-ref plugin remains SHA prerelease; #224 proposes beta.v.6 |
+| #119 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39630649892) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39630649862) success | Demo TypeScript lock 7.0.2 |
+| #120 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39630654078) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39630653864) success | CLI Ora lock 9.4.1 |
+| #121 | closed, unmerged | n/a | Agent-collab cf manifest remains beta.10; #225 proposes beta.24 |
+| #122 | closed, unmerged | n/a | Fork-worker cf manifest is beta.20 via merged #229 |
+| #123 | closed, unmerged | n/a | Shared-ref cf manifest is beta.20 |
+| #124 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39630664405) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39630664418) success | CLI Node typings lock 26.6.5 |
+| #125 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39734806268) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39734806341) success | Root Vite now 8.3.5 via merged #227 |
+| #126 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39688533586) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39688533646) success | Agent-collab Vite now 8.3.5 via merged #222 |
+| #127 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39706694528) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39706694522) success | Fork-worker Vite 8.3.4; #226 proposes 8.3.5. An earlier CodeQL attempt was cancelled. |
+| #128 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/39728018027) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/39728018086) success | Shared-ref Vite 8.3.4; #228 proposes 8.3.5 |
+| #129 | merged | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/41221562232) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/41221562339) success | CLI TypeScript lock 7.0.2 |
+
+### Post-#129 Cloudflare replacements
+
+These later PRs account for some closed targets above. Merged #222 (agent-collab
+Vite 8.3.5), #227 (root experiment Vite 8.3.5), #229 (fork-worker cf
+beta.20), and #230 (agent-collab plugin beta.v.3) each have completed CI and
+CodeQL runs with success:
+
+| PR | Head | CI / CodeQL |
+| --- | --- | --- |
+| #222 | `1a8922ec` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/40195944205) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/40195944197) success |
+| #227 | `49d9cc1a` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/40247814752) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/40247814736) success |
+| #229 | `7a268779` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/40195959504) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/40195959466) success |
+| #230 | `e4dd2dfc` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/40195962236) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/40195962179) success |
+
+Current still-open replacements are:
+
+| PR | Head | Proposed update | Base at latest observed PR head | CI / CodeQL | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| #221 | `5c4a8bc6` | Fork plugin → beta.v.6 | `c7d0b003`, behind main `7b49e6ff` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/41222702897) failed; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/41222702978) success | Stale base; rebase and rerun before review |
+| #223 | `84024b62` | Root cf → beta.24 | `c7d0b003`, behind main `7b49e6ff` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/41222662295) failed; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/41222662279) success | Stale base; rebase and rerun before review |
+| #224 | `8818dda3` | Shared-ref plugin → beta.v.6 | `c7d0b003`, behind main `7b49e6ff` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/41222809872) failed; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/41222809820) success | Stale base; rebase and rerun before review |
+| #225 | `5cf591a5` | Agent-collab cf → beta.24 | current base `7b49e6ff` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/41227067152) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/41227067329) success | Open, not merged or acceptance-reviewed |
+| #226 | `07f55ffe` | Fork-worker Vite → 8.3.5 | current base `7b49e6ff` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/41227063241) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/41227063148) success | Open, not merged or acceptance-reviewed |
+| #228 | `4b5686c1` | Shared-ref Vite → 8.3.5 | current base `7b49e6ff` | [CI](https://github.com/mikeholownych/nexus-code/actions/runs/41227062303) success; [CodeQL](https://github.com/mikeholownych/nexus-code/actions/runs/41227062308) success | Open, not merged or acceptance-reviewed |
+
+The failed CI jobs for #221, #223, and #224 all reached “Run the CLI suite with
+a hang bound” and failed there; their `linux-x86_64` jobs were skipped. The
+workflow-run summary did not expose the assertion/log cause, so no dependency
+regression is inferred from the failures. No PR in the open table is treated as
+merged or as satisfying G1.1-5.
 
 The closed PR updates are classified against the current base tree and the
 current Dependabot proposals as follows:
