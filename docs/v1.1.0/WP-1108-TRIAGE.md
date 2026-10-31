@@ -25,12 +25,23 @@ new yanked policy. No npm or Rust package versions were changed in the policy
 batch; the separately reviewed #106 workflow-action update is recorded below.
 
 CI now has a dedicated `cloudflare-experiment` job on Node 22 and 24. It runs
-`npm ci`, then the experiment package's existing `typecheck` and `build` scripts,
-matching the roadmap's Cloudflare verification commands. This adds automated
-coverage only: no CI run has executed this job at this branch head while SUITE is
-held, so a passing result is still required before these updates are accepted.
-The job covers the top-level experiment package and its lockfile; it does not
-validate the separate nested worker manifests/packages.
+`npm ci`, then the top-level experiment package's existing `typecheck` and
+`build` scripts, matching the roadmap's Cloudflare verification commands. It
+also runs `agent-collab-fixture`'s existing `build` script; that fixture has no
+lockfile of its own and uses the top-level install's TypeScript compiler. This
+adds automated coverage only: no CI run has executed this job at this branch
+head while SUITE is held, so a passing result is still required before these
+updates are accepted.
+
+The remaining nested package manifests are not covered transitively by the
+top-level package: `agent-collab-worker`, `fork-worker`, and `shared-ref-worker`
+have neither lockfiles nor build/typecheck scripts; `trusted-broker-bundle` has
+its own lockfile but no build/typecheck script. The roadmap specifies verification
+for the top-level experiment package only. No worker-specific build/install
+command is added here because none is defined by those manifests, and inventing
+one would not demonstrate compatibility of their declared, unlocked dependency
+sets. These nested dependency entries therefore remain without experiment-level
+build/typecheck evidence.
 
 ## PR disposition review
 
@@ -150,7 +161,8 @@ versions or newer open PRs establish that the old target is stale; they do not
 establish that the replacement is compatible. Cloudflare changes remain
 unadopted until their experiment-specific typecheck/build validation passes on
 the relevant final heads. The new CI job above provides that validation path
-for the top-level experiment only; nested worker packages remain outside it.
+for the top-level experiment and compiles the fixture; nested worker packages
+remain outside it as described above.
 
 ## Evidence limits
 
