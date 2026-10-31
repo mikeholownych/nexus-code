@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M69DZJTGEZ3TCYK826TKT0KR",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".gitignore",
+    "cli/test/helpers/setup.ts",
+    "cli/test/home_isolation.test.ts",
+    "docs/v1.0.0/AUDIT.md",
+    "docs/v1.0.0/CONCURRENCY.md",
+    "docs/v1.0.0/DECISIONS.md",
+    "docs/v1.0.0/EVIDENCE.md",
+    "docs/v1.0.0/README.md",
+    "docs/v1.0.0/ROADMAP.md",
+    "docs/v1.0.0/SHA256SUMS",
+    "docs/v1.0.0/plans/PLAN-01-safe-execution-defaults.md",
+    "docs/v1.0.0/plans/PLAN-04-continuity-and-durable-work.md",
+    "docs/v1.0.0/plans/PLAN-07-supply-chain-and-release-engineering.md",
+    "docs/v1.0.0/plans/PLAN-09-requirements-governance-and-docs.md",
+    "docs/v1.0.0/plans/PLAN-10-v1-qualification-and-evaluation.md",
+    "docs/v1.0.0/plans/PLAN-C1-contest-submission-track.md",
+    "docs/v1.0.0/specs/SPEC-01-safe-execution-defaults.md",
+    "docs/v1.0.0/specs/SPEC-04-continuity-and-durable-work.md",
+    "docs/v1.0.0/specs/SPEC-07-supply-chain-and-release-engineering.md",
+    "docs/v1.0.0/specs/SPEC-09-requirements-governance-and-docs.md",
+    "docs/v1.0.0/specs/SPEC-10-v1-qualification-and-evaluation.md",
+    "docs/v1.0.0/specs/SPEC-11-verification-and-tool-call-integrity.md",
+    "docs/v1.0.0/specs/SPEC-C1-contest-submission-track.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 154804,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 12192671,
+    "output_tokens": 35979,
+    "api_call_count": 123
+  },
+  "redaction": {
+    "replacements": 15,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 15,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
