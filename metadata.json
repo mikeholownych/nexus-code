@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M69Q1DG6GMZ28JRQ2JR3P850",
+  "strategy": "manual-commit",
+  "branch": "v1/v11-release",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/repro.yml",
+    "cli/test/operation_release_acceptance.test.ts",
+    "cli/test/repro_workflow.test.ts",
+    "docs/releases/v1.0.0.md",
+    "docs/releases/v1.1.0.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 147404,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 12721816,
+    "output_tokens": 27867,
+    "api_call_count": 134
+  },
+  "redaction": {
+    "replacements": 21,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 21,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

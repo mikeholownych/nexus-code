@@ -1,0 +1,9 @@
+review the v1.1.0 roadmap. check in with other agents working in the repo and work collaboratively on the release.
+
+---
+
+proceed
+
+---
+
+continue iteratively until v1.1.0 has been released
