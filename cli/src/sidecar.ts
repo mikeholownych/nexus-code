@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
+import { format as formatDiagnostic } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
@@ -1040,6 +1041,23 @@ function busySafe(command: string, args: string): boolean {
   return name === "doctor" && !args.split(/\s+/).includes("--fix");
 }
 
+/** Serialize a diagnostic only after the canonical credential classifier has sanitized it. */
+export function formatSafeSidecarDiagnostic(args: readonly unknown[]): string {
+  try {
+    const serialized = formatDiagnostic(...args);
+    // Canonical sanitizer failure suppresses the complete diagnostic; never fall through to raw text.
+    return redactSecrets(redactForPersistence(serialized));
+  } catch {
+    return "[diagnostic suppressed: credential sanitization failed]";
+  }
+}
+
+export function formatSafeSidecarStdoutSummary(chunk: string | Uint8Array): string {
+  const bytes = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
+  // Chunks may split a credential across calls. Keep content out of debug logs entirely.
+  return `[sidecar debug] stdout chunk suppressed (${bytes} bytes)\n`;
+}
+
 /** Milestones the agent recorded in its own durable task state (update_plan completions); empty when unreadable. */
 function agentMilestones(agent: ReturnType<ApplicationCore["getAgent"]>): any[] {
   try {
@@ -1069,7 +1087,7 @@ async function main(argv: string[]): Promise<void> {
   const protocolWrite = process.stdout.write.bind(process.stdout);
   const debug = process.env.NEXUS_DEBUG === "1";
   const toStderr = (...args: unknown[]): void => {
-    if (debug) process.stderr.write(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ") + "\n");
+    if (debug) process.stderr.write(`${formatSafeSidecarDiagnostic(args)}\n`);
   };
 
   const program = new Command()
@@ -1110,7 +1128,9 @@ async function main(argv: string[]): Promise<void> {
   // startup state is read or used. The packaged TUI may launch this entry
   // point directly, without passing through index.ts.
   (process.stdout as any).write = (chunk: unknown, encoding?: unknown, cb?: unknown): boolean => {
-    if (debug) process.stderr.write(typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array));
+    if (debug && (typeof chunk === "string" || chunk instanceof Uint8Array)) {
+      process.stderr.write(formatSafeSidecarStdoutSummary(chunk));
+    }
     const done = typeof encoding === "function" ? encoding : cb;
     if (typeof done === "function") (done as () => void)();
     return true;
@@ -1119,6 +1139,7 @@ async function main(argv: string[]): Promise<void> {
   console.info = toStderr;
   console.warn = toStderr;
   console.debug = toStderr;
+  console.error = (...args: unknown[]) => process.stderr.write(`${formatSafeSidecarDiagnostic(args)}\n`);
   const home = process.env.HOME || os.homedir();
   const { acquireClientLease, releaseClientLease } = await import("./core/client_lease.js");
   const { hasPendingStateRestore, recoverPendingStateRestore } = await import("./core/state_restore.js");
@@ -1144,7 +1165,7 @@ async function main(argv: string[]): Promise<void> {
     onShutdown: () => process.exit(0),
   });
 
-  const report = (err: unknown) => process.stderr.write(`nexus sidecar: ${err instanceof Error ? err.message : String(err)}\n`);
+  const report = (err: unknown) => process.stderr.write(`nexus sidecar: ${formatSafeSidecarDiagnostic([err])}\n`);
   const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   input.on("line", (line) => {
     server.handleLine(line).catch(report);
@@ -1169,7 +1190,7 @@ function isEntryPoint(argv1: string | undefined, moduleUrl: string): boolean {
 
 if (isEntryPoint(process.argv[1], import.meta.url)) {
   main(process.argv).catch((err) => {
-    process.stderr.write(`nexus sidecar failed to start: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`nexus sidecar failed to start: ${formatSafeSidecarDiagnostic([err])}\n`);
     process.exit(1);
   });
 }

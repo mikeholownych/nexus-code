@@ -22,6 +22,15 @@ export function redactForPersistence<T>(value: T): T {
   return InformationFlowBoundary.getGlobalInstance().redactForDurablePersistence(value);
 }
 
+/** Redact diagnostic text, suppressing it completely if the canonical classifier fails. */
+export function redactDiagnosticForOutput(value: string): string {
+  try {
+    return InformationFlowBoundary.getGlobalInstance().redactForTelemetry(value);
+  } catch {
+    return "[diagnostic suppressed: credential sanitization failed]";
+  }
+}
+
 /** Classify individual path components as well as the whole value. The general
  * classifier intentionally does not treat slash-delimited paths as tokens. */
 function classifyPathComponents(value: string): ReturnType<InformationFlowBoundary["classifyText"]> {
@@ -284,7 +293,10 @@ export function recordMiddlewareAudit(record: MiddlewareAuditRecord): void {
       timestamp: record.timestamp || new Date().toISOString(),
       ...record,
     };
-    appendPrivateFile(auditPath, JSON.stringify(entry) + "\n");
+    // Middleware metadata can include operator-controlled workspace paths or plugin/tool names.
+    // Apply the durable telemetry sanitizer to the entire record before the append boundary.
+    const safeEntry = InformationFlowBoundary.getGlobalInstance().redactForTelemetry(entry);
+    appendPrivateFile(auditPath, JSON.stringify(safeEntry) + "\n");
   } catch {
     // Ignore audit log write errors in restricted environments
   }
