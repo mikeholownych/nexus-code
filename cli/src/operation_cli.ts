@@ -15,13 +15,16 @@ import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
-import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
+import { ConvergenceScheduler, DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
+import { validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
+import { MessageRejected, publishMessage } from "./core/operation_messages.js";
+import { ROLE_PROFILES } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
-import { buildOperationView, renderOperationView, watchOperation } from "./operation_view.js";
+import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
 import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
 import { safeTerminal } from "./ui.js";
-import { credentialFingerprint, type ResourceDescriptor } from "./core/resources.js";
+import { credentialFingerprint, ResourceRegistry, type ResourceDescriptor } from "./core/resources.js";
 import { createOperationAccountIdentity } from "./core/account_identity.js";
 import { credentialStorageHome, operatorSetting } from "./client.js";
 import { baseUrlSetting, originOf, providerDefinition } from "./providers.js";
@@ -37,6 +40,112 @@ interface OperationSpec {
   policy?: Partial<OperationPolicy>;
   /** Opt-in Git isolation: each unit runs on its own worktree/branch; completions merge into an operation branch. */
   git?: { isolate?: boolean; baseRef?: string };
+}
+
+/**
+ * An operation spec the operator must fix. Distinct from an internal failure: the CLI reports it as a usage error
+ * (exit 2) and never starts work, so a typo cannot silently change what an operation does.
+ */
+export class OperationSpecError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OperationSpecError";
+  }
+}
+
+// The spec is untrusted operator input. Unknown keys are rejected rather than ignored: a silently ignored
+// `git.publish` would leave the operator believing a PR will be opened, and a typo such as `depends` would drop a
+// dependency and run work out of order.
+const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git"] as const;
+const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "contextBudget"] as const;
+const POLICY_KEYS = ["maxWaitMs", "unknownResumeBudget", "maxRunsPerUnit", "minWaitMs", "maxConcurrentUnits"] as const;
+const GIT_KEYS = ["isolate", "baseRef"] as const;
+const REQUIREMENT_KEYS = ["capabilities", "qualification", "minContext", "independentOf", "minTrust"] as const;
+const RESOURCE_KEYS = [
+  "id", "provider", "endpoint", "model", "pool", "account", "accountIdentitySource", "apiKeyEnv", "providerId",
+  "capabilities", "qualifications", "preferredFor", "contextLength", "rank", "rateLimitScope", "taskClass",
+  "maxConcurrentUnits",
+] as const;
+
+function rejectUnknown(scope: string, value: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const key of Object.keys(value)) {
+    if (allowed.includes(key)) continue;
+    if (scope === "git" && key === "publish") {
+      throw new OperationSpecError("git.publish is not supported in this version; remove it to start the operation.");
+    }
+    const hint = allowed.find((candidate) => candidate.toLowerCase().startsWith(key.toLowerCase()) || key.toLowerCase().startsWith(candidate.toLowerCase()));
+    throw new OperationSpecError(`unknown ${scope} key '${key}'${hint ? ` (did you mean '${hint}'?)` : ""}`);
+  }
+}
+
+/**
+ * Validates the operator's spec before anything is created. Every rule here exists because the alternative is a
+ * silent misconfiguration: an ignored key, a unit that can never be scheduled, or a limit that would be clamped.
+ */
+export function validateOperationSpec(spec: unknown): asserts spec is OperationSpec {
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) throw new OperationSpecError("operation spec must be a JSON object");
+  const s = spec as Record<string, any>;
+  rejectUnknown("spec", s, SPEC_KEYS);
+  if (typeof s.objective !== "string" || !s.objective.trim()) throw new OperationSpecError("operation spec needs a non-empty 'objective'");
+  if (!Array.isArray(s.units) || s.units.length === 0) throw new OperationSpecError("operation spec needs a non-empty 'units' array");
+  if (s.id !== undefined && (typeof s.id !== "string" || !/^[A-Za-z0-9._-]{1,160}$/.test(s.id))) {
+    throw new OperationSpecError("operation spec 'id' must be 1-160 characters of letters, digits, '.', '_' or '-'");
+  }
+  if (s.discoverCatalog !== undefined && typeof s.discoverCatalog !== "boolean") {
+    throw new OperationSpecError("operation spec 'discoverCatalog' must be true or false");
+  }
+  if (s.git !== undefined) {
+    if (!s.git || typeof s.git !== "object" || Array.isArray(s.git)) throw new OperationSpecError("operation spec 'git' must be an object");
+    rejectUnknown("git", s.git, GIT_KEYS);
+    if (s.git.isolate !== undefined && typeof s.git.isolate !== "boolean") throw new OperationSpecError("operation spec 'git.isolate' must be true or false");
+    if (s.git.baseRef !== undefined && typeof s.git.baseRef !== "string") throw new OperationSpecError("operation spec 'git.baseRef' must be a string");
+  }
+  if (s.policy !== undefined) {
+    if (!s.policy || typeof s.policy !== "object" || Array.isArray(s.policy)) throw new OperationSpecError("operation spec 'policy' must be an object");
+    rejectUnknown("policy", s.policy, POLICY_KEYS);
+    try {
+      validateOperationPolicy(s.policy);
+    } catch (error: any) {
+      throw new OperationSpecError(String(error?.message ?? error).replace(/^operation \(new\): /, ""));
+    }
+  }
+  if (s.resources !== undefined) {
+    if (!Array.isArray(s.resources)) throw new OperationSpecError("operation spec 'resources' must be an array");
+    for (const resource of s.resources) {
+      if (!resource || typeof resource !== "object" || Array.isArray(resource)) throw new OperationSpecError("each resource must be an object");
+      rejectUnknown("resource", resource, RESOURCE_KEYS);
+      try {
+        validateResourceSlots([resource]);
+      } catch (error: any) {
+        throw new OperationSpecError(String(error?.message ?? error).replace(/^operation \(new\): /, ""));
+      }
+    }
+  }
+  const unitIds = new Set<string>();
+  for (const unit of s.units as Array<Record<string, any>>) {
+    if (!unit || typeof unit !== "object" || Array.isArray(unit)) throw new OperationSpecError("each work unit must be an object");
+    if (typeof unit.id !== "string" || !unit.id) throw new OperationSpecError("each work unit needs a non-empty 'id'");
+    rejectUnknown(`unit '${unit.id}'`, unit, UNIT_KEYS);
+    if (unitIds.has(unit.id)) throw new OperationSpecError(`duplicate work unit id '${unit.id}'`);
+    unitIds.add(unit.id);
+    if (typeof unit.prompt !== "string" || !unit.prompt.trim()) throw new OperationSpecError(`work unit '${unit.id}' needs a non-empty 'prompt'`);
+    if (unit.dependsOn !== undefined && (!Array.isArray(unit.dependsOn) || unit.dependsOn.some((d: unknown) => typeof d !== "string"))) {
+      throw new OperationSpecError(`work unit '${unit.id}' 'dependsOn' must be an array of unit ids`);
+    }
+    if (unit.required !== undefined && typeof unit.required !== "boolean") throw new OperationSpecError(`work unit '${unit.id}' 'required' must be true or false`);
+    if (unit.role !== undefined && !(unit.role in ROLE_PROFILES)) {
+      throw new OperationSpecError(`work unit '${unit.id}' has unknown role '${unit.role}' (known: ${Object.keys(ROLE_PROFILES).join(", ")})`);
+    }
+    if (unit.contextBudget !== undefined && (!Number.isInteger(unit.contextBudget) || unit.contextBudget <= 0)) {
+      throw new OperationSpecError(`work unit '${unit.id}' 'contextBudget' must be a positive integer number of tokens`);
+    }
+    if (unit.requires !== undefined) {
+      if (!unit.requires || typeof unit.requires !== "object" || Array.isArray(unit.requires)) {
+        throw new OperationSpecError(`work unit '${unit.id}' 'requires' must be an object`);
+      }
+      rejectUnknown(`unit '${unit.id}' requires`, unit.requires, REQUIREMENT_KEYS);
+    }
+  }
 }
 
 function normalizeResources(spec: OperationSpec, config: HarnessConfig, identity: ReturnType<typeof createOperationAccountIdentity>): ResourceDescriptor[] {
@@ -112,7 +221,8 @@ function operationAction<T extends unknown[]>(action: (...args: T) => void | Pro
       await action(...args);
     } catch (error: any) {
       console.error(pc.red(safeTerminal(String(error?.message ?? error))));
-      process.exitCode = 1;
+      // A spec the operator must fix is a usage error, not an internal failure.
+      process.exitCode = error instanceof OperationSpecError || error instanceof MessageRejected ? 2 : 1;
     }
   };
 }
@@ -135,7 +245,13 @@ export function registerOperationCommands(program: Command): void {
   common(op.command("run").argument("<spec>", "Operation spec JSON file"))
     .description("Start an operation from a work-unit spec")
     .action(operationAction(async (specPath: string, options: any) => {
-      const spec = JSON.parse(fs.readFileSync(path.resolve(specPath), "utf-8")) as OperationSpec;
+      let spec: OperationSpec;
+      try {
+        spec = JSON.parse(fs.readFileSync(path.resolve(specPath), "utf-8")) as OperationSpec;
+      } catch (error: any) {
+        throw new OperationSpecError(`cannot read operation spec ${specPath}: ${String(error?.message ?? error)}`);
+      }
+      validateOperationSpec(spec);
       const config = buildConfig(options);
       const store = new OperationStore(config.workspace);
       const id = spec.id ?? `op-${randomUUID().slice(0, 8)}`;
@@ -202,11 +318,17 @@ export function registerOperationCommands(program: Command): void {
     .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
     .option("-j, --json", "JSON output")
     .option("--dag", "Read-only view: work-unit DAG, resource eligibility and the open decision")
+    .option("--replay", "Read-only replay: the recorded event timeline, oldest first")
     .option("--events <count>", "Events to include with --dag (newest kept)", "20")
     .description("Show operation state, parked work, wake time and pending decisions")
     .action(operationAction((id: string | undefined, options: any) => {
       const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
-      if (options.dag) {
+      if (options.dag && options.replay) {
+        console.error(pc.red("--dag and --replay are separate read-only views; pass one of them."));
+        process.exitCode = 2;
+        return;
+      }
+      if (options.dag || options.replay) {
         const eventsText = String(options.events);
         const eventLimit = Number(eventsText);
         if (!eventsText.trim() || !Number.isFinite(eventLimit) || eventLimit < 0) {
@@ -224,17 +346,60 @@ export function registerOperationCommands(program: Command): void {
           process.exitCode = 2;
           return;
         }
-        const views = ops.map((state) => buildOperationView(state, { events: Math.floor(eventLimit) }));
+        const views = ops.map((state) => buildOperationView(state, { events: Math.floor(eventLimit), ...(options.replay ? { replay: true } : {}) }));
         if (options.json) return void console.log(JSON.stringify(views, null, 2));
         if (!views.length) return void console.log("No operations in this workspace.");
         const width = process.stdout.isTTY ? process.stdout.columns ?? 0 : 0;
-        views.forEach((view) => console.log(renderOperationView(view, { width })));
+        views.forEach((view) =>
+          console.log(options.replay && view.replay ? renderReplay(view.replay, { width }) : renderOperationView(view, { width })),
+        );
         return;
       }
       const ops = id ? [store.loadForInspection(id)] : store.listForInspection();
       if (options.json) return void console.log(JSON.stringify(ops, null, 2));
       if (!ops.length) return void console.log("No operations in this workspace.");
       ops.forEach(printStatus);
+    }));
+
+  op.command("message")
+    .argument("<id>", "Operation id")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .option("--from <sender>", "Sender (a unit id, or 'operator')", "operator")
+    .option("--to <recipient>", "Recipient unit id, or '*' for the whole operation")
+    .option("--kind <kind>", "request | observation | artifact | verdict", "observation")
+    .option("--body <text>", "Message body (advisory context; pointers, not content)")
+    .description("Publish a typed message to an operation's work units")
+    .action(operationAction((id: string, options: any) => {
+      const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      if (!options.to) throw new MessageRejected("--to is required: a unit id, or '*' for the whole operation");
+      if (!options.body) throw new MessageRejected("--body is required");
+      const release = store.acquire(id);
+      try {
+        const state = store.load(id);
+        const now = Date.now();
+        const registry = new ResourceRegistry(state.resources, state.conditions, { now: () => now, random: Math.random });
+        const scheduler = new ConvergenceScheduler(state, registry, () => now);
+        const { message, dropped } = publishMessage(
+          state,
+          { from: String(options.from), to: String(options.to), kind: String(options.kind) as any, body: String(options.body) },
+          now,
+        );
+        scheduler.emit("OPERATION_MESSAGE", `${message.from} published a ${message.kind} to ${message.to}.`, {
+          unitId: message.from,
+          detail: { to: message.to, kind: message.kind, id: message.id },
+        });
+        for (const lost of dropped) {
+          scheduler.emit("OPERATION_MESSAGE_DROPPED", `Dropped message ${lost.id} from ${lost.from} to keep the record bounded.`, {
+            unitId: lost.from,
+            detail: { id: lost.id, to: lost.to, kind: lost.kind },
+          });
+        }
+        state.updatedAt = new Date(now).toISOString();
+        store.save(state);
+        console.log(`Message ${message.id} published to ${message.to}.`);
+      } finally {
+        release();
+      }
     }));
 
   op.command("checkpoint")

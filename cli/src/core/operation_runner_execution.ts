@@ -9,6 +9,7 @@ import { providerApiKey } from "../credentials.js";
 import type { ChatMessage, HarnessConfig } from "../types.js";
 import type { TaskRecoveryResult } from "./state.js";
 import { unitBaseTask, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { messagesBlock } from "./operation_messages.js";
 import { redactForPersistence } from "./persistence_protection.js";
 import { ROLE_PROFILES, isReadOnlyRole, type AgentRole } from "./roles.js";
 import { applyProviderCatalog, ResourceRegistry, type ResourceConditionRecord, type ResourceDescriptor } from "./resources.js";
@@ -157,6 +158,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       budgetTokens: unit.contextBudget,
       contextLimit: estimate.contextLimit,
       at: new Date().toISOString(),
+      source: unit.contextBudget < estimate.contextLimit ? "operator-budget" : "agent-estimate",
     };
     // If the prompt does not fit the resource, admission/compaction owns it (it may compact and continue): the
     // operator's cap is only the binding constraint when the prompt would otherwise be admitted.
@@ -179,7 +181,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       question:
         `${unit.title} needs about ${total} tokens (prompt ${estimate.estimatedPromptTokens}, completion ` +
         `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over its ${unit.contextBudget}-token ` +
-        `budget. Assign it to a resource with more context, revise it, or stop?`,
+        `operator budget (resource limit ${estimate.contextLimit}; the binding bound is ` +
+        `${unit.contextBudget < estimate.contextLimit ? "the operator cap" : "the resource limit"}, ` +
+        `source ${unit.contextBudget < estimate.contextLimit ? "operator-budget" : "agent-estimate"}). ` +
+        `Lift the budget, or stop?`,
       // Reassigning cannot clear a cap (the cap travels with the unit) and revise only grows the prompt, so the offered
       // remedy changes the thing that blocks: the budget itself.
       options: [{ label: "lift this unit's context budget", action: { kind: "lift_context_budget" } }],
@@ -350,7 +355,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
             : "";
           prompt =
             `[Work unit resumed on ${resource.id} (${resource.model}) after: ${ctx.resumeReason ?? "a resource change"}]\n${decision}` +
-            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${stopped}` +
+            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${stopped}${messagesBlock(ctx.messages)}` +
             `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
         }
       } else {
@@ -494,7 +499,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       ? `\nCompleted prerequisite work:\n${ctx.dependencies.map((d) => `- ${d.title}: ${d.summary}`).join("\n")}\n`
       : "";
     return (
-      `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${deps}\n` +
+      `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${deps}${messagesBlock(ctx.messages)}\n` +
       `Task:\n${unit.prompt}\n\nCall task_completed with a concise summary when done.`
     );
   }

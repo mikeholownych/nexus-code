@@ -6,7 +6,8 @@
 import { credentialStorageHome, storedCredentialFor } from "../client.js";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
-import { ConvergenceScheduler, type Decision, type DurableOperationState, type OperationEvent, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { markDelivered, publishMessage, undeliveredFor } from "./operation_messages.js";
 import { OperationGit, ensureIntegrationWorktree, type OperationGitPlan } from "./operation_git.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
 import {
@@ -17,9 +18,10 @@ import {
   type ResourceDescriptor,
 } from "./resources.js";
 import { createOperationAccountIdentity } from "./account_identity.js";
+import { computeCandidateIdentitySync } from "./candidate.js";
 import type { InferenceFailure } from "./turn.js";
 import { OperationRevalidator } from "./operation_runner_revalidation.js";
-import type { OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
+import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 import type { OperationStore } from "./operation_runner_persistence.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
@@ -37,6 +39,8 @@ export interface UnitRunContext {
   operatorDecision?: { label: string; note?: string; restart?: boolean };
   /** Durably records the unit's conversation task before execution, so a crash mid-run can be reconciled. */
   bindAgentTask(taskId: string): void;
+  /** Messages owed to this unit, marked delivered by the same save that started it. Advisory context only. */
+  messages?: OperationMessage[];
   /** Isolated operations: the unit's worktree. Absent means the executor's configured workspace. */
   workspace?: string;
   observeFailure(failure: InferenceFailure): ResourceConditionRecord | null;
@@ -89,6 +93,8 @@ export class OperationRunner {
   private readonly clock: RecoveryClock;
   private readonly revalidator: OperationRevalidator;
   private readonly git: OperationGit | undefined;
+  /** One merge at a time: all units share the operation's integration worktree. */
+  private integrationChain: Promise<void> = Promise.resolve();
 
   constructor(
     readonly state: DurableOperationState,
@@ -126,6 +132,9 @@ export class OperationRunner {
     }
     this.reconcileIntegrated();
     this.scheduler.reconcileInterruptedRuns();
+    // Persist the interrupted-run accounting before the revalidation awaits: a crash in that window would otherwise
+    // lose an increment and let a repeatedly interrupted unit resume without ever reaching its budget.
+    if (this.state.units.some((unit) => unit.status === "RUNNABLE" && unit.unknownResumes > 0)) this.save();
     if (this.state.status === "WAITING" && this.state.wait && Date.parse(this.state.wait.wakeAt) <= this.clock.now()) {
       await this.revalidator.revalidate(signal);
     } else await this.revalidator.refresh(signal);
@@ -135,33 +144,51 @@ export class OperationRunner {
       if (signal?.aborted) return this.cancelled();
       const d = this.scheduler.decide();
       if (d.kind === "run") {
-        if (this.git) {
-          // An authorized restart recreates the worktree; only a unit without that authorization fails closed here.
-          const restart = Boolean(d.unit.pendingDecision?.restart);
-          const missing = restart ? undefined : this.git.missingWorktrees().find((entry) => entry.unitId === d.unit.id);
-          if (missing) {
-            this.scheduler.start(d);
-            this.scheduler.apply(d.unit.id, {
-              kind: "failed",
-              cause: "EXECUTION_FAILED",
-              reason: `isolated worktree is missing (${missing.worktree})`,
-              question: `${d.unit.title}'s isolated worktree was removed outside Nexus. Restart it from the integration tip, or stop?`,
-              options: [{ label: "restart the unit from the integration tip", action: { kind: "retry", restart: true } }],
-            });
-            this.save();
-            continue;
+        // Prepare every assignment before starting any: a unit whose isolated worktree vanished, or whose resource
+        // needs revalidation, is handled here without leaving its batch-mates half-started.
+        const ready: Assignment[] = [];
+        for (const assignment of d.assignments) {
+          const unit = assignment.unit;
+          if (this.git) {
+            // An authorized restart recreates the worktree; only a unit without that authorization fails closed here.
+            const restart = Boolean(unit.pendingDecision?.restart);
+            const missing = restart ? undefined : this.git.missingWorktrees().find((entry) => entry.unitId === unit.id);
+            if (missing) {
+              this.scheduler.start(assignment);
+              this.scheduler.apply(unit.id, {
+                kind: "failed",
+                cause: "EXECUTION_FAILED",
+                reason: `isolated worktree is missing (${missing.worktree})`,
+                question: `${unit.title}'s isolated worktree was removed outside Nexus. Restart it from the integration tip, or stop?`,
+                options: [{ label: "restart the unit from the integration tip", action: { kind: "retry", restart: true } }],
+              });
+              this.save();
+              continue;
+            }
+          }
+          if (await this.revalidator.beforeAssign(assignment.resource, signal)) continue;
+          ready.push(assignment);
+        }
+        if (!ready.length) continue;
+        // Delivery is recorded with the RUNNING transition: a crash either delivers with the start or not at all.
+        const owed = new Map<string, OperationMessage[]>();
+        const at = new Date(this.clock.now()).toISOString();
+        for (const assignment of ready) {
+          const messages = undeliveredFor(this.state, assignment.unit.id);
+          if (messages.length) {
+            owed.set(assignment.unit.id, messages);
+            markDelivered(this.state, messages.map((message) => message.id), assignment.unit.id, at);
           }
         }
-        if (await this.revalidator.beforeAssign(d.resource, signal)) continue;
-        this.scheduler.start(d);
+        for (const assignment of ready) this.scheduler.start(assignment);
         this.save();
-        const result = await this.execute(d, signal);
-        if (result.kind === "cancelled" || signal?.aborted) {
-          this.scheduler.apply(d.unit.id, { kind: "cancelled" });
-          return this.cancelled();
+        const results = await this.executeBatch(ready, owed, signal);
+        for (const { assignment, result } of results) {
+          this.scheduler.apply(assignment.unit.id, result);
+          if (result.kind === "completed") this.publishCompletion(assignment.unit);
         }
-        this.scheduler.apply(d.unit.id, result);
         this.save();
+        if (signal?.aborted) return this.cancelled();
         continue;
       }
       if (d.kind === "wait") {
@@ -178,7 +205,10 @@ export class OperationRunner {
       }
       this.scheduler.finish(d);
       // A blocked operation keeps its unit worktrees: the retry/restart remedies run the unit again in them.
-      if (d.kind === "complete") this.git?.disposeAllUnits();
+      if (d.kind === "complete") {
+      this.reportPreservedWorktrees();
+      this.git?.disposeAllUnits();
+    }
       this.save();
       return this.state;
     }
@@ -199,7 +229,35 @@ export class OperationRunner {
     return this.state;
   }
 
-  private async execute(d: Extract<Decision, { kind: "run" }>, signal?: AbortSignal): Promise<UnitRunResult> {
+  /**
+   * Runs one due-set. Every unit settles before the batch returns, so the next `decide()` sees a complete picture.
+   * A rejected unit promise is turned into a unit failure rather than aborting its batch-mates.
+   */
+  private async executeBatch(
+    assignments: Assignment[],
+    owed: Map<string, OperationMessage[]>,
+    signal?: AbortSignal,
+  ): Promise<Array<{ assignment: Assignment; result: UnitRunResult }>> {
+    const settled = await Promise.allSettled(
+      assignments.map(async (assignment) => ({ assignment, result: await this.execute(assignment, owed.get(assignment.unit.id), signal) })),
+    );
+    return settled.map((outcome, index) => {
+      if (outcome.status === "fulfilled") return outcome.value;
+      const reason = (outcome.reason as any)?.message ?? String(outcome.reason);
+      return {
+        assignment: assignments[index],
+        result: {
+          kind: "failed",
+          cause: "EXECUTION_FAILED",
+          reason: `executor error: ${reason}`,
+          question: `${assignments[index].unit.title} failed with an internal error (${reason}). Retry it, or stop?`,
+          options: [{ label: "retry", action: { kind: "retry" } }],
+        } satisfies UnitRunResult,
+      };
+    });
+  }
+
+  private async execute(d: Assignment, messages?: OperationMessage[], signal?: AbortSignal): Promise<UnitRunResult> {
     const { unit, resource } = d;
     let workspace: string | undefined;
     let recoverMerged = false;
@@ -242,6 +300,7 @@ export class OperationRunner {
         unit.agentTaskId = taskId;
         this.save();
       },
+      ...(messages?.length ? { messages } : {}),
       observeFailure: (f) => this.registry.observeFailure(resource, f),
       observeSuccess: () => this.registry.observeSuccess(resource),
       shouldYield: (_f, delay) => this.shouldYield(unit, resource, delay),
@@ -261,44 +320,7 @@ export class OperationRunner {
       }
       const result: UnitRunResult = await this.opts.executor.run(unit, resource, ctx);
       if (result.kind !== "completed" || !this.git) return result;
-      const integration = await this.git.integrate(unit, result);
-      if (integration.kind === "conflict") {
-        const files = integration.files.length ? ` (${integration.files.join(", ")})` : "";
-        return {
-          kind: "failed",
-          cause: "MERGE_CONFLICT",
-          reason: `merging ${unit.id} into the operation branch conflicts${files}`,
-          question:
-            `${unit.title} completed, but its branch conflicts with the integrated work${files}. Merge ` +
-            `${this.state.git?.integrationBranch} into the unit's branch (${this.git.unitState(unit.id)?.worktree}), ` +
-            `resolve and commit it there, then retry; or revise the unit, or stop?`,
-          options: [
-            { label: "retry after resolving the conflict", action: { kind: "retry" } },
-            { label: "revise the unit (note required)", action: { kind: "revise" } },
-          ],
-        };
-      }
-      if (integration.kind === "failed") {
-        return {
-          kind: "failed",
-          cause: "INTEGRATION_FAILED",
-          reason: integration.reason,
-          question: `${unit.title} could not be integrated: ${integration.reason}. Retry the unit, or stop?`,
-          options: [{ label: "retry", action: { kind: "retry" } }],
-        };
-      }
-      this.state.integrations = [...(this.state.integrations ?? []), integration.receipt];
-      this.scheduler.emit(
-        "WORK_COMPLETED",
-        integration.receipt.verification === "NOT_RUN"
-          ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (not re-verified).`
-          : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}.`,
-        { unitId: unit.id, detail: { integration: integration.receipt } },
-      );
-      this.save();
-      this.git.disposeUnit(unit.id);
-      this.save();
-      return result;
+      return this.enqueueIntegration(unit, result);
     } catch (err: any) {
       if (signal?.aborted) return { kind: "cancelled" };
       return {
@@ -308,6 +330,142 @@ export class OperationRunner {
         question: `${unit.title} failed with an internal error (${err?.message ?? err}). Retry it, or stop?`,
         options: [{ label: "retry", action: { kind: "retry" } }],
       };
+    }
+  }
+
+  /**
+   * Publishes what a completed unit produced, so downstream units and the operator can see it. Only a unit that
+   * actually completed publishes: an unverified or blocked unit has nothing to publish. The body is the unit's own
+   * verified summary; pointers, not content, travel with it.
+   */
+  private publishCompletion(unit: WorkUnit): void {
+    const result = unit.result;
+    if (!result || unit.dropped) return;
+    const receipts = this.state.integrations ?? [];
+    const receipt = receipts.length ? [...receipts].reverse().find((entry) => entry.unitId === unit.id) : undefined;
+    const kind = unit.role === "reviewer" ? "verdict" : "artifact";
+    try {
+      const { message, dropped } = publishMessage(
+        this.state,
+        {
+          from: unit.id,
+          to: "*",
+          kind,
+          body: `${result.outcome}: ${result.summary}`,
+          refs: [
+            ...(receipt ? [{ kind: "receipt" as const, ref: receipt.integratedCommit }] : []),
+            { kind: "unit" as const, ref: unit.id },
+          ],
+        },
+        this.clock.now(),
+      );
+      this.scheduler.emit("OPERATION_MESSAGE", `${unit.id} published a ${kind} to the operation.`, {
+        unitId: unit.id,
+        detail: { to: message.to, kind: message.kind, id: message.id },
+      });
+      for (const lost of dropped) {
+        this.scheduler.emit("OPERATION_MESSAGE_DROPPED", `Dropped message ${lost.id} from ${lost.from} to keep the record bounded.`, {
+          unitId: lost.from,
+          detail: { id: lost.id, to: lost.to, kind: lost.kind },
+        });
+      }
+    } catch (error: any) {
+      // A message is advisory: failing to publish one must never fail the unit or the operation.
+      reportOperationDiagnostic(this.opts.onDiagnostic, "runner", "message_publish_failed");
+    }
+  }
+
+  /**
+   * Serialises integration independently of completion order: concurrent units mutate one shared integration
+   * worktree, so merges happen one at a time. The returned promise resolves with what the unit's completion becomes
+   * (the original result on success, or a decision-bearing failure).
+   */
+  private enqueueIntegration(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<UnitRunResult> {
+    this.scheduler.emit("INTEGRATION_QUEUED", `${unit.id} queued for integration.`, { unitId: unit.id });
+    const job = async (): Promise<UnitRunResult> => {
+      const current = this.scheduler.unit(unit.id);
+      if (current.dropped || this.state.status === "CANCELLED") {
+        this.scheduler.emit("INTEGRATION_SKIPPED", `${unit.id} was not integrated: it is ${current.dropped ? "dropped" : "cancelled"}.`, {
+          unitId: unit.id,
+          detail: { reason: current.dropped ? "dropped" : "cancelled" },
+        });
+        return result;
+      }
+      return this.integrateUnit(unit, result);
+    };
+    const next = this.integrationChain.then(job, job);
+    this.integrationChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  /** Merges one completed unit into the operation branch and records the receipt, or returns the blocking decision. */
+  private async integrateUnit(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<UnitRunResult> {
+    const candidate = this.candidateFor(unit);
+    const tests = result.verification
+      ? { command: result.verification.command, status: result.verification.status, hasExecutedTests: result.verification.hasExecutedTests }
+      : undefined;
+    const integration = await this.git!.integrate(unit, result, {
+      sequence: (this.state.integrations?.length ?? 0) + 1,
+      ...(candidate ? { candidate } : {}),
+      ...(tests ? { tests } : {}),
+    });
+    if (integration.kind === "conflict") {
+      const files = integration.files.length ? ` (${integration.files.join(", ")})` : "";
+      return {
+        kind: "failed",
+        cause: "MERGE_CONFLICT",
+        reason: `merging ${unit.id} into the operation branch conflicts${files}`,
+        question:
+          `${unit.title} completed, but its branch conflicts with the integrated work${files}. Merge ` +
+          `${this.state.git?.integrationBranch} into the unit's branch (${this.git!.unitState(unit.id)?.worktree}), ` +
+          `resolve and commit it there, then retry; or revise the unit, or stop?`,
+        options: [
+          { label: "retry after resolving the conflict", action: { kind: "retry" } },
+          { label: "revise the unit (note required)", action: { kind: "revise" } },
+        ],
+      };
+    }
+    if (integration.kind === "failed") {
+      return {
+        kind: "failed",
+        cause: "INTEGRATION_FAILED",
+        reason: integration.reason,
+        question: `${unit.title} could not be integrated: ${integration.reason}. Retry the unit, or stop?`,
+        options: [{ label: "retry", action: { kind: "retry" } }],
+      };
+    }
+    // ALREADY_INTEGRATED means a receipt for this unit already exists; appending a second one would double-count it.
+    if (integration.receipt.verification !== "ALREADY_INTEGRATED") {
+      this.state.integrations = [...(this.state.integrations ?? []), integration.receipt];
+    }
+    this.scheduler.emit(
+      "WORK_INTEGRATED",
+      integration.receipt.verification === "NOT_RUN"
+        ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (not re-verified).`
+        : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}.`,
+      { unitId: unit.id, detail: { integration: integration.receipt } },
+    );
+    this.save();
+    this.reportPreservedWorktrees([unit.id]);
+    this.git!.disposeUnit(unit.id);
+    this.save();
+    return result;
+  }
+
+  /**
+   * The content-addressed view of the unit's tree at merge time. Absent when the worktree is gone (recovery) rather
+   * than fabricated: the receipt stays honest about not having observed it.
+   */
+  private candidateFor(unit: WorkUnit): { digest: string; scope: "tree" | "commit" } | undefined {
+    const worktree = this.git?.unitState(unit.id)?.worktree;
+    if (!worktree) return undefined;
+    try {
+      return { digest: computeCandidateIdentitySync(worktree).candidateId, scope: "tree" };
+    } catch {
+      return undefined;
     }
   }
 
@@ -367,6 +525,17 @@ export class OperationRunner {
     }
   }
 
+  /** Name every worktree that disposal will keep, so the event log explains what remains on disk and why. */
+  private reportPreservedWorktrees(unitIds?: string[]): void {
+    for (const entry of this.git?.preservedWorktrees(unitIds) ?? []) {
+      this.scheduler.emit(
+        "WORKTREE_RETAINED",
+        `${entry.unitId}: kept its isolated worktree at ${entry.worktree} (${entry.reason === "dirty" ? "uncommitted changes" : "ignored files only"}).`,
+        { unitId: entry.unitId, detail: { worktree: entry.worktree, reason: entry.reason } },
+      );
+    }
+  }
+
   private blockOnGit(reason: string): void {
     this.scheduler.finish({
       kind: "blocked",
@@ -383,6 +552,7 @@ export class OperationRunner {
 
   private cancelled(): DurableOperationState {
     this.scheduler.cancel();
+    this.reportPreservedWorktrees();
     this.git?.disposeAllUnits();
     this.save();
     return this.state;

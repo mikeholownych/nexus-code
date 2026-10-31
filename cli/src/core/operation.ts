@@ -39,7 +39,19 @@ import type { AgentRole } from "./roles.js";
 import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, WorkRequirements } from "./resources.js";
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
+import { CURRENT_OPERATION_SCHEMA_VERSION, validateOperationPolicy, validateResourceSlots } from "./operation_schema.js";
 export { ConvergenceScheduler, DecisionRejected, isRequired } from "./scheduler.js";
+export {
+  CURRENT_OPERATION_SCHEMA_VERSION,
+  LEGACY_OPERATION_SCHEMA_VERSION,
+  MAX_CONCURRENT_UNITS,
+  InvalidOperationStateError,
+  UnsupportedOperationSchemaError,
+  effectiveConcurrency,
+  migrateOperationState,
+  validateOperationState,
+  validateResourceSlots,
+} from "./operation_schema.js";
 
 export type WorkUnitStatus = "RUNNABLE" | "RUNNING" | "PARKED" | "WAITING_ON_DEPENDENCY" | "COMPLETE" | "BLOCKED";
 export type OperationStatus = "RUNNING" | "WAITING" | "BLOCKED" | "COMPLETE" | "CANCELLED";
@@ -145,7 +157,14 @@ export interface WorkUnit {
    */
   contextBudget?: number;
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
-  context?: { estimatedPromptTokens: number; budgetTokens: number; contextLimit: number; at: string };
+  context?: {
+    estimatedPromptTokens: number;
+    budgetTokens: number;
+    contextLimit: number;
+    at: string;
+    /** Which bound decided the check. Absent on records written before v1.1. */
+    source?: "agent-estimate" | "operator-budget";
+  };
 }
 
 export type OperationEventType =
@@ -163,7 +182,14 @@ export type OperationEventType =
   | "OPERATION_BLOCKED"
   | "OPERATION_COMPLETED"
   | "OPERATION_CANCELLED"
-  | "DECISION_APPLIED";
+  | "DECISION_APPLIED"
+  | "CONCURRENCY_LIMIT"
+  | "INTEGRATION_QUEUED"
+  | "INTEGRATION_SKIPPED"
+  | "OPERATION_MESSAGE"
+  | "OPERATION_MESSAGE_DROPPED"
+  | "WORK_INTEGRATED"
+  | "WORKTREE_RETAINED";
 
 export interface OperationEvent {
   type: OperationEventType;
@@ -184,6 +210,11 @@ export interface OperationPolicy {
   maxRunsPerUnit: number;
   /** Floor between WAITING wake-ups. */
   minWaitMs: number;
+  /**
+   * Units that may run at once. Absent means 1, which is the v1.0.0 behaviour: exactly one unit in flight.
+   * Bounded by `MAX_CONCURRENT_UNITS` and by the number of eligible resource slots (see `operation_schema`).
+   */
+  maxConcurrentUnits?: number;
 }
 
 export const DEFAULT_OPERATION_POLICY: OperationPolicy = {
@@ -235,6 +266,28 @@ export interface ContextCheckpoint {
   files: ContextCheckpointFile[];
 }
 
+/** A typed message between units, or from the operator. Advisory context only: never verification evidence. */
+export type OperationMessageKind = "request" | "observation" | "artifact" | "verdict";
+
+export interface OperationMessage {
+  /** Stable id, monotonic within the operation (`msg-1`, `msg-2`, …). */
+  id: string;
+  at: string;
+  /** Sending unit id, or `operator`. */
+  from: string;
+  /** Recipient unit id, or `*` for the whole operation. */
+  to: string;
+  kind: OperationMessageKind;
+  /** Bounded, operator-readable text. Control characters are rejected at write time, not stripped. */
+  body: string;
+  /** Pointers the recipient can read itself. Never content. */
+  refs?: Array<{ kind: "file" | "receipt" | "unit" | "checkpoint"; ref: string }>;
+  /** Set when the first unit's prompt included this message. */
+  deliveredAt?: string;
+  /** Every unit that has received this message. `to: "*"` means each unit once, not the first unit only. */
+  deliveredTo?: string[];
+}
+
 /** What was integrated, and the evidence the merge was accepted with. */
 export interface IntegrationReceipt {
   unitId: string;
@@ -246,10 +299,17 @@ export interface IntegrationReceipt {
   outcome: string;
   summary: string;
   verification: "PASSED" | "PASSED_POSTHOC" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
+  /** Content-addressed view of the merged unit's tree; absent when the worktree was already gone. */
+  candidate?: { digest: string; scope: "tree" | "commit" };
+  /** The unit's executed verifier, copied verbatim from its result; absent when the unit produced none. */
+  tests?: { command: string; status: string; hasExecutedTests: boolean };
+  /** 1-based merge order within the operation, assigned by the runner. */
+  sequence?: number;
 }
 
 export interface DurableOperationState {
-  schemaVersion: 1;
+  /** Operation document version; see `operation_schema.ts`. Independent of the task-store envelope version. */
+  schemaVersion: typeof CURRENT_OPERATION_SCHEMA_VERSION;
   id: string;
   objective: string;
   status: OperationStatus;
@@ -269,6 +329,10 @@ export interface DurableOperationState {
   integrations?: IntegrationReceipt[];
   /** Operator-created conversation snapshots, oldest first. */
   contextCheckpoints?: ContextCheckpoint[];
+  /** Typed inter-unit messages, oldest first; bounded (see `operation_messages.ts`). */
+  messages?: OperationMessage[];
+  /** Highest message id ever issued. Kept so a pruned id is never reused (events cite message ids). */
+  messageSeq?: number;
 }
 
 /** An option before it is numbered into a decision. */
@@ -302,10 +366,17 @@ export type UnitRunResult =
   | { kind: "cancelled" };
 
 export type Decision =
-  | { kind: "run"; unit: WorkUnit; resource: ResourceDescriptor; reroutedFrom?: { resourceId: string; reason: string } }
+  | { kind: "run"; assignments: Assignment[] }
   | { kind: "wait"; wakeAt: number; reason: string; parked: string[] }
   | { kind: "complete" }
   | { kind: "blocked"; decisions: EscalationDecision[] };
+
+/** One unit, the resource it may run on now, and why it moved off its previous resource. */
+export interface Assignment {
+  unit: WorkUnit;
+  resource: ResourceDescriptor;
+  reroutedFrom?: { resourceId: string; reason: string };
+}
 
 /** An operator decision Nexus will not apply (stale, not offered, or outside the unit's authority). */
 export interface WorkUnitSpec {
@@ -349,9 +420,11 @@ export function newOperation(
   }
   if (!units.some((u) => u.required !== false)) throw new Error("An operation needs at least one required work unit");
   assertAcyclic(units);
+  validateOperationPolicy(policy);
+  validateResourceSlots(resources);
   const at = new Date(now).toISOString();
   return {
-    schemaVersion: 1,
+    schemaVersion: CURRENT_OPERATION_SCHEMA_VERSION,
     id,
     objective,
     status: "RUNNING",
