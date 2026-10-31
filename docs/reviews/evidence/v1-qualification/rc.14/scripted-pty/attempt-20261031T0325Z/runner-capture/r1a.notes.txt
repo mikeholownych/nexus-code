@@ -1,0 +1,7 @@
+[  20.04s] TIMEOUT waiting for repl-prompt
+[  20.04s] SCREEN timeout-repl-prompt (100x30)
+[  20.05s] SEND request write approval
+[  35.37s] TIMEOUT waiting for RC14-approval-prompt
+[  35.37s] SCREEN timeout-RC14-approval-prompt (100x30)
+[  35.37s] SCREEN approval-prompt (100x30)
+[  35.38s] SEND Enter with no explicit y

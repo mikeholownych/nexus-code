@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-7f119167",
+  "sessionId": "task-7f119167",
+  "id": "task-7f119167",
+  "title": "Task task-7f119167",
+  "workspacePath": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0325Z/runner-capture/runs/r1a/ws",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0325Z/runner-capture/runs/r1a/ws",
+  "model": "m",
+  "createdAt": "2026-10-31T03:25:49.424Z",
+  "updatedAt": "2026-10-31T03:25:49.434Z",
+  "status": "in_progress",
+  "activePlan": [],
+  "milestones": [],
+  "validationReceipts": [],
+  "currentOperation": null,
+  "unverifiedChangesPending": false,
+  "messageLog": null
+}

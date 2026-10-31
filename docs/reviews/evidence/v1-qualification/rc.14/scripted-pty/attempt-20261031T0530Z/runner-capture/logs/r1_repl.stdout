@@ -1,0 +1,24 @@
+[   1.07s] SAW prompt
+[   1.07s] SCREEN repl-start (100x30)
+[   1.07s] SEND b'create hello.txt\r'
+[  16.32s] TIMEOUT waiting for approval-prompt
+[  16.32s] SCREEN timeout-approval-prompt (100x30)
+[  16.32s] SCREEN approval (100x30)
+[  16.33s] SEND lone Enter
+[  22.53s] SCREEN after-enter (100x30)
+A file after lone Enter: False
+[   0.63s] SAW prompt
+[   0.64s] SEND b'create hello.txt\r'
+[   0.94s] TYPE typing during turn: text, Enter, Enter gap=0.1
+[  19.69s] TIMEOUT waiting for approval-prompt
+[  19.69s] SCREEN timeout-approval-prompt (100x30)
+[  20.70s] SEND Enter (user thinks it's a newline)
+[  26.90s] SCREEN after (100x30)
+B file: False
+[   0.85s] SAW prompt
+[   0.85s] SEND b'create hello.txt\r'
+[  16.22s] TIMEOUT waiting for approval-prompt
+[  16.22s] SCREEN timeout-approval-prompt (100x30)
+[  16.23s] SEND bracketed paste 'notes:\n\nmore\n'
+[  22.43s] SCREEN after-paste (100x30)
+C file: False

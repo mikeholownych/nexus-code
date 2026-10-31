@@ -1,0 +1,5 @@
+[   1.83s] SAW idle
+[   1.83s] SEND start real synthetic command
+[   4.74s] SEND Esc
+[   7.49s] SAW idle-after-escape
+[   7.97s] SCREEN final (100x30)

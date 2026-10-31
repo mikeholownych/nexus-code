@@ -1,0 +1,2 @@
+{"n": 1, "t": 1793403860.8026092, "tools": 0, "stream": true, "last": "create hello.txt\n\n[Git Status: main (0 uncommitted dirty files)]"}
+{"n": 2, "t": 1793403865.4181778, "tools": 1, "stream": true, "last": "{\n  \"bytes_written\": 9,\n  \"path\": \"hello.txt\",\n  \"status\": \"created\"\n}"}

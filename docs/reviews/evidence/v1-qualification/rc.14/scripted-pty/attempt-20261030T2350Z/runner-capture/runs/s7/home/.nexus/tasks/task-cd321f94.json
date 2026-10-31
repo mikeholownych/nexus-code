@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-cd321f94",
+  "sessionId": "task-cd321f94",
+  "id": "task-cd321f94",
+  "title": "Task task-cd321f94",
+  "workspacePath": "/tmp/nexus-rc14-pty-run.sh5bQP/runs/s7/ws",
+  "workspace": "/tmp/nexus-rc14-pty-run.sh5bQP/runs/s7/ws",
+  "model": "m",
+  "createdAt": "2026-10-30T23:45:23.493Z",
+  "updatedAt": "2026-10-30T23:45:23.603Z",
+  "status": "in_progress",
+  "activePlan": [],
+  "milestones": [],
+  "validationReceipts": [],
+  "currentOperation": null,
+  "unverifiedChangesPending": true,
+  "messageLog": null
+}

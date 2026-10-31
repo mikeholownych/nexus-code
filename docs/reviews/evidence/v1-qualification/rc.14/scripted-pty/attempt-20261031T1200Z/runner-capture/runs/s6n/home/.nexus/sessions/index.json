@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T04:00:27.800Z",
+  "sessions": {
+    "session_20261031_040021_b343wwlu": {
+      "id": "session_20261031_040021_b343wwlu",
+      "cleanId": "session_20261031_040021_b343wwlu",
+      "title": "talk slowly",
+      "updatedAt": "2026-10-31T04:00:27.774Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.d1b645/runs/s6n/ws",
+      "messageCount": 2,
+      "mtime": 1793419227800,
+      "pinned": false
+    }
+  }
+}

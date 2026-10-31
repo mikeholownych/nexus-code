@@ -1,0 +1,8 @@
+[   1.32s] SAW prompt
+[   1.32s] SCREEN repl-start (100x30)
+[   1.33s] SEND b'create hello.txt\r'
+[  16.63s] TIMEOUT waiting for approval-prompt
+[  16.63s] SCREEN timeout-approval-prompt (100x30)
+[  16.63s] SCREEN approval (100x30)
+[  16.64s] SEND lone Enter
+[  22.84s] SCREEN after-enter (100x30)

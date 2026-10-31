@@ -1,0 +1,32 @@
+
+===== idle @ 6.45s (100x30) =====
+ NEXUS   ws  ⎇ main ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+› talk slowly
+
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+
+↳ also mention cats
+  steering · not applied — Not applied: the turn was cancelled before it could be applied. Your
+message is back in the composer.
+
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+Thinking about it. Thinking about it. Thinking about it. Thinking about it. Thinking about it.
+
+◌ Cancelled  You stopped the turn during inference.
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› also mention cats

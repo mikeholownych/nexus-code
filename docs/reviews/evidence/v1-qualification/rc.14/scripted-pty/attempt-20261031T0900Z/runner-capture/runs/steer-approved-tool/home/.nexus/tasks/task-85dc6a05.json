@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-85dc6a05",
+  "sessionId": "task-85dc6a05",
+  "id": "task-85dc6a05",
+  "title": "Task task-85dc6a05",
+  "workspacePath": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0900Z/runner-capture/runs/steer-approved-tool/ws",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0900Z/runner-capture/runs/steer-approved-tool/ws",
+  "model": "m",
+  "createdAt": "2026-10-31T03:50:16.164Z",
+  "updatedAt": "2026-10-31T03:50:42.065Z",
+  "status": "completed",
+  "lastTurn": {
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "FINAL_TEXT",
+    "finalOutputComplete": true,
+    "verification": null,
+    "interruption": null,
+    "inferenceFailure": null,
+    "steps": {
+      "used": 2,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": true,
+    "finishedAt": "2026-10-31T03:50:42.041Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 2
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unsupported",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 2,
+        "promptTokens": 5007,
+        "source": "client_estimate",
+        "clientEstimate": 5007,
+        "uncertainty": "the connection advertises no request counting"
+      }
+    },
+    "execution": "COMPLETED",
+    "outcome": "UNVERIFIED",
+    "reason": "NO_APPLICABLE_VERIFIER"
+  },
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "validationReceipts": [],
+  "unverifiedChangesPending": true,
+  "providerRecovery": null,
+  "objective": {
+    "version": 1,
+    "objective": "run it",
+    "objectiveSha256": "9dc5c61d793b51ed7b77d8439715a2569ea086d16288e95d7ffe0798225560aa",
+    "startedAt": "2026-10-31T03:50:16.895Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "run it",
+        "detail": "run it",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-31T03:50:16.895Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [
+      {
+        "id": "g1101f870b956a9-1",
+        "text": "also mention cats",
+        "receivedAt": "2026-10-31T03:50:18.745Z",
+        "status": "applied",
+        "appliedAt": "2026-10-31T03:50:41.833Z",
+        "appliedAtStep": 2
+      }
+    ],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 2,
+      "lastProgressStep": 1
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 2,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 1,
+      "repetitions": [
+        {
+          "key": "7dd6ef3bec25f226",
+          "action": "run_command {\"command\":\"sleep 23.7; echo finished\"}",
+          "actionId": "b70d74cf649d8d26",
+          "actionKind": "external",
+          "outcomeClass": "success",
+          "state": "72271fc8a750494b",
+          "count": 1,
+          "firstStep": 1,
+          "lastStep": 1,
+          "outcome": "{\n \"cancelled\": false,\n \"command\": \"sleep 23.7; echo finished\",\n \"duration_ms\": <dur>,\n \"exit_code\": 0,\n \"shell\": \"bash\",\n \"stderr\": \"\",\n \"stdout\": \"finished\\n\",\n \"timed_out\": false\n}"
+        }
+      ],
+      "progress": [
+        {
+          "step": 1,
+          "at": "2026-10-31T03:50:41.746Z",
+          "kind": "progress",
+          "detail": "new information observed"
+        },
+        {
+          "step": 2,
+          "at": "2026-10-31T03:50:41.992Z",
+          "kind": "operator_input",
+          "detail": "operator steering applied"
+        }
+      ],
+      "stagnation": [],
+      "failedApproaches": [],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "72271fc8a750494b"
+      ],
+      "seenObservations": [
+        "7dd6ef3bec25f226"
+      ],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "incomplete",
+      "reason": "NO_APPLICABLE_VERIFIER",
+      "remaining": [],
+      "at": "2026-10-31T03:50:42.041Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "changeBaseline": null,
+  "tokenStats": {
+    "prompt": 9729,
+    "completion": 42,
+    "total": 9771,
+    "requests": 2,
+    "reportedRequests": 0,
+    "estimatedRequests": 2
+  },
+  "cognitiveRouting": {
+    "activeTier": "planner",
+    "tokenStats": {
+      "prompt": 0,
+      "completion": 0,
+      "total": 0
+    }
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "6e71b9e1a90596d30abf78a751e772ba927c2bdb9af89253817d97710117a8a2",
+    "offset": 4529,
+    "bytes": 294,
+    "count": 6
+  }
+}

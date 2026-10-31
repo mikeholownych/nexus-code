@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 2,
+  "taskId": "session_20261031_040424_7akv8h4u",
+  "sessionId": "session_20261031_040424_7akv8h4u",
+  "id": "session_20261031_040424_7akv8h4u",
+  "title": "talk slowly",
+  "workspacePath": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1300Z/runner-capture/runs/s6-queued-steer-then-cancel/ws",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1300Z/runner-capture/runs/s6-queued-steer-then-cancel/ws",
+  "model": "m",
+  "createdAt": "2026-10-31T04:04:26.031Z",
+  "updatedAt": "2026-10-31T04:04:26.094Z",
+  "status": "interrupted",
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "candidateIdentity": null,
+  "validationReceipts": [],
+  "currentOperation": null,
+  "unverifiedChangesPending": false,
+  "tokenStats": {
+    "prompt": 0,
+    "completion": 0,
+    "total": 0,
+    "requests": 0,
+    "reportedRequests": 0,
+    "estimatedRequests": 0
+  },
+  "lastTurn": {
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "NONE",
+    "finalOutputComplete": false,
+    "verification": null,
+    "interruption": {
+      "requestedAt": "2026-10-31T04:04:25.928Z",
+      "phase": "inference",
+      "undispatchedToolCalls": 0
+    },
+    "inferenceFailure": null,
+    "steps": {
+      "used": 1,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": false,
+    "finishedAt": "2026-10-31T04:04:25.948Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 1
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unsupported",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 1,
+        "promptTokens": 4728,
+        "source": "client_estimate",
+        "clientEstimate": 4728,
+        "uncertainty": "the connection advertises no request counting"
+      }
+    },
+    "execution": "INTERRUPTED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "OPERATOR_INTERRUPT"
+  },
+  "objective": {
+    "version": 1,
+    "objective": "talk slowly",
+    "objectiveSha256": "4e2e05ba8aa88132146b36db035da6b2dc3cb1eface2f7b2f34a57640fb0d819",
+    "startedAt": "2026-10-31T04:04:25.052Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "talk slowly",
+        "detail": "talk slowly",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-31T04:04:25.052Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [
+      {
+        "id": "g120111aea81410-1",
+        "text": "also mention cats",
+        "receivedAt": "2026-10-31T04:04:25.893Z",
+        "status": "cancelled"
+      }
+    ],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "d1b47af30e259017"
+      ],
+      "seenObservations": [],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "incomplete",
+      "reason": "OPERATOR_INTERRUPT",
+      "remaining": [],
+      "at": "2026-10-31T04:04:25.948Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "4c4435c69021c96c01fc23fadb5842507c43b95a4df2c73b8d0d3b85561a9376",
+    "offset": 1,
+    "bytes": 3226,
+    "count": 2
+  }
+}

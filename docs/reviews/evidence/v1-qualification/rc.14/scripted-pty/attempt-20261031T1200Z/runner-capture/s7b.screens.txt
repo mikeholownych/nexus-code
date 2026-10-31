@@ -1,0 +1,64 @@
+
+===== resumed-start @ 1.85s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+  · Earlier conversation of session session_20261031_040029_wp95i2ig (2 messages)
+
+› remember the word 宽字符 please
+
+宽字符测试 全角ＡＢＣ emoji 👩 🎉 combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was nothing to verify.
+  · Resumed session session_20261031_040029_wp95i2ig.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+===== sessions @ 5.05s (100x30) =====
+ NEXUS   ws  ⎇ master ●1 changed  model m  mode: review · sandbox: off · workspace: trusted
+  · Earlier conversation of session session_20261031_040029_wp95i2ig (2 messages)
+
+› remember the word 宽字符 please
+
+宽字符测试 全角ＡＢＣ emoji 👩 🎉 combining é (é) RTL שלום tab  here
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+✓ Done  No files changed, so there was nothing to verify.
+  · Resumed session session_20261031_040029_wp95i2ig.
+
+› /sessions
+  * session_20261031_040029_wp95i2ig  2026-10-31T04:00:32  Active Session · 3 messages
+
+  Load one with /resume <id>.
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

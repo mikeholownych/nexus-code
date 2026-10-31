@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-7f76058d",
+  "sessionId": "task-7f76058d",
+  "id": "task-7f76058d",
+  "title": "Task task-7f76058d",
+  "workspacePath": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/s9/ws",
+  "workspace": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/s9/ws",
+  "model": "m",
+  "createdAt": "2026-10-30T23:39:56.995Z",
+  "updatedAt": "2026-10-30T23:40:01.406Z",
+  "status": "interrupted",
+  "lastTurn": {
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "NONE",
+    "finalOutputComplete": false,
+    "verification": null,
+    "interruption": {
+      "requestedAt": "2026-10-30T23:40:01.138Z",
+      "phase": "tool_settling",
+      "undispatchedToolCalls": 0,
+      "outstandingTool": "run_command",
+      "outstandingToolSettled": true
+    },
+    "inferenceFailure": null,
+    "steps": {
+      "used": 1,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": false,
+    "finishedAt": "2026-10-30T23:40:01.385Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 1
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unsupported",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 1,
+        "promptTokens": 4656,
+        "source": "client_estimate",
+        "clientEstimate": 4656,
+        "uncertainty": "the connection advertises no request counting"
+      }
+    },
+    "execution": "INTERRUPTED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "OPERATOR_INTERRUPT"
+  },
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "validationReceipts": [],
+  "unverifiedChangesPending": false,
+  "providerRecovery": null,
+  "objective": {
+    "version": 1,
+    "objective": "run it",
+    "objectiveSha256": "9dc5c61d793b51ed7b77d8439715a2569ea086d16288e95d7ffe0798225560aa",
+    "startedAt": "2026-10-30T23:39:58.322Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "run it",
+        "detail": "run it",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-30T23:39:58.322Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [
+        {
+          "key": "11f02016d77ca0e1",
+          "action": "run_command {\"command\":\"sleep 23.7; echo finished\"}",
+          "actionId": "b70d74cf649d8d26",
+          "actionKind": "external",
+          "outcomeClass": "deterministic_failure",
+          "state": "3658a1b78b94495f",
+          "count": 1,
+          "firstStep": 1,
+          "lastStep": 1,
+          "outcome": "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach."
+        }
+      ],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [
+        {
+          "step": 1,
+          "at": "2026-10-30T23:40:01.149Z",
+          "kind": "run_command",
+          "detail": "run_command {\"command\":\"sleep 23.7; echo finished\"} -> Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach."
+        }
+      ],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "3658a1b78b94495f"
+      ],
+      "seenObservations": [
+        "11f02016d77ca0e1"
+      ],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "incomplete",
+      "reason": "OPERATOR_INTERRUPT",
+      "remaining": [],
+      "at": "2026-10-30T23:40:01.385Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "tokenStats": {
+    "prompt": 4656,
+    "completion": 39,
+    "total": 4695,
+    "requests": 1,
+    "reportedRequests": 0,
+    "estimatedRequests": 1
+  },
+  "cognitiveRouting": {
+    "activeTier": "planner",
+    "tokenStats": {
+      "prompt": 0,
+      "completion": 0,
+      "total": 0
+    }
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "5c3def8656d3e9081072bded6bba9b9c92735ce61f5f208fc4b92c68bc905303",
+    "offset": 3498,
+    "bytes": 474,
+    "count": 4
+  }
+}

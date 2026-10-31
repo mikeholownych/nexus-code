@@ -1,0 +1,6 @@
+[   0.86s] SAW idle
+[   0.86s] SEND b'talk slowly\r'
+[   1.60s] SAW streaming
+[   1.75s] TYPE queue steering during active stream gap=0.01
+[   2.31s] SAW idle after cancel
+[   2.33s] SCREEN cancel-ack-review (100x30)

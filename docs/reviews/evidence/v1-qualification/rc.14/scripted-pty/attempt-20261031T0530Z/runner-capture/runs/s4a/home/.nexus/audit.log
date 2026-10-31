@@ -1,0 +1,2 @@
+{"timestamp":"2026-10-31T03:34:53.961Z","workspace":"/tmp/nexus-rc14-pty-run-env-20261031T0530Z/tmp/nexus-rc14-pty-run.2r6XOS/runs/s4a/ws","tool":"turn_cancel","args":{"reason":"external signal","phase":"inference","step":1},"success":true,"duration_ms":0}
+{"timestamp":"2026-10-31T03:34:59.364Z","workspace":"/tmp/nexus-rc14-pty-run-env-20261031T0530Z/tmp/nexus-rc14-pty-run.2r6XOS/runs/s4a/ws","tool":"turn_cancel","args":{"reason":"external signal","phase":"inference","step":1},"success":true,"duration_ms":0}

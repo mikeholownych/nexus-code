@@ -1,0 +1,1 @@
+{"timestamp":"2026-10-31T04:04:19.866Z","workspace":"/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1300Z/runner-capture/runs/s4-esc/ws","tool":"turn_cancel","args":{"reason":"external signal","phase":"inference","step":1},"success":true,"duration_ms":0}

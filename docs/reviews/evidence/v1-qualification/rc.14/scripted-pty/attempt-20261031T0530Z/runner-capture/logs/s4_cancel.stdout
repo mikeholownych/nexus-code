@@ -1,0 +1,23 @@
+[   1.22s] SAW idle
+[   1.22s] SCREEN idle-40x20-nocolor (40x20)
+[   1.23s] SEND b'talk slowly\r'
+[   4.43s] SCREEN streaming (40x20)
+[   4.43s] TYPE 'also mention cats\r' gap=0.05
+[   6.84s] SCREEN after-steer (40x20)
+[   6.84s] SEND Ctrl-C
+[  10.04s] SCREEN after-ctrl-c (40x20)
+[  10.04s] SEND b'again\r'
+[  12.24s] SEND Esc
+[  15.45s] SCREEN after-esc (40x20)
+alive True
+SGR codes: 638 color SGRs: []
+[   0.75s] SAW idle
+[   0.75s] SEND b'run it\r'
+[  10.98s] TIMEOUT waiting for tool-running
+[  10.98s] SCREEN timeout-tool-running (100x30)
+[  12.48s] SCREEN tool-running (100x30)
+[  12.49s] SEND Esc during tool
+[  13.42s] SAW idle-after-esc
+esc->idle secs 0.93
+[  13.42s] SCREEN after-esc-tool (100x30)
+no-leftover-sleep

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-30T23:40:20.830Z",
+  "sessions": {
+    "session_20261030_234004_hosqpilr": {
+      "id": "session_20261030_234004_hosqpilr",
+      "cleanId": "session_20261030_234004_hosqpilr",
+      "title": "create hello.txt",
+      "updatedAt": "2026-10-30T23:40:20.666Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/r1a/ws",
+      "messageCount": 5,
+      "mtime": 1793403620830,
+      "pinned": false
+    }
+  }
+}

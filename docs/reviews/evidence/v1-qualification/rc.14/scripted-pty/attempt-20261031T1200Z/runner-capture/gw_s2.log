@@ -1,0 +1,3 @@
+{"n": 1, "t": 1793419152.4473052, "tools": 0, "stream": true, "last": "create hello.txt\n\n[Git Status: master (0 uncommitted dirty files)]"}
+{"n": 2, "t": 1793419166.6239133, "tools": 1, "stream": true, "last": "Error executing write_file: Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach."}
+{"n": 3, "t": 1793419167.4703114, "tools": 1, "stream": true, "last": "yes y y please yy\n\n[Git Status: master (1 uncommitted dirty files)]"}

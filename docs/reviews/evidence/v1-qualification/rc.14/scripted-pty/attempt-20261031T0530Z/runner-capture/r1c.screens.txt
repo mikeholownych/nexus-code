@@ -1,0 +1,64 @@
+
+===== timeout-approval-prompt @ 16.23s (100x30) =====
+
+ NEXUS  local engineering agent
+Describe the outcome you want. Nexus will show meaningful activity and keep full evidence in the ses
+sion.
+Type /help for commands · /tui for the session view
+
+mode: review · sandbox: off · workspace: trusted
+WORKSPACE  ws [git: master]  /tmp/nexus-rc14-pty-run-env-20261031T0530Z/tmp/nexus-rc14-pty-run.2r6XO
+S/runs/r1c/ws
+MODEL      m  · review mode
+session session_20261031_033652_uz92huch · 1 messages · bash
+
+
+[Notice] Nexus retention: automatic daily GC keeps state for 90 days or up to 2 GB (0 items / 0.0 MB
+ reclaimable). Run 'nexus gc --ack' or set NEXUS_GC=auto to enable automatic background cleanup.
+
+nexus ws:master ❯ create hello.txt
+✔ Nexus is considering the next step
+  · Writing file  hello.txt
+
+⚠
+  Action: Create/overwrite hello.txt (9 bytes)
+
+
+
+
+
+
+
+
+
+===== after-paste @ 22.43s (100x30) =====
+mode: review · sandbox: off · workspace: trusted
+WORKSPACE  ws [git: master]  /tmp/nexus-rc14-pty-run-env-20261031T0530Z/tmp/nexus-rc14-pty-run.2r6XO
+S/runs/r1c/ws
+MODEL      m  · review mode
+session session_20261031_033652_uz92huch · 1 messages · bash
+
+
+[Notice] Nexus retention: automatic daily GC keeps state for 90 days or up to 2 GB (0 items / 0.0 MB
+ reclaimable). Run 'nexus gc --ack' or set NEXUS_GC=auto to enable automatic background cleanup.
+
+nexus ws:master ❯ create hello.txt
+✔ Nexus is considering the next step
+  · Writing file  hello.txt
+
+⚠
+  Action: Create/overwrite hello.txt (9 bytes)
+notes:
+
+more
+⚠
+✔ Nexus is considering the next step
+
+💭 Assistant: Wrote hello.txt. 完成 ✅ — naïve café 🎉
+
+
+✓ TURN ENDED - NO CHANGES TO VERIFY  execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT
+
+⚠ 2 lines arrived while no prompt was waiting and were ignored (first: "more"). This REPL reads one
+line at a time: wrap multi-line input in """ … """, or use the default TUI (`harness`).
+nexus ws:master *1 ❯

@@ -1,0 +1,8 @@
+[   0.83s] SAW idle
+[   0.83s] SEND b'create hello.txt'
+[   1.33s] SEND b'\r'
+[   3.68s] SAW panel
+[   6.18s] SCREEN panel-letters (80x24)
+[   6.18s] SEND y
+[   7.70s] SAW idle-after-turn
+[   7.70s] SCREEN after-turn (80x24)

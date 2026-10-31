@@ -1,0 +1,28 @@
+[   0.74s] SAW idle
+[   0.74s] SCREEN idle-review-mode (100x30)
+[   0.74s] TYPE 'create hello.txt\r' gap=0.03
+[   1.25s] TYPE continuous typing w/ y and Enter across panel gap=0.12
+[   3.66s] SAW panel
+[   3.66s] SCREEN panel-after-typing (100x30)
+file exists after typing: False
+[   3.67s] SEND bracketed paste y/Enter
+[   4.87s] SCREEN after-paste (100x30)
+file after paste: False
+[   4.88s] SEND unbracketed burst
+file after burst: False
+[   6.08s] RESIZE 40x14
+[   7.08s] SCREEN approval-40x14 (40x14)
+[   7.08s] SEND y at 40x14
+file after y@40: False
+[   8.28s] RESIZE 100x30
+[   9.28s] SCREEN approval-back-100x30 (100x30)
+[  11.78s] SEND deliberate y after 2.5s quiet
+[  12.98s] SCREEN after-deliberate-y (100x30)
+file after deliberate y: False
+[  12.99s] SEND Right
+[  15.49s] SEND Enter#1
+[  16.29s] SCREEN after-enter1 (100x30)
+file after enter1: False
+[  16.29s] SEND Enter#2
+[  19.50s] SCREEN after-enter2 (100x30)
+file after enter2: False

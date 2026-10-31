@@ -1,0 +1,14 @@
+[   0.83s] SAW idle
+[   1.13s] SEND b'remember the word \xe5\xae\xbd\xe5\xad\x97\xe7\xac\xa6 please\r'
+[   1.94s] SAW turn-done
+[   1.94s] SCREEN unicode-40x20 (40x20)
+[   1.94s] RESIZE 100x30
+[   2.94s] SCREEN unicode-100x30 (100x30)
+[   2.95s] SEND b'/quit\r'
+alive after /quit False
+[   0.74s] SAW idle
+[   1.74s] SCREEN resumed-start (100x30)
+[   1.74s] SEND b'/sessions\r'
+[   4.95s] SCREEN sessions (100x30)
+[   4.95s] SEND b'\x03'
+alive after idle Ctrl-C False

@@ -1,0 +1,32 @@
+
+===== final @ 26.91s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: auto · sandbox: off · workspace: trusted
+› run it
+  ✓ Run sleep 23.7; echo finished · exit 0 · 1 line · 23.7s
+    ▎ finished
+
+↳ also mention cats
+  steering · applied
+
+Done.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠸ thinking · 0:25 · step 2 · esc cancels ──────────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it

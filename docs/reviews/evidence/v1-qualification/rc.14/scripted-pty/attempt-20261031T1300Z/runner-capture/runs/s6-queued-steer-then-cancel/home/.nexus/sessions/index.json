@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T04:04:26.153Z",
+  "sessions": {
+    "session_20261031_040424_7akv8h4u": {
+      "id": "session_20261031_040424_7akv8h4u",
+      "cleanId": "session_20261031_040424_7akv8h4u",
+      "title": "talk slowly",
+      "updatedAt": "2026-10-31T04:04:26.094Z",
+      "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1300Z/runner-capture/runs/s6-queued-steer-then-cancel/ws",
+      "messageCount": 2,
+      "mtime": 1793419466152,
+      "pinned": false
+    }
+  }
+}

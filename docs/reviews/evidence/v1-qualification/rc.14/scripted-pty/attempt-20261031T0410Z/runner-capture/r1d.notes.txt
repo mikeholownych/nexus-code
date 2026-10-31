@@ -1,0 +1,9 @@
+[   1.16s] SAW repl-prompt
+[   1.16s] SEND request write approval
+[   1.66s] SEND typed-ahead y before approval prompt
+[   3.81s] SAW RC14-approval-prompt
+[   3.81s] SCREEN approval-prompt (100x30)
+[   4.48s] SEND Enter with no explicit y after grace window
+[  14.76s] TIMEOUT waiting for approval-denied
+[  14.76s] SCREEN timeout-approval-denied (100x30)
+[  15.27s] SCREEN after-denial (100x30)

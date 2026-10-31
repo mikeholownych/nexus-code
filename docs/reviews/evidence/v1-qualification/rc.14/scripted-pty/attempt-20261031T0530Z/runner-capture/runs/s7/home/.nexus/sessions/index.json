@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T03:35:42.316Z",
+  "sessions": {
+    "session_20261031_033539_uy2jhh5c": {
+      "id": "session_20261031_033539_uy2jhh5c",
+      "cleanId": "session_20261031_033539_uy2jhh5c",
+      "title": "Active Session",
+      "updatedAt": "2026-10-31T03:35:42.274Z",
+      "workspace": "/tmp/nexus-rc14-pty-run-env-20261031T0530Z/tmp/nexus-rc14-pty-run.2r6XOS/runs/s7/ws",
+      "messageCount": 3,
+      "mtime": 1793417742315,
+      "pinned": false
+    }
+  }
+}

@@ -1,0 +1,8 @@
+[   0.63s] SAW idle
+[   0.63s] SEND request synthetic command
+[   1.55s] SAW approval-panel
+[   4.05s] SCREEN before-deliberate-approval (100x30)
+[   4.05s] SEND select Approve
+[   5.05s] SEND confirm deliberate Approve
+[   6.20s] SEND confirm explicit approval choice
+[  21.49s] SCREEN final (100x30)

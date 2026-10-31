@@ -1,0 +1,6 @@
+artifact_version=1.0.0-rc.14 (16eeb6eeffe7)
+archive_sha256=52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7
+node_version=v24.11.1
+python_version=Python 3.12.3
+source_commit=d4a0aa721bf615e242fd74d32fdd7dcabdeed874
+scenarios=s1_startup.py s2_approval.py s3_complete.py s4_cancel.py s5_ctrlc.py s6_steer_cancel.py s6n.py s7_resume.py s8_cancel_tool.py s9_quit_tool.py r1_repl.py r1d.py

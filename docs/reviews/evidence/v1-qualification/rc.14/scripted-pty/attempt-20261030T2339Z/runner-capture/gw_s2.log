@@ -1,0 +1,2 @@
+{"n": 1, "t": 1793403482.523412, "tools": 0, "stream": true, "last": "create hello.txt\n\n[Git Status: main (0 uncommitted dirty files)]"}
+{"n": 2, "t": 1793403498.3997154, "tools": 1, "stream": true, "last": "[Operator steering g2122b9a931ae5-2]: y"}

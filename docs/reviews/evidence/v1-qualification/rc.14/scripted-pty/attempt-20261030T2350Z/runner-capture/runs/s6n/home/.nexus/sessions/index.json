@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-30T23:45:18.572Z",
+  "sessions": {
+    "session_20261030_234512_6erqfkx0": {
+      "id": "session_20261030_234512_6erqfkx0",
+      "cleanId": "session_20261030_234512_6erqfkx0",
+      "title": "talk slowly",
+      "updatedAt": "2026-10-30T23:45:18.548Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.sh5bQP/runs/s6n/ws",
+      "messageCount": 2,
+      "mtime": 1793403918571,
+      "pinned": false
+    }
+  }
+}

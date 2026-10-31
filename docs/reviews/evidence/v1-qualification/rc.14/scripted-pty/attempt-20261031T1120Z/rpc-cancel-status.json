@@ -1,0 +1,34 @@
+{
+  "artifact": "/tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/core/harness-core",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1120Z/workspace",
+  "command": "sleep 20; echo finished",
+  "responses": [
+    {
+      "id": 41,
+      "result": {
+        "cancelled": true,
+        "command": "sleep 20; echo finished",
+        "duration_ms": 201,
+        "exit_code": null,
+        "shell": "bash",
+        "stderr": "",
+        "stdout": "",
+        "timed_out": false
+      }
+    },
+    {
+      "id": 42,
+      "result": {
+        "cancelled": true
+      }
+    }
+  ],
+  "processesAtCancel": [
+    "1146541 1146519 1146541 S    bash -c sleep 20; echo finished",
+    "1146544 1146541 1146541 S    sleep 20"
+  ],
+  "processesAfterCancel": [],
+  "cancelSentAfterProcessObserved": true,
+  "cancelProbePass": true,
+  "engineExitCode": 0
+}

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T04:04:23.183Z",
+  "sessions": {
+    "session_20261031_040421_0hgxvcs3": {
+      "id": "session_20261031_040421_0hgxvcs3",
+      "cleanId": "session_20261031_040421_0hgxvcs3",
+      "title": "talk slowly",
+      "updatedAt": "2026-10-31T04:04:23.134Z",
+      "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T1300Z/runner-capture/runs/s5-ctrl-c/ws",
+      "messageCount": 2,
+      "mtime": 1793419463182,
+      "pinned": false
+    }
+  }
+}

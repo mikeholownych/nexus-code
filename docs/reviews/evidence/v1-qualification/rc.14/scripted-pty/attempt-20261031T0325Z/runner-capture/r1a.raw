@@ -1,0 +1,31 @@
+[?25l[2J[H
+Trust this folder?
+↑↓ navigate · Enter select · Esc exit
+…iews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0325Z/runner-capture/runs/r1a/ws
+Load project instructions
+No project instruction file found
+Trust remembered for this folder.
+Includes future project config changes.
+Trust loads project instructions and
+workspace integrations.
+Tool approvals use permission settings.
+Folder trust doesn't change approvals.
+
+› Trust and continue
+  Continue without trusting
+  Exit[?25h
+
+[1m[30m[46m NEXUS [49m[39m[22m [2mlocal engineering agent[22m
+[2mDescribe the outcome you want. Nexus will show meaningful activity and keep full evidence in the session.[22m
+[2mType /help for commands · /tui for the session view
+[22m
+[2mmode: review · sandbox: off · workspace: trusted[22m
+[1m[36mWORKSPACE[39m[22m  [37mws[39m[36m [git: [1mmaster[22m][39m  [2m/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0325Z/runner-capture/runs/r1a/ws[22m
+[1m[36mMODEL[39m[22m      [32mm[39m  [2m· review mode[22m
+[2msession session_20261031_032550_9eaxnytr · 1 messages · bash[22m
+
+[33m
+[Notice] Nexus retention: automatic daily GC keeps state for 90 days or up to 2 GB (0 items / 0.0 MB reclaimable). Run 'nexus gc --ack' or set NEXUS_GC=auto to enable automatic background cleanup.
+[39m
+[1G[0J[1m[36mnexus[39m[22m [33mws[39m[90m:[36mmaster[90m[39m [1m[36m❯[39m[22m [19G
+[1G[0J[1m[36mnexus[39m[22m [33mws[39m[90m:[36mmaster[90m[39m [1m[36m❯[39m[22m [19G

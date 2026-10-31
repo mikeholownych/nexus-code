@@ -1,0 +1,6 @@
+[   0.85s] SAW prompt
+[   0.85s] SEND b'create hello.txt\r'
+[  16.22s] TIMEOUT waiting for approval-prompt
+[  16.22s] SCREEN timeout-approval-prompt (100x30)
+[  16.23s] SEND bracketed paste 'notes:\n\nmore\n'
+[  22.43s] SCREEN after-paste (100x30)

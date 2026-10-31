@@ -1,0 +1,9 @@
+{
+  "id": "cp_1793403504077_tbi2",
+  "name": "Turn: create hello.txt",
+  "timestamp": "2026-10-30T23:38:24.077Z",
+  "workspace": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/s3/ws",
+  "gitRef": "55d2b7d8c219e64b12a5060e8d12141e56afcf4b",
+  "untrackedFiles": [],
+  "untrackedFileModes": {}
+}

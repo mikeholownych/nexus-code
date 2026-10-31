@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T03:59:37.381Z",
+  "sessions": {
+    "session_20261031_035931_ffr8eql7": {
+      "id": "session_20261031_035931_ffr8eql7",
+      "cleanId": "session_20261031_035931_ffr8eql7",
+      "title": "create hello.txt",
+      "updatedAt": "2026-10-31T03:59:37.356Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.d1b645/runs/s3/ws",
+      "messageCount": 5,
+      "mtime": 1793419177380,
+      "pinned": false
+    }
+  }
+}

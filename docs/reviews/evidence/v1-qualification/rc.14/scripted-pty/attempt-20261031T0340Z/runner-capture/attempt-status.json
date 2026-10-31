@@ -1,0 +1,5 @@
+{
+  "status": "INVALID_PREFLIGHT_TRUST_INTERSTITIAL",
+  "detail": "Installed RC opened workspace trust screen before REPL prompt; approval scenarios were not executed.",
+  "artifact": "v1.0.0-rc.14 (16eeb6eeffe7)"
+}

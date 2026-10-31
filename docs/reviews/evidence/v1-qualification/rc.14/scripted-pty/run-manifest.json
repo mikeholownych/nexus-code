@@ -1,0 +1,121 @@
+{
+  "scope": "ACCEPTANCE §5.2 installed-RC scripted PTY only",
+  "status": "EVIDENCE_COMPLETE_PENDING_INDEPENDENT_REVIEW",
+  "acceptance_gate_status": "NOT_YET_INDEPENDENTLY_ACCEPTED",
+  "artifact": {
+    "tag": "v1.0.0-rc.14",
+    "version_output": "1.0.0-rc.14 (16eeb6eeffe7)",
+    "source_commit": "16eeb6eeffe7fc0bae234aa34dcb671a6ba5ff99",
+    "linux_archive_sha256": "52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7",
+    "installed_components_sha256": {
+      "lib/core/harness-core": "f70368b3b3003f7d0938c23a07fbac5192ecddf3dc8ff4129a21998ce98a733f",
+      "lib/core/nexus-tui": "16026211e20d46dfc632643db5e7f0b70b2098150bc677a56859efd1f3c97e57",
+      "lib/cli/dist/sidecar.js": "c896ba4e6337ac2f559fc236cd44a80699da01e98253129dbb0d121e8b6f8caf",
+      "lib/cli/dist/index.js": "08f3970bece31880df497e4eb75b048bb7568d1cbf57e950d60bb3760c4794fa"
+    }
+  },
+  "environment": {
+    "node": "v24.11.1",
+    "python": "3.12.3",
+    "gateway": "local synthetic mock only",
+    "workspace": "fresh synthetic Git fixtures",
+    "home": "isolated per scenario",
+    "held_out_data_or_live_inference": false
+  },
+  "runner": {
+    "path": "docs/v1.0.0/evidence/D_pty/",
+    "source_commit": "d4a0aa721bf615e242fd74d32fdd7dcabdeed874",
+    "fresh_full_attempt": "attempt-20261031T1200Z",
+    "runner_manifest": "attempt-20261031T1200Z/runner-manifest.txt",
+    "fixture_git_metadata": "84 nested synthetic-workspace Git metadata directories are byte-count verified and retained as per-workspace .git-metadata.tar.gz archives; see fixture-git-archives.json.",
+    "limitations": [
+      "The fresh full runner's s1 script was stopped at 34 seconds; it is not counted. The dedicated bounded s1 run is the qualifying evidence.",
+      "The legacy REPL helper waited for an obsolete approval prompt. Its output is retained but not counted; corrected exact-asset r1a/r1d evidence is used.",
+      "The s8/s9 auxiliary classifier imposed a one-frame cancellation-acknowledgement predicate that §5.2 specifies only for s4-s6. Its false status is preserved; the process-cleanup observations are assessed against the actual s8/s9 predicate.",
+      "The s4-s6 high-resolution probe initially used an assumed 60 Hz threshold. Its raw timings are retained; the preserved boolean based on that assumption is superseded by the exact RC14 FRAME=100 ms source and first-redraw observations recorded here."
+    ]
+  },
+  "frame_timing": {
+    "official_installed_rc_frame_ms": 100,
+    "source": "v1.0.0-rc.14:core/src/bin/nexus_tui/live_view.rs:36",
+    "input_redraw_path": "v1.0.0-rc.14:core/src/bin/nexus_tui/live.rs:446-450,503-519",
+    "meaning": "The ACCEPTANCE one-frame bound is evaluated against the exact installed TUI frame duration, not an assumed 60 Hz frame.",
+    "measured_ack_ms": {
+      "Esc": 7.56,
+      "Ctrl-C": 8.89,
+      "Ctrl-C with queued steering": 19.39
+    },
+    "result": "All three acknowledgements are within one 100 ms TUI frame."
+  },
+  "scenario_review": [
+    {
+      "scenario": "s1 startup, unreachable endpoint",
+      "verdict": "PASS",
+      "evidence": "attempt-20261031T0600Z/runner-capture/s1-bounded-status.json",
+      "observed": "The turn naturally ended after 117.874 seconds, named http://127.0.0.1:9/v1, and gave repair guidance. The gate limit is 150 seconds."
+    },
+    {
+      "scenario": "s2 approval during typing, paste, burst, and at 40x14",
+      "verdict": "PASS",
+      "evidence": "attempt-20261031T1200Z/runner-capture/s2.screens.txt and s2_approval.py",
+      "observed": "Stray typing, bracketed paste, unbracketed burst, and a y at 40x14 left the approval unresolved and the file absent. A deliberate arrow-and-Enter action selected denial; the file remained absent."
+    },
+    {
+      "scenario": "s3 completion disposition",
+      "verdict": "PASS",
+      "evidence": "attempt-20261031T1200Z/runner-capture/s3.screens.txt",
+      "observed": "After the file change, the installed UI displayed “Done · not verified” and explained that no test command was found. This is the UI rendering for the UNVERIFIED outcome."
+    },
+    {
+      "scenario": "s4-s6 cancellation and steering",
+      "verdict": "PASS",
+      "evidence": [
+        "attempt-20261031T1300Z/runner-capture/cancel-ack-frame-status.json",
+        "attempt-20261031T0900Z/runner-capture/approved-tool-steer-status.json"
+      ],
+      "observed": "Esc and Ctrl-C cancellation states appeared in the first TUI redraw after the key event (7.56 ms, 8.89 ms, and 19.39 ms); all are within the exact RC14 100 ms UI frame. Each case returned to idle in under 0.36 seconds. The queued-steer case returned the unapplied message to the composer. A separate running-tool scenario showed the steering text in the next gateway request and displayed it as applied."
+    },
+    {
+      "scenario": "s7 resume",
+      "verdict": "PASS",
+      "evidence": "attempt-20261031T1200Z/runner-capture/s7b.screens.txt",
+      "observed": "The resumed screen showed the prior session identifier, earlier conversation, and resume disposition."
+    },
+    {
+      "scenario": "s8 cancel during a running tool",
+      "verdict": "PASS",
+      "evidence": "attempt-20261031T1000Z/runner-capture/tool-lifecycle-status.json",
+      "observed": "A real synthetic sleep command was observed in its shell process group before Esc. At the post-cancel snapshot, the shell and sleep PIDs were gone; the TUI, sidecar, and RPC engine remained, as expected for Esc. The interface returned to idle within 2.751 seconds."
+    },
+    {
+      "scenario": "s9 quit during a running tool",
+      "verdict": "PASS",
+      "evidence": [
+        "attempt-20261031T1000Z/runner-capture/tool-lifecycle-status.json",
+        "attempt-20261031T1120Z/rpc-cancel-status.json"
+      ],
+      "observed": "The installed TUI exited while a synthetic command ran; the pre-exit command process group and UI process tree had no surviving PIDs afterward. The separate direct RPC probe also confirmed both cancellation responses and no remaining command process."
+    },
+    {
+      "scenario": "r1a lone Enter at REPL approval",
+      "verdict": "PASS",
+      "evidence": "attempt-20261031T0450Z/runner-capture/rc14-repl-approval-status.json",
+      "observed": "The corrected installed-asset probe reached the approval prompt; lone Enter was rejected by the gateway, no file was created, and the isolated HOME was used."
+    },
+    {
+      "scenario": "r1d typed-ahead y at REPL approval",
+      "verdict": "PASS",
+      "evidence": "attempt-20261031T0450Z/runner-capture/rc14-repl-approval-status.json",
+      "observed": "The typed-ahead y was discarded, the approval prompt was reached, the gateway rejected the action, and no file was created."
+    }
+  ],
+  "other_recorded_attempts": "All interrupted, invalid, and supplemental attempts remain in this packet with their original status. No failed attempt was rewritten as a pass.",
+  "waivers": {
+    "section_5_3_manual_terminal_matrix": "WAIVED by DEC-20; not run and no result claimed"
+  },
+  "review": {
+    "independent_reviewer": "PENDING",
+    "human_acceptance": "PENDING",
+    "release_acceptance": "NOT_ESTABLISHED"
+  }
+}

@@ -1,0 +1,1 @@
+{"timestamp":"2026-10-31T03:59:03.768Z","workspace":"/tmp/nexus-rc14-pty-run.d1b645/runs/s1a/ws","tool":"turn_cancel","args":{"reason":"external signal","phase":"provider_wait","step":1},"success":true,"duration_ms":0}

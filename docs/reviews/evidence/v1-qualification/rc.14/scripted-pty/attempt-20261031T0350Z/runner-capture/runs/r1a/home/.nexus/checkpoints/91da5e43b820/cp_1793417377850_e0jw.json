@@ -1,0 +1,9 @@
+{
+  "id": "cp_1793417377850_e0jw",
+  "name": "Turn: create hello.txt",
+  "timestamp": "2026-10-31T03:29:37.850Z",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0350Z/runner-capture/runs/r1a/ws",
+  "gitRef": "afdbc5580a612ed1ba19ae4e1f621848808c4325",
+  "untrackedFiles": [],
+  "untrackedFileModes": {}
+}

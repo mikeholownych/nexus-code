@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-31T03:59:50.477Z",
+  "sessions": {
+    "session_20261031_035938_3zxcikqz": {
+      "id": "session_20261031_035938_3zxcikqz",
+      "cleanId": "session_20261031_035938_3zxcikqz",
+      "title": "also mention catsagain",
+      "updatedAt": "2026-10-31T03:59:50.435Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.d1b645/runs/s4a/ws",
+      "messageCount": 3,
+      "mtime": 1793419190477,
+      "pinned": false
+    }
+  }
+}

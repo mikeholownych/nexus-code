@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-e33cf610",
+  "sessionId": "task-e33cf610",
+  "id": "task-e33cf610",
+  "title": "Task task-e33cf610",
+  "workspacePath": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0600Z/runner-capture/runs/s1_bounded/ws",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0600Z/runner-capture/runs/s1_bounded/ws",
+  "model": "m",
+  "createdAt": "2026-10-31T03:40:03.989Z",
+  "updatedAt": "2026-10-31T03:42:00.812Z",
+  "status": "failed",
+  "lastTurn": {
+    "providerRecovery": [
+      {
+        "state": "EXHAUSTED",
+        "step": 1,
+        "startedAt": "2026-10-31T03:40:05.019Z",
+        "updatedAt": "2026-10-31T03:42:00.789Z",
+        "condition": "TEMPORARILY_UNAVAILABLE",
+        "submissions": [
+          {
+            "requestId": "c57f765c-a714-469c-a20a-cf94193c0d13",
+            "attempt": 1,
+            "failedAt": "2026-10-31T03:40:05.019Z",
+            "kind": "network_error",
+            "condition": "TEMPORARILY_UNAVAILABLE",
+            "execution": "UNKNOWN",
+            "message": "Inference request failed: fetch failed (cause: bad port)"
+          }
+        ],
+        "probes": 14,
+        "waitedMs": 114959,
+        "unknownReplays": 1,
+        "endpoint": "http://127.0.0.1:9/v1",
+        "everSucceeded": false,
+        "policy": {
+          "deadlineMs": 120000,
+          "maxDelayMs": 15000,
+          "maxUnknownReplays": 1
+        },
+        "reason": "provider (http://127.0.0.1:9/v1) did not recover within 120s (next wait 13s would exceed it) — run `nexus doctor`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect"
+      }
+    ],
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "NONE",
+    "finalOutputComplete": false,
+    "verification": null,
+    "interruption": null,
+    "inferenceFailure": {
+      "kind": "network_error",
+      "origin": "transport",
+      "message": "Inference request failed: fetch failed (cause: bad port)",
+      "requestId": "c57f765c-a714-469c-a20a-cf94193c0d13",
+      "transportCause": [
+        {
+          "name": "Error",
+          "message": "bad port"
+        }
+      ],
+      "condition": "TEMPORARILY_UNAVAILABLE",
+      "execution": "UNKNOWN"
+    },
+    "steps": {
+      "used": 1,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": false,
+    "finishedAt": "2026-10-31T03:42:00.793Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 1
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unavailable",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 1,
+        "promptTokens": 4716,
+        "source": "client_estimate",
+        "clientEstimate": 4716,
+        "uncertainty": "capability discovery unavailable (fetch failed)"
+      }
+    },
+    "execution": "FAILED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "INFERENCE_FAILED",
+    "detail": "network_error/transport; provider recovery exhausted after 1 submissions, 115s waiting — run `nexus doctor`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect"
+  },
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "validationReceipts": [],
+  "unverifiedChangesPending": false,
+  "providerRecovery": null,
+  "objective": {
+    "version": 1,
+    "objective": "say hello",
+    "objectiveSha256": "3cad3da3dbbe1c106b3219f6c278a565f411cee74f0848956aff65d3df4846a7",
+    "startedAt": "2026-10-31T03:40:04.781Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "say hello",
+        "detail": "say hello",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-31T03:40:04.781Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "5111f4b43ec6afcd"
+      ],
+      "seenObservations": [],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "incomplete",
+      "reason": "INFERENCE_FAILED",
+      "remaining": [],
+      "at": "2026-10-31T03:42:00.793Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "tokenStats": {
+    "prompt": 0,
+    "completion": 0,
+    "total": 0,
+    "requests": 0,
+    "reportedRequests": 0,
+    "estimatedRequests": 0
+  },
+  "cognitiveRouting": {
+    "activeTier": "planner",
+    "tokenStats": {
+      "prompt": 0,
+      "completion": 0,
+      "total": 0
+    }
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "096f8e7295d9c08aa864235f94c3305fba72c96c37c8703d4da679b563f4c462",
+    "offset": 1,
+    "bytes": 3188,
+    "count": 2
+  }
+}

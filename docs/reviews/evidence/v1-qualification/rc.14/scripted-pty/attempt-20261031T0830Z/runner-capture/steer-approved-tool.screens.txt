@@ -1,0 +1,64 @@
+
+===== before-deliberate-approval @ 4.05s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Run sleep 23.7; echo finished                                                                     │
+│Proposed: run a shell command in the workspace                                                    │
+│                                                                                                  │
+│$ sleep 23.7; echo finished                                                                       │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+›
+
+===== final @ 21.50s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Run sleep 23.7; echo finished                                                                     │
+│Proposed: run a shell command in the workspace                                                    │
+│                                                                                                  │
+│$ sleep 23.7; echo finished                                                                       │
+│                                                                                                  │
+│ Approve   Approve all later actions   Deny                                                       │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────
+›

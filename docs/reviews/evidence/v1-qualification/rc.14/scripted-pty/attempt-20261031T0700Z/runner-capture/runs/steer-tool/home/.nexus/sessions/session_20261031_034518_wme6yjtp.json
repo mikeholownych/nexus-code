@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 2,
+  "taskId": "session_20261031_034518_wme6yjtp",
+  "sessionId": "session_20261031_034518_wme6yjtp",
+  "id": "session_20261031_034518_wme6yjtp",
+  "title": "run it",
+  "workspacePath": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0700Z/runner-capture/runs/steer-tool/ws",
+  "workspace": "/home/mike/nexus-wt/rc14-scripted-pty-20261030/docs/reviews/evidence/v1-qualification/rc.14/scripted-pty/attempt-20261031T0700Z/runner-capture/runs/steer-tool/ws",
+  "model": "m",
+  "createdAt": "2026-10-31T03:46:17.975Z",
+  "updatedAt": "2026-10-31T03:46:18.009Z",
+  "status": "interrupted",
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "candidateIdentity": null,
+  "validationReceipts": [],
+  "currentOperation": null,
+  "unverifiedChangesPending": false,
+  "tokenStats": {
+    "prompt": 4716,
+    "completion": 39,
+    "total": 4755,
+    "requests": 1,
+    "reportedRequests": 0,
+    "estimatedRequests": 1
+  },
+  "lastTurn": {
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "NONE",
+    "finalOutputComplete": false,
+    "verification": null,
+    "interruption": {
+      "requestedAt": "2026-10-31T03:46:17.777Z",
+      "phase": "tool_settling",
+      "undispatchedToolCalls": 0,
+      "outstandingTool": "run_command",
+      "outstandingToolSettled": true
+    },
+    "inferenceFailure": null,
+    "steps": {
+      "used": 1,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": false,
+    "finishedAt": "2026-10-31T03:46:17.920Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 1
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unsupported",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 1,
+        "promptTokens": 4716,
+        "source": "client_estimate",
+        "clientEstimate": 4716,
+        "uncertainty": "the connection advertises no request counting"
+      }
+    },
+    "execution": "INTERRUPTED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "OPERATOR_INTERRUPT"
+  },
+  "objective": {
+    "version": 1,
+    "objective": "run it",
+    "objectiveSha256": "9dc5c61d793b51ed7b77d8439715a2569ea086d16288e95d7ffe0798225560aa",
+    "startedAt": "2026-10-31T03:45:19.492Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "run it",
+        "detail": "run it",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-31T03:45:19.492Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [
+        {
+          "key": "ada0c5ee2d386c62",
+          "action": "run_command {\"command\":\"sleep 23.7; echo finished\"}",
+          "actionId": "b70d74cf649d8d26",
+          "actionKind": "external",
+          "outcomeClass": "deterministic_failure",
+          "state": "7f971f5dc6dfaa0e",
+          "count": 1,
+          "firstStep": 1,
+          "lastStep": 1,
+          "outcome": "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach."
+        }
+      ],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [
+        {
+          "step": 1,
+          "at": "2026-10-31T03:46:17.790Z",
+          "kind": "run_command",
+          "detail": "run_command {\"command\":\"sleep 23.7; echo finished\"} -> Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach."
+        }
+      ],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "7f971f5dc6dfaa0e"
+      ],
+      "seenObservations": [
+        "ada0c5ee2d386c62"
+      ],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "incomplete",
+      "reason": "OPERATOR_INTERRUPT",
+      "remaining": [],
+      "at": "2026-10-31T03:46:17.920Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "94251931764347c88cd736a606440eca7d9a18216632b232afd0c972c1885ccf",
+    "offset": 3658,
+    "bytes": 493,
+    "count": 4
+  }
+}

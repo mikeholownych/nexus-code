@@ -1,0 +1,17 @@
+[   0.63s] SAW idle
+[   0.63s] SEND b'run it\r'
+[   1.25s] SAW tool-running
+tui pid 1160452
+before:
+1063476 1063162    1048 /home/mike/.local/lib/nexus/v1.0.0-rc.14/lib/core/nexus-tui --live --sidecar /home/mike/.local/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js --node /home/mike/.config/nvm/versions/node/v24.21.0/bin/node -- -y
+1063511 1063476    1048 /home/mike/.config/nvm/versions/node/v24.21.0/bin/node /home/mike/.local/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js -y
+1083162 1063511     969 /home/mike/.local/lib/nexus/v1.0.0-rc.14/lib/core/harness-core --workspace /home/mike/nexus-code rpc
+1160452 1160401       2 /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/core/nexus-tui --live --sidecar /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js --node node -- -w /tmp/nexus-rc14-pty-run.d1b645/runs/s9/ws -e http://127.0.0.1:19127/v1 -m m
+1160455 1160452       2 node /tmp/nexus-rc14-pty.wHTfre/prefix/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js -w /tmp/nexus-rc14-pty-run.d1b645/runs/s9/ws -e http://127.0.0.1:19127/v1 -m m
+[   2.83s] SEND Ctrl-C
+[   3.53s] SEND Ctrl-C again -> quit
+tui alive: False
+after quit +6s:
+1063476 1063162    1049 /home/mike/.local/lib/nexus/v1.0.0-rc.14/lib/core/nexus-tui --live --sidecar /home/mike/.local/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js --node /home/mike/.config/nvm/versions/node/v24.21.0/bin/node -- -y
+1063511 1063476    1049 /home/mike/.config/nvm/versions/node/v24.21.0/bin/node /home/mike/.local/lib/nexus/v1.0.0-rc.14/lib/cli/dist/sidecar.js -y
+1083162 1063511     970 /home/mike/.local/lib/nexus/v1.0.0-rc.14/lib/core/harness-core --workspace /home/mike/nexus-code rpc

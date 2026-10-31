@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-72f965f9",
+  "sessionId": "task-72f965f9",
+  "id": "task-72f965f9",
+  "title": "Task task-72f965f9",
+  "workspacePath": "/tmp/nexus-rc14-pty-run-env-20261031T0530Z/tmp/nexus-rc14-pty-run.2r6XOS/runs/s9/ws",
+  "workspace": "/tmp/nexus-rc14-pty-run-env-20261031T0530Z/tmp/nexus-rc14-pty-run.2r6XOS/runs/s9/ws",
+  "model": "m",
+  "createdAt": "2026-10-31T03:35:57.743Z",
+  "updatedAt": "2026-10-31T03:36:00.232Z",
+  "status": "interrupted",
+  "lastTurn": {
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "NONE",
+    "finalOutputComplete": false,
+    "verification": null,
+    "interruption": {
+      "requestedAt": "2026-10-31T03:36:00.062Z",
+      "phase": "tool_settling",
+      "undispatchedToolCalls": 0,
+      "outstandingTool": "run_command",
+      "outstandingToolSettled": true
+    },
+    "inferenceFailure": null,
+    "steps": {
+      "used": 1,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": false,
+    "finishedAt": "2026-10-31T03:36:00.211Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 1
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unsupported",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 1,
+        "promptTokens": 4694,
+        "source": "client_estimate",
+        "clientEstimate": 4694,
+        "uncertainty": "the connection advertises no request counting"
+      }
+    },
+    "execution": "INTERRUPTED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "OPERATOR_INTERRUPT"
+  },
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "validationReceipts": [],
+  "unverifiedChangesPending": false,
+  "providerRecovery": null,
+  "objective": {
+    "version": 1,
+    "objective": "run it",
+    "objectiveSha256": "9dc5c61d793b51ed7b77d8439715a2569ea086d16288e95d7ffe0798225560aa",
+    "startedAt": "2026-10-31T03:35:57.998Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "run it",
+        "detail": "run it",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-31T03:35:57.998Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [
+        {
+          "key": "d3128561f53c494b",
+          "action": "run_command {\"command\":\"sleep 23.7; echo finished\"}",
+          "actionId": "b70d74cf649d8d26",
+          "actionKind": "external",
+          "outcomeClass": "deterministic_failure",
+          "state": "8292b51f4851bdb5",
+          "count": 1,
+          "firstStep": 1,
+          "lastStep": 1,
+          "outcome": "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach."
+        }
+      ],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [
+        {
+          "step": 1,
+          "at": "2026-10-31T03:36:00.075Z",
+          "kind": "run_command",
+          "detail": "run_command {\"command\":\"sleep 23.7; echo finished\"} -> Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach."
+        }
+      ],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "8292b51f4851bdb5"
+      ],
+      "seenObservations": [
+        "d3128561f53c494b"
+      ],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "incomplete",
+      "reason": "OPERATOR_INTERRUPT",
+      "remaining": [],
+      "at": "2026-10-31T03:36:00.211Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "tokenStats": {
+    "prompt": 4694,
+    "completion": 39,
+    "total": 4733,
+    "requests": 1,
+    "reportedRequests": 0,
+    "estimatedRequests": 1
+  },
+  "cognitiveRouting": {
+    "activeTier": "planner",
+    "tokenStats": {
+      "prompt": 0,
+      "completion": 0,
+      "total": 0
+    }
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "cdd61df9a6d19f2413eda3752544f90f6e18f21d11775129fda4245e379b1d3f",
+    "offset": 3542,
+    "bytes": 474,
+    "count": 4
+  }
+}

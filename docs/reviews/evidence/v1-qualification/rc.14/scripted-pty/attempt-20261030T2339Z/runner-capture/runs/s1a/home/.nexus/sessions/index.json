@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-30T23:37:51.223Z",
+  "sessions": {
+    "session_20261030_233718_mmjhpiy5": {
+      "id": "session_20261030_233718_mmjhpiy5",
+      "cleanId": "session_20261030_233718_mmjhpiy5",
+      "title": "say hello",
+      "updatedAt": "2026-10-30T23:37:51.158Z",
+      "workspace": "/tmp/nexus-rc14-pty-run.9EmZHf/runs/s1a/ws",
+      "messageCount": 2,
+      "mtime": 1793403471222,
+      "pinned": false
+    }
+  }
+}

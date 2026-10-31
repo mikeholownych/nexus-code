@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 2,
+  "taskId": "task-b781494e",
+  "sessionId": "task-b781494e",
+  "id": "task-b781494e",
+  "title": "Task task-b781494e",
+  "workspacePath": "/tmp/nexus-rc14-pty-run.sh5bQP/runs/s1a/ws",
+  "workspace": "/tmp/nexus-rc14-pty-run.sh5bQP/runs/s1a/ws",
+  "model": "m",
+  "createdAt": "2026-10-30T23:43:17.160Z",
+  "updatedAt": "2026-10-30T23:43:50.092Z",
+  "status": "interrupted",
+  "lastTurn": {
+    "providerRecovery": [
+      {
+        "state": "CANCELLED",
+        "step": 1,
+        "startedAt": "2026-10-30T23:43:22.947Z",
+        "updatedAt": "2026-10-30T23:43:50.074Z",
+        "condition": "TEMPORARILY_UNAVAILABLE",
+        "submissions": [
+          {
+            "requestId": "e8860052-0323-417f-b8f0-a586d9b195a0",
+            "attempt": 1,
+            "failedAt": "2026-10-30T23:43:22.947Z",
+            "kind": "network_error",
+            "condition": "TEMPORARILY_UNAVAILABLE",
+            "execution": "UNKNOWN",
+            "message": "Inference request failed: fetch failed (cause: bad port)"
+          }
+        ],
+        "probes": 5,
+        "waitedMs": 23224,
+        "unknownReplays": 1,
+        "endpoint": "http://127.0.0.1:9/v1",
+        "everSucceeded": false,
+        "policy": {
+          "deadlineMs": 120000,
+          "maxDelayMs": 15000,
+          "maxUnknownReplays": 1
+        },
+        "reason": "operator cancelled while waiting for the provider"
+      }
+    ],
+    "acceptance": "NOT_REQUESTED",
+    "modelStop": "NONE",
+    "finalOutputComplete": false,
+    "verification": null,
+    "interruption": {
+      "requestedAt": "2026-10-30T23:43:50.072Z",
+      "phase": "provider_wait",
+      "undispatchedToolCalls": 0
+    },
+    "inferenceFailure": null,
+    "steps": {
+      "used": 1,
+      "max": null,
+      "limitReached": false
+    },
+    "unverifiedChangesPending": false,
+    "finishedAt": "2026-10-30T23:43:50.077Z",
+    "continuation": {
+      "segments": 1,
+      "segmentSteps": 30,
+      "stepsWithoutProgress": 0,
+      "cumulativeSteps": 1
+    },
+    "tokenAccounting": {
+      "contextLimit": 65536,
+      "contextSource": "client_default",
+      "outputAllowance": 8192,
+      "outputSource": "client_default",
+      "toolHeadroomPolicy": 4096,
+      "discovery": "unavailable",
+      "tokenCounting": "unsupported",
+      "lastRequest": {
+        "step": 1,
+        "promptTokens": 4656,
+        "source": "client_estimate",
+        "clientEstimate": 4656,
+        "uncertainty": "capability discovery unavailable (fetch failed)"
+      }
+    },
+    "execution": "INTERRUPTED",
+    "outcome": "NOT_ESTABLISHED",
+    "reason": "OPERATOR_INTERRUPT"
+  },
+  "activePlan": [],
+  "milestones": [],
+  "worktreeBinding": null,
+  "candidateId": null,
+  "validationReceipts": [],
+  "unverifiedChangesPending": false,
+  "providerRecovery": null,
+  "objective": {
+    "version": 1,
+    "objective": "say hello",
+    "objectiveSha256": "3cad3da3dbbe1c106b3219f6c278a565f411cee74f0848956aff65d3df4846a7",
+    "startedAt": "2026-10-30T23:43:22.744Z",
+    "requirements": [
+      {
+        "id": "R1",
+        "text": "say hello",
+        "detail": "say hello",
+        "status": "open",
+        "source": "objective",
+        "evidence": [],
+        "updatedAt": "2026-10-30T23:43:22.744Z"
+      }
+    ],
+    "scopeChanges": [],
+    "steering": [],
+    "verification": [],
+    "continuation": {
+      "segments": 1,
+      "totalSteps": 1,
+      "lastProgressStep": 0
+    },
+    "amendments": [],
+    "execution": {
+      "version": 1,
+      "cumulativeSteps": 1,
+      "turns": 1,
+      "stepsWithoutProgress": 0,
+      "lastProgressStep": 0,
+      "repetitions": [],
+      "progress": [],
+      "stagnation": [],
+      "failedApproaches": [],
+      "interventions": [],
+      "compactions": [],
+      "lowYieldCompactions": 0,
+      "seenStates": [
+        "116b23a74c1c9ed2"
+      ],
+      "seenObservations": [],
+      "seenLedgerStates": [
+        "ed10ae238bb06a30"
+      ],
+      "evicted": {
+        "states": 0,
+        "observations": 0,
+        "ledgerStates": 0,
+        "repetitions": 0,
+        "events": 0
+      }
+    },
+    "outcome": {
+      "status": "incomplete",
+      "reason": "OPERATOR_INTERRUPT",
+      "remaining": [],
+      "at": "2026-10-30T23:43:50.077Z"
+    }
+  },
+  "findings": [],
+  "history": {
+    "complete": true,
+    "compactions": 0,
+    "archivedMessages": 0,
+    "committedCompactions": []
+  },
+  "tokenStats": {
+    "prompt": 0,
+    "completion": 0,
+    "total": 0,
+    "requests": 0,
+    "reportedRequests": 0,
+    "estimatedRequests": 0
+  },
+  "cognitiveRouting": {
+    "activeTier": "planner",
+    "tokenStats": {
+      "prompt": 0,
+      "completion": 0,
+      "total": 0
+    }
+  },
+  "messageLog": {
+    "schemaVersion": 2,
+    "sha256": "7b8d305b7a2d3ca4430c577c57f054879fbb892296e4a4ddf917e1d9adb575a7",
+    "offset": 1,
+    "bytes": 3067,
+    "count": 2
+  }
+}
