@@ -6,9 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
-## [v1.1.0] - Unreleased
+## [v1.1.0] - 2026-10-31
 
-See [`docs/releases/v1.1.0.md`](docs/releases/v1.1.0.md) for full release notes. Scope and acceptance:
+See [`docs/releases/v1.1.0.md`](docs/releases/v1.1.0.md) (and candidate notes [`docs/releases/v1.1.0-rc.1.md`](docs/releases/v1.1.0-rc.1.md)) for full release notes. Scope and acceptance:
 [`docs/v1.1.0/SPEC.md`](docs/v1.1.0/SPEC.md), [`docs/v1.1.0/REQUIREMENTS.md`](docs/v1.1.0/REQUIREMENTS.md).
 
 ### Added
