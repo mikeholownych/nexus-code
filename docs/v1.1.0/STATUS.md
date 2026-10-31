@@ -5,7 +5,8 @@ checkpoint; never record a state the evidence does not support.
 
 Last updated: 2026-10-31T18:50Z
 Branch: `v1/v11-lead-program` · Worktree: `/home/mike/nexus-wt/v11-lead`
-Baseline: `origin/main` `c7d0b003` · `v1.0.0` tag `501eab68` (published 2026-10-31T11:22Z)
+Baseline: `origin/main` `7b49e6ff` (moved from `c7d0b003` mid-review; see §5) ·
+`v1.0.0` tag `501eab68` (published 2026-10-31T11:22Z)
 
 ---
 
@@ -44,6 +45,9 @@ Branch `v1/v11-lead-program`, based on `origin/main` `c7d0b003`.
 | `d2de3941` | WP-1..WP-3: schema v2 + migration + strict specs + terminal safety; deterministic parallel due-sets; batch runner, integration queue, evidenced receipts |
 | `844854cc` | WP-4..WP-7: typed message channel; replay; estimate provenance; v1.1 ledger; documentation reconciliation |
 | `e22ed4c9` | Independent-review fixes (slot validation, per-recipient delivery, WORK_INTEGRATED, save guard, quarantine, tests) |
+| `ade106b4` | Real v1.0.0 migration fixture; defect dispositions |
+| `fa63a482` | Merge of `origin/main` `7b49e6ff`; README conflict resolved; competing scope recorded |
+| `003d5f7e` | §2.5 dispositions for the parallel post-v1 roadmap; Q6 |
 | (this commit) | STATUS/execution record update |
 
 | WP | Title | State | Evidence |
@@ -114,6 +118,8 @@ evidence — the numbers must be copied here when it finishes).
 | v1.0.0 release notes/CHANGELOG were stale at publication | operators read a published release that says it is unreleased; CHANGELOG now correct for v1.0.0, release body still stale on GitHub | open (Q2) |
 | `git diff --exit-code -- cli/dist` in CI is a no-op (dist is untracked) | the step proves nothing | open, documented (`ROADMAP-REVIEW.md` D-V11-07); changing CI needs owner approval |
 | v1.0 ledger `--enforce` requires a clean worktree | the gate cannot pass mid-branch; expected, and it is why the v1.1 ledger uses `--ledger` | by design |
+| Two documents on `main` claim "v1.1.0" (the four implemented proposals and the merged WP-11xx roadmap) | release naming and notes are blocked until the owner decides | open (Q6) |
+| `origin/main` moved during the review and now carries a TypeScript 7 dependency bump | verified: `tsc --noEmit` clean, `cli` build clean, 195/195 focused after `npm ci` on TS 7.0.2 | resolved, but the final suite must run on the merged commit |
 
 ## 6. Claims held
 
@@ -134,8 +140,9 @@ holding the suite claim; the claim's owner PID was gone but the claim was left f
    except Rust/security/packaging, which must be run before an RC.
 3. Run `cargo test --locked`, `scripts/security_gates.sh`, and the packaging smoke.
 4. Prepare the RC candidate (version bump to `1.1.0-rc.1`, `docs/releases/v1.1.0-rc.1.md`) **without tagging**.
-5. Request the owner decision Q1 (stable release under inherited v1.0.0 gaps) and Q2 (v1.0.0 documentation hotfix)
-   with the candidate and evidence in hand. Do not tag, publish or deploy without it.
+5. Request the owner decisions Q1 (stable release under inherited v1.0.0 gaps), Q2 (v1.0.0 documentation hotfix) and
+   Q6 (which document set is v1.1.0) with the candidate and evidence in hand. Do not tag, publish or deploy without
+   them.
 
 ## 8. Resumption checklist
 
