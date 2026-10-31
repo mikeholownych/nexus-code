@@ -16,7 +16,7 @@
 		"test": "node test/substrate-adapter.test.mjs && node test/restricted-code-executor.test.mjs && node test/real-agent-runner.test.mjs && node test/demo-smoke.test.mjs"
   },
   "dependencies": {
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   },
   "license": "MIT"
 }
