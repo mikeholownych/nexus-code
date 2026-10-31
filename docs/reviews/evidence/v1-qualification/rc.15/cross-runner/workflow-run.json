@@ -1,1 +1,18 @@
-{"conclusion":"success","createdAt":"2026-10-31T08:45:40Z","databaseId":41185904380,"event":"workflow_dispatch","headSha":"865e342d481d427c8ea7ecb0088fc5fda7e89f6f","startedAt":"2026-10-31T08:45:40Z","updatedAt":"2026-10-31T08:49:27Z","url":"https://github.com/mikeholownych/nexus-code/actions/runs/41185904380"}
+{
+  "conclusion": "success",
+  "createdAt": "2026-10-31T08:45:40Z",
+  "databaseId": 41185904380,
+  "event": "workflow_dispatch",
+  "headSha": "865e342d481d427c8ea7ecb0088fc5fda7e89f6f",
+  "startedAt": "2026-10-31T08:45:40Z",
+  "updatedAt": "2026-10-31T08:49:27Z",
+  "url": "https://github.com/mikeholownych/nexus-code/actions/runs/41185904380",
+  "artifact": {
+    "id": 13037095425,
+    "name": "nexus-repro-evidence-v1.0.0-rc.15",
+    "digest": "sha256:b758da840c323e67b1da7ed2df1aa730cfdab24b8de6a5d78555076f30a5a6bc",
+    "sizeInBytes": 1402,
+    "createdAt": "2026-10-31T08:49:24Z",
+    "expired": false
+  }
+}
