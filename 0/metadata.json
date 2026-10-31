@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M69K8NCNHEA7JFR8PGPY57P9",
+  "session_id": "47e461b3-2e0c-467f-ad6d-a36d7dcca78f",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-31T18:24:34.480703421Z",
+  "branch": "v1/v11-lead-program",
+  "checkpoints_count": 528,
+  "save_step_count": 1,
+  "files_touched": [
+    "cli/package.json"
+  ],
+  "agent": "Antigravity",
+  "model": "",
+  "turn_id": "a416746c0802",
+  "redaction": {
+    "replacements": 2814,
+    "layers": {
+      "betterleaks": 78,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 68,
+      "credentialed_uri": 1,
+      "entropy": 2680,
+      "key_context": 0,
+      "provider_token": 4,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 528
+  }
+}

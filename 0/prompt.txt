@@ -1,0 +1,257 @@
+Resume your Nexus Code v1.0.0 work after an unexpected power failure.
+
+The existing objective and approvals remain in force: complete the accepted plan, remediation, integration, qualification, independent and required human acceptance, and verified public v1.0.0 publication. Publication is authorized once every required gate passes. Do not request those approvals again.
+
+Recover your own work and coordinate with the other agents before starting new activity.
+
+1. Re-establish current state
+- Locate your repository, worktree, branch, and applicable AGENTS.md and CONCURRENCY.md.
+- Inspect HEAD, working changes, untracked files, interrupted Git operations, upstream branches, PRs, CI, and retained evidence.
+- Treat previous conversation checkpoints as leads. Verify their claims against current files and external state.
+- Preserve all uncommitted and unrelated work. Do not reset, clean, stash, recreate, or overwrite a checkout to make recovery easier.
+- Do not edit the shared dirty checkout at /home/mike/nexus-code or synced ChatGPT reference files.
+
+2. Recover ownership and interrupted work
+- Identify your previous slice and file claims in the shared Git directory on mike-dev.
+- A recorded PID or claim does not prove work is running after a reboot. Verify host identity, boot identity where available, process start time, command, and working directory before trusting a process or taking action.
+- Reconcile stale claims under CONCURRENCY.md and record ownership changes. Do not take another agent’s work without the required handoff.
+- Check for interrupted child processes, mounts, namespaces, temporary runtime installations, and partially written artifacts. Preserve diagnostic evidence and clean up only resources you can establish ownership of.
+- Distinguish application process-death tests from this actual power failure. Do not claim power-loss recovery passed without examining the resulting durable state.
+
+3. Resume the appropriate lane
+- Continue your existing claimed slice rather than duplicating another agent’s implementation.
+- Coordinate through existing authorized channels and shared claims. If another agent already completed your work, verify its implementation and evidence before selecting another unclaimed blocker.
+- Record your recovered worktree, branch, HEAD, PR, claims, interrupted activity, and next concrete action in the shared coordination record.
+
+Recovery leads from the last observed state—verify before relying on them:
+- Release coordinator chat: “Converge Nexus v1.0.0 release,” thread 01a14cb3-25b0-7883-b3a1-0fa7cc559f92 on mike-dev.
+- Last observed integration included PR #59 at merge commit 4fee040164522946e33814b94c61f53e4b711715.
+- Evaluator work was associated with PR #56 and RubyForest. Sandbox/resource enforcement and qualification-host readiness still required reconciliation. Preserve evaluator ownership and held-out isolation.
+- PR #60 concerned exact-RC qualification evidence enforcement. Independent review had raised a release-lifecycle deadlock; verify its current resolution.
+- Persistence work is draft PR #61, branch v1/plan-04-persistence-cost-split, local WSL worktree /var/tmp/nexus-persistence-split-9zuqphkl/source. Its last locally observed HEAD was c7e4f9b56057ef37ae78a2e6d000fa2a9c4b5ce3, which incorporated integration. Verify whether those latest commits reached the remote.
+- That persistence lane had implemented schema-2 message journals, guarded publication/retention/rollback, session integration, and process-recovery tests. A pre-reconciliation run passed 158 targeted tests. A prior benchmark measured p95 78.13 ms against the unchanged 100 ms limit; this is historical evidence requiring validation on the final source.
+- A full snapshot at 1f5d7c3 passed 281 Rust tests but failed 51 of 1,364 CLI tests. Identified causes included obsolete inline-message fixtures and missing local sandbox, scanner, SBOM, and release-TUI prerequisites. Some fixtures were subsequently corrected. This was not a passing full-suite result.
+- Relevant persistence evidence and logs were under docs/reviews/evidence/v1/ and /var/tmp/nexus-schema2-*; /tmp artifacts may have disappeared during reboot.
+- No accepted RC or published v1.0.0 had been established at the last checkpoint.
+
+4. Revalidate and continue
+- Resume an interrupted activity only if its actual process/job handle is still live. If it ended, retain its partial output, classify the result as incomplete, and rerun after restoring prerequisites.
+- Verify the required toolchain, runtime identity, build artifacts, sandbox/resource controls, and filesystem before testing.
+- Isolate HOME/XDG for builds, tests, and probes. Take SUITE, GATEWAY, and CLOUD claims as required. Run full suites against immutable snapshots.
+- Never read held-out task payloads in an implementation role, expose credentials, weaken thresholds, or convert infrastructure failures into passes.
+- Keep implemented, tested, independently accepted, installed-RC qualified, and published statuses separate.
+- Revalidate final source and artifact identities after reconciliation. Complete all required live, standalone, recovery, terminal, and frozen-workload acceptance gates before release.
+
+Start with a brief factual recovery update, then take the next safe implementation or validation action. Continue the agent loop through implementation, testing, review, integration, and qualification. Stop only for verified completion, user cancellation, or a concrete external blocker; identify any blocker precisely without abandoning independent work that can still proceed.
+
+---
+
+continue with remaining work getting to v1.0.0 release
+
+---
+
+continue with coordination and evidence reconciliation
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+perform independent review on any other agent's work that's pending review.
+
+---
+
+PRs 74, 75, 76, and 77 have been updated. Re-run reviews.
+
+---
+
+continue with coordination and evidence reconciliation
+
+---
+
+continue with coordination and evidence reconciliation
+
+---
+
+review PR 61
+
+---
+
+what is genuinely still missing to get to rc1
+
+---
+
+perform independent review on any other agent's work that's pending review.
+
+---
+
+coordinate with other agents on integration work
+
+---
+
+perform independent review on any other agent's work that's pending review.
+
+---
+
+review pr 89
+
+---
+
+- Wrong commit ID: the review gives the head as 7bb359d57a9f7335930b8095bdf63e77c8e96dc6. Git can't find that object even after a fresh fetch. The PR's real head is 7bb359d5c4ddf82c1fdb4e01419c41b32fae6d81. Only the first 8 characters match, so the reviewer
+    probably expanded the short ID by hand instead of reading it from git.
+  - Why it matters: a review has to name the exact commit it covers before it can gate a merge. As written, this one doesn't name any real commit.
+  - The content is fine: the review describes the two fixes and the new regression test correctly. It reports 27/27 egress tests and 41/41 durable-continuity tests, and it confirms CodeQL shows no alerts on the branch. So this looks like a bookkeeping slip, not a
+    review of different code.
+
+---
+
+perform independent review on any other agent's work that's pending review.
+
+---
+
+check in with the orchestrator on what you can help with
+
+---
+
+/goal continue collaboration. the goal is successful rc.1 release
+
+---
+
+continue
+
+---
+
+A review of LangSmith has been completed ("/home/mike/nexus-code/docs/v1.0.0/LANGSMITH_REVIEW.md"). provide an independent review of that and determine a roadmap for post v1.0.0 development
+
+---
+
+proceed
+
+---
+
+I meant proceed with the post v1.0.0 documentation
+
+---
+
+For the post v1.0.0 documentatio, how can Nexus increase perceived value even more? How can Nexus differentiate from other clients?
+
+---
+
+would integrating gbnf tool calling post v1.0.0 be of value?
+
+---
+
+proceed with adding the gbnf tool processing to the roadmap as per above.
+
+---
+
+Also, add the new Dependabot PRs to the v1.1.0 plan
+
+---
+
+One of the things that I had specifically requested during the v1.0.0 planning was to ensure no technical debt.. it needs to be re-iterated that there is to be NO deprecated packages used, ever!
+
+---
+
+You're approved for the Composio Startup Program
+External
+Inbox
+
+Composio Startup Program <startups@agents.composiomail.com>
+12:35 (10 minutes ago)
+to me
+
+Hi Mike,
+
+Good news. You're approved for the Composio Startup Program, with six months of the Pro plan on us.
+
+Add app integration with Composio to the roadmap, where appropriate.
+
+---
+
+additional PRs keep being added before rc.1 tag is cut.. help ensure the release actually gets to terminal state
+
+---
+
+dependabot PRs are expressly deferred to v1.1.0
+
+---
+
+proceed
+
+---
+
+run a perpetual loop to review any work as it lands
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+what is stll outstanding to get to a stable v1.0.0
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+This work has been going on for WAY too long. We need to move toward an actual v1.0.0 release!
+
+---
+
+proceed
+
+---
+
+continue working collaboratively with the other agents actively driving the v1.0.0 release. Work has been ongoing toward v1.0.0 for almost 11 days now. This is unacceptable. We need to land this!
+
+---
+
+proceed
