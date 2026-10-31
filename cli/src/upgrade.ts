@@ -23,6 +23,7 @@ import {
 import { verifyInstalledRuntime } from "./upgrade_health.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "./core/state.js";
 import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
+import { safeTerminal } from "./ui.js";
 import {
   UpgradeJournalEntry,
   readJournal,
@@ -44,7 +45,7 @@ export const DEFAULT_RELEASE_BASE_URL = `https://github.com/${CANONICAL_REPO}/re
 /** Redact secrets from upgrade errors while preserving ordinary diagnostics verbatim. */
 export function formatUpgradeDiagnostic(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return redactDiagnosticForOutput(message);
+  return safeTerminal(redactDiagnosticForOutput(message));
 }
 
 export type InstallProvenance = "packaged" | "development" | "package-manager" | "unsupported";

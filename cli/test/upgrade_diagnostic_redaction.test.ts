@@ -31,3 +31,18 @@ test("suppresses upgrade diagnostics if canonical credential classification fail
     InformationFlowBoundary.setGlobalInstance(original);
   }
 });
+
+test("redacts credentials before escaping terminal controls in upgrade diagnostics", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  const secret = "synthetic_upgrade_terminal_secret_aa71";
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary({ explicitSecrets: [secret] }));
+  try {
+    const formatted = formatUpgradeDiagnostic(new Error(`failed ${secret}\u001b[31mred\u001b[0m\u0007\u0085\u202e`));
+    assert.equal(formatted.includes(secret), false);
+    assert.doesNotMatch(formatted, /[\u0000-\u001f\u007f-\u009f\u202a-\u202e]/);
+    assert.match(formatted, /REDACTED/);
+    assert.match(formatted, /␛\[31mred␛\[0m␇<U\+0085><U\+202E>/);
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
