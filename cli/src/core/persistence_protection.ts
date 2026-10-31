@@ -215,6 +215,10 @@ export function redactTaskStateForPersistence<T extends {
     } : {}),
   };
   const protectedValue = redactForPersistence(masked);
+  if (preserveOperationGitPaths &&
+      Object.keys(operationGit.units ?? {}).length !== Object.keys(protectedValue.operation.git.units ?? {}).length) {
+    throw new Error("Operation git unit identities collide during persistence protection");
+  }
   return {
     ...protectedValue,
     workspacePath: selectedWorkspace.value,

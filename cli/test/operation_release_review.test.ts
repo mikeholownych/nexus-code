@@ -225,6 +225,31 @@ test("Git unit restoration keeps protected keys and branches while restoring onl
   assert.equal(unit.baseCommit, plan.baseCommit);
 });
 
+test("Git unit restoration fails closed when protected unit IDs collide", (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-git-collision-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+  execFileSync("git", ["config", "user.email", "t@t.invalid"], { cwd: workspace });
+  execFileSync("git", ["config", "user.name", "t"], { cwd: workspace });
+  fs.writeFileSync(path.join(workspace, "base.txt"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["commit", "-qm", "base"], { cwd: workspace });
+
+  const store = new OperationStore(workspace, path.join(workspace, "tasks"), workspace);
+  const op = newOperation("op-unit-collision", "reject protected collisions", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  const plan = planOperationGit(workspace, op.id);
+  op.git = newOperationGitState(plan);
+  const first = `ghp_${"A".repeat(36)}`;
+  const second = `ghp_${"B".repeat(36)}`;
+  op.git.units = {
+    [first]: { branch: "nexus/first", worktree: path.join(plan.baseDir, "units", "first"), baseCommit: plan.baseCommit },
+    [second]: { branch: "nexus/second", worktree: path.join(plan.baseDir, "units", "second"), baseCommit: plan.baseCommit },
+  };
+
+  assert.throws(() => store.save(op), /Sensitive-data protection|collid|protected unit/i);
+  assert.equal(fs.existsSync(store.manager.getStateFilePath(op.id)), false, "a colliding record must not be published");
+});
+
 test("operation version preflight honors a pending restore barrier for load and save", (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-restore-barrier-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
