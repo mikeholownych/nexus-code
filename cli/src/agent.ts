@@ -4921,6 +4921,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     };
 
     const effectiveTaskId = this.activeWorktree?.taskId || this.currentTaskId;
+    // Worktree task IDs scope tool authority and execution receipts, but durable state is
+    // intentionally keyed by the parent session ID (see checkpointDurableState). Keep the
+    // operation journal on that durable identity so recordOperationStart/End can find the
+    // state initialized before a speculative worktree is created.
+    const durableTaskId = this.currentTaskId;
     if (typeof (this.client as any)?.setTaskId === "function") this.client.setTaskId(effectiveTaskId);
     if (typeof (this.plannerClient as any)?.setTaskId === "function") this.plannerClient.setTaskId(effectiveTaskId);
     if (typeof (this.coderClient as any)?.setTaskId === "function") this.coderClient.setTaskId(effectiveTaskId);
@@ -4929,9 +4934,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     // operation's change only and never includes edits already in the working tree.
     const diffTarget = this.observer?.onFileChange && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
     const before = diffTarget ? snapshot(diffTarget) : undefined;
-    if (this.durable && this.stateManager && effectiveTaskId) {
+    if (this.durable && this.stateManager && durableTaskId) {
       try {
-        this.stateManager.recordOperationStart(effectiveTaskId, {
+        this.stateManager.recordOperationStart(durableTaskId, {
           invocationId: call.id,
           seq: operationSeq,
           toolName,
@@ -4992,9 +4997,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
     }
 
-    if (this.durable && this.stateManager && effectiveTaskId) {
+    if (this.durable && this.stateManager && durableTaskId) {
       try {
-        this.stateManager.recordOperationEnd(effectiveTaskId, call.id, {
+        this.stateManager.recordOperationEnd(durableTaskId, call.id, {
           success: receipt.success,
           error: receipt.error,
         }, operationSeq);
