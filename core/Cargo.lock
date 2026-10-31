@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "1.0.0-rc.15"
+version = "1.0.0"
 dependencies = [
  "clap",
  "crossterm",

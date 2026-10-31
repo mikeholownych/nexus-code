@@ -1,6 +1,6 @@
 {
   "name": "nexus-code-harness",
-  "version": "1.0.0-rc.15",
+  "version": "1.0.0",
   "description": "High-Performance Autonomous Local AI Coding Harness (Codex / Claude-Code style) powered by Rust + TypeScript",
   "scripts": {
     "build:core": "cargo build --release --manifest-path core/Cargo.toml",
