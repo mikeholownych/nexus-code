@@ -178,7 +178,7 @@ The release-tools lock previously resolved minimatch 10.2.6 and glob 13.0.6;
 the patched advisory versions are minimatch 11.0.1 and glob 14.0.2. npm root
 `overrides` are a supported way to select patched transitive versions, even
 when parent package ranges do not include those versions. This candidate adds
-those two lock-only overrides and resolves the release-tools lock to the
+those two transitive-only overrides and resolves the release-tools lock to the
 patched versions. A static consumer/API audit found current visible callsites
 use `minimatch()`, `Minimatch`, `.match()`, `.negate`, `.globParts`, and the
 top-level `glob()` API; the patched packages retain those entry points. Some
@@ -197,10 +197,15 @@ runs only release-tools installation and notice generation in
 (Node 24.22.2/npm 11.19.1). The existing release and reproducibility jobs
 compare package archive, checksum, notices, SBOM, and installer outputs; those
 comparisons must pass on the integrated candidate to establish that the runtime
-split preserves output semantics. The candidate now requires Docker for local
-notice generation as well as CI; CI already uses Docker for the pinned Rust
-build image, but local packaging environments without Docker need an explicit
-compatibility decision. No tests or builds were run while SUITE was held.
+split preserves output semantics. Docker remains the default runtime for
+release-tools installation and notice generation. For a Dockerless local
+package run, `NEXUS_RELEASE_TOOLS_NODE24_BIN` may name a caller-supplied Node
+24.22.2/npm 11.19.1 `bin` directory; the script checks both versions and uses
+that PATH only for release-tools installation and notice generation. CLI
+install/build continues to use the existing Node 22/npm 10 PATH. A full local
+Dockerless package still requires the existing explicit
+`NEXUS_ALLOW_HOST_RUST_BUILD=1` opt-in. These local commands are not the release
+reproducibility evidence. No tests or builds were run while SUITE was held.
 Sources: [minimatch advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249), [glob advisory](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4), [checker releases](https://github.com/RSeidelsohn/license-checker-rseidelsohn/releases), [npm overrides documentation](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#overrides).
 
 ## Evidence limits

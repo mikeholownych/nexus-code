@@ -133,20 +133,41 @@ RELEASE_TOOLS="$WORK/release-tools"
 mkdir -p "$RELEASE_TOOLS"
 cp "$ROOT/scripts/release-tools/package.json" "$ROOT/scripts/release-tools/package-lock.json" "$RELEASE_TOOLS/"
 node "$ROOT/scripts/check_deprecated_lock.mjs" "$ROOT/scripts/release-tools/package-lock.json"
-command -v docker >/dev/null || { echo "docker is required for the isolated, digest-pinned Node 24 release-tools runtime" >&2; exit 2; }
-docker run --rm --pull=always --platform linux/amd64 \
-  --user "$(id -u):$(id -g)" \
-  --mount "type=bind,src=$RELEASE_TOOLS,dst=/release-tools" \
-  --mount "type=bind,src=$PKG/lib/cli,dst=/package,readonly" \
-  --workdir /release-tools \
-  --env HOME=/tmp \
-  "$APPROVED_RELEASE_TOOLS_IMAGE" \
-  sh -ec '
-    test "$(node --version)" = "v24.22.2"
-    test "$(npm --version)" = "11.19.1"
-    npm ci --ignore-scripts >&2
-    exec ./node_modules/.bin/license-checker-rseidelsohn --production --plainVertical --start /package
-  ' > "$WORK/notices-npm.txt"
+if [[ -n "${NEXUS_RELEASE_TOOLS_NODE24_BIN:-}" ]]; then
+  RELEASE_TOOLS_NODE="$NEXUS_RELEASE_TOOLS_NODE24_BIN/node"
+  RELEASE_TOOLS_NPM="$NEXUS_RELEASE_TOOLS_NODE24_BIN/npm"
+  [[ -x "$RELEASE_TOOLS_NODE" && -x "$RELEASE_TOOLS_NPM" ]] || {
+    echo "NEXUS_RELEASE_TOOLS_NODE24_BIN must contain executable node and npm binaries" >&2
+    exit 2
+  }
+  RELEASE_TOOLS_PATH="$NEXUS_RELEASE_TOOLS_NODE24_BIN:$PATH"
+  [[ "$("$RELEASE_TOOLS_NODE" --version)" = "v24.22.2" ]] || {
+    echo "release tools require Node v24.22.2" >&2
+    exit 2
+  }
+  [[ "$(PATH="$RELEASE_TOOLS_PATH" "$RELEASE_TOOLS_NPM" --version)" = "11.19.1" ]] || {
+    echo "release tools require npm 11.19.1" >&2
+    exit 2
+  }
+  PATH="$RELEASE_TOOLS_PATH" "$RELEASE_TOOLS_NPM" ci --ignore-scripts --prefix "$RELEASE_TOOLS" >&2
+  PATH="$RELEASE_TOOLS_PATH" "$RELEASE_TOOLS/node_modules/.bin/license-checker-rseidelsohn" \
+    --production --plainVertical --start "$PKG/lib/cli" > "$WORK/notices-npm.txt"
+else
+  command -v docker >/dev/null || { echo "docker is required for the isolated, digest-pinned Node 24 release-tools runtime" >&2; exit 2; }
+  docker run --rm --pull=always --platform linux/amd64 \
+    --user "$(id -u):$(id -g)" \
+    --mount "type=bind,src=$RELEASE_TOOLS,dst=/release-tools" \
+    --mount "type=bind,src=$PKG/lib/cli,dst=/package,readonly" \
+    --workdir /release-tools \
+    --env HOME=/tmp \
+    "$APPROVED_RELEASE_TOOLS_IMAGE" \
+    sh -ec '
+      test "$(node --version)" = "v24.22.2"
+      test "$(npm --version)" = "11.19.1"
+      npm ci --ignore-scripts >&2
+      exec ./node_modules/.bin/license-checker-rseidelsohn --production --plainVertical --start /package
+    ' > "$WORK/notices-npm.txt"
+fi
 cat > "$PKG/THIRD_PARTY_NOTICES.txt" <<'EOF'
 ================================================================================
 Nexus Code Third-Party Software Notices and Licenses
