@@ -6,6 +6,8 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { OperationStore } from "../src/core/operation_runner.js";
+import { ConvergenceScheduler } from "../src/core/scheduler.js";
+import { ResourceRegistry } from "../src/core/resources.js";
 import { newOperation, type DurableOperationState } from "../src/core/operation.js";
 import {
   CURRENT_OPERATION_SCHEMA_VERSION,
@@ -74,6 +76,16 @@ test("the migrated state schedules exactly as the v1 state did", () => {
     (v1.units as Array<{ id: string; dependsOn: string[]; status: string }>).map((u) => ({ id: u.id, dependsOn: u.dependsOn, status: u.status })),
   );
   assert.equal(effectiveConcurrency(migrated), 1);
+
+  // The criterion is about scheduling, not shape: run the real scheduler over both and compare the due-sets.
+  const decide = (op: DurableOperationState) => {
+    const clock = { now: () => NOW };
+    const scheduler = new ConvergenceScheduler(op, new ResourceRegistry(op.resources, op.conditions, clock), clock.now);
+    const decision = scheduler.decide();
+    assert.equal(decision.kind, "run");
+    return decision.kind === "run" ? decision.assignments.map((a) => [a.unit.id, a.resource.id]) : [];
+  };
+  assert.deepEqual(decide(migrated), decide(asV1Document(state()) as DurableOperationState));
 });
 
 test("a record from a newer build is refused, not quarantined", (t) => {
@@ -90,6 +102,9 @@ test("a record from a newer build is refused, not quarantined", (t) => {
   fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
 
   assert.throws(() => store.load(op.id), UnsupportedOperationSchemaError);
+  // Every load path must agree; a status listing must not silently drop the operation either.
+  assert.throws(() => store.loadForInspection(op.id), UnsupportedOperationSchemaError);
+  assert.throws(() => store.list(), UnsupportedOperationSchemaError);
   assert.ok(fs.existsSync(file), "a newer record must stay readable, not be renamed away");
   assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".corrupt-")), []);
 });
@@ -115,6 +130,19 @@ test("structural invariants name the field and the unit", () => {
     mutate(op);
     assert.throws(() => validateOperationState(op), expected, label);
   }
+});
+
+test("a resource slot count out of range is refused at creation, so the record can always be reloaded", (t) => {
+  const dir = tmpdir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (const value of [0, 65, 1.5]) {
+    assert.throws(
+      () => newOperation("op", "o", [{ id: "u1", prompt: "x" }], [resource("r1", { maxConcurrentUnits: value })], NOW),
+      /resource 'r1'.maxConcurrentUnits must be an integer from 1 to 64/,
+    );
+  }
+  // A value the spec validator refuses must never reach the store; if it did, every later load would fail.
+  assert.throws(() => validateOperationSpec({ objective: "o", units: [{ id: "u1", prompt: "x" }], resources: [{ id: "r1", endpoint: "https://a.test", model: "m", maxConcurrentUnits: 0 }] }), OperationSpecError);
 });
 
 test("newOperation rejects an out-of-range concurrency and accepts a valid one", () => {
@@ -188,6 +216,7 @@ test("the spec validator rejects publish, unknown keys and a bad limit with an a
     [{ ...valid, units: [{ id: "u1", prompt: "x", role: "wizard" }] }, /unknown role 'wizard'/],
     [{ ...valid, units: [{ id: "u1", prompt: "x", requires: { minContexts: 1 } }] }, /unknown unit 'u1' requires key 'minContexts'/],
     [{ ...valid, units: [] }, /non-empty 'units' array/],
+    [{ ...valid, resources: [{ id: "r1", endpoint: "https://api.test", model: "m", maxConcurrentUnits: 99 }] }, /resource 'r1'.maxConcurrentUnits must be an integer from 1 to 64/],
     [{ ...valid, objective: "  " }, /non-empty 'objective'/],
   ];
   for (const [spec, expected] of cases) {
@@ -234,4 +263,20 @@ test("a tampered status renders as visible control pictures, never as an escape 
   const rendered = renderOperationView(buildOperationView(op), { width: 200 });
   assert.doesNotMatch(rendered, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
   assert.match(rendered, /␛/);
+});
+
+test("ACC-V11-SCHEMA-04: an invalid operation document is quarantined on load, never silently skipped", (t) => {
+  const dir = tmpdir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
+  const op = state();
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+  raw.operation.units[0].contextBudget = 0;
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+
+  assert.throws(() => store.load(op.id), /is invalid: .*contextBudget.*quarantined to/);
+  assert.equal(fs.existsSync(file), false, "the invalid record must be moved aside");
+  assert.equal(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".corrupt-")).length, 1);
 });

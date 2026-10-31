@@ -31,6 +31,8 @@ if (ledgerArg >= 0) {
   const ownDir = path.dirname(ledgerPath);
   if (path.resolve(ownDir) !== path.resolve(pkg)) {
     for (const file of fs.readdirSync(ownDir).filter((name) => name.endsWith(".md"))) {
+      // Never treat the ledger itself as the document that defines its own acceptance criteria.
+      if (path.resolve(path.join(ownDir, file)) === path.resolve(ledgerPath)) continue;
       specs.push(read(path.join(ownDir, file)));
     }
   }

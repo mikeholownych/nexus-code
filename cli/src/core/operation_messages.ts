@@ -20,9 +20,10 @@ export const MAX_MESSAGE_BODY = 4_000;
 
 const KINDS: ReadonlySet<string> = new Set(["request", "observation", "artifact", "verdict"]);
 const REF_KINDS: ReadonlySet<string> = new Set(["file", "receipt", "unit", "checkpoint"]);
-// C0 (except TAB/LF), DEL, C1: rejected at write time rather than stripped, so the sender learns the body was unsafe
-// instead of silently handing the recipient something different from what it sent.
-const UNSAFE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
+// C0 (except TAB/LF), CR, DEL, C1: rejected at write time rather than stripped, so the sender learns the body was
+// unsafe instead of silently handing the recipient something different from what it sent. CR is rejected because a
+// message body is rendered line-oriented in a prompt and in a terminal.
+const UNSAFE = /[\u0000-\u0008\u000b\u000c\u000d\u000e-\u001f\u007f-\u009f]/;
 
 /** A message the operation will not store. */
 export class MessageRejected extends Error {}
@@ -42,13 +43,19 @@ export interface PublishResult {
   dropped: OperationMessage[];
 }
 
+/**
+ * The next id. It comes from a durable counter, not from the surviving messages: a pruned message's id is cited by
+ * `OPERATION_MESSAGE` events, so reusing it would make two different messages share an id in the timeline.
+ */
 function nextId(state: DurableOperationState): string {
-  let highest = 0;
+  let highest = state.messageSeq ?? 0;
   for (const message of state.messages ?? []) {
     const match = /^msg-(\d+)$/.exec(message.id);
     if (match) highest = Math.max(highest, Number(match[1]));
   }
-  return `msg-${highest + 1}`;
+  const next = highest + 1;
+  state.messageSeq = next;
+  return `msg-${next}`;
 }
 
 /**
@@ -87,6 +94,7 @@ export function publishMessage(state: DurableOperationState, input: MessageInput
   const dropped: OperationMessage[] = [];
   while (all.length > MAX_MESSAGES) {
     // Drop a delivered message before an undelivered one: an undelivered message is still owed to a unit.
+    // Prefer a message no unit is owed any more; otherwise the oldest that has at least been seen once.
     const index = all.findIndex((candidate) => candidate.deliveredAt !== undefined);
     const [removed] = all.splice(index >= 0 ? index : 0, 1);
     dropped.push(removed);
@@ -95,10 +103,16 @@ export function publishMessage(state: DurableOperationState, input: MessageInput
   return { message, dropped };
 }
 
-/** Messages owed to `unitId`: addressed to it or to the operation, not from itself, oldest first, bounded per turn. */
+/**
+ * Messages owed to `unitId`: addressed to it or to the operation, not from itself, not already received by it, oldest
+ * first, bounded per turn. `to: "*"` means each unit receives it once — not that the first unit consumes it.
+ */
 export function undeliveredFor(state: DurableOperationState, unitId: string): OperationMessage[] {
   return (state.messages ?? [])
-    .filter((message) => message.deliveredAt === undefined && message.from !== unitId && (message.to === unitId || message.to === "*"))
+    .filter(
+      (message) =>
+        !message.deliveredTo?.includes(unitId) && message.from !== unitId && (message.to === unitId || message.to === "*"),
+    )
     .slice(0, MAX_MESSAGES_PER_TURN);
 }
 
@@ -106,9 +120,11 @@ export function undeliveredFor(state: DurableOperationState, unitId: string): Op
 export function markDelivered(state: DurableOperationState, ids: string[], unitId: string, at: string): void {
   const wanted = new Set(ids);
   for (const message of state.messages ?? []) {
-    if (!wanted.has(message.id) || message.deliveredAt !== undefined) continue;
-    message.deliveredAt = at;
-    message.deliveredTo = unitId;
+    if (!wanted.has(message.id)) continue;
+    const to = message.deliveredTo ?? [];
+    if (to.includes(unitId)) continue;
+    message.deliveredTo = [...to, unitId];
+    message.deliveredAt ??= at;
   }
 }
 

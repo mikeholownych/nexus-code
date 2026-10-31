@@ -61,11 +61,14 @@ test("messages are addressed, ordered and delivered at most once", () => {
 
   markDelivered(op, ["msg-1"], "b", new Date(40).toISOString());
   assert.deepEqual(undeliveredFor(op, "b").map((m) => m.id), ["msg-2"]);
-  assert.equal(op.messages!.find((m) => m.id === "msg-1")!.deliveredTo, "b");
+  assert.deepEqual(op.messages!.find((m) => m.id === "msg-1")!.deliveredTo, ["b"]);
+  // `*` is per recipient: one unit's delivery does not consume the broadcast for another.
+  assert.deepEqual(undeliveredFor(op, "c").map((m) => m.id), ["msg-1", "msg-3"]);
 
-  // Re-marking is idempotent: the first delivery record wins.
-  markDelivered(op, ["msg-1"], "c", new Date(50).toISOString());
-  assert.equal(op.messages!.find((m) => m.id === "msg-1")!.deliveredTo, "b");
+  // Re-marking is idempotent: one entry per recipient.
+  markDelivered(op, ["msg-1"], "b", new Date(50).toISOString());
+  markDelivered(op, ["msg-1"], "c", new Date(60).toISOString());
+  assert.deepEqual(op.messages!.find((m) => m.id === "msg-1")!.deliveredTo, ["b", "c"]);
 });
 
 test("a turn receives at most the per-turn cap, oldest first", () => {
@@ -111,7 +114,7 @@ test("ACC-V11-MAO-05: a completed unit's artifact reaches the next unit exactly 
 
   const second = seen.find((entry) => entry.unit === "b")!;
   assert.deepEqual(second.messages?.map((m) => m.id), [published.id], "b receives a's artifact once");
-  assert.equal(published.deliveredTo, "b");
+  assert.deepEqual(published.deliveredTo, ["b"]);
   assert.equal(seen.find((entry) => entry.unit === "a")!.messages, undefined, "a receives nothing it did not earn");
 
   // A resumed turn does not repeat a delivered message.

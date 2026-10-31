@@ -94,7 +94,12 @@ export function effectiveConcurrency(state: Pick<DurableOperationState, "policy"
  */
 export function validateOperationState(state: DurableOperationState): void {
   if (!Array.isArray(state.units)) throw new InvalidOperationStateError("operation record has no units array");
-  if (!state.policy || typeof state.policy !== "object") throw new InvalidOperationStateError(`operation ${state.id}: missing policy`);
+  for (const field of ["resources", "conditions", "events"] as const) {
+    if (!Array.isArray(state[field])) throw new InvalidOperationStateError(`operation ${state.id}: ${field} is not an array`);
+  }
+  if (!state.policy || typeof state.policy !== "object" || Array.isArray(state.policy)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: policy is not an object`);
+  }
 
   const ids = new Set<string>();
   for (const unit of state.units) {
@@ -120,10 +125,21 @@ export function validateOperationState(state: DurableOperationState): void {
   if (state.messages !== undefined) {
     if (!Array.isArray(state.messages)) throw new InvalidOperationStateError(`operation ${state.id}: messages is not an array`);
     for (const message of state.messages) {
-      if (!message || typeof message.id !== "string" || typeof message.body !== "string" || typeof message.from !== "string" || typeof message.to !== "string") {
-        throw new InvalidOperationStateError(`operation ${state.id}: a message is missing its id, from, to or body`);
+      if (
+        !message ||
+        typeof message.id !== "string" ||
+        typeof message.at !== "string" ||
+        typeof message.kind !== "string" ||
+        typeof message.body !== "string" ||
+        typeof message.from !== "string" ||
+        typeof message.to !== "string"
+      ) {
+        throw new InvalidOperationStateError(`operation ${state.id}: a message is missing its id, at, kind, from, to or body`);
       }
     }
+  }
+  if (state.messageSeq !== undefined && (!Number.isInteger(state.messageSeq) || state.messageSeq < 0)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: messageSeq must be a non-negative integer (got ${String(state.messageSeq)})`);
   }
   if (state.integrations !== undefined) {
     if (!Array.isArray(state.integrations)) throw new InvalidOperationStateError(`operation ${state.id}: integrations is not an array`);
@@ -147,6 +163,16 @@ function validateConcurrency(operationId: string, field: string, value: unknown)
 /** The policy field this build adds; kept here so the scheduler and the loader agree on the default and the bound. */
 export function validateOperationPolicy(policy: Partial<OperationPolicy>): void {
   validateConcurrency("(new)", "policy.maxConcurrentUnits", policy.maxConcurrentUnits);
+}
+
+/**
+ * Resource slots, validated wherever a resource enters the record. A value out of range must be refused at the door:
+ * discovering it at load would make an operation that was accepted once permanently unreadable.
+ */
+export function validateResourceSlots(resources: Array<{ id?: string; maxConcurrentUnits?: unknown }>): void {
+  for (const resource of resources) {
+    validateConcurrency("(new)", `resource '${resource.id ?? "?"}'.maxConcurrentUnits`, resource.maxConcurrentUnits);
+  }
 }
 
 /** Units whose resource is busy are still runnable; a unit that is dropped or complete is not. */

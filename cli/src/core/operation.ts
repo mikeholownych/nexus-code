@@ -39,7 +39,7 @@ import type { AgentRole } from "./roles.js";
 import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, WorkRequirements } from "./resources.js";
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
-import { CURRENT_OPERATION_SCHEMA_VERSION, validateOperationPolicy } from "./operation_schema.js";
+import { CURRENT_OPERATION_SCHEMA_VERSION, validateOperationPolicy, validateResourceSlots } from "./operation_schema.js";
 export { ConvergenceScheduler, DecisionRejected, isRequired } from "./scheduler.js";
 export {
   CURRENT_OPERATION_SCHEMA_VERSION,
@@ -50,6 +50,7 @@ export {
   effectiveConcurrency,
   migrateOperationState,
   validateOperationState,
+  validateResourceSlots,
 } from "./operation_schema.js";
 
 export type WorkUnitStatus = "RUNNABLE" | "RUNNING" | "PARKED" | "WAITING_ON_DEPENDENCY" | "COMPLETE" | "BLOCKED";
@@ -186,7 +187,9 @@ export type OperationEventType =
   | "INTEGRATION_QUEUED"
   | "INTEGRATION_SKIPPED"
   | "OPERATION_MESSAGE"
-  | "OPERATION_MESSAGE_DROPPED";
+  | "OPERATION_MESSAGE_DROPPED"
+  | "WORK_INTEGRATED"
+  | "WORKTREE_RETAINED";
 
 export interface OperationEvent {
   type: OperationEventType;
@@ -279,9 +282,10 @@ export interface OperationMessage {
   body: string;
   /** Pointers the recipient can read itself. Never content. */
   refs?: Array<{ kind: "file" | "receipt" | "unit" | "checkpoint"; ref: string }>;
-  /** Set when a unit's prompt included this message; a message is delivered at most once. */
+  /** Set when the first unit's prompt included this message. */
   deliveredAt?: string;
-  deliveredTo?: string;
+  /** Every unit that has received this message. `to: "*"` means each unit once, not the first unit only. */
+  deliveredTo?: string[];
 }
 
 /** What was integrated, and the evidence the merge was accepted with. */
@@ -327,6 +331,8 @@ export interface DurableOperationState {
   contextCheckpoints?: ContextCheckpoint[];
   /** Typed inter-unit messages, oldest first; bounded (see `operation_messages.ts`). */
   messages?: OperationMessage[];
+  /** Highest message id ever issued. Kept so a pruned id is never reused (events cite message ids). */
+  messageSeq?: number;
 }
 
 /** An option before it is numbered into a decision. */
@@ -415,6 +421,7 @@ export function newOperation(
   if (!units.some((u) => u.required !== false)) throw new Error("An operation needs at least one required work unit");
   assertAcyclic(units);
   validateOperationPolicy(policy);
+  validateResourceSlots(resources);
   const at = new Date(now).toISOString();
   return {
     schemaVersion: CURRENT_OPERATION_SCHEMA_VERSION,

@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { ConvergenceScheduler, newOperation, type DurableOperationState, type UnitRunResult, type WorkUnitSpec } from "../src/core/operation.js";
-import { OperationRunner, type UnitRunContext, type WorkUnitExecutor } from "../src/core/operation_runner.js";
+import { OperationRunner, OperationStore, type UnitRunContext, type WorkUnitExecutor } from "../src/core/operation_runner.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
 import { ResourceRegistry, type ResourceDescriptor } from "../src/core/resources.js";
 import { fakeClock } from "./helpers/provider_fixture.js";
@@ -67,12 +67,17 @@ test("a resource that declares two slots may serve two units", () => {
   assert.deepEqual(decision.assignments.map((a) => a.unit.id), ["a", "b"]);
 });
 
-test("ACC-V11-MAO-04: the same state always produces the same due-set", () => {
-  const scheduler = schedulerFor([unit("a"), unit("b", { dependsOn: ["a"] }), unit("c")], [res("r1"), res("r2")], { maxConcurrentUnits: 2 });
+test("ACC-V11-MAO-04: the same state always produces the same due-set, in the documented order", () => {
+  // b gates d (a long tail), a and c gate nothing: the order must put b first, then declaration order.
+  const units = [unit("a"), unit("b"), unit("d", { dependsOn: ["b"] }), unit("c")];
+  const scheduler = schedulerFor(units, [res("r1"), res("r2")], { maxConcurrentUnits: 2 });
   const first = JSON.stringify((scheduler.decide() as any).assignments.map((a: any) => [a.unit.id, a.resource.id]));
+  assert.deepEqual((scheduler.decide() as any).assignments.map((a: any) => a.unit.id), ["b", "a"], "critical path first, then declaration order");
   for (let i = 0; i < 1000; i++) {
     assert.equal(JSON.stringify((scheduler.decide() as any).assignments.map((a: any) => [a.unit.id, a.resource.id])), first);
   }
+  // Repeated calls must not flood the event ring with truncation notices.
+  assert.ok(scheduler.state.events.filter((e) => e.type === "CONCURRENCY_LIMIT").length <= 1);
 });
 
 test("the longest unfinished dependency chain is scheduled before independent work", () => {
@@ -188,6 +193,13 @@ test("ACC-V11-MAO-02/09: the same two units serialise on one resource", async ()
   assert.equal(h.maxActive(), 1, "one slot must never run two units");
 });
 
+test("ACC-V11-MAO-02: a policy limit of 1 serialises even when two resources are free", async () => {
+  const h = runnerFor([unit("a"), unit("b")], [res("r1"), res("r2")], async (u) => done(`${u.id} done`), { maxConcurrentUnits: 1 });
+  await h.runner.run();
+  assert.equal(h.state.status, "COMPLETE");
+  assert.equal(h.maxActive(), 1, "the operation limit binds before resource capacity");
+});
+
 test("ACC-V11-MAO-03: concurrency does not change the outcome of independent units", async () => {
   const run = async (limit: number) => {
     const h = runnerFor([unit("a"), unit("b")], [res("r1"), res("r2")], async (u) => done(`${u.id} done`), { maxConcurrentUnits: limit });
@@ -219,19 +231,32 @@ test("ACC-V11-MAO-08: cancelling a batch cancels every in-flight unit and leaves
   assert.deepEqual(h.state.units.map((u) => u.status), ["RUNNABLE", "RUNNABLE"]);
 });
 
-test("ACC-V11-MAO-07: a restart reconciles every unit that was in flight", async () => {
+test("ACC-V11-MAO-07: a restart reconciles every unit that was in flight, through the real store", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-v11-restart-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
   const clock = fakeClock();
   const state = newOperation("op-restart", "objective", [unit("a"), unit("b")], [res("r1"), res("r2")], clock.now(), { maxConcurrentUnits: 2 });
+  store.save(state);
+
+  // Two units were in flight when the previous process died: persisted exactly as the runner leaves them.
   for (const u of state.units) {
     u.status = "RUNNING";
     u.assignment = { resourceId: "r1", model: "model-r1", since: new Date(clock.now()).toISOString() };
   }
-  const executor: WorkUnitExecutor = { run: async (u) => done(`${u.id} done`) };
-  const runner = new OperationRunner(state, { executor, clock, persist: () => {} });
-  await runner.run();
-  assert.equal(state.status, "COMPLETE");
-  assert.deepEqual(state.units.map((u) => u.unknownResumes), [1, 1], "each interrupted unit resumes once");
-  assert.deepEqual(state.units.map((u) => u.runs), [1, 1], "no duplicated work");
+  store.save(state);
+
+  const ran: string[] = [];
+  const executor: WorkUnitExecutor = { run: async (u) => { ran.push(u.id); return done(`${u.id} done`); } };
+  // A fresh process: load from disk, never reuse the in-memory object.
+  const reloaded = store.load("op-restart");
+  await new OperationRunner(reloaded, { executor, clock, persist: (s) => store.save(s) }).run();
+
+  const final = store.load("op-restart");
+  assert.equal(final.status, "COMPLETE");
+  assert.deepEqual(final.units.map((u) => u.unknownResumes), [1, 1], "each interrupted unit resumes once");
+  assert.deepEqual(final.units.map((u) => u.runs), [1, 1], "no duplicated work");
+  assert.deepEqual(ran.sort(), ["a", "b"]);
 });
 
 test("ACC-V11-MAO-06: a failing review ends the operation BLOCKED, never COMPLETE", async () => {
@@ -311,7 +336,8 @@ test("ACC-V11-GIT-01/03: concurrent isolated units integrate serially with order
   assert.equal(state.status, "COMPLETE");
   const receipts = state.integrations ?? [];
   assert.equal(receipts.length, 2, "both units must integrate exactly once");
-  assert.deepEqual(receipts.map((r) => r.sequence).sort(), [1, 2], "receipts record merge order");
+  assert.deepEqual(receipts.map((r) => r.sequence), [1, 2], "receipts record merge order in the order they were merged");
+  assert.notEqual(receipts[0].candidate?.digest, receipts[1].candidate?.digest, "each candidate is the unit's own tree");
   for (const receipt of receipts) {
     assert.ok(receipt.candidate?.digest, "the receipt names the candidate it merged");
     assert.equal(receipt.candidate?.scope, "tree");
@@ -324,4 +350,30 @@ test("ACC-V11-GIT-01/03: concurrent isolated units integrate serially with order
   assert.equal(git(root, ["rev-parse", "HEAD"]), plan.baseCommit, "the operator checkout must not move");
   const unitsDir = path.join(plan.baseDir, "units");
   assert.deepEqual(fs.existsSync(unitsDir) ? fs.readdirSync(unitsDir) : [], [], "no unit worktree remains after a clean lifecycle");
+});
+
+test("ACC-V11-GIT-05: a worktree kept for ignored files is named in the event log", async (t) => {
+  const root = repo();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const clock = fakeClock();
+  const plan = planOperationGit(root, "op-git-retain");
+  const state = newOperation("op-git-retain", "objective", [unit("a")], [res("r1")], clock.now());
+  state.git = newOperationGitState(plan);
+  ensureIntegrationWorktree(plan, state.git);
+
+  const executor: WorkUnitExecutor = {
+    run: async (_u, _r, ctx) => {
+      fs.writeFileSync(path.join(ctx.workspace!, ".gitignore"), "*.log\n");
+      fs.writeFileSync(path.join(ctx.workspace!, "build.log"), "ignored output\n");
+      return { kind: "completed", summary: "kept a log", outcome: "NOT_REQUIRED" };
+    },
+  };
+  await new OperationRunner(state, { executor, clock, persist: () => {} }).run();
+
+  assert.equal(state.status, "COMPLETE");
+  const retained = state.events.find((e) => e.type === "WORKTREE_RETAINED");
+  assert.ok(retained, "a retained worktree must be named in the event log");
+  assert.match(retained!.message, /ignored files only/);
+  assert.equal((retained!.detail as any).reason, "ignored");
+  assert.ok(fs.existsSync(path.join((retained!.detail as any).worktree, "build.log")), "the ignored file must survive");
 });

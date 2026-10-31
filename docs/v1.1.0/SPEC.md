@@ -328,15 +328,16 @@ A violation is a corrupt record: quarantine it (existing behaviour) rather than 
 
 ### 4.5 Compatibility
 
-- Forward: a v1.0.0 build reading a v2 record sees an unknown inner `schemaVersion` but the envelope gate passes.
-  That is why D-V11-01 is fixed now; a v1.0.0 binary MUST NOT be asked to run a v2 operation. The CLI MUST refuse
-  to resume a v2 record when `CURRENT_OPERATION_SCHEMA_VERSION < record.schemaVersion`, which is the same
-  `UnsupportedOperationSchemaError` path.
+- Forward: a **v1.1.0** build refuses a record from a newer build (`UnsupportedOperationSchemaError`). A **v1.0.0**
+  binary, however, has no operation-document gate — the gate was added in v1.1.0 — so it will open a v2 record, ignore
+  the new fields, and can write it back without them. That is why the pre-migration copy exists and why downgrade is a
+  documented restore procedure, not an automatic one: restore `<record>.pre-migration-v1` before running a v1.0.0
+  binary against that operation.
 - Backward: v2 builds read every v1 record, and the migration is tested against a checked-in v1.0.0 fixture
   (§10, ACC-V11-SCHEMA-02).
-- The `--dag --json` view document keeps `schemaVersion: 1`; v1.1 adds fields to it, and a field addition that a
-  strict consumer could reject is a view-schema version bump. Because `additionalProperties: false` is used, adding
-  a field **is** a breaking change for validators: the view schema MUST be bumped to 2 and the constant with it.
+- The `--dag --json` view document is version **2** in v1.1 (it was 1). Because the schema uses
+  `additionalProperties: false`, adding `replay` is a breaking change for a strict validator, so the version and the
+  checked-in schema's `const` are bumped together (`OPERATION_VIEW_SCHEMA_VERSION`).
 
 ---
 
@@ -418,8 +419,9 @@ acceptable implementation because it runs under the `exec` effect, not `egress`.
 
 On the normal paths (`complete`, `cancel`), every unit worktree is removed unless it has uncommitted or ignored
 files, and the integration worktree is retained because it is the operator's inspection surface. The v1.1
-acceptance is therefore stated precisely: **no unit worktree remains after a clean lifecycle**, and any retained
-worktree is named in the final event log with its reason. The previous "leaves no worktree behind" claim was false.
+acceptance is therefore stated precisely: **no unit worktree remains after a clean lifecycle**, and every retained
+worktree is named in the event log with its reason (`WORKTREE_RETAINED`, detail `{ worktree, reason: "dirty" |
+"ignored" }`). The previous "leaves no worktree behind" claim was false.
 
 ### 5.7 Documentation corrections
 
@@ -572,11 +574,13 @@ until the TUI pane exists.
 |---|---|---|
 | `WORK_STARTED` (existing) | per unit, at assignment | unchanged |
 | `WORK_COMPLETED` (existing) | per unit, after apply | unchanged |
-| `INTEGRATION_QUEUED` | a unit's integration enqueued | `{ unitId, sequenceHint }` |
-| `INTEGRATION_SKIPPED` | queued integration skipped (unit cancelled/dropped) | `{ unitId, reason }` |
+| `INTEGRATION_QUEUED` | a unit's integration enqueued | `{ unitId }` |
+| `INTEGRATION_SKIPPED` | queued integration skipped (unit cancelled/dropped) | `{ unitId, detail: { reason } }` |
+| `WORK_INTEGRATED` | a completed unit's branch was merged | `{ unitId, detail: { integration: receipt } }` |
+| `WORKTREE_RETAINED` | disposal kept a worktree | `{ unitId, detail: { worktree, reason } }` |
 | `OPERATION_MESSAGE` | a message was published | `{ unitId: from, detail: { to, kind, id } }` — body is **not** logged |
-| `OPERATION_MESSAGE_DROPPED` | ring overflow dropped an undelivered message | `{ detail: { id, from, to, kind } }` |
-| `CONCURRENCY_LIMIT` | the due-set was truncated by the limit | `{ detail: { limit, eligible } }` |
+| `OPERATION_MESSAGE_DROPPED` | ring overflow dropped an undelivered message | `{ unitId: from, detail: { id, to, kind } }` |
+| `CONCURRENCY_LIMIT` | the due-set was truncated by the limit | `{ detail: { limit, eligible } }`; emitted once per distinct truncation, not per `decide()` call |
 
 Event bodies never include message content or provider output. `MAX_EVENTS` stays 300.
 
@@ -748,12 +752,13 @@ Parallelism MUST NOT multiply provider cost silently: the default is 1, and the 
 
 ### 12.2 Error text
 
-Every new error is one line, sanitised, and names the field and the remedy:
+Every new error is one line, sanitised, and names the field and the remedy. The CLI prints the message without a
+prefix and exits 2 for a spec the operator must fix:
 
-- `Operation spec error: git.publish is not supported in this version; remove it to start the operation.`
-- `Operation spec error: unknown unit key 'depends' in 'impl' (did you mean 'dependsOn'?).`
-- `Operation op-1234 was written by a newer Nexus (operation schema 3; this build supports 2). Upgrade Nexus to resume it.`
-- `policy.maxConcurrentUnits must be an integer from 1 to 64 (got 0).`
+- `git.publish is not supported in this version; remove it to start the operation.`
+- `unknown unit 'impl' key 'depends' (did you mean 'dependsOn'?)`
+- `operation record schema 3 is newer than this build supports (2); upgrade Nexus to open it`
+- `policy.maxConcurrentUnits must be an integer from 1 to 64 (got 0)`
 
 ### 12.3 Empty and degraded states
 

@@ -44,6 +44,9 @@ export class ConvergenceScheduler {
     private readonly onDiagnostic?: OperationDiagnosticHandler,
   ) {}
 
+  /** Last truncation signature reported, so repeated decide() calls do not flood the event ring. */
+  private concurrencyNotice?: string;
+
   unit(id: string): WorkUnit {
     const u = this.state.units.find((x) => x.id === id);
     if (!u) throw new Error(`Unknown work unit ${id}`);
@@ -145,12 +148,19 @@ export class ConvergenceScheduler {
     const assignments = this.assign(ordered, choices, reroutes);
     if (assignments.length) {
       const limit = effectiveConcurrency(this.state);
-      if (ordered.length > assignments.length && assignments.length >= limit) {
-        this.emit(
-          "CONCURRENCY_LIMIT",
-          `${ordered.length} units are runnable; starting ${assignments.length} (limit ${limit}).`,
-          { detail: { limit, eligible: ordered.length } },
-        );
+      const running = this.state.units.filter((u) => u.status === "RUNNING").length;
+      if (ordered.length > assignments.length && running + assignments.length >= limit) {
+        // One notice per distinct truncation, not one per decide() call: the scheduler is called repeatedly over the
+        // same state and the event ring holds 300 entries for the whole operation.
+        const signature = `${limit}|${running}|${ordered.map((u) => u.id).join(",")}`;
+        if (this.concurrencyNotice !== signature) {
+          this.concurrencyNotice = signature;
+          this.emit(
+            "CONCURRENCY_LIMIT",
+            `${ordered.length} units are runnable; starting ${assignments.length} (limit ${limit}).`,
+            { detail: { limit, eligible: ordered.length } },
+          );
+        }
       }
       return { kind: "run", assignments };
     }
@@ -251,9 +261,11 @@ export class ConvergenceScheduler {
       const capacity = Math.max(1, resource?.maxConcurrentUnits ?? 1);
       return (used.get(resourceId) ?? 0) < capacity;
     };
+    // Running units already count against the limit: the limit bounds units in flight, not units started this call.
+    const inFlight = this.state.units.filter((u) => u.status === "RUNNING").length;
     const out: Assignment[] = [];
     for (const unit of ordered) {
-      if (out.length >= limit) break;
+      if (inFlight + out.length >= limit) break;
       const sel = choices.get(unit.id);
       if (!sel) continue;
       // Preference order: the registry's chosen resource first, then the rest of its qualified list in registry order.

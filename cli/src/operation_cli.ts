@@ -16,7 +16,7 @@ import type { Command } from "commander";
 import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { ConvergenceScheduler, DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
-import { validateOperationPolicy } from "./core/operation_schema.js";
+import { validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
@@ -114,6 +114,11 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
     for (const resource of s.resources) {
       if (!resource || typeof resource !== "object" || Array.isArray(resource)) throw new OperationSpecError("each resource must be an object");
       rejectUnknown("resource", resource, RESOURCE_KEYS);
+      try {
+        validateResourceSlots([resource]);
+      } catch (error: any) {
+        throw new OperationSpecError(String(error?.message ?? error).replace(/^operation \(new\): /, ""));
+      }
     }
   }
   const unitIds = new Set<string>();

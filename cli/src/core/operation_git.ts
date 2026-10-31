@@ -415,6 +415,26 @@ export class OperationGit {
     if (entry) this.removeWorktree(entry.worktree, true);
   }
 
+  /**
+   * Unit worktrees that were deliberately kept instead of removed, with the reason. The operator is told about them:
+   * a retained worktree holds uncommitted or ignored work, so silently keeping it would hide work and silently
+   * removing it would destroy it.
+   */
+  preservedWorktrees(unitIds?: string[]): Array<{ unitId: string; worktree: string; reason: "dirty" | "ignored" }> {
+    const out: Array<{ unitId: string; worktree: string; reason: "dirty" | "ignored" }> = [];
+    for (const [unitId, entry] of Object.entries(this.state.units)) {
+      if (unitIds && !unitIds.includes(unitId)) continue;
+      if (!fs.existsSync(entry.worktree)) continue;
+      const status = gitResult(entry.worktree, ["status", "--porcelain", "--ignored"]);
+      if (!status.ok) out.push({ unitId, worktree: entry.worktree, reason: "dirty" });
+      else if (status.stdout.trim()) {
+        const tracked = gitResult(entry.worktree, ["status", "--porcelain"]);
+        out.push({ unitId, worktree: entry.worktree, reason: tracked.stdout.trim() ? "dirty" : "ignored" });
+      }
+    }
+    return out;
+  }
+
   /** A missing worktree is recoverable only when its retained branch is already merged. */
   canRecoverMissingWorktree(unitId: string): boolean {
     const entry = this.state.units[unitId];

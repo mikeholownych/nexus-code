@@ -132,6 +132,9 @@ export class OperationRunner {
     }
     this.reconcileIntegrated();
     this.scheduler.reconcileInterruptedRuns();
+    // Persist the interrupted-run accounting before the revalidation awaits: a crash in that window would otherwise
+    // lose an increment and let a repeatedly interrupted unit resume without ever reaching its budget.
+    if (this.state.units.some((unit) => unit.status === "RUNNABLE" && unit.unknownResumes > 0)) this.save();
     if (this.state.status === "WAITING" && this.state.wait && Date.parse(this.state.wait.wakeAt) <= this.clock.now()) {
       await this.revalidator.revalidate(signal);
     } else await this.revalidator.refresh(signal);
@@ -202,7 +205,10 @@ export class OperationRunner {
       }
       this.scheduler.finish(d);
       // A blocked operation keeps its unit worktrees: the retry/restart remedies run the unit again in them.
-      if (d.kind === "complete") this.git?.disposeAllUnits();
+      if (d.kind === "complete") {
+      this.reportPreservedWorktrees();
+      this.git?.disposeAllUnits();
+    }
       this.save();
       return this.state;
     }
@@ -431,15 +437,19 @@ export class OperationRunner {
         options: [{ label: "retry", action: { kind: "retry" } }],
       };
     }
-    this.state.integrations = [...(this.state.integrations ?? []), integration.receipt];
+    // ALREADY_INTEGRATED means a receipt for this unit already exists; appending a second one would double-count it.
+    if (integration.receipt.verification !== "ALREADY_INTEGRATED") {
+      this.state.integrations = [...(this.state.integrations ?? []), integration.receipt];
+    }
     this.scheduler.emit(
-      "WORK_COMPLETED",
+      "WORK_INTEGRATED",
       integration.receipt.verification === "NOT_RUN"
         ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (not re-verified).`
         : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}.`,
       { unitId: unit.id, detail: { integration: integration.receipt } },
     );
     this.save();
+    this.reportPreservedWorktrees([unit.id]);
     this.git!.disposeUnit(unit.id);
     this.save();
     return result;
@@ -515,6 +525,17 @@ export class OperationRunner {
     }
   }
 
+  /** Name every worktree that disposal will keep, so the event log explains what remains on disk and why. */
+  private reportPreservedWorktrees(unitIds?: string[]): void {
+    for (const entry of this.git?.preservedWorktrees(unitIds) ?? []) {
+      this.scheduler.emit(
+        "WORKTREE_RETAINED",
+        `${entry.unitId}: kept its isolated worktree at ${entry.worktree} (${entry.reason === "dirty" ? "uncommitted changes" : "ignored files only"}).`,
+        { unitId: entry.unitId, detail: { worktree: entry.worktree, reason: entry.reason } },
+      );
+    }
+  }
+
   private blockOnGit(reason: string): void {
     this.scheduler.finish({
       kind: "blocked",
@@ -531,6 +552,7 @@ export class OperationRunner {
 
   private cancelled(): DurableOperationState {
     this.scheduler.cancel();
+    this.reportPreservedWorktrees();
     this.git?.disposeAllUnits();
     this.save();
     return this.state;
