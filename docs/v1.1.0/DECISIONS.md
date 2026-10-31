@@ -316,9 +316,10 @@ bury v1.1 rows in a deferral list.
    change it.
 3. Git operations are fast enough that a serialised queue does not dominate a two-unit batch. Measured, not assumed,
    in the performance test.
-4. The v1.0.0 operation record shape is stable enough to check in as a fixture. If a real record cannot be captured
-   without an inference run, the fixture is synthesised from the documented v1 shape and labelled
-   `synthetic-documented` in the test name.
+4. The v1.0.0 operation record shape is stable enough to check in as a fixture. **Resolved:** a real record was
+   produced by running the `v1.0.0` tag's own `OperationStore.save` (no inference involved) and is checked in as
+   `cli/test/fixtures/operation-v1.json`; its only edit is the embedded workspace path, which the store binds a
+   record to. See that directory's README.
 
 ## 5. Open questions
 

@@ -280,3 +280,43 @@ test("ACC-V11-SCHEMA-04: an invalid operation document is quarantined on load, n
   assert.equal(fs.existsSync(file), false, "the invalid record must be moved aside");
   assert.equal(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".corrupt-")).length, 1);
 });
+
+test("a real v1.0.0 record captured from the v1.0.0 tag loads, migrates and schedules identically", (t) => {
+  const dir = tmpdir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const workspace = path.join(dir, "ws");
+  fs.mkdirSync(workspace, { recursive: true });
+  const baseDir = path.join(dir, "tasks");
+  fs.mkdirSync(baseDir, { recursive: true });
+
+  // Produced by running the v1.0.0 tag's own OperationStore (see the fixture's README); the only edit is the
+  // embedded workspace path, which the store binds a record to.
+  const fixturePath = path.join(cliDir, "test", "fixtures", "operation-v1.json");
+  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf-8"));
+  assert.equal(fixture.operation.schemaVersion, 1, "the fixture must be a v1.0.0 operation document");
+  assert.equal(fixture.messages, undefined, "a v1.0.0 envelope has no v2 message array");
+  fixture.workspacePath = workspace;
+  fixture.workspace = workspace;
+  const file = path.join(baseDir, `${fixture.taskId}.json`);
+  const bytes = Buffer.from(JSON.stringify(fixture));
+  fs.writeFileSync(file, bytes, { mode: 0o600 });
+
+  const store = new OperationStore(workspace, baseDir, dir);
+  const loaded = store.load(fixture.taskId);
+  assert.equal(loaded.schemaVersion, CURRENT_OPERATION_SCHEMA_VERSION);
+  assert.equal(loaded.id, "op-v100-fixture");
+  assert.deepEqual(loaded.units.map((u) => u.id), ["impl", "test"]);
+  assert.equal(loaded.units[0].status, "COMPLETE", "the recorded status survives the migration");
+  assert.equal(loaded.units[1].dependsOn[0], "impl");
+  assert.equal(loaded.policy.maxConcurrentUnits, undefined, "a v1.0.0 operation has no concurrency limit");
+  assert.equal(effectiveConcurrency(loaded), 1);
+
+  store.save(loaded);
+  assert.deepEqual(fs.readFileSync(`${file}.pre-migration-v1`), bytes, "the copy is the exact v1.0.0 record");
+  const decide = (op: DurableOperationState) => {
+    const clock = { now: () => NOW };
+    const decision = new ConvergenceScheduler(op, new ResourceRegistry(op.resources, op.conditions, clock), clock.now).decide();
+    return decision.kind === "run" ? decision.assignments.map((a) => [a.unit.id, a.resource.id]) : decision.kind;
+  };
+  assert.deepEqual(decide(loaded), [["test", "primary"]], "the migrated record schedules its runnable unit on the preferred resource");
+});
