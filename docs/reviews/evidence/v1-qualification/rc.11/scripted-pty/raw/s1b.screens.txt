@@ -1,0 +1,32 @@
+
+===== startup-default-endpoint @ 0.52s (100x30) =====
+error: unknown option '--sidecar'
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

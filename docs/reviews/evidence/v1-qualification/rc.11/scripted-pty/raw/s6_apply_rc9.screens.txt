@@ -1,0 +1,32 @@
+
+===== after-steer-turn @ 4.88s (100x30) =====
+ NEXUS   ws  ⎇ master  model m  mode: auto · sandbox: off · workspace: trusted
+› write two files
+
+↳ also mention cats
+  steering · applied
+
+  ✓ Created a.txt  +1 −0
+    ▎   1 + a
+
+  ✓ Created b.txt  +1 −0
+    ▎   1 + b
+
+Done.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠦ thinking · 0:03 · step 3 · esc cancels ──────────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it

@@ -1,0 +1,5 @@
+[   0.72s] SAW repl-prompt
+[   0.72s] SEND b'create hello.txt\r'
+[   0.92s] SEND typed ahead before the approval prompt
+[   2.65s] SAW approval-prompt
+[   5.65s] SEND Enter after prompt grace window

@@ -1,0 +1,4 @@
+[   4.00s] SCREEN startup-unreachable (100x30)
+[   4.01s] TYPE 'say hello\r' gap=0.05
+[ 118.92s] SAW turn-returned-to-idle
+[ 118.92s] SCREEN after-full-window (100x30)
