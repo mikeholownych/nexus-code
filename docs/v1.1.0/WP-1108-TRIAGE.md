@@ -38,11 +38,20 @@ current Dependabot proposals as follows:
   floor to 1.53.3 in `core/Cargo.toml` (commit `863fc188`), then resolved
   `core/Cargo.lock` to 1.54.1 (commit `c881cbf7`). No additional #105 patch is
   needed.
-- #106 (download-artifact 8.0.2) remains unresolved. The reproducibility
-  workflow still pins download-artifact v4 at `.github/workflows/repro.yml`
-  (lines 172 and 176); the PR's available history contains no compatibility
-  rationale or replacement update. Do not classify this as incompatible until
-  the v8 behavior is reviewed and the artifact consumer is validated.
+- #106's original patch is obsolete: it changed a previous all-artifacts
+  download step, while the current reproducibility workflow has two explicit
+  by-name downloads. The current workflow was updated to the signed v8.0.2
+  commit after reviewing its contract. Both selected uploads use
+  `actions/upload-artifact@v7` without `archive: false`, so they remain zipped;
+  v8 documents unchanged direct extraction for a single by-name artifact. Its
+  new default of failing on artifact digest mismatch strengthens the
+  reproducibility gate. The runner is GitHub-hosted and already uses
+  upload-artifact v7, which itself runs on Node 24. Sources: the [v8 release
+  notes](https://github.com/actions/download-artifact/releases/tag/v8.0.0),
+  [download contract](https://github.com/actions/download-artifact#usage), and
+  [upload archive default](https://github.com/actions/upload-artifact/blob/main/action.yml).
+  Static workflow validation passed; the workflow was not executed while SUITE
+  was held, so runtime artifact behavior remains to be confirmed in CI.
 - #109, #122, and #123 (cf 1.0.0-beta.18) are superseded by cf 1.0.0-beta.20
   already present in, respectively, the trusted broker bundle manifest and
   lockfile, the fork worker manifest, and the shared reference worker manifest.
