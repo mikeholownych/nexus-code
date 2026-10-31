@@ -18,7 +18,7 @@ docker run --rm --pull=never --network bridge \
   NEXUS_VERSION=v1.0.0-rc.14 NEXUS_VERIFY_ATTESTATION=0 sh /tmp/nexus-install.sh >/tmp/install.log 2>&1
   export PATH="$HOME/.local/bin:$PATH"
   test "$(nexus --version)" = "1.0.0-rc.14 (16eeb6eeffe7)"
-  echo "RUN_BINDING runner=docker:nexus-e2/ubuntu-22-04-node22:prep-182e8addeee0 node=$(node --version) nexus=$(nexus --version) archive_sha256_expected=52d1c855158c63dbc7cac2e9d87e2f64b1feffb193de97660e92276a2bd46eb7 installer_sha256_expected=b243cda661eb0a57890435cfa2170fb50ea8e507aeec595d364d3f2ce71c8125"
+  echo "RUN_BINDING runner=docker:nexus-e2/ubuntu-22-04-node22:prep-182e8addeee0 node=$(node --version) nexus=$(nexus --version) archive_sha256=NOT_MEASURED_BY_THIS_CELL binding=installed_version_and_commit installer_sha256_expected=b243cda661eb0a57890435cfa2170fb50ea8e507aeec595d364d3f2ce71c8125"
   prefix="$HOME/.local"; lib="$prefix/lib/nexus"; journal="$lib/.upgrade-journal.json"
   staging="$lib/.tmp-upgrade-synthetic"
   link=$(readlink -f "$prefix/bin/nexus")
