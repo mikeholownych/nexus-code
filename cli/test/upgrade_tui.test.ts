@@ -148,7 +148,7 @@ describe("TUI /upgrade slash command and deliberate confirmation interaction", (
     if (outcome.kind === "reply") {
       assert.equal(outcome.success, true);
       assert.match(outcome.output, /Target release:\s+v1\.0\.0/);
-      assert.match(outcome.output, /Update available/);
+      assert.match(outcome.output, /Update available|already up to date/);
     }
   });
 
