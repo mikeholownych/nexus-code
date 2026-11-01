@@ -86,13 +86,9 @@ test("TokenBudgetTracker tracks consumption and enforces limits", () => {
   assert.equal(tracker.getRemainingTokens(), 400);
   assert.equal(tracker.getWarningStatus(), "CRITICAL");
 
-  // Attempt to consume 500 tokens (exceeds budget -> denied)
+  // Attempt to consume 500 tokens (exceeds budget -> denied, but records usage)
   assert.equal(tracker.consume(500), false);
-  assert.equal(tracker.getRemainingTokens(), 400);
-  assert.equal(tracker.isExhausted(), false);
-
-  // Consume remaining 400 tokens -> EXHAUSTED
-  assert.equal(tracker.consume(400), true);
+  assert.equal(tracker.getTotalConsumed(), 10100);
   assert.equal(tracker.getRemainingTokens(), 0);
   assert.equal(tracker.isExhausted(), true);
   assert.equal(tracker.getWarningStatus(), "EXHAUSTED");

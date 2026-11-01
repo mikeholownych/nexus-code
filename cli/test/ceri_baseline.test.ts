@@ -126,3 +126,53 @@ test("CeriBaselineComparator classifies IMPROVEMENT_CANDIDATE", () => {
   assert.equal(res.divergences[0].assertionId, "assert-1");
   assert.equal(res.divergences[0].currentStatus, "PASS");
 });
+
+test("CeriBaselineComparator classifies INFRASTRUCTURE_FAILURE, EVALUATOR_DEFECT, NOT_EXECUTED, and FLAKY", () => {
+  const base = sampleBaseline;
+  const baselineAssertions = { "assert-1": true };
+
+  // Infrastructure failure
+  const mInfra = createManifest({
+    status: "INFRASTRUCTURE_FAILURE",
+    terminationReason: "Gateway connection timeout (504)",
+  });
+  const resInfra = CeriBaselineComparator.compareRuns(mInfra, {}, base, baselineAssertions);
+  assert.equal(resInfra.outcome, "INFRASTRUCTURE_FAILURE");
+
+  // Evaluator defect
+  const mEvalDefect = createManifest({
+    status: "EVALUATOR_DEFECT",
+    terminationReason: "Evaluator defect: invalid assertion schema syntax",
+  });
+  const resEvalDefect = CeriBaselineComparator.compareRuns(mEvalDefect, {}, base, baselineAssertions);
+  assert.equal(resEvalDefect.outcome, "EVALUATOR_DEFECT");
+
+  // Not executed
+  const mNotExec = createManifest({ status: "NOT_EXECUTED" });
+  const resNotExec = CeriBaselineComparator.compareRuns(mNotExec, {}, base, baselineAssertions);
+  assert.equal(resNotExec.outcome, "NOT_EXECUTED");
+
+  // Flaky
+  const mFlaky = createManifest();
+  const resFlaky = CeriBaselineComparator.compareRuns(
+    mFlaky,
+    { "assert-1": true },
+    base,
+    baselineAssertions,
+    true,
+    { isPriorRegressionCandidate: true }
+  );
+  assert.equal(resFlaky.outcome, "FLAKY");
+});
+
+test("CeriBaselineComparator does not classify newly introduced assertions as IMPROVEMENT_CANDIDATE", () => {
+  const m = createManifest();
+  // Baseline only had assert-1 (which passed)
+  const baselineAssertions = { "assert-1": true };
+  // Candidate has assert-1 and a brand new assert-new
+  const currentAssertions = { "assert-1": true, "assert-new": true };
+
+  const res = CeriBaselineComparator.compareRuns(m, currentAssertions, sampleBaseline, baselineAssertions);
+  assert.equal(res.outcome, "PASS");
+  assert.notEqual(res.outcome, "IMPROVEMENT_CANDIDATE");
+});

@@ -68,7 +68,16 @@ export interface HardwareMetadata {
   totalMemoryBytes: number;
 }
 
-export type RunStatus = "RUNNING" | "COMPLETED" | "INTERRUPTED" | "FAILED" | "CANCELLED";
+export type RunStatus =
+  | "RUNNING"
+  | "COMPLETED"
+  | "INTERRUPTED"
+  | "FAILED"
+  | "CANCELLED"
+  | "INCONCLUSIVE"
+  | "NOT_EXECUTED"
+  | "INFRASTRUCTURE_FAILURE"
+  | "EVALUATOR_DEFECT";
 
 export interface RunManifest {
   runId: string;
@@ -120,6 +129,7 @@ export interface BaselineSpecification {
   selectionRationale: string;
   manifestSha256: string;
   establishedAt: string;
+  assertions?: Record<string, boolean>;
 }
 
 export interface BaselineComparisonResult {
@@ -183,6 +193,7 @@ export interface CeriOperationalReport {
   inconclusiveCount: number;
   flakyCount: number;
   infrastructureFailures: number;
+  incomparableCount: number;
   blockers: string[];
   evidenceCompletenessScore: number;
   limitations: string[];
@@ -211,9 +222,33 @@ export function validateEvaluationDefinition(def: unknown): EvaluationDefinition
 }
 
 /**
+ * Deterministically serializes any JavaScript object to canonical JSON with recursively sorted keys.
+ * Correctly preserves all nested object properties without dropping fields.
+ */
+export function canonicalJsonStringify(val: unknown): string {
+  if (val === null || typeof val !== "object") {
+    return JSON.stringify(val);
+  }
+  if (Array.isArray(val)) {
+    return "[" + val.map(canonicalJsonStringify).join(",") + "]";
+  }
+  const keys = Object.keys(val as Record<string, unknown>).sort();
+  return (
+    "{" +
+    keys
+      .map(
+        (k) =>
+          JSON.stringify(k) + ":" + canonicalJsonStringify((val as Record<string, unknown>)[k])
+      )
+      .join(",") +
+    "}"
+  );
+}
+
+/**
  * Computes a deterministic SHA-256 hash for any serializable payload.
  */
 export function computePayloadHash(payload: unknown): string {
-  const json = JSON.stringify(payload, Object.keys(payload as any).sort());
+  const json = canonicalJsonStringify(payload);
   return createHash("sha256").update(json).digest("hex");
 }

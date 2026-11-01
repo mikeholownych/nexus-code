@@ -57,7 +57,8 @@ export interface EscalationContext {
  */
 function normalizeErrorMessage(msg: string): string {
   return msg
-    .replace(/at (?:[^\s]+) \((?:.+):(\d+):(\d+)\)/g, "at $1")
+    .replace(/at ([^\s(]+)(?: \((?:[^)]+):(?:\d+):(?:\d+)\)|\s*:[0-9]+:[0-9]+)/g, "at $1")
+    .replace(/(?:\/[^\s)]+):(\d+):(\d+)/g, "FILE:LINE")
     .replace(/0x[0-9a-fA-F]+/g, "0xHEX")
     .replace(/\s+/g, " ")
     .trim();
@@ -90,18 +91,30 @@ export function evaluateEscalation(context: EscalationContext): EscalationDecisi
   const currentFingerprint = computeFailureFingerprint(context.failureEvidence);
   const currentDiffHash = computeDiffHash(context.failureEvidence.diff);
 
-  // Check for cycle detection first: repeated identical failure signature with identical or cycling diff
+  // Check for cycle detection:
+  // 1. Repeated identical diff resulting in identical failure fingerprint (immediate thrash)
+  const identicalDiffLoop = context.history.some(
+    (entry) =>
+      entry.fingerprint === currentFingerprint &&
+      entry.diffHash === currentDiffHash &&
+      currentDiffHash !== "no_diff"
+  );
+
+  // 2. Repeated failure fingerprint exceeding cycle threshold
   const matchingFailures = context.history.filter(
     (entry) => entry.fingerprint === currentFingerprint
   );
 
   const cycleThreshold = context.options?.cycleThreshold ?? 2;
-  if (matchingFailures.length >= cycleThreshold) {
+  if (identicalDiffLoop || matchingFailures.length >= cycleThreshold) {
+    const reason = identicalDiffLoop
+      ? `Cycle detected: identical diff hash '${currentDiffHash}' re-introduced failure fingerprint '${currentFingerprint}'. Halting for operator intervention to prevent token thrashing.`
+      : `Cycle detected: failure fingerprint '${currentFingerprint}' observed ${matchingFailures.length + 1} times. Halting for operator intervention to prevent token thrashing.`;
     return {
       nextStage: "OPERATOR_DECISION",
       cycleDetected: true,
       recommendedAction: "REQUEST_OPERATOR",
-      reason: `Cycle detected: failure fingerprint '${currentFingerprint}' observed ${matchingFailures.length + 1} times. Halting for operator intervention to prevent token thrashing.`,
+      reason,
     };
   }
 

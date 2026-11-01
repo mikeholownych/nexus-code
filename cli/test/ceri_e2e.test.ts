@@ -50,6 +50,10 @@ test("Full CERI Foundational Vertical Slice: Definition -> Execution -> Manifest
       selectionRationale: "Initial certified baseline",
       manifestSha256: "hash-001",
       establishedAt: "2026-10-31T00:00:00Z",
+      assertions: {
+        "assert-calc-passes": true,
+        "assert-clean-diff": true,
+      },
     };
 
     // 1. Run evaluation with mock assertion executor where one assertion passes and one fails (regression candidate!)
@@ -106,6 +110,85 @@ test("Full CERI Foundational Vertical Slice: Definition -> Execution -> Manifest
     const markdown = CeriReportGenerator.formatMarkdownReport(report);
     assert.match(markdown, /QUALIFICATION IN PROGRESS/);
     assert.match(markdown, /Coverage Score/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("CeriEvaluationRunner handles empty assertions, default command execution, and missing baseline assertions", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ceri-edge-cases-"));
+  try {
+    const store = new CeriEvidenceStore(tmpDir);
+
+    // 1. Zero assertions yields INCONCLUSIVE
+    const emptyDef: EvaluationDefinition = {
+      id: "eval-empty",
+      version: "1.0.0",
+      domain: "code_comprehension",
+      objective: "No assertions",
+      fixturePath: "eval/fixtures",
+      expectedOutputs: [],
+      authorizedTools: [],
+      executionBudget: { maxSteps: 5, timeoutSeconds: 30 },
+      deterministicAssertions: [],
+      independentValidationCriteria: [],
+    };
+
+    const emptyResult = await CeriEvaluationRunner.runEvaluation(emptyDef, {
+      model: { name: "model-test", parameters: { temperature: 0 } },
+      gatewayUrl: "http://localhost:9200",
+      evidenceStore: store,
+    });
+    assert.equal(emptyResult.manifest.status, "INCONCLUSIVE");
+
+    // 2. Default execution executes command in shell
+    const cmdDef: EvaluationDefinition = {
+      id: "eval-cmd",
+      version: "1.0.0",
+      domain: "code_comprehension",
+      objective: "Command execution test",
+      fixturePath: "eval/fixtures",
+      expectedOutputs: [],
+      authorizedTools: [],
+      executionBudget: { maxSteps: 5, timeoutSeconds: 30 },
+      deterministicAssertions: [
+        {
+          id: "assert-echo",
+          description: "Echo test",
+          command: "node -e 'process.stdout.write(\"all-good\")'",
+          expectedExitCode: 0,
+          expectedStdoutPattern: "all-good",
+        },
+      ],
+      independentValidationCriteria: [],
+    };
+
+    const cmdResult = await CeriEvaluationRunner.runEvaluation(cmdDef, {
+      model: { name: "model-test", parameters: { temperature: 0 } },
+      gatewayUrl: "http://localhost:9200",
+      evidenceStore: store,
+    });
+    assert.equal(cmdResult.manifest.status, "COMPLETED");
+    assert.equal(cmdResult.assertions["assert-echo"], true);
+
+    // 3. Baseline specification without assertions produces INCOMPARABLE
+    const missingBaselineResult = await CeriEvaluationRunner.runEvaluation(cmdDef, {
+      model: { name: "model-test", parameters: { temperature: 0 } },
+      gatewayUrl: "http://localhost:9200",
+      evidenceStore: store,
+      baseline: {
+        baselineId: "non-existent-base",
+        evaluationId: "eval-cmd",
+        evaluationVersion: "1.0.0",
+        sourceCommit: "1111222233334444555566667777888899990000",
+        modelName: "model-test",
+        selectionRationale: "baseline test",
+        manifestSha256: "hash",
+        establishedAt: new Date().toISOString(),
+      },
+    });
+
+    assert.equal(missingBaselineResult.comparison?.outcome, "INCOMPARABLE");
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

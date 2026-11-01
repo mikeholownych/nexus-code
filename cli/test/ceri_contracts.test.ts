@@ -49,11 +49,19 @@ test("validateEvaluationDefinition rejects invalid definition", () => {
   );
 });
 
-test("computePayloadHash produces deterministic SHA-256 digests", () => {
+test("computePayloadHash produces deterministic SHA-256 digests and sorts nested keys recursively", () => {
   const p1 = { a: 1, b: "hello" };
-  const p2 = { a: 1, b: "hello" };
+  const p2 = { b: "hello", a: 1 };
   const p3 = { a: 2, b: "hello" };
 
   assert.equal(computePayloadHash(p1), computePayloadHash(p2));
   assert.notEqual(computePayloadHash(p1), computePayloadHash(p3));
+
+  // Nested keys order should not affect hash
+  const nested1 = { outer: { z: 1, a: 2, arr: [1, 2] } };
+  const nested2 = { outer: { a: 2, z: 1, arr: [1, 2] } };
+  const nested3 = { outer: { a: 2, z: 999, arr: [1, 2] } };
+
+  assert.equal(computePayloadHash(nested1), computePayloadHash(nested2));
+  assert.notEqual(computePayloadHash(nested1), computePayloadHash(nested3));
 });

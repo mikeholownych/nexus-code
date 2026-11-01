@@ -56,3 +56,41 @@ test("ComparativeEvaluationHarness evaluates Config A vs Config B vs Config C", 
   // Efficiency score of Config C should be highest
   assert.ok(result.profiles.configC.efficiencyScore > result.profiles.configA.efficiencyScore);
 });
+
+test("ComparativeEvaluationHarness evaluates recorded execution traces", () => {
+  const traces = [
+    {
+      scenarioId: "sc-1",
+      configId: "configA" as const,
+      turns: 5,
+      tokensConsumed: 10000,
+      confirmationBiasDefectAccepted: true,
+      cycleDetected: false,
+    },
+    {
+      scenarioId: "sc-1",
+      configId: "configB" as const,
+      turns: 4,
+      tokensConsumed: 7000,
+      confirmationBiasDefectAccepted: false,
+      cycleDetected: false,
+    },
+    {
+      scenarioId: "sc-1",
+      configId: "configC" as const,
+      turns: 2,
+      tokensConsumed: 2000,
+      confirmationBiasDefectAccepted: false,
+      cycleDetected: true,
+    },
+  ];
+
+  const result = ComparativeEvaluationHarness.evaluateTraces(traces);
+  assert.equal(result.scenariosCount, 1);
+  assert.equal(result.profiles.configA.totalTokens, 10000);
+  assert.equal(result.profiles.configB.totalTokens, 7000);
+  assert.equal(result.profiles.configC.totalTokens, 2000);
+  assert.equal(result.profiles.configB.efficiencyScore, 30.0); // 30% savings
+  assert.equal(result.profiles.configC.efficiencyScore, 80.0); // 80% savings
+  assert.equal(result.profiles.configC.cyclesDetected, 1);
+});

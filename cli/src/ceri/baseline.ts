@@ -62,9 +62,10 @@ export class CeriBaselineComparator {
     currentAssertions: Record<string, boolean>,
     baseline: BaselineSpecification,
     baselineAssertions: Record<string, boolean>,
-    isRepeatReproduction = false
+    isRepeatReproduction = false,
+    options?: { isPriorRegressionCandidate?: boolean; isKnownFlaky?: boolean }
   ): BaselineComparisonResult {
-    // 1. Check basic execution statuses
+    // 1. Check basic execution statuses and failure types
     if (manifest.status === "CANCELLED") {
       return {
         baselineId: baseline.baselineId,
@@ -77,7 +78,7 @@ export class CeriBaselineComparator {
       };
     }
 
-    if (manifest.status === "INTERRUPTED") {
+    if (manifest.status === "INTERRUPTED" || manifest.status === "INCONCLUSIVE") {
       return {
         baselineId: baseline.baselineId,
         currentRunId: manifest.runId,
@@ -85,7 +86,55 @@ export class CeriBaselineComparator {
         outcome: "INCONCLUSIVE",
         divergences: [],
         confidence: 0.0,
-        explanation: "Run was interrupted before assertions could be finalized.",
+        explanation:
+          manifest.terminationReason ??
+          "Run was inconclusive or interrupted before assertions could be finalized.",
+      };
+    }
+
+    if (manifest.status === "NOT_EXECUTED") {
+      return {
+        baselineId: baseline.baselineId,
+        currentRunId: manifest.runId,
+        isEligibleForComparison: false,
+        outcome: "NOT_EXECUTED",
+        divergences: [],
+        confidence: 1.0,
+        explanation: "Run was scheduled or created but not executed.",
+      };
+    }
+
+    if (
+      manifest.status === "INFRASTRUCTURE_FAILURE" ||
+      manifest.terminationReason?.toLowerCase().includes("infrastructure")
+    ) {
+      return {
+        baselineId: baseline.baselineId,
+        currentRunId: manifest.runId,
+        isEligibleForComparison: false,
+        outcome: "INFRASTRUCTURE_FAILURE",
+        divergences: [],
+        confidence: 1.0,
+        explanation:
+          manifest.terminationReason ??
+          "Run failed due to infrastructure or environment failure.",
+      };
+    }
+
+    if (
+      manifest.status === "EVALUATOR_DEFECT" ||
+      manifest.terminationReason?.toLowerCase().includes("evaluator defect")
+    ) {
+      return {
+        baselineId: baseline.baselineId,
+        currentRunId: manifest.runId,
+        isEligibleForComparison: false,
+        outcome: "EVALUATOR_DEFECT",
+        divergences: [],
+        confidence: 1.0,
+        explanation:
+          manifest.terminationReason ??
+          "Run failed due to defect in assertion evaluation harness or specification.",
       };
     }
 
@@ -116,8 +165,32 @@ export class CeriBaselineComparator {
     let allBaselinePassed = true;
 
     for (const id of allAssertionIds) {
-      const cur = currentAssertions[id] ?? false;
-      const base = baselineAssertions[id] ?? false;
+      const hasCur = Object.prototype.hasOwnProperty.call(currentAssertions, id);
+      const hasBase = Object.prototype.hasOwnProperty.call(baselineAssertions, id);
+
+      // New assertion in current run not present in baseline: do not treat as improvement over baseline
+      if (!hasBase) {
+        if (!currentAssertions[id]) {
+          allCurrentPassed = false;
+        }
+        continue;
+      }
+
+      // Assertion present in baseline but omitted from current run: regression in coverage/execution
+      if (!hasCur) {
+        allCurrentPassed = false;
+        hasRegression = true;
+        divergences.push({
+          assertionId: id,
+          baselineStatus: baselineAssertions[id] ? "PASS" : "FAIL",
+          currentStatus: "FAIL",
+          details: `Assertion '${id}' was verified in baseline but omitted from current run.`,
+        });
+        continue;
+      }
+
+      const cur = currentAssertions[id];
+      const base = baselineAssertions[id];
 
       if (!cur) allCurrentPassed = false;
       if (!base) allBaselinePassed = false;
@@ -145,8 +218,12 @@ export class CeriBaselineComparator {
     let outcome: ComparativeOutcome;
     let explanation: string;
 
-    if (hasRegression) {
-      if (isRepeatReproduction) {
+    if (options?.isKnownFlaky || (options?.isPriorRegressionCandidate && !hasRegression)) {
+      outcome = "FLAKY";
+      explanation =
+        "Assertion outcome exhibited non-deterministic or intermittent behaviour across runs.";
+    } else if (hasRegression) {
+      if (isRepeatReproduction || options?.isPriorRegressionCandidate) {
         outcome = "CONFIRMED_REGRESSION";
         explanation = `Confirmed reproducible regression across ${divergences.length} assertion(s).`;
       } else {

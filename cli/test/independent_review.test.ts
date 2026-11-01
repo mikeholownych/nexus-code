@@ -24,9 +24,23 @@ index 3333333..4444444 100644
 +export const leaked = 1;
 `;
 
-test("extractModifiedFilesFromDiff accurately extracts paths from git unified diff", () => {
+test("extractModifiedFilesFromDiff accurately extracts paths from git unified diff including deletions and renames", () => {
   const files = extractModifiedFilesFromDiff(SAMPLE_DIFF);
   assert.deepEqual(files.sort(), ["cli/src/extra.ts", "cli/src/feature.ts"]);
+
+  const deleteDiff = `diff --git a/deleted.ts b/dev/null
+--- a/deleted.ts
++++ /dev/null
+@@ -1,2 +0,0 @@
+`;
+  assert.deepEqual(extractModifiedFilesFromDiff(deleteDiff), ["deleted.ts"]);
+
+  const renameDiff = `diff --git a/old.ts b/new.ts
+similarity index 100%
+rename from old.ts
+rename to new.ts
+`;
+  assert.deepEqual(extractModifiedFilesFromDiff(renameDiff).sort(), ["new.ts", "old.ts"]);
 });
 
 test("detectScopeViolations flags files modified outside authorized scope", () => {
@@ -144,4 +158,15 @@ Here is my review:
   const res5 = parseIndependentReviewVerdict(malformed, cleanPackage);
   assert.equal(res5.verdict, "REJECT");
   assert.match(res5.suspectedDefects[0].description, /Failed to parse structured review verdict/);
+
+  // 6. Truncated diff without passing verifier fails-closed as REJECT
+  const hugeDiff = "a".repeat(25000);
+  const truncatedPkg: ReviewEvidencePackage = {
+    ...cleanPackage,
+    unifiedDiff: hugeDiff,
+    verifierExitCode: undefined, // Untested!
+  };
+  const res6 = parseIndependentReviewVerdict(validOutput, truncatedPkg);
+  assert.equal(res6.verdict, "REJECT");
+  assert.match(res6.unprovenCriteria[0], /Unified diff was truncated/);
 });

@@ -41,9 +41,21 @@ test("RemediationProposalManager rejects author self-approval", () => {
       ),
     SelfApprovalForbiddenError
   );
+
+  // Self-approval with whitespace and case variations must also be rejected
+  assert.throws(
+    () =>
+      RemediationProposalManager.reviewProposal(
+        proposal,
+        "  agent-x  ", // Normalized match!
+        "APPROVED",
+        "Looks good"
+      ),
+    SelfApprovalForbiddenError
+  );
 });
 
-test("RemediationProposalManager permits independent reviewer approval", () => {
+test("RemediationProposalManager permits independent reviewer approval and prevents double review", () => {
   const proposal = RemediationProposalManager.createProposal({
     id: "prop-03",
     targetIssue: "Off-by-one index error",
@@ -62,4 +74,16 @@ test("RemediationProposalManager permits independent reviewer approval", () => {
 
   assert.equal(reviewed.approvalStatus, "APPROVED");
   assert.equal(reviewed.reviewerAgent, "Independent-Reviewer-Agent");
+
+  // Attempting to review an already-approved proposal fails
+  assert.throws(
+    () =>
+      RemediationProposalManager.reviewProposal(
+        reviewed,
+        "Another-Reviewer",
+        "REJECTED",
+        "Too late"
+      ),
+    /expected 'PENDING_REVIEW'/
+  );
 });

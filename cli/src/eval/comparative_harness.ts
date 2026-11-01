@@ -13,6 +13,15 @@ export interface BenchmarkScenario {
   hasConfirmationBiasRisk: boolean;
 }
 
+export interface ExecutionTrace {
+  scenarioId: string;
+  configId: "configA" | "configB" | "configC";
+  turns: number;
+  tokensConsumed: number;
+  confirmationBiasDefectAccepted: boolean;
+  cycleDetected: boolean;
+}
+
 export interface OrchestrationConfigProfile {
   id: "configA" | "configB" | "configC";
   name: string;
@@ -33,10 +42,14 @@ export interface ComparativeBenchmarkResult {
 }
 
 /**
- * Comparative evaluation benchmark harness contrasting:
- * - Config A: Baseline (Single generalist agent, naive retry, unstripped review narratives)
- * - Config B: Specialist Profiles & Objective Independent Review (no micro-router)
+ * Comparative evaluation framework contrasting three orchestration architectures:
+ * - Config A: Baseline Generalist (Single agent, naive retry, unstripped review narratives)
+ * - Config B: Specialist Profiles & Objective Review (Specialists + Review boundary, no micro-router)
  * - Config C: Adaptive Orchestration (Specialists, Micro-Router, Review Boundary, Escalation Machine, Adaptive Throttle)
+ *
+ * Supports both:
+ * 1. Empirical evaluation of recorded execution traces (`evaluateTraces`)
+ * 2. Analytical projection based on theoretical architecture savings (`runBenchmark` / `projectScenarios`)
  */
 export class ComparativeEvaluationHarness {
   private readonly scenarios: readonly BenchmarkScenario[];
@@ -45,14 +58,17 @@ export class ComparativeEvaluationHarness {
     this.scenarios = scenarios;
   }
 
-  async runBenchmark(): Promise<ComparativeBenchmarkResult> {
+  /**
+   * Evaluates empirical execution traces recorded from live or simulated harness runs.
+   */
+  static evaluateTraces(traces: readonly ExecutionTrace[]): ComparativeBenchmarkResult {
     const configA: OrchestrationConfigProfile = {
       id: "configA",
       name: "Config A (Baseline Generalist)",
       totalTurns: 0,
       totalTokens: 0,
       confirmationBiasDefectsAccepted: 0,
-      efficiencyScore: 50.0,
+      efficiencyScore: 0.0,
       cyclesDetected: 0,
     };
 
@@ -62,7 +78,7 @@ export class ComparativeEvaluationHarness {
       totalTurns: 0,
       totalTokens: 0,
       confirmationBiasDefectsAccepted: 0,
-      efficiencyScore: 75.0,
+      efficiencyScore: 0.0,
       cyclesDetected: 0,
     };
 
@@ -72,45 +88,117 @@ export class ComparativeEvaluationHarness {
       totalTurns: 0,
       totalTokens: 0,
       confirmationBiasDefectsAccepted: 0,
-      efficiencyScore: 92.5,
+      efficiencyScore: 0.0,
+      cyclesDetected: 0,
+    };
+
+    const scenarioIds = new Set<string>();
+
+    for (const trace of traces) {
+      scenarioIds.add(trace.scenarioId);
+      const target =
+        trace.configId === "configA" ? configA : trace.configId === "configB" ? configB : configC;
+      target.totalTurns += trace.turns;
+      target.totalTokens += trace.tokensConsumed;
+      if (trace.confirmationBiasDefectAccepted) target.confirmationBiasDefectsAccepted += 1;
+      if (trace.cycleDetected) target.cyclesDetected += 1;
+    }
+
+    const baselineTokens = configA.totalTokens;
+    configA.efficiencyScore = 0.0;
+    configB.efficiencyScore =
+      baselineTokens > 0
+        ? Number(((1 - configB.totalTokens / baselineTokens) * 100).toFixed(1))
+        : 0.0;
+    configC.efficiencyScore =
+      baselineTokens > 0
+        ? Number(((1 - configC.totalTokens / baselineTokens) * 100).toFixed(1))
+        : 0.0;
+
+    return {
+      scenariosCount: scenarioIds.size,
+      profiles: { configA, configB, configC },
+    };
+  }
+
+  /**
+   * Executes an analytical projection model across defined benchmark scenarios.
+   * Efficiency score is dynamically derived from relative token savings versus baseline Config A.
+   */
+  async runBenchmark(): Promise<ComparativeBenchmarkResult> {
+    const configA: OrchestrationConfigProfile = {
+      id: "configA",
+      name: "Config A (Baseline Generalist)",
+      totalTurns: 0,
+      totalTokens: 0,
+      confirmationBiasDefectsAccepted: 0,
+      efficiencyScore: 0.0,
+      cyclesDetected: 0,
+    };
+
+    const configB: OrchestrationConfigProfile = {
+      id: "configB",
+      name: "Config B (Specialists + Independent Review)",
+      totalTurns: 0,
+      totalTokens: 0,
+      confirmationBiasDefectsAccepted: 0,
+      efficiencyScore: 0.0,
+      cyclesDetected: 0,
+    };
+
+    const configC: OrchestrationConfigProfile = {
+      id: "configC",
+      name: "Config C (Adaptive Orchestration)",
+      totalTurns: 0,
+      totalTokens: 0,
+      confirmationBiasDefectsAccepted: 0,
+      efficiencyScore: 0.0,
       cyclesDetected: 0,
     };
 
     for (const scenario of this.scenarios) {
-      // Config A evaluation
+      // Config A: Baseline
       configA.totalTurns += scenario.syntheticBaselineTurns;
       configA.totalTokens += scenario.syntheticBaselineTokens;
       if (scenario.hasConfirmationBiasRisk) {
         configA.confirmationBiasDefectsAccepted += 1;
       }
 
-      // Config B evaluation
-      // Specialists have better token efficiency on debugging & review
-      const bTokens = scenario.category === "code_review" || scenario.category === "debugging"
-        ? Math.floor(scenario.syntheticBaselineTokens * 0.75)
-        : scenario.syntheticBaselineTokens;
+      // Config B: Specialists + Independent review
+      const bTokens =
+        scenario.category === "code_review" || scenario.category === "debugging"
+          ? Math.floor(scenario.syntheticBaselineTokens * 0.75)
+          : scenario.syntheticBaselineTokens;
       configB.totalTurns += scenario.syntheticBaselineTurns;
       configB.totalTokens += bTokens;
-      // Independent review strips narrative -> 0 confirmation bias defects accepted
       configB.confirmationBiasDefectsAccepted += 0;
 
-      // Config C evaluation
-      // Micro-router short-circuits deterministic queries (0 model tokens, 1 direct turn)
+      // Config C: Adaptive Orchestration with micro-router deterministic short-circuit
       if (scenario.category === "deterministic_query") {
         configC.totalTurns += 1;
-        configC.totalTokens += 50; // nominal telemetry/overhead
+        configC.totalTokens += 50; // nominal deterministic invocation overhead
       } else if (scenario.category === "debugging") {
-        // Cycle detection prevents thrashing
         configC.totalTurns += Math.max(2, Math.floor(scenario.syntheticBaselineTurns * 0.5));
         configC.totalTokens += Math.floor(scenario.syntheticBaselineTokens * 0.45);
         configC.cyclesDetected += 1;
       } else {
-        // Code review / implementation with specialist + objective boundary
         configC.totalTurns += scenario.syntheticBaselineTurns;
         configC.totalTokens += Math.floor(scenario.syntheticBaselineTokens * 0.7);
       }
       configC.confirmationBiasDefectsAccepted += 0;
     }
+
+    // Derive efficiency score dynamically from measured token consumption reduction
+    const baselineTokens = configA.totalTokens;
+    configA.efficiencyScore = 0.0;
+    configB.efficiencyScore =
+      baselineTokens > 0
+        ? Number(((1 - configB.totalTokens / baselineTokens) * 100).toFixed(1))
+        : 0.0;
+    configC.efficiencyScore =
+      baselineTokens > 0
+        ? Number(((1 - configC.totalTokens / baselineTokens) * 100).toFixed(1))
+        : 0.0;
 
     return {
       scenariosCount: this.scenarios.length,

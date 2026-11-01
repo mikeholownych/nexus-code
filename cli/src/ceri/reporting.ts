@@ -17,6 +17,7 @@ export class CeriReportGenerator {
     let inconclusiveCount = 0;
     let flakyCount = 0;
     let infrastructureFailures = 0;
+    let incomparableCount = 0;
     const confirmedRegressions: string[] = [];
     const regressionCandidates: string[] = [];
     const blockers: string[] = [];
@@ -24,7 +25,7 @@ export class CeriReportGenerator {
     for (const { manifest, comparison } of runs) {
       if (manifest.status === "FAILED") failedRuns++;
       else if (manifest.status === "COMPLETED") passedRuns++;
-      else if (manifest.status === "INTERRUPTED") inconclusiveCount++;
+      else if (manifest.status === "INTERRUPTED" || manifest.status === "INCONCLUSIVE") inconclusiveCount++;
 
       if (comparison) {
         if (comparison.outcome === "CONFIRMED_REGRESSION") {
@@ -38,13 +39,16 @@ export class CeriReportGenerator {
           infrastructureFailures++;
         } else if (comparison.outcome === "INCONCLUSIVE") {
           inconclusiveCount++;
+        } else if (comparison.outcome === "INCOMPARABLE") {
+          incomparableCount++;
         }
       }
     }
 
     const executedRuns = runs.length;
-    const completenessScore =
-      executedRuns > 0 ? Number(((executedRuns / Math.max(1, totalAvailableEvaluations)) * 100).toFixed(1)) : 0;
+    const rawCoverage =
+      executedRuns > 0 ? (executedRuns / Math.max(1, totalAvailableEvaluations)) * 100 : 0;
+    const completenessScore = Number(Math.min(100, Math.max(0, rawCoverage)).toFixed(1));
 
     return {
       reportId: `CERI-REP-${Date.now()}`,
@@ -63,6 +67,7 @@ export class CeriReportGenerator {
       inconclusiveCount,
       flakyCount,
       infrastructureFailures,
+      incomparableCount,
       blockers,
       evidenceCompletenessScore: completenessScore,
       limitations: options?.limitations ?? [
@@ -86,7 +91,10 @@ export class CeriReportGenerator {
     lines.push("");
 
     lines.push(`## 1. Executive Status & Release Gates`);
-    if (report.blockers.length > 0) {
+    if (report.evaluationCoverage.executedRuns === 0) {
+      lines.push(`> [!WARNING]`);
+      lines.push(`> **NO EVALUATIONS EXECUTED:** Coverage is 0%. No capability or regression claims can be substantiated.`);
+    } else if (report.blockers.length > 0) {
       lines.push(`> [!CAUTION]`);
       lines.push(`> **RELEASE BLOCKED:** ${report.blockers.length} confirmed regression blocker(s) detected.`);
       for (const b of report.blockers) {
@@ -95,9 +103,21 @@ export class CeriReportGenerator {
     } else if (report.regressions.candidates.length > 0) {
       lines.push(`> [!WARNING]`);
       lines.push(`> **QUALIFICATION IN PROGRESS:** ${report.regressions.candidates.length} regression candidate(s) awaiting reproduction runs.`);
+    } else if (
+      report.evaluationCoverage.failedRuns > 0 ||
+      report.inconclusiveCount > 0 ||
+      report.infrastructureFailures > 0 ||
+      report.incomparableCount > 0
+    ) {
+      lines.push(`> [!WARNING]`);
+      lines.push(
+        `> **EVALUATION ANOMALIES DETECTED:** Non-zero failures (${report.evaluationCoverage.failedRuns}), inconclusive (${report.inconclusiveCount}), infrastructure failures (${report.infrastructureFailures}), or incomparable runs (${report.incomparableCount}). Further qualification required.`
+      );
     } else {
       lines.push(`> [!NOTE]`);
-      lines.push(`> **NO REGRESSIONS OBSERVED:** All executed evaluations match or exceed baseline criteria.`);
+      lines.push(
+        `> **NO REGRESSIONS OBSERVED:** All executed evaluations (${report.evaluationCoverage.passedRuns}) completed cleanly and match or exceed baseline criteria.`
+      );
     }
     lines.push("");
 
@@ -112,6 +132,7 @@ export class CeriReportGenerator {
     lines.push(`| Inconclusive / Interrupted | ${report.inconclusiveCount} |`);
     lines.push(`| Flaky Evaluations | ${report.flakyCount} |`);
     lines.push(`| Infrastructure Failures | ${report.infrastructureFailures} |`);
+    lines.push(`| Incomparable Configurations | ${report.incomparableCount} |`);
     lines.push("");
 
     lines.push(`## 3. Explicit Measurement Limitations`);

@@ -49,7 +49,7 @@ export class AdaptiveConcurrencyThrottle {
 
   getCurrentLimit(): number {
     if (this.history.length === 0) {
-      return this.baselineConcurrency;
+      return Math.min(this.maxConcurrency, this.baselineConcurrency);
     }
 
     const metrics = this.getMetrics();
@@ -62,12 +62,12 @@ export class AdaptiveConcurrencyThrottle {
     // Ratio of observed latency to baseline latency
     const latencyRatio = metrics.averageLatencyMs / this.baselineLatencyMs;
 
-    if (latencyRatio <= 1.2) {
-      // Normal latency
-      return this.baselineConcurrency;
+    // Normal latency: below 2x baseline latency
+    if (latencyRatio < 2.0) {
+      return Math.min(this.maxConcurrency, this.baselineConcurrency);
     }
 
-    // High latency: scale concurrency down proportionally
+    // High latency (>= 2x baseline): scale concurrency down proportionally
     const adjusted = Math.floor(this.baselineConcurrency / latencyRatio);
     return Math.max(this.minConcurrency, Math.min(this.maxConcurrency, adjusted));
   }
@@ -136,11 +136,11 @@ export class TokenBudgetTracker {
   }
 
   consume(tokens: number): boolean {
-    if (tokens < 0) return true;
-    if (this.consumedTokens + tokens > this.maxTokens) {
+    if (tokens <= 0) return true;
+    this.consumedTokens += tokens;
+    if (this.consumedTokens > this.maxTokens) {
       return false;
     }
-    this.consumedTokens += tokens;
     return true;
   }
 

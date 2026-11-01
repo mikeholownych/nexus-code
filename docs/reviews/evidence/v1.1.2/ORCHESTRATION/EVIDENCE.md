@@ -5,7 +5,7 @@
 **Date:** 2026-11-01  
 **Target Release:** Nexus Code `v1.1.2`  
 **Branch:** `v1/v112-specialist-orchestration`  
-**Base Commit:** `9a3d87879f0c6afbabdcc77a92b70c1fe95a454a`  
+**Base Commit:** `9a62db9976bb6da377cf968ba02fb1ca077df346`  
 
 ---
 
@@ -18,12 +18,14 @@ All tests executed with isolated `HOME=/home/mike/nexus-wt/v112-orchestration-ho
 | `cli/test/specialist_profiles.test.ts` | 4 | 4 | 0 | 18ms | `tsx --test test/specialist_profiles.test.ts` |
 | `cli/test/independent_review.test.ts` | 5 | 5 | 0 | 25ms | `tsx --test test/independent_review.test.ts` |
 | `cli/test/micro_router.test.ts` | 3 | 3 | 0 | 12ms | `tsx --test test/micro_router.test.ts` |
-| `cli/test/escalation.test.ts` | 5 | 5 | 0 | 15ms | `tsx --test test/escalation.test.ts` |
+| `cli/test/escalation.test.ts` | 6 | 6 | 0 | 18ms | `tsx --test test/escalation.test.ts` |
 | `cli/test/adaptive_throttle.test.ts` | 5 | 5 | 0 | 12ms | `tsx --test test/adaptive_throttle.test.ts` |
-| `cli/test/comparative_harness.test.ts` | 1 | 1 | 0 | 10ms | `tsx --test test/comparative_harness.test.ts` |
+| `cli/test/comparative_harness.test.ts` | 2 | 2 | 0 | 12ms | `tsx --test test/comparative_harness.test.ts` |
+| `cli/test/ceri_*.test.ts` | 19 | 19 | 0 | 650ms | `tsx --test test/ceri_*.test.ts` |
 | `cli/test/operation_messages.test.ts` (Regression) | 8 | 8 | 0 | 4.4s | `tsx --test test/operation_messages.test.ts` |
 | `cli/test/node_floor.test.ts` (Release Gates) | 6 | 6 | 0 | 1.9s | `tsx --test test/node_floor.test.ts` |
-| **Type Check Gate** | 1 | 1 | 0 | 14.1s | `tsc --noEmit` |
+| **Combined Orchestration & CERI Suite** | 44 | 44 | 0 | 6.8s | `node scripts/run_tests.mjs test/...` |
+| **Type Check Gate** | 1 | 1 | 0 | 13.8s | `tsc --noEmit` |
 
 ---
 
@@ -62,17 +64,19 @@ All tests executed with isolated `HOME=/home/mike/nexus-wt/v112-orchestration-ho
 
 ### 2.5 Adaptive Concurrency Throttle & Token Budgeting
 - `AdaptiveConcurrencyThrottle`:
-  - Dynamically throttles active slots from baseline (4) down to 1 when latency spikes > 2x baseline or timeout rate reaches 20%.
+  - Dynamically throttles active slots from baseline (4) down to 1 when latency spikes $\ge 2.0\times$ baseline (`latencyRatio >= 2.0`) or timeout rate reaches 20%. Below $2.0\times$, concurrency remains unthrottled.
+  - When idle (empty history), respects `min(maxConcurrency, baselineConcurrency)`.
   - Smoothly recovers concurrency slots back to baseline as observed latency normalizes.
 - `TokenBudgetTracker`:
-  - Calculates remaining token runway.
+  - Accurately tracks total consumed tokens across all calls, including recording consumption when an invocation overflows the budget (`consume` returns `false` while incrementing `consumedTokens`).
   - Emits `WARNING` at 80% consumption, `CRITICAL` at 95%, and blocks consumption when `EXHAUSTED`.
 
-### 2.6 Comparative Evaluation Benchmark
+### 2.6 Comparative Evaluation Framework
 - `ComparativeEvaluationHarness`:
-  - Proves Config C (Adaptive) achieves higher token efficiency than Config A on deterministic queries and debugging.
-  - Proves Config B & C eliminate confirmation bias defects compared to Config A.
-  - Proves composite efficiency score: Config C (92.5) > Config B (75.0) > Config A (50.0).
+  - Provides both an empirical trace evaluator (`evaluateTraces`) for recorded run traces and an analytical projection model (`runBenchmark`).
+  - Demonstrates architectural advantages of Config C (Adaptive) over Config A (Baseline Generalist) and Config B (Specialists without micro-routing).
+  - Efficiency scores are dynamically derived from relative token consumption reduction versus baseline Config A.
+  - Note: §2.6 scenario projections represent analytical architectural ceilings (e.g. 0 model tokens for deterministic micro-routed fastpaths); empirical benchmark validation with live LLMs is evaluated in subsequent test qualification passes.
 
 ---
 

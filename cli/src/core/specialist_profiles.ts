@@ -162,17 +162,17 @@ export class ToolAccessDeniedError extends Error {
  * Throws ToolAccessDeniedError if the tool is not whitelisted.
  */
 export function validateSpecialistToolAccess(role: SpecialistRole, toolName: string): void {
-  const contract = SPECIALIST_CONTRACTS[role];
-  if (!contract) {
+  if (!isSpecialistRole(role)) {
     throw new Error(`Unknown specialist role: '${role}'`);
   }
+  const contract = SPECIALIST_CONTRACTS[role];
   if (!contract.permittedTools.includes(toolName)) {
     throw new ToolAccessDeniedError(role, toolName, contract.permittedTools);
   }
 }
 
 export function isSpecialistRole(role: string | undefined): role is SpecialistRole {
-  return role !== undefined && role in SPECIALIST_CONTRACTS;
+  return role !== undefined && typeof role === "string" && Object.hasOwn(SPECIALIST_CONTRACTS, role);
 }
 
 export interface SpecialistEvidenceItem {

@@ -46,6 +46,7 @@ export interface IndependentReviewVerdict {
 
 /**
  * Parses files modified from a unified git diff.
+ * Checks both source and destination headers, renames, and git index lines.
  */
 export function extractModifiedFilesFromDiff(diff: string): string[] {
   const modified = new Set<string>();
@@ -54,16 +55,23 @@ export function extractModifiedFilesFromDiff(diff: string): string[] {
     if (line.startsWith("diff --git a/")) {
       const parts = line.split(" ");
       if (parts.length >= 4) {
-        const fileB = parts[3].replace(/^b\//, "");
-        if (fileB && fileB !== "/dev/null") {
-          modified.add(fileB);
-        }
+        const fileA = parts[2].replace(/^a\//, "").trim();
+        const fileB = parts[3].replace(/^b\//, "").trim();
+        if (fileA && fileA !== "/dev/null" && fileA !== "dev/null") modified.add(fileA);
+        if (fileB && fileB !== "/dev/null" && fileB !== "dev/null") modified.add(fileB);
       }
+    } else if (line.startsWith("--- a/")) {
+      const file = line.replace(/^---\s+a\//, "").trim();
+      if (file && file !== "/dev/null" && file !== "dev/null") modified.add(file);
     } else if (line.startsWith("+++ b/")) {
-      const file = line.replace(/^\+\+\+ b\//, "").trim();
-      if (file && file !== "/dev/null") {
-        modified.add(file);
-      }
+      const file = line.replace(/^\+\+\+\s+b\//, "").trim();
+      if (file && file !== "/dev/null" && file !== "dev/null") modified.add(file);
+    } else if (line.startsWith("rename from ")) {
+      const file = line.replace(/^rename from\s+/, "").trim();
+      if (file) modified.add(file);
+    } else if (line.startsWith("rename to ")) {
+      const file = line.replace(/^rename to\s+/, "").trim();
+      if (file) modified.add(file);
     }
   }
   return Array.from(modified);
@@ -125,6 +133,18 @@ export function buildReviewEvidencePackage(params: {
 }
 
 /**
+ * Formats raw verifier output, preserving the beginning and the tail
+ * so that failure logs at the end are never lost to naive slicing.
+ */
+export function formatVerifierOutput(output?: string): string {
+  if (!output) return "No verifier output recorded";
+  if (output.length <= 10000) return output;
+  const head = output.slice(0, 2000);
+  const tail = output.slice(-8000);
+  return `${head}\n\n... [truncated ${output.length - 10000} characters; retaining verifier tail] ...\n\n${tail}`;
+}
+
+/**
  * Formats the review prompt, instructing the independent model to evaluate
  * only the objective evidence package and emit a strict JSON verdict.
  */
@@ -136,6 +156,15 @@ export function formatIndependentReviewPrompt(
     ? `\n[AUTOMATED SCOPE WARNING] The diff touches files outside authorizedScope: [${scopeViolations.join(", ")}]\n`
     : "";
 
+  const isDiffTruncated = pkg.unifiedDiff.length > 20000;
+  const diffContent = isDiffTruncated
+    ? `${pkg.unifiedDiff.slice(0, 20000)}\n\n[TRUNCATED: Unified diff exceeded 20,000 characters. Remaining content omitted for context budget.]`
+    : pkg.unifiedDiff;
+
+  const diffWarning = isDiffTruncated
+    ? `\n[AUTOMATED TRUNCATION WARNING] Unified diff exceeded 20,000 characters and was truncated. Complete independent inspection requires deterministic passing verifier evidence.\n`
+    : "";
+
   return `[Independent Review Task for Unit '${pkg.unitId}' in Operation '${pkg.operationId}']
 
 Objective Requirements:
@@ -143,7 +172,7 @@ ${pkg.objective}
 
 Authorized Scope:
 ${pkg.authorizedScope.length ? pkg.authorizedScope.map((s) => `- ${s}`).join("\n") : "Unrestricted (Repository-wide)"}
-${scopeWarning}
+${scopeWarning}${diffWarning}
 Repository Baseline:
 - Base Commit: ${pkg.baselineCommit}${pkg.candidateCommit ? `\n- Candidate Commit: ${pkg.candidateCommit}` : ""}
 
@@ -152,12 +181,12 @@ Verifier Execution Evidence:
 - Exit Code: ${pkg.verifierExitCode !== undefined ? pkg.verifierExitCode : "Untested"}
 - Raw Verifier Output:
 \`\`\`
-${(pkg.verifierOutput ?? "No verifier output recorded").slice(0, 10000)}
+${formatVerifierOutput(pkg.verifierOutput)}
 \`\`\`
 
 Candidate Unified Diff:
 \`\`\`diff
-${pkg.unifiedDiff.slice(0, 20000)}
+${diffContent}
 \`\`\`
 
 INSTRUCTIONS FOR INDEPENDENT REVIEWER:
@@ -233,6 +262,12 @@ export function parseIndependentReviewVerdict(
       }
       if (scopeViolations.length > 0) {
         finalVerdict = "REJECT";
+      }
+      if (pkg.unifiedDiff.length > 20000 && pkg.verifierExitCode !== 0) {
+        finalVerdict = "REJECT";
+        unprovenCriteria.push(
+          "Unified diff was truncated (>20000 characters) and lacks passing deterministic verifier evidence"
+        );
       }
     }
 

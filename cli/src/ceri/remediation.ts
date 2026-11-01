@@ -41,11 +41,20 @@ export class RemediationProposalManager {
     decision: "APPROVED" | "REJECTED",
     rationale: string
   ): RemediationProposal {
-    if (!reviewerAgent || typeof reviewerAgent !== "string") {
+    if (!reviewerAgent || typeof reviewerAgent !== "string" || !reviewerAgent.trim()) {
       throw new Error("Reviewer agent identifier is required");
     }
 
-    if (decision === "APPROVED" && reviewerAgent === proposal.authorAgent) {
+    if (proposal.approvalStatus !== "PENDING_REVIEW") {
+      throw new Error(
+        `Cannot review proposal '${proposal.id}': current status is '${proposal.approvalStatus}', expected 'PENDING_REVIEW'`
+      );
+    }
+
+    const normReviewer = reviewerAgent.trim().toLowerCase();
+    const normAuthor = proposal.authorAgent.trim().toLowerCase();
+
+    if (decision === "APPROVED" && normReviewer === normAuthor) {
       throw new SelfApprovalForbiddenError(
         `Author agent '${proposal.authorAgent}' cannot approve its own remediation proposal '${proposal.id}'. Independent review required.`
       );
@@ -54,7 +63,7 @@ export class RemediationProposalManager {
     return {
       ...proposal,
       approvalStatus: decision,
-      reviewerAgent,
+      reviewerAgent: reviewerAgent.trim(),
       reviewDecisionRationale: rationale,
     };
   }

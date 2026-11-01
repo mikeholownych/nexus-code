@@ -157,7 +157,7 @@ The v1.1.2 release line encompasses two complementary tiers:
 - **Operational Risks:** False regression alarms on non-comparable environments; benchmark overfitting; token consumption during reruns.
 - **Rollback Approach:** Purely additive modules in `cli/src/ceri/`; gated by config flag `ceri.enabled`.
 - **Complexity:** High (5 days).
-- **Implementation Status:** Foundational vertical slice under active implementation.
+- **Implementation Status:** Foundational primitives and libraries implemented and verified in PR #396 (contracts, tamper-evident evidence store, baseline comparator, epistemological investigation, non-self-approving remediation, operational reporting, and comparative evaluation framework). Interactive agent loop integration and live dual-worker GPU scheduling are scheduled for subsequent integration PRs.
 
 ---
 

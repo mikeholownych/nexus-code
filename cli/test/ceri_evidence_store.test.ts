@@ -100,3 +100,50 @@ test("CeriEvidenceStore detects interrupted runs", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("CeriEvidenceStore rejects path traversal in evaluationId and runId", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ceri-traversal-"));
+  try {
+    const store = new CeriEvidenceStore(tmpDir);
+
+    const baseManifest: RunManifest = {
+      runId: "run-01",
+      evaluationId: "eval-01",
+      evaluationVersion: "1.0.0",
+      sourceCommit: "abcd",
+      dirtyWorktree: false,
+      model: { name: "model-x", parameters: { temperature: 0 } },
+      routingConfig: { gatewayUrl: "http://localhost", specialistRouting: false },
+      agentProfileVersion: "1.1.2",
+      harnessVersion: "1.1.2-rc.1",
+      toolchainVersions: {},
+      environment: { os: "Linux", kernel: "x", nodeVersion: "22" },
+      hardware: { cpuModel: "Intel", totalMemoryBytes: 1000 },
+      startedAt: new Date().toISOString(),
+      status: "RUNNING",
+      mandatoryComparabilityKeys: [],
+    };
+
+    assert.throws(
+      () => store.initRun({ ...baseManifest, evaluationId: "../../etc" }),
+      /contains invalid characters or path traversal elements/
+    );
+
+    assert.throws(
+      () => store.initRun({ ...baseManifest, runId: "sub/../../escape" }),
+      /contains invalid characters or path traversal elements/
+    );
+
+    assert.throws(
+      () => store.loadAssertions("../etc", "run-01"),
+      /contains invalid characters or path traversal elements/
+    );
+
+    assert.throws(
+      () => store.loadManifest("eval-01", "../escape"),
+      /contains invalid characters or path traversal elements/
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

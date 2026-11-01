@@ -11,6 +11,24 @@ export interface IntegrityRecord {
   compositeSha256: string;
 }
 
+export function sanitizeIdentifier(id: string, name: string): string {
+  if (!id || typeof id !== "string") {
+    throw new Error(`Invalid ${name}: must be a non-empty string`);
+  }
+  const trimmed = id.trim();
+  if (
+    trimmed.includes("..") ||
+    trimmed.includes("/") ||
+    trimmed.includes("\\") ||
+    !/^[a-zA-Z0-9_.-]+$/.test(trimmed)
+  ) {
+    throw new Error(
+      `Invalid ${name} "${id}": contains invalid characters or path traversal elements`
+    );
+  }
+  return trimmed;
+}
+
 export class CeriEvidenceStore {
   private readonly baseDir: string;
   private currentRunDir?: string;
@@ -27,7 +45,13 @@ export class CeriEvidenceStore {
    * Initializes a run directory and atomically writes the initial RunManifest.
    */
   initRun(manifest: RunManifest): string {
-    const runDir = path.join(this.baseDir, manifest.evaluationId, manifest.runId);
+    const sEvalId = sanitizeIdentifier(manifest.evaluationId, "evaluationId");
+    const sRunId = sanitizeIdentifier(manifest.runId, "runId");
+    const runDir = path.resolve(this.baseDir, sEvalId, sRunId);
+    if (!runDir.startsWith(this.baseDir + path.sep)) {
+      throw new Error(`Path traversal detected: ${runDir} is outside baseDir ${this.baseDir}`);
+    }
+
     fs.mkdirSync(runDir, { recursive: true });
     this.currentRunDir = runDir;
     this.currentManifest = { ...manifest, status: "RUNNING" };
@@ -121,6 +145,52 @@ export class CeriEvidenceStore {
     this.currentRunDir = undefined;
     this.currentManifest = undefined;
     return result;
+  }
+
+  /**
+   * Loads assertions recorded for a past evaluation run.
+   */
+  loadAssertions(evaluationId: string, runId: string): Record<string, boolean> | undefined {
+    const sEvalId = sanitizeIdentifier(evaluationId, "evaluationId");
+    const sRunId = sanitizeIdentifier(runId, "runId");
+    const assertionsPath = path.resolve(this.baseDir, sEvalId, sRunId, "assertions.json");
+    if (!assertionsPath.startsWith(this.baseDir + path.sep)) {
+      throw new Error(`Path traversal detected: ${assertionsPath} is outside baseDir ${this.baseDir}`);
+    }
+    if (!fs.existsSync(assertionsPath)) return undefined;
+    try {
+      const data = JSON.parse(fs.readFileSync(assertionsPath, "utf-8"));
+      if (Array.isArray(data)) {
+        const map: Record<string, boolean> = {};
+        for (const item of data) {
+          if (item && typeof item === "object" && typeof item.id === "string") {
+            map[item.id] = Boolean(item.passed);
+          }
+        }
+        return map;
+      } else if (data && typeof data === "object") {
+        return data as Record<string, boolean>;
+      }
+    } catch {}
+    return undefined;
+  }
+
+  /**
+   * Loads manifest for a past evaluation run.
+   */
+  loadManifest(evaluationId: string, runId: string): RunManifest | undefined {
+    const sEvalId = sanitizeIdentifier(evaluationId, "evaluationId");
+    const sRunId = sanitizeIdentifier(runId, "runId");
+    const manifestPath = path.resolve(this.baseDir, sEvalId, sRunId, "manifest.json");
+    if (!manifestPath.startsWith(this.baseDir + path.sep)) {
+      throw new Error(`Path traversal detected: ${manifestPath} is outside baseDir ${this.baseDir}`);
+    }
+    if (!fs.existsSync(manifestPath)) return undefined;
+    try {
+      return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as RunManifest;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

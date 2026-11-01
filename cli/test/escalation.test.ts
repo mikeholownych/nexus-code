@@ -8,15 +8,15 @@ import {
   computeFailureFingerprint,
 } from "../src/core/escalation.js";
 
-test("computeFailureFingerprint generates deterministic hashes", () => {
+test("computeFailureFingerprint generates deterministic hashes and normalizes line numbers", () => {
   const f1: FailureEvidence = {
     exitCode: 1,
-    stderr: "Error: expected 42 but received undefined\n    at test.js:10:5",
+    stderr: "Error: expected 42 but received undefined\n    at calculateTotal (/home/user/nexus/src/calc.ts:10:5)",
     failingTests: ["testSuite > calculateTotal"],
   };
   const f2: FailureEvidence = {
     exitCode: 1,
-    stderr: "Error: expected 42 but received undefined\n    at test.js:10:5",
+    stderr: "Error: expected 42 but received undefined\n    at calculateTotal (/tmp/run-123/calc.ts:99:45)",
     failingTests: ["testSuite > calculateTotal"],
   };
   const f3: FailureEvidence = {
@@ -118,6 +118,51 @@ test("evaluateEscalation detects repeating failure cycle and halts at OPERATOR_D
   assert.equal(decision.cycleDetected, true);
   assert.equal(decision.recommendedAction, "REQUEST_OPERATOR");
   assert.match(decision.reason, /cycle detected/i);
+});
+
+test("evaluateEscalation detects immediate cycle when identical diff is re-introduced", () => {
+  const failure: FailureEvidence = {
+    exitCode: 1,
+    stderr: "Error: failure",
+    diff: "diff --git a/file.ts b/file.ts\n+bad_change()",
+  };
+
+  const fp = computeFailureFingerprint(failure);
+  const diffHash = "68b329da9893e340"; // or computeDiffHash(failure.diff)
+  const history: EscalationHistoryEntry[] = [
+    {
+      stage: "INITIAL_ATTEMPT",
+      attempt: 1,
+      fingerprint: fp,
+      diffHash,
+      timestamp: Date.now() - 5000,
+    },
+  ];
+
+  const decision = evaluateEscalation({
+    currentStage: "DIAGNOSTIC_ANALYSIS",
+    attemptCount: 2,
+    failureEvidence: failure,
+    history: [
+      {
+        stage: "INITIAL_ATTEMPT",
+        attempt: 1,
+        fingerprint: fp,
+        diffHash: "bad_diff_hash",
+        timestamp: Date.now() - 10000,
+      },
+      {
+        stage: "INITIAL_ATTEMPT",
+        attempt: 2,
+        fingerprint: fp,
+        diffHash: "different_diff",
+        timestamp: Date.now() - 5000,
+      },
+    ],
+  });
+
+  assert.equal(decision.cycleDetected, true);
+  assert.equal(decision.nextStage, "OPERATOR_DECISION");
 });
 
 test("evaluateEscalation transitions to OPERATOR_DECISION when maxAttempts exceeded", () => {

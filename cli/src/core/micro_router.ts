@@ -11,7 +11,7 @@
  * 3. Model classification can never override hard security or policy constraints.
  */
 
-import { isSpecialistRole, type SpecialistRole } from "./specialist_profiles.js";
+import type { SpecialistRole } from "./specialist_profiles.js";
 
 export type RoutingKind =
   | "DETERMINISTIC_FASTPATH"
@@ -39,6 +39,14 @@ interface DeterministicPattern {
   reason: string;
 }
 
+/**
+ * Checks whether an input prompt conveys code authoring, patching, or mutation intent.
+ * Prompts with mutation intent cannot be routed to read-only specialist profiles.
+ */
+export function isMutationIntent(q: string): boolean {
+  return /\b(?:fix|patch|edit|modify|write|create|delete|remove|bump|update|merge|refactor|implement|replace|change|remedy)\b/i.test(q);
+}
+
 const DETERMINISTIC_PATTERNS: DeterministicPattern[] = [
   // 1. Direct test suite execution
   {
@@ -59,47 +67,57 @@ const DETERMINISTIC_PATTERNS: DeterministicPattern[] = [
     reason: "Pure repository diff or status query without code authoring",
   },
 
-  // 3. Security and vulnerability review requests
+  // 3. Security and vulnerability review requests (read-only)
   {
     ruleId: "SPECIALIST_SECURITY_AUDIT",
     kind: "SPECIALIST_DELEGATION",
-    matcher: (q) => /\b(?:security\s+review|vulnerability\s+audit|codeql|dependabot|injection\s+check)\b/i.test(q),
+    matcher: (q) =>
+      !isMutationIntent(q) &&
+      /\b(?:security\s+review|vulnerability\s+audit|codeql|dependabot|injection\s+check)\b/i.test(q),
     targetRole: "security_reviewer",
     reason: "Query specifically requests security auditing or vulnerability analysis",
   },
 
-  // 4. Failure investigation & debugging
+  // 4. Failure investigation & debugging (read-only diagnostic)
   {
     ruleId: "SPECIALIST_FAILURE_DEBUG",
     kind: "SPECIALIST_DELEGATION",
-    matcher: (q) => /\b(?:investigate\s+(?:the\s+)?failure|diagnose\s+crash|debug\s+test\s+failure|stack\s*trace)\b/i.test(q),
+    matcher: (q) =>
+      !isMutationIntent(q) &&
+      /\b(?:investigate\s+(?:the\s+)?failure|diagnose\s+crash|debug\s+test\s+failure|stack\s*trace)\b/i.test(q),
     targetRole: "failure_debugger",
     reason: "Query targets failure triage, diagnostic stack trace analysis, or crash isolation",
   },
 
-  // 5. Dependency & call-site tracing
+  // 5. Dependency & call-site tracing (read-only)
   {
     ruleId: "SPECIALIST_CALL_SITE",
     kind: "SPECIALIST_DELEGATION",
-    matcher: (q) => /\b(?:call\s*sites?|who\s+calls|trace\s+dependencies?|downstream\s+callers?)\b/i.test(q),
+    matcher: (q) =>
+      !isMutationIntent(q) &&
+      /\b(?:call\s*sites?|who\s+calls|trace\s+dependencies?|downstream\s+callers?)\b/i.test(q),
     targetRole: "call_site_analyzer",
     reason: "Query targets call graph tracing, dependency flow, or caller discovery",
   },
 
-  // 6. Semantic exploration & search
+  // 6. Semantic exploration & search (read-only)
   {
     ruleId: "SPECIALIST_EXPLORATION",
     kind: "SPECIALIST_DELEGATION",
-    matcher: (q) => /\b(?:explore\s+(?:the\s+)?codebase|architecture\s+overview|map\s+the\s+modules?)\b/i.test(q),
+    matcher: (q) =>
+      !isMutationIntent(q) &&
+      /\b(?:explore\s+(?:the\s+)?codebase|architecture\s+overview|map\s+the\s+modules?)\b/i.test(q),
     targetRole: "semantic_explorer",
     reason: "Query requests broad architectural reconnaissance or cross-file pattern discovery",
   },
 
-  // 7. Acceptance & review
+  // 7. Acceptance & review (read-only)
   {
     ruleId: "SPECIALIST_ACCEPTANCE",
     kind: "SPECIALIST_DELEGATION",
-    matcher: (q) => /\b(?:independent\s+review|verify\s+(?:the\s+)?release|acceptance\s+check)\b/i.test(q),
+    matcher: (q) =>
+      !isMutationIntent(q) &&
+      /\b(?:independent\s+review|verify\s+(?:the\s+)?release|acceptance\s+check)\b/i.test(q),
     targetRole: "acceptance_reviewer",
     reason: "Query requests independent validation, acceptance review, or verification gate check",
   },

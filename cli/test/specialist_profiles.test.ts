@@ -30,11 +30,18 @@ test("specialist profiles declare explicit permitted tools and bounds", () => {
   }
 });
 
-test("isSpecialistRole identifies valid specialist roles", () => {
+test("isSpecialistRole identifies valid specialist roles and resists prototype poisoning", () => {
   assert.equal(isSpecialistRole("semantic_explorer"), true);
   assert.equal(isSpecialistRole("call_site_analyzer"), true);
   assert.equal(isSpecialistRole("unknown_role"), false);
+  assert.equal(isSpecialistRole("constructor"), false);
+  assert.equal(isSpecialistRole("toString"), false);
+  assert.equal(isSpecialistRole("__proto__"), false);
   assert.equal(isSpecialistRole(undefined), false);
+
+  assert.throws(() => {
+    validateSpecialistToolAccess("constructor" as any, "read_file");
+  }, /Unknown specialist role: 'constructor'/);
 });
 
 test("validateSpecialistToolAccess permits whitelisted tools and blocks unauthorized tools", () => {

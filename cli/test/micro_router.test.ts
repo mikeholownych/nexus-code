@@ -62,4 +62,15 @@ test("routeTaskMicroDecision falls back to general engineering execution for com
   assert.equal(general.kind, "GENERAL_ENGINEERING");
   assert.equal(general.ruleId, "FALLBACK_GENERAL_MODEL");
   assert.equal(general.requiresInference, true);
+
+  // Mutation intent with specialist keywords must route to general engineering
+  const fixBug = routeTaskMicroDecision("debug and fix the broken test in runner.ts");
+  assert.equal(fixBug.kind, "GENERAL_ENGINEERING");
+  assert.equal(fixBug.ruleId, "FALLBACK_GENERAL_MODEL");
+
+  const patchSec = routeTaskMicroDecision("patch the security vulnerability in auth.ts");
+  assert.equal(patchSec.kind, "GENERAL_ENGINEERING");
+
+  const replaceCallers = routeTaskMicroDecision("find references of foo and replace them with bar");
+  assert.equal(replaceCallers.kind, "GENERAL_ENGINEERING");
 });
