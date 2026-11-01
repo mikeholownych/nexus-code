@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
+## [v1.1.2] - 2026-11-01
+
+See [`docs/releases/v1.1.2.md`](docs/releases/v1.1.2.md) (and candidate notes [`docs/releases/v1.1.2-rc.1.md`](docs/releases/v1.1.2-rc.1.md)) for full release notes.
+Patch release: a crash-resumed work unit no longer receives the second and later messages of a multi-message prompt twice. The v1.1.1 notes carry a matching addendum.
+
 ## [v1.1.1] - 2026-11-01
 
 See [`docs/releases/v1.1.1.md`](docs/releases/v1.1.1.md) (and candidate notes [`docs/releases/v1.1.1-rc.1.md`](docs/releases/v1.1.1-rc.1.md)) for full release notes.
