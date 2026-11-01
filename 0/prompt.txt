@@ -1,0 +1,112 @@
+Manual terminal screenshots are exempted for completing v1.0.0 release.
+
+---
+
+From that same trail: 
+Medium
+Code review
+·
+4h ago
+·
+In a non-Git POSIX workspace, creation stores a legal filename such as a:b in the manifest (cli/src/checkpoint.ts:1000–1003,1023), but this unconditional Windows-drive check rejects it. listCheckpoints silently drops the saved checkpoint at lines 1046–1049, making it unrestorable and potentially causing /undo to select an older snapshot. Apply native path rules consistently during creation and validation.
+
+Code review
+·
+4h ago
+·
+These escapes change the filename checked by check-ignore, so an ignored a/? (rule a/?) is checked as a different path. If a was a captured untracked file, the replacement preflight at cli/src/checkpoint.ts:798–800 passes, and restore mutates the workspace and runs cleanup at lines 1289–1307 before copying fails on the retained directory at line 1309. Pass the ./-prefixed filename without glob escaping.
+
+Security review
+·
+4h ago
+·
+assertGitChangesSafe now drops every changed path outside the workspace prefix (via workspaceRelativeGitPath). But git stash create at line 959 still records the index and worktree of the whole repository into the checkpoint commit under refs/nexus/checkpoints/<id>. If the workspace is a subdirectory, a staged or unstaged credential in a sibling tracked file (for example config.env at the repo root) is no longer checked by assertNoSensitivePersistenceContent, and it gets saved durably in the checkpoint ref. The base scanned these index entries, and the previous head scanned both the index and the worktree, so this is a regression of the persistence-protection control. Keep scanning every repository-wide changed path, or create the stash commit with a pathspec limited to the workspace.
+
+Code review
+·
+6h ago
+·
+For a POSIX workspace in a Git subdirectory named a\b, Git returns the literal prefix a\b/, but this converts it to a/b/. The consumers at cli/src/checkpoint.ts:126–129, :197–198 and :795–796 consequently select a different directory or no files, allowing restore to report success while leaving tracked changes untouched. Preserve the Git-provided prefix without rewriting literal backslashes.
+
+Slop
+·
+6h ago
+·
+directoryContainsOnlyGitCleanRemovableEntries and directoryContainsOnlyTrackedRemovableEntries are near-identical recursive walkers. Between them they hold four copies of the same git check-ignore --no-index -q try/catch with a status-1 check, and assertNoIgnoredAddedPaths adds a fifth. Extract an isGitIgnored(path): boolean helper and one walker; that would remove roughly 60 duplicated lines from a fail-closed path.
+
+Slop
+·
+6h ago
+·
+The ignored-name set ["node_modules", ".git", "target", "dist", ".nexus", ".next", ".cache"] is now copied into workspaceSnapshotPaths, workspaceSnapshotDirectories, directoryHasCleanupPreservedEntries and removeNonSnapshotEntries, on top of the existing copy in copyDirFiltered. These five lists decide what restore captures, deletes and preserves. If one copy drifts, restore could delete data the snapshot never captured. Hoist the set to a single module constant.
+
+Low
+Slop
+·
+4h ago
+·
+The new try { isGitPathIgnored(...) } catch { return false; } block in directoryContainsOnlyTrackedRemovableEntries is indented at the wrong level, outdented from the if (entry.isDirectory()) body it belongs to. This looks like leftover debris from a mechanical replacement. Move the block to the correct indentation.
+
+Slop
+·
+4h ago
+·
+The same parent-safety loop now appears twice: in assertNoIgnoredAddedPaths (L178-189) and in assertGitChangesSafe (L370-381). It walks relativePath.split("/").slice(0, -1) and stops at the first missing, non-directory or symlinked parent. Both copies decide whether a path is skipped in fail-closed checks, so they need to stay identical. Move the loop into one hasUnsafeParent(relativePath) helper.
+
+Slop
+·
+6h ago
+·
+assertNoNestedGitRepositoryAncestors repeats the NESTED_GIT_REPOSITORY_ERROR text as a string literal at L442, then aliases the constant to a local nestedRepositoryError at L451. The caller in restore compares error.message === NESTED_GIT_REPOSITORY_ERROR, so the literal only works because the two strings happen to match. Use the constant directly everywhere and drop the alias.
+
+Slop
+·
+6h ago
+·
+restoreGitIndex already returns early when prefix is empty, so the ternaries prefix ? [...] : [] and workspacePathspec.length ? ... : [] can never take their empty branch. This is dead code left over from an earlier version.
+
+Slop
+·
+6h ago
+·
+
+---
+
+From kimi-code agent:
+ ● Picked up the held-out corpus lane and claimed V1_HELDOUT_CORPUS_CUSTODY_20261028.
+
+   • Repository: /home/mike/nexus-wt/qualify-all-accepted-v9
+   • Branch/HEAD: v1/qualify-all-accepted-v9 at 4c4df05a32889dae251750780880b6d4d61401eb
+   • Current origin/main: cbb3b653a6bb6060071d8927e08e30d63765865e
+   • Existing modifications to two TUI test files were left untouched.
+
+   Current findings
+
+   • T2’s public manifest is unchanged and matches origin/main: SHA-256 50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b.
+   • T2 remains incompatible with qualification because its sealed corpus uses legacy validators. The evaluator correctly requires isolated blackbox-v1 oracles at eval/validate.mjs:49; enabling legacy validation would violate the security boundary.
+   • T3’s manifest is unchanged: SHA-256 85fb9cafbe18e846bd64fb13eb4fba0f92df0792bc93d12adaa685e04c9f1383. Its historical custody report records blackbox-v1, but fresh custody acceptance remains unverified.
+
+   Blocker and handoff
+
+   Both /home/mike/nexus-heldout-v2 and /home/mike/nexus-heldout-t3 remain root:root, mode 0700, with no ACL granting this account access. I did not attempt privileged access or read any private payloads. A handoff request is recorded in nexus-claims.log.
+
+   The authorized root custodian must now either:
+
+   1. perform the T2 conversion/replacement and fresh validation, or
+   2. provide an explicitly approved, non-disclosing custody execution path.
+
+   No qualification runs, tests, commits, or release actions were performed. The claim remains held pending that access handoff; stable v1.0.0 remains blocked.
+
+---
+
+manual 5×3 terminal matrix is waived for v1.0.0, and the automated and scripted PTY gates (§5.1–§5.2) stay mandatory
+
+---
+
+<send_user_message_question_reply>
+[{"questionItemId":"[\"request_user_input_async\",\"call_d7c7fe0e413145f38eb98af46036ca77\",0]","question":"An uncommitted PR318 patch appeared in the shared worktree at 20:01 UTC, raising the scanner deadline from 25 to 60 seconds and the parent timeout from 35 to 70 seconds. This conflicts with your instruction not to weaken thresholds, so I preserved it. Is that your authorized change, or should I wait for its author to hand it off before altering the worktree?","answer":"It is mine; take over and replace it with a fix that keeps the 25-second limit"}]
+</send_user_message_question_reply>
+
+---
+
+continue
