@@ -25,7 +25,7 @@ export class CeriReportGenerator {
     for (const { manifest, comparison } of runs) {
       if (manifest.status === "FAILED") failedRuns++;
       else if (manifest.status === "COMPLETED") passedRuns++;
-      else if (manifest.status === "INTERRUPTED" || manifest.status === "INCONCLUSIVE") inconclusiveCount++;
+      else if (manifest.status === "INTERRUPTED" || manifest.status === "INCONCLUSIVE" || manifest.status === "NOT_EXECUTED") inconclusiveCount++;
 
       if (comparison) {
         if (comparison.outcome === "CONFIRMED_REGRESSION") {

@@ -5,27 +5,27 @@
 **Date:** 2026-11-01  
 **Target Release:** Nexus Code `v1.1.2`  
 **Branch:** `v1/v112-specialist-orchestration`  
-**Base Commit:** `9a62db9976bb6da377cf968ba02fb1ca077df346`  
+**Base Commit:** `9a62db998991a4378941d9aff83090a47be96669`  
 
 ---
 
 ## 1. Test Execution Ledger
 
-All tests executed with isolated `HOME=/home/mike/nexus-wt/v112-orchestration-home`.
+Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node.js v24.11.1 (Linux x86_64) with an isolated temporary `HOME`. Durations are wall-clock values reported by `node --test` for each file run on its own.
 
 | Test Suite | Tests Run | Pass | Fail | Duration | Command |
 |---|---|---|---|---|---|
-| `cli/test/specialist_profiles.test.ts` | 4 | 4 | 0 | 18ms | `tsx --test test/specialist_profiles.test.ts` |
-| `cli/test/independent_review.test.ts` | 5 | 5 | 0 | 25ms | `tsx --test test/independent_review.test.ts` |
-| `cli/test/micro_router.test.ts` | 3 | 3 | 0 | 12ms | `tsx --test test/micro_router.test.ts` |
-| `cli/test/escalation.test.ts` | 6 | 6 | 0 | 18ms | `tsx --test test/escalation.test.ts` |
-| `cli/test/adaptive_throttle.test.ts` | 5 | 5 | 0 | 12ms | `tsx --test test/adaptive_throttle.test.ts` |
-| `cli/test/comparative_harness.test.ts` | 2 | 2 | 0 | 12ms | `tsx --test test/comparative_harness.test.ts` |
-| `cli/test/ceri_*.test.ts` | 19 | 19 | 0 | 650ms | `tsx --test test/ceri_*.test.ts` |
-| `cli/test/operation_messages.test.ts` (Regression) | 8 | 8 | 0 | 4.4s | `tsx --test test/operation_messages.test.ts` |
-| `cli/test/node_floor.test.ts` (Release Gates) | 6 | 6 | 0 | 1.9s | `tsx --test test/node_floor.test.ts` |
-| **Combined Orchestration & CERI Suite** | 44 | 44 | 0 | 6.8s | `node scripts/run_tests.mjs test/...` |
-| **Type Check Gate** | 1 | 1 | 0 | 13.8s | `tsc --noEmit` |
+| `cli/test/specialist_profiles.test.ts` | 4 | 4 | 0 | 301ms | `tsx --test test/specialist_profiles.test.ts` |
+| `cli/test/independent_review.test.ts` | 5 | 5 | 0 | 328ms | `tsx --test test/independent_review.test.ts` |
+| `cli/test/micro_router.test.ts` | 3 | 3 | 0 | 286ms | `tsx --test test/micro_router.test.ts` |
+| `cli/test/escalation.test.ts` | 6 | 6 | 0 | 352ms | `tsx --test test/escalation.test.ts` |
+| `cli/test/adaptive_throttle.test.ts` | 6 | 6 | 0 | 331ms | `tsx --test test/adaptive_throttle.test.ts` |
+| `cli/test/comparative_harness.test.ts` | 3 | 3 | 0 | 333ms | `tsx --test test/comparative_harness.test.ts` |
+| `cli/test/ceri_*.test.ts` | 19 | 19 | 0 | 4.6s (sum) | `tsx --test test/ceri_*.test.ts` |
+| `cli/test/operation_messages.test.ts` (Regression) | 8 | 8 | 0 | 9.9s | `tsx --test test/operation_messages.test.ts` |
+| `cli/test/node_floor.test.ts` (Release Gates) | 6 | 6 | 0 | 1.5s | `tsx --test test/node_floor.test.ts` |
+| **Combined Orchestration & CERI Suite** | 46 | 46 | 0 | 5.1s | `node scripts/run_tests.mjs test/...` |
+| **Type Check Gate** | 1 | 1 | 0 | — | `tsc --noEmit` |
 
 ---
 
@@ -68,15 +68,14 @@ All tests executed with isolated `HOME=/home/mike/nexus-wt/v112-orchestration-ho
   - When idle (empty history), respects `min(maxConcurrency, baselineConcurrency)`.
   - Smoothly recovers concurrency slots back to baseline as observed latency normalizes.
 - `TokenBudgetTracker`:
-  - Accurately tracks total consumed tokens across all calls, including recording consumption when an invocation overflows the budget (`consume` returns `false` while incrementing `consumedTokens`).
+  - Accurately tracks total consumed tokens across all calls, including recording consumption when an invocation overflows the budget (`consume` returns `false` while incrementing `consumedTokens`). Non-finite token counts (`NaN`, `Infinity`) throw `RangeError` instead of corrupting the counter.
   - Emits `WARNING` at 80% consumption, `CRITICAL` at 95%, and blocks consumption when `EXHAUSTED`.
 
 ### 2.6 Comparative Evaluation Framework
 - `ComparativeEvaluationHarness`:
   - Provides both an empirical trace evaluator (`evaluateTraces`) for recorded run traces and an analytical projection model (`runBenchmark`).
-  - Demonstrates architectural advantages of Config C (Adaptive) over Config A (Baseline Generalist) and Config B (Specialists without micro-routing).
-  - Efficiency scores are dynamically derived from relative token consumption reduction versus baseline Config A.
-  - Note: §2.6 scenario projections represent analytical architectural ceilings (e.g. 0 model tokens for deterministic micro-routed fastpaths); empirical benchmark validation with live LLMs is evaluated in subsequent test qualification passes.
+  - `runBenchmark` is an assumption-driven projection, not a measurement. Config B and C token totals are fixed multiples (×0.75, ×0.45, ×0.7, or a nominal 50 tokens) of each scenario's synthetic baseline. The efficiency scores it reports restate those assumptions and demonstrate nothing about any configuration.
+  - `evaluateTraces` computes the same profile fields from recorded execution traces, and rejects traces with an unknown `configId`. No recorded traces exist yet, so this PR makes no claim that any configuration is better.
 
 ---
 

@@ -115,7 +115,7 @@ test("Full CERI Foundational Vertical Slice: Definition -> Execution -> Manifest
   }
 });
 
-test("CeriEvaluationRunner handles empty assertions, default command execution, and missing baseline assertions", async () => {
+test("CeriEvaluationRunner handles empty assertions, refuses to execute without an executor, and missing baseline assertions", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ceri-edge-cases-"));
   try {
     const store = new CeriEvidenceStore(tmpDir);
@@ -141,7 +141,9 @@ test("CeriEvaluationRunner handles empty assertions, default command execution, 
     });
     assert.equal(emptyResult.manifest.status, "INCONCLUSIVE");
 
-    // 2. Default execution executes command in shell
+    // 2. Without an executor the runner executes nothing: a command assertion that would pass if run is
+    // NOT_EXECUTED, never COMPLETED, and leaves no assertion records that could later serve as a baseline.
+    const marker = path.join(tmpDir, "ran-marker");
     const cmdDef: EvaluationDefinition = {
       id: "eval-cmd",
       version: "1.0.0",
@@ -154,10 +156,9 @@ test("CeriEvaluationRunner handles empty assertions, default command execution, 
       deterministicAssertions: [
         {
           id: "assert-echo",
-          description: "Echo test",
-          command: "node -e 'process.stdout.write(\"all-good\")'",
+          description: "Would pass if the runner executed it",
+          command: `touch ${JSON.stringify(marker)}`,
           expectedExitCode: 0,
-          expectedStdoutPattern: "all-good",
         },
       ],
       independentValidationCriteria: [],
@@ -168,8 +169,38 @@ test("CeriEvaluationRunner handles empty assertions, default command execution, 
       gatewayUrl: "http://localhost:9200",
       evidenceStore: store,
     });
-    assert.equal(cmdResult.manifest.status, "COMPLETED");
-    assert.equal(cmdResult.assertions["assert-echo"], true);
+    assert.equal(cmdResult.manifest.status, "NOT_EXECUTED");
+    assert.deepEqual(cmdResult.assertions, {});
+    assert.equal(fs.existsSync(marker), false, "the runner must never execute assertion.command itself");
+    assert.equal(store.loadAssertions("eval-cmd", cmdResult.manifest.runId), undefined);
+
+    const notExecutedReport = CeriReportGenerator.generateOperationalReport([{ manifest: cmdResult.manifest }], 1);
+    assert.equal(notExecutedReport.inconclusiveCount, 1);
+    assert.doesNotMatch(CeriReportGenerator.formatMarkdownReport(notExecutedReport), /NO REGRESSIONS OBSERVED/);
+
+    // A NOT_EXECUTED run cannot be used as baseline evidence.
+    const passingExecutor = async () => true;
+    const againstNotExecuted = await CeriEvaluationRunner.runEvaluation(
+      cmdDef,
+      {
+        model: { name: "model-test", parameters: { temperature: 0 } },
+        gatewayUrl: "http://localhost:9200",
+        evidenceStore: store,
+        baseline: {
+          baselineId: cmdResult.manifest.runId,
+          evaluationId: "eval-cmd",
+          evaluationVersion: "1.0.0",
+          sourceCommit: cmdResult.manifest.sourceCommit,
+          modelName: "model-test",
+          selectionRationale: "not-executed run as baseline",
+          manifestSha256: "hash",
+          establishedAt: new Date().toISOString(),
+        },
+      },
+      passingExecutor
+    );
+    assert.equal(againstNotExecuted.manifest.status, "COMPLETED");
+    assert.equal(againstNotExecuted.comparison?.outcome, "INCOMPARABLE");
 
     // 3. Baseline specification without assertions produces INCOMPARABLE
     const missingBaselineResult = await CeriEvaluationRunner.runEvaluation(cmdDef, {
@@ -186,8 +217,9 @@ test("CeriEvaluationRunner handles empty assertions, default command execution, 
         manifestSha256: "hash",
         establishedAt: new Date().toISOString(),
       },
-    });
+    }, passingExecutor);
 
+    assert.equal(missingBaselineResult.manifest.status, "COMPLETED");
     assert.equal(missingBaselineResult.comparison?.outcome, "INCOMPARABLE");
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -118,45 +118,15 @@ export class CeriEvaluationRunner {
     const assertionResults: Record<string, boolean> = {};
     const recordedAssertions: Array<{ id: string; passed: boolean; timestamp: string }> = [];
 
-    for (const assertion of definition.deterministicAssertions) {
+    // Assertions run only through an executor the caller supplies (and is accountable for, e.g. one that routes
+    // commands through Nexus's command policy and sandbox). The runner never runs `assertion.command` itself:
+    // without an executor nothing is executed, and the run is recorded as NOT_EXECUTED rather than passed or failed.
+    // No assertion records are written for a run that executed nothing, so it can never serve as baseline evidence.
+    for (const assertion of assertionExecutor ? definition.deterministicAssertions : []) {
       let passed = false;
-      if (assertionExecutor) {
-        try {
-          passed = await assertionExecutor(assertion.id, definition);
-        } catch {
-          passed = false;
-        }
-      } else if (assertion.command) {
-        try {
-          const stdout = execSync(assertion.command, {
-            timeout: 30000,
-            stdio: ["ignore", "pipe", "pipe"],
-            encoding: "utf-8",
-          });
-          const expectedCode = assertion.expectedExitCode ?? 0;
-          let matchesCode = true;
-          let matchesPattern = true;
-          if (assertion.expectedStdoutPattern) {
-            matchesPattern = new RegExp(assertion.expectedStdoutPattern).test(stdout);
-          }
-          passed = matchesCode && matchesPattern;
-        } catch (err: unknown) {
-          const status = (err as { status?: number })?.status;
-          const stdout = (err as { stdout?: string | Buffer })?.stdout?.toString() ?? "";
-          const stderr = (err as { stderr?: string | Buffer })?.stderr?.toString() ?? "";
-          if (assertion.expectedExitCode !== undefined && typeof status === "number") {
-            const matchesCode = status === assertion.expectedExitCode;
-            let matchesPattern = true;
-            const combinedOutput = `${stdout}\n${stderr}`;
-            if (assertion.expectedStdoutPattern) {
-              matchesPattern = new RegExp(assertion.expectedStdoutPattern).test(combinedOutput);
-            }
-            passed = matchesCode && matchesPattern;
-          } else {
-            passed = false;
-          }
-        }
-      } else {
+      try {
+        passed = await assertionExecutor!(assertion.id, definition);
+      } catch {
         passed = false;
       }
 
@@ -174,7 +144,7 @@ export class CeriEvaluationRunner {
       });
     }
 
-    options.evidenceStore.recordAssertions(recordedAssertions);
+    if (assertionExecutor) options.evidenceStore.recordAssertions(recordedAssertions);
 
     // 3. Finalize run with tamper-proof integrity hash
     let finalStatus: RunStatus;
@@ -184,6 +154,9 @@ export class CeriEvaluationRunner {
       // An evaluation without assertions is inconclusive
       finalStatus = "INCONCLUSIVE";
       terminationReason = "Evaluation definition contains zero deterministic assertions to verify";
+    } else if (!assertionExecutor) {
+      finalStatus = "NOT_EXECUTED";
+      terminationReason = "No assertion executor was supplied; no assertion was executed";
     } else {
       const allPassed = Object.values(assertionResults).every(Boolean);
       finalStatus = allPassed ? "COMPLETED" : "FAILED";

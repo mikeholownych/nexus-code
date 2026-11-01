@@ -3,26 +3,25 @@
 **Document ID:** `NEXUS-EVIDENCE-V112-CERI`  
 **Target Release:** Nexus Code `v1.1.2`  
 **Date:** 2026-11-01  
-**Worktree:** `/home/mike/nexus-wt/v112-orchestration`  
 **Branch:** `v1/v112-specialist-orchestration`  
-**Base Commit:** `9a62db9976bb6da377cf968ba02fb1ca077df346`  
+**Base Commit:** `9a62db998991a4378941d9aff83090a47be96669`  
 
 ---
 
 ## 1. Test Execution Ledger
 
-All tests were executed using isolated `HOME=/home/mike/nexus-wt/v112-orchestration-home` on Node.js v24.11.1 (Linux x86_64).
+Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node.js v24.11.1 (Linux x86_64) with an isolated temporary `HOME`. Durations are wall-clock values reported by `node --test` for each file run on its own.
 
 | Test Suite | Tests Run | Pass | Fail | Duration | Command |
 |---|---|---|---|---|---|
-| `cli/test/ceri_contracts.test.ts` | 3 | 3 | 0 | 8ms | `tsx --test test/ceri_contracts.test.ts` |
-| `cli/test/ceri_evidence_store.test.ts` | 3 | 3 | 0 | 65ms | `tsx --test test/ceri_evidence_store.test.ts` |
-| `cli/test/ceri_baseline.test.ts` | 6 | 6 | 0 | 18ms | `tsx --test test/ceri_baseline.test.ts` |
-| `cli/test/ceri_investigation.test.ts` | 2 | 2 | 0 | 12ms | `tsx --test test/ceri_investigation.test.ts` |
-| `cli/test/ceri_remediation.test.ts` | 3 | 3 | 0 | 14ms | `tsx --test test/ceri_remediation.test.ts` |
-| `cli/test/ceri_e2e.test.ts` | 2 | 2 | 0 | 480ms | `tsx --test test/ceri_e2e.test.ts` |
-| **Combined Orchestration & CERI Suite** | 44 | 44 | 0 | 6.8s | `node scripts/run_tests.mjs test/...` |
-| **TypeScript Typecheck** | 1 | 1 | 0 | 13.8s | `tsc --noEmit` |
+| `cli/test/ceri_contracts.test.ts` | 3 | 3 | 0 | 299ms | `tsx --test test/ceri_contracts.test.ts` |
+| `cli/test/ceri_evidence_store.test.ts` | 3 | 3 | 0 | 560ms | `tsx --test test/ceri_evidence_store.test.ts` |
+| `cli/test/ceri_baseline.test.ts` | 6 | 6 | 0 | 335ms | `tsx --test test/ceri_baseline.test.ts` |
+| `cli/test/ceri_investigation.test.ts` | 2 | 2 | 0 | 305ms | `tsx --test test/ceri_investigation.test.ts` |
+| `cli/test/ceri_remediation.test.ts` | 3 | 3 | 0 | 302ms | `tsx --test test/ceri_remediation.test.ts` |
+| `cli/test/ceri_e2e.test.ts` | 2 | 2 | 0 | 2.8s | `tsx --test test/ceri_e2e.test.ts` |
+| **Combined Orchestration & CERI Suite** | 46 | 46 | 0 | 5.1s | `node scripts/run_tests.mjs test/...` |
+| **TypeScript Typecheck** | 1 | 1 | 0 | — | `tsc --noEmit` |
 
 ---
 
@@ -66,7 +65,7 @@ All tests were executed using isolated `HOME=/home/mike/nexus-wt/v112-orchestrat
 
 ### 2.6 Full End-to-End Vertical Slice
 - Full flow executed: `Definition` $\to$ `Execution` $\to$ `Run Manifest` $\to$ `Durable Evidence` $\to$ `Integrity Record` $\to$ `Baseline Comparison` $\to$ `Machine-Readable Operational Report` $\to$ `Markdown Summary`.
-- Verifies default execution of assertion `command` via shell when `assertionExecutor` is omitted.
+- The runner never executes `assertion.command` itself. Assertions run only through a caller-supplied `assertionExecutor`. Without one, the run is `NOT_EXECUTED`, writes no assertion records (so it cannot serve as a baseline), and is counted as inconclusive in reports.
 - Verifies empty assertion sets result in `INCONCLUSIVE`.
 
 ---

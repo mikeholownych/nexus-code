@@ -134,6 +134,16 @@ test("CeriEvidenceStore rejects path traversal in evaluationId and runId", () =>
       /contains invalid characters or path traversal elements/
     );
 
+    // "." would collapse into the parent directory (a run written into the evaluation directory itself).
+    assert.throws(
+      () => store.initRun({ ...baseManifest, runId: "." }),
+      /contains invalid characters or path traversal elements/
+    );
+    assert.throws(
+      () => store.initRun({ ...baseManifest, evaluationId: " . " }),
+      /contains invalid characters or path traversal elements/
+    );
+
     assert.throws(
       () => store.loadAssertions("../etc", "run-01"),
       /contains invalid characters or path traversal elements/

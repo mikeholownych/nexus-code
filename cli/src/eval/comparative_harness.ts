@@ -93,11 +93,14 @@ export class ComparativeEvaluationHarness {
     };
 
     const scenarioIds = new Set<string>();
+    const profiles = { configA, configB, configC };
 
     for (const trace of traces) {
+      if (!Object.hasOwn(profiles, trace.configId)) {
+        throw new Error(`Unknown configId '${trace.configId}' in trace for scenario '${trace.scenarioId}'`);
+      }
+      const target = profiles[trace.configId];
       scenarioIds.add(trace.scenarioId);
-      const target =
-        trace.configId === "configA" ? configA : trace.configId === "configB" ? configB : configC;
       target.totalTurns += trace.turns;
       target.totalTokens += trace.tokensConsumed;
       if (trace.confirmationBiasDefectAccepted) target.confirmationBiasDefectsAccepted += 1;
@@ -122,8 +125,9 @@ export class ComparativeEvaluationHarness {
   }
 
   /**
-   * Executes an analytical projection model across defined benchmark scenarios.
-   * Efficiency score is dynamically derived from relative token savings versus baseline Config A.
+   * Computes an assumption-driven projection across the defined scenarios. Nothing is executed: Config B and C
+   * totals are fixed multiples of each scenario's synthetic baseline, so this is not evidence that any
+   * configuration is better. Use `evaluateTraces` with recorded runs for empirical comparison.
    */
   async runBenchmark(): Promise<ComparativeBenchmarkResult> {
     const configA: OrchestrationConfigProfile = {
@@ -188,7 +192,8 @@ export class ComparativeEvaluationHarness {
       configC.confirmationBiasDefectsAccepted += 0;
     }
 
-    // Derive efficiency score dynamically from measured token consumption reduction
+    // Efficiency is computed from the projected token totals above. Those totals come from fixed per-category
+    // multipliers, not from executed runs, so the result restates the model's assumptions and proves nothing.
     const baselineTokens = configA.totalTokens;
     configA.efficiencyScore = 0.0;
     configB.efficiencyScore =

@@ -17,6 +17,7 @@ export function sanitizeIdentifier(id: string, name: string): string {
   }
   const trimmed = id.trim();
   if (
+    trimmed === "." ||
     trimmed.includes("..") ||
     trimmed.includes("/") ||
     trimmed.includes("\\") ||

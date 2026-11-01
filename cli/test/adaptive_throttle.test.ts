@@ -93,3 +93,13 @@ test("TokenBudgetTracker tracks consumption and enforces limits", () => {
   assert.equal(tracker.isExhausted(), true);
   assert.equal(tracker.getWarningStatus(), "EXHAUSTED");
 });
+
+test("TokenBudgetTracker rejects non-finite token counts instead of poisoning the counter", () => {
+  const tracker = new TokenBudgetTracker({ maxTokens: 1000 });
+  assert.throws(() => tracker.consume(Number.NaN), RangeError);
+  assert.throws(() => tracker.consume(Number.POSITIVE_INFINITY), RangeError);
+  assert.equal(tracker.getTotalConsumed(), 0);
+  assert.equal(tracker.consume(5000), false);
+  assert.equal(tracker.isExhausted(), true);
+  assert.equal(tracker.getWarningStatus(), "EXHAUSTED");
+});

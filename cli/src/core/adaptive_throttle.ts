@@ -136,6 +136,9 @@ export class TokenBudgetTracker {
   }
 
   consume(tokens: number): boolean {
+    if (!Number.isFinite(tokens)) {
+      throw new RangeError(`Token count must be a finite number, got ${tokens}`);
+    }
     if (tokens <= 0) return true;
     this.consumedTokens += tokens;
     if (this.consumedTokens > this.maxTokens) {

@@ -94,3 +94,14 @@ test("ComparativeEvaluationHarness evaluates recorded execution traces", () => {
   assert.equal(result.profiles.configC.efficiencyScore, 80.0); // 80% savings
   assert.equal(result.profiles.configC.cyclesDetected, 1);
 });
+
+test("ComparativeEvaluationHarness rejects traces with an unknown configId", () => {
+  assert.throws(
+    () =>
+      ComparativeEvaluationHarness.evaluateTraces([
+        { scenarioId: "s1", configId: "configA", turns: 1, tokensConsumed: 100, confirmationBiasDefectAccepted: false, cycleDetected: false },
+        { scenarioId: "s1", configId: "configD" as never, turns: 1, tokensConsumed: 10, confirmationBiasDefectAccepted: false, cycleDetected: false },
+      ]),
+    /Unknown configId 'configD'/
+  );
+});
