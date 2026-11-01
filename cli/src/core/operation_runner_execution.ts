@@ -101,10 +101,20 @@ function isSubmittedUnitPrompt(message: ChatMessage): boolean {
   return initial || resumed;
 }
 
+/** Whether a submitted prompt's messages block carries `message`'s entry, at any position among its messages. */
+function promptCarriesMessage(prompt: string, message: OperationMessage): boolean {
+  const block = messagesBlock([message]);
+  const entryStart = block.indexOf("\n- [");
+  const header = block.slice(0, entryStart + 1);
+  const entry = block.slice(entryStart);
+  const at = prompt.indexOf(header);
+  return at >= 0 && prompt.indexOf(entry, at + header.length - 1) >= 0;
+}
+
 function unsubmittedMessages(history: ChatMessage[], messages?: OperationMessage[]): OperationMessage[] | undefined {
   if (!messages?.length) return messages;
   const prompts = history.filter(isSubmittedUnitPrompt).map((message) => message.content as string);
-  return messages.filter((message) => !prompts.some((prompt) => prompt.includes(messagesBlock([message]))));
+  return messages.filter((message) => !prompts.some((prompt) => promptCarriesMessage(prompt, message)));
 }
 
 /**
