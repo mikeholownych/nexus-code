@@ -6,6 +6,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readRequests, readCoverage, shellReadRequest, covered, mergeIntervals } from "../src/core/observation_identity.js";
 import { ExecutionTracker, createTracking, normalizeTracking } from "../src/core/execution_tracking.js";
+import { createLedger, renderPinnedLedger } from "../src/core/objective.js";
 
 const WS = "/work/repo";
 /** The engine's numbered listing (core file_ops: `{:>5} | line`). */
@@ -189,10 +190,35 @@ describe("tracker: equivalence, escalation and refusal", () => {
     const onlyS2 = (id: string) => id === s2.callId;
     assert.equal(t.recoveryDenial(4, "read_file", { path: "a.ts" }, "S1", WS, onlyS2, SIG), undefined, "S1's output was compacted away: re-acquisition allowed");
     assert.ok(t.recoveryDenial(4, "read_file", { path: "a.ts" }, "S1", WS, (id) => id === s1.callId, SIG));
-    // The exact-repeat path checks the last run's own call id as well.
+    // Other observing tools depend on what the state identity does not cover (ignored files, LSP, index): never refused.
     t.observe(5, { name: "list_dir", args: { path: "." }, success: true, text: "a.ts", stateBefore: "S1", callId: "ld1", present: () => true });
-    assert.ok(t.recoveryDenial(6, "list_dir", { path: "." }, "S1", WS, (id) => id === "ld1", SIG));
-    assert.equal(t.recoveryDenial(6, "list_dir", { path: "." }, "S1", WS, (id) => id !== "ld1", SIG), undefined);
+    for (const name of ["list_dir", "file_info", "search_code", "lsp_diagnostics", "semantic_search"]) {
+      assert.equal(t.recoveryDenial(6, name, { path: "." }, "S1", WS, () => true, SIG), undefined, name);
+    }
+    assert.equal(t.recoveryDenial(6, "read_file", { path: "a.ts", offset: 0, length: 10 }, "S1", WS, () => true, SIG), undefined, "byte-range read");
+  });
+
+  test("different slices of a file already read are redundant (not progress) but not a loop; the same lines three times are", () => {
+    const t = ExecutionTracker.fresh();
+    readObs(t, 1, { path: "a.ts" }, 300, 300, "S", () => true);
+    for (let i = 0; i < 6; i++) {
+      const v = readObs(t, 2 + i, { path: "a.ts", start_line: 1 + i * 20, end_line: 20 + i * 20 }, 20, 300, "S", () => true, 1 + i * 20);
+      assert.equal(v.classification, "OBSERVATION_DUPLICATE");
+      assert.equal(v.equivalentLoop, false, `slice ${i + 1}`);
+    }
+    readObs(t, 10, { path: "a.ts", start_line: 5, end_line: 9 }, 5, 300, "S", () => true, 5);
+    assert.equal(readObs(t, 11, { path: "a.ts", start_line: 5, end_line: 9 }, 5, 300, "S", () => true, 5).equivalentLoop, true, "lines 5-9 obtained again twice more");
+  });
+
+  test("a pinned ledger written before v1.1.2 (no recovery, no coverage) renders without error", () => {
+    const ledger = createLedger("Fix the doctor command");
+    const old = createTracking() as any;
+    delete old.recovery;
+    delete old.coverage;
+    delete old.equivalents;
+    ledger.execution = old;
+    ledger.verification.push({ n: 1, command: "npm test", status: "failed", inputs: "abcdef123456" } as any);
+    assert.doesNotThrow(() => renderPinnedLedger(ledger, false));
   });
 
   test("with no recovery notes allowed the first loop exhausts recovery (existing bound kept)", () => {

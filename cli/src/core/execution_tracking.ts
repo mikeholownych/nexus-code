@@ -75,8 +75,6 @@ export interface RepetitionRecord {
   lastStep: number;
   /** Clipped normalized outcome, kept as evidence. */
   outcome: string;
-  /** Tool call id of the most recent run, so its output can be found in the conversation (not another run's). */
-  lastCallId?: string;
 }
 
 export interface TrackingEvent {
@@ -123,7 +121,13 @@ export interface CoverageSegment {
 export interface EquivalenceRecord {
   path: string;
   state: string;
-  /** Observations of already-observed lines while the earlier output was still in the conversation. */
+  /**
+   * The exact lines re-obtained. A loop is the same lines obtained again and again (through any interface), not
+   * different slices of a file already read: those are redundant (not progress) but not repetition.
+   */
+  start?: number;
+  end?: number;
+  /** Re-observations of these lines while the earlier output was still in the conversation. */
   count: number;
   firstStep: number;
   lastStep: number;
@@ -425,9 +429,6 @@ export interface RecoveryDenial {
   action: string;
 }
 
-/** Observing tools whose exact repeat is not refused: completion attempts, and Nexus's own memory/ledger reads. */
-const NEVER_REFUSED = new Set(["task_completed", "read_findings", "read_objective", "read_archive"]);
-
 export interface StepEvaluation {
   progressed: boolean;
   reasons: string[];
@@ -484,7 +485,6 @@ export class ExecutionTracker {
     }
     record.count++;
     record.lastStep = step;
-    if (o.callId) record.lastCallId = o.callId;
     const reacquired = Boolean(o.reacquire) && record.count > 1;
     if (reacquired) record.reacquired = (record.reacquired ?? 0) + 1;
     if (!stateUnknown) addSeen(this.data.seenObservations, key, (n) => (this.data.evicted.observations += n));
@@ -500,7 +500,7 @@ export class ExecutionTracker {
       classification = judged.covered ? "OBSERVATION_DUPLICATE" : judged.overlapping ? "OBSERVATION_OVERLAPPING" : "OBSERVATION_NEW";
       if (judged.covered && judged.inContext && !o.reacquire) {
         for (const c of coverage) {
-          const r = this.noteEquivalent(step, c.path, o.stateBefore, record.action);
+          const r = this.noteEquivalent(step, c, o.stateBefore, record.action);
           if (!equivalence || r.count > equivalence.count) equivalence = r;
         }
         equivalentLoop = (equivalence?.count ?? 0) >= REPEAT_THRESHOLD - 1;
@@ -562,10 +562,10 @@ export class ExecutionTracker {
     pushBounded(list, segment, MAX_COVERAGE, (n) => (this.data.evicted.coverage += n));
   }
 
-  private noteEquivalent(step: number, p: string, state: string, action: string): EquivalenceRecord {
-    let record = this.data.equivalents.find((r) => r.path === p && r.state === state);
+  private noteEquivalent(step: number, c: ReadCoverage, state: string, action: string): EquivalenceRecord {
+    let record = this.data.equivalents.find((r) => r.path === c.path && r.state === state && r.start === c.start && r.end === c.end);
     if (!record) {
-      record = { path: p, state, count: 0, firstStep: step, lastStep: step, action };
+      record = { path: c.path, state, start: c.start, end: c.end, count: 0, firstStep: step, lastStep: step, action };
       pushBounded(this.data.equivalents, record, MAX_EQUIVALENTS);
     }
     record.count++;
@@ -661,10 +661,11 @@ export class ExecutionTracker {
       }
       return { action, coveredBy, reason: "every line it would read was already returned on this unchanged workspace, and that output is still in this conversation" };
     }
-    if (actionKind(name) !== "observe_workspace" || NEVER_REFUSED.has(name)) return undefined;
-    const prior = this.priorRun(name, args, state);
-    if (!prior?.lastCallId || !present(prior.lastCallId)) return undefined;
-    return { action, coveredBy: [], reason: `the same call already ran on this unchanged workspace (step ${prior.lastStep}) and its output is still in this conversation` };
+    // Nothing else is refused: other observing tools (file_info, list_dir, search, LSP, semantic index) depend on what
+    // the workspace state identity does not cover (ignored files, a language server, an index), so their answer
+    // cannot be shown to be in the conversation already. Their repeats are still loops: one that runs while
+    // constrained exhausts recovery (recordUnproductive).
+    return undefined;
   }
 
   /** Records a refused call; true when the episode's refusals are exhausted (the turn must stop). */

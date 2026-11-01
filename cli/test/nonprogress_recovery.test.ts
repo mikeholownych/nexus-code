@@ -176,7 +176,9 @@ describe("regression fixture NONPROGRESS-20261101-DOCTOR", () => {
 describe("semantic observation identity", () => {
   test("the same lines through read_file, cat, sed and head are equivalent; a constrained shell re-read is refused before it runs", { timeout: 120_000 }, async () => {
     const repo = makeRepo({ "f.txt": lines("f", 30) });
-    const script: Call[][] = [[read("f.txt")], [sh("cat f.txt")], [sh("sed -n '1,20p' f.txt")], [sh("head -n 5 f.txt")], [sh("cat ./f.txt")], [read("f.txt", 3, 9)], [sh(`cd ${repo} && head -3 f.txt`)]];
+    // The same 30 lines obtained four times through four interfaces is a loop; while constrained, any read of lines
+    // already in context (a narrower one included) is refused.
+    const script: Call[][] = [[read("f.txt")], [sh("cat f.txt")], [sh("sed -n '1,30p' f.txt")], [sh("head -n 30 f.txt")], [sh("cat ./f.txt")], [read("f.txt", 3, 9)], [sh(`cd ${repo} && head -3 f.txt`)]];
     const gw = await startGateway((n) => (n <= script.length ? tools(script[n - 1]) : text("unreachable")));
     const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
     const ran = dispatchLog(agent);
@@ -184,7 +186,7 @@ describe("semantic observation identity", () => {
       const turn = await agent.runTurn("Look at f.txt.");
       assert.equal(turn.reason, "STAGNATION_DETECTED", JSON.stringify(turn));
       assert.match(turn.detail ?? "", /recovery exhausted/);
-      assert.deepEqual(ran.map((r) => JSON.parse(r.args).command ?? JSON.parse(r.args).path), ["f.txt", "cat f.txt", "sed -n '1,20p' f.txt", "head -n 5 f.txt"], "only the first four ran");
+      assert.deepEqual(ran.map((r) => JSON.parse(r.args).command ?? JSON.parse(r.args).path), ["f.txt", "cat f.txt", "sed -n '1,30p' f.txt", "head -n 30 f.txt"], "only the first four ran");
       const refused = refusals(agent).map((m) => String(m.content));
       assert.equal(refused.length, 3, "two refusals allowed; the third equivalent attempt is refused and stops the turn");
       assert.match(refused[0], /cat \.\/f\.txt.*already returned on this unchanged workspace.*f\.txt lines 1-30 \(step \d+\)/);
@@ -288,6 +290,25 @@ describe("semantic observation identity", () => {
 });
 
 describe("recovery that preserves legitimate work", () => {
+  test("a full read followed by distinct slices of the same file completes: redundant reads are not a loop", { timeout: 120_000 }, async () => {
+    const repo = makeRepo({ "f.txt": lines("f", 300) });
+    const script: Call[][] = [[read("f.txt")], ...Array.from({ length: 6 }, (_, i) => [read("f.txt", 1 + i * 40, 20 + i * 40)])];
+    const gw = await startGateway((n) => (n <= script.length ? tools(script[n - 1]) : text("Reviewed every section of f.txt.")));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const ran = dispatchLog(agent);
+    try {
+      const turn = await agent.runTurn("Review f.txt section by section; change nothing.");
+      assert.equal(turn.execution, "COMPLETED", JSON.stringify(turn));
+      assert.equal(ran.length, 7, "every read ran");
+      assert.equal(refusals(agent).length, 0);
+      assert.equal(recovery(agent).episode, 0);
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("a read-only investigation of distinct files completes with no recovery and nothing refused", { timeout: 60_000 }, async () => {
     const repo = makeRepo({ "a.txt": lines("a", 5), "b.txt": lines("b", 5), "c.txt": lines("c", 5) });
     const script: Call[][] = [[read("a.txt")], [read("b.txt"), read("c.txt")], [{ name: "search_code", args: { query: "line 3" } }], [read("a.txt", 2, 4)]];

@@ -36,8 +36,8 @@ The causes:
 ### Observation identity (`cli/src/core/observation_identity.ts`)
 
 - **Read requests** before execution, for `read_file` (path, `start_line`, `end_line`; `offset`/`length` are not
-  classified), `batch_read`, and `run_command` in exactly these shell forms: an optional `cd DIR &&` that resolves to
-  the workspace root, then `cat F`, `head [-n N|-N] F` or `sed -n 'A,Bp' F`. Words may not contain expansion
+  classified), `batch_read`, and `run_command` in exactly these shell forms: an optional `cd DIR &&` where DIR resolves
+  inside the workspace (the file path is taken relative to it), then `cat F`, `head [-n N|-N] F` or `sed -n 'A,Bp' F`. Words may not contain expansion
   characters (quotes are allowed only around the sed script). Paths are normalized to workspace-relative form, and
   paths outside the workspace are not classified.
 - **Coverage** after execution, from what the read returned (never from its arguments): the numbered listing of
@@ -55,8 +55,9 @@ The causes:
 An observation is **equivalent** when every returned line was already returned, on the same workspace state and the
 same file signature, by a tool call whose own output (by tool call id, not by arguments) is still present in full in
 the conversation, and it is not a re-acquisition after
-compaction. The same range with a different fingerprint is new (the content decides). The third equivalent
-observation is a semantic loop. Equivalent observations are classified `OBSERVATION_DUPLICATE` and are not progress.
+compaction. The same range with a different fingerprint is new (the content decides). Obtaining the same lines (the same
+range of the same file) a third time is a semantic loop. Different slices of a file already read are redundant and
+not progress, but they are not a loop and are never escalated. Equivalent observations are classified `OBSERVATION_DUPLICATE` and are not progress.
 
 ### Escalation (`ExecutionTracker`, `cli/src/core/execution_tracking.ts`)
 
@@ -94,7 +95,12 @@ refused call gets a tool message beginning `[Nexus refused: not executed]` that 
 Once a refusal or a loop stops the turn, no other call in that batch runs (in the parallel path, including calls
 judged before the stopping refusal); each gets a "turn stopped before this call" message.
 
+Only classified reads are ever refused, and only while the file's own signature is unchanged.
+
 **Never refused**:
+- other observing tools (`file_info`, `list_dir`, `search_code`, LSP, semantic search) and byte-range reads: their
+  answers depend on what the state identity does not cover (ignored files, a language server, an index). Their
+  repeats are still loops, and one that runs while constrained exhausts recovery;
 - mutations;
 - commands and tests (other than the shell read forms above);
 - `task_completed`;
@@ -128,7 +134,8 @@ The events are persisted with the session.
 | --- | --- |
 | Incident replay (fixture `NONPROGRESS-20261101-DOCTOR`): advisory, then constrained, then refusal, then a bounded stop; all RECOVERY_REQUIRED sections; no repeat executed after the constrained note | regression fixture |
 | The agent takes another path after the constrained note, and recovery completes | regression fixture |
-| `read_file`, `cat`, `sed`, `head`, `./` and `cd ROOT &&` spellings are equivalent; refused before they run | semantic identity |
+| `read_file`, `cat`, `sed`, `head`, `./` and `cd ROOT &&` spellings of the same lines are equivalent; refused before they run | semantic identity |
+| A full read then distinct slices of the same file completes (redundant reads are not a loop) | legitimate work |
 | Overlapping, non-identical ranges are new | semantic identity |
 | A narrower re-read of lines in context is not progress | semantic identity |
 | A re-read after the file changed is never equivalent or refused | semantic identity |

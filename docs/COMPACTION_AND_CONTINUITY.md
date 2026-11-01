@@ -83,11 +83,11 @@ Nexus compares three things before calling an action repeated: the action (tool 
 
 How Nexus responds:
 
-- **The same action and result on an unchanged state** is a demonstrated loop on its third occurrence. So is a third
-  observation of the same lines of a file through any read interface (`read_file`, `batch_read`, `cat F`,
-  `head [-n N|-N] F`, `sed -n 'A,Bp' F`, optionally after `cd DIR &&`), while the earlier output is still in the
+- **The same action and result on an unchanged state** is a demonstrated loop on its third occurrence. So is obtaining
+  the same lines of a file a third time through any read interface (`read_file`, `batch_read`, `cat F`,
+  `head [-n N|-N] F`, `sed -n 'A,Bp' F`, optionally after `cd DIR &&` with DIR inside the workspace), while the earlier output is still in the
   conversation: coverage is judged by the lines a read actually returned, not by its arguments. A narrower re-read of
-  lines already in context is not progress.
+  lines already in context is not progress, but different slices of a file already read are not a loop.
 - **Recovery escalates instead of repeating advice.** The first loop gets an advisory note. The note that reaches
   the recovery limit (two by default) is a `RECOVERY_REQUIRED` context: the objective, the evidence already acquired
   (files and line ranges with content fingerprints), the repeated observations, the workspace state, the last
@@ -99,7 +99,8 @@ How Nexus responds:
   threshold keeps counting. Evidence-backed progress (a new workspace state, new information, an acceptance-ledger
   change, operator input) ends constrained recovery; a later loop on the same objective is constrained at once.
   Several looping calls in one batch are one escalation: the model always gets an inference to answer each note.
-- **What is never refused**: mutations, commands and tests (`run_command` other than the read forms above,
+- **What is never refused**: anything but the reads above (`file_info`, `list_dir`, searches and LSP depend on more
+  than the workspace state; their repeats still count as loops), mutations, commands and tests (`run_command` other than the read forms above,
   `run_tests`), completion attempts, Nexus's memory reads (`read_findings`, `read_objective`, `read_archive`), any read
   whose earlier output compaction removed, and anything on an unknown workspace state. Shell forms outside the list
   above (pipes, globs, variables, several files, `tail`, `awk`, …) are not classified and run normally. Each one is

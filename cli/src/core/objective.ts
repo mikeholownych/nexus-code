@@ -591,14 +591,16 @@ export function renderPinnedLedger(
     out.push(`Continuation: segment ${c.segments} of this turn; ${c.totalSteps} steps so far on this objective. Keep working toward the open requirements; no operator "continue" is needed.`);
   }
   if (ledger.execution) {
-    const tracker = new ExecutionTracker(ledger.execution);
+    // A ledger restored from an earlier version may lack fields (recovery, coverage): read a normalized copy.
+    const execution = normalizeTracking(ledger.execution);
+    const tracker = new ExecutionTracker(execution);
     if (tracker.recoveryStage === "constrained") out.push(renderRecoveryContext(recoveryInput(ledger), recovery));
     const loops = tracker.loops().slice(0, 3);
     if (loops.length) {
       out.push("Repeated without progress on an unchanged workspace (do not repeat these; change approach):");
       for (const r of loops) out.push(`- ${r.action} ×${r.count} (steps ${r.firstStep}-${r.lastStep}) -> ${r.outcome.slice(0, 160)}`);
     }
-    const failed = ledger.execution.failedApproaches.slice(-4);
+    const failed = execution.failedApproaches.slice(-4);
     if (failed.length) {
       out.push("Failed approaches on this objective (most recent):");
       for (const f of failed) out.push(`- step ${f.step}: ${f.detail.slice(0, 200)}`);
@@ -635,7 +637,7 @@ export function renderRecoveryContext(
     }
   } else out.push("- none recorded as file line ranges");
   const repeated = [
-    ...(state === "unknown" ? [] : tracker.equivalentsOn(state).slice(0, 4).map((e) => `- ${e.path}: already-observed lines read ${e.count} more time(s) (steps ${e.firstStep}-${e.lastStep}; last: ${e.action})`)),
+    ...(state === "unknown" ? [] : tracker.equivalentsOn(state).slice(0, 4).map((e) => `- ${e.path}${e.start !== undefined ? ` lines ${e.start}-${e.end}` : ""}: obtained again ${e.count} time(s) while already in this conversation (steps ${e.firstStep}-${e.lastStep}; last: ${e.action})`)),
     ...tracker.loops().filter((l) => l.state === state).slice(0, 3).map((l) => `- ${l.action} ×${l.count} with the same result (steps ${l.firstStep}-${l.lastStep})`),
   ];
   out.push("Repeated observations:", ...(repeated.length ? repeated : [`- ${r.trigger ?? "unrecorded"}`]));
@@ -650,7 +652,7 @@ export function renderRecoveryContext(
   out.push(
     "Disallowed operations (refused before they run while the workspace is unchanged):",
     "- Reading any of the line ranges above again, through any interface (read_file, batch_read, cat/head/sed), while that output is still in this conversation.",
-    "- Repeating any observing call above with the same arguments.",
+    "- (Other calls are not refused, but repeating one that returns the same result on this unchanged workspace stops the turn.)",
   );
   out.push(
     "Permitted next actions:",

@@ -38,6 +38,7 @@ import {
   backoffMs,
   combineState,
   ledgerStateIdentity,
+  normalizeTracking,
   type ObservationVerdict,
   type RecoveryDenial,
 } from "./core/execution_tracking.js";
@@ -1653,6 +1654,9 @@ export class AutonomousAgent {
     this.messages = state.messages || [];
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
+    // A ledger written by an earlier version lacks newer tracking fields (recovery, coverage): complete it now, before
+    // anything renders the pinned ledger or estimates a request.
+    if (this.objective?.execution) this.objective.execution = normalizeTracking(this.objective.execution);
     this.activeProviderRecovery = state.providerRecovery ?? null;
     this.recoveredOperation = state.operation;
     // Durable task state is writable by the same local user who can run candidate
@@ -5612,7 +5616,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           const count = verdict.loop ? verdict.record.count : (verdict.equivalence?.count ?? 0) + 1;
           const what = verdict.loop
             ? `called ${name} with the same arguments ${count} times`
-            : `read lines of ${verdict.equivalence?.path} you already have ${count} times (most recently with ${name})`;
+            : `obtained lines ${verdict.equivalence?.start}-${verdict.equivalence?.end} of ${verdict.equivalence?.path} ${count} times (most recently with ${name})`;
           tracker.stagnation(cumulativeStep, "repetition", `${verdict.record.action} ×${count} with the same result on an unchanged workspace -> ${verdict.record.outcome.slice(0, 160)}`);
           const transition = tracker.recordUnproductive(cumulativeStep, verdict.record.action, inputState, budget.maxRecoveries, allowedDenials);
           if (transition.outcome === "exhausted") {
