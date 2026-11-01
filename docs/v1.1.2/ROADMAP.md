@@ -120,7 +120,7 @@ The v1.1.2 release line encompasses two complementary tiers:
 - **Objective:** Measure and contrast Configuration A (Baseline) vs Configuration B (Specialist + Independent Review) vs Configuration C (Adaptive).
 - **Existing Capability / Gap:** Individual tests exist, but no unified comparative benchmark measuring token efficiency, defect escape rate, and confirmation bias.
 - **Planned Implementation:**
-  - Create `eval/comparative_orchestration_harness.ts`.
+  - Create `eval/comparative_orchestration_harness.ts` / `cli/src/eval/comparative_harness.ts`.
   - Execute standard suites with telemetry recording.
 - **Dependencies:** Items 1, 2, 3.
 - **Priority:** Medium (P2).
@@ -128,6 +128,36 @@ The v1.1.2 release line encompasses two complementary tiers:
   - Produces structured comparative CSV/JSON metrics across identical benchmark tasks.
 - **Verification Method:** Benchmark dry-run on synthetic tasks.
 - **Complexity:** Medium (4 days).
+- **Implementation Status:** Complete in `cli/src/eval/comparative_harness.ts` (Commit `ad8ea909`).
+
+---
+
+### Item 7: Continuous Evaluation and Regression Intelligence (CERI)
+- **Objective:** Establish a continuous, evidence-based mechanism for detecting, investigating, classifying, and reporting degradation in Nexus's end-to-end engineering capabilities, enforcing that internal evaluations may veto releases but never certify correctness without independent validation.
+- **Existing Capability / Gap:** `eval/run.mjs` and `cli/src/evaluator.ts` execute tasks and capture candidate receipts, but lack versioned evaluation definitions, run manifests with full model/hardware provenance, designated baseline comparison, 12-state comparative classification, regression intelligence with epistemological distinction, and non-self-approving remediation pathways.
+- **Planned Implementation:**
+  - Workstream A: Versioned evaluation definitions and run manifests capturing immutable commit, dirty status, model identity, toolchain, and host environment.
+  - Workstream B: Append-only evidence persistence with atomic writes, secret redaction, and strict separation between tamper-evidence and independent validation receipts.
+  - Workstream C: Baseline comparator with eligibility validation and 12-state classification (`PASS`, `FAIL`, `REGRESSION_CANDIDATE`, `CONFIRMED_REGRESSION`, `IMPROVEMENT_CANDIDATE`, `FLAKY`, `INFRASTRUCTURE_FAILURE`, `EVALUATOR_DEFECT`, `INCONCLUSIVE`, `NOT_EXECUTED`, `CANCELLED`, `INCOMPARABLE`).
+  - Workstream D: Repeatability and flakiness analysis with bounded rerun policies.
+  - Workstream E: Capacity-aware scheduling for local dual-worker Intel Arc Pro environments.
+  - Workstream F: Representative end-to-end engineering evaluation benchmarks.
+  - Workstream G: Regression intelligence structuring findings into observation, inference, hypothesis, confirmed finding, and unresolved uncertainty.
+  - Workstream H: Reviewable remediation proposals with non-self-approval boundary.
+  - Workstream I: Structured machine-readable operational reporting with measurement limitations and blockers.
+- **Dependencies:** Items 1-6, `CandidateTracker`, `ValidationReceipt`, `isolate.mjs`.
+- **Priority:** High (P1) — Release qualification gate.
+- **Acceptance Criteria:**
+  - Full provenance captured in run manifests without fabricating missing metadata.
+  - Incomparable baselines rejected explicitly rather than silently compared.
+  - Binary pass/fail forcing eliminated in favor of 12-state classification.
+  - Internal evaluations cannot mark candidates as verified without deterministic verifier receipts.
+  - Remediation proposals enforce `approvalStatus: "PENDING_REVIEW"`.
+- **Verification Method:** Unit and integration test suites in `cli/test/ceri_*.test.ts`.
+- **Operational Risks:** False regression alarms on non-comparable environments; benchmark overfitting; token consumption during reruns.
+- **Rollback Approach:** Purely additive modules in `cli/src/ceri/`; gated by config flag `ceri.enabled`.
+- **Complexity:** High (5 days).
+- **Implementation Status:** Foundational vertical slice under active implementation.
 
 ---
 
