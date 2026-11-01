@@ -6,6 +6,7 @@
  * resource, reroutes or parks when it becomes unavailable, and never runs a role on an unqualified one.
  */
 import type { WorkRequirements } from "./resources.js";
+export * from "./specialist_profiles.js";
 
 export type AgentRole = "researcher" | "architect" | "implementer" | "tester" | "reviewer";
 
