@@ -1,0 +1,615 @@
+# Nexus Code v1.1.2: Continuous Evaluation and Regression Intelligence
+
+## Role and objective
+
+Act as the principal software architect, reliability engineer, and implementation lead for Nexus Code.
+
+Your assignment is to assess, plan, and begin implementing the **Continuous Evaluation and Regression Intelligence (CERI)** workstream, targeting Nexus Code v1.1.2.
+
+The objective is to establish a continuous, evidence-based mechanism for detecting, investigating, classifying, and reporting degradation in Nexus's end-to-end engineering capabilities.
+
+This includes regressions involving agent execution, model routing, context management, tool invocation, durable task state, recovery, independent review, and acceptance validation.
+
+The system must distinguish between successful execution, independently validated correctness, incomplete evaluation, and unresolved uncertainty.
+
+**Core requirement: Internal evaluation results may veto a release or implementation, but must not independently establish correctness.**
+
+Do not treat passing internal tests, agent confidence scores, or agreement between models as sufficient independent validation.
+
+## 1. Mandatory repository reconnaissance
+
+Before changing code:
+
+1. Inspect the repository's current architecture, roadmap, execution lifecycle, test harnesses, benchmark infrastructure, CI workflows, reporting facilities, and evidence persistence.
+2. Identify the current implementation state of v1.1.2, including any specialist-agent orchestration, independent review, adaptive routing, or resource scheduling work already completed.
+3. Review existing engineering instructions, architectural decisions, conventions, and acceptance criteria.
+4. Inspect the working tree, active branch, and outstanding uncommitted changes.
+5. Identify overlapping functionality before proposing new components.
+6. Identify existing sources of authoritative execution state, configuration, validation evidence, and model identity.
+
+Do not assume that CERI requires a new scheduler, database, agent framework, or reporting service.
+
+Reuse existing components where their contracts and operational properties are sufficient.
+
+Preserve all existing roadmap commitments and unrelated work.
+
+Produce a repository-grounded gap analysis before implementation.
+
+## 2. Target architecture
+
+Evaluate the feasibility of the following logical pipeline:
+
+Evaluation trigger
+→ Execution scheduler
+→ Pinned evaluation environment
+→ Evaluation runner
+→ Immutable run evidence
+→ Baseline comparator
+→ Regression classifier
+→ Investigation coordinator
+→ Reviewable remediation proposal
+→ Independent verification
+→ Human-controlled acceptance
+
+These are logical responsibilities, not a requirement to introduce separate services.
+
+Prefer a modular implementation within the existing Nexus architecture.
+
+The evaluation control plane must remain separate from the agents and execution paths being evaluated wherever practical.
+
+The system must be able to report that it cannot establish a trustworthy result.
+
+Failure to produce evidence must not be represented as a successful evaluation.
+
+## 3. Workstream A: Evaluation definitions and provenance
+
+Develop or extend a versioned evaluation definition format.
+
+Each evaluation must specify, as appropriate:
+
+- Stable evaluation identifier and version.
+- Objective and engineering capability being evaluated.
+- Input fixture and initial repository state.
+- Expected outputs and acceptance criteria.
+- Authorized tools and permissions.
+- Resource and execution budgets.
+- Timeout and cancellation conditions.
+- Deterministic assertions.
+- Applicable independent validation mechanisms.
+- Required evidence artifacts.
+- Known nondeterministic behaviours.
+
+Define a run manifest that records:
+
+- Unique run identifier.
+- Evaluation suite identifier and version.
+- Source repository and commit SHA.
+- Dirty-worktree status and relevant content identity, or an explicit prohibition on dirty-worktree execution.
+- Model names and immutable model artifact identities where available.
+- Model quantization and inference parameters.
+- Gateway and routing configuration identity.
+- Agent profile and prompt versions.
+- Tool and dependency versions.
+- Evaluator and harness versions.
+- Operating environment identity.
+- Relevant hardware configuration.
+- Execution timestamps and duration.
+- Resource limits.
+- Evidence artifact references.
+- Execution status and termination reason.
+
+Do not fabricate unavailable model digests, driver versions, or infrastructure metadata.
+
+Record unavailable or unverifiable fields explicitly.
+
+Define which metadata fields are mandatory for baseline comparability.
+
+## 4. Workstream B: Evidence storage and integrity
+
+Assess existing evidence persistence facilities.
+
+Implement an append-only evaluation evidence model using existing storage primitives where feasible.
+
+At minimum, preserve:
+
+- Run manifest.
+- Evaluation inputs.
+- Execution events.
+- Relevant tool invocations and outcomes.
+- Assertions and observed results.
+- Failure traces.
+- Resource observations.
+- Comparison results.
+- Investigation findings.
+- Review and acceptance decisions.
+
+Where appropriate, establish hash-linked or content-addressed evidence references.
+
+Differentiate tamper-evident evidence from independently trustworthy evidence.
+
+A hash chain generated entirely by the same execution environment does not independently prove that observations are complete or accurate.
+
+Define retention, redaction, access control, schema evolution, and artifact cleanup behaviour.
+
+Prevent credentials, access tokens, and sensitive repository contents from being copied into evidence artifacts unnecessarily.
+
+Use atomic writes or equivalent transaction guarantees to avoid reporting partially written evidence as complete.
+
+Interrupted runs must remain identifiable and recoverable for investigation.
+
+## 5. Workstream C: Baseline comparison
+
+Implement a baseline comparison mechanism that does not assume the immediately preceding run is authoritative.
+
+Support explicitly designated baselines.
+
+Record:
+
+- Baseline identifier.
+- Baseline selection rationale.
+- Version and environment compatibility.
+- Evaluation definition compatibility.
+- Differences in model and runtime configuration.
+- Comparison eligibility.
+- Comparison outcome.
+
+Reject or mark comparisons as non-equivalent when critical configuration differences invalidate direct comparison.
+
+Do not silently normalize away potentially significant differences.
+
+Define classifications including:
+
+- Pass.
+- Fail.
+- Regression candidate.
+- Confirmed reproducible regression.
+- Improvement candidate.
+- Flaky or nondeterministic result.
+- Infrastructure failure.
+- Evaluator defect.
+- Inconclusive.
+- Not executed.
+- Cancelled.
+- Incomparable.
+
+Keep execution status separate from comparative classification and acceptance status.
+
+Avoid presenting an inconclusive result as either a clean pass or confirmed regression.
+
+## 6. Workstream D: Repeatability and regression classification
+
+Develop a defensible process for distinguishing genuine regressions from environmental or nondeterministic variation.
+
+Evaluate:
+
+- Repeat execution of identical pinned cases.
+- Historical failure frequency.
+- Model inference variability.
+- Tool execution variability.
+- Resource contention.
+- Environmental drift.
+- Incomplete or corrupted evidence.
+- Changes to evaluation fixtures.
+- Changes to evaluator implementation.
+
+Classification must preserve the underlying observations and supporting evidence.
+
+Do not allow a language model to promote a suspected regression to confirmed status based solely on narrative reasoning.
+
+Where reproducibility cannot be established, preserve uncertainty rather than forcing a binary decision.
+
+Design bounded rerun policies to prevent repeated failures from creating uncontrolled evaluation loops.
+
+## 7. Workstream E: Evaluation scheduling and resource control
+
+Assess existing scheduler, queue, retry, and worker-management facilities.
+
+Implement a scheduling mechanism appropriate to the current architecture.
+
+Candidate triggers:
+
+- Manual execution.
+- Scheduled execution.
+- Significant source changes.
+- Model or gateway configuration changes.
+- Pre-release qualification.
+- Post-remediation verification.
+
+Support bounded execution concurrency.
+
+For the initial local deployment, account for the existing dual-worker Intel Arc Pro inference environment.
+
+Avoid assuming that both inference workers can execute unlimited concurrent evaluations.
+
+Consider:
+
+- Worker health.
+- Active interactive sessions.
+- Inference queue depth.
+- Available memory and KV-cache capacity.
+- Resource reservations.
+- Execution priority.
+- Task preemption or deferment where supported.
+- Timeout and cancellation propagation.
+- Evaluation job starvation.
+- Telemetry availability and freshness.
+
+Missing or unreliable resource telemetry must trigger explicitly defined conservative scheduling behaviour.
+
+An overnight evaluation must not silently interfere with higher-priority interactive engineering operations.
+
+Do not introduce a heavyweight scheduling platform without demonstrating that existing mechanisms are insufficient.
+
+## 8. Workstream F: End-to-end engineering evaluations
+
+Evaluate Nexus's capabilities through realistic engineering tasks rather than relying exclusively on component unit tests.
+
+Candidate evaluation categories:
+
+1. Repository exploration and code comprehension.
+2. Scoped implementation against explicit acceptance criteria.
+3. Multi-file refactoring.
+4. Dependency analysis.
+5. Tool selection and execution correctness.
+6. Context compaction and restoration.
+7. Durable session pause and resume.
+8. Retry and backoff behaviour.
+9. Rate-limit recovery.
+10. Lead/deep model escalation.
+11. Cloud fallback behaviour.
+12. Specialist-agent delegation.
+13. Independent review and defect detection.
+14. Unauthorized-operation rejection.
+15. Workspace and worktree isolation.
+16. Correct rejection of insufficient evidence.
+17. Recovery from partial failures.
+18. Long-running multi-step task completion.
+
+Select an initial representative subset based on actual repository capabilities and risks.
+
+Do not invent large synthetic evaluation suites merely to increase test counts.
+
+Define acceptance criteria that are objectively verifiable wherever feasible.
+
+Where semantic grading is unavoidable, isolate it from deterministic acceptance and record the grader's limitations.
+
+## 9. Workstream G: Regression intelligence
+
+Implement a bounded investigation mechanism that consumes evaluation evidence.
+
+The investigator may:
+
+- Compare failing and baseline traces.
+- Identify changed code and configuration.
+- Examine relevant tool failures.
+- Analyze dependency changes.
+- Correlate errors with resource observations.
+- Identify likely failure domains.
+- Propose targeted reproductions.
+- Suggest corrective actions.
+
+The investigator must distinguish:
+
+- Observation.
+- Inference.
+- Hypothesis.
+- Confirmed finding.
+- Unresolved uncertainty.
+
+Require evidence references for substantive findings.
+
+Do not permit the investigation agent to silently modify evaluation definitions or authoritative baseline data.
+
+Prevent the investigator from treating its own generated explanation as confirmation.
+
+Where the evidence does not support a diagnosis, report that explicitly.
+
+## 10. Workstream H: Remediation proposals
+
+Introduce a controlled pathway for turning confirmed or sufficiently supported findings into reviewable corrective work.
+
+Initially, support:
+
+- Issue or task generation.
+- Proposed remediation plans.
+- Reproduction procedures.
+- Candidate patches in isolated workspaces.
+- Test recommendations.
+- Reviewable diffs.
+- Verification evidence.
+
+Do not enable automatic merge, production deployment, or release publication.
+
+Do not allow an agent proposing a fix to independently approve the same fix.
+
+Any modifications to evaluation definitions, expected results, or acceptance thresholds must be reviewed separately from production code corrections.
+
+This prevents benchmark contamination and accidental weakening of acceptance gates.
+
+Remediation outcomes must reference the original regression evidence and the subsequent verification run.
+
+## 11. Workstream I: Operational reporting
+
+Implement or extend an operational report covering:
+
+- Evaluation coverage.
+- Latest execution status.
+- Current baseline.
+- Confirmed regressions.
+- Regression candidates.
+- Inconclusive evaluations.
+- Flaky evaluations.
+- Infrastructure and harness failures.
+- Unresolved investigations.
+- Pending remediation proposals.
+- Changes in validated engineering outcomes.
+- Resource consumption and execution duration.
+- Evidence completeness.
+- Acceptance blockers.
+
+Prefer structured machine-readable reports with a concise human-readable summary.
+
+A dashboard is optional and should not displace the evidence foundation.
+
+Report measurement limitations and missing data.
+
+Avoid unsupported aggregate health scores that conceal critical failures.
+
+## 12. Evaluation integrity and independent observation
+
+Treat evaluation integrity as a first-class architectural requirement.
+
+Identify and mitigate:
+
+- Evaluation data contamination.
+- Test fixture leakage.
+- Benchmark overfitting.
+- Self-modifying acceptance criteria.
+- Reviewer confirmation bias.
+- Common-mode failures.
+- Incomplete telemetry.
+- Selective result reporting.
+- Baseline manipulation.
+- False success after retry.
+- Environment-dependent failures.
+- Stale or mismatched evidence.
+- Compromised or overly privileged evaluation workers.
+
+Where independent confirmation is required, define what makes the observation genuinely independent.
+
+A separate prompt, agent identity, or model does not automatically establish independence.
+
+Do not label internal evaluations as independently validated without meeting the documented independence criteria.
+
+## 13. Comparative performance evaluation
+
+Provide a framework for comparing baseline Nexus against the enhanced orchestration capabilities being developed for v1.1.2.
+
+Candidate comparison configurations:
+
+**A. Existing orchestration baseline**
+
+Current stable execution behaviour.
+
+**B. Specialist orchestration**
+
+Bounded specialist agents and independent review contexts.
+
+**C. Adaptive orchestration**
+
+Specialist delegation, deterministic micro-routing, escalation controls, and capacity-aware scheduling.
+
+Measure:
+
+- Independently validated task acceptance.
+- Escaped defects.
+- False-positive review findings.
+- Regression frequency.
+- Retry amplification.
+- Completion time.
+- Token usage.
+- Inference latency.
+- Resource consumption.
+- Recovery success.
+- Authorization and scope violations.
+
+Use equivalent task fixtures, pinned environments, and repeated trials where necessary.
+
+Do not claim improvements based solely on reduced token usage, model confidence, or a single successful run.
+
+## 14. Required implementation order
+
+### Phase 1: Independent architectural assessment
+
+Inspect actual implementation and produce a gap analysis.
+
+Identify what already exists, what is missing, and what should be reused.
+
+Record relevant source files, tests, architectural constraints, and risks.
+
+### Phase 2: v1.1.2 roadmap integration
+
+Add **Continuous Evaluation and Regression Intelligence** as a distinct workstream.
+
+For each proposed item include:
+
+- Scope.
+- Dependencies.
+- Priority.
+- Acceptance criteria.
+- Verification method.
+- Operational risks.
+- Rollback approach.
+- Implementation status.
+
+Preserve other roadmap workstreams and commitments.
+
+### Phase 3: Architecture and implementation plan
+
+Define:
+
+- Evaluation schemas and contracts.
+- Evidence persistence strategy.
+- Baseline management.
+- Classification state machine.
+- Scheduling integration.
+- Resource controls.
+- Investigation boundaries.
+- Authorization model.
+- Testing approach.
+- Migration requirements.
+- Observability and failure handling.
+
+Resolve foundational dependencies before scheduling autonomous investigation work.
+
+### Phase 4: Initial implementation
+
+Begin with the highest-value foundational vertical slice.
+
+The preferred first milestone, subject to repository findings, is:
+
+**Versioned evaluation definition → reproducible execution → run manifest → durable evidence → deterministic result classification → baseline comparison → machine-readable report.**
+
+Include working code and tests.
+
+Do not begin with autonomous patch generation, a dashboard, or a new agent framework.
+
+### Phase 5: Verification
+
+Verify the initial implementation against:
+
+- Successful evaluation execution.
+- Failed evaluation execution.
+- Interrupted or cancelled execution.
+- Incomplete evidence.
+- Corrupted evidence.
+- Incompatible baselines.
+- Invalid evaluation definitions.
+- Missing model metadata.
+- Resource exhaustion.
+- Retry exhaustion.
+- Unauthorized artifact modification.
+- Partial persistence failure.
+
+Use the existing repository test infrastructure where practical.
+
+Record actual commands, outcomes, and remaining limitations.
+
+### Phase 6: Continue incremental implementation
+
+If the foundational slice passes its defined local acceptance criteria, proceed to the next lowest-risk, dependency-ready milestone.
+
+Candidate next increments:
+
+1. Bounded scheduled execution.
+2. Repeatability and flakiness analysis.
+3. Investigation evidence packages.
+4. Specialist-agent regression investigation.
+5. Reviewable remediation proposals.
+
+Do not skip validation boundaries to accelerate feature delivery.
+
+## 15. Required deliverables
+
+Create or update repository artifacts according to existing conventions:
+
+**A. CERI architecture assessment**
+
+Evidence-grounded analysis of existing capabilities, technical gaps, risks, and design alternatives.
+
+**B. Updated v1.1.2 roadmap**
+
+Integrated CERI workstream, ordered milestones, dependencies, and acceptance criteria.
+
+**C. Technical implementation plan**
+
+Concrete component interfaces, persistence contracts, state transitions, failure handling, and verification strategy.
+
+**D. Initial implementation**
+
+Functional code for at least one justified end-to-end vertical slice.
+
+**E. Automated tests**
+
+Unit and integration coverage for implemented behaviour, including negative and recovery paths.
+
+**F. Verification evidence**
+
+Reproducible commands, actual test outcomes, source revisions, and known limitations.
+
+**G. Final engineering report**
+
+Report:
+
+- Existing functionality reused.
+- New functionality implemented.
+- Files and interfaces changed.
+- Verification results.
+- Independently confirmed outcomes, if any.
+- Unresolved defects and uncertainty.
+- Deferred features.
+- Operational risks.
+- Recommended next increments.
+
+Do not report planned functionality as implemented.
+
+Do not report internally verified functionality as independently validated.
+
+## 16. Execution authority
+
+You are authorized to inspect the repository, modify roadmap and architectural documentation, implement scoped changes, add tests, and run local validation.
+
+Preserve unrelated working-tree changes.
+
+You may create scoped local commits when appropriate and consistent with project conventions.
+
+You are not authorized to:
+
+- Push to remote repositories.
+- Merge branches.
+- Publish releases.
+- Deploy to production.
+- Modify production infrastructure.
+- Delete or overwrite unrelated work.
+- Replace existing evaluation evidence.
+- Weaken acceptance thresholds.
+- Change security boundaries without justification and review.
+- Introduce major dependencies without demonstrating necessity.
+- Enable autonomous remediation merges.
+- Alter authoritative baselines without an explicit, auditable decision.
+
+For actions outside these boundaries, document the requirement and defer that action pending authorization.
+
+Continue safe, independently executable work wherever possible.
+
+## 17. Completion criteria
+
+This assignment is not complete merely because the roadmap and architecture documents exist.
+
+At minimum, completion requires:
+
+1. Repository-grounded architectural assessment.
+2. CERI integration into v1.1.2.
+3. Dependency-aware implementation plan.
+4. One working foundational vertical slice.
+5. Automated verification of that slice.
+6. Reproducible evidence of the implementation's behaviour.
+7. Explicit disclosure of unverified assumptions and remaining work.
+
+Do not declare the entire CERI workstream complete unless all its committed acceptance criteria have actually been met.
+
+## 18. Start execution
+
+Begin with repository inspection.
+
+Determine whether the existing Nexus execution, evidence, test, scheduling, and review infrastructure can support CERI without introducing unnecessary components.
+
+Challenge every architectural assumption in this assignment against the actual implementation.
+
+Update the roadmap and produce the implementation plan, then begin implementation within the authorized boundaries.
+
+Proceed autonomously through reversible, appropriately scoped engineering changes.
+
+**Prioritize evidence integrity and reproducibility over autonomous diagnosis, and prioritize diagnosis accuracy over automated remediation speed.**
+
+The intended outcome is a reliable evaluation capability that can detect when Nexus is getting worse, preserve defensible evidence of that deterioration, and support controlled correction without allowing the system to certify its own success.

@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6C4TW4XC3EHY86B20RFR34P",
+  "session_id": "512070ca-5530-41ec-ab5f-9575eb06063c",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-01T18:09:36.726218439Z",
+  "branch": "v1/v112-specialist-orchestration",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-medium",
+  "turn_id": "56e9c22b0fd6",
+  "checkpoint_transcript_start": 4198,
+  "transcript_lines_at_start": 4198,
+  "token_usage": {
+    "input_tokens": 40626,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1508367,
+    "output_tokens": 21268,
+    "api_call_count": 41
+  },
+  "redaction": {
+    "replacements": 57,
+    "layers": {
+      "betterleaks": 1,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 2,
+      "credentialed_uri": 0,
+      "entropy": 54,
+      "key_context": 0,
+      "provider_token": 1,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 11
+  }
+}
