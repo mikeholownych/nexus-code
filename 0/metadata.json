@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6C6T6V8YKRPXHJEC1RM5535",
+  "session_id": "4b8a8a0b-ef7d-4bb0-ab34-2ff1be61338e",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-01T18:44:13.521026598Z",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "AGENTS.md",
+    "cli/dist/agent.js",
+    "cli/dist/core/state.js",
+    "cli/package.json",
+    "cli/src/agent.ts",
+    "cli/src/checkpoint.ts",
+    "cli/src/core/durable_file.ts",
+    "cli/src/core/persistence_protection.ts",
+    "cli/src/core/state.ts",
+    "cli/src/flight.ts",
+    "cli/src/knowledge.ts",
+    "cli/src/session.ts",
+    "cli/test/compaction_continuity.test.ts",
+    "core/tests/adversarial_path_traversal.rs",
+    "docs/v1.0.0/ACCEPTANCE.md",
+    "docs/v1.0.0/REQUIREMENTS.md",
+    "scripts/check_requirements.mjs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "0161d20cac0c",
+  "checkpoint_transcript_start": 293,
+  "transcript_lines_at_start": 293,
+  "compact_transcript_start": 27,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 3
+  }
+}

@@ -1,0 +1,15 @@
+review the open Dependabot PRs and apply as necessary.
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+<task-notification>
+<task-id>b9n1s1wk5</task-id>
+<tool-use-id>toolu_01J3XGNeADppgkDKdszUFavo</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/90831ce7-12dd-4e3f-a07d-bc2921efe403/tasks/b9n1s1wk5.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI on open Dependabot PRs, then report non-passing checks" completed (exit code 0)</summary>
+</task-notification>
