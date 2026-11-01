@@ -150,7 +150,7 @@ import {
 } from "./core/findings.js";
 import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnReason } from "./core/turn.js";
-import { isReadOnlyRole, ROLE_PROFILES, type AgentRole } from "./core/roles.js";
+import { isReadOnlyRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 
@@ -1864,11 +1864,8 @@ export class AutonomousAgent {
       ...this.mcpManager.getToolDefinitions(),
       ...this.pluginManager.getCustomToolDefinitions(),
     ];
-    if (this.role && isReadOnlyRole(this.role)) {
-      const allowed = new Set(ROLE_PROFILES[this.role]?.recommendedTools || []);
-      allowed.add("task_completed");
-      tools = tools.filter((t) => allowed.has(t.function.name));
-    }
+    const allowed = roleToolAllowList(this.role);
+    if (allowed) tools = tools.filter((t) => allowed.has(t.function.name));
     return tools;
   }
 
@@ -4679,6 +4676,32 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           success: false,
           output: "",
           error: `Tool call "${toolName}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        },
+        shouldExit: false,
+      };
+    }
+
+    // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
+    // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
+    const roleAllowed = roleToolAllowList(this.role);
+    if (roleAllowed && !roleAllowed.has(toolName) && !(this.isReadOnly() && isWriteOrExecTool(toolName))) {
+      return {
+        receipt: {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+          toolName,
+          targetResources: [],
+          success: false,
+          output: "",
+          error: `Tool "${toolName}" is not permitted for role '${this.role}'. Permitted tools: ${[...roleAllowed].join(", ")}.`,
           durationMs: 0,
           candidateMutated: false,
           status: "DENIED",

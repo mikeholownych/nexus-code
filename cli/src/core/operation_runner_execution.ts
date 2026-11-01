@@ -19,6 +19,48 @@ import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./op
 import { isTestPath } from "../tester.js";
 import { isContextAdmissible } from "../tokens.js";
 import { ensurePrivateDir, writePrivateFile } from "./durable_file.js";
+import { execFileSync } from "node:child_process";
+import {
+  buildReviewEvidencePackage,
+  formatIndependentReviewPrompt,
+  parseIndependentReviewVerdict,
+  type ReviewEvidencePackage,
+} from "./independent_review.js";
+
+/** Roles whose result is an independent review verdict rather than an artifact. */
+export function isReviewRole(role: AgentRole | undefined): boolean {
+  return role === "reviewer" || role === "acceptance_reviewer";
+}
+
+const REVIEW_DIFF_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The candidate a review unit judges: tracked changes against the operation's base commit (HEAD when the operation is
+ * not isolated) plus untracked files, as Git renders them. A workspace that is not a Git checkout yields no diff; the
+ * reviewer is told so rather than shown nothing.
+ */
+export function reviewCandidateDiff(workspace: string, baseCommit?: string): { base: string; diff: string } | { error: string } {
+  const git = (args: string[], okExit: number[] = [0]): string => {
+    try {
+      return execFileSync("git", args, { cwd: workspace, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000, maxBuffer: REVIEW_DIFF_MAX_BYTES });
+    } catch (err: any) {
+      if (typeof err?.status === "number" && okExit.includes(err.status) && typeof err.stdout === "string") return err.stdout;
+      throw err;
+    }
+  };
+  try {
+    const base = baseCommit ?? git(["rev-parse", "HEAD"]).trim();
+    let diff = git(["diff", "--no-color", "--no-ext-diff", base, "--"]);
+    const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
+    for (const file of untracked) {
+      // `git diff --no-index` exits 1 when the files differ, which is always the case against /dev/null.
+      diff += git(["diff", "--no-color", "--no-ext-diff", "--no-index", "--", "/dev/null", file], [1]);
+    }
+    return { base, diff };
+  } catch (err: any) {
+    return { error: String(err?.stderr || err?.message || err).trim().slice(0, 300) };
+  }
+}
 
 function origin(endpoint: string): string {
   try {
@@ -316,6 +358,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       let prompt: string;
       let promptMessages = ctx.messages;
       let unusable: string | undefined;
+      const review = isReviewRole(unit.role) ? this.reviewEvidence(unit, ctx, config.workspace) : undefined;
       if (unit.agentTaskId) {
         let recovered: TaskRecoveryResult | undefined;
         try {
@@ -346,7 +389,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           // conversation describes discarded files, so never resume that history on the fresh worktree.
           agent.restartConversation(!recovered?.obligationRecordPresent);
           prompt =
-            `${this.initialPrompt(unit, ctx, promptMessages)}\n\n${decision}` +
+            `${this.initialPrompt(unit, ctx, promptMessages, review)}\n\n${decision}` +
             "Note: this unit was explicitly restarted after recovery. Its earlier conversation is not being continued. " +
             "Earlier workspace history may be incomplete; inspect any changes that remain, because they remain unverified.";
         } else if (unusable) {
@@ -364,13 +407,13 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           // changes are unknown, so they count as unverified.
           agent.restartConversation(!recovered || !recovered.obligationRecordPresent);
           prompt =
-            `${this.initialPrompt(unit, ctx, promptMessages)}\n\n${decision}` +
+            `${this.initialPrompt(unit, ctx, promptMessages, review)}\n\n${decision}` +
             `Note: earlier task history was unusable (${unusable}). Prior workspace changes may be unknown and remain unverified; inspect the workspace before relying on them.`;
         } else if (notStarted) {
           const restartNotice = ctx.operatorDecision?.restart
             ? "\n\nNote: this unit was explicitly restarted after recovery. Earlier workspace history may be incomplete, and any prior changes remain unverified; inspect the workspace before relying on them."
             : "";
-          prompt = `${this.initialPrompt(unit, ctx, promptMessages)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
+          prompt = `${this.initialPrompt(unit, ctx, promptMessages, review)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
         } else {
           const op = recovered?.state.currentOperation;
           const stopped = op?.status === "interrupted"
@@ -383,7 +426,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
             `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
         }
       } else {
-        prompt = this.initialPrompt(unit, ctx, promptMessages);
+        prompt = this.initialPrompt(unit, ctx, promptMessages, review);
       }
       ctx.bindAgentTask(agent.getTaskId());
       if (agent.durable && !unit.agentTaskId) {
@@ -501,7 +544,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       } catch {
         reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "turn_checkpoint_failed");
       }
-      const outcome = this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx, testerVerifiedThisTurn);
+      const outcome = this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx, testerVerifiedThisTurn, review);
       if (outcome.kind === "completed" && turn.verification?.command) {
         return {
           ...outcome,
@@ -519,8 +562,38 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     }
   }
 
-  private initialPrompt(unit: WorkUnit, ctx: UnitRunContext, messages?: OperationMessage[]): string {
+  /** The objective evidence a review unit is given: requirements, scope, base, candidate diff and verifier receipts. */
+  private reviewEvidence(unit: WorkUnit, ctx: UnitRunContext, workspace: string): ReviewEvidencePackage {
+    const candidate = reviewCandidateDiff(ctx.workspace ?? workspace, ctx.baseCommit);
+    const verified = ctx.dependencies.find((d) => d.verification)?.verification;
+    return buildReviewEvidencePackage({
+      operationId: ctx.objective.slice(0, 80),
+      unitId: unit.id,
+      objective: `${ctx.objective}\n\nReview task: ${unit.prompt}`,
+      authorizedScope: [],
+      baselineCommit: "base" in candidate ? candidate.base : "unknown",
+      unifiedDiff: "diff" in candidate ? candidate.diff : `[Nexus could not compute the candidate diff: ${candidate.error}]`,
+      ...(verified
+        ? {
+            verifierCommand: verified.command,
+            verifierOutput: `status ${verified.status}${verified.hasExecutedTests ? "" : " (no tests executed)"}`,
+            ...(verified.status === "PASSED" && verified.hasExecutedTests ? { verifierExitCode: 0 } : {}),
+          }
+        : {}),
+    });
+  }
+
+  private initialPrompt(unit: WorkUnit, ctx: UnitRunContext, messages?: OperationMessage[], review?: ReviewEvidencePackage): string {
     const role = unit.role ? ROLE_PROFILES[unit.role]?.systemPromptAddendum ?? "" : "";
+    if (review) {
+      // The independent review boundary: the reviewer sees objective evidence only. Prerequisite summaries are the
+      // authors' own narrative, so they are withheld.
+      return (
+        `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${messagesBlock(messages)}\n` +
+        `${formatIndependentReviewPrompt(review)}\n` +
+        "Inspect the workspace as needed, then call task_completed with the JSON verdict as its summary."
+      );
+    }
     const deps = ctx.dependencies.length
       ? `\nCompleted prerequisite work:\n${ctx.dependencies.map((d) => `- ${d.title}: ${d.summary}`).join("\n")}\n`
       : "";
@@ -538,6 +611,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     condition: ResourceConditionRecord | null,
     ctx: UnitRunContext,
     testerVerifiedThisTurn = false,
+    review?: ReviewEvidencePackage,
   ): UnitRunResult {
     if (turn.execution === "INTERRUPTED") return { kind: "cancelled" };
     if (turn.persistence?.durable === false) {
@@ -572,6 +646,27 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         };
       }
       ctx.observeSuccess();
+      if (review) {
+        // A review completes only with a well-formed ACCEPT that survives the deterministic gates; anything else,
+        // including prose, a malformed verdict or an out-of-scope diff, is a REJECT the operator must act on.
+        const verdict = parseIndependentReviewVerdict(summary ?? turn.detail ?? "", review);
+        if (verdict.verdict !== "ACCEPT") {
+          const defects = verdict.suspectedDefects.map((d) => `${d.path}${d.line ? `:${d.line}` : ""} ${d.description}`);
+          const why = [...verdict.scopeViolations.map((v) => `scope: ${v}`), ...defects, ...verdict.unprovenCriteria.map((c) => `unproven: ${c}`)];
+          const detail = (why.length ? why.join("; ") : verdict.reviewerConfidenceNote).slice(0, 300);
+          return {
+            kind: "failed",
+            cause: "EXECUTION_FAILED",
+            reason: `review rejected: ${detail}`,
+            question: `${unit.title} rejected the candidate (${detail}). Revise the work under review, retry the review, or stop?`,
+            options: [
+              { label: "retry the review", action: { kind: "retry" } },
+              { label: "revise the unit (note required)", action: { kind: "revise" } },
+            ],
+          };
+        }
+        return { kind: "completed", summary: `ACCEPT: ${verdict.verifiedObservations.join("; ") || verdict.reviewerConfidenceNote}`.slice(0, 2000), outcome: turn.outcome };
+      }
       return {
         kind: "completed",
         summary: summary ?? turn.detail ?? "completed",

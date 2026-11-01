@@ -32,7 +32,9 @@ export type { AgentExecutorOptions } from "./operation_runner_execution.js";
 export interface UnitRunContext {
   signal?: AbortSignal;
   objective: string;
-  dependencies: Array<{ id: string; title: string; summary: string }>;
+  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean } }>;
+  /** Isolated operations: the commit the operation started from, which a review unit diffs against. */
+  baseCommit?: string;
   /** Why the unit is being resumed on this resource (undefined on its first run). */
   resumeReason?: string;
   /** Operator decision applied since the unit last ran (told to the unit). `restart` authorizes starting it over. */
@@ -309,8 +311,11 @@ export class OperationRunner {
       objective: this.state.objective,
       dependencies: unit.dependsOn.map((id) => {
         const dep = this.scheduler.unit(id);
-        return { id, title: dep.title, summary: dep.result?.summary ?? "" };
+        // The verifier a dependency passed is recorded on its integration receipt (isolated operations only).
+        const receipt = [...(this.state.integrations ?? [])].reverse().find((entry) => entry.unitId === id);
+        return { id, title: dep.title, summary: dep.result?.summary ?? "", ...(receipt?.tests ? { verification: receipt.tests } : {}) };
       }),
+      ...(this.state.git?.baseCommit ? { baseCommit: this.state.git.baseCommit } : {}),
       ...(unit.agentTaskId
         ? {
             resumeReason:
