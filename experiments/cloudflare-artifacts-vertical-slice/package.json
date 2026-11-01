@@ -10,7 +10,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vite-plugin": "beta",
-		"cf": "^1.0.0-beta.10",
+		"cf": "^1.0.0-beta.25",
 		"typescript": "^7.0.2",
 		"vite": "^8.3.5"
 	},
