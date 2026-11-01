@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6C0PE7V49313V7KXKWNPSZ7",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 528,
+  "files_touched": [
+    "AGENTS.md",
+    "checkin-agents.md",
+    "cli/package.json",
+    "cli/src/agent.ts",
+    "cli/src/checkpoint.ts",
+    "cli/src/core/durable_file.ts",
+    "cli/src/core/persistence_protection.ts",
+    "cli/src/core/state.ts",
+    "cli/src/flight.ts",
+    "cli/src/knowledge.ts",
+    "cli/src/session.ts",
+    "cli/test/compaction_continuity.test.ts",
+    "core/tests/adversarial_path_traversal.rs",
+    "docs/v1.0.0/ACCEPTANCE.md",
+    "docs/v1.0.0/REQUIREMENTS.md",
+    "package-lock.json",
+    "scripts/check_requirements.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "redaction": {
+    "replacements": 2814,
+    "layers": {
+      "betterleaks": 78,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 68,
+      "credentialed_uri": 1,
+      "entropy": 2680,
+      "key_context": 0,
+      "provider_token": 4,
+      "shell_stdin": 0
+    }
+  }
+}

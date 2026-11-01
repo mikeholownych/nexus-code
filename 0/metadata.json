@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6C0PE7V49313V7KXKWNPSZ7",
+  "session_id": "47e461b3-2e0c-467f-ad6d-a36d7dcca78f",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-01T16:57:23.244469621Z",
+  "branch": "main",
+  "checkpoints_count": 528,
+  "save_step_count": 1,
+  "files_touched": [
+    "AGENTS.md",
+    "checkin-agents.md",
+    "cli/package.json",
+    "cli/src/agent.ts",
+    "cli/src/checkpoint.ts",
+    "cli/src/core/durable_file.ts",
+    "cli/src/core/persistence_protection.ts",
+    "cli/src/core/state.ts",
+    "cli/src/flight.ts",
+    "cli/src/knowledge.ts",
+    "cli/src/session.ts",
+    "cli/test/compaction_continuity.test.ts",
+    "core/tests/adversarial_path_traversal.rs",
+    "docs/v1.0.0/ACCEPTANCE.md",
+    "docs/v1.0.0/REQUIREMENTS.md",
+    "package-lock.json",
+    "scripts/check_requirements.mjs"
+  ],
+  "agent": "Antigravity",
+  "model": "",
+  "turn_id": "a416746c0802",
+  "checkpoint_transcript_start": 49395,
+  "transcript_lines_at_start": 49395,
+  "redaction": {
+    "replacements": 2814,
+    "layers": {
+      "betterleaks": 78,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 68,
+      "credentialed_uri": 1,
+      "entropy": 2680,
+      "key_context": 0,
+      "provider_token": 4,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 528
+  }
+}
