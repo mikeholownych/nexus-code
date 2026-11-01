@@ -14,6 +14,16 @@ The v1.1.2 release line encompasses two complementary tiers:
 1. **Tier 1 (Completed in v1.1.2-rc.1):** Operational defect fix for multi-message prompt deduplication upon crash-resume ([PR #377](https://github.com/mikeholownych/nexus-code/pull/377)) and release documentation addendum.
 2. **Tier 2 (v1.1.2 Feature Enhancement):** Bounded specialist agent contracts, objective independent review boundaries (eliminating implementer confirmation bias), deterministic micro-routing, and telemetry-aware scheduling.
 
+### Status in PR #396 (owner decision: connect the new modules or cut them)
+- **Item 1, connected.** The specialist contracts are runtime roles in `cli/src/core/roles.ts`. An operation unit or `/team` target can run as one. The agent offers only the contract's permitted tools, and it refuses any other call when the call is dispatched (`roleToolAllowList`). That holds whether or not the role is read-only.
+- **Item 2, connected.** Units with the `reviewer` or `acceptance_reviewer` role run behind the boundary:
+  - Their prompt is the evidence package: the candidate diff against the operation's base commit, and the verifier receipt of the unit they depend on. Prerequisite summaries are withheld.
+  - The unit completes only on a well-formed `ACCEPT` that survives the deterministic gates. Prose, a malformed verdict, a reported defect or a failed verifier blocks the unit for an operator decision.
+  - The boundary complements `cli/src/core/independent_check.ts`, which decides whether a verifier pass is independent evidence. It does not replace it.
+- **Items 3 and 4, cut.** Nothing in the runtime routed on the micro-router. The escalation machine duplicated the non-progress recovery in PR #398, which is connected.
+- **`TokenBudgetTracker`, cut.** It duplicated `UsageLedger` (`cli/src/usage.ts`), which already enforces `NEXUS_CLOUD_MAX_TOKENS` with in-flight reservations.
+- **Item 5 and the CERI and comparative harness entry points are not yet connected.** The throttle needs request latency from `cli/src/client.ts`. CERI needs a `nexus eval` command in `cli/src/index.ts`. Both files are claimed by other open work.
+
 ---
 
 ## 2. Workstream Roadmap Specifications
@@ -65,7 +75,7 @@ The v1.1.2 release line encompasses two complementary tiers:
 
 ---
 
-### Item 3: Deterministic Micro-Routing Engine (Workstream C)
+### Item 3: Deterministic Micro-Routing Engine (Workstream C) — cut from PR #396
 - **Objective:** Eliminate unnecessary LLM turns for non-semantic, deterministic commands and routine file/test operations.
 - **Existing Capability / Gap:** All in-turn tool calls are routed through the LLM. No classification for deterministic fast-paths.
 - **Planned Implementation:**
@@ -83,7 +93,7 @@ The v1.1.2 release line encompasses two complementary tiers:
 
 ---
 
-### Item 4: Multi-Stage Escalation State Machine (Workstream E)
+### Item 4: Multi-Stage Escalation State Machine (Workstream E) — cut from PR #396; superseded by PR #398 non-progress recovery
 - **Objective:** Replace naive retry loops with an observable escalation state machine that detects repeat failures, engages failure investigators, and escalates to deep reasoning models before blocking for operator input.
 - **Existing Capability / Gap:** Units retry naively up to `maxRunsPerUnit` on the same resource without diagnostic enrichment.
 - **Planned Implementation:**

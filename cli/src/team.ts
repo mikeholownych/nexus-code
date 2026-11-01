@@ -16,13 +16,13 @@ import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, type AgentRole } fr
 import { mergeOperationPolicy } from "./config.js";
 import type { HarnessConfig } from "./types.js";
 
-export { ROLE_PROFILES, ROLE_REQUIREMENTS, type AgentRole, type RoleProfile } from "./core/roles.js";
+export { ROLE_PROFILES, ROLE_REQUIREMENTS, type AgentRole, type TeamRole, type RoleProfile } from "./core/roles.js";
 
 export const TEAM_ROLES: AgentRole[] = ["researcher", "architect", "implementer", "tester", "reviewer"];
 
 export type TeamTarget = AgentRole | "full";
 
-const UNIT_ID: Record<AgentRole, string> = { researcher: "research", architect: "design", implementer: "implement", tester: "verify", reviewer: "review" };
+const UNIT_ID: Partial<Record<AgentRole, string>> = { researcher: "research", architect: "design", implementer: "implement", tester: "verify", reviewer: "review" };
 
 /** Role turns segment at 15 steps (durable checkpoint boundary; continues until completion, stagnation or cancel unless --no-continuation is set). */
 const ROLE_MAX_STEPS = 15;
@@ -34,7 +34,7 @@ const ROLE_MAX_STEPS = 15;
  */
 export function teamUnits(target: TeamTarget, objective: string, opts: { independentReview?: boolean } = {}): WorkUnitSpec[] {
   const unit = (role: AgentRole, dependsOn: string[], independentOf?: string[]): WorkUnitSpec => ({
-    id: UNIT_ID[role],
+    id: UNIT_ID[role] ?? role,
     title: ROLE_PROFILES[role].title,
     role,
     prompt: objective,

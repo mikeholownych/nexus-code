@@ -1,7 +1,7 @@
 # Nexus Code v1.1.2 Specialist Orchestration & Independent Review Verification Evidence
 
 **Document ID:** `NEXUS-EVIDENCE-V112-ORCH`  
-**Evaluation Scope:** Specialist Profiles, Independent Review Boundary, Deterministic Micro-Router  
+**Evaluation Scope:** Specialist Profiles, Independent Review Boundary, runtime connection of both  
 **Date:** 2026-11-01  
 **Target Release:** Nexus Code `v1.1.2`  
 **Branch:** `v1/v112-specialist-orchestration`  
@@ -11,20 +11,21 @@
 
 ## 1. Test Execution Ledger
 
-Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node.js v24.11.1 (Linux x86_64) with an isolated temporary `HOME`. Durations are wall-clock values reported by `node --test` for each file run on its own.
+Ledger re-measured after the PR #396 runtime connection (claude-code), on Node.js v24.11.1 (Linux x86_64) with an isolated temporary `HOME`. Durations are wall-clock values reported by `node --test` for each file run on its own.
 
 | Test Suite | Tests Run | Pass | Fail | Duration | Command |
 |---|---|---|---|---|---|
-| `cli/test/specialist_profiles.test.ts` | 4 | 4 | 0 | 261ms | `tsx --test test/specialist_profiles.test.ts` |
-| `cli/test/independent_review.test.ts` | 7 | 7 | 0 | 307ms | `tsx --test test/independent_review.test.ts` |
-| `cli/test/micro_router.test.ts` | 3 | 3 | 0 | 316ms | `tsx --test test/micro_router.test.ts` |
-| `cli/test/escalation.test.ts` | 6 | 6 | 0 | 329ms | `tsx --test test/escalation.test.ts` |
-| `cli/test/adaptive_throttle.test.ts` | 6 | 6 | 0 | 330ms | `tsx --test test/adaptive_throttle.test.ts` |
-| `cli/test/comparative_harness.test.ts` | 3 | 3 | 0 | 391ms | `tsx --test test/comparative_harness.test.ts` |
-| `cli/test/ceri_*.test.ts` | 21 | 21 | 0 | 4.9s (sum) | `tsx --test test/ceri_*.test.ts` |
-| `cli/test/operation_messages.test.ts` (Regression) | 8 | 8 | 0 | 4.1s | `tsx --test test/operation_messages.test.ts` |
+| `cli/test/specialist_profiles.test.ts` | 4 | 4 | 0 | 266ms | `tsx --test test/specialist_profiles.test.ts` |
+| `cli/test/specialist_roles_runtime.test.ts` | 4 | 4 | 0 | 937ms | `tsx --test test/specialist_roles_runtime.test.ts` |
+| `cli/test/independent_review.test.ts` | 7 | 7 | 0 | 305ms | `tsx --test test/independent_review.test.ts` |
+| `cli/test/review_unit_boundary.test.ts` | 7 | 7 | 0 | 6.3s | `tsx --test test/review_unit_boundary.test.ts` |
+| `cli/test/adaptive_throttle.test.ts` | 4 | 4 | 0 | 332ms | `tsx --test test/adaptive_throttle.test.ts` |
+| `cli/test/comparative_harness.test.ts` | 3 | 3 | 0 | 363ms | `tsx --test test/comparative_harness.test.ts` |
+| `cli/test/ceri_*.test.ts` | 21 | 21 | 0 | 2.4s | `tsx --test test/ceri_*.test.ts` |
+| `cli/test/operation_messages.test.ts` (Regression) | 8 | 8 | 0 | 3.2s | `tsx --test test/operation_messages.test.ts` |
 | `cli/test/node_floor.test.ts` (Release Gates) | 6 | 6 | 0 | 0.3s | `tsx --test test/node_floor.test.ts` |
-| **Combined Orchestration & CERI Suite** | 50 | 50 | 0 | 5.1s | `node scripts/run_tests.mjs test/...` |
+| **Combined Orchestration & CERI Suite** | 50 | 50 | 0 | 13.1s | `node scripts/run_tests.mjs test/...` |
+| **Related runtime suites (operation, team, convergence, read-only, slash; Rust core built)** | 431 | 431 | 0 | — | same set at `717833d6`: 424/424; no test fails at either commit |
 | **Type Check Gate** | 1 | 1 | 0 | — | `tsc --noEmit` |
 
 ---
@@ -53,26 +54,29 @@ Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node
   - Malformed JSON fails closed as `REJECT`.
   - Every schema field is required and type-checked; a missing or malformed field or defect entry (e.g. `"suspectedDefects": "found a bug"`) fails closed as `REJECT` instead of being coerced to an empty list.
 
-### 2.3 Deterministic Micro-Routing
-- `routeTaskMicroDecision`:
-  - Non-semantic queries (`run tests`, `npm test`, `git diff`) return `DETERMINISTIC_FASTPATH` with `requiresInference: false`, bypassing LLM turns.
-  - Domain-specific queries (`security review`, `investigate failure`, `trace call sites`) return `SPECIALIST_DELEGATION` to the correct specialist role.
-  - Complex coding tasks fall back to `GENERAL_ENGINEERING` with confidence rating.
+### 2.3 Runtime Connection (owner decision: connect or cut)
+- Specialist roles are runtime roles (`cli/test/specialist_roles_runtime.test.ts`):
+  - Every contract is a `ROLE_PROFILES` entry, read-only exactly as its contract says.
+  - Operation specs and `/team` targets accept the specialist roles. An unknown role is still rejected.
+  - A `failure_debugger` agent is offered only its permitted tools. Its `write_file` call is refused at dispatch with `not permitted for role`, and no file is written.
+  - A read-only specialist keeps the read-only refusal for writes. Its other non-permitted tools, such as `fetch_web`, are refused by role.
+- Review units run behind the independent review boundary (`cli/test/review_unit_boundary.test.ts`):
+  - The candidate diff covers tracked edits and new files against the base. A workspace without Git yields an error, never an empty diff.
+  - The reviewer prompt carries the diff and the dependency's verifier receipt, never the dependency's summary. Units that are not review units still see prerequisite summaries.
+  - A review unit completes only on a valid `ACCEPT`. Prose, a malformed field, a reported defect or a `REJECT` blocks it with `review rejected:`.
+  - A failing dependency verifier turns a model `ACCEPT` into `REJECT`.
+- Cut:
+  - The micro-router (`micro_router.ts`): nothing in the runtime routed on it.
+  - The escalation machine (`escalation.ts`): superseded by the non-progress recovery in PR #398.
+  - `TokenBudgetTracker`: duplicated `UsageLedger`'s `NEXUS_CLOUD_MAX_TOKENS` limit.
+  - Their tests went with them.
 
-### 2.4 Multi-Stage Escalation & Cycle Detection
-- `evaluateEscalation`:
-  - Verified state transitions: `INITIAL_ATTEMPT` -> `DIAGNOSTIC_ANALYSIS` -> `DEEP_REASONING_ESCALATION` -> `OPERATOR_DECISION`.
-  - Cycle detection verified: Identical failure fingerprints across retries trigger `cycleDetected = true` and halt immediately at `OPERATOR_DECISION`, preventing runaway token expenditure.
-  - Max attempt boundaries verified: attempts >= maxAttempts transition to `OPERATOR_DECISION`.
-
-### 2.5 Adaptive Concurrency Throttle & Token Budgeting
+### 2.4 Adaptive Concurrency Throttle (not yet connected)
 - `AdaptiveConcurrencyThrottle`:
   - Dynamically throttles active slots from baseline (4) down to 1 when latency spikes $\ge 2.0\times$ baseline (`latencyRatio >= 2.0`) or timeout rate reaches 20%. Below $2.0\times$, concurrency remains unthrottled.
   - When idle (empty history), respects `min(maxConcurrency, baselineConcurrency)`.
   - Smoothly recovers concurrency slots back to baseline as observed latency normalizes.
-- `TokenBudgetTracker`:
-  - Accurately tracks total consumed tokens across all calls, including recording consumption when an invocation overflows the budget (`consume` returns `false` while incrementing `consumedTokens`). Non-finite token counts (`NaN`, `Infinity`) throw `RangeError` instead of corrupting the counter.
-  - Emits `WARNING` at 80% consumption, `CRITICAL` at 95%, and blocks consumption when `EXHAUSTED`.
+- Not yet connected: the request latency it needs is observable only in `cli/src/client.ts`, which other open work holds.
 
 ### 2.6 Comparative Evaluation Framework
 - `ComparativeEvaluationHarness`:

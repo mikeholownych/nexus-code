@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AdaptiveConcurrencyThrottle, TokenBudgetTracker } from "../src/core/adaptive_throttle.js";
+import { AdaptiveConcurrencyThrottle } from "../src/core/adaptive_throttle.js";
 
 test("AdaptiveConcurrencyThrottle starts at baseline concurrency", () => {
   const throttle = new AdaptiveConcurrencyThrottle({
@@ -68,38 +68,4 @@ test("AdaptiveConcurrencyThrottle recovers towards baseline when latency normali
 
   assert.equal(throttle.getCurrentLimit(), 4);
   assert.equal(throttle.isThrottled(), false);
-});
-
-test("TokenBudgetTracker tracks consumption and enforces limits", () => {
-  const tracker = new TokenBudgetTracker({ maxTokens: 10000 });
-
-  assert.equal(tracker.getRemainingTokens(), 10000);
-  assert.equal(tracker.getWarningStatus(), "OK");
-
-  // Consume 8100 tokens (81% -> WARNING)
-  assert.equal(tracker.consume(8100), true);
-  assert.equal(tracker.getRemainingTokens(), 1900);
-  assert.equal(tracker.getWarningStatus(), "WARNING");
-
-  // Consume 1500 tokens (96% -> CRITICAL)
-  assert.equal(tracker.consume(1500), true);
-  assert.equal(tracker.getRemainingTokens(), 400);
-  assert.equal(tracker.getWarningStatus(), "CRITICAL");
-
-  // Attempt to consume 500 tokens (exceeds budget -> denied, but records usage)
-  assert.equal(tracker.consume(500), false);
-  assert.equal(tracker.getTotalConsumed(), 10100);
-  assert.equal(tracker.getRemainingTokens(), 0);
-  assert.equal(tracker.isExhausted(), true);
-  assert.equal(tracker.getWarningStatus(), "EXHAUSTED");
-});
-
-test("TokenBudgetTracker rejects non-finite token counts instead of poisoning the counter", () => {
-  const tracker = new TokenBudgetTracker({ maxTokens: 1000 });
-  assert.throws(() => tracker.consume(Number.NaN), RangeError);
-  assert.throws(() => tracker.consume(Number.POSITIVE_INFINITY), RangeError);
-  assert.equal(tracker.getTotalConsumed(), 0);
-  assert.equal(tracker.consume(5000), false);
-  assert.equal(tracker.isExhausted(), true);
-  assert.equal(tracker.getWarningStatus(), "EXHAUSTED");
 });
