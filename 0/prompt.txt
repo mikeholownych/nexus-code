@@ -1,0 +1,461 @@
+proceed
+
+---
+
+# Nexus Code v1.1.2: Specialist Agent Orchestration, Independent Review, and Adaptive Routing
+
+## Role
+
+You are acting as the principal software architect and senior implementation engineer for Nexus Code.
+
+Your assignment is to independently assess, plan, and begin implementing enhancements to Nexus's multi-model orchestration architecture, targeting release **v1.1.2**.
+
+Operate with a production engineering mindset. Prioritize correctness, deterministic behaviour, backward compatibility, auditability, resource efficiency, and evidence-based acceptance.
+
+Do not assume that the proposed enhancements are necessary, correctly specified, or superior to the existing implementation.
+
+**Independent assessment must precede implementation.**
+
+## 1. Required repository reconnaissance
+
+Before making changes:
+
+1. Inspect the repository structure, existing architecture, agent profiles, routing mechanisms, execution lifecycle, context management, validation framework, and relevant tests.
+2. Locate and review the current roadmap, including v1.0.0, v1.1.0, v1.1.1, and v1.1.2 planning material, wherever available.
+3. Identify features already implemented, partially implemented, planned, deprecated, or superseded.
+4. Review existing architectural decision records and engineering conventions.
+5. Inspect the active branch, working tree, existing uncommitted changes, and repository instructions.
+6. Identify existing functionality that these enhancements could interfere with.
+
+Do not overwrite unrelated changes or reorganize existing roadmap commitments.
+
+Establish the actual current state from repository evidence. Do not rely on assumptions from this prompt.
+
+If v1.1.2 already has defined scope, integrate the proposed work without silently displacing or reprioritizing existing commitments.
+
+If no v1.1.2 roadmap exists, create one following the repository's established conventions.
+
+## 2. Architectural objective
+
+Evaluate and enhance Nexus's ability to coordinate specialized agents, invoke different inference models according to task requirements, isolate execution contexts, perform independent review, and minimize unnecessary inference overhead.
+
+The proposed architecture separates five responsibilities:
+
+1. Deterministic operations and routing.
+2. Primary engineering execution.
+3. Bounded specialist investigation.
+4. Independent validation and review.
+5. Evidence-based acceptance and escalation.
+
+Nexus's orchestrator must retain ownership of execution state, authorization, routing constraints, resource budgets, escalation decisions, and acceptance gates.
+
+Individual models must not become the authoritative source of approval, authorization, or completion status.
+
+Preserve compatibility with standards-compliant inference endpoints. Do not introduce hard dependencies on Anthropic, Claude Code, or any particular model provider.
+
+## 3. Workstream A: Specialist agent profiles
+
+Assess the existing agent and delegation architecture.
+
+Introduce or extend bounded specialist profiles where they provide measurable value.
+
+Candidate profiles:
+
+- Repository exploration and semantic search.
+- Dependency and call-site analysis.
+- Failure investigation and debugging.
+- Implementation assistance.
+- Test result interpretation.
+- Security and correctness review.
+- Independent acceptance review.
+
+Each profile should have an explicit contract defining:
+
+- Purpose and permitted operations.
+- Input schema and required evidence.
+- Output schema.
+- Model capability requirements.
+- Filesystem and tool permissions.
+- Context and token budget.
+- Timeout, retry, and cancellation behaviour.
+- Escalation criteria.
+- Provenance requirements.
+
+Do not introduce agent invocations for operations already handled reliably by deterministic tools.
+
+For example, ordinary file discovery, grep, AST queries, git diff operations, and known test commands should remain deterministic unless semantic interpretation is actually necessary.
+
+Specialist agents must return bounded, structured results rather than unrestricted conversation histories.
+
+## 4. Workstream B: Independent review and validation
+
+Evaluate the current reviewer architecture for common-mode failure, confirmation bias, and excessive dependence on the implementation agent's narrative.
+
+Implement a review boundary that can construct an independent evidence package containing:
+
+- Original task requirements.
+- Acceptance criteria.
+- Authorized scope.
+- Repository baseline and relevant revision identifiers.
+- Actual implementation diff.
+- Relevant repository context.
+- Test and validation evidence.
+- Known limitations and unresolved assumptions.
+
+The independent reviewer should receive this material without first receiving the implementing agent's preferred conclusion or confidence claims.
+
+Reviewer output should identify:
+
+- Verified observations.
+- Suspected defects.
+- Unsupported assumptions.
+- Acceptance criteria that remain unproven.
+- Scope violations.
+- Missing evidence.
+- Required corrective actions.
+
+A review by another model must not automatically count as independent confirmation of correctness.
+
+Where appropriate, supplement model review with deterministic tests, independently executed validation, or external evidence.
+
+**Internal model-produced metrics may veto an implementation, but must not independently establish its correctness.**
+
+Preserve a strict separation between reviewer recommendations and authoritative acceptance decisions.
+
+## 5. Workstream C: Deterministic micro-routing
+
+Investigate whether the current routing architecture makes unnecessary model calls for deterministic decisions.
+
+Candidate decisions include:
+
+- Tool selection.
+- Repository path selection.
+- Known task classification.
+- Retry eligibility.
+- Escalation thresholds.
+- Execution continuation versus termination.
+- Specialist profile assignment.
+
+Implement deterministic routing where rules can reliably resolve the decision.
+
+Where ambiguity genuinely requires inference, allow model-assisted classification within explicit constraints.
+
+A model-assisted routing decision must:
+
+- Be recorded with its inputs and result.
+- Respect existing authorization policy.
+- Have defined uncertainty handling.
+- Support deterministic fallback.
+- Be independently observable.
+- Never override hard policy constraints.
+
+Evaluate any proposed classification or routing accelerator separately before introducing it as a dependency.
+
+Do not introduce JEV or another framework merely because it appears in an external architectural example.
+
+## 6. Workstream D: Isolated execution and review
+
+Assess Nexus's existing worktree, workspace, and sandbox capabilities.
+
+Where supported, implement separate environments for:
+
+- Primary implementation.
+- Read-only investigation.
+- Independent review.
+- Validation and test execution.
+
+Isolation must be enforceable through actual filesystem permissions, tool restrictions, process controls, or equivalent mechanisms.
+
+Prompt instructions alone do not constitute isolation.
+
+Prevent specialist agents from accidentally modifying the primary working tree.
+
+Account for dirty worktrees, concurrent modifications, stale snapshots, conflicting patches, symlinks, and unsafe repository operations.
+
+Record which repository revision and evidence snapshot each agent evaluated.
+
+## 7. Workstream E: Evidence-driven escalation
+
+Assess existing escalation logic and identify situations where a stronger model or independent reviewer materially improves outcomes.
+
+Evaluate triggers such as:
+
+- Failure repeated after a meaningful corrective attempt.
+- Conflicting test or reviewer evidence.
+- Unresolved architectural decisions.
+- Changes outside the originally authorized scope.
+- High-impact or security-sensitive modifications.
+- Reviewer disagreement.
+- Inability to establish required acceptance evidence.
+- Resource budget exhaustion.
+
+Do not blindly escalate after two identical errors without determining whether the second attempt contributed new information.
+
+Implement explicit escalation state transitions with bounded retries and loop detection.
+
+Escalation must not bypass tool restrictions, approval requirements, or acceptance gates.
+
+## 8. Workstream F: Adaptive concurrency and resource budgets
+
+Evaluate the existing scheduling and concurrency architecture.
+
+The primary deployment environment includes two local inference workers behind a routing gateway:
+
+- Lead: Qwen3-Coder-30B-A3B-Instruct, used primarily for engineering execution.
+- Deep: Qwen3.5-27B, used for complex reasoning, escalation, and review.
+
+Treat these as an initial deployment configuration, not hardcoded architectural requirements.
+
+Investigate concurrency controls using available signals such as:
+
+- Worker availability.
+- Queue depth and queue wait.
+- Time to first token.
+- Token generation latency.
+- KV-cache utilization.
+- Active inference requests.
+- Context size.
+- Task priority.
+- Remaining resource budget.
+
+Do not assume every signal is available or trustworthy. Identify authoritative telemetry sources and define behaviour when telemetry is missing, stale, or inconsistent.
+
+Avoid unbounded agent fan-out.
+
+Ensure background specialist tasks cannot indefinitely starve primary engineering execution.
+
+Preserve model/provider portability.
+
+## 9. Workstream G: Comparative evaluation
+
+Build or extend a benchmark harness capable of comparing:
+
+**Configuration A: Existing baseline**
+
+Current Nexus execution and escalation behaviour.
+
+**Configuration B: Specialist delegation**
+
+Existing models with bounded specialist agents and isolated review contexts.
+
+**Configuration C: Adaptive orchestration**
+
+Specialist delegation plus deterministic micro-routing, event-driven escalation, and capacity-aware scheduling.
+
+Use the same pinned repository revisions, tasks, acceptance criteria, and tool environments.
+
+Where models are stochastic, conduct repeated trials and report the observed variation.
+
+Capture:
+
+- Task completion rate.
+- Independently validated acceptance rate.
+- Escaped defects.
+- False-positive reviewer findings.
+- Unnecessary escalation rate.
+- Retry amplification.
+- Total token consumption.
+- Wall-clock completion time.
+- Tool execution overhead.
+- Queue and inference latency.
+- Peak memory/KV-cache pressure where measurable.
+- Operational failures and recovery behaviour.
+
+Measure the end-to-end system rather than isolated model calls.
+
+Do not claim efficiency improvements from reduced lead-model context alone if specialist agents increase overall inference consumption.
+
+Preserve raw measurements and experiment configuration for reproduction.
+
+## 10. Implementation principles
+
+All changes must comply with the following constraints:
+
+1. Existing functionality remains the baseline unless evidence justifies replacement.
+2. Prefer extending established architecture over introducing parallel frameworks.
+3. No unnecessary dependencies.
+4. No hardcoded model identities or provider-specific assumptions.
+5. No unrestricted agent delegation.
+6. No self-approval by implementing agents.
+7. No acceptance based exclusively on internally generated confidence scores.
+8. No silent fallback that changes task semantics, authorization, or acceptance criteria.
+9. No destructive workspace operations without appropriate safeguards.
+10. No reduction in engineering accuracy merely to improve throughput.
+11. Preserve durable task state, pause/resume behaviour, and provenance.
+12. Preserve compatibility with existing gateway routing and cloud fallback capabilities.
+13. Ensure new capabilities can be disabled or rolled back independently wherever practical.
+14. Prefer observable, explicit failure states over silent recovery.
+15. Follow repository conventions and avoid unrelated refactoring.
+
+## 11. Required implementation sequence
+
+### Phase 1: Independent assessment
+
+Produce a repository-grounded assessment identifying:
+
+- Existing supporting capabilities.
+- Missing capabilities.
+- Design conflicts.
+- Technical dependencies.
+- Operational risks.
+- Proposed changes.
+- Changes that should explicitly not be implemented.
+
+Reference actual source files, tests, and relevant documentation.
+
+Separate verified findings from hypotheses.
+
+### Phase 2: Roadmap update
+
+Update the existing v1.1.2 roadmap to incorporate accepted workstreams.
+
+For each item define:
+
+- Objective.
+- Existing capability or gap.
+- Planned implementation.
+- Dependencies.
+- Priority.
+- Acceptance criteria.
+- Verification method.
+- Rollback considerations.
+- Estimated complexity.
+
+Explicitly identify work that should be deferred to a later release.
+
+Do not remove existing roadmap items.
+
+### Phase 3: Implementation planning
+
+Develop an ordered implementation plan identifying:
+
+- Architectural interfaces.
+- Files/modules expected to change.
+- Data contracts and state transitions.
+- Persistence and migration implications.
+- Test coverage requirements.
+- Integration risks.
+- Deployment compatibility.
+- Feature flags or configuration controls.
+- Verification milestones.
+
+Prioritize foundational correctness and isolation ahead of optimization.
+
+### Phase 4: Begin implementation
+
+After completing the assessment and roadmap update, begin implementing the highest-priority, lowest-risk foundational changes.
+
+Implement vertical slices that include:
+
+- Production code.
+- Unit tests.
+- Integration tests where applicable.
+- Documentation.
+- Observable failure handling.
+- Evidence of behaviour.
+
+Prefer one independently testable capability at a time.
+
+Do not begin high-risk architectural restructuring merely to demonstrate progress.
+
+If foundational assumptions are disproven, revise the plan before proceeding.
+
+### Phase 5: Verification
+
+For each completed change:
+
+- Run relevant existing tests.
+- Run new targeted tests.
+- Inspect the actual diff.
+- Check backward compatibility.
+- Check failure and recovery behaviour.
+- Record test commands and results.
+- Identify remaining unverified claims.
+
+Never equate passing tests with complete proof of correctness.
+
+If independent validation is unavailable, explicitly record that limitation.
+
+## 12. Deliverables
+
+Produce the following within the repository, using existing documentation and planning conventions:
+
+**A. Architecture assessment**
+
+A detailed analysis of existing mechanisms, gaps, risks, and proposed changes with source references.
+
+**B. Updated v1.1.2 roadmap**
+
+Integrate the accepted enhancements without disrupting existing commitments.
+
+**C. Implementation plan**
+
+An ordered, dependency-aware plan with concrete acceptance criteria.
+
+**D. Initial implementation**
+
+Working, tested code for the first justified implementation increment.
+
+**E. Verification evidence**
+
+Test results, review findings, limitations, and reproducible validation procedures.
+
+**F. Final engineering report**
+
+Summarize:
+
+- What was already implemented.
+- What was missing.
+- What was added to v1.1.2.
+- What code actually changed.
+- Which tests passed or failed.
+- What was independently verified.
+- What remains unproven.
+- What was deferred and why.
+- Known regressions or risks.
+- Recommended next implementation steps.
+
+## 13. Execution authority and stop conditions
+
+You are authorized to:
+
+- Inspect the repository.
+- Update roadmap and planning documentation.
+- Implement changes within the assessed scope.
+- Add or modify appropriate tests.
+- Run local validation.
+- Create reversible, scoped implementation commits if consistent with repository conventions.
+
+You are not authorized to:
+
+- Push changes to remote repositories.
+- Merge branches.
+- Publish releases.
+- Deploy to production.
+- Modify production infrastructure.
+- Destroy or overwrite unrelated user work.
+- Disable existing acceptance or security controls.
+- Introduce external dependencies without justification and review.
+- Expand implementation beyond approved architectural objectives.
+
+If changes require destructive operations, material security changes, substantial dependency additions, or production infrastructure modifications, document the proposed actions and stop that portion of the work pending authorization.
+
+Do not halt unrelated, safe implementation work.
+
+## 14. Final instructions
+
+Start by inspecting the repository.
+
+Do not begin with a generic architecture proposal detached from the actual codebase.
+
+Challenge the assumptions in this assignment where repository evidence contradicts them.
+
+Preserve existing functionality wherever possible.
+
+Plan the work against v1.1.2, not v1.1.0.
+
+Begin implementation once sufficient evidence supports the initial design.
+
+Proceed autonomously within the defined boundaries, without requesting confirmation for ordinary reversible development changes.
+
+**Success means a defensible roadmap update, an evidence-grounded implementation plan, and verified incremental engineering progress. It does not mean merely producing documentation or claiming the proposed architecture has been implemented.**
