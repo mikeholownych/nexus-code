@@ -14,13 +14,13 @@ Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node
 
 | Test Suite | Tests Run | Pass | Fail | Duration | Command |
 |---|---|---|---|---|---|
-| `cli/test/ceri_contracts.test.ts` | 3 | 3 | 0 | 299ms | `tsx --test test/ceri_contracts.test.ts` |
-| `cli/test/ceri_evidence_store.test.ts` | 3 | 3 | 0 | 560ms | `tsx --test test/ceri_evidence_store.test.ts` |
-| `cli/test/ceri_baseline.test.ts` | 6 | 6 | 0 | 335ms | `tsx --test test/ceri_baseline.test.ts` |
-| `cli/test/ceri_investigation.test.ts` | 2 | 2 | 0 | 305ms | `tsx --test test/ceri_investigation.test.ts` |
-| `cli/test/ceri_remediation.test.ts` | 3 | 3 | 0 | 302ms | `tsx --test test/ceri_remediation.test.ts` |
-| `cli/test/ceri_e2e.test.ts` | 2 | 2 | 0 | 2.8s | `tsx --test test/ceri_e2e.test.ts` |
-| **Combined Orchestration & CERI Suite** | 46 | 46 | 0 | 5.1s | `node scripts/run_tests.mjs test/...` |
+| `cli/test/ceri_contracts.test.ts` | 3 | 3 | 0 | 362ms | `tsx --test test/ceri_contracts.test.ts` |
+| `cli/test/ceri_evidence_store.test.ts` | 3 | 3 | 0 | 888ms | `tsx --test test/ceri_evidence_store.test.ts` |
+| `cli/test/ceri_baseline.test.ts` | 7 | 7 | 0 | 530ms | `tsx --test test/ceri_baseline.test.ts` |
+| `cli/test/ceri_investigation.test.ts` | 2 | 2 | 0 | 507ms | `tsx --test test/ceri_investigation.test.ts` |
+| `cli/test/ceri_remediation.test.ts` | 3 | 3 | 0 | 620ms | `tsx --test test/ceri_remediation.test.ts` |
+| `cli/test/ceri_e2e.test.ts` | 3 | 3 | 0 | 2.0s | `tsx --test test/ceri_e2e.test.ts` |
+| **Combined Orchestration & CERI Suite** | 50 | 50 | 0 | 5.1s | `node scripts/run_tests.mjs test/...` |
 | **TypeScript Typecheck** | 1 | 1 | 0 | — | `tsc --noEmit` |
 
 ---
@@ -46,6 +46,7 @@ Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node
   - Detects and rejects comparisons when evaluation definition version has drifted.
   - Detects and rejects comparisons when inference models differ (`qwen-coder-30b` vs `claude-3-opus`).
   - Detects and rejects unrecorded dirty worktrees.
+  - Detects and rejects quantization mismatches, including quantization recorded on only one side.
   - Classifies outcomes across all 12 operational states (`PASS`, `FAIL`, `REGRESSION_CANDIDATE`, `CONFIRMED_REGRESSION`, `IMPROVEMENT_CANDIDATE`, `FLAKY`, `INFRASTRUCTURE_FAILURE`, `EVALUATOR_DEFECT`, `INCONCLUSIVE`, `NOT_EXECUTED`, `CANCELLED`, `INCOMPARABLE`).
   - Fails comparability (`INCOMPARABLE`) when baseline assertions are not provided or loaded, eliminating ungrounded baseline comparisons.
   - Does not classify newly added assertions not tested in baseline as `IMPROVEMENT_CANDIDATE`.
@@ -67,6 +68,7 @@ Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node
 - Full flow executed: `Definition` $\to$ `Execution` $\to$ `Run Manifest` $\to$ `Durable Evidence` $\to$ `Integrity Record` $\to$ `Baseline Comparison` $\to$ `Machine-Readable Operational Report` $\to$ `Markdown Summary`.
 - The runner never executes `assertion.command` itself. Assertions run only through a caller-supplied `assertionExecutor`. Without one, the run is `NOT_EXECUTED`, writes no assertion records (so it cannot serve as a baseline), and is counted as inconclusive in reports.
 - Verifies empty assertion sets result in `INCONCLUSIVE`.
+- Reports count each run at most once per anomaly metric (a manifest status and a matching comparison outcome are one run), treat evaluator defects, flaky and cancelled runs as anomalies that block the "no regressions" message, and compute coverage from distinct evaluation ids, with the run count reported separately.
 
 ---
 

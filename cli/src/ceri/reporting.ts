@@ -17,37 +17,41 @@ export class CeriReportGenerator {
     let inconclusiveCount = 0;
     let flakyCount = 0;
     let infrastructureFailures = 0;
+    let evaluatorDefects = 0;
     let incomparableCount = 0;
     const confirmedRegressions: string[] = [];
     const regressionCandidates: string[] = [];
     const blockers: string[] = [];
+    const executedEvaluationIds = new Set<string>();
 
     for (const { manifest, comparison } of runs) {
+      executedEvaluationIds.add(manifest.evaluationId);
       if (manifest.status === "FAILED") failedRuns++;
       else if (manifest.status === "COMPLETED") passedRuns++;
-      else if (manifest.status === "INTERRUPTED" || manifest.status === "INCONCLUSIVE" || manifest.status === "NOT_EXECUTED") inconclusiveCount++;
 
-      if (comparison) {
-        if (comparison.outcome === "CONFIRMED_REGRESSION") {
-          confirmedRegressions.push(comparison.currentRunId);
-          blockers.push(`Confirmed regression in evaluation '${manifest.evaluationId}' (Run ${manifest.runId})`);
-        } else if (comparison.outcome === "REGRESSION_CANDIDATE") {
-          regressionCandidates.push(comparison.currentRunId);
-        } else if (comparison.outcome === "FLAKY") {
-          flakyCount++;
-        } else if (comparison.outcome === "INFRASTRUCTURE_FAILURE") {
-          infrastructureFailures++;
-        } else if (comparison.outcome === "INCONCLUSIVE") {
-          inconclusiveCount++;
-        } else if (comparison.outcome === "INCOMPARABLE") {
-          incomparableCount++;
-        }
+      // Each anomaly metric counts a run at most once, whether the manifest status, the comparison outcome,
+      // or both report it (compareRuns echoes the manifest's INCONCLUSIVE/INFRASTRUCTURE_FAILURE/EVALUATOR_DEFECT).
+      const outcome = comparison?.outcome;
+      const inconclusiveStatuses = ["INTERRUPTED", "INCONCLUSIVE", "NOT_EXECUTED", "CANCELLED"];
+      if (inconclusiveStatuses.includes(manifest.status) || outcome === "INCONCLUSIVE" || outcome === "NOT_EXECUTED" || outcome === "CANCELLED") {
+        inconclusiveCount++;
+      }
+      if (manifest.status === "INFRASTRUCTURE_FAILURE" || outcome === "INFRASTRUCTURE_FAILURE") infrastructureFailures++;
+      if (manifest.status === "EVALUATOR_DEFECT" || outcome === "EVALUATOR_DEFECT") evaluatorDefects++;
+      if (outcome === "FLAKY") flakyCount++;
+      if (outcome === "INCOMPARABLE") incomparableCount++;
+      if (outcome === "CONFIRMED_REGRESSION") {
+        confirmedRegressions.push(comparison!.currentRunId);
+        blockers.push(`Confirmed regression in evaluation '${manifest.evaluationId}' (Run ${manifest.runId})`);
+      } else if (outcome === "REGRESSION_CANDIDATE") {
+        regressionCandidates.push(comparison!.currentRunId);
       }
     }
 
     const executedRuns = runs.length;
+    const executedEvaluations = executedEvaluationIds.size;
     const rawCoverage =
-      executedRuns > 0 ? (executedRuns / Math.max(1, totalAvailableEvaluations)) * 100 : 0;
+      executedEvaluations > 0 ? (executedEvaluations / Math.max(1, totalAvailableEvaluations)) * 100 : 0;
     const completenessScore = Number(Math.min(100, Math.max(0, rawCoverage)).toFixed(1));
 
     return {
@@ -55,6 +59,7 @@ export class CeriReportGenerator {
       generatedAt: new Date().toISOString(),
       evaluationCoverage: {
         totalEvaluations: totalAvailableEvaluations,
+        executedEvaluations,
         executedRuns,
         passedRuns,
         failedRuns,
@@ -67,6 +72,7 @@ export class CeriReportGenerator {
       inconclusiveCount,
       flakyCount,
       infrastructureFailures,
+      evaluatorDefects,
       incomparableCount,
       blockers,
       evidenceCompletenessScore: completenessScore,
@@ -87,7 +93,7 @@ export class CeriReportGenerator {
     if (report.baselineId) {
       lines.push(`**Designated Baseline:** \`${report.baselineId}\`  `);
     }
-    lines.push(`**Coverage Score:** ${report.evidenceCompletenessScore}% (${report.evaluationCoverage.executedRuns}/${report.evaluationCoverage.totalEvaluations} evaluations executed)  `);
+    lines.push(`**Coverage Score:** ${report.evidenceCompletenessScore}% (${report.evaluationCoverage.executedEvaluations}/${report.evaluationCoverage.totalEvaluations} evaluations executed, ${report.evaluationCoverage.executedRuns} runs)  `);
     lines.push("");
 
     lines.push(`## 1. Executive Status & Release Gates`);
@@ -107,11 +113,13 @@ export class CeriReportGenerator {
       report.evaluationCoverage.failedRuns > 0 ||
       report.inconclusiveCount > 0 ||
       report.infrastructureFailures > 0 ||
+      report.evaluatorDefects > 0 ||
+      report.flakyCount > 0 ||
       report.incomparableCount > 0
     ) {
       lines.push(`> [!WARNING]`);
       lines.push(
-        `> **EVALUATION ANOMALIES DETECTED:** Non-zero failures (${report.evaluationCoverage.failedRuns}), inconclusive (${report.inconclusiveCount}), infrastructure failures (${report.infrastructureFailures}), or incomparable runs (${report.incomparableCount}). Further qualification required.`
+        `> **EVALUATION ANOMALIES DETECTED:** Non-zero failures (${report.evaluationCoverage.failedRuns}), inconclusive (${report.inconclusiveCount}), infrastructure failures (${report.infrastructureFailures}), evaluator defects (${report.evaluatorDefects}), flaky (${report.flakyCount}), or incomparable runs (${report.incomparableCount}). Further qualification required.`
       );
     } else {
       lines.push(`> [!NOTE]`);
@@ -124,6 +132,7 @@ export class CeriReportGenerator {
     lines.push(`## 2. Evaluation Metrics Ledger`);
     lines.push(`| Metric | Value |`);
     lines.push(`|---|---|`);
+    lines.push(`| Executed Evaluations | ${report.evaluationCoverage.executedEvaluations} / ${report.evaluationCoverage.totalEvaluations} |`);
     lines.push(`| Executed Runs | ${report.evaluationCoverage.executedRuns} |`);
     lines.push(`| Passed Runs | ${report.evaluationCoverage.passedRuns} |`);
     lines.push(`| Failed Runs | ${report.evaluationCoverage.failedRuns} |`);
@@ -132,6 +141,7 @@ export class CeriReportGenerator {
     lines.push(`| Inconclusive / Interrupted | ${report.inconclusiveCount} |`);
     lines.push(`| Flaky Evaluations | ${report.flakyCount} |`);
     lines.push(`| Infrastructure Failures | ${report.infrastructureFailures} |`);
+    lines.push(`| Evaluator Defects | ${report.evaluatorDefects} |`);
     lines.push(`| Incomparable Configurations | ${report.incomparableCount} |`);
     lines.push("");
 

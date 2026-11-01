@@ -91,7 +91,8 @@ export const SPECIALIST_CONTRACTS: Record<SpecialistRole, SpecialistContract> = 
       "file_info",
       "task_completed",
     ],
-    readOnly: true,
+    // run_command / run_tests can write to the workspace, so this role is not read-only.
+    readOnly: false,
     maxContextTokens: 32000,
     inputRequirements: ["failure_log", "reproduction_command"],
     outputSchemaName: "FailureDebugOutput",

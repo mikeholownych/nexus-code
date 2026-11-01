@@ -170,3 +170,73 @@ Here is my review:
   assert.equal(res6.verdict, "REJECT");
   assert.match(res6.unprovenCriteria[0], /Unified diff was truncated/);
 });
+
+// Headers exactly as `git diff` writes them (captured from git 2.x): non-ASCII and tab characters are C-quoted
+// with octal escapes, and a bare path containing a space gets a trailing tab on ---/+++ lines.
+const QUOTED_PATH_DIFF = [
+  'diff --git a/cli/src/with space.ts "b/cli/src/moved \\303\\251.ts"',
+  "rename from cli/src/with space.ts",
+  'rename to "cli/src/moved \\303\\251.ts"',
+  "--- a/cli/src/with space.ts\t",
+  '+++ "b/cli/src/moved \\303\\251.ts"\t',
+  "@@ -1 +1,2 @@",
+  " b",
+  "+d",
+  'diff --git "a/cli/src/tab\\tname.ts" "b/cli/src/tab\\tname.ts"',
+  '--- "a/cli/src/tab\\tname.ts"',
+  '+++ "b/cli/src/tab\\tname.ts"',
+  "@@ -1 +1,2 @@",
+  " x",
+  "+y",
+  'diff --git "a/outside/\\303\\251.ts" "b/outside/\\303\\251.ts"',
+  '--- "a/outside/\\303\\251.ts"',
+  '+++ "b/outside/\\303\\251.ts"',
+  "@@ -1,2 +1 @@",
+  " a",
+  "--- removed line that starts with two dashes",
+  "",
+].join("\n");
+
+test("extractModifiedFilesFromDiff decodes Git-quoted paths, keeps bare paths with spaces, and ignores hunk lines", () => {
+  assert.deepEqual(extractModifiedFilesFromDiff(QUOTED_PATH_DIFF).sort(), [
+    "cli/src/moved é.ts",
+    "cli/src/tab\tname.ts",
+    "cli/src/with space.ts",
+    "outside/é.ts",
+  ]);
+  assert.deepEqual(detectScopeViolations(QUOTED_PATH_DIFF, ["cli/src"]), ["outside/é.ts"]);
+  assert.deepEqual(
+    detectScopeViolations('diff --git "a/outside/\\303\\251.ts\n', ["cli/src"]).map((v) => v.startsWith("<unparseable diff header")),
+    [true],
+    "an unparseable header must surface as a violation, not disappear"
+  );
+});
+
+test("parseIndependentReviewVerdict rejects missing or malformed schema fields instead of coercing them away", () => {
+  const pkg = buildReviewEvidencePackage({
+    operationId: "op",
+    unitId: "u",
+    objective: "o",
+    authorizedScope: ["cli/src/feature.ts"],
+    baselineCommit: "b",
+    unifiedDiff: "diff --git a/cli/src/feature.ts b/cli/src/feature.ts\n--- a/cli/src/feature.ts\n+++ b/cli/src/feature.ts\n@@ -1 +1 @@\n-a\n+b\n",
+    verifierOutput: "ok",
+    verifierExitCode: 0,
+  });
+  const valid = { verdict: "ACCEPT", verifiedObservations: [], suspectedDefects: [], unprovenCriteria: [], scopeViolations: [], reviewerConfidenceNote: "n" };
+  assert.equal(parseIndependentReviewVerdict(JSON.stringify(valid), pkg).verdict, "ACCEPT");
+
+  const malformed: Array<[string, Record<string, unknown>]> = [
+    ["string defects", { ...valid, suspectedDefects: "found a bug" }],
+    ["defect entry without description", { ...valid, suspectedDefects: [{ path: "x.ts" }] }],
+    ["non-object defect entry", { ...valid, suspectedDefects: ["bug"] }],
+    ["missing suspectedDefects", { ...valid, suspectedDefects: undefined }],
+    ["missing scopeViolations", { ...valid, scopeViolations: undefined }],
+    ["non-string observation", { ...valid, verifiedObservations: [1] }],
+    ["lower-case verdict", { ...valid, verdict: "accept" }],
+    ["missing confidence note", { ...valid, reviewerConfidenceNote: undefined }],
+  ];
+  for (const [label, body] of malformed) {
+    assert.equal(parseIndependentReviewVerdict(JSON.stringify(body), pkg).verdict, "REJECT", label);
+  }
+});

@@ -33,13 +33,12 @@ export class CeriBaselineComparator {
       );
     }
 
-    if (
-      baseline.modelQuantization &&
-      manifest.model.quantization &&
-      manifest.model.quantization !== baseline.modelQuantization
-    ) {
+    // Absent on one side is a mismatch: comparability cannot be established without matching configurations.
+    const currentQuantization = manifest.model.quantization || undefined;
+    const baselineQuantization = baseline.modelQuantization || undefined;
+    if (currentQuantization !== baselineQuantization) {
       reasons.push(
-        `Model quantization mismatch: current '${manifest.model.quantization}' vs baseline '${baseline.modelQuantization}'`
+        `Model quantization mismatch: current '${currentQuantization ?? "(unrecorded)"}' vs baseline '${baselineQuantization ?? "(unrecorded)"}'`
       );
     }
 

@@ -23,7 +23,8 @@ test("specialist profiles declare explicit permitted tools and bounds", () => {
     assert.ok(contract, `Contract must exist for role: ${role}`);
     assert.equal(contract.role, role);
     assert.ok(contract.permittedTools.length > 0, `${role} must declare permitted tools`);
-    assert.ok(contract.readOnly, `${role} is expected to be read-only`);
+    const canExecute = contract.permittedTools.some((t) => t === "run_command" || t === "run_tests");
+    assert.equal(contract.readOnly, !canExecute, `${role}: readOnly must be false exactly when it may run commands`);
     assert.ok(contract.maxContextTokens > 0, `${role} must declare a maxContextTokens ceiling`);
     assert.ok(contract.inputRequirements.length > 0, `${role} must declare input requirements`);
     assert.ok(contract.escalationCriteria.length > 0, `${role} must declare escalation criteria`);

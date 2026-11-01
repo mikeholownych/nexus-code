@@ -181,6 +181,8 @@ export interface CeriOperationalReport {
   generatedAt: string;
   evaluationCoverage: {
     totalEvaluations: number;
+    /** Distinct evaluation ids with at least one run; coverage is computed from this, not from the run count. */
+    executedEvaluations: number;
     executedRuns: number;
     passedRuns: number;
     failedRuns: number;
@@ -193,6 +195,7 @@ export interface CeriOperationalReport {
   inconclusiveCount: number;
   flakyCount: number;
   infrastructureFailures: number;
+  evaluatorDefects: number;
   incomparableCount: number;
   blockers: string[];
   evidenceCompletenessScore: number;

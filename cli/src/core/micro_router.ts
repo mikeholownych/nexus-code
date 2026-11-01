@@ -78,7 +78,7 @@ const DETERMINISTIC_PATTERNS: DeterministicPattern[] = [
     reason: "Query specifically requests security auditing or vulnerability analysis",
   },
 
-  // 4. Failure investigation & debugging (read-only diagnostic)
+  // 4. Failure investigation & debugging (diagnostic; failure_debugger may run commands and tests)
   {
     ruleId: "SPECIALIST_FAILURE_DEBUG",
     kind: "SPECIALIST_DELEGATION",

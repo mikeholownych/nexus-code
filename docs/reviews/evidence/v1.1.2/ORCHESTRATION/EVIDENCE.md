@@ -15,16 +15,16 @@ Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node
 
 | Test Suite | Tests Run | Pass | Fail | Duration | Command |
 |---|---|---|---|---|---|
-| `cli/test/specialist_profiles.test.ts` | 4 | 4 | 0 | 301ms | `tsx --test test/specialist_profiles.test.ts` |
-| `cli/test/independent_review.test.ts` | 5 | 5 | 0 | 328ms | `tsx --test test/independent_review.test.ts` |
-| `cli/test/micro_router.test.ts` | 3 | 3 | 0 | 286ms | `tsx --test test/micro_router.test.ts` |
-| `cli/test/escalation.test.ts` | 6 | 6 | 0 | 352ms | `tsx --test test/escalation.test.ts` |
-| `cli/test/adaptive_throttle.test.ts` | 6 | 6 | 0 | 331ms | `tsx --test test/adaptive_throttle.test.ts` |
-| `cli/test/comparative_harness.test.ts` | 3 | 3 | 0 | 333ms | `tsx --test test/comparative_harness.test.ts` |
-| `cli/test/ceri_*.test.ts` | 19 | 19 | 0 | 4.6s (sum) | `tsx --test test/ceri_*.test.ts` |
-| `cli/test/operation_messages.test.ts` (Regression) | 8 | 8 | 0 | 9.9s | `tsx --test test/operation_messages.test.ts` |
-| `cli/test/node_floor.test.ts` (Release Gates) | 6 | 6 | 0 | 1.5s | `tsx --test test/node_floor.test.ts` |
-| **Combined Orchestration & CERI Suite** | 46 | 46 | 0 | 5.1s | `node scripts/run_tests.mjs test/...` |
+| `cli/test/specialist_profiles.test.ts` | 4 | 4 | 0 | 261ms | `tsx --test test/specialist_profiles.test.ts` |
+| `cli/test/independent_review.test.ts` | 7 | 7 | 0 | 307ms | `tsx --test test/independent_review.test.ts` |
+| `cli/test/micro_router.test.ts` | 3 | 3 | 0 | 316ms | `tsx --test test/micro_router.test.ts` |
+| `cli/test/escalation.test.ts` | 6 | 6 | 0 | 329ms | `tsx --test test/escalation.test.ts` |
+| `cli/test/adaptive_throttle.test.ts` | 6 | 6 | 0 | 330ms | `tsx --test test/adaptive_throttle.test.ts` |
+| `cli/test/comparative_harness.test.ts` | 3 | 3 | 0 | 391ms | `tsx --test test/comparative_harness.test.ts` |
+| `cli/test/ceri_*.test.ts` | 21 | 21 | 0 | 4.9s (sum) | `tsx --test test/ceri_*.test.ts` |
+| `cli/test/operation_messages.test.ts` (Regression) | 8 | 8 | 0 | 4.1s | `tsx --test test/operation_messages.test.ts` |
+| `cli/test/node_floor.test.ts` (Release Gates) | 6 | 6 | 0 | 0.3s | `tsx --test test/node_floor.test.ts` |
+| **Combined Orchestration & CERI Suite** | 50 | 50 | 0 | 5.1s | `node scripts/run_tests.mjs test/...` |
 | **Type Check Gate** | 1 | 1 | 0 | — | `tsc --noEmit` |
 
 ---
@@ -36,6 +36,7 @@ Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node
   - Whitelisted tools (`read_file`, `search_code`, etc.) execute without error.
   - Non-whitelisted tools (e.g. `write_file` called by `semantic_explorer`) immediately throw `ToolAccessDeniedError` naming the role, unauthorized tool, and full permitted set.
   - Unknown roles reject fail-closed.
+  - `readOnly` is `true` exactly for roles that cannot run commands; `failure_debugger` (allowed `run_command` and `run_tests`) is `readOnly: false`.
 
 ### 2.2 Confirmation Bias Mitigation & Review Boundary
 - `buildReviewEvidencePackage`:
@@ -43,12 +44,14 @@ Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node
   - Freezes authorized change scope.
 - `detectScopeViolations`:
   - Successfully detects files touched in unified diff that are outside `authorizedScope`.
+  - Decodes Git's C-quoted paths (non-ASCII and tab characters, octal escapes) and bare paths containing spaces, checks both sides of renames, and ignores hunk lines that look like headers. A header it cannot parse is reported as a violation rather than skipped.
 - `parseIndependentReviewVerdict`:
   - Valid `ACCEPT` with zero defects passes.
   - Deterministic verifier failure (`verifierExitCode !== 0`) overrides model `ACCEPT` and forces `REJECT`.
   - Scope violations override model `ACCEPT` and force `REJECT`.
   - Suspected defects force `REJECT`.
   - Malformed JSON fails closed as `REJECT`.
+  - Every schema field is required and type-checked; a missing or malformed field or defect entry (e.g. `"suspectedDefects": "found a bug"`) fails closed as `REJECT` instead of being coerced to an empty list.
 
 ### 2.3 Deterministic Micro-Routing
 - `routeTaskMicroDecision`:

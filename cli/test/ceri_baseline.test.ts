@@ -176,3 +176,26 @@ test("CeriBaselineComparator does not classify newly introduced assertions as IM
   assert.equal(res.outcome, "PASS");
   assert.notEqual(res.outcome, "IMPROVEMENT_CANDIDATE");
 });
+
+test("CeriBaselineComparator treats quantization recorded on only one side as incomparable", () => {
+  const quantizedBaseline = { ...sampleBaseline, modelQuantization: "Q4" };
+  const unrecorded = CeriBaselineComparator.checkComparability(createManifest(), quantizedBaseline);
+  assert.equal(unrecorded.eligible, false);
+  assert.match(unrecorded.reasons.join(" "), /quantization mismatch: current '\(unrecorded\)' vs baseline 'Q4'/i);
+
+  const currentOnly = CeriBaselineComparator.checkComparability(
+    createManifest({ model: { name: "qwen-coder-30b", parameters: { temperature: 0 }, quantization: "Q8" } }),
+    sampleBaseline
+  );
+  assert.equal(currentOnly.eligible, false);
+
+  const matching = CeriBaselineComparator.checkComparability(
+    createManifest({ model: { name: "qwen-coder-30b", parameters: { temperature: 0 }, quantization: "Q4" } }),
+    quantizedBaseline
+  );
+  assert.equal(matching.eligible, true);
+  assert.equal(CeriBaselineComparator.checkComparability(createManifest(), sampleBaseline).eligible, true);
+
+  const outcome = CeriBaselineComparator.compareRuns(createManifest(), { a1: true }, quantizedBaseline, { a1: true });
+  assert.equal(outcome.outcome, "INCOMPARABLE");
+});

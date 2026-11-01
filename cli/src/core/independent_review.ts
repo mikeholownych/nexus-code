@@ -48,30 +48,118 @@ export interface IndependentReviewVerdict {
  * Parses files modified from a unified git diff.
  * Checks both source and destination headers, renames, and git index lines.
  */
+/**
+ * Reads one path token as Git writes it: either bare, or C-quoted ("a/\303\251.ts", with \t, \", \\ and octal
+ * byte escapes) when the path contains non-ASCII bytes, tabs, quotes or backslashes. Returns the decoded path and
+ * the text after the token.
+ */
+function readGitPath(text: string): { path: string; rest: string } | undefined {
+  if (!text.startsWith('"')) return undefined;
+  const bytes: number[] = [];
+  const named: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  for (let i = 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      return { path: Buffer.from(bytes).toString("utf-8"), rest: text.slice(i + 1) };
+    }
+    if (ch !== "\\") {
+      bytes.push(...Buffer.from(ch, "utf-8"));
+      continue;
+    }
+    const next = text[++i];
+    if (next === undefined) return undefined;
+    if (/[0-7]/.test(next)) {
+      const octal = text.slice(i, i + 3);
+      if (!/^[0-7]{3}$/.test(octal)) return undefined;
+      bytes.push(parseInt(octal, 8));
+      i += 2;
+    } else if (next in named) {
+      bytes.push(named[next]);
+    } else {
+      return undefined;
+    }
+  }
+  return undefined; // unterminated quote
+}
+
+/** Strips the a/ or b/ prefix Git adds; /dev/null means "no file on this side". */
+function diffSidePath(raw: string, prefix: "a/" | "b/"): string | undefined {
+  const path = raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
+  return path === "/dev/null" || path === "dev/null" || raw === "/dev/null" ? undefined : path;
+}
+
+/** Parses the path written after `---`/`+++`/`rename from`/`rename to`, quoted or bare (bare runs to end of line). */
+function headerPath(text: string): string | undefined {
+  if (text.startsWith('"')) return readGitPath(text)?.path;
+  const bare = text.replace(/\t.*$/, ""); // GNU diff may append a tab and timestamp
+  return bare || undefined;
+}
+
+/**
+ * Lists every file a unified diff touches, on both sides of renames, from `diff --git`, `---`/`+++` and
+ * `rename from`/`rename to` headers. Handles Git's C-quoted paths and bare paths containing spaces.
+ * A header that cannot be parsed yields a sentinel entry so the scope check fails closed instead of skipping it.
+ */
 export function extractModifiedFilesFromDiff(diff: string): string[] {
   const modified = new Set<string>();
+  const add = (p: string | undefined) => {
+    if (p) modified.add(p);
+  };
+  // File headers (---/+++/rename) only appear before a file's first hunk; inside a hunk, a removed line such as
+  // "-- note" is written "--- note" and must not be read as a path.
+  let inHeader = true;
   const lines = diff.split("\n");
-  for (const line of lines) {
-    if (line.startsWith("diff --git a/")) {
-      const parts = line.split(" ");
-      if (parts.length >= 4) {
-        const fileA = parts[2].replace(/^a\//, "").trim();
-        const fileB = parts[3].replace(/^b\//, "").trim();
-        if (fileA && fileA !== "/dev/null" && fileA !== "dev/null") modified.add(fileA);
-        if (fileB && fileB !== "/dev/null" && fileB !== "dev/null") modified.add(fileB);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // A plain unified diff (no "diff --git" lines) starts each later file with a "---"/"+++" pair.
+    if (!inHeader && line.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ")) inHeader = true;
+    if (line.startsWith("@@")) {
+      inHeader = false;
+      continue;
+    }
+    if (line.startsWith("diff --git ")) {
+      inHeader = true;
+      const rest = line.slice("diff --git ".length);
+      if (rest.startsWith('"')) {
+        const first = readGitPath(rest);
+        const second = first && first.rest.startsWith(" ") ? first.rest.slice(1) : undefined;
+        const b = second?.startsWith('"') ? readGitPath(second)?.path : second;
+        if (!first || b === undefined) {
+          add(`<unparseable diff header: ${line}>`);
+          continue;
+        }
+        add(diffSidePath(first.path, "a/"));
+        add(diffSidePath(b, "b/"));
+      } else {
+        // Bare: "a/<path> b/<path>". With identical sides the split point is the midpoint; otherwise the
+        // ---/+++ or rename headers that follow carry the exact paths.
+        const half = (rest.length - 1) / 2;
+        if (Number.isInteger(half) && rest[half] === " " && rest.slice(2, half) === rest.slice(half + 3)) {
+          add(diffSidePath(rest.slice(0, half), "a/"));
+        } else {
+          const quotedB = rest.indexOf(' "b/');
+          const bareB = rest.lastIndexOf(" b/");
+          const cut = quotedB >= 0 ? quotedB : bareB;
+          if (cut < 0) {
+            add(`<unparseable diff header: ${line}>`);
+            continue;
+          }
+          add(diffSidePath(rest.slice(0, cut), "a/"));
+          const bSide = rest.slice(cut + 1);
+          add(diffSidePath(bSide.startsWith('"') ? readGitPath(bSide)?.path ?? `<unparseable diff header: ${line}>` : bSide, "b/"));
+        }
       }
-    } else if (line.startsWith("--- a/")) {
-      const file = line.replace(/^---\s+a\//, "").trim();
-      if (file && file !== "/dev/null" && file !== "dev/null") modified.add(file);
-    } else if (line.startsWith("+++ b/")) {
-      const file = line.replace(/^\+\+\+\s+b\//, "").trim();
-      if (file && file !== "/dev/null" && file !== "dev/null") modified.add(file);
-    } else if (line.startsWith("rename from ")) {
-      const file = line.replace(/^rename from\s+/, "").trim();
-      if (file) modified.add(file);
-    } else if (line.startsWith("rename to ")) {
-      const file = line.replace(/^rename to\s+/, "").trim();
-      if (file) modified.add(file);
+    } else if (!inHeader) {
+      continue;
+    } else if (line.startsWith("--- ")) {
+      const p = headerPath(line.slice(4));
+      add(p === undefined ? `<unparseable diff header: ${line}>` : diffSidePath(p, "a/"));
+    } else if (line.startsWith("+++ ")) {
+      const p = headerPath(line.slice(4));
+      add(p === undefined ? `<unparseable diff header: ${line}>` : diffSidePath(p, "b/"));
+    } else if (line.startsWith("rename from ") || line.startsWith("rename to ")) {
+      const p = headerPath(line.replace(/^rename (?:from|to) /, ""));
+      add(p ?? `<unparseable diff header: ${line}>`);
     }
   }
   return Array.from(modified);
@@ -224,29 +312,42 @@ export function parseIndependentReviewVerdict(
       throw new Error("Verdict is not a JSON object");
     }
 
-    const verdict: "ACCEPT" | "REJECT" = parsed.verdict === "ACCEPT" ? "ACCEPT" : "REJECT";
-    const verifiedObservations = Array.isArray(parsed.verifiedObservations)
-      ? parsed.verifiedObservations.map(String)
-      : [];
-    const unprovenCriteria = Array.isArray(parsed.unprovenCriteria)
-      ? parsed.unprovenCriteria.map(String)
-      : [];
-    const scopeViolations = Array.isArray(parsed.scopeViolations)
-      ? parsed.scopeViolations.map(String)
-      : [];
-
-    const suspectedDefects: ReviewDefect[] = [];
-    if (Array.isArray(parsed.suspectedDefects)) {
-      for (const d of parsed.suspectedDefects) {
-        if (d && typeof d === "object" && typeof d.path === "string" && typeof d.description === "string") {
-          suspectedDefects.push({
-            path: d.path,
-            line: typeof d.line === "number" ? d.line : undefined,
-            description: d.description,
-          });
-        }
-      }
+    // Every schema field is required and must have its declared type. A missing or malformed field (for example
+    // "suspectedDefects": "found a bug") throws, which the catch below turns into REJECT; nothing is coerced away.
+    if (parsed.verdict !== "ACCEPT" && parsed.verdict !== "REJECT") {
+      throw new Error(`"verdict" must be "ACCEPT" or "REJECT", got ${JSON.stringify(parsed.verdict)}`);
     }
+    const verdict: "ACCEPT" | "REJECT" = parsed.verdict;
+    const stringArray = (field: string): string[] => {
+      const value = parsed[field];
+      if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+        throw new Error(`"${field}" must be an array of strings`);
+      }
+      return [...value];
+    };
+    const verifiedObservations = stringArray("verifiedObservations");
+    const unprovenCriteria = stringArray("unprovenCriteria");
+    const scopeViolations = stringArray("scopeViolations");
+    if (typeof parsed.reviewerConfidenceNote !== "string") {
+      throw new Error(`"reviewerConfidenceNote" must be a string`);
+    }
+
+    if (!Array.isArray(parsed.suspectedDefects)) {
+      throw new Error(`"suspectedDefects" must be an array`);
+    }
+    const suspectedDefects: ReviewDefect[] = parsed.suspectedDefects.map((d: unknown, i: number) => {
+      const entry = d as { path?: unknown; line?: unknown; description?: unknown } | null;
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        typeof entry.path !== "string" ||
+        typeof entry.description !== "string" ||
+        (entry.line !== undefined && entry.line !== null && typeof entry.line !== "number")
+      ) {
+        throw new Error(`"suspectedDefects[${i}]" must be {path: string, line?: number, description: string}`);
+      }
+      return { path: entry.path, line: typeof entry.line === "number" ? entry.line : undefined, description: entry.description };
+    });
 
     // Deterministic gate enforcement: If verifier explicitly failed (exitCode !== 0)
     // or deterministic scope violations exist, model ACCEPT cannot override objective failure.
@@ -281,9 +382,7 @@ export function parseIndependentReviewVerdict(
       suspectedDefects,
       unprovenCriteria,
       scopeViolations,
-      reviewerConfidenceNote: typeof parsed.reviewerConfidenceNote === "string"
-        ? parsed.reviewerConfidenceNote
-        : "Automated parsed verdict",
+      reviewerConfidenceNote: parsed.reviewerConfidenceNote,
     };
   } catch (err) {
     // Fail-closed as REJECT on any parse failure

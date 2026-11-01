@@ -225,3 +225,38 @@ test("CeriEvaluationRunner handles empty assertions, refuses to execute without 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("CeriReportGenerator counts each run once per anomaly, flags evaluator defects, and measures coverage by evaluation", () => {
+  const manifest = (evaluationId: string, runId: string, status: string) =>
+    ({ evaluationId, runId, status }) as unknown as Parameters<typeof CeriReportGenerator.generateOperationalReport>[0][number]["manifest"];
+  const comparison = (runId: string, outcome: string) =>
+    ({ baselineId: "b", currentRunId: runId, outcome, isEligibleForComparison: false, divergences: [], confidence: 1, explanation: "" }) as never;
+
+  // A report containing only an evaluator-defect run must not reach the clean-completion message.
+  const defect = CeriReportGenerator.generateOperationalReport(
+    [{ manifest: manifest("e1", "r1", "EVALUATOR_DEFECT"), comparison: comparison("r1", "EVALUATOR_DEFECT") }],
+    1
+  );
+  assert.equal(defect.evaluatorDefects, 1);
+  const defectMd = CeriReportGenerator.formatMarkdownReport(defect);
+  assert.doesNotMatch(defectMd, /NO REGRESSIONS OBSERVED/);
+  assert.match(defectMd, /EVALUATION ANOMALIES DETECTED/);
+  assert.match(defectMd, /\| Evaluator Defects \| 1 \|/);
+
+  // An inconclusive manifest whose comparison also reports INCONCLUSIVE is one inconclusive run, not two.
+  const inconclusive = CeriReportGenerator.generateOperationalReport(
+    [{ manifest: manifest("e1", "r1", "INCONCLUSIVE"), comparison: comparison("r1", "INCONCLUSIVE") }],
+    1
+  );
+  assert.equal(inconclusive.inconclusiveCount, 1);
+
+  // Rerunning one evaluation three times covers one of two evaluations: 50%, not 100% or 150%.
+  const reruns = CeriReportGenerator.generateOperationalReport(
+    [manifest("e1", "r1", "COMPLETED"), manifest("e1", "r2", "COMPLETED"), manifest("e1", "r3", "COMPLETED")].map((m) => ({ manifest: m })),
+    2
+  );
+  assert.equal(reruns.evaluationCoverage.executedRuns, 3);
+  assert.equal(reruns.evaluationCoverage.executedEvaluations, 1);
+  assert.equal(reruns.evidenceCompletenessScore, 50);
+  assert.match(CeriReportGenerator.formatMarkdownReport(reruns), /50% \(1\/2 evaluations executed, 3 runs\)/);
+});
