@@ -3,7 +3,7 @@
   "checkpoint_id": "01M6CMHMZQX5WQ0S6FNTRCCRAS",
   "strategy": "manual-commit",
   "branch": "v1/pr396-takeover",
-  "checkpoints_count": 6,
+  "checkpoints_count": 9,
   "files_touched": [
     "cli/src/agent.ts"
   ],
@@ -19,14 +19,28 @@
       "transcript": "/1/full.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "compact_transcript": "/2/transcript.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": "/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 181240,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 44110892,
-    "output_tokens": 139534,
-    "api_call_count": 410
+    "input_tokens": 181256,
+    "cache_creation_tokens": 9000,
+    "cache_read_tokens": 45996167,
+    "output_tokens": 144071,
+    "api_call_count": 416,
+    "subagent_tokens": {
+      "input_tokens": 194,
+      "cache_creation_tokens": 194789,
+      "cache_read_tokens": 12851751,
+      "output_tokens": 53506,
+      "api_call_count": 97
+    }
   },
   "redaction": {
     "replacements": 58,
