@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6CMHMZQX5WQ0S6FNTRCCRAS",
+  "session_id": "424a3749-6081-4a93-b524-386e99c9a5fc",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-01T22:44:11.314811828Z",
+  "branch": "v1/pr396-takeover",
+  "checkpoints_count": 3,
+  "save_step_count": 3,
+  "files_touched": [
+    "cli/src/agent.ts"
+  ],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-medium",
+  "turn_id": "8eee66d9e297",
+  "token_usage": {
+    "input_tokens": 135525,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 8653416,
+    "output_tokens": 32696,
+    "api_call_count": 114
+  },
+  "redaction": {
+    "replacements": 1,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 1,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 3
+  }
+}
