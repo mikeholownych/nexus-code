@@ -56,6 +56,10 @@ describe("coverage from what a read returned", () => {
     assert.equal(readCoverage("run_command", { command: "cat a.ts" }, JSON.stringify({ exit_code: 1, stdout: "", stderr: "No such file", timed_out: false }), WS), undefined);
     assert.equal(readCoverage("run_command", { command: "cat a.ts" }, JSON.stringify({ exit_code: 0, stdout: "a\n[TRUNCATED 999 BYTES]\nb\n", stderr: "", timed_out: false }), WS), undefined);
     assert.equal(readCoverage("read_file", { path: "a.ts" }, "not json", WS), undefined);
+    // A batch with any failed file is one observation that is not attributable to line ranges.
+    const ok = { path: "a.ts", success: true, total_lines: 1, content: numbered(["x"]) };
+    assert.equal(readCoverage("batch_read", { paths: ["a.ts", "missing.ts"] }, JSON.stringify({ files: [ok, { path: "missing.ts", success: false, total_lines: 0, content: "", error: "Open error" }] }), WS), undefined);
+    assert.equal(readCoverage("batch_read", { paths: ["a.ts"] }, JSON.stringify({ files: [ok] }), WS)?.length, 1);
     // A listing whose numbering does not match the reported range cannot be attributed to lines.
     assert.equal(readCoverage("read_file", { path: "a.ts" }, JSON.stringify({ path: "a.ts", total_lines: 3, start_line: 1, end_line: 3, content: "1\n2\n3\n" }), WS), undefined);
   });
@@ -81,21 +85,28 @@ describe("coverage from what a read returned", () => {
   });
 });
 
-/** Feeds one read observation to the tracker, with coverage, on `state`. */
-function readObs(t: ExecutionTracker, step: number, args: Record<string, unknown>, lines: number, total: number, state: string, present: (k: string) => boolean, start = 1) {
+let callSeq = 0;
+/** Feeds one read observation (a new tool call id each time) with the file signature `sig`; returns the verdict and its call id. */
+function readObs(t: ExecutionTracker, step: number, args: Record<string, unknown>, lines: number, total: number, state: string, present: (id: string) => boolean, start = 1, sig = "SIG") {
+  return readObsWithId(t, step, args, lines, total, state, present, start, sig).verdict;
+}
+function readObsWithId(t: ExecutionTracker, step: number, args: Record<string, unknown>, lines: number, total: number, state: string, present: (id: string) => boolean, start = 1, sig = "SIG") {
+  const callId = `call_${++callSeq}`;
   const end = start + lines - 1;
   const out = JSON.stringify({ path: args.path, total_lines: total, start_line: start, end_line: end, content: numbered(Array.from({ length: lines }, (_, i) => `l${start + i}`), start) });
-  return t.observe(step, {
+  const verdict = t.observe(step, {
     name: "read_file",
     args,
     success: true,
     text: out,
     stateBefore: state,
-    coverage: readCoverage("read_file", args, out, WS),
-    callKey: `read_file ${JSON.stringify(args)}`,
+    coverage: readCoverage("read_file", args, out, WS)?.map((c) => ({ ...c, sig })),
+    callId,
     present,
   });
+  return { verdict, callId };
 }
+const SIG = () => "SIG";
 
 describe("tracker: equivalence, escalation and refusal", () => {
   test("a narrower re-read of lines still in context is a duplicate; a re-read after compaction removed them is not equivalent", () => {
@@ -106,10 +117,10 @@ describe("tracker: equivalence, escalation and refusal", () => {
     const v2 = readObs(t, 2, { path: "a.ts", start_line: 1, end_line: 40 }, 40, 100, "S", all);
     assert.equal(v2.classification, "OBSERVATION_DUPLICATE");
     assert.equal(v2.informative, false, "covered lines are not new information");
-    assert.equal(v2.equivalent, true);
+    assert.ok(v2.equivalence, "equivalent: lines in context re-read");
     const gone = readObs(t, 3, { path: "a.ts", start_line: 1, end_line: 30 }, 30, 100, "S", () => false);
     assert.equal(gone.classification, "OBSERVATION_DUPLICATE");
-    assert.equal(gone.equivalent, false, "the model no longer had it: a re-acquisition, not an equivalent");
+    assert.equal(gone.equivalence, undefined, "the model no longer had it: a re-acquisition, not an equivalent");
     const over = readObs(t, 4, { path: "a.ts", start_line: 90, end_line: 120 }, 11, 100, "S2", all, 90);
     assert.equal(over.classification, "OBSERVATION_NEW", "another state: new");
     const v5 = readObs(t, 5, { path: "a.ts", start_line: 95, end_line: 140 }, 6, 100, "S2", all, 95);
@@ -122,7 +133,7 @@ describe("tracker: equivalence, escalation and refusal", () => {
   test("the same lines with different content on the 'same' state are new (the content decides)", () => {
     const t = ExecutionTracker.fresh();
     const mk = (content: string) => JSON.stringify({ path: "a.ts", total_lines: 1, start_line: 1, end_line: 1, content: numbered([content]) });
-    const obs = (step: number, content: string) => t.observe(step, { name: "read_file", args: { path: "a.ts" }, success: true, text: mk(content), stateBefore: "S", coverage: readCoverage("read_file", { path: "a.ts" }, mk(content), WS), callKey: "k", present: () => true });
+    const obs = (step: number, content: string) => t.observe(step, { name: "read_file", args: { path: "a.ts" }, success: true, text: mk(content), stateBefore: "S", coverage: readCoverage("read_file", { path: "a.ts" }, mk(content), WS)?.map((c) => ({ ...c, sig: "SIG" })), callId: `k${step}`, present: () => true });
     obs(1, "one");
     assert.equal(obs(2, "two").classification, "OBSERVATION_NEW");
   });
@@ -136,14 +147,15 @@ describe("tracker: equivalence, escalation and refusal", () => {
     assert.equal(t.recoveryStage, "constrained");
     const present = () => true;
     readObs(t, 6, { path: "a.ts" }, 10, 10, "S", present);
-    const denial = t.recoveryDenial("run_command", { command: "cat a.ts" }, "S", WS, "x", present)!;
+    assert.equal(t.recoveryDenial(6, "run_command", { command: "cat a.ts" }, "S", WS, present, SIG), undefined, "nothing is refused in the step whose note the model has not seen");
+    const denial = t.recoveryDenial(7, "run_command", { command: "cat a.ts" }, "S", WS, present, SIG)!;
     assert.ok(denial, "a shell re-read of lines in context is refused while constrained");
-    assert.equal(t.recoveryDenial("run_command", { command: "cat a.ts" }, "S-changed", WS, "x", present), undefined, "a changed workspace lifts it");
-    assert.equal(t.recoveryDenial("run_command", { command: "cat a.ts" }, "S", WS, "x", () => false), undefined, "output gone from context: allowed");
-    assert.equal(t.recoveryDenial("read_file", { path: "a.ts", start_line: 5, end_line: 20 }, "S", WS, "x", present)?.coveredBy.length, 1, "clamped to EOF (10 lines)");
-    assert.equal(t.recoveryDenial("read_file", { path: "b.ts" }, "S", WS, "x", present), undefined, "unread file: allowed");
-    assert.equal(t.recoveryDenial("run_tests", {}, "S", WS, "x", present), undefined, "validation is never refused");
-    assert.equal(t.recoveryDenial("task_completed", {}, "S", WS, "x", present), undefined);
+    assert.equal(t.recoveryDenial(7, "run_command", { command: "cat a.ts" }, "S-changed", WS, present, SIG), undefined, "a changed workspace lifts it");
+    assert.equal(t.recoveryDenial(7, "run_command", { command: "cat a.ts" }, "S", WS, () => false, SIG), undefined, "output gone from context: allowed");
+    assert.equal(t.recoveryDenial(7, "read_file", { path: "a.ts", start_line: 5, end_line: 20 }, "S", WS, present, SIG)?.coveredBy.length, 1, "clamped to EOF (10 lines)");
+    assert.equal(t.recoveryDenial(7, "read_file", { path: "b.ts" }, "S", WS, present, SIG), undefined, "unread file: allowed");
+    assert.equal(t.recoveryDenial(7, "run_tests", {}, "S", WS, present, SIG), undefined, "validation is never refused");
+    assert.equal(t.recoveryDenial(7, "task_completed", {}, "S", WS, present, SIG), undefined);
     assert.equal(t.recordDenial(7, denial), false);
     assert.equal(t.recordDenial(8, denial), false);
     assert.equal(t.recordDenial(9, denial), true, "the third refusal beyond two allowed exhausts recovery");
@@ -157,6 +169,30 @@ describe("tracker: equivalence, escalation and refusal", () => {
     const kinds = t.data.recovery.events.map((e) => e.kind);
     for (const k of ["non_progress_detected", "recovery_advisory_issued", "recovery_constrained", "tool_execution_denied", "recovery_exhausted", "recovery_progress_detected", "recovery_completed"]) assert.ok(kinds.includes(k), k);
     assert.ok(t.data.recovery.events.every((e) => e.detail.length <= 400));
+  });
+
+  test("a file whose own signature changed is neither equivalent nor refused (state identity does not cover ignored files)", () => {
+    const t = ExecutionTracker.fresh();
+    readObs(t, 1, { path: "build.log" }, 10, 10, "S", () => true, 1, "v1");
+    assert.equal(readObs(t, 2, { path: "build.log" }, 10, 10, "S", () => true, 1, "v2").equivalence, undefined, "another version of the file");
+    t.recordUnproductive(3, "a", "S", 1, 1);
+    assert.equal(t.recoveryDenial(4, "read_file", { path: "build.log" }, "S", WS, () => true, () => "v3"), undefined, "changed since read: allowed");
+    assert.equal(t.recoveryDenial(4, "read_file", { path: "build.log" }, "S", WS, () => true, () => undefined), undefined, "unreadable now: allowed");
+    assert.ok(t.recoveryDenial(4, "read_file", { path: "build.log" }, "S", WS, () => true, () => "v2"), "unchanged since the last read: refused");
+  });
+
+  test("presence is per tool call: another run with the same arguments on another state does not make this state's output present", () => {
+    const t = ExecutionTracker.fresh();
+    const s1 = readObsWithId(t, 1, { path: "a.ts" }, 10, 10, "S1", () => true);
+    const s2 = readObsWithId(t, 2, { path: "a.ts" }, 10, 10, "S2", () => true);
+    t.recordUnproductive(3, "a", "S1", 1, 1);
+    const onlyS2 = (id: string) => id === s2.callId;
+    assert.equal(t.recoveryDenial(4, "read_file", { path: "a.ts" }, "S1", WS, onlyS2, SIG), undefined, "S1's output was compacted away: re-acquisition allowed");
+    assert.ok(t.recoveryDenial(4, "read_file", { path: "a.ts" }, "S1", WS, (id) => id === s1.callId, SIG));
+    // The exact-repeat path checks the last run's own call id as well.
+    t.observe(5, { name: "list_dir", args: { path: "." }, success: true, text: "a.ts", stateBefore: "S1", callId: "ld1", present: () => true });
+    assert.ok(t.recoveryDenial(6, "list_dir", { path: "." }, "S1", WS, (id) => id === "ld1", SIG));
+    assert.equal(t.recoveryDenial(6, "list_dir", { path: "." }, "S1", WS, (id) => id !== "ld1", SIG), undefined);
   });
 
   test("with no recovery notes allowed the first loop exhausts recovery (existing bound kept)", () => {
@@ -177,7 +213,7 @@ describe("tracker: equivalence, escalation and refusal", () => {
     t.recordUnproductive(2, "a", "S", 1, 1);
     const restored = new ExecutionTracker(normalizeTracking(JSON.parse(JSON.stringify(t.data))));
     assert.equal(restored.recoveryStage, "constrained");
-    assert.ok(restored.recoveryDenial("read_file", { path: "a.ts" }, "S", WS, "k", () => true));
+    assert.ok(restored.recoveryDenial(7, "read_file", { path: "a.ts" }, "S", WS, () => true, SIG));
     const old = createTracking() as any;
     delete old.recovery;
     delete old.coverage;

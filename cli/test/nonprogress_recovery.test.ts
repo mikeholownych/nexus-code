@@ -59,11 +59,12 @@ const text = (content: string): Reply => ({ kind: "text", content });
 const lines = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix} line ${i + 1}`).join("\n") + "\n";
 
 /** Records every tool call that actually reached execution (not refused before dispatch). */
-function dispatchLog(agent: AutonomousAgent): Array<{ id: string; name: string; args: string }> {
-  const log: Array<{ id: string; name: string; args: string }> = [];
+function dispatchLog(agent: AutonomousAgent, requests?: () => number): Array<{ id: string; name: string; args: string; afterRequests: number }> {
+  const log: Array<{ id: string; name: string; args: string; afterRequests: number }> = [];
   const original = (agent as any).dispatchToolCall.bind(agent);
   (agent as any).dispatchToolCall = async (call: any, ...rest: unknown[]) => {
-    log.push({ id: call.id, name: call.function.name, args: typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments) });
+    // afterRequests: how many inference requests the gateway had answered when this call ran.
+    log.push({ id: call.id, name: call.function.name, args: typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments), afterRequests: requests?.() ?? -1 });
     return original(call, ...rest);
   };
   return log;
@@ -91,7 +92,7 @@ describe("regression fixture NONPROGRESS-20261101-DOCTOR", () => {
       return tools(fixture.repeat.calls, fixture.repeat.contents[i % fixture.repeat.contents.length]);
     });
     const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
-    const ran = dispatchLog(agent);
+    const ran = dispatchLog(agent, () => gw.requests.length);
     try {
       const turn = await agent.runTurn("Find and fix a real bug in the doctor command, with a regression test.");
       assert.equal(turn.reason, "STAGNATION_DETECTED", JSON.stringify(turn));
@@ -112,21 +113,27 @@ describe("regression fixture NONPROGRESS-20261101-DOCTOR", () => {
       const firstConstrained = noted.find((r) => r.notes.some((t) => t.startsWith("[Nexus recovery 2/2]")));
       assert.ok(firstAdvisory && firstConstrained && firstConstrained.i > firstAdvisory.i, "advisory first, then constrained, in later requests");
       const note2 = firstConstrained!.notes.find((t) => t.startsWith("[Nexus recovery 2/2]"))!;
+      assert.match(note2, /RECOVERY_REQUIRED section of the pinned objective ledger/, "the note points to the one live copy");
+      assert.ok(!note2.includes("Recovery budget:"), "the context is not duplicated into the conversation");
+      // The pinned ledger in that same request carries the context.
+      const pinnedAtNote = ((gw.requests[firstConstrained!.i] as any).messages as any[]).filter((m) => m.role === "system").map((m) => String(m.content)).join("\n");
       for (const section of ["RECOVERY_REQUIRED", "Current objective:", "Previously acquired evidence", "Repeated observations:", "Current workspace state:", "Last meaningful progress:", "Unresolved question:", "Disallowed operations", "Permitted next actions:", "Recovery budget:"]) {
-        assert.ok(note2.includes(section), `recovery context has ${section}`);
+        assert.ok(pinnedAtNote.includes(section), `recovery context has ${section}`);
       }
-      assert.match(note2, /cli\/src\/doctor\.ts lines 1-400 of 400/, "evidence is the coverage actually returned");
-      assert.match(note2, /is not recorded\. State it in one sentence/, "no unresolved question is invented");
+      assert.match(pinnedAtNote, /cli\/src\/doctor\.ts lines 1-400 of 400/, "evidence is the coverage actually returned");
+      assert.match(pinnedAtNote, /is not recorded\. State it in one sentence/, "no unresolved question is invented");
       // Refused calls never reached execution.
       const refusedIds = refusals(agent).map((m) => m.tool_call_id);
       assert.ok(refusedIds.length >= 2, `refusals: ${refusedIds.length}`);
       const ranIds = new Set(ran.map((r) => r.id));
       for (const id of refusedIds) assert.equal(ranIds.has(id), false, `refused call ${id} did not run`);
-      // Executions of the repeated pair after constrained recovery began: none.
-      const constrainedAtRequest = firstConstrained!.i; // 0-based request index = step - 1
-      const repeatIds = new Set(callIds(agent, (name, args) => name === "read_file" && args.path === "cli/src/doctor.ts" && args.end_line === 50));
+      // Executions of the repeated pair issued in reply to the constrained note or later: none. Request index i (0-based)
+      // is the first request carrying the note; calls from its reply run once i + 1 requests have been answered.
+      const constrainedAtRequest = firstConstrained!.i;
+      const repeatIds = new Set(callIds(agent, (name, args) => name === "read_file" && (args.path === "cli/src/doctor.ts" || args.path === "cli/test/doctor.test.ts") && (args.end_line === 50 || args.end_line === 80)));
       const repeatRuns = ran.filter((r) => repeatIds.has(r.id));
-      assert.ok(repeatRuns.length <= constrainedAtRequest, "no repeat executed after the constrained note");
+      assert.ok(repeatRuns.length > 0, "the pair ran before recovery constrained it");
+      assert.deepEqual(repeatRuns.filter((r) => r.afterRequests > constrainedAtRequest).map((r) => r.args), [], "no repeat executed after the constrained note");
       // Bounded: the turn did not run on.
       assert.ok(gw.requests.length <= prelude.length + 6, `bounded: ${gw.requests.length} requests`);
       // The pinned ledger carries the recovery context while constrained (it survives compaction).
@@ -379,36 +386,58 @@ describe("recovery state continuity", () => {
     }
   });
 
-  test("compaction keeps recovery state; a read is refused only while its output is still in the conversation", { timeout: 120_000 }, async () => {
+  /** Whole read_file results for f.txt still in the conversation (independent of the tracker). */
+  const wholeReads = (agent: AutonomousAgent) =>
+    toolMessages(agent).filter((m) => {
+      try {
+        const r = JSON.parse(String(m.content));
+        return r.path === "f.txt" && typeof r.content === "string" && r.end_line === r.total_lines;
+      } catch {
+        return false;
+      }
+    });
+
+  test("compaction keeps recovery state; a read whose output compaction kept is refused", { timeout: 120_000 }, async () => {
     const repo = makeRepo({ "f.txt": lines("f", 10) });
     const gw = await startGateway((n) => (n <= 6 ? tools([read("f.txt")]) : text("Using what I have.")));
-    const sessions = new SessionManager(path.join(home, "sessions-compact"), () => WorkspacePath.fromSelectedWorkspace(repo));
-    const sessionId = sessions.generateSessionId();
+    const sessions = new SessionManager(path.join(home, "sessions-compact-kept"), () => WorkspacePath.fromSelectedWorkspace(repo));
     let agent: AutonomousAgent | undefined;
     try {
-      agent = await constrainedSession(gw.url, repo, sessions, sessionId);
+      agent = await constrainedSession(gw.url, repo, sessions, sessions.generateSessionId());
       const result = await agent.compactNow(false);
       assert.equal(result.ok, true, result.message);
       assert.equal(recovery(agent).stage, "constrained", "compaction does not reset recovery");
-      // Independent of the tracker: is a whole read_file result for f.txt still a tool message after compaction?
-      const readOutputPresent = toolMessages(agent).some((m) => {
-        try {
-          const r = JSON.parse(String(m.content));
-          return r.path === "f.txt" && typeof r.content === "string" && r.end_line === r.total_lines;
-        } catch {
-          return false;
-        }
-      });
+      // Compaction keeps the most recent exchange: the last read's output is still whole in the conversation.
+      assert.ok(wholeReads(agent).length >= 1, "precondition: the last read survived compaction");
       const ran = dispatchLog(agent);
       await agent.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
-      const reads = ran.filter((r) => r.name === "read_file").length;
-      if (readOutputPresent) {
-        assert.equal(reads, 0, "the output survived compaction, so re-reading it is refused");
-      } else {
-        assert.equal(reads, 1, "compaction removed the output: one re-acquisition runs, then the in-context repeat is refused");
-      }
+      assert.equal(ran.filter((r) => r.name === "read_file").length, 0, "re-reading output still in context is refused");
       assert.ok(refusals(agent).length >= 1);
-      assert.equal(recovery(agent).denials >= 1 || recovery(agent).stage === "normal", true);
+      assert.ok(recovery(agent).denials >= 1);
+    } finally {
+      agent?.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a read whose output compaction removed is re-acquired once (never refused); the in-context repeat after it is", { timeout: 120_000 }, async () => {
+    const repo = makeRepo({ "f.txt": lines("f", 10) });
+    const gw = await startGateway((n) => (n <= 6 ? tools([read("f.txt")]) : text("Using what I have.")));
+    const sessions = new SessionManager(path.join(home, "sessions-compact-removed"), () => WorkspacePath.fromSelectedWorkspace(repo));
+    let agent: AutonomousAgent | undefined;
+    try {
+      agent = await constrainedSession(gw.url, repo, sessions, sessions.generateSessionId());
+      const result = await agent.compactNow(false);
+      assert.equal(result.ok, true, result.message);
+      // What compaction does to an output that does not fit: cut it, with Nexus's truncation marker. None is whole now.
+      for (const m of wholeReads(agent)) m.content = `${String(m.content).slice(0, 40)}\n[Nexus: output truncated to fit the context window; showed the first 40 of ${String(m.content).length} characters.]`;
+      assert.equal(wholeReads(agent).length, 0, "precondition: no whole read of f.txt is in the conversation");
+      assert.equal(recovery(agent).stage, "constrained");
+      const ran = dispatchLog(agent);
+      await agent.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(ran.filter((r) => r.name === "read_file").length, 1, "one re-acquisition runs");
+      assert.ok(refusals(agent).length >= 1, "the repeat after the re-acquisition is refused");
     } finally {
       agent?.shutdown();
       await gw.close();

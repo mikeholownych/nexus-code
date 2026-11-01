@@ -502,7 +502,12 @@ export function recordAttempt(ledger: ObjectiveLedger, attempt: Omit<Verificatio
  * The context block the model sees every request: requirement states, steering, verification and continuation.
  * The objective is included verbatim only when the operator's original message is no longer in the conversation.
  */
-export function renderPinnedLedger(ledger: ObjectiveLedger, includeObjective: boolean, budgetChars = MAX_PINNED_OBJECTIVE_CHARS): string {
+export function renderPinnedLedger(
+  ledger: ObjectiveLedger,
+  includeObjective: boolean,
+  budgetChars = MAX_PINNED_OBJECTIVE_CHARS,
+  recovery: { present?: (callId: string) => boolean; stagnationSteps?: number } = {},
+): string {
   const out: string[] = [PINNED_LEDGER_PREFIX];
   if (includeObjective) {
     const unresolved = gatingRequirements(ledger).filter((r) => !requirementDone(r));
@@ -587,7 +592,7 @@ export function renderPinnedLedger(ledger: ObjectiveLedger, includeObjective: bo
   }
   if (ledger.execution) {
     const tracker = new ExecutionTracker(ledger.execution);
-    if (tracker.recoveryStage === "constrained") out.push(renderRecoveryContext(recoveryInput(ledger)));
+    if (tracker.recoveryStage === "constrained") out.push(renderRecoveryContext(recoveryInput(ledger), recovery));
     const loops = tracker.loops().slice(0, 3);
     if (loops.length) {
       out.push("Repeated without progress on an unchanged workspace (do not repeat these; change approach):");
@@ -613,7 +618,7 @@ const fmtRanges = (ranges: Array<[number, number]>) => ranges.map(([a, b]) => (b
  */
 export function renderRecoveryContext(
   input: { objective: string; open: Array<{ id: string; text: string }>; execution: ExecutionTracking },
-  opts: { present?: (key: string) => boolean; stagnationSteps?: number } = {},
+  opts: { present?: (callId: string) => boolean; stagnationSteps?: number } = {},
 ): string {
   const t = normalizeTracking(input.execution);
   const tracker = new ExecutionTracker(t);

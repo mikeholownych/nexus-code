@@ -46,10 +46,15 @@ The causes:
   engine, and it was not folded by Nexus). EOF is inferred when `cat` or a short `head` printed everything.
 - **Fingerprint**: a digest of the canonical line sequence (`\n` split, `\r` stripped, numbering removed), so the same
   lines hash the same through every interface. Only digests and ranges are stored; no file content is kept.
+- **File signature**: each coverage segment also records the file's own signature (size, modification and change
+  times in nanoseconds, inode) when it was read. The workspace state identity does not cover ignored files (logs,
+  build output), so a read counts as equivalent, or is refused, only while that file's signature is unchanged.
+- **`batch_read`** is one observation: if any file in the batch failed, the batch records no coverage at all.
 - **Bounds**: 512 coverage segments, 128 equivalence records and 64 recovery events per objective, with eviction counts.
 
-An observation is **equivalent** when every returned line was already returned on the same workspace state by an
-observation whose output is still present in full in the conversation, and it is not a re-acquisition after
+An observation is **equivalent** when every returned line was already returned, on the same workspace state and the
+same file signature, by a tool call whose own output (by tool call id, not by arguments) is still present in full in
+the conversation, and it is not a re-acquisition after
 compaction. The same range with a different fingerprint is new (the content decides). The third equivalent
 observation is a semantic loop. Equivalent observations are classified `OBSERVATION_DUPLICATE` and are not progress.
 
@@ -64,14 +69,17 @@ ADVISORY|CONSTRAINED --evidence-backed progress or operator input--> NORMAL (rec
 
 - The state lives in the objective ledger (`execution.recovery`), so compaction never rewrites it and session resume
   restores it.
-- At most one escalation per step: the model always gets an inference to answer each note.
+- At most one escalation per step: the model always gets an inference to answer each note. Nothing is refused in the
+  step that entered constrained recovery; refusal starts once the model has seen the note.
 - A later episode on the same objective, after its notes are spent, is constrained at once.
 - Refusals are not progress. They produce no verdict, so the stagnation counter keeps counting.
 - With `maxRecoveries` 0 the first loop stops the turn (the existing bound is kept).
 
 ### RECOVERY_REQUIRED context (`renderRecoveryContext`, `cli/src/core/objective.ts`)
 
-Delivered with the constraining note, and pinned on every request while constrained. Sections: current objective,
+Pinned on every request while constrained (rebuilt per request, so its budget and presence lines are current). The
+constraining note points to it rather than repeating it; only when no ledger is pinned (a non-durable session) does
+the note carry the context itself. Sections: current objective,
 previously acquired evidence (files, merged line ranges, totals, steps, fingerprints), repeated observations, current
 workspace state, last meaningful progress, unresolved question, disallowed operations, permitted next actions,
 recovery budget (refusals and stagnation steps left).
@@ -83,7 +91,8 @@ question is not recorded, and asks the agent to state it in one sentence.
 
 Refusal happens at tool dispatch, before execution, in both the sequential and the parallel read-only paths. A
 refused call gets a tool message beginning `[Nexus refused: not executed]` that names where the output already is.
-Calls after a stop in the same batch get a "turn stopped before this call" message and are not executed.
+Once a refusal or a loop stops the turn, no other call in that batch runs (in the parallel path, including calls
+judged before the stopping refusal); each gets a "turn stopped before this call" message.
 
 **Never refused**:
 - mutations;

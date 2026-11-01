@@ -75,6 +75,8 @@ export interface RepetitionRecord {
   lastStep: number;
   /** Clipped normalized outcome, kept as evidence. */
   outcome: string;
+  /** Tool call id of the most recent run, so its output can be found in the conversation (not another run's). */
+  lastCallId?: string;
 }
 
 export interface TrackingEvent {
@@ -110,8 +112,11 @@ export interface CoverageSegment {
   total?: number;
   fingerprint: string;
   state: string;
+  /** Tool call id of the read that returned these lines: presence is judged for that call's output only. */
   key: string;
   step: number;
+  /** The file's own signature when it was read (observation_identity.fileSignature). */
+  sig?: string;
 }
 
 /** Re-reads of lines already observed on the same state, per file: the semantic counterpart of a repetition record. */
@@ -368,10 +373,10 @@ export interface Observation {
   kind?: ActionKind;
   /** File lines the call actually returned (observation_identity.readCoverage), for semantic equivalence. */
   coverage?: ReadCoverage[];
-  /** The call's observation key, so a later equivalent can be checked against the conversation. */
-  callKey?: string;
-  /** Whether an earlier observation's output is still in the conversation in full (by observation key). */
-  present?: (key: string) => boolean;
+  /** The tool call id, so a later equivalent can be checked against this call's own output in the conversation. */
+  callId?: string;
+  /** Whether an earlier call's output is still in the conversation in full (by tool call id). */
+  present?: (callId: string) => boolean;
 }
 
 /**
@@ -403,12 +408,8 @@ export interface ObservationVerdict {
   /** Re-acquisition of output compaction removed (never a loop); `thrash` once it has recurred REPEAT_THRESHOLD - 1 times. */
   reacquired: boolean;
   thrash: boolean;
+  /** What the call contributed; DUPLICATE observations are never informative (see `informative`). */
   classification: ProgressClass;
-  /**
-   * Re-read lines already observed on this state while that output was still in the conversation, through any read
-   * interface (read_file, batch_read, cat/head/sed). Never set on an unknown state or for a re-acquisition.
-   */
-  equivalent: boolean;
   /** Third (or later) observation of the same lines of a file on a known unchanged state: a semantic loop. */
   equivalentLoop: boolean;
   /** The equivalence record behind `equivalent` (per file and state). */
@@ -483,6 +484,7 @@ export class ExecutionTracker {
     }
     record.count++;
     record.lastStep = step;
+    if (o.callId) record.lastCallId = o.callId;
     const reacquired = Boolean(o.reacquire) && record.count > 1;
     if (reacquired) record.reacquired = (record.reacquired ?? 0) + 1;
     if (!stateUnknown) addSeen(this.data.seenObservations, key, (n) => (this.data.evicted.observations += n));
@@ -490,7 +492,6 @@ export class ExecutionTracker {
     const repeat = record.count > 1 && !stateUnknown;
     // Line coverage judges reads across interfaces and argument spellings; it is recorded only for known states.
     let classification: ProgressClass | undefined;
-    let equivalent = false;
     let equivalentLoop = false;
     let equivalence: EquivalenceRecord | undefined;
     const coverage = command.success && !stateUnknown && o.coverage?.length ? o.coverage : undefined;
@@ -498,7 +499,6 @@ export class ExecutionTracker {
       const judged = this.judgeCoverage(coverage, o.stateBefore, o.present);
       classification = judged.covered ? "OBSERVATION_DUPLICATE" : judged.overlapping ? "OBSERVATION_OVERLAPPING" : "OBSERVATION_NEW";
       if (judged.covered && judged.inContext && !o.reacquire) {
-        equivalent = true;
         for (const c of coverage) {
           const r = this.noteEquivalent(step, c.path, o.stateBefore, record.action);
           if (!equivalence || r.count > equivalence.count) equivalence = r;
@@ -506,7 +506,7 @@ export class ExecutionTracker {
         equivalentLoop = (equivalence?.count ?? 0) >= REPEAT_THRESHOLD - 1;
         this.recoveryEvent(step, "observation_equivalent", `${record.action}: lines already observed on this unchanged workspace and still in the conversation (${coverage.map((c) => `${c.path}:${c.start}-${c.end}`).join(", ")}; ×${equivalence?.count ?? 1})`);
       }
-      for (const c of coverage) this.addCoverage({ ...c, state: o.stateBefore, key: o.callKey ?? action, step });
+      if (o.callId) for (const c of coverage) this.addCoverage({ ...c, state: o.stateBefore, key: o.callId, step });
     }
     const informative = record.count === 1 && kind !== "bookkeeping" && kind !== "mutate" && outcomeClass !== "transient_failure" && classification !== "OBSERVATION_DUPLICATE";
     if (!classification) {
@@ -523,7 +523,7 @@ export class ExecutionTracker {
     if (outcomeClass === "deterministic_failure" && record.count === 1) {
       this.event(this.data.failedApproaches, MAX_FAILED, step, o.name, `${record.action} -> ${record.outcome}`);
     }
-    return { key, record, repeat, informative, loop, poll, stateUnknown, reacquired, thrash, classification, equivalent, equivalentLoop, equivalence };
+    return { key, record, repeat, informative, loop, poll, stateUnknown, reacquired, thrash, classification, equivalentLoop, equivalence };
   }
 
   /**
@@ -531,12 +531,13 @@ export class ExecutionTracker {
    * conversation). A range whose text differs from an earlier read of exactly the same lines on the "same" state is
    * new: the state identity missed a change, and the content decides.
    */
-  private judgeCoverage(coverage: ReadCoverage[], state: string, present?: (key: string) => boolean): { covered: boolean; inContext: boolean; overlapping: boolean } {
+  private judgeCoverage(coverage: ReadCoverage[], state: string, present?: (callId: string) => boolean): { covered: boolean; inContext: boolean; overlapping: boolean } {
     let all = true;
     let inContext = true;
     let overlapping = false;
     for (const c of coverage) {
-      const prior = this.data.coverage.filter((s) => s.path === c.path && s.state === state);
+      // Only reads of this same version of the file count: the state identity does not cover ignored files.
+      const prior = this.data.coverage.filter((s) => s.path === c.path && s.state === state && c.sig !== undefined && s.sig === c.sig);
       const contradicted = prior.some((s) => s.start === c.start && s.end === c.end && s.fingerprint !== c.fingerprint);
       if (!prior.length || contradicted) {
         all = false;
@@ -629,14 +630,27 @@ export class ExecutionTracker {
    * observation whose output is still present in full (any read interface), or it is an exact repeat of another
    * observing call whose output is still present. Anything that cannot be judged before it runs is allowed.
    */
-  recoveryDenial(name: string, args: unknown, state: string, workspace: string, callKey: string, present: (key: string) => boolean): RecoveryDenial | undefined {
-    if (this.data.recovery.stage !== "constrained" || state === "unknown") return undefined;
+  recoveryDenial(
+    step: number,
+    name: string,
+    args: unknown,
+    state: string,
+    workspace: string,
+    present: (callId: string) => boolean,
+    signature: (path: string) => string | undefined,
+  ): RecoveryDenial | undefined {
+    const r = this.data.recovery;
+    if (r.stage !== "constrained" || state === "unknown") return undefined;
+    // The step that constrained recovery has not delivered its note yet: nothing is refused before the model sees it.
+    if (r.lastEscalationStep === step) return undefined;
     const action = clip(`${name} ${typeof args === "string" ? args : JSON.stringify(args ?? {})}`.replace(/\s+/g, " "), 160);
     const requests = readRequests(name, args, workspace);
     if (requests) {
       const coveredBy: CoverageSegment[] = [];
       for (const req of requests) {
-        const prior = this.data.coverage.filter((s) => s.path === req.path && s.state === state);
+        const sig = signature(req.path);
+        if (!sig) return undefined;
+        const prior = this.data.coverage.filter((s) => s.path === req.path && s.state === state && s.sig === sig);
         const live = prior.filter((s) => present(s.key));
         const total = prior.find((s) => typeof s.total === "number")?.total;
         const end = req.end === undefined ? total : total === undefined ? req.end : Math.min(req.end, total);
@@ -649,7 +663,7 @@ export class ExecutionTracker {
     }
     if (actionKind(name) !== "observe_workspace" || NEVER_REFUSED.has(name)) return undefined;
     const prior = this.priorRun(name, args, state);
-    if (!prior || !present(callKey)) return undefined;
+    if (!prior?.lastCallId || !present(prior.lastCallId)) return undefined;
     return { action, coveredBy: [], reason: `the same call already ran on this unchanged workspace (step ${prior.lastStep}) and its output is still in this conversation` };
   }
 

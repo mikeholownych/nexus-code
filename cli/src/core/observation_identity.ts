@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
@@ -27,6 +28,23 @@ export interface ReadCoverage {
   end: number;
   total?: number;
   fingerprint: string;
+  /**
+   * The file's identity when the read ran (size, change/modification times, inode; see fileSignature). The workspace
+   * state identity does not cover every file (ignored files such as logs), so coverage counts for a later read only
+   * while the file's own signature is unchanged.
+   */
+  sig?: string;
+}
+
+/** Identity of a workspace file as it is now (size, mtime, ctime, inode), or undefined when it cannot be read. */
+export function fileSignature(workspace: string, relPath: string): string | undefined {
+  try {
+    const st = fs.statSync(path.resolve(workspace, relPath), { bigint: true });
+    if (!st.isFile()) return undefined;
+    return `${st.size}:${st.mtimeNs}:${st.ctimeNs}:${st.ino}`;
+  } catch {
+    return undefined;
+  }
 }
 
 const digest = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
@@ -184,14 +202,17 @@ export function readCoverage(name: string, rawArgs: unknown, output: string, wor
     } catch {
       return undefined;
     }
-    if (!Array.isArray(parsed?.files)) return undefined;
+    // A batch is one observation: if any file failed (or is missing from the result) the successful subset does not
+    // stand for it, so the batch is not attributed to line ranges at all.
+    if (!Array.isArray(parsed?.files) || parsed.files.length !== requests.length) return undefined;
+    if (parsed.files.some((file: any) => !file?.success)) return undefined;
     const out: ReadCoverage[] = [];
     for (const [i, file] of parsed.files.entries()) {
       const req = requests[i];
-      if (!req || !file?.success || typeof file.content !== "string") continue;
+      if (!req || typeof file.content !== "string") return undefined;
       const got = numberedLines(file.content, 1);
       const total = typeof file.total_lines === "number" ? file.total_lines : undefined;
-      if (!got || (got.length === 0 && total !== 0)) continue;
+      if (!got || (got.length === 0 && total !== 0)) return undefined;
       out.push({ path: req.path, start: 1, end: got.length, total, fingerprint: linesDigest(got) });
     }
     return out;
