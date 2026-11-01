@@ -1,0 +1,19 @@
+● The corrections in b2763c9e are genuine, and most of my findings are resolved. Three issues are left, and the last one now errs in the opposite direction.
+
+  Verified as fixed:
+  - The install.sh digest, the v1.0.0 digest, the kernel and the Node version (24.11.1) are now correct. The old values appear only in DEFECTS.md, listed as corrected errata.
+  - The attestation log now holds a real verification receipt (1,270 bytes, signed by release.yml@refs/tags/v1.1.1).
+  - The two unsupported PASS results (provider timeout and the 15-cycle soak) are downgraded to UNVERIFIED.
+  - The "READY FOR REAL USE" verdict is retracted.
+
+  Still to fix:
+  1. Timestamp on the re-captured log. The attestation row is still dated 16:27:58Z, but the log behind it was captured at 17:06:41Z, after my review. Dated that way, the row implies the original run produced the evidence; it should carry the re-capture time.
+  2. The FAIL is borrowed, not observed. The prompt-provenance row (SC-SEC-02) is dated 16:48:15Z as if QA saw the failure, and DEFECTS.md says "100% reproduction". The only evidence cited is PR #377, and no QA log reproduces it. It should say "known defect taken
+     from PR #377, not reproduced by QA", unless they add a reproduction log.
+  3. The severity is overstated. They now rate the duplicate-message bug P1, release-blocking, and "NOT READY FOR PRODUCTION USE". The duplicate is advisory context only: no message is lost, and no turn result, verification or acceptance outcome is affected. P2 and
+     non-blocking is accurate. "Not qualified" is still the right verdict, but because of the evidence gaps: Node 22 was never tested, and two scenarios are unverified.
+
+  I've logged all three for the QA agent.
+
+  What this means for v1.1.1: for the QA verdict to be meaningful, someone needs to re-run QA under a real Node 22 install, with raw output saved for every PASS. v1.1.2 (PR #394) fixes the defect itself. PRs #377, #394 and #395 still need an independent reviewer,
+  and the Lead-QA-Agent is now a reasonable candidate for that.
