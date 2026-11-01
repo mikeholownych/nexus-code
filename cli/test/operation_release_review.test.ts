@@ -697,6 +697,8 @@ test("a post-prompt crash suppresses duplicate history injection and acknowledge
   const store = new OperationStore(root, env.RELEASE_STATE_DIR, env.HOME);
   const initial = newOperation("op-post-prompt-message", "deduplicate submitted messages", [{ id: "b", title: "b", prompt: "b" }], [resource], Date.now());
   const { message } = publishMessage(initial, { from: "operator", to: "b", kind: "request", body: "submit exactly once" }, Date.now());
+  // A second message submitted in the same prompt must be recognised as submitted too, not only the first.
+  const { message: second } = publishMessage(initial, { from: "operator", to: "b", kind: "request", body: "second in the same prompt" }, Date.now());
   store.save(initial);
   const script = `
     import fs from "node:fs";
@@ -785,6 +787,10 @@ test("a post-prompt crash suppresses duplicate history injection and acknowledge
   assert.equal(durableHistory.split("submit exactly once").length - 1, 1);
   assert.equal(durableHistory.split(message.id).length - 1, 1);
   assert.deepEqual(resumed.messages![0].deliveredTo, ["b"]);
+  assert.doesNotMatch(resumePrompts[0], /second in the same prompt/);
+  assert.equal(durableHistory.split("second in the same prompt").length - 1, 1);
+  assert.deepEqual(resumed.messages![1].deliveredTo, ["b"]);
+  assert.equal(resumed.messages![1].id, second.id);
 });
 
 test("a context-admission withdrawal does not acknowledge a message and retry submits it", async (t) => {
