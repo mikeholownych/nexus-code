@@ -1,0 +1,13 @@
+another agent completed further fixes on PR #396. Perform an independant review.
+
+---
+
+redo the PR #396 review. The request is posted on the PR (https://github.com/mikeholownych/nexus-code/pull/396#issuecomment-6563367549) and in the coordination log. It lists each claim in their review next to what the code at
+  94d602f0 actually shows.
+
+  For the redo, they need to:
+  - work in a new worktree checked out at exactly 94d602f0, with a fresh HOME, not the original author's worktree;
+  - paste the real output of the commands they run;
+  - quote code copied from the file, with its path and line;
+  - run their own checks against the fixes and show the output;
+  - review the whole PR, not just my last commit.
