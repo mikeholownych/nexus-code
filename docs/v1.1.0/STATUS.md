@@ -3,29 +3,33 @@
 Durable state of the v1.1.0 programme. A new lead agent can resume from this file alone. Update it at every
 checkpoint; never record a state the evidence does not support.
 
-Last updated: 2026-10-31T21:45Z
+Last updated: 2026-10-31T23:33Z
 Branch: `v1/v11-release` · Worktree: `/home/mike/nexus-wt/v11-release`
-Baseline: `origin/main` `7b49e6ff`; candidate under repair: `3c727547` plus V11-QUALITY-04 ·
+Baseline: `origin/main` `bed30a90` (PRs #372, #373, #374 merged) ·
 `v1.0.0` tag `501eab68` (published 2026-10-31T11:22Z)
 
 ---
 
 ## 1. Current gate
 
-**Gates 1–2 complete. Gate 3 is in final review: persistence fixes are approved; V11-QUALITY-04 remains
-open. Gate 4 (full regression + RC qualification) has not started on the repaired candidate.**
+**Gates 1–3 complete. All work packages WP-1 through WP-7 and V11-QUALITY-04 are fully implemented, verified,
+independently reviewed, and merged into `origin/main` across PR #372 (`9a8fe2d5`), PR #373 (`d10ef418`), and
+PR #374 (`bed30a90`). CI matrices (Node 22, 24), dual container packaging (`package-linux.sh`), bit-for-bit
+reproducibility comparison (`cmp`), CycloneDX SBOM validation, and package/installer smoke tests passed.**
+
 Remote annotated tags `v1.1.0-rc.1` and `v1.1.0` exist prematurely at `ba9764bc` and `4789bb7c`. Both Release
 workflows failed the main-ancestry gate (runs 41234889855 and 41234889861), and no GitHub release was created.
-They are unqualified and must not be published. PR #372 is draft. A later qualified RC requires a new RC number;
-the stable-tag collision requires an owner-safe resolution and must not be bypassed by publishing defective code.
+They are unqualified and must not be published.
+All quality fixes are now safely committed to `origin/main`. Tagging and publishing the qualified release candidate
+and stable release is reserved for the owner per project guidelines.
 
 | Gate | State |
 |---|---|
 | 1. Repository baseline and roadmap reconciliation | complete (`ROADMAP-REVIEW.md`) |
 | 2. Specification, xerj research, collaboration plan | complete (`SPEC.md`, `DECISIONS.md`, `COLLABORATION.md`) |
-| 3. Implementation in reviewable increments | persistence approved; V11-QUALITY-04 pending plan review/implementation and final quality approval |
-| 4. Full regression and RC qualification | not started on the repaired candidate |
-| 5. Release preparation and publication | draft metadata exists; publication blocked by gates 3–4 and the premature stable tag |
+| 3. Implementation in reviewable increments | complete (WP-1..7 and V11-QUALITY-04 merged on `main`) |
+| 4. Full regression and RC qualification | complete on `origin/main` (CI run 41249622550, 41245766686, 41241366953 green) |
+| 5. Release preparation and publication | candidate ready on `origin/main` `bed30a90`; handover to owner for tag/push/publication |
 
 ## 2. Documents
 
@@ -54,7 +58,9 @@ Branch `v1/v11-release`, based on `v1/v11-lead-program` at `853c6333`.
 | `003d5f7e` | §2.5 dispositions for the parallel post-v1 roadmap; Q6 |
 | `853c6333` | lead-programme execution record; independent reviews subsequently requested changes |
 | `d44e7a87`..`3c727547` | release acceptance tests and real crash evidence; generalized RC repro; persistence and runner review fixes; premature RC1/stable metadata preserved without qualification; acceptance ledger bound to evidence |
-| `V11-QUALITY-04` | four final quality edge cases in spec/plan review; no implementation commit yet |
+| `76a6b1ca` | PR #373: V11-QUALITY-04 cancellation idempotency, durability-positive acknowledgment, replay future envelope guard |
+| `34f63119`..`c7bb2270` | PR #374: V11-QUALITY-04 genuine prompt submission provenance, tool-result non-suppression, non-vacuous recovery hook assertion, no-ID replay propagation |
+| `9a8fe2d5`, `d10ef418`, `bed30a90` | Merged to `origin/main` with 100% green CI matrix (Node 22, 24, CodeQL, linux-x86_64 dual packaging, cmp, cyclonedx, smoke tests) |
 
 | WP | Title | State | Evidence |
 |---|---|---|---|
