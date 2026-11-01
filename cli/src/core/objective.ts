@@ -587,6 +587,7 @@ export function renderPinnedLedger(ledger: ObjectiveLedger, includeObjective: bo
   }
   if (ledger.execution) {
     const tracker = new ExecutionTracker(ledger.execution);
+    if (tracker.recoveryStage === "constrained") out.push(renderRecoveryContext(recoveryInput(ledger)));
     const loops = tracker.loops().slice(0, 3);
     if (loops.length) {
       out.push("Repeated without progress on an unchanged workspace (do not repeat these; change approach):");
@@ -602,10 +603,72 @@ export function renderPinnedLedger(ledger: ObjectiveLedger, includeObjective: bo
   return out.join("\n");
 }
 
+const clipText = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
+const fmtRanges = (ranges: Array<[number, number]>) => ranges.map(([a, b]) => (b < a ? "empty" : a === b ? `${a}` : `${a}-${b}`)).join(", ");
+
+/**
+ * The RECOVERY_REQUIRED context: built only from recorded evidence (executed observations, the ledger, recovery
+ * state), never from the model's own claims. When the specific open question is not recorded, it says so and requires
+ * the agent to state it. `present` (when the caller has the conversation) marks evidence still in context.
+ */
+export function renderRecoveryContext(
+  input: { objective: string; open: Array<{ id: string; text: string }>; execution: ExecutionTracking },
+  opts: { present?: (key: string) => boolean; stagnationSteps?: number } = {},
+): string {
+  const t = normalizeTracking(input.execution);
+  const tracker = new ExecutionTracker(t);
+  const r = t.recovery;
+  const state = r.state ?? "unknown";
+  const out: string[] = ["RECOVERY_REQUIRED"];
+  out.push("Current objective:", `- ${clipText(input.objective.replace(/\s+/g, " "), 300)}`);
+  const observed = state === "unknown" ? [] : tracker.observedOn(state).sort((a, b) => Math.max(...b.steps) - Math.max(...a.steps)).slice(0, 8);
+  out.push("Previously acquired evidence (on the current workspace state):");
+  if (observed.length) {
+    for (const o of observed) {
+      const live = opts.present ? (o.keys.some((k) => opts.present!(k)) ? "output still in this conversation" : "output no longer in this conversation") : `step(s) ${o.steps.slice(-4).join(", ")}`;
+      out.push(`- ${o.path} lines ${fmtRanges(o.ranges)}${o.total !== undefined ? ` of ${o.total}` : ""} (${live}; fingerprint ${o.fingerprints.slice(-1)[0]})`);
+    }
+  } else out.push("- none recorded as file line ranges");
+  const repeated = [
+    ...(state === "unknown" ? [] : tracker.equivalentsOn(state).slice(0, 4).map((e) => `- ${e.path}: already-observed lines read ${e.count} more time(s) (steps ${e.firstStep}-${e.lastStep}; last: ${e.action})`)),
+    ...tracker.loops().filter((l) => l.state === state).slice(0, 3).map((l) => `- ${l.action} ×${l.count} with the same result (steps ${l.firstStep}-${l.lastStep})`),
+  ];
+  out.push("Repeated observations:", ...(repeated.length ? repeated : [`- ${r.trigger ?? "unrecorded"}`]));
+  const unchangedSince = t.progress.filter((p) => /workspace reached a new state/.test(p.detail)).at(-1)?.step;
+  out.push("Current workspace state:", `- ${state === "unknown" ? "unknown" : state.slice(0, 12)}${unchangedSince ? `; unchanged since step ${unchangedSince}` : ""}`);
+  const last = t.progress.at(-1);
+  out.push("Last meaningful progress:", `- ${last ? `step ${last.step}: ${last.detail}` : "none recorded on this objective"}`);
+  const open = input.open.slice(0, 4);
+  out.push("Unresolved question:");
+  for (const q of open) out.push(`- open requirement ${q.id}: ${clipText(q.text, 160)}`);
+  out.push("- The specific question your next action must answer is not recorded. State it in one sentence, and why the evidence above does not answer it, before any further observation.");
+  out.push(
+    "Disallowed operations (refused before they run while the workspace is unchanged):",
+    "- Reading any of the line ranges above again, through any interface (read_file, batch_read, cat/head/sed), while that output is still in this conversation.",
+    "- Repeating any observing call above with the same arguments.",
+  );
+  out.push(
+    "Permitted next actions:",
+    "- Use the output already in this conversation; read lines or files not listed above; search for a specific symbol or string; edit files; run a build, test or command;",
+    "- record a finding or a blocker with update_requirements (status \"blocked\" with the reason); or finish with a final message reporting what you found.",
+  );
+  const remaining = Math.max(0, r.allowedDenials - r.denials);
+  const stagnation = opts.stagnationSteps !== undefined ? `; ${Math.max(0, opts.stagnationSteps - t.stepsWithoutProgress)} step(s) without progress left before the turn stops` : "";
+  out.push("Recovery budget:", `- ${remaining} refusal(s) left of ${r.allowedDenials} in episode ${r.episode}; another refused attempt beyond that stops the turn${stagnation}.`);
+  return out.join("\n");
+}
+
+/** The ledger facts the recovery context is built from: the objective, its open requirements, its tracking. */
+export function recoveryInput(ledger: ObjectiveLedger): { objective: string; open: Array<{ id: string; text: string }>; execution: ExecutionTracking } {
+  return { objective: ledger.objective, open: gatingRequirements(ledger).filter((q) => !requirementDone(q)), execution: normalizeTracking(ledger.execution) };
+}
+
 /** Whether the ledger has anything worth a context block beyond the operator's message itself. */
 export function ledgerNeedsPinning(ledger: ObjectiveLedger, objectiveInContext: boolean): boolean {
+  const execution = ledger.execution;
   return (
     !objectiveInContext ||
+    (execution !== undefined && (execution.recovery?.stage ?? "normal") !== "normal") ||
     gatingRequirements(ledger).length > 0 ||
     ledger.steering.length > 0 ||
     ledger.verification.length > 0 ||

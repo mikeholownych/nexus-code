@@ -20,7 +20,7 @@ checkpoint and continues by itself. A turn ends for one of these reasons only:
 | the model calls `task_completed` or gives a final answer | `COMPLETED` (with the verifier's outcome) |
 | you cancel (Esc / Ctrl-C) | `INTERRUPTED` |
 | no progress for `--stagnation-steps` consecutive steps (default 12) | `STAGNATION_DETECTED` |
-| the same action gives the same result on an unchanged workspace after two recovery notes | `STAGNATION_DETECTED` |
+| the same action (or a re-read of lines already in context) gives no new information on an unchanged workspace after two recovery notes, and recovery is exhausted | `STAGNATION_DETECTED` |
 | inference fails and provider recovery cannot wait it out | `INFERENCE_FAILED` |
 | the model's reply is cut off at the output limit twice in a row (see below) | `INFERENCE_FAILED` (`output_truncated/client`) |
 | a compaction (or another record the next action depends on) cannot be written | `PERSISTENCE_FAILED` |
@@ -83,8 +83,28 @@ Nexus compares three things before calling an action repeated: the action (tool 
 
 How Nexus responds:
 
-- **The same action and result on an unchanged state** is a demonstrated loop on its third occurrence. The model gets
-  a recovery note; after two notes the turn stops with the loop cited.
+- **The same action and result on an unchanged state** is a demonstrated loop on its third occurrence. So is a third
+  observation of the same lines of a file through any read interface (`read_file`, `batch_read`, `cat F`,
+  `head [-n N|-N] F`, `sed -n 'A,Bp' F`, optionally after `cd DIR &&`), while the earlier output is still in the
+  conversation: coverage is judged by the lines a read actually returned, not by its arguments. A narrower re-read of
+  lines already in context is not progress.
+- **Recovery escalates instead of repeating advice.** The first loop gets an advisory note. The note that reaches
+  the recovery limit (two by default) is a `RECOVERY_REQUIRED` context: the objective, the evidence already acquired
+  (files and line ranges with content fingerprints), the repeated observations, the workspace state, the last
+  recorded progress, the open requirements, and what is disallowed and permitted. If the specific open question is not
+  recorded, the context says so and asks the agent to state it; it is never inferred. From then on recovery is
+  *constrained*: an observation that would only return what the conversation already holds is refused before it
+  runs, with a message naming where that output already is. Refusals are bounded (two by default); one more
+  equivalent attempt stops the turn with `recovery exhausted`. Refusals are never progress, so the stagnation
+  threshold keeps counting. Evidence-backed progress (a new workspace state, new information, an acceptance-ledger
+  change, operator input) ends constrained recovery; a later loop on the same objective is constrained at once.
+  Several looping calls in one batch are one escalation: the model always gets an inference to answer each note.
+- **What is never refused**: mutations, commands and tests (`run_command` other than the read forms above,
+  `run_tests`), completion attempts, Nexus's memory reads (`read_findings`, `read_objective`, `read_archive`), any read
+  whose earlier output compaction removed, and anything on an unknown workspace state. Shell forms outside the list
+  above (pipes, globs, variables, several files, `tail`, `awk`, …) are not classified and run normally. Each one is
+  a distinct action, so its first run counts as new information and ends a recovery episode; its exact repeats are
+  polls (spaced by backoff), so these forms are bounded by the stagnation threshold, not by refusal.
 - **The same command after a real change** (an edit, a staged change, reinstalled dependencies with different
   content) is a legitimate retry. It starts a new count.
 - **Polling**: an external command (`run_command`, network tools) returning the same result on an unchanged workspace
@@ -116,7 +136,8 @@ Each objective carries its execution tracking inside the objective ledger:
 - compactions.
 
 Compaction rewrites the conversation, never the ledger. `/resume` and task recovery restore the ledger with the
-session. The model sees demonstrated loops and recent failed approaches in the pinned ledger, so they are not
+session, including the recovery stage, notes and refusals used: neither compaction nor resume lifts constrained
+recovery. While constrained, the pinned ledger carries the `RECOVERY_REQUIRED` context on every request. The model sees demonstrated loops and recent failed approaches in the pinned ledger, so they are not
 repeated after a compaction or a restart.
 
 When a follow-up is the same objective:

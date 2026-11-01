@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { covered, mergeIntervals, overlaps, readRequests, type ReadCoverage } from "./observation_identity.js";
 
 /**
  * Objective-scoped execution tracking: how many steps the work has taken (observability only, never a termination
@@ -36,6 +37,9 @@ const MAX_EVENTS = 64;
 const MAX_FAILED = 64;
 const MAX_INTERVENTIONS = 128;
 const MAX_COMPACTIONS = 128;
+const MAX_COVERAGE = 512;
+const MAX_EQUIVALENTS = 128;
+const MAX_RECOVERY_EVENTS = 64;
 
 /** Backoff before re-running an unchanged poll or a transient failure: doubles from 1 s, capped at 30 s. */
 export const BACKOFF_BASE_MS = 1_000;
@@ -94,6 +98,63 @@ export interface CompactionEvent {
   detail?: string;
 }
 
+/**
+ * Lines of a workspace file an executed read returned, on the workspace state it ran on. `key` is the observation key
+ * of the call that returned them (the agent's `observationKey`), so whether that output is still in the conversation
+ * can be checked against the conversation itself. No file content is kept: only a 16-hex digest of it.
+ */
+export interface CoverageSegment {
+  path: string;
+  start: number;
+  end: number;
+  total?: number;
+  fingerprint: string;
+  state: string;
+  key: string;
+  step: number;
+}
+
+/** Re-reads of lines already observed on the same state, per file: the semantic counterpart of a repetition record. */
+export interface EquivalenceRecord {
+  path: string;
+  state: string;
+  /** Observations of already-observed lines while the earlier output was still in the conversation. */
+  count: number;
+  firstStep: number;
+  lastStep: number;
+  /** Clipped readable action of the latest equivalent call (arguments only, never file content). */
+  action: string;
+}
+
+/**
+ * Recovery from demonstrated non-progress (see `ExecutionTracker.recordUnproductive`):
+ * normal -> advisory (a recovery note) -> constrained (equivalent observations are refused before they run) -> normal
+ * on evidence-backed progress, or the turn stops (recovery exhausted). Lives in the ledger with the rest of tracking,
+ * so compaction cannot remove it and resume restores it; operator input starts it over.
+ */
+export type RecoveryStage = "normal" | "advisory" | "constrained";
+
+export interface RecoveryState {
+  stage: RecoveryStage;
+  /** Recovery episodes on this objective (each begins with non_progress_detected). */
+  episode: number;
+  /** Recovery notes issued since the last operator input (a later episode resumes from this count). */
+  notes: number;
+  /** Equivalent observations refused in the current episode. */
+  denials: number;
+  /** Denials allowed per episode before recovery is exhausted (fixed when the episode is constrained). */
+  allowedDenials: number;
+  enteredStep?: number;
+  /** Workspace state identity the episode concerns (refusals apply only while the workspace is still in it). */
+  state?: string;
+  /** Readable action that triggered the current episode. */
+  trigger?: string;
+  /** Step of the last escalation: several unproductive calls in one batch are one event, not several. */
+  lastEscalationStep?: number;
+  /** Correlated recovery evidence: non_progress_detected, recovery_advisory_issued, recovery_constrained, ... */
+  events: TrackingEvent[];
+}
+
 export interface ExecutionTracking {
   version: number;
   /** Steps run against this objective across all turns (observability; no limit is derived from it). */
@@ -113,7 +174,14 @@ export interface ExecutionTracking {
   seenStates: string[];
   seenObservations: string[];
   seenLedgerStates: string[];
-  evicted: { states: number; observations: number; ledgerStates: number; repetitions: number; events: number };
+  coverage: CoverageSegment[];
+  equivalents: EquivalenceRecord[];
+  recovery: RecoveryState;
+  evicted: { states: number; observations: number; ledgerStates: number; repetitions: number; events: number; coverage: number };
+}
+
+function createRecovery(): RecoveryState {
+  return { stage: "normal", episode: 0, notes: 0, denials: 0, allowedDenials: 0, events: [] };
 }
 
 export function createTracking(): ExecutionTracking {
@@ -133,7 +201,10 @@ export function createTracking(): ExecutionTracking {
     seenStates: [],
     seenObservations: [],
     seenLedgerStates: [],
-    evicted: { states: 0, observations: 0, ledgerStates: 0, repetitions: 0, events: 0 },
+    coverage: [],
+    equivalents: [],
+    recovery: createRecovery(),
+    evicted: { states: 0, observations: 0, ledgerStates: 0, repetitions: 0, events: 0, coverage: 0 },
   };
 }
 
@@ -152,6 +223,19 @@ export function normalizeTracking(raw: unknown): ExecutionTracking {
       if (typeof t[key] !== "number" || !Number.isFinite(t[key])) t[key] = value;
     } else if (key === "evicted") {
       t[key] = { ...value, ...(t[key] && typeof t[key] === "object" ? t[key] : {}) };
+    } else if (key === "recovery") {
+      const r = t[key] && typeof t[key] === "object" ? t[key] : {};
+      const fresh = createRecovery() as unknown as Record<string, any>;
+      for (const [k, v] of Object.entries(fresh)) {
+        if (Array.isArray(v)) {
+          if (!Array.isArray(r[k])) r[k] = [];
+        } else if (typeof v === "number") {
+          if (typeof r[k] !== "number" || !Number.isFinite(r[k])) r[k] = v;
+        } else if (k === "stage" && !["normal", "advisory", "constrained"].includes(r[k])) {
+          r[k] = v;
+        }
+      }
+      t[key] = r;
     }
   }
   return t as ExecutionTracking;
@@ -280,7 +364,29 @@ export interface Observation {
   stateBefore: string;
   /** Compaction had removed this call's earlier output from context: running it again re-acquires it. */
   reacquire?: boolean;
+  /** How the action relates to state, when the caller knows better than the tool name (a recognised shell read). */
+  kind?: ActionKind;
+  /** File lines the call actually returned (observation_identity.readCoverage), for semantic equivalence. */
+  coverage?: ReadCoverage[];
+  /** The call's observation key, so a later equivalent can be checked against the conversation. */
+  callKey?: string;
+  /** Whether an earlier observation's output is still in the conversation in full (by observation key). */
+  present?: (key: string) => boolean;
 }
+
+/**
+ * What an executed observation contributed. OBSERVATION_* for reads (by line coverage when known, else by identity),
+ * ARTIFACT_MODIFIED for a successful mutation, VALIDATION_* for test runs, NO_PROGRESS for bookkeeping and failures
+ * that reveal nothing new. A model's statement is never an input: only executed calls and their results are.
+ */
+export type ProgressClass =
+  | "OBSERVATION_NEW"
+  | "OBSERVATION_DUPLICATE"
+  | "OBSERVATION_OVERLAPPING"
+  | "ARTIFACT_MODIFIED"
+  | "VALIDATION_PASSED"
+  | "VALIDATION_FAILED"
+  | "NO_PROGRESS";
 
 export interface ObservationVerdict {
   key: string;
@@ -297,7 +403,29 @@ export interface ObservationVerdict {
   /** Re-acquisition of output compaction removed (never a loop); `thrash` once it has recurred REPEAT_THRESHOLD - 1 times. */
   reacquired: boolean;
   thrash: boolean;
+  classification: ProgressClass;
+  /**
+   * Re-read lines already observed on this state while that output was still in the conversation, through any read
+   * interface (read_file, batch_read, cat/head/sed). Never set on an unknown state or for a re-acquisition.
+   */
+  equivalent: boolean;
+  /** Third (or later) observation of the same lines of a file on a known unchanged state: a semantic loop. */
+  equivalentLoop: boolean;
+  /** The equivalence record behind `equivalent` (per file and state). */
+  equivalence?: EquivalenceRecord;
 }
+
+/** Why a call must not run during constrained recovery, and the earlier observations that already answered it. */
+export interface RecoveryDenial {
+  reason: string;
+  /** Earlier observations whose output is still in the conversation and covers the request. */
+  coveredBy: CoverageSegment[];
+  /** Readable action that was refused. */
+  action: string;
+}
+
+/** Observing tools whose exact repeat is not refused: completion attempts, and Nexus's own memory/ledger reads. */
+const NEVER_REFUSED = new Set(["task_completed", "read_findings", "read_objective", "read_archive"]);
 
 export interface StepEvaluation {
   progressed: boolean;
@@ -327,7 +455,7 @@ export class ExecutionTracker {
 
   /** Records a single tool result; the verdict says whether it was new, a poll, or part of a demonstrated loop. */
   observe(step: number, o: Observation): ObservationVerdict {
-    const kind = actionKind(o.name);
+    const kind = o.kind ?? actionKind(o.name);
     const command = commandResult(o.success, o.text);
     const outcomeClass = classifyOutcome(command.success, o.text, o.timedOut || command.timedOut);
     const action = actionIdentity(o.name, o.args);
@@ -360,7 +488,34 @@ export class ExecutionTracker {
     if (!stateUnknown) addSeen(this.data.seenObservations, key, (n) => (this.data.evicted.observations += n));
     // On an unknown state no recurrence can be shown to share its input: it is recorded, never judged a repeat.
     const repeat = record.count > 1 && !stateUnknown;
-    const informative = record.count === 1 && kind !== "bookkeeping" && kind !== "mutate" && outcomeClass !== "transient_failure";
+    // Line coverage judges reads across interfaces and argument spellings; it is recorded only for known states.
+    let classification: ProgressClass | undefined;
+    let equivalent = false;
+    let equivalentLoop = false;
+    let equivalence: EquivalenceRecord | undefined;
+    const coverage = command.success && !stateUnknown && o.coverage?.length ? o.coverage : undefined;
+    if (coverage) {
+      const judged = this.judgeCoverage(coverage, o.stateBefore, o.present);
+      classification = judged.covered ? "OBSERVATION_DUPLICATE" : judged.overlapping ? "OBSERVATION_OVERLAPPING" : "OBSERVATION_NEW";
+      if (judged.covered && judged.inContext && !o.reacquire) {
+        equivalent = true;
+        for (const c of coverage) {
+          const r = this.noteEquivalent(step, c.path, o.stateBefore, record.action);
+          if (!equivalence || r.count > equivalence.count) equivalence = r;
+        }
+        equivalentLoop = (equivalence?.count ?? 0) >= REPEAT_THRESHOLD - 1;
+        this.recoveryEvent(step, "observation_equivalent", `${record.action}: lines already observed on this unchanged workspace and still in the conversation (${coverage.map((c) => `${c.path}:${c.start}-${c.end}`).join(", ")}; ×${equivalence?.count ?? 1})`);
+      }
+      for (const c of coverage) this.addCoverage({ ...c, state: o.stateBefore, key: o.callKey ?? action, step });
+    }
+    const informative = record.count === 1 && kind !== "bookkeeping" && kind !== "mutate" && outcomeClass !== "transient_failure" && classification !== "OBSERVATION_DUPLICATE";
+    if (!classification) {
+      if (kind === "mutate") classification = outcomeClass === "success" ? "ARTIFACT_MODIFIED" : "NO_PROGRESS";
+      else if (o.name === "run_tests") classification = outcomeClass === "success" ? "VALIDATION_PASSED" : "VALIDATION_FAILED";
+      else if (informative) classification = "OBSERVATION_NEW";
+      else if (repeat) classification = "OBSERVATION_DUPLICATE";
+      else classification = "NO_PROGRESS";
+    }
     const poll = repeat && !reacquired && !stateUnknown && (outcomeClass === "transient_failure" || (kind === "external" && outcomeClass === "success"));
     // Only occurrences the model made while it still had the result count toward a loop.
     const loop = repeat && !reacquired && !stateUnknown && !poll && kind !== "bookkeeping" && record.count - (record.reacquired ?? 0) >= REPEAT_THRESHOLD;
@@ -368,7 +523,179 @@ export class ExecutionTracker {
     if (outcomeClass === "deterministic_failure" && record.count === 1) {
       this.event(this.data.failedApproaches, MAX_FAILED, step, o.name, `${record.action} -> ${record.outcome}`);
     }
-    return { key, record, repeat, informative, loop, poll, stateUnknown, reacquired, thrash };
+    return { key, record, repeat, informative, loop, poll, stateUnknown, reacquired, thrash, classification, equivalent, equivalentLoop, equivalence };
+  }
+
+  /**
+   * Whether every returned range was already observed on `state` (and, separately, by output that is still in the
+   * conversation). A range whose text differs from an earlier read of exactly the same lines on the "same" state is
+   * new: the state identity missed a change, and the content decides.
+   */
+  private judgeCoverage(coverage: ReadCoverage[], state: string, present?: (key: string) => boolean): { covered: boolean; inContext: boolean; overlapping: boolean } {
+    let all = true;
+    let inContext = true;
+    let overlapping = false;
+    for (const c of coverage) {
+      const prior = this.data.coverage.filter((s) => s.path === c.path && s.state === state);
+      const contradicted = prior.some((s) => s.start === c.start && s.end === c.end && s.fingerprint !== c.fingerprint);
+      if (!prior.length || contradicted) {
+        all = false;
+        inContext = false;
+        continue;
+      }
+      const spans = prior.map((s): [number, number] => [s.start, s.end]);
+      const live = prior.filter((s) => present?.(s.key)).map((s): [number, number] => [s.start, s.end]);
+      const isEmpty = c.end < c.start;
+      const priorEmpty = prior.some((s) => s.total === 0);
+      if (isEmpty ? !priorEmpty : !covered(spans, c.start, c.end)) all = false;
+      if (isEmpty ? !prior.some((s) => s.total === 0 && present?.(s.key)) : !covered(live, c.start, c.end)) inContext = false;
+      if (!isEmpty && overlaps(spans, c.start, c.end)) overlapping = true;
+    }
+    return { covered: all, inContext: all && inContext, overlapping };
+  }
+
+  private addCoverage(segment: CoverageSegment): void {
+    const list = this.data.coverage;
+    const same = list.findIndex((s) => s.path === segment.path && s.state === segment.state && s.start === segment.start && s.end === segment.end && s.key === segment.key);
+    if (same >= 0) list.splice(same, 1);
+    pushBounded(list, segment, MAX_COVERAGE, (n) => (this.data.evicted.coverage += n));
+  }
+
+  private noteEquivalent(step: number, p: string, state: string, action: string): EquivalenceRecord {
+    let record = this.data.equivalents.find((r) => r.path === p && r.state === state);
+    if (!record) {
+      record = { path: p, state, count: 0, firstStep: step, lastStep: step, action };
+      pushBounded(this.data.equivalents, record, MAX_EQUIVALENTS);
+    }
+    record.count++;
+    record.lastStep = step;
+    record.action = action;
+    return record;
+  }
+
+  private recoveryEvent(step: number, kind: string, detail: string): void {
+    const r = this.data.recovery;
+    pushBounded(r.events, { step, at: this.clock(), kind, detail: clip(`episode ${r.episode} [${r.stage}] ${detail}`, 400) }, MAX_RECOVERY_EVENTS, (n) => (this.data.evicted.events += n));
+  }
+
+  /** The recovery stage now. */
+  get recoveryStage(): RecoveryStage {
+    return this.data.recovery.stage;
+  }
+
+  /**
+   * Demonstrated non-progress (a loop or a semantic loop that executed) and what recovery does about it:
+   * the first notes are advisory; the note that reaches `maxRecoveries` constrains (equivalent observations are refused
+   * from then on); an unproductive observation that still executes while constrained exhausts recovery. With
+   * `maxRecoveries` 0 the first one exhausts it. `allowedDenials` is fixed when the episode becomes constrained.
+   */
+  recordUnproductive(step: number, action: string, state: string, maxRecoveries: number, allowedDenials: number): { outcome: "advisory" | "constrained" | "exhausted"; note: number; sameStep?: boolean } {
+    const r = this.data.recovery;
+    r.state = state;
+    // The model has not yet seen this step's note: a second unproductive call in the same batch does not escalate.
+    if (r.lastEscalationStep === step && r.stage !== "normal") {
+      return { outcome: r.stage === "constrained" ? "constrained" : "advisory", note: r.notes, sameStep: true };
+    }
+    r.lastEscalationStep = step;
+    if (r.stage === "normal") {
+      r.episode++;
+      r.denials = 0;
+      r.enteredStep = step;
+      r.trigger = action;
+      this.recoveryEvent(step, "non_progress_detected", `${action} repeated with no new information on an unchanged workspace`);
+    }
+    if (r.stage === "constrained" || maxRecoveries <= 0) {
+      this.recoveryEvent(step, "recovery_exhausted", `${action} executed again with no new information after ${r.notes} recovery note(s)${r.stage === "constrained" ? " while constrained" : ""}`);
+      return { outcome: "exhausted", note: r.notes };
+    }
+    // A later episode on the same objective, its notes already spent, is constrained at once (no further advisory).
+    const repeatOffender = r.notes >= maxRecoveries;
+    if (!repeatOffender) r.notes++;
+    if (repeatOffender || r.notes >= maxRecoveries) {
+      const from = r.stage;
+      r.stage = "constrained";
+      r.allowedDenials = Math.max(1, allowedDenials);
+      this.recoveryEvent(step, "recovery_constrained", `${from} -> constrained after ${action}; equivalent observations are refused before they run (${r.allowedDenials} refusal(s) allowed)`);
+      return { outcome: "constrained", note: r.notes };
+    }
+    r.stage = "advisory";
+    this.recoveryEvent(step, "recovery_advisory_issued", `note ${r.notes}/${maxRecoveries} after ${action}`);
+    return { outcome: "advisory", note: r.notes };
+  }
+
+  /**
+   * Whether a call must be refused before it runs: only while constrained, only on a known state, and only when its
+   * answer is already in the conversation — every line it would read was returned on this same state by an
+   * observation whose output is still present in full (any read interface), or it is an exact repeat of another
+   * observing call whose output is still present. Anything that cannot be judged before it runs is allowed.
+   */
+  recoveryDenial(name: string, args: unknown, state: string, workspace: string, callKey: string, present: (key: string) => boolean): RecoveryDenial | undefined {
+    if (this.data.recovery.stage !== "constrained" || state === "unknown") return undefined;
+    const action = clip(`${name} ${typeof args === "string" ? args : JSON.stringify(args ?? {})}`.replace(/\s+/g, " "), 160);
+    const requests = readRequests(name, args, workspace);
+    if (requests) {
+      const coveredBy: CoverageSegment[] = [];
+      for (const req of requests) {
+        const prior = this.data.coverage.filter((s) => s.path === req.path && s.state === state);
+        const live = prior.filter((s) => present(s.key));
+        const total = prior.find((s) => typeof s.total === "number")?.total;
+        const end = req.end === undefined ? total : total === undefined ? req.end : Math.min(req.end, total);
+        if (end === undefined || !live.length) return undefined;
+        const spans = live.map((s): [number, number] => [s.start, s.end]);
+        if (end < req.start ? total !== 0 : !covered(spans, req.start, end)) return undefined;
+        coveredBy.push(...live.filter((s) => s.end >= req.start && s.start <= end));
+      }
+      return { action, coveredBy, reason: "every line it would read was already returned on this unchanged workspace, and that output is still in this conversation" };
+    }
+    if (actionKind(name) !== "observe_workspace" || NEVER_REFUSED.has(name)) return undefined;
+    const prior = this.priorRun(name, args, state);
+    if (!prior || !present(callKey)) return undefined;
+    return { action, coveredBy: [], reason: `the same call already ran on this unchanged workspace (step ${prior.lastStep}) and its output is still in this conversation` };
+  }
+
+  /** Records a refused call; true when the episode's refusals are exhausted (the turn must stop). */
+  recordDenial(step: number, denial: RecoveryDenial): boolean {
+    const r = this.data.recovery;
+    r.denials++;
+    this.recoveryEvent(step, "tool_execution_denied", `${denial.action}: not executed; ${denial.reason} (${r.denials}/${r.allowedDenials})`);
+    if (r.denials > r.allowedDenials) {
+      this.recoveryEvent(step, "recovery_exhausted", `${r.denials - 1} refusal(s) used and another equivalent observation was attempted`);
+      return true;
+    }
+    return false;
+  }
+
+  /** Evidence-backed progress ends a recovery episode. Refusals never count as progress (they produce no verdict). */
+  private recoveryProgress(step: number, reasons: string[]): void {
+    const r = this.data.recovery;
+    if (r.stage === "normal") return;
+    this.recoveryEvent(step, "recovery_progress_detected", reasons.join("; "));
+    const from = r.stage;
+    r.stage = "normal";
+    r.denials = 0;
+    r.enteredStep = undefined;
+    r.trigger = undefined;
+    r.state = undefined;
+    this.recoveryEvent(step, "recovery_completed", `${from} -> normal`);
+  }
+
+  /** Repeated lines per file on `state` (newest first). */
+  equivalentsOn(state: string): EquivalenceRecord[] {
+    return this.data.equivalents.filter((r) => r.state === state && r.count > 0).sort((a, b) => b.lastStep - a.lastStep);
+  }
+
+  /** Lines observed per file on `state`, merged: what the work already has. */
+  observedOn(state: string): Array<{ path: string; ranges: Array<[number, number]>; total?: number; steps: number[]; fingerprints: string[]; keys: string[] }> {
+    const byPath = new Map<string, CoverageSegment[]>();
+    for (const s of this.data.coverage) if (s.state === state) byPath.set(s.path, [...(byPath.get(s.path) ?? []), s]);
+    return [...byPath.entries()].map(([p, segs]) => ({
+      path: p,
+      ranges: mergeIntervals(segs.map((s): [number, number] => [s.start, s.end])),
+      total: segs.find((s) => typeof s.total === "number")?.total,
+      steps: [...new Set(segs.map((s) => s.step))].sort((a, b) => a - b),
+      fingerprints: [...new Set(segs.map((s) => s.fingerprint))],
+      keys: segs.map((s) => s.key),
+    }));
   }
 
   /** Keeps records that show recurrence; evicts the oldest single-count record first. */
@@ -424,6 +751,7 @@ export class ExecutionTracker {
       this.data.stepsWithoutProgress = 0;
       this.data.lastProgressStep = step;
       this.event(this.data.progress, MAX_EVENTS, step, "progress", reasons.join("; "));
+      this.recoveryProgress(step, reasons);
     } else {
       this.data.stepsWithoutProgress++;
     }
@@ -443,6 +771,9 @@ export class ExecutionTracker {
   operatorInput(step: number, detail: string): void {
     this.data.stepsWithoutProgress = 0;
     this.event(this.data.progress, MAX_EVENTS, step, "operator_input", detail);
+    // Operator input is new direction: recovery starts over, notes included.
+    this.recoveryProgress(step, ["operator input applied"]);
+    this.data.recovery.notes = 0;
   }
 
   stagnation(step: number, kind: string, detail: string): void {
