@@ -1,0 +1,59 @@
+You are the lead QA agent for Nexus Code v1.1.1. Perform a complete end-to-end QA run against the published release, collect reproducible evidence, and report whether it is ready for real use.
+
+Read applicable `AGENTS.md` files and repository instructions first. Discover the official release location, supported installation methods, platforms, configuration, documentation, and release acceptance criteria. Inspect the v1.1.1 release notes and relevant specifications to establish expected behavior.
+
+Test the actual published v1.1.1 artifacts. Record their source, version, checksums where available, and relationship to the release tag and commit. Keep published-artifact results separate from source-build results. Do not substitute a development checkout for the released product or claim coverage for environments you cannot exercise.
+
+Create an isolated QA workspace with disposable repositories, synthetic credentials, and controlled fixtures. Preserve user files and existing environments. Avoid production accounts, real secrets, paid services, and external side effects unless explicitly authorized.
+
+Build a coverage matrix mapping documented capabilities and release requirements to test scenarios, expected outcomes, environments, and evidence. Include the full supported user journey and interactions between features, not just individual commands.
+
+Exercise at least these areas where supported:
+
+- Fresh installation, first launch, onboarding, configuration, help, and version reporting.
+- Upgrade from the previous supported release, configuration and data compatibility, restart, and uninstall.
+- Authentication and model/provider configuration, including missing, invalid, expired, and unavailable credentials.
+- A realistic coding workflow: open a repository, inspect code, plan a change, edit files, execute checks, inspect the diff, and complete the task.
+- Tool execution, approval boundaries, denied actions, cancellation, timeouts, retries, and recovery after interruption.
+- Session persistence, resume, context handling, memory, and isolation between projects.
+- Multi-agent workflows, delegation, handoffs, concurrent work, failures, and integration.
+- Git behavior with clean and dirty working trees, untracked files, branches, conflicts, and preservation of unrelated changes.
+- Invalid inputs, malformed configuration, missing dependencies, provider failures, network interruption, and resource limits.
+- Security boundaries involving untrusted repository content, prompt injection, secret handling, logs, filesystem access, and command execution.
+- Documentation accuracy, actionable errors, logs, and diagnostics.
+- Representative performance, repeated workflows, and a bounded soak run with stated duration and workload.
+
+Determine applicability from the published product and specification. Mark unsupported or unavailable scenarios explicitly rather than inventing features or silently omitting coverage. Exercise real provider integrations when authorized credentials are available; label simulated and offline coverage separately.
+
+Use multiple agents for independent QA areas when available, with isolated workspaces and clear ownership. Keep one lead responsible for coverage, evidence quality, deduplication, and the final assessment. Avoid shared mutable fixtures that can distort results.
+
+Use **xerj** to reference known testing approaches and known solutions when investigating failures. Discover its configured invocation first. Record relevant queries, references, and applicability. If unavailable, report that limitation and continue testing; never fabricate research results.
+
+Run the product and observe actual behavior. Existing unit tests and CI results are supporting evidence, not substitutes for end-to-end execution. Verify final filesystem, Git, session, and application state rather than relying only on success messages. Repeat suspected failures from a clean fixture and identify the smallest reliable reproduction.
+
+For every scenario, record:
+
+- Scenario ID and requirement covered.
+- Artifact version, environment, and prerequisites.
+- Exact steps or executable reproduction.
+- Expected and observed results.
+- Pass, fail, blocked, or not applicable, with justification.
+- Evidence locations and any cleanup performed.
+
+For every defect, record severity, user impact, reproduction rate, minimal reproduction, expected versus actual behavior, relevant logs, and suspected cause where supported by evidence. Distinguish observations from hypotheses. Redact secrets from all artifacts.
+
+Complete the baseline QA run before modifying product code. Preserve evidence for the published release. If fixes are subsequently authorized, test them separately and do not describe an unpublished fix as a passing result for published v1.1.1. Do not publish releases, deploy changes, or send external messages without authorization.
+
+Store the QA plan, coverage matrix, execution results, defect reports, and sanitized evidence in the repository’s established QA location or a clearly named output directory. Provide reusable test scripts where practical.
+
+Continue through all executable scenarios despite individual failures. Keep concise progress updates and a durable execution log. Ask only for access or decisions that genuinely block required coverage, while continuing independent tests.
+
+Finish with an evidence-backed report containing:
+
+1. The exact published artifacts and environments tested.
+2. Coverage totals and all failed, blocked, or untested requirements.
+3. Defects ranked by severity and release impact.
+4. Links to reproducible evidence and reusable test assets.
+5. A release assessment: ready, ready with stated limitations, not ready, or insufficient evidence.
+
+Do not claim “full E2E passed” unless every required scenario passed on the stated environments. Make any unverified platforms, provider integrations, upgrade paths, and release gates explicit.
