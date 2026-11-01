@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
+## [v1.1.1] - 2026-11-01
+
+See [`docs/releases/v1.1.1.md`](docs/releases/v1.1.1.md) (and candidate notes [`docs/releases/v1.1.1-rc.1.md`](docs/releases/v1.1.1-rc.1.md)) for full release notes.
+Promoted release line delivering multi-agent orchestration, serialized git integration, typed inter-agent channels, operation replay, context-budget provenance, cancellation idempotency, durability-positive message acknowledgment, structured prompt provenance, and protected replay envelope error propagation.
+
 ## [v1.1.0] - 2026-10-31
 
 See [`docs/releases/v1.1.0.md`](docs/releases/v1.1.0.md) (and candidate notes [`docs/releases/v1.1.0-rc.1.md`](docs/releases/v1.1.0-rc.1.md)) for full release notes. Scope and acceptance:
