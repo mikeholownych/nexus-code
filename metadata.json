@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6CE7KKZ8WZ4Q7QRGDMYSB7M",
+  "strategy": "manual-commit",
+  "branch": "v1/v112-nonprogress-recovery",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "cli/src/agent.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 65050,
+    "cache_read_tokens": 10584260,
+    "output_tokens": 36768,
+    "api_call_count": 40,
+    "subagent_tokens": {
+      "input_tokens": 102,
+      "cache_creation_tokens": 162182,
+      "cache_read_tokens": 5615900,
+      "output_tokens": 27116,
+      "api_call_count": 50
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

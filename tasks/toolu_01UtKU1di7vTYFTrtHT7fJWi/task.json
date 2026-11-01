@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01UtKU1di7vTYFTrtHT7fJWi",
+  "agent_id": "a7c4b7c18e255ee61",
+  "subagent_type": "general-purpose",
+  "task_description": "Independent review of PR 398",
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 162182,
+    "cache_read_tokens": 5615900,
+    "output_tokens": 27116,
+    "api_call_count": 50
+  },
+  "started_at": "2026-11-01T20:33:55.244134088Z",
+  "completed_at": "2026-11-01T20:47:21.919833647Z"
+}
