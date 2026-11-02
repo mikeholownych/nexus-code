@@ -226,7 +226,7 @@ test("a dependency that ran no verifier forwards none; a large diff then has no 
 // ---------------------------------------------------------------- end to end: a real reviewer unit through the executor
 
 import { AutonomousAgent } from "../src/agent.js";
-import { OperationStore } from "../src/core/operation_runner.js";
+import { applyOperatorDecision, OperationStore } from "../src/core/operation_runner.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { TeamOrchestrator } from "../src/team.js";
 import { fakeClock, startGateway } from "./helpers/provider_fixture.js";
@@ -291,4 +291,46 @@ test("end to end: an uncollectable candidate diff blocks the review before any m
   assert.match(review.blocked?.reason ?? "", /review rejected: candidate diff unavailable/);
   assert.equal(prompts.length, 0, "no model turn was spent on a review with nothing to judge");
   assert.equal(out.success, false);
+});
+
+test("end to end: retrying a rejected review resumes read-only without inheriting a write-verification obligation", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-retry-home-"));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  const summaries = [verdict({ suspectedDefects: [{ path: "math.js", line: 1, description: "no test" }] }), verdict()];
+  const gw = await startGateway((n) => ({ kind: "tools", calls: [{ name: "task_completed", args: { summary: summaries[Math.min(n, summaries.length) - 1] } }] }));
+  try {
+    const dir = repo();
+    fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-retry-state-"));
+    const clock = fakeClock();
+    const config: HarnessConfig = { endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: dir, shell: "bash" } as HarnessConfig;
+    const executor = new AgentWorkUnitExecutor({
+      baseConfig: config,
+      createAgent: (c) => {
+        const agent = new AutonomousAgent(c, 1);
+        (agent as any).recoveryClock = clock;
+        (agent as any).stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [(agent as any).primaryWorkspacePathIdentity] });
+        return agent;
+      },
+    });
+    const resources = [{ id: "r1", provider: new URL(gw.url).origin, endpoint: gw.url, model: "r1", capabilities: ["tools"], rank: 0 }];
+    const store = new OperationStore(dir, stateDir);
+    const team = new TeamOrchestrator(config, { store, executor, clock, resources } as any);
+    const first = await team.run("reviewer", "Fix add so it returns the sum.");
+    const blocked = first.operation.units.find((u: any) => u.role === "reviewer")!;
+    assert.equal(blocked.status, "BLOCKED", first.report);
+    assert.ok(blocked.agentTaskId, "the rejected review kept its conversation task");
+    const decision = blocked.blocked!.decision;
+    const retry = decision.options.find((o: any) => o.label === "retry the review")!;
+    const state = applyOperatorDecision(store, first.operation.id, decision.id, retry.id);
+    const second = await team.drive(state);
+    const review = second.operation.units.find((u: any) => u.role === "reviewer")!;
+    assert.equal(review.status, "COMPLETE", second.report);
+    assert.match(review.result?.summary ?? "", /^ACCEPT: /);
+  } finally {
+    await gw.close();
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+  }
 });
