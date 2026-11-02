@@ -35,7 +35,7 @@ const SECRET_WORDS = new Set([
   "password", "passwords", "passwd", "passphrase", "pwd", "secret", "secrets", "credential", "credentials", "authorization", "auth", "cookie", "cookies", "bearer", "jwt", "apikey",
   // The same names written as one lowercase word.
   "accesstoken", "refreshtoken", "idtoken", "authtoken", "sessiontoken", "bearertoken", "apitoken", "clientsecret", "privatekey", "secretkey", "accesskey",
-  "dbpass", "userpass", "adminpass", "rootpass", "sshkey", "masterkey", "signingkey", "secretvalue", "pat",
+  "dbpass", "userpass", "adminpass", "rootpass", "sshkey", "masterkey", "signingkey", "secretvalue",
 ]);
 /** Words that, before "pass", make it a password (`DB_PASS`, `user_pass`); bare `pass` and `bypass` are not credentials. */
 const PASS_CONTEXT = new Set(["db", "database", "user", "admin", "root", "login", "smtp", "mysql", "postgres", "redis", "ssh", "ftp", "sql", "mongo", "ldap", "wifi", "master"]);
@@ -43,6 +43,13 @@ const PASS_CONTEXT = new Set(["db", "database", "user", "admin", "root", "login"
 const COUNT_AFTER = new Set(["count", "counts", "limit", "limits", "budget", "usage", "total", "used"]);
 /** Words that, before "token", make it a count or a limit rather than a credential. */
 const COUNT_WORDS = new Set(["max", "min", "total", "input", "output", "prompt", "completion", "num", "count", "context", "reasoning", "cached", "budget"]);
+
+/** Words before a bare `pat` that make it a personal access token (`github_pat`, `user_pat`). */
+const PAT_OWNERS = new Set(["github", "gitlab", "gh", "user", "personal", "access", "my", "bitbucket", "azure"]);
+/** Words that, before `key`, make it a credential (`api_key`, `ssh_keys`). */
+const KEY_CONTEXT = new Set(["api", "access", "private", "secret", "auth", "signing", "ssh", "master", "encryption"]);
+/** Words after `key` that make it a reference to a key, not the key (`encryptionKeyId`, `api_key_name`). */
+const KEY_REFERENCE = new Set(["id", "ids", "name", "names", "path", "file", "fingerprint", "type", "version", "ref", "label"]);
 
 /** Splits `apiKey`, `api_key`, `api-key` and `X-Api-Key` into lowercase words. */
 function keyWords(key: string): string[] {
@@ -60,7 +67,10 @@ export function isSensitiveKey(key: string): boolean {
     if (SECRET_WORDS.has(w)) return true;
     if (w === "token") return !COUNT_WORDS.has(words[i - 1] ?? "") && !COUNT_AFTER.has(words[i + 1] ?? "");
     if (w === "pass") return PASS_CONTEXT.has(words[i - 1] ?? "") || ["word", "wd", "phrase"].includes(words[i + 1] ?? "");
-    if (w === "key") return ["api", "access", "private", "secret", "auth", "signing", "ssh", "master", "encryption"].includes(words[i - 1] ?? "");
+    // `pat` is a personal access token only alone or after a provider or owner word, so `path_pat` (a pattern) is kept.
+    if (w === "pat") return words.length === 1 || PAT_OWNERS.has(words[i - 1] ?? "");
+    // `key` and `keys` after a credential word; `encryptionKeyId` and `keyName` only name a key, so they are kept.
+    if (w === "key" || w === "keys") return KEY_CONTEXT.has(words[i - 1] ?? "") && !KEY_REFERENCE.has(words[i + 1] ?? "");
     return false;
   });
 }

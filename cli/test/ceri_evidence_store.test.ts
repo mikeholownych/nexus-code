@@ -204,16 +204,16 @@ test("CeriEvidenceStore redacts whole values under credential keys and keeps cou
       // Concatenated or split spellings of the same credential names.
       accesstoken: "LEAK-c1", refreshtoken: "LEAK-c2", idtoken: "LEAK-c3", authtoken: "LEAK-c4", clientsecret: "LEAK-c5", privatekey: "LEAK-c6", secretkey: "LEAK-c7", accesskey: "LEAK-c8",
       sessiontoken: "LEAK-c9", bearertoken: "LEAK-c10", DB_PASS: "LEAK-c11", dbPass: "LEAK-c12", passWord: "LEAK-c13", PASSWORD: "LEAK-c14", user_pass: "LEAK-c15", ADMIN_PASS: "LEAK-c16",
-      pwd: "LEAK-c17", dbpass: "LEAK-d1", sshKey: "LEAK-d2", masterKey: "LEAK-d3", pat: "LEAK-d4", secretvalue: "LEAK-d5", ssh_key: "LEAK-d6", client_secret: "LEAK-c18", ClientSecret: "LEAK-c19", AWS_SECRET_ACCESS_KEY: "LEAK-c20",
+      pwd: "LEAK-c17", dbpass: "LEAK-d1", sshKey: "LEAK-d2", masterKey: "LEAK-d3", pat: "LEAK-d4", secretvalue: "LEAK-d5", ssh_key: "LEAK-d6", ssh_keys: "LEAK-d7", secretValue: "LEAK-d8", secret_value: "LEAK-d9", github_pat: "LEAK-d10", user_pat: "LEAK-d11", PAT: "LEAK-d12", client_secret: "LEAK-c18", ClientSecret: "LEAK-c19", AWS_SECRET_ACCESS_KEY: "LEAK-c20",
     };
-    const kept = { pass: 12, bypass: "kept-bypass", max_token: 4096, max_tokens: 8192, tokens: { input: 5, output: 7 }, passed: true, keyboard: "kept-kb", author: "kept-author", compass: "kept-compass", passport: "kept-passport", tokenCount: 3, token_used: 99, passes: 4, keys: 5 };
+    const kept = { pass: 12, bypass: "kept-bypass", max_token: 4096, max_tokens: 8192, tokens: { input: 5, output: 7 }, passed: true, keyboard: "kept-kb", author: "kept-author", compass: "kept-compass", passport: "kept-passport", tokenCount: 3, token_used: 99, path_pat: "kept-pathpat", encryptionKeyId: "kept-keyid", api_key_name: "kept-keyname", pattern: "kept-pattern", passes: 4, keys: 5 };
     store.appendEvent({ ...secrets, ...kept });
     store.recordAssertions([{ ...secrets, ...kept }]);
     store.recordReceipts([{ nested: { ...secrets, ...kept } }]);
     const files = ["events.jsonl", "assertions.json", "receipts.json"].map((f) => fs.readFileSync(path.join(runDir, f), "utf-8"));
     for (const text of files) {
       assert.ok(!/LEAK-/.test(text), text.match(/LEAK-[\w-]+/)?.[0]);
-      for (const k of ["kept-bypass", "kept-kb", "kept-author", "4096", "8192"]) assert.ok(text.includes(k), `${k} was over-redacted`);
+      for (const k of ["kept-bypass", "kept-pathpat", "kept-keyid", "kept-keyname", "kept-pattern", "kept-kb", "kept-author", "4096", "8192"]) assert.ok(text.includes(k), `${k} was over-redacted`);
       assert.match(text, /"pass":\s*12/);
       assert.match(text, /"input":\s*5/);
     }
