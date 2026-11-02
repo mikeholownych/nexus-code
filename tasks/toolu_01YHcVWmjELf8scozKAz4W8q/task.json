@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01YHcVWmjELf8scozKAz4W8q",
+  "agent_id": "aeaf20b29fcf766ba",
+  "task_description": "Independent review of PR 401",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 47070,
+    "cache_read_tokens": 260795,
+    "output_tokens": 3115,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-02T20:15:11.848672085Z",
+  "completed_at": "2026-11-02T20:16:35.627617274Z"
+}
