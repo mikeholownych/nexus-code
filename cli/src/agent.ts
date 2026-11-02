@@ -38,8 +38,11 @@ import {
   backoffMs,
   combineState,
   ledgerStateIdentity,
+  normalizeTracking,
   type ObservationVerdict,
+  type RecoveryDenial,
 } from "./core/execution_tracking.js";
+import { fileSignature, readCoverage, readRequests } from "./core/observation_identity.js";
 import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool } from "./parser.js";
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
@@ -132,7 +135,9 @@ import {
   priorAttempt,
   queueSteering,
   recordAttempt,
+  recoveryInput,
   renderPinnedLedger,
+  renderRecoveryContext,
   trackingOf,
 } from "./core/objective.js";
 import {
@@ -404,10 +409,38 @@ function collectRecordedRemovals(text: string, out: Set<string>): void {
   }
 }
 
+/** Prefix of the tool message for a call refused during constrained recovery (it did not run). */
+const RECOVERY_REFUSAL_PREFIX = "[Nexus refused: not executed]";
+
+function isRecoveryRefusal(message: ChatMessage): boolean {
+  return message.role === "tool" && normalizeMessageContent(message.content).text.join("").startsWith(RECOVERY_REFUSAL_PREFIX);
+}
+
+/**
+ * The tool message for a refused call: what was refused and why, where the answer already is in the conversation,
+ * and the refusals left. The call did not run.
+ */
+function recoveryDenialMessage(denial: RecoveryDenial, recovery: { denials: number; allowedDenials: number }, exhausted: boolean): string {
+  const where = denial.coveredBy.length
+    ? ` The output is already in this conversation: ${[...new Map(denial.coveredBy.map((s) => [`${s.path}:${s.start}-${s.end}`, s])).values()].slice(0, 6).map((s) => `${s.path} lines ${s.start}-${s.end} (step ${s.step})`).join("; ")}.`
+    : "";
+  const tail = exhausted
+    ? " Recovery is exhausted: Nexus stops the turn here. Report what you found and what blocks the work."
+    : ` Use that output, or take a different action from RECOVERY_REQUIRED. Refusals used: ${recovery.denials} of ${recovery.allowedDenials}; another equivalent attempt beyond that stops the turn.`;
+  return `${RECOVERY_REFUSAL_PREFIX} ${denial.action}: ${denial.reason}.${where}${tail}`;
+}
+
+/** The tool message for a call that did not run because the turn had already stopped earlier in its batch. */
+function notExecutedMessage(call: ToolCall, why: string): { role: "tool"; tool_call_id: string; name: string; content: string } {
+  return { role: "tool", tool_call_id: call.id, name: call.function.name, content: `${RECOVERY_REFUSAL_PREFIX} the turn stopped before this call (${why}). No action was taken.` };
+}
+
 /** Observations whose output is present in full as a tool message, and those present only truncated. */
-function observationPresence(messages: ChatMessage[]): { present: Set<string>; truncated: Set<string> } {
+function observationPresence(messages: ChatMessage[]): { present: Set<string>; truncated: Set<string>; presentCalls: Set<string> } {
   const present = new Set<string>();
   const truncated = new Set<string>();
+  /** Tool call ids whose own output is present in full (one specific execution, not any call with the same arguments). */
+  const presentCalls = new Set<string>();
   const callKeys = new Map<string, string>();
   for (const message of messages) {
     if (message.role === "assistant") {
@@ -417,11 +450,16 @@ function observationPresence(messages: ChatMessage[]): { present: Set<string>; t
     }
     if (message.role === "tool" && typeof message.tool_call_id === "string") {
       const key = callKeys.get(message.tool_call_id);
-      if (key) (isTruncatedObservation(message) ? truncated : present).add(key);
+      // A refused call's message carries no output: it never makes an observation present.
+      if (key && !isRecoveryRefusal(message)) {
+        const whole = !isTruncatedObservation(message);
+        (whole ? present : truncated).add(key);
+        if (whole) presentCalls.add(message.tool_call_id);
+      }
     }
   }
   for (const key of present) truncated.delete(key);
-  return { present, truncated };
+  return { present, truncated, presentCalls };
 }
 
 /** Observations whose output is present in full as a tool message. */
@@ -1616,6 +1654,9 @@ export class AutonomousAgent {
     this.messages = state.messages || [];
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
+    // A ledger written by an earlier version lacks newer tracking fields (recovery, coverage): complete it now, before
+    // anything renders the pinned ledger or estimates a request.
+    if (this.objective?.execution) this.objective.execution = normalizeTracking(this.objective.execution);
     this.activeProviderRecovery = state.providerRecovery ?? null;
     this.recoveredOperation = state.operation;
     // Durable task state is writable by the same local user who can run candidate
@@ -2583,6 +2624,39 @@ export class AutonomousAgent {
     }
   }
 
+  /** The RECOVERY_REQUIRED context for the tracker's current episode, with evidence marked by presence in context. */
+  private recoveryContext(tracker: ExecutionTracker, stagnationSteps: number, objectiveText: string): string {
+    const { presentCalls } = observationPresence(this.messages);
+    const input = this.objective && this.objective.execution === tracker.data
+      ? recoveryInput(this.objective)
+      : { objective: objectiveText, open: [], execution: tracker.data };
+    return renderRecoveryContext(input, { present: (id) => presentCalls.has(id), stagnationSteps });
+  }
+
+  /**
+   * Gives each tool call an id that no other execution in this conversation or in the objective's coverage uses.
+   * Providers may repeat ids (e.g. "call_0" every turn); presence and coverage are judged per execution, so a reused id
+   * would let one call's output stand for another's. Nexus writes both the call and its result, so the pair stays
+   * consistent; ids that are already unique are kept unchanged.
+   */
+  private uniqueCallIds(calls: ToolCall[], tracker: ExecutionTracker): void {
+    if (!calls.length) return;
+    const used = new Set<string>(tracker.data.coverage.map((s) => s.key));
+    for (const m of this.messages) {
+      if (m.role === "assistant") for (const c of (m as any).tool_calls ?? []) if (typeof c?.id === "string") used.add(c.id);
+      if (m.role === "tool" && typeof m.tool_call_id === "string") used.add(m.tool_call_id);
+    }
+    for (const call of calls) {
+      if (typeof call.id !== "string" || !call.id || used.has(call.id)) call.id = `${typeof call.id === "string" && call.id ? call.id.slice(0, 40) : "call"}_nx${randomUUID().slice(0, 8)}`;
+      used.add(call.id);
+    }
+  }
+
+  /** Whether requests carry the pinned Objective Ledger for this objective (and with it the live recovery context). */
+  private pinsLedger(): boolean {
+    return Boolean(this.objective && this.durable);
+  }
+
   /** Whether the operator's objective message is still in `messages` (else the pinned block carries it verbatim). */
   private objectiveInContext(messages: ChatMessage[]): boolean {
     const objective = this.objective?.objective;
@@ -2602,7 +2676,9 @@ export class AutonomousAgent {
     if (!ledgerNeedsPinning(ledger, inContext)) return messages;
     // A quarter of the context window (≈4 characters per token) for the objective when it must be carried in full.
     const budget = Math.max(8000, Math.floor(this.contextLimit() * 4 * 0.25));
-    return [messages[0], { role: "system", content: renderPinnedLedger(ledger, !inContext, budget) }, ...messages.slice(1)];
+    const { presentCalls } = observationPresence(messages);
+    const recovery = { present: (id: string) => presentCalls.has(id), stagnationSteps: this.config.continuation?.stagnationSteps ?? DEFAULT_CONTINUATION.stagnationSteps };
+    return [messages[0], { role: "system", content: renderPinnedLedger(ledger, !inContext, budget, recovery) }, ...messages.slice(1)];
   }
 
   /**
@@ -5408,7 +5484,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       let stopReason: TurnReason | undefined;
       let stopDetail: string | undefined;
       let completionNudges = 0;
-      let recoveries = 0;
+      // Recovery state (notes, stage, refusals) lives in the tracker: in the ledger when durable, so compaction cannot
+      // remove it and resume restores it.
+      const allowedDenials = budget ? Math.max(1, budget.maxRecoveries) : 0;
       this.stateIdentityDisabled = false;
       this.stateIdentityUncertainty = undefined;
       tracker.beginTurn();
@@ -5476,6 +5554,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (this.objective && this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
         const stepStateBefore = stateNow;
         const verdicts: ObservationVerdict[] = [];
+        /**
+         * Evidence-backed progress earlier in this step: new information, or a successful change that is not a repeat
+         * of the same change on the same workspace state (an identical rewrite changes nothing). `except` is the
+         * verdict being judged, which never counts for itself.
+         */
+        const progressedThisStep = (except?: ObservationVerdict) =>
+          verdicts.some((v) => v !== except && (v.informative || (v.classification === "ARTIFACT_MODIFIED" && !v.repeat)));
         let operatorInputApplied = this.applyQueuedSteering(currentStep) > 0;
         if (operatorInputApplied) {
           completionNudges = 0;
@@ -5492,6 +5577,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           }
           return callInputState;
         };
+        /** Whether an observation's output is in the conversation in full, as of now. */
+        const presence = (): ((key: string) => boolean) => {
+          const { presentCalls } = observationPresence(this.messages);
+          return (id: string) => presentCalls.has(id);
+        };
         /** Waits before re-running an unchanged poll or a transient failure on an unchanged state (see backoffMs). */
         const backoffBefore = async (call: ToolCall): Promise<void> => {
           const prior = tracker.priorRun(call.function.name, call.function.arguments, inputStateFor());
@@ -5504,6 +5594,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         const observe = (call: ToolCall, receipt: ExecutionReceipt, reacquire = false) => {
           const name = call.function.name;
           const inputState = inputStateFor();
+          // A recognised shell read (cat/head/sed) observes the workspace like read_file; its coverage counts only when
+          // the model receives the output whole (run_command output is folded when long).
+          const shellRead = name === "run_command" && readRequests(name, call.function.arguments, this.config.workspace) !== undefined;
+          const delivered = !shellRead || foldVoluminousOutput(receipt.output ?? "") === (receipt.output ?? "");
+          const coverage = (receipt.success && delivered ? readCoverage(name, call.function.arguments, receipt.output ?? "", this.config.workspace) : undefined)
+            ?.map((c) => ({ ...c, sig: fileSignature(this.config.workspace, c.path) }));
           const verdict = tracker.observe(cumulativeStep, {
             name,
             args: call.function.arguments,
@@ -5511,6 +5607,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             text: receipt.success ? receipt.output ?? "" : `${receipt.error ?? ""}\n${receipt.output ?? ""}`,
             stateBefore: inputState,
             reacquire,
+            kind: shellRead ? "observe_workspace" : undefined,
+            coverage,
+            callId: call.id,
+            present: presence(),
           });
           verdicts.push(verdict);
           if (verdict.thrash && !noticedThrash.has(verdict.key)) {
@@ -5537,24 +5637,57 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             }
             return;
           }
-          if (!verdict.loop) return;
-          const count = verdict.record.count;
+          if (!verdict.loop && !verdict.equivalentLoop) return;
+          // A semantic loop (the same lines through another read form) is reported by its file; an exact one by its call.
+          const count = verdict.loop ? verdict.record.count : (verdict.equivalence?.count ?? 0) + 1;
+          const what = verdict.loop
+            ? `called ${name} with the same arguments ${count} times`
+            : `obtained lines ${verdict.equivalence?.start}-${verdict.equivalence?.end} of ${verdict.equivalence?.path} ${count} times (most recently with ${name})`;
           tracker.stagnation(cumulativeStep, "repetition", `${verdict.record.action} ×${count} with the same result on an unchanged workspace -> ${verdict.record.outcome.slice(0, 160)}`);
-          if (recoveries < budget.maxRecoveries) {
-            recoveries++;
-            tracker.intervention(cumulativeStep, "recovery_note", `${verdict.record.action} ×${count}`);
-            try {
-              this.observer?.onContinuation?.({ kind: "recovery", n: recoveries, max: budget.maxRecoveries, detail: name });
-            } catch {}
-            pendingRecoveryNote =
-              `[Nexus recovery ${recoveries}/${budget.maxRecoveries}] You have called ${name} with the same arguments ${count} times on an unchanged workspace and received the same result each time. ` +
-              `Repeating it will not change the outcome. Use the result you already have or change approach; if the remaining work is blocked, ` +
-              `record that with update_requirements (status "blocked" with the reason) and stop with a final message.`;
-          } else {
+          // This step already made progress: it ends the recovery episode at endStep, so a repeat in it neither
+          // escalates nor exhausts recovery (later calls in the step still run).
+          if (progressedThisStep(verdict)) return;
+          const transition = tracker.recordUnproductive(cumulativeStep, verdict.record.action, inputState, budget.maxRecoveries, allowedDenials);
+          if (transition.outcome === "exhausted") {
             stopReason = "STAGNATION_DETECTED";
-            stopDetail = `repeated ${name} ${count} times with an unchanged result on an unchanged workspace after ${budget.maxRecoveries} recovery notes`;
+            stopDetail = `repeated ${name} ${count} times with an unchanged result on an unchanged workspace after ${transition.note} recovery notes`;
             tracker.stagnation(cumulativeStep, "repetition_stop", stopDetail);
+            return;
           }
+          if (transition.sameStep) return;
+          tracker.intervention(cumulativeStep, "recovery_note", `${verdict.record.action} ×${count} -> ${transition.outcome}`);
+          try {
+            this.observer?.onContinuation?.({ kind: "recovery", n: transition.note, max: budget.maxRecoveries, detail: name });
+          } catch {}
+          const header = `[Nexus recovery ${transition.note}/${budget.maxRecoveries}] You have ${what} on an unchanged workspace and received the same result each time. Repeating it will not change the outcome.`;
+          pendingRecoveryNote = transition.outcome === "advisory"
+            ? `${header} Use the result you already have or change approach; if the remaining work is blocked, ` +
+              `record that with update_requirements (status "blocked" with the reason) and stop with a final message.`
+            : `${header} From now on Nexus refuses, before they run, observations that would only return what this conversation already holds.` +
+              // One live copy: the pinned ledger carries RECOVERY_REQUIRED on every request while constrained.
+              (this.pinsLedger()
+                ? ` The RECOVERY_REQUIRED section of the pinned objective ledger lists the evidence you already have, what is refused, what is permitted and the budget left; it is kept current on every request.`
+                : `\n\n${this.recoveryContext(tracker, budget.stagnationSteps, promptText)}`);
+        };
+        /**
+         * Refuses a call that would only re-observe what the conversation already holds, during constrained recovery.
+         * Returns the tool message content when refused (the call is not executed), else undefined.
+         */
+        const refuse = (call: ToolCall): string | undefined => {
+          if (!budget) return undefined;
+          // An earlier call in this step already showed progress: recovery ends with this step, so nothing more in it is refused.
+          if (progressedThisStep()) return undefined;
+          const name = call.function.name;
+          const denial = tracker.recoveryDenial(cumulativeStep, name, call.function.arguments, inputStateFor(), this.config.workspace, presence(), (p) => fileSignature(this.config.workspace, p));
+          if (!denial) return undefined;
+          const exhausted = tracker.recordDenial(cumulativeStep, denial);
+          if (exhausted && !stopReason) {
+            stopReason = "STAGNATION_DETECTED";
+            const r = tracker.data.recovery;
+            stopDetail = `recovery exhausted after ${r.notes} recovery notes: ${r.denials} equivalent observation(s) refused on an unchanged workspace (last: ${denial.action})`;
+            tracker.stagnation(cumulativeStep, "recovery_exhausted", stopDetail);
+          }
+          return recoveryDenialMessage(denial, tracker.data.recovery, exhausted);
         };
         const endStep = () => {
           if (pendingRecoveryNote) {
@@ -5811,6 +5944,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
 
         // Record assistant's response in history
+        this.uniqueCallIds(parsed.toolCalls, tracker);
         this.messages.push({
           role: "assistant",
           content: assistantMessage.content || "",
@@ -5886,8 +6020,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           turn.phase = "tool";
           turn.currentTool = `${parsed.toolCalls.length} parallel reads`;
           const reacquiring = new Set(parsed.toolCalls.filter((call) => this.turnRemovedObservations.has(observationKey(call.function.name, call.function.arguments))));
-          const parallelResults = await Promise.all(
-            parsed.toolCalls.map(async (call) => {
+          // Constrained recovery: each call is judged before any runs; refused calls do not run.
+          const refused = new Map<ToolCall, string>();
+          for (const call of parsed.toolCalls) {
+            const content = stopReason ? notExecutedMessage(call, stopDetail ?? stopReason).content : refuse(call);
+            if (content !== undefined) refused.set(call, content);
+          }
+          // A refusal that stopped the turn stops the whole batch: calls judged before it do not run either.
+          if (stopReason) for (const call of parsed.toolCalls) if (!refused.has(call)) refused.set(call, notExecutedMessage(call, stopDetail ?? stopReason).content);
+          const executed = await Promise.all(
+            parsed.toolCalls.filter((call) => !refused.has(call)).map(async (call) => {
               const { receipt } = await this.dispatchToolCall(call, currentStep, "agent");
               return { call, toolName: call.function.name, receipt };
             })
@@ -5895,7 +6037,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           this.ui.stopSpinner(true);
           turn.currentTool = undefined;
 
-          for (const item of parallelResults) {
+          // Results in call order; a refused call's message stands in its place.
+          for (const call of parsed.toolCalls) {
+            const refusal = refused.get(call);
+            if (refusal !== undefined) {
+              this.messages.push({ role: "tool", tool_call_id: call.id, name: call.function.name, content: refusal });
+              continue;
+            }
+            const item = executed.find((entry) => entry.call === call)!;
             observe(item.call, item.receipt, reacquiring.has(item.call));
             let content = item.receipt.success
               ? item.receipt.output
@@ -5942,6 +6091,18 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             rawArgs = {};
           }
 
+          // Recovery stopped the turn earlier in this batch: nothing more runs.
+          if (stopReason) {
+            for (const rest of parsed.toolCalls.slice(ci)) this.messages.push(notExecutedMessage(rest, stopDetail ?? stopReason));
+            break;
+          }
+          // Constrained recovery: an observation that would only return what the conversation holds does not run.
+          const refusal = refuse(call);
+          if (refusal !== undefined) {
+            this.messages.push({ role: "tool", tool_call_id: call.id, name: toolName, content: refusal });
+            this.persistProgress({ messages: true });
+            continue;
+          }
           await backoffBefore(call);
           const reacquire = this.turnRemovedObservations.has(observationKey(toolName, call.function.arguments));
           turn.phase = "tool";
@@ -6597,6 +6758,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       else this.totalTokens.estimatedRequests++;
       const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
       const parsed = parseModelResponse(assistantMessage, { nativeTools });
+      this.uniqueCallIds(parsed.toolCalls, tracker);
       this.messages.push({
         role: "assistant",
         content: assistantMessage.content || "",
