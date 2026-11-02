@@ -37,6 +37,7 @@ Ledger re-measured after the PR #396 takeover remediation (claude-code), on Node
   - Enforces strict identifier validation and path traversal sanitization on `evaluationId` and `runId`, ensuring all artifact reads and writes remain within `baseDir`.
   - Enforces atomic writes via `.tmp` file rename, preventing partial/corrupted evidence presentation.
   - Redacts sensitive credentials (e.g. Anthropic/OpenAI API keys) before filesystem writing.
+  - Redacts by key name as well as by value text: a value under `apiKey`, `token`, `secret`, `password`, `authorization` or similar keys is replaced even when it matches no known secret pattern. This applies to `events.jsonl` and to every atomically written artifact. Counters such as a `tokens: {input, output}` object are kept.
   - Generates composite SHA-256 integrity records linking all run files (`manifest.json`, `events.jsonl`, `assertions.json`).
   - Correctly detects interrupted runs (`detectInterruptedRuns`) where process exited before completion.
   - Loads past assertions and manifests via `loadAssertions` and `loadManifest`.

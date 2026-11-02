@@ -30,6 +30,24 @@ export function sanitizeIdentifier(id: string, name: string): string {
   return trimmed;
 }
 
+/** Keys whose value is a credential whatever it looks like: `apiKey`, `session_token`, `password`, `clientSecret`... */
+const SENSITIVE_KEY = /(?:api[_-]?key|access[_-]?key|private[_-]?key|token|secret|pass(?:word|phrase)?|authorization|credential)$/i;
+
+/**
+ * Serializes evidence with secrets removed. A replacer that only sees string values cannot know that
+ * `{"apiKey": "abcdef1234567890"}` is a credential, so the key name is checked as well as the value text.
+ */
+function redactedJson(data: unknown, space?: number): string {
+  return JSON.stringify(
+    data,
+    (key, v) => {
+      if (key && SENSITIVE_KEY.test(key) && (typeof v === "string" || typeof v === "number")) return "[REDACTED]";
+      return typeof v === "string" ? redactSecrets(v) : v;
+    },
+    space,
+  );
+}
+
 export class CeriEvidenceStore {
   private readonly baseDir: string;
   private currentRunDir?: string;
@@ -70,7 +88,7 @@ export class CeriEvidenceStore {
       throw new Error("Cannot append event: no active run initialized");
     }
     const eventsPath = path.join(this.currentRunDir, "events.jsonl");
-    const serialized = JSON.stringify(event, (_k, v) => (typeof v === "string" ? redactSecrets(v) : v));
+    const serialized = redactedJson(event);
     fs.appendFileSync(eventsPath, serialized + "\n", { encoding: "utf-8" });
   }
 
@@ -231,7 +249,7 @@ export class CeriEvidenceStore {
   private atomicWriteJson(targetPath: string, data: unknown): void {
     const dir = path.dirname(targetPath);
     const tmpPath = path.join(dir, `.tmp.${path.basename(targetPath)}.${process.pid}.${Date.now()}`);
-    const serialized = JSON.stringify(data, (_k, v) => (typeof v === "string" ? redactSecrets(v) : v), 2);
+    const serialized = redactedJson(data, 2);
 
     fs.writeFileSync(tmpPath, serialized, { encoding: "utf-8" });
     fs.renameSync(tmpPath, targetPath);

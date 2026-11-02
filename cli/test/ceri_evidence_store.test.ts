@@ -157,3 +157,32 @@ test("CeriEvidenceStore rejects path traversal in evaluationId and runId", () =>
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("CeriEvidenceStore redacts by key name: an unregistered credential value never reaches events.jsonl or an artifact", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ceri-evidence-keys-"));
+  try {
+    const store = new CeriEvidenceStore(tmpDir);
+    const runDir = store.initRun({
+      runId: "run-002", evaluationId: "eval-keys", evaluationVersion: "1.0.0", sourceCommit: "abcd1234abcd1234abcd1234abcd1234abcd1234", dirtyWorktree: false,
+      model: { name: "m", parameters: {} }, routingConfig: { gatewayUrl: "http://localhost:9200", specialistRouting: false }, agentProfileVersion: "1.1.2", harnessVersion: "1.1.2",
+      toolchainVersions: {}, environment: { os: "Linux", kernel: "6", nodeVersion: "22" }, hardware: { cpuModel: "x", totalMemoryBytes: 1 }, startedAt: new Date().toISOString(), status: "RUNNING",
+      mandatoryComparabilityKeys: ["evaluationId"],
+    } as RunManifest);
+    store.appendEvent({ action: "call", apiKey: "abcdef1234567890", nested: { password: "hunter2hunter2", session_token: 1234567890, tokens: { input: 12, output: 3 } }, note: "kept" });
+    store.recordAssertions([{ assertionId: "a1", passed: true, authorization: "abcdef1234567890", clientSecret: "zzzzzz987654" }]);
+    store.recordReceipts([{ id: "r1", detail: { api_key: "qqqqqq123456" } }]);
+
+    const events = fs.readFileSync(path.join(runDir, "events.jsonl"), "utf-8");
+    const assertions = fs.readFileSync(path.join(runDir, "assertions.json"), "utf-8");
+    const receipts = fs.readFileSync(path.join(runDir, "receipts.json"), "utf-8");
+    for (const [text, secrets] of [[events, ["abcdef1234567890", "hunter2hunter2", "1234567890"]], [assertions, ["abcdef1234567890", "zzzzzz987654"]], [receipts, ["qqqqqq123456"]]] as const) {
+      for (const secret of secrets) assert.ok(!text.includes(secret), `${secret} leaked`);
+    }
+    const event = JSON.parse(events.trim());
+    assert.equal(event.note, "kept");
+    assert.deepEqual(event.nested.tokens, { input: 12, output: 3 }, "usage counters are not credentials");
+    assert.equal(JSON.parse(assertions)[0].passed, true);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
