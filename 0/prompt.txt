@@ -1,0 +1,1883 @@
+<pasted_content id="4bb7">
+Set up claude-mem cloud sync for me using the claude-mem plugin's
+cloud-sync skill (claude-mem >= 13.12.0 — the installed worker syncs
+through SyncHub; there is no separate sync client to download).
+
+Use these connection values from cmem.ai -> Connect:
+  sync token: cm_pro_789367867e701c66bfff8c6cf7d58185
+  user id: 0aac00f4-71af-45a6-b58d-aa288752a1c2
+  SyncHub URL: https://sync.cmem.ai
+
+Follow the skill exactly: write the three values to
+~/.claude-mem/settings.json (mode 0600), restart the worker, then verify
+the status route reports lastError: null and a non-null lastFlushAt
+(hub.reachable alone does not prove uploads work). Never print the sync token,
+put it in argv, or log it.
+</pasted_content id="4bb7">
+
+---
+
+Perform an independent review of PR #396
+
+---
+
+post the review to the PR
+
+---
+
+this is a single user repo at this time
+
+---
+
+<pasted_content id="4bb7">
+# Nexus v1.1.2: Non-Progress Recovery and Execution-State Continuity
+
+You are operating inside the Nexus Code repository as a senior principal engineer responsible for agent orchestration, execution reliability, recovery mechanisms, and regression prevention.
+
+Your assignment is to investigate, design, implement, test, and independently validate improvements to Nexus's non-progress detection and recovery behavior.
+
+**This is an implementation assignment, not a documentation-only exercise.**
+
+## 1. Incident Context
+
+During a live Nexus dogfooding session, the engineering agent repeatedly inspected repository files despite having already acquired the relevant information.
+
+Observed behavior:
+
+- The agent inspected `cli/src/doctor.ts` and `cli/test/doctor.test.ts`.
+- The agent explicitly recognized that it needed to stop re-reading files.
+- Subsequent reasoning repeatedly regenerated nearly identical plans.
+- Equivalent file reads continued without meaningful progress.
+- Nexus detected repeated `read_file` observations with unchanged results.
+- Two recovery instructions failed to produce a materially different approach.
+- The workspace remained unchanged.
+- Nexus eventually stopped execution with `too many steps without progress`.
+
+Representative evidence:
+
+```text
+The agent repeated read_file with an unchanged result:
+Nexus told it to change approach (2 of 2).
+
+Stopped at too many steps without progress
+
+repeated read_file 3 times with an unchanged result
+on an unchanged workspace after 2 recovery notes
+```
+
+Initial assessment:
+
+- Non-progress detection: functioning for this scenario.
+- Bounded termination: functioning.
+- Recovery instruction effectiveness: insufficient.
+- Execution-state continuity: potentially defective.
+- Semantic equivalence detection: potentially incomplete.
+- Recovery escalation: insufficiently enforced.
+
+These are hypotheses, not established root causes. Verify them against the implementation and available session evidence.
+
+## 2. Primary Objective
+
+Improve Nexus so that detecting non-progress leads to a constrained, evidence-driven change in execution strategy rather than repeated advisory instructions.
+
+Nexus must distinguish among:
+
+1. New information acquired.
+2. A meaningful change in the agent's working hypothesis.
+3. A productive execution action.
+4. Repeated observation of existing information.
+5. Repeated planning without state advancement.
+6. Legitimate, intentional reinspection following a material state change.
+
+**Success means improved task completion and recovery effectiveness, not merely fewer tool calls.**
+
+Do not weaken existing loop detection or termination safeguards to make the agent appear more successful.
+
+## 3. Repository and Baseline Discovery
+
+Before implementation:
+
+1. Inspect the current repository state and branch.
+2. Identify existing uncommitted, staged, and untracked changes.
+3. Identify the current v1.1.2 roadmap and Continuous Evaluation and Regression Intelligence workstream.
+4. Locate the orchestration loop, tool execution pipeline, progress detection, recovery instructions, context management, session persistence, and termination logic.
+5. Identify existing tests and regression fixtures covering non-progress, duplicate observations, and recovery.
+
+Preserve all pre-existing changes.
+
+Do not reset, discard, overwrite, or commit unrelated work.
+
+Avoid repeatedly reading entire large files. Prefer targeted searches, symbol-level inspection, and bounded file ranges.
+
+Record the baseline before modifying behavior.
+
+## 4. Required Engineering Work
+
+### 4.1 Semantic Observation Identity
+
+Investigate how Nexus determines that a tool observation has already been seen.
+
+Design and implement semantic equivalence detection sufficient to recognize materially redundant observations across tool invocation variants.
+
+Examples:
+
+```text
+read_file cli/src/doctor.ts
+cat cli/src/doctor.ts
+sed -n '1,500p' cli/src/doctor.ts
+head -500 cli/src/doctor.ts
+```
+
+These may provide equivalent observations even though the tool names and arguments differ.
+
+Requirements:
+
+- Normalize resource identities and file paths.
+- Account for inspected content ranges.
+- Track content fingerprints where practical.
+- Distinguish exact duplication from substantial overlap.
+- Account for workspace revisions and content changes.
+- Avoid treating legitimate rereads after file modifications as duplicates.
+- Avoid broad semantic similarity rules that incorrectly classify different evidence as identical.
+- Keep fingerprint and observation metadata bounded.
+- Do not retain redundant raw file contents unnecessarily.
+
+Investigate existing infrastructure before introducing new abstractions.
+
+### 4.2 Structured Recovery Escalation
+
+Replace repeated advisory-only recovery with a bounded escalation mechanism.
+
+Target conceptual states:
+
+```text
+NORMAL
+  |
+  v
+NON_PROGRESS_DETECTED
+  |
+  v
+RECOVERY_ADVISORY
+  |
+  v
+RECOVERY_CONSTRAINED
+  |
+  +--> PRODUCTIVE_PROGRESS --> NORMAL
+  |
+  +--> NO_VIABLE_ALTERNATIVE --> TERMINATED
+  |
+  +--> RECOVERY_EXHAUSTED --> TERMINATED
+```
+
+Adapt state names and implementation to the existing architecture.
+
+Requirements:
+
+- First occurrence may produce an advisory.
+- Repeated equivalent observations must trigger enforceable constraints.
+- Nexus must reject equivalent unproductive observations during constrained recovery.
+- Tool denial must be deterministic and explainable.
+- Denied tool calls must not execute.
+- Denial alone must not count as productive progress.
+- Denied calls must not reset stagnation counters.
+- Recovery must remain bounded.
+- Existing step, token, time, and tool budgets must remain enforceable.
+- Do not introduce an unbounded loop of rejected actions.
+
+### 4.3 Recovery Context Contract
+
+When entering constrained recovery, provide the agent with compact, structured context containing:
+
+```text
+RECOVERY_REQUIRED
+
+Current objective:
+[Known task objective]
+
+Previously acquired evidence:
+[Relevant observations already available]
+
+Repeated observations:
+[Resources, ranges, and fingerprints]
+
+Current workspace state:
+[Known revision or change marker]
+
+Last meaningful progress:
+[Evidence-backed progress event]
+
+Unresolved question:
+[Specific remaining information requirement, if known]
+
+Disallowed operations:
+[Equivalent observations already proven unproductive]
+
+Permitted next actions:
+[Alternative evidence acquisition or execution paths]
+
+Recovery budget:
+[Remaining attempts and applicable limits]
+```
+
+Do not fabricate an unresolved question or infer progress from the model's own claims.
+
+If the unresolved question is not known, require the agent to identify it.
+
+Reuse existing session context and evidence mechanisms where possible.
+
+### 4.4 Execution-State Continuity
+
+Investigate whether the agent is repeatedly reconstructing the same plan because relevant execution state is lost, compacted, omitted, or not incorporated into subsequent turns.
+
+Implement the minimum necessary improvements to preserve:
+
+- Current objective.
+- Completed investigative steps.
+- Evidence already acquired.
+- Open questions.
+- Active execution hypothesis.
+- Last meaningful progress.
+- Recovery state.
+- Explicitly disallowed repetitive operations.
+
+Do not create an entirely new planning subsystem unless existing architecture demonstrably cannot support the requirement.
+
+Context compaction and session resume must preserve recovery-critical state.
+
+The agent must not be able to escape recovery constraints merely by triggering compaction, resuming a session, or switching between equivalent tool interfaces.
+
+### 4.5 Progress Classification
+
+Introduce or improve progress classification so Nexus does not equate tool execution with useful work.
+
+At minimum, distinguish:
+
+```text
+OBSERVATION_NEW
+OBSERVATION_DUPLICATE
+OBSERVATION_OVERLAPPING
+HYPOTHESIS_UPDATED
+ARTIFACT_MODIFIED
+VALIDATION_EXECUTED
+VALIDATION_PASSED
+VALIDATION_FAILED
+RECOVERY_ACTION
+RECOVERY_DENIED
+NO_PROGRESS
+```
+
+These are conceptual categories. Reuse established event types where appropriate.
+
+Important constraints:
+
+- A model statement claiming new understanding is not independently sufficient evidence of progress.
+- A changed command string is not necessarily a new observation.
+- A failed validation may constitute useful progress when it produces new diagnostic evidence.
+- A file modification is not automatically productive if it is unrelated or repeatedly reverted.
+- Legitimate read-only tasks must be able to complete without workspace changes.
+- Repeated reads may be legitimate when the underlying artifact or relevant assumptions change.
+
+Do not build an arbitrary scoring system unless deterministic rules cannot meet the requirements.
+
+### 4.6 Recovery-Aware Tool Enforcement
+
+Place enforcement at the appropriate execution boundary.
+
+Constraints must apply before the tool action executes, regardless of how the model phrases the intended operation.
+
+Investigate bypass paths involving:
+
+- Native file-reading tools.
+- Shell commands.
+- Equivalent command substitutions.
+- Tool aliases.
+- Batched tool calls.
+- Session resume.
+- Context compaction.
+- Worker/model changes.
+
+**Do not claim universal semantic equivalence across arbitrary shell commands unless it is genuinely implemented and independently tested.**
+
+For operations that cannot be reliably classified before execution, explicitly document the enforcement boundary and implement conservative handling that preserves legitimate work.
+
+Do not silently claim complete mediation where only partial interception exists.
+
+## 5. Continuous Evaluation and Regression Intelligence
+
+Integrate this failure into the existing v1.1.2 evaluation workstream.
+
+Create a deterministic regression fixture based on the observed scenario.
+
+The fixture must cover:
+
+1. Initial inspection of repository files.
+2. Repeated equivalent observations.
+3. Non-progress detection.
+4. First recovery advisory.
+5. Continued equivalent observations.
+6. Escalation to constrained recovery.
+7. Tool denial where supported.
+8. Agent selection of an alternative operation.
+9. Productive continuation or bounded termination.
+10. Preservation of recovery state across compaction and resume.
+
+Include adversarial variants:
+
+- Identical read through another tool.
+- Overlapping but nonidentical line ranges.
+- Repeated full-file reads.
+- Relevant file modified between reads.
+- Shell command aliases.
+- Model repeatedly acknowledging instructions without changing behavior.
+- Agent generating slightly different plans without acquiring new evidence.
+- Read-only investigation where no file modification is expected.
+- Legitimate test rerun after changing code.
+- Recovery budget exhaustion.
+- Tool denial followed by another equivalent attempted operation.
+- Session resume while constrained recovery is active.
+
+Assert outcomes using execution evidence, not only model-generated text.
+
+## 6. Acceptance Criteria
+
+The implementation is not complete until the following are demonstrated.
+
+### Functional correctness
+
+- Duplicate observations are detected within the supported enforcement scope.
+- Repeated equivalent observations cause constrained recovery.
+- Enforced denials prevent supported redundant operations from executing.
+- Recovery state survives relevant context and session lifecycle transitions.
+- Meaningful alternative operations remain available.
+- Legitimate rereads after material changes are permitted.
+- Read-only tasks are not incorrectly blocked.
+
+### Reliability
+
+- No unbounded recovery loops.
+- No infinite retry-after-denial cycles.
+- Existing termination safeguards remain functional.
+- Existing budget ceilings remain enforceable.
+- Recovery failure produces a clear terminal reason.
+- Failure handling does not corrupt session state.
+
+### Observability
+
+Emit structured, correlated evidence for:
+
+```text
+non_progress_detected
+recovery_advisory_issued
+recovery_constrained
+observation_equivalent
+tool_execution_denied
+recovery_progress_detected
+recovery_exhausted
+recovery_completed
+```
+
+Map these to existing event schemas where possible.
+
+Evidence must identify:
+
+- Session and relevant step.
+- Triggering observation/action.
+- Reason for the classification.
+- Recovery state transition.
+- Enforced restriction.
+- Outcome.
+
+Avoid leaking sensitive file contents or credentials into telemetry.
+
+### Regression safety
+
+- Existing tests pass.
+- New tests exercise actual enforcement paths.
+- Existing normal execution is not materially degraded.
+- Session replay remains valid.
+- No unrelated interfaces are broken.
+
+## 7. Independent Validation
+
+Do not treat newly written tests passing as independent confirmation.
+
+Perform separate validation using the strongest available mechanism:
+
+1. Existing integration harness.
+2. Session replay against a controlled fixture.
+3. Actual Nexus agent execution against a disposable repository.
+4. Existing independent reviewer or evaluator, if available.
+
+Where feasible, compare baseline and candidate behavior using identical tasks and controlled model settings.
+
+Capture:
+
+- Task completion result.
+- Duplicate observation attempts.
+- Duplicate observations actually executed.
+- Recovery transitions.
+- Denied tool executions.
+- Time and token consumption.
+- Termination reason.
+- False-positive restrictions.
+- Evidence of successful continuation.
+
+Do not claim improved task-completion rates from one successful execution.
+
+If model behavior is stochastic, distinguish deterministic enforcement validation from empirical recovery effectiveness.
+
+Do not allow an internally generated evaluation score to serve as the sole proof of effectiveness.
+
+## 8. Implementation Discipline
+
+Follow existing Nexus engineering conventions.
+
+Required operating rules:
+
+- No destructive repository cleanup.
+- No unrelated refactoring.
+- No weakening current safety or budget controls.
+- No new dependencies without justification.
+- No broad exceptions that suppress non-progress detection.
+- No simulated results represented as live results.
+- No acceptance based solely on self-assessment.
+- No scope expansion into cosmetic UI changes.
+- No automatic production deployment.
+
+Preserve current user work and maintain compatibility with supported model endpoints.
+
+Prioritize deterministic execution and evidence over model-specific prompt tricks.
+
+## 9. Required Deliverables
+
+Produce:
+
+1. Root-cause assessment with supporting code and session evidence.
+2. Architecture decision explaining the selected enforcement boundaries.
+3. Implemented recovery improvements.
+4. Deterministic unit and integration tests.
+5. Regression fixture integrated with v1.1.2 Continuous Evaluation and Regression Intelligence.
+6. Evidence from independent validation.
+7. Updated roadmap and implementation status.
+8. Remaining limitations and bypass scenarios.
+9. Final acceptance report.
+
+Final report format:
+
+```text
+NEXUS v1.1.2 NON-PROGRESS RECOVERY
+
+Baseline:
+Root cause:
+Implementation:
+Enforcement boundary:
+Tests:
+Independent validation:
+Regression results:
+Known limitations:
+Remaining risks:
+Files changed:
+Commit(s):
+Acceptance status:
+```
+
+Use explicit acceptance states:
+
+```text
+PASS
+PARTIAL
+FAIL
+NOT_TESTED
+BLOCKED
+```
+
+A passing implementation requires evidence that Nexus both detects and enforces recovery constraints without introducing unacceptable false positives or bypasses.
+
+## 10. Execution Authorization
+
+Proceed with repository discovery, implementation planning, code modifications, test development, and local validation.
+
+Do not stop after producing a plan.
+
+Implement the smallest coherent production-quality solution that meets the verified requirements.
+
+You may commit verified, in-scope changes using the repository's established workflow, but do not commit unrelated existing changes.
+
+Do not deploy to production or modify live infrastructure.
+
+If full semantic command interception, deterministic replay, or independent evaluation is not currently supported, implement the defensible subset, expose the limitation explicitly, and identify the remaining work.
+
+**Begin by inspecting the existing progress and recovery implementation, then execute the work through validation and reporting.**
+</pasted_content id="4bb7">
+
+---
+
+<task-notification>
+<task-id>b7hr7lvkn</task-id>
+<tool-use-id>toolu_014DgLp4kDkhTDcE4u5Bb2rK</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/b7hr7lvkn.output</output-file>
+<status>failed</status>
+<summary>Background command "Build Rust core and CLI in the worktree" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcqrlzlba</task-id>
+<tool-use-id>toolu_01RPo3tRFrd2rB2Ckxn86Lu7</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bcqrlzlba.output</output-file>
+<status>completed</status>
+<summary>Background command "Run baseline progress/recovery suites" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcl4h2u5d</task-id>
+<summary>Monitor event: "non-progress agent suite test results"</summary>
+<event>✔ the incident's tool-call sequence escalates to constrained recovery, refuses the repeats before they run, and stops boundedly (6529.815358ms)
+✖ after the constrained note the agent takes another path: the work continues and recovery completes (576.030971ms)
+✖ regression fixture NONPROGRESS-20261101-DOCTOR (7110.343102ms)
+✖ the same lines through read_file, cat, sed and head are equivalent; a constrained shell re-read is refused before it runs (4486.776067ms)
+✔ overlapping but non-identical ranges are new information: no recovery, the task completes (2235.573444ms)
+✔ a narrower re-read of lines already in context is not progress (the stagnation counter is not reset by it) (815.82441ms)
+✖ a re-read after the file changed is legitimate: never equivalent, never refused (6122.891962ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcl4h2u5d</task-id>
+<summary>Monitor event: "non-progress agent suite test results"</summary>
+<event>✖ shell forms outside the recognised set are never refused (documented enforcement boundary), and the turn still stops boundedly (57601.251259ms)
+✖ semantic observation identity (71269.89652ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcl4h2u5d</task-id>
+<summary>Monitor event: "non-progress agent suite test results"</summary>
+<event>✔ a read-only investigation of distinct files completes with no recovery and nothing refused (6257.605692ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcl4h2u5d</task-id>
+<summary>Monitor event: "non-progress agent suite test results"</summary>
+<event>✔ a test rerun after changing code runs (commands are never refused), and the task completes (7709.858493ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcl4h2u5d</task-id>
+<summary>Monitor event: "non-progress agent suite test results"</summary>
+<event>✔ acknowledging the note and re-planning without new evidence does not reset stagnation or lift the constraint (22018.143926ms)
+✔ recovery that preserves legitimate work (35991.044185ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcl4h2u5d</task-id>
+<summary>Monitor event: "non-progress agent suite test results"</summary>
+<event>✖ session resume while constrained keeps the constraint: the first equivalent read after resume is refused (9160.899053ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcl4h2u5d</task-id>
+<summary>Monitor event: "non-progress agent suite test results"</summary>
+<event>✖ compaction keeps recovery state; a read is refused only while its output is still in the conversation (11454.842455ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgslwgxht</task-id>
+<tool-use-id>toolu_01UHBAfLhBnNUg44oq76gKck</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bgslwgxht.output</output-file>
+<status>failed</status>
+<summary>Background command "Create and build baseline worktree at origin/main" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7xv17520</task-id>
+<tool-use-id>toolu_01F8Ys3CSzpbFhahXCKGuKLT</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/b7xv17520.output</output-file>
+<status>failed</status>
+<summary>Background command "Run the new non-progress recovery suite" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4zxxmrsl</task-id>
+<summary>Monitor event: "run2 per-test results"</summary>
+<event>✔ the incident's tool-call sequence escalates to constrained recovery, refuses the repeats before they run, and stops boundedly (15691.931928ms)
+✖ after the constrained note the agent takes another path: the work continues and recovery completes (788.148986ms)
+✖ regression fixture NONPROGRESS-20261101-DOCTOR (16485.225709ms)
+✖ the same lines through read_file, cat, sed and head are equivalent; a constrained shell re-read is refused before it runs (9013.366579ms)
+✔ overlapping but non-identical ranges are new information: no recovery, the task completes (4210.748279ms)
+✔ a narrower re-read of lines already in context is not progress (the stagnation counter is not reset by it) (1984.085218ms)
+✖ a re-read after the file changed is legitimate: never equivalent, never refused (7620.557573ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4zxxmrsl</task-id>
+<summary>Monitor event: "run2 per-test results"</summary>
+<event>✖ shell forms outside the recognised set are never refused (documented enforcement boundary), and the turn still stops boundedly (36059.505522ms)
+✖ semantic observation identity (58890.899058ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4zxxmrsl</task-id>
+<summary>Monitor event: "run2 per-test results"</summary>
+<event>✔ a read-only investigation of distinct files completes with no recovery and nothing refused (2879.267669ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4zxxmrsl</task-id>
+<summary>Monitor event: "run2 per-test results"</summary>
+<event>✔ a test rerun after changing code runs (commands are never refused), and the task completes (4269.765624ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4zxxmrsl</task-id>
+<summary>Monitor event: "run2 per-test results"</summary>
+<event>✔ acknowledging the note and re-planning without new evidence does not reset stagnation or lift the constraint (7890.336501ms)
+✔ recovery that preserves legitimate work (15042.991829ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4zxxmrsl</task-id>
+<summary>Monitor event: "run2 per-test results"</summary>
+<event>✖ session resume while constrained keeps the constraint: the first equivalent read after resume is refused (3249.021281ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzr6k39bd</task-id>
+<tool-use-id>toolu_01E4ffFKWeNAhmA7VG5pGf1U</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bzr6k39bd.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun the recovery suite with forced exit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4zxxmrsl</task-id>
+<summary>Monitor event: "run2 per-test results"</summary>
+<event>✖ compaction keeps recovery state; a read is refused only while its output is still in the conversation (4318.96873ms)
+✖ recovery state continuity (7569.506143ms)
+✖ failing tests:
+✖ after the constrained note the agent takes another path: the work continues and recovery completes (788.148986ms)
+✖ the same lines through read_file, cat, sed and head are equivalent; a constrained shell re-read is refused before it runs (9013.366579ms)
+✖ a re-read after the file changed is legitimate: never equivalent, never refused (7620.557573ms)
+✖ shell forms outside the recognised set are never refused (documented enforcement boundary), and the turn still stops boundedly (36059.505522ms)
+✖ session resume while constrained keeps the constraint: the first equivalent read after resume is refused (3249.021281ms)
+✖ compaction keeps recovery state; a read is refused only while its output is still in the conversation (4318.96873ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bfsmpo55g</task-id>
+<tool-use-id>toolu_01RYSEtvdXShnFBf3JUteayP</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bfsmpo55g.output</output-file>
+<status>completed</status>
+<summary>Monitor "recovery suite run2 completion" stream ended</summary>
+<event>exit 1</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b5c7cp71w</task-id>
+<tool-use-id>toolu_01K5J6PC43HcHHpxEym127WY</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/b5c7cp71w.output</output-file>
+<status>completed</status>
+<summary>Monitor "run2 finished" stream ended</summary>
+<event>done</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bj7n5xb5f</task-id>
+<tool-use-id>toolu_01EQqcTC1Hgtx8ouybuzh3CX</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bj7n5xb5f.output</output-file>
+<status>completed</status>
+<summary>Monitor "run2 exit line" stream ended</summary>
+<event>finished</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgdkciwi2</task-id>
+<tool-use-id>toolu_01NTeL3GHGam1jWhZoG5G6Hy</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bgdkciwi2.output</output-file>
+<status>completed</status>
+<summary>Background command "Run baseline replay comparison" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bvnyiyq96</task-id>
+<tool-use-id>toolu_01Cui25Rffk5LUgGFthqxk1E</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bvnyiyq96.output</output-file>
+<status>completed</status>
+<summary>Monitor "run3 recovery suite results" stream ended</summary>
+<event>✔ the incident's tool-call sequence escalates to constrained recovery, refuses the repeats before they run, and stops boundedly (8403.857605ms)
+✔ after the constrained note the agent takes another path: the work continues and recovery completes (3316.560618ms)
+✔ regression fixture NONPROGRESS-20261101-DOCTOR (11722.750972ms)
+✖ the same lines through read_file, cat, sed and head are equivalent; a constrained shell re-read is refused before it runs (3560.652581ms)
+✔ overlapping but non-identical ranges are new information: no recovery, the task completes (2989.263828ms)
+✔ a narrower re-read of lines already in context is not progress (the stagnation counter is not reset by it) (1242.882405ms)
+✔ a re-read after the file changed is legitimate: never equivalent, never refused (4657.088791ms)
+✖ shell forms outside the recognised set are never refused (documented enforcement boundary), and the turn still stops boundedly (35855.397633ms)
+✖ semantic observation identity (48308.260146ms)
+✔ a read-only investigation of distinct files completes with no recovery and nothing refused (3824.129011ms)
+✔ a test rerun after changing code runs (commands are never refused), and the task completes (2041.854119ms)
+✔ acknowledging the note and re-planning without new evidence does not reset stagnation or lift the constraint (5230.430257ms)
+✔ recovery that preserves legitimate work (11098.232795ms)
+✖ session resume while constrained keeps the constraint: the first equivalent read after resume is refused (5465.282118ms)
+✖ compaction keeps recovery state; a read is refused only while its output is still in the conversation (10449.226479ms)
+✖ recovery state continuity (15918.639791ms)
+✖ failing tests:
+✖ the same lines through read_file, cat, sed and head are equivalent; a constrained shell re-read is refused before it runs (3560.652581ms)
+✖ shell forms outside the recognised set are never refused (documented enforcement boundary), and the turn still stops boundedly (35855.397633ms)
+✖ session resume while constrained keeps the constraint: the first equivalent read after resume is refused (5465.282118ms)
+✖ compaction keeps recovery state; a read is refused only while its output is still in the conversation (10449.226479ms)
+exit 1</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b60y2vi8i</task-id>
+<tool-use-id>toolu_01DM41WmiEDU6JL9H1MUhMzN</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/b60y2vi8i.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun agent suite with full log" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcl4h2u5d</task-id>
+<summary>Monitor event: "non-progress agent suite test results"</summary>
+<event>✖ recovery state continuity (20617.793459ms)
+✖ test/nonprogress_recovery.test.ts (899055.508834ms)
+✖ failing tests:
+✖ after the constrained note the agent takes another path: the work continues and recovery completes (576.030971ms)
+AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+code: 'ERR_ASSERTION',
+✖ the same lines through read_file, cat, sed and head are equivalent; a constrained shell re-read is refused before it runs (4486.776067ms)
+AssertionError [ERR_ASSERTION]: {"acceptance":"NOT_REQUESTED","modelStop":"FINAL_TEXT","finalOutputComplete":true,"verification":null,"interruption":null,"inferenceFailure":null,"steps":{"used":8,"max":null,"limitReached":false},"unverifiedChangesPending":true,"finishedAt":"2026-11-01T19:52:44.051Z","continuation":{"segments":1,"segmentSteps":30,"stepsWithoutProgress":2,"cumulativeSteps":8},"tokenAccounting":{"contextLimit":65536,"contextSource":"client_default","outputAllowance":8192,"outputSou...(truncated)
+code: 'ERR_ASSERTION',
+✖ a re-read after the file changed is legitimate: never equivalent, never refused (6122.891962ms)
+AssertionError [ERR_ASSERTION]: observation_equivalent,observation_equivalent,non_progress_detected,recovery_advisory_issued,recovery_progress_detected,recovery_completed
+code: 'ERR_ASSERTION',
+✖ shell forms outside the recognised set are never refused (documented enforcement boundary), and the turn still stops boundedly (57601.251259ms)
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+code: 'ERR_ASSERTION',
+✖ session resume while constrained keeps the constraint: the first equivalent read after resume is refused (9160.899053ms)
+AssertionError [ERR_ASSERTION]: {"acceptance":"NOT_REQUESTED","modelStop":"FINAL_TEXT","finalOutputComplete":true,"verification":null,"interruption":null,"inferenceFailure":null,"steps":{"used":6,"max":30,"limitReached":false},"unverifiedChangesPending":false,"finishedAt":"2026-11-01T19:54:35.869Z","continuation":{"segments":1,"segmentSteps":30,"stepsWithoutProgress":4,"cumulativeSteps":6,"repeated":[{"action":"read_file {\"path\":\"f.txt\"}","count":4,"firstStep":1,"lastStep":4}]},"persistence"...(truncated)
+code: 'ERR_ASSERTION',
+✖ compaction keeps recovery state; a read is refused only while its output is still in the conversation (11454.842455ms)
+AssertionError [ERR_ASSERTION]: {"acceptance":"NOT_REQUESTED","modelStop":"FINAL_TEXT","finalOutputComplete":true,"verification":null,"interruption":null,"inferenceFailure":null,"steps":{"used":7,"max":30,"limitReached":false},"unverifiedChangesPending":false,"finishedAt":"2026-11-01T19:54:47.058Z","continuation":{"segments":1,"segmentSteps":30,"stepsWithoutProgress":5,"cumulativeSteps":7,"repeated":[{"action":"read_file {\"path\":\"f.txt\"}","count":4,"firstStep":1,"lastStep":4}]},"persistence"...(truncated)
+code: 'ERR_ASSERTION',
+✖ test/nonprogress_recovery.test.ts (899055.508834ms)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bqa762h5j</task-id>
+<tool-use-id>toolu_015zVFd5NTUnyz5ZQECHgFN1</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bqa762h5j.output</output-file>
+<status>completed</status>
+<summary>Background command "Read failing test assertion summaries" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bw0fknheh</task-id>
+<tool-use-id>toolu_01QHHmqwpufYTtRjiuEHS3z3</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bw0fknheh.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the agent suite to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bks7kt6o7</task-id>
+<tool-use-id>toolu_01KQBFYr3WeU3ii4esVMKhGt</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bks7kt6o7.output</output-file>
+<status>completed</status>
+<summary>Monitor "affected suites at candidate and baseline" stream ended</summary>
+<event>cand: exit 0
+base: exit 1</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4zxxmrsl</task-id>
+<summary>Monitor event: "run2 per-test results"</summary>
+<event>[Monitor expired after 10m with 7 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcl4h2u5d</task-id>
+<summary>Monitor event: "non-progress agent suite test results"</summary>
+<event>[Monitor expired after 20m with 8 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>✖ Tool Error:</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+✖ Tool Error:
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>✖ Tool Error:
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+✖ Tool Error:</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+✖ Tool Error:
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+✖ Tool Error:
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>[2 events suppressed — output rate too high. Consider using TaskStop to restart this monitor with a more selective filter.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>[2 events suppressed — output rate too high. Consider using TaskStop to restart this monitor with a more selective filter.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>[2 events suppressed — output rate too high. Consider using TaskStop to restart this monitor with a more selective filter.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>[2 events suppressed — output rate too high. Consider using TaskStop to restart this monitor with a more selective filter.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>[3 events suppressed — output rate too high. Consider using TaskStop to restart this monitor with a more selective filter.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>[1 events suppressed — output rate too high. Consider using TaskStop to restart this monitor with a more selective filter.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==
+==&gt; /home/mike/nexus-wt/v112-suite-base.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>==&gt; /home/mike/nexus-wt/v112-suite-cand.log &lt;==</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0v6avqy2</task-id>
+<summary>Monitor event: "top-level suite failures (cand/base)"</summary>
+<event>[Monitor stopped — too much output (1 events suppressed over 36s). Restart with a more selective source.]</event>
+</task-notification>
+
+---
+
+I hand off FILE_cli_src_agent.ts to you, push and open the PR
+
+---
+
+<task-notification>
+<task-id>bzz0t4ihb</task-id>
+<summary>Monitor event: "PR 398 CI check results"</summary>
+<event>CodeRabbit: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzz0t4ihb</task-id>
+<summary>Monitor event: "PR 398 CI check results"</summary>
+<event>CodeQL: pass
+javascript-typescript: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+review PR #398 independently
+
+---
+
+<pasted_content id="4bb7">
+Findings
+Medium
+Code review
+·
+7m ago
+·
+batch_read returns overall success with per-file errors (core/src/file_ops.rs:1010-1018,1186-1189), but dropping failed entries lets the successful subset represent the entire observation. After reading a.ts, successive batches containing a.ts plus a different missing path are classified as duplicates (cli/src/core/execution_tracking.ts:498-511) and eventually exhaust recovery despite discovering new errors. Account for those outcomes before treating the whole batch as equivalent.
+
+Code review
+·
+7m ago
+·
+An ignored file such as build.log can change without changing this state: candidate enumeration excludes ignored files (cli/src/core/candidate.ts:565-567), and the supplemental identity covers only fixed markers (cli/src/agent.ts:759-767,2682-2687). Once constrained, cached coverage and EOF therefore cause new log output to be refused without executing the read, eventually stopping legitimate monitoring. Verify the target file's identity before refusing, or allow reads of files outside the workspace identity's coverage.
+
+Code review
+·
+7m ago
+·
+Presence is keyed only by tool and arguments (cli/src/agent.ts:380-387,438-451): reading a file on S1, compacting that output away, reading the same arguments on S2, then restoring S1 makes S1's coverage appear present because S2's output shares its key. During constrained recovery, this refuses reacquisition even though the conversation contains the wrong version, and repeated attempts terminate the turn. Track presence by execution identity or by state and output identity.
+
+Code review
+·
+7m ago
+·
+When the first call in a sequential batch escalates recovery to constrained, the next three covered reads can immediately exhaust the default refusal budget, although the constraining note is only delivered in endStep (cli/src/agent.ts:5616-5641). This stops the turn and skips later work in that batch before the model can respond to the note. Activate refusal on the following step, or exempt the constraining batch from the denial budget.
+
+Slop
+·
+8m ago
+·
+While constrained, the full RECOVERY_REQUIRED block is pushed into history as a user message (the constrained note, via this.recoveryContext). renderPinnedLedger also renders it again as a pinned system block on every request. The note's 'refusals left' and evidence-presence lines are frozen at the moment the note was written, while the pinned copy is current. The model therefore sees two RECOVERY_REQUIRED blocks that contradict each other on the budget. Keep the context in one place, e.g. make the note point to the pinned block.
+
+Slop
+·
+8m ago
+·
+ProgressClass (7 values) and the verdict's classification and equivalent fields are computed on every observe(), but no production code reads them. agent.ts only uses equivalentLoop/equivalence, and only the unit tests assert classification. This is speculative API surface that has to be maintained alongside informative/repeat, which already drive progress. Remove it, or wire it into the progress evaluation that is meant to use it.
+
+Low
+Slop
+·
+8m ago
+·
+In the parallel read path, every call is judged first, and refuse() can set stopReason partway through the batch. Calls judged before that point are still dispatched afterward via executed. So a turn that recovery has already stopped still runs reads, even though the sequential path's comment says "nothing more runs". Drop those calls (with a not-executed message) once stopReason is set.
+
+Slop
+·
+8m ago
+·
+assert.ok(repeatRuns.length <= constrainedAtRequest, "no repeat executed after the constrained note") compares a count of executions against a request index. Because the repeated pair runs at most once per request, this is nearly always true and does not check that no repeat ran after the constrained note. Filter the dispatch log to calls issued after that request and assert the result is empty.
+
+Slop
+·
+8m ago
+·
+The compaction continuity test branches on what actually happened (if (readOutputPresent) … else …) and then asserts the disjunction denials >= 1 || stage === "normal". Whichever way compaction goes, the test accepts it, so it doesn't pin down the claimed behavior that a read is refused only while its output is still in the conversation. Set up a fixture where the output is deterministically kept (or removed) and assert that single outcome.
+
+</pasted_content id="4bb7">
+
+---
+
+<task-notification>
+<task-id>bv3ybccme</task-id>
+<summary>Monitor event: "affected suites rerun at both trees"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzz0t4ihb</task-id>
+<summary>Monitor event: "PR 398 CI check results"</summary>
+<event>test-matrix (22): pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7c4b7c18e255ee61</task-id>
+<tool-use-id>toolu_01UtKU1di7vTYFTrtHT7fJWi</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/a7c4b7c18e255ee61.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 398" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the completion notification.</result>
+<usage><subagent_tokens>163037</subagent_tokens><tool_uses>50</tool_uses><duration_ms>807150</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzz0t4ihb</task-id>
+<summary>Monitor event: "PR 398 CI check results"</summary>
+<event>test-matrix (24): pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7h1f2nr3</task-id>
+<tool-use-id>toolu_01BzpwfqwibYHn3wCPrkJzJH</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/b7h1f2nr3.output</output-file>
+<status>failed</status>
+<summary>Monitor "run5 new suites results" script failed (exit 1)</summary>
+<event>ℹ tests 27
+ℹ pass 27
+ℹ fail 0
+exit 0</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzz0t4ihb</task-id>
+<summary>Monitor event: "PR 398 CI check results"</summary>
+<event>[Monitor expired after 30m with 4 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bx77qsxoi</task-id>
+<tool-use-id>toolu_01WVy6xPSjyJqhJz6iLLLmnC</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/bx77qsxoi.output</output-file>
+<status>completed</status>
+<summary>Background command "Push fixes, start candidate suites, log" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>blv3y38me</task-id>
+<tool-use-id>toolu_01Vpx2X7mUkUPFyCRpY3XJBg</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/tasks/blv3y38me.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR 398 push landing" stream ended</summary>
+<event>pushed 4dd980ef</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzucvqbud</task-id>
+<summary>Monitor event: "PR 398 CI at 4dd980ef"</summary>
+<event>CodeRabbit: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzucvqbud</task-id>
+<summary>Monitor event: "PR 398 CI at 4dd980ef"</summary>
+<event>CodeQL: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzucvqbud</task-id>
+<summary>Monitor event: "PR 398 CI at 4dd980ef"</summary>
+<event>javascript-typescript: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+continue
+
+---
+
+<task-notification>
+<task-id>ab6082bbc06259a62</task-id>
+<tool-use-id>toolu_013xSaf3JV9fyikiBBY1rBTj</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab6082bbc06259a62.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 398 head" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: REQUEST CHANGES** for PR #398 at `ff2e2ef1`.
+
+All nine of the earlier findings are fixed or partly fixed, and all nine suites you listed pass. But I reproduced a crash when a session saved by an older build is restored, and a refusal-and-stop on a legitimate read-only pattern that the base build completes. The review worktree at `/home/mike/nexus-wt/pr398-review` is clean at `ff2e2ef1` and left in place. The probe scripts are in `/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/scratchpad/` (`probe.test.mts`, `upgrade.mts`, `oldledger.mts`, `shell.mts`). Builds were clean: `cargo build --locked --release`, then `npm ci &amp;&amp; npm run build` (tsc).
+
+## Findings, by severity
+
+**1. High: crash after restoring a session saved before v1.1.2** (`cli/src/core/objective.ts:594-595`; reproduced)
+- `renderPinnedLedger` reads `tracker.recoveryStage` straight from `ledger.execution`, which is never normalized. A ledger written by an older build has no `execution.recovery` field.
+- Restoring a session doesn't normalize the ledger either (`agent.ts:1655`). The only call that does, `trackingOf`, runs at the start of `runTurn`.
+- So whenever the ledger has to be pinned (a verifier attempt, gating requirements, or the objective compacted out), anything that builds request messages before the first turn throws. That includes `/compact` (repl, slash command, sidecar `compactNow`) and `estimateTurnAdmission`, which the operation runner calls.
+- How I reproduced it: I ran a turn with a verifier on base `9a62db99` and saved the session, then restored it on head:
+  ```
+  restored; execution has recovery: false
+  gating 0 verification 1 objInContext true
+  estimateTurnAdmission THREW TypeError Cannot read properties of undefined (reading 'stage')
+  compactConversation THREW TypeError Cannot read properties of undefined (reading 'stage')
+  runTurn(resume) OK VERIFICATION_NOT_RUN
+  ```
+- At unit level the same old ledger renders fine on base (`rendered OK, length 136`) and throws on head.
+- `ledgerNeedsPinning` already uses `recovery?.stage`. The fix is to normalize the tracking (or use `?.`) in `renderPinnedLedger`, and to normalize on restore.
+
+**2. High: legitimate read-only work gets refused and the turn stops** (`execution_tracking.ts:502-507`, `agent.ts:5610`, note text at `agent.ts:5629`; reproduced, regression against base)
+- The equivalence counter is per file and state, and the loop threshold is 2. So one full read followed by two narrower reads of *different* line ranges counts as a loop.
+- Probe P1: read the whole 300-line file once, then six distinct 20-line ranges, with no edits.
+  - Head: `STAGNATION_DETECTED recovery exhausted after 2 recovery notes: 3 equivalent observation(s) refused`, ran 4 of 7.
+  - Base: completes, all 7 ran.
+- The note tells the model it "received the same result each time", which is false when the ranges differ.
+- The existing test "a read-only investigation of distinct files" only does one narrow re-read, so it doesn't cover this. The doc's limitations section doesn't mention it either.
+
+**3. Medium: other workspace-observing tools ignore the file-signature fix** (`execution_tracking.ts:664-667`; reproduced)
+- Earlier issue 2 is fixed for `read_file`, `batch_read` and the shell reads. But the exact-repeat refusal for the other workspace-observing tools still trusts only the workspace state identity. Those tools are `file_info`, `list_dir`, `search_code`, `lsp_diagnostics`, `semantic_search`, and `read_file` with `offset`/`length`.
+- Probe P5: a background writer appends to an ignored `build.log`. Run `file_info build.log`, constrain with repeated `f.txt` reads, then `file_info build.log` again. Head returns `[Nexus refused: not executed] file_info {"path":"build.log"}: the same call already ran on this unchanged workspace (step 1)…` while the file grew (now 141 bytes). Base runs it.
+- Results from the LSP and semantic-index tools also depend on server or index state, not only on the workspace.
+
+**4. Low: one parallel batch can use up the whole refusal budget** (`agent.ts:5990`, `execution_tracking.ts:675`; reproduced)
+- Refusals are counted per call, while escalation is limited to once per step.
+- Probe P3: after the constraining note, a batch of `[g.txt (new), f.txt×3, g.txt 2-3]` gave 3 refusals and a stop, so the new `g.txt` read never ran.
+- Result order matched `tool_calls` (`P3 order ok true`). Base also stops on this script, so it isn't a regression in outcome.
+
+**5. Low / nits** (code reading only)
+- `verdict.classification` (`execution_tracking.ts:512-517`) is still computed for every call but nothing in `src` reads it. Only the internal "duplicate means not informative" use matters.
+- `presence()` scans every message on every tool call, even when recovery is in its normal stage, because it is evaluated eagerly at `agent.ts:5643` and inside `observe`.
+- The file signature is taken after the read, so a write by another process between the read and the stat could pair old coverage with a new signature. This is a narrow race.
+- The doc says the `cd DIR &amp;&amp;` prefix must resolve to the workspace root, but the code accepts any subdirectory (`cd src &amp;&amp; cat a.ts` gives `src/a.ts`). The behaviour is fine; the doc is wrong.
+
+## The nine earlier findings
+
+| # | Status | Evidence |
+|---|---|---|
+| 1 batch_read with per-file errors | Fixed | `observation_identity.ts:191-193` attributes nothing if any file failed or is missing; there is a unit test at line 61. |
+| 2 ignored files | Partly fixed | Reads check the file signature (`judgeCoverage`, `recoveryDenial:651-653`). Other observing tools don't (finding 3). |
+| 3 presence keyed by tool+args | Fixed | Coverage is keyed by call id and filtered by state and signature; there is a unit test for it. |
+| 4 budget used up in the constraining step | Fixed | `recoveryDenial` returns early when `lastEscalationStep === step`; `recordUnproductive` treats repeats in the same step as one. |
+| 5 RECOVERY_REQUIRED duplicated | Fixed for durable sessions | The note points to the pinned copy, and the incident test asserts the note has no `Recovery budget:`. Non-durable sessions still get one frozen copy, by design. |
+| 6 unused fields | Partly fixed | `equivalent` was removed; `classification` is still unused (finding 5). |
+| 7 parallel calls judged before a stopping refusal still dispatched | Fixed | P3: `g.txt`, judged before the stop, did not run. |
+| 8 vacuous incident assertion | Fixed | It now asserts no repeat ran with `afterRequests &gt; constrainedAtRequest`, together with at least 2 refusals and at least one earlier run. |
+| 9 test accepted either outcome | Fixed | Split into two deterministic tests: output kept means refused; output cut means one re-acquisition then a refusal. The cut is simulated by rewriting the message with Nexus's truncation marker. |
+
+## Other checks (no defects found)
+- **Bounds:** `maxRecoveries` 0 still stops on the first loop, the stagnation window is unchanged, and refusals produce no verdict, so they never count as progress (the ledger identity covers requirements only). Backoff is untouched.
+- **Persistence:** `normalizeTracking` fills in `recovery`, `coverage`, `equivalents` and `evicted.coverage`. Growth is capped (512 coverage segments, 128 equivalence records, 64 events) and only 16-hex digests are stored, never file content.
+- **Shell parsing** (`shell.mts`): no trailing newline, CRLF, empty files, `sed` past EOF (no coverage), `head -n 10` on a 3-line file (total 3), `cd ..` (rejected), pipes and `;` (rejected) all behave correctly. `cat -` maps to a path `-`, which is harmless.
+- **Folded or truncated output:** run_command output is one JSON line, so diagnostic hints and folding can't cut stdout while it still counts as delivered. My P2 attempt confirmed this: the refusal there was correct.
+
+## Test runs
+Each suite was run with `cd /home/mike/nexus-wt/pr398-review/cli &amp;&amp; node scripts/run_tests.mjs test/&lt;f&gt;.test.ts`; all exited 0 with no failures.
+
+| Suite | Passed |
+|---|---|
+| nonprogress_recovery | 13/13 |
+| observation_identity | 14/14 |
+| execution_tracking | 20/20 |
+| objective_continuation | 34/34 |
+| compaction_continuity | 34/34 |
+| durable_continuity | 42/42 |
+| context_auto_compaction | 8/8 |
+| turn_semantics | 37/37 |
+| convergence_invariants | 30/30 |
+
+The probes were run with `PROBE_ROOT=&lt;tree&gt; HOME=$(mktemp -d) ./node_modules/.bin/tsx --test --test-force-exit [--test-name-pattern …] &lt;scratchpad&gt;/probe.test.mts`, on both head and the baseline worktree.
+
+CI at `ff2e2ef1` when I checked: CodeQL, javascript-typescript and test-matrix (24) passed; test-matrix (22) and Entire Gates were still pending. The PR's own comparison of existing suites against base is still marked "still running".</result>
+<usage><subagent_tokens>199271</subagent_tokens><tool_uses>101</tool_uses><duration_ms>1695690</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bj9k8j9tk</task-id>
+<summary>Monitor event: "candidate affected suites finished"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bye5dqoba</task-id>
+<summary>Monitor event: "PR 398 CI final at ff2e2ef1"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+continue
+
+---
+
+<task-notification>
+<task-id>b03usg0ss</task-id>
+<tool-use-id>toolu_017NspsB571vQdtLyBDnHHtR</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/b03usg0ss.output</output-file>
+<status>completed</status>
+<summary>Monitor "run6 new suites results" stream ended</summary>
+<event>ℹ tests 30
+ℹ pass 30
+ℹ fail 0
+exit 0</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab6082bbc06259a62</task-id>
+<tool-use-id>toolu_01KoGTDXXpga5peN5TcdnYm3</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab6082bbc06259a62.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 398 head" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The last five suites are still running. I'll write up the verdict once their results arrive.</result>
+<usage><subagent_tokens>227022</subagent_tokens><tool_uses>23</tool_uses><duration_ms>689789</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab6082bbc06259a62</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab6082bbc06259a62.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 398 head" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Four suites are still running.</result>
+<usage><subagent_tokens>226729</subagent_tokens><tool_uses>23</tool_uses><duration_ms>839221</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab6082bbc06259a62</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab6082bbc06259a62.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 398 head" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Three suites are left.</result>
+<usage><subagent_tokens>227050</subagent_tokens><tool_uses>23</tool_uses><duration_ms>1109654</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab6082bbc06259a62</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab6082bbc06259a62.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 398 head" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Two suites are left.</result>
+<usage><subagent_tokens>227373</subagent_tokens><tool_uses>23</tool_uses><duration_ms>1116317</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab6082bbc06259a62</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab6082bbc06259a62.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 398 head" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>One suite is left.</result>
+<usage><subagent_tokens>227691</subagent_tokens><tool_uses>23</tool_uses><duration_ms>1211511</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab6082bbc06259a62</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab6082bbc06259a62.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 398 head" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>**Verdict: ACCEPT WITH NITS** for PR #398 at `17addf0a58266a69828cc104859afdb5d6d637a4`.
+
+Both High findings from my last review are fixed and re-probed, and so is the Medium one. No unbounded loop and no escaped loop pattern turned up. All nine suites pass. The review worktree `/home/mike/nexus-wt/pr398-review` is clean at `17addf0a` and left in place. I did not touch `/home/mike/nexus-wt/v112-nonprogress`, push, or comment. `npm run build` (tsc) is clean.
+
+## Earlier findings, re-run on the new head
+
+**1. Crash restoring a session saved before v1.1.2 (was High): fixed.**
+- `objective.ts:594` now normalizes the tracking before building the tracker.
+- I re-ran `upgrade.mts`: a fresh session with a verifier attempt saved by base `9a62db99`, then restored on head:
+  ```
+  restored; execution has recovery: false
+  gating 0 verification 1 objInContext true
+  requestMessages(after compaction drops objective) OK 3
+  estimateTurnAdmission OK
+  compactConversation OK Compacted context: distilled 2 messages, 5 active messages in memory. ...
+  runTurn(resume) OK VERIFICATION_NOT_RUN
+  ```
+- `oldledger.mts` now prints `rendered OK, length 136`.
+- Nit: the new normalize-on-restore at `agent.ts:1657` is on the task-recovery path only. `restoreSession` (`agent.ts:2003`, used by `restoreConversation`) still doesn't normalize; that is why the probe still prints `recovery: false`. The crash is covered by the normalization at render time, so this is not a defect.
+
+**2. Full read followed by distinct slices refused and stopped (was High): fixed.**
+- Equivalence now counts exact line ranges, not whole files.
+- P1 output: `P1 reason undefined` (completed), `P1 ran 7 refused 0`, events were only `observation_equivalent` ×6, with no recovery episode.
+- P4 output: `ran 6 refused 0`, completed.
+- There is a new test covering this case.
+
+**3. Exact repeat of `file_info` on a growing ignored file refused (was Medium): fixed.**
+- `recoveryDenial` no longer refuses non-read tools at all.
+- P5 output: both `file_info build.log` calls ran, `P5 refused []`, completed.
+
+**4. One parallel batch uses up the whole refusal budget (was Low): not fixed, unchanged.**
+- P3 output: `STAGNATION_DETECTED recovery exhausted ... 3 equivalent observation(s) refused`; the new `g.txt` read in the batch didn't run; `P3 order ok true`.
+- Base also stops on this script, so it's not a regression.
+
+**5. Nits: unchanged.**
+- `classification` is still computed but never read in production.
+- `presence()` still scans every message on every tool call.
+- The signature-after-read race is still there.
+- The `cd DIR &amp;&amp;` wording in the doc was revised; I didn't re-check it against the code.
+
+## The two areas you asked about
+
+**Can a repeat-only loop of a non-read tool now run unbounded? No.** These tools are no longer refused, but their exact repeats still escalate (note, then constrained), and the next run that executes ends the turn.
+
+| Probe | Result |
+|---|---|
+| `file_info` repeated | `STAGNATION_DETECTED`, "repeated file_info 5 times ... after 2 recovery notes", ran 5 |
+| `list_dir` repeated | same, ran 5 |
+| `search_code` repeated | same, ran 5 |
+| `read_file` with offset/length repeated | same, ran 5 |
+| 4 identical `file_info` per step, in parallel | "repeated file_info 9 times ...", ran 12, 3 requests |
+
+**Does exact-range equivalence let a loop escape detection? Nothing escapes, but some loops are caught later.**
+- The incident fixture still passes.
+- The commit rewrote the cross-interface test: `sed 1,20` became `sed 1,30` and `head -n 5` became `head -n 30`. The new script makes every call read the same range, so the test no longer covers loops that mix narrower ranges.
+- N4, the original script on head:
+  - Once through: only the advisory note fires, then it completes (`ran 7 refused 0`).
+  - Repeated as a cycle: constrained, then `recovery exhausted ... 3 refused`, after 8 executions and 11 requests. At `ff2e2ef1` that was 4 executions and 7 requests.
+- N3, the same range through five rotating forms (read_file, `sed`, `head`, `./`, `cd . &amp;&amp;`): exhausted after 4 executions, 3 refused.
+- N3, alternating the incident's ranges 1-50 and 1-80: exhausted after 6 executions, 3 refused.
+- N2, a sliding 10-line window over a file already in context: no recovery note at all. It stops on the stagnation window: "30 consecutive steps without progress", 31 requests.
+- So mixed-range and sliding re-reads are bounded by the stagnation window rather than by refusal. The doc's lines 58-59 now say this.
+
+## Suites
+Each was run with `cd /home/mike/nexus-wt/pr398-review/cli &amp;&amp; node scripts/run_tests.mjs test/&lt;f&gt;.test.ts`; all exited 0 with no failures.
+
+| Suite | Passed |
+|---|---|
+| nonprogress_recovery | 14/14 |
+| observation_identity | 16/16 |
+| execution_tracking | 20/20 |
+| objective_continuation | 34/34 |
+| compaction_continuity | 34/34 |
+| durable_continuity | 42/42 |
+| context_auto_compaction | 8/8 |
+| turn_semantics | 37/37 |
+| convergence_invariants | 30/30 |
+
+The probes (P1, P3–P5, N1–N4) are in `/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/scratchpad/probe.test.mts`, with `upgrade.mts` and `oldledger.mts` beside it. Run them with `PROBE_ROOT=&lt;tree&gt; HOME=$(mktemp -d) ./node_modules/.bin/tsx --test --test-force-exit --test-name-pattern &lt;P|N&gt; &lt;file&gt;`.</result>
+<usage><subagent_tokens>232245</subagent_tokens><tool_uses>24</tool_uses><duration_ms>1330774</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab6082bbc06259a62</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab6082bbc06259a62.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 398 head" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That notification was a leftover wait loop finishing; nothing has changed. The re-review of PR #398 at `17addf0a` stands at **ACCEPT WITH NITS**, with all nine suites passing.</result>
+<usage><subagent_tokens>233380</subagent_tokens><tool_uses>24</tool_uses><duration_ms>1334613</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bef9yp8ks</task-id>
+<tool-use-id>toolu_01WsuZG8M85TDuANbhuxwedA</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/bef9yp8ks.output</output-file>
+<status>completed</status>
+<summary>Monitor "affected suites at 17addf0a" stream ended</summary>
+<event>cand3 exit 0 ℹ tests 700 ℹ pass 700 ℹ fail 0</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<pasted_content id="4bb7">
+Findings
+Medium
+Code review
+·
+1h ago
+·
+The parser preserves provider call IDs (cli/src/parser.ts:551-552), so different executions can share one. If compaction removes a read but retains an update_plan result with the same ID, this set marks the removed read as present; cli/src/core/execution_tracking.ts:653-659 then refuses its legitimate reacquisition and can exhaust recovery. Use a unique execution identifier shared by coverage and the stored result.
+
+Code review
+·
+3h ago
+·
+With constrained recovery’s refusal budget spent, a sequential batch such as [read_file(new.ts), read_file(covered.ts), write_file(...)] observes new evidence but still stops on the second call, skipping the write. Recovery clears only at batch end (cli/src/agent.ts:5657-5668, cli/src/core/execution_tracking.ts:750-768), after this code has committed to STAGNATION_DETECTED. Apply the recorded progress before exhausting recovery on later calls.
+
+Slop
+·
+3h ago
+·
+ProgressClass (7 values) and the verdict's classification and equivalent fields are computed on every observe(), but no production code reads them. agent.ts only uses equivalentLoop/equivalence, and only the unit tests assert classification. This is speculative API surface that has to be maintained alongside informative/repeat, which already drive progress. Remove it, or wire it into the progress evaluation that is meant to use it.
+
+Low
+Slop
+·
+3h ago
+·
+ObservationVerdict.equivalent was removed, but the doc comment on equivalence still says "The equivalence record behind equivalent". Point it at equivalentLoop or describe the record directly.
+
+</pasted_content id="4bb7">
+
+---
+
+<task-notification>
+<task-id>ab3470e66448d2933</task-id>
+<tool-use-id>toolu_01Jwjq2LnSJDvNzyBjhbsN4X</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab3470e66448d2933.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent re-review PR398 dcf2674c" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the test run to complete.</result>
+<usage><subagent_tokens>88356</subagent_tokens><tool_uses>32</tool_uses><duration_ms>423744</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab3470e66448d2933</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/ab3470e66448d2933.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent re-review PR398 dcf2674c" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: REQUEST CHANGES** at `dcf2674c9d46d71cf51bcbc7c0326624cacebaaa`.
+
+Findings 1, 3 and 4 are fixed. The fix for finding 2 also creates a regression that I reproduced: a model can repeat an identical write that changes nothing, and recovery never steps in.
+
+## The four findings
+
+**1. Call ids reused across executions: fixed.**
+- `uniqueCallIds` (`cli/src/agent.ts:2642`) collects every id already in use: coverage keys, ids in assistant `tool_calls`, and ids in tool results. It renames any call that collides with one of them, or with an earlier call in the same batch.
+- It runs before the push at `cli/src/agent.ts:5942`. The parser creates new call objects (`cli/src/parser.ts:552`, `cli/src/parser.ts:597`), so the raw provider message is not changed.
+- Everything that uses `call.id` runs after the push and reads the same objects: dispatch, approval, `observe` (`callId`), refusals, and the tool-result `tool_call_id`. I found nothing that reads an id before the push. Token accounting stringifies the raw message, but it does not use the id.
+- On resume or restore, the ids already in history go into the "in use" set.
+- `stableToolCallId` hashes both sides of a pair the same way, so pairs still match on disk. Renamed short ids are about 17 characters, below its 20-character threshold.
+- The new test passes. It checks that 6 calls all named `call_0` get unique ids, that results pair correctly, and that coverage keys belong only to the read calls.
+- The scan of `this.messages` costs O(n) per step. That is no worse than `observationPresence(this.messages)`, which already runs once per call, so speed is not a concern.
+
+**2. Batch stopped before the write: fixed for the reported batch.** The new test passes for `[new read, covered read, write]` with the refusal budget spent. See the regression below.
+
+**3. Unused ProgressClass / classification: fixed.** `classification` is now read in production (`cli/src/agent.ts:5558`). `"ARTIFACT_MODIFIED"` is a real member of the union (`cli/src/core/execution_tracking.ts:395`). It is produced for any successful action in `MUTATORS` (`cli/src/core/execution_tracking.ts:513`). The `equivalent` field was already gone at 17addf0a.
+
+**4. Stale doc comment: fixed** (`cli/src/core/execution_tracking.ts:419`).
+
+## New finding (Medium): identical writes bypass recovery
+
+**Location:** `cli/src/agent.ts:5558`, used at `cli/src/agent.ts:5644` and `cli/src/agent.ts:5674`.
+
+**Cause:**
+- `progressedThisStep()` counts any `ARTIFACT_MODIFIED` verdict as progress. That class is assigned to every successful write, including one that rewrites a file with the same content.
+- The check also sees the verdict of the call currently being judged, because it is pushed before the check. So a write that is itself repeating unchanged (`verdict.loop` is true) returns before `recordUnproductive`.
+- `evaluateStep` (`cli/src/core/execution_tracking.ts:738`) disagrees: it only counts a new workspace state, new information, a ledger change or operator input as progress. So the new comment "it ends the recovery episode at endStep" is false in this case. Recovery is suspended, but the episode never ends.
+
+**Reproduction:** a throwaway probe test, run at both SHAs and then deleted. The gateway returns the same calls every step, with `stagnationSteps: 30` and `maxRecoveries: 2`.
+
+| Scenario | 17addf0a | dcf2674c |
+|---|---|---|
+| `write_file(x.txt, "same\n", overwrite)` every step | stops at step 5; 2 notes, constrained then exhausted | 30 steps, 0 recovery notes, stopped only by stagnation |
+| that write + `read_file(f.txt)` (already covered) every step | stops at step 5, 9 calls run | 31 steps, 62 calls run, 0 notes, 0 refusals |
+| reads only (control) | stops at step 7, 3 refusals | stops at step 7, 3 refusals (unchanged) |
+
+**Impact:**
+- This is bounded, but only by `stagnationSteps` (default 12, so about 2.4 times the 17addf0a bound, which costs inference and tokens), and it removes the guarantee the recovery notes and refusals are meant to give.
+- With a write whose content changes each time, `evaluateStep` does count progress. That was already true at 17addf0a, so it is not new.
+
+**Suggested fix:**
+- Count a write as progress only if the workspace actually reached a new state. For example: `v.informative || (v.classification === "ARTIFACT_MODIFIED" &amp;&amp; !v.repeat)`. Or compare `inputStateFor()` to the step's starting state and to the states already seen.
+- Leave out the current call's own verdict when `observe` makes this check.
+- Add a test with a write that changes nothing.
+
+## Nit
+
+The subagent loop (`cli/src/agent.ts:6758`) does not call `uniqueCallIds`. Nothing breaks, because the subagent tracker uses neither `callId` nor presence. But the docs say ids are unique per execution "in the conversation", and subagent histories can still hold duplicates.
+
+## Tests run
+
+- At dcf2674c, with an isolated HOME: `test/nonprogress_recovery.test.ts`, `test/observation_identity.test.ts` and `test/objective_continuation.test.ts` gave **66 tests, 66 pass, 0 fail**. `npm run build` exited 0.
+- The probe ran at both SHAs (3/3 runs completed at each, with the results in the table). It was deleted afterwards.
+- The worktree is clean and back at dcf2674c. Nothing was committed or pushed, and I did not touch `/home/mike/nexus-wt/v112-nonprogress`.
+
+The probe source is kept at `/tmp/claude-1000/-home-mike-nexus-code/ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6/scratchpad/probe2.ts`. To run it, copy it into `cli/test/`.</result>
+<usage><subagent_tokens>102882</subagent_tokens><tool_uses>45</tool_uses><duration_ms>675377</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b2rvkdyui</task-id>
+<tool-use-id>toolu_01P1TeP3w1kjXKhpkg6ZkFjb</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/8deb35f8-7066-418b-b7d8-b4f14f3f4df9/tasks/b2rvkdyui.output</output-file>
+<status>completed</status>
+<summary>Background command "Run all affected suites at exact head" completed (exit code 0)</summary>
+</task-notification>
