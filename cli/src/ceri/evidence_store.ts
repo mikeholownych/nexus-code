@@ -34,8 +34,8 @@ export function sanitizeIdentifier(id: string, name: string): string {
 const SECRET_WORDS = new Set([
   "password", "passwords", "passwd", "passphrase", "pwd", "secret", "secrets", "credential", "credentials", "authorization", "auth", "cookie", "cookies", "bearer", "jwt", "apikey",
   // The same names written as one lowercase word.
-  "accesstoken", "refreshtoken", "idtoken", "authtoken", "sessiontoken", "bearertoken", "apitoken", "clientsecret", "privatekey", "secretkey", "accesskey",
-  "dbpass", "userpass", "adminpass", "rootpass", "sshkey", "masterkey", "signingkey", "secretvalue",
+  "accesstoken", "refreshtoken", "idtoken", "authtoken", "sessiontoken", "bearertoken", "apitoken", "clientsecret",
+  "secretvalue",
 ]);
 /** Words that, before "pass", make it a password (`DB_PASS`, `user_pass`); bare `pass` and `bypass` are not credentials. */
 const PASS_CONTEXT = new Set(["db", "database", "user", "admin", "root", "login", "smtp", "mysql", "postgres", "redis", "ssh", "ftp", "sql", "mongo", "ldap", "wifi", "master"]);
@@ -60,11 +60,18 @@ function keyWords(key: string): string[] {
     .map((w) => w.toLowerCase());
 }
 
+/** `dbpass`, `sshkey` and `encryptionkeys` written as one lowercase word: a context word from the lists above plus `pass` or `key(s)`. */
+function isJoinedCredentialWord(w: string): boolean {
+  for (const p of PASS_CONTEXT) if (w === `${p}pass`) return true;
+  for (const p of KEY_CONTEXT) if (w === `${p}key` || w === `${p}keys`) return true;
+  return false;
+}
+
 /** Whether a key names a credential, by whole words: `api_key` and `access_token` do, `max_token`, `pass` and `bypass` do not. */
 export function isSensitiveKey(key: string): boolean {
   const words = keyWords(key);
   return words.some((w, i) => {
-    if (SECRET_WORDS.has(w)) return true;
+    if (SECRET_WORDS.has(w) || isJoinedCredentialWord(w)) return true;
     if (w === "token") return !COUNT_WORDS.has(words[i - 1] ?? "") && !COUNT_AFTER.has(words[i + 1] ?? "");
     if (w === "pass") return PASS_CONTEXT.has(words[i - 1] ?? "") || ["word", "wd", "phrase"].includes(words[i + 1] ?? "");
     // `pat` is a personal access token only alone or after a provider or owner word, so `path_pat` (a pattern) is kept.
