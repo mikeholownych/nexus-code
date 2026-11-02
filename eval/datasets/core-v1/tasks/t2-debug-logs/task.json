@@ -1,0 +1,7 @@
+{
+  "id": "t2-debug-logs",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 60,
+  "minutes": 20
+}

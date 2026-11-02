@@ -64,6 +64,7 @@ cp -R "$ROOT/cli/dist" "$PKG/lib/cli/dist"
 cp "$ROOT/cli/package.json" "$ROOT/cli/package-lock.json" "$PKG/lib/cli/"
 npm ci --omit=dev --prefix "$PKG/lib/cli"
 cp "$RUST_CORE_TARGET/harness-core" "$RUST_CORE_TARGET/nexus-tui" "$PKG/lib/core/"
+node "$ROOT/scripts/stage_eval_runtime.mjs" "$ROOT" "$PKG"
 command -v readelf >/dev/null || { echo "readelf is required to verify package glibc compatibility" >&2; exit 2; }
 for binary in "$PKG/lib/core/harness-core" "$PKG/lib/core/nexus-tui"; do
   required_glibc=$(readelf --version-info --wide "$binary" | grep -oE 'Name: GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/.*GLIBC_//' | sort -V | tail -n 1)

@@ -1,0 +1,10 @@
+const assert = require("node:assert/strict");
+const { runJob } = require("../src/job.js");
+const { dailySummary } = require("../src/report.js");
+assert.equal(dailySummary("core", [{ author: "ana" }, { author: "bo" }, { author: "ana" }]), "core: 3 commits, top ana (2)");
+let out;
+assert.doesNotThrow(() => { out = runJob([{ name: "core", commits: [{ author: "ana" }] }, { name: "infra", commits: [] }]); });
+assert.equal(out[0], "core: 1 commits, top ana (1)");
+assert.equal(typeof out[1], "string");
+assert.match(out[1], /^infra: 0 commits/);
+console.log("hidden report ok");

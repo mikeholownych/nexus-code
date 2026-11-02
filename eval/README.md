@@ -12,6 +12,21 @@ node eval/score.mjs eval/out/<label>/results.jsonl          # markdown table; --
 node eval/score.mjs --pairs "$NEXUS_RESULTS" "$GOOSE_RESULTS" "$OPENCODE_RESULTS"
 ```
 
+## Installed versioned datasets
+
+Installed releases expose the versioned runner through the Nexus CLI:
+
+```bash
+nexus eval --dataset /path/to/core-v1 --split benchmark --runs 1 \
+  --isolated-home --output ./results/benchmark.json
+```
+
+The dataset path must be a versioned dataset directory. The installed command loads its runner from the package named by
+`NEXUS_HOME`; it does not fall back to evaluator code in a development checkout. The score file is created with
+owner-only permissions, and per-task run artifacts are written beside it under `<output>.artifacts`. The legacy
+`nexus eval <dataset-file> --limit N` form remains available for file-based benchmark datasets. `--limit` is not
+supported for versioned dataset directories; select `--split` or provide a dataset containing the desired task set.
+
 Each run uses a frozen copy of the task tree, a fresh workspace and `HOME`, and a unique output directory. The agent
 receives only its workspace, isolated home, selected read-only runtime files, and a run-scoped token for a local proxy;
 the real gateway credential stays in the harness process. The candidate runs in Bubblewrap user, PID and network
@@ -47,6 +62,22 @@ matching `--max-turns`, context/output limits and temperature settings. Qualific
 `sampling.temperature` to be `0` across all three adapters; seed metadata remains recorded when configured.
 
 ## Task format (`eval/tasks/<id>/task.json`)
+
+The versioned dataset loader and installed `nexus eval --dataset ... --split ...` command support governed task populations. The CLI dispatches the packaged runner against a versioned dataset directory, while `eval/run.mjs` continues to accept the legacy task directory. Each dataset contains
+`manifest.json`, `examples.jsonl`, `oracles.jsonl`, and `tasks/<id>/`. The manifest pins SHA-256 digests of both JSONL
+files and exact split counts. `examples.jsonl` has an allowlisted stimulus schema (`id`, `split`, `domain`, `objective`,
+`taskDir`, and optional task budgets/classification); it cannot contain oracle fields. `oracles.jsonl` has the same unique
+IDs and evaluator-only `hidden` and `regression` records. The loader rejects digest mismatch, duplicate/missing IDs,
+unknown fields, unsupported splits, count mismatch, path escape, and symlinks. The loader keeps oracle records separate from
+stimulus records; the versioned runner stages fixtures and applies its Bubblewrap namespace and mount policies. Full WP-1103 provider-request and filesystem-isolation acceptance remains a separate qualification gate. Dataset task
+directories keep a sanitized `task.json` with fixture metadata and no objective or oracle commands. `eval/tasks/` remains
+available as a legacy input while datasets and configs migrate. Loader bounds are 64 KiB per manifest, 32 MiB per JSONL
+file, 1 MiB per record, 10,000 records, and 50,000 task-tree entries (maximum depth 64, 64 MiB per file, 512 MiB per
+task tree).
+
+The committed `eval/datasets/core-v1/` is the first migrated population: one regression self-test and six benchmark
+tasks. It can be run through the installed CLI with `nexus eval --dataset eval/datasets/core-v1 --split benchmark`. Held-out qualification corpora remain under their separately approved custody process and are not copied into
+this public development dataset.
 
 | Field | Meaning |
 |---|---|

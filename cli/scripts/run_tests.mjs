@@ -14,7 +14,11 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-test-home-"));
 
 const files = process.argv.length > 2
   ? process.argv.slice(2)
-  : fs.readdirSync(path.join(cli, "test")).filter((f) => f.endsWith(".test.ts")).sort().map((f) => path.join("test", f));
+  : [
+      ...fs.readdirSync(path.join(cli, "test")).filter((f) => f.endsWith(".test.ts")).sort().map((f) => path.join("test", f)),
+      path.resolve(cli, "../eval/dataset.test.mjs"),
+      path.resolve(cli, "../eval/package_runtime.test.mjs"),
+    ];
 
 const env = {
   ...process.env,

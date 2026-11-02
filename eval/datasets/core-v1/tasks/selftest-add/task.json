@@ -1,0 +1,7 @@
+{
+  "id": "selftest-add",
+  "tier": "T1",
+  "fixture": "repo",
+  "steps": 20,
+  "minutes": 5
+}
