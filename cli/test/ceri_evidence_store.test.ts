@@ -186,3 +186,34 @@ test("CeriEvidenceStore redacts by key name: an unregistered credential value ne
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("CeriEvidenceStore redacts whole values under credential keys and keeps count-like keys, on events.jsonl and artifacts", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ceri-evidence-words-"));
+  try {
+    const store = new CeriEvidenceStore(tmpDir);
+    const runDir = store.initRun({
+      runId: "run-003", evaluationId: "eval-words", evaluationVersion: "1.0.0", sourceCommit: "abcd1234abcd1234abcd1234abcd1234abcd1234", dirtyWorktree: false,
+      model: { name: "m", parameters: {} }, routingConfig: { gatewayUrl: "http://localhost:9200", specialistRouting: false }, agentProfileVersion: "1.1.2", harnessVersion: "1.1.2",
+      toolchainVersions: {}, environment: { os: "Linux", kernel: "6", nodeVersion: "22" }, hardware: { cpuModel: "x", totalMemoryBytes: 1 }, startedAt: new Date().toISOString(), status: "RUNNING",
+      mandatoryComparabilityKeys: ["evaluationId"],
+    } as RunManifest);
+    const secrets: Record<string, unknown> = {
+      apiKey: ["LEAK-array-1"], api_key: "LEAK-snake", "api-key": "LEAK-kebab", access_token: "LEAK-access", token: { value: "LEAK-object" },
+      password: "LEAK-pw", passwd: "LEAK-passwd", secret: "LEAK-secret", secrets: ["LEAK-secrets"], credentials: { user: "LEAK-cred" }, credential: "LEAK-cred1",
+      authorization: "LEAK-authz", auth: "LEAK-auth", cookie: "LEAK-cookie", cookies: "LEAK-cookies", bearer: "LEAK-bearer", jwt: "LEAK-jwt", private_key: "LEAK-pk", privateKey: "LEAK-pk2",
+    };
+    const kept = { pass: 12, bypass: "kept-bypass", max_token: 4096, max_tokens: 8192, tokens: { input: 5, output: 7 }, passed: true, keyboard: "kept-kb", author: "kept-author" };
+    store.appendEvent({ ...secrets, ...kept });
+    store.recordAssertions([{ ...secrets, ...kept }]);
+    store.recordReceipts([{ nested: { ...secrets, ...kept } }]);
+    const files = ["events.jsonl", "assertions.json", "receipts.json"].map((f) => fs.readFileSync(path.join(runDir, f), "utf-8"));
+    for (const text of files) {
+      assert.ok(!/LEAK-/.test(text), text.match(/LEAK-[\w-]+/)?.[0]);
+      for (const k of ["kept-bypass", "kept-kb", "kept-author", "4096", "8192"]) assert.ok(text.includes(k), `${k} was over-redacted`);
+      assert.match(text, /"pass":\s*12/);
+      assert.match(text, /"input":\s*5/);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

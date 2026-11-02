@@ -30,18 +30,41 @@ export function sanitizeIdentifier(id: string, name: string): string {
   return trimmed;
 }
 
-/** Keys whose value is a credential whatever it looks like: `apiKey`, `session_token`, `password`, `clientSecret`... */
-const SENSITIVE_KEY = /(?:api[_-]?key|access[_-]?key|private[_-]?key|token|secret|pass(?:word|phrase)?|authorization|credential)$/i;
+/** Words that make a key a credential on their own. */
+const SECRET_WORDS = new Set(["password", "passwd", "passphrase", "secret", "secrets", "credential", "credentials", "authorization", "auth", "cookie", "cookies", "bearer", "jwt", "apikey"]);
+/** Words that, before "token", make it a count or a limit rather than a credential. */
+const COUNT_WORDS = new Set(["max", "min", "total", "input", "output", "prompt", "completion", "num", "count", "context", "reasoning", "cached", "budget"]);
+
+/** Splits `apiKey`, `api_key`, `api-key` and `X-Api-Key` into lowercase words. */
+function keyWords(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase());
+}
+
+/** Whether a key names a credential, by whole words: `api_key` and `access_token` do, `max_token`, `pass` and `bypass` do not. */
+export function isSensitiveKey(key: string): boolean {
+  const words = keyWords(key);
+  return words.some((w, i) => {
+    if (SECRET_WORDS.has(w)) return true;
+    if (w === "token") return !COUNT_WORDS.has(words[i - 1] ?? "");
+    if (w === "key") return ["api", "access", "private", "secret", "auth", "signing"].includes(words[i - 1] ?? "");
+    return false;
+  });
+}
 
 /**
  * Serializes evidence with secrets removed. A replacer that only sees string values cannot know that
- * `{"apiKey": "abcdef1234567890"}` is a credential, so the key name is checked as well as the value text.
+ * `{"apiKey": "abcdef1234567890"}` is a credential, so the key name is checked as well as the value text, and the
+ * whole value under a credential key (string, number, array or object) is replaced.
  */
 function redactedJson(data: unknown, space?: number): string {
   return JSON.stringify(
     data,
     (key, v) => {
-      if (key && SENSITIVE_KEY.test(key) && (typeof v === "string" || typeof v === "number")) return "[REDACTED]";
+      if (key && v !== null && v !== undefined && isSensitiveKey(key)) return "[REDACTED]";
       return typeof v === "string" ? redactSecrets(v) : v;
     },
     space,
