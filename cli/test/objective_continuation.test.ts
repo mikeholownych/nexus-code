@@ -97,7 +97,11 @@ describe("continuation beyond the per-segment step limit", () => {
       const turn = await agent.runTurn("Inspect base.txt.");
       assert.equal(turn.execution, "LIMIT_REACHED");
       assert.equal(turn.reason, "STAGNATION_DETECTED");
-      assert.match(turn.detail ?? "", /repeated read_file \d+ times with an unchanged result on an unchanged workspace after 2 recovery notes/);
+      // v1.1.2: after the second note recovery is constrained; the repeats are refused before they run, and the turn
+      // stops when the refusals are used up.
+      assert.match(turn.detail ?? "", /recovery exhausted after 2 recovery notes: \d+ equivalent observation\(s\) refused on an unchanged workspace/);
+      const refused = agent.getMessages().filter((m: any) => m.role === "tool" && String(m.content).startsWith("[Nexus refused: not executed]"));
+      assert.ok(refused.length >= 2, `refused repeats: ${refused.length}`);
       assert.ok(gw.requests.length <= 10, `bounded: ${gw.requests.length} requests`);
       const notes = userMessages(gw.requests[gw.requests.length - 1]).filter((m) => m.startsWith("[Nexus recovery"));
       assert.equal(notes.length, 2, "two bounded recovery notes before stopping");

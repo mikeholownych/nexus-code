@@ -47,54 +47,77 @@ export class SkillManager {
         ? this.explicitTrusted
         : isWorkspaceTrusted(this.workspace, this.readOnly);
 
+    // Real paths already scanned: skill installers link one skill into several agent directories,
+    // and a symlink cycle must not recurse forever.
+    const visited = new Set<string>();
+
     // User home locations (always loaded & trusted)
     const homeDirs = [
       path.join(os.homedir(), ".nexus", "skills"),
       path.join(os.homedir(), ".config", "nexus", "skills"),
+      // Shared Agent Skills location (`npx skills add -g --agent nexus` installs here)
+      path.join(os.homedir(), ".agents", "skills"),
       path.join(os.homedir(), ".config", "opencode", "skills"),
       path.join(os.homedir(), ".claude", "skills"),
     ];
 
     for (const dir of homeDirs) {
       if (fs.existsSync(dir)) {
-        this.scanDir(dir, { isWorkspace: false, trusted: true });
+        this.scanDir(dir, { isWorkspace: false, trusted: true }, visited);
       }
     }
 
     // Project workspace locations (gated by workspace trust)
     const workspaceDirs = [
       path.join(this.workspace, ".nexus", "skills"),
+      // Shared Agent Skills location (`npx skills add --agent nexus` installs here)
+      path.join(this.workspace, ".agents", "skills"),
       path.join(this.workspace, ".claude", "skills"),
       path.join(this.workspace, "skills"),
     ];
 
     for (const dir of workspaceDirs) {
       if (fs.existsSync(dir)) {
-        this.scanDir(dir, { isWorkspace: true, trusted: isTrusted });
+        this.scanDir(dir, { isWorkspace: true, trusted: isTrusted }, visited);
       }
     }
   }
 
-  private scanDir(baseDir: string, context: { isWorkspace: boolean; trusted: boolean }): void {
+  private scanDir(baseDir: string, context: { isWorkspace: boolean; trusted: boolean }, visited: Set<string>): void {
     try {
+      const real = fs.realpathSync(baseDir);
+      if (visited.has(real)) return;
+      visited.add(real);
       const entries = fs.readdirSync(baseDir, { withFileTypes: true });
 
       for (const entry of entries) {
         const fullPath = path.join(baseDir, entry.name);
+        // Skill installers (e.g. `npx skills add`) link skill directories rather than copy them.
+        let isDirectory = entry.isDirectory();
+        let isFile = entry.isFile();
+        if (entry.isSymbolicLink()) {
+          try {
+            const target = fs.statSync(fullPath);
+            isDirectory = target.isDirectory();
+            isFile = target.isFile();
+          } catch {
+            continue; // dangling link
+          }
+        }
 
-        if (entry.isDirectory()) {
+        if (isDirectory) {
           // Check for SKILL.md inside directory
           const skillFile = path.join(fullPath, "SKILL.md");
           if (fs.existsSync(skillFile)) {
             this.loadSkillFile(skillFile, entry.name, context);
           } else {
             // Also check single-level subdirectories
-            this.scanDir(fullPath, context);
+            this.scanDir(fullPath, context, visited);
           }
-        } else if (entry.isFile() && entry.name === "SKILL.md") {
+        } else if (isFile && entry.name === "SKILL.md") {
           const parentDirName = path.basename(baseDir);
           this.loadSkillFile(fullPath, parentDirName, context);
-        } else if (entry.isFile() && entry.name.endsWith(".skill.md")) {
+        } else if (isFile && entry.name.endsWith(".skill.md")) {
           const skillName = entry.name.replace(/\.skill\.md$/, "");
           this.loadSkillFile(fullPath, skillName, context);
         }
@@ -139,31 +162,47 @@ export class SkillManager {
     }
   }
 
+  /**
+   * Reads the top-level scalar keys of a SKILL.md YAML frontmatter block. Only `name` and `description` are used;
+   * no other key (e.g. `allowed-tools`) has any effect. Supports plain, quoted, multi-line plain, and block
+   * (`|`, `>`, with `-`/`+` chomping) scalars; nested mappings are skipped, never merged into the top level.
+   */
   private parseFrontmatter(text: string): { metadata: Record<string, string>; body: string } {
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("---")) {
+    const lines = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim().split("\n");
+    if (lines[0]?.trim() !== "---") {
+      return { metadata: {}, body: text };
+    }
+    const close = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
+    if (close === -1) {
       return { metadata: {}, body: text };
     }
 
-    const secondIndex = trimmed.indexOf("---", 3);
-    if (secondIndex === -1) {
-      return { metadata: {}, body: text };
-    }
-
-    const yamlBlock = trimmed.slice(3, secondIndex).trim();
-    const body = trimmed.slice(secondIndex + 3).trim();
-
+    const yamlLines = lines.slice(1, close);
+    const body = lines.slice(close + 1).join("\n").trim();
     const metadata: Record<string, string> = {};
-    for (const line of yamlBlock.split("\n")) {
-      const colonIdx = line.indexOf(":");
-      if (colonIdx > 0) {
-        const key = line.slice(0, colonIdx).trim();
-        let val = line.slice(colonIdx + 1).trim();
-        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-          val = val.slice(1, -1);
-        }
-        metadata[key] = val;
+
+    for (let i = 0; i < yamlLines.length; i++) {
+      const match = /^([A-Za-z0-9_-]+):(?:\s+(.*))?$/.exec(yamlLines[i].trimEnd());
+      if (!match) continue; // indented (nested or continuation) lines, comments, list items
+      const key = match[1];
+      let val = (match[2] ?? "").trim();
+      const continuation: string[] = [];
+      while (i + 1 < yamlLines.length && (/^\s/.test(yamlLines[i + 1]) || yamlLines[i + 1].trim() === "")) {
+        continuation.push(yamlLines[++i]);
       }
+      const block = /^([|>])([+-]?)$/.exec(val);
+      if (block) {
+        const indent = Math.min(...continuation.filter((l) => l.trim()).map((l) => l.length - l.trimStart().length));
+        const content = continuation.map((l) => l.slice(Number.isFinite(indent) ? indent : 0).trimEnd());
+        while (content.length && content[content.length - 1] === "") content.pop();
+        val = block[1] === "|" ? content.join("\n") : content.join("\n").replace(/([^\n])\n(?=[^\n])/g, "$1 ");
+      } else if (val === "" || !/^["'{[]/.test(val)) {
+        val = [val, ...continuation.map((l) => l.trim())].filter(Boolean).join(" ");
+      }
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      metadata[key] = val;
     }
 
     return { metadata, body };
@@ -209,8 +248,10 @@ export class SkillManager {
 
     const watchDirs = [
       path.join(this.workspace, ".nexus", "skills"),
+      path.join(this.workspace, ".agents", "skills"),
       path.join(this.workspace, "skills"),
       path.join(os.homedir(), ".nexus", "skills"),
+      path.join(os.homedir(), ".agents", "skills"),
     ];
 
     for (const dir of watchDirs) {

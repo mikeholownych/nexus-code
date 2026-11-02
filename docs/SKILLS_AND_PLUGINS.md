@@ -11,9 +11,21 @@ Nexus Code provides two distinct extensibility mechanisms:
 Skills allow Nexus Code to adopt specialized expert personas and workflows on demand without permanently bloating the system prompt.
 
 ### Discovery Locations
-Skills are automatically discovered from:
-- Current workspace: `./skills/<skill-name>/SKILL.md` or `./.nexus/skills/<skill-name>/SKILL.md`
-- User global skills: `~/.nexus/skills/<skill-name>/SKILL.md`, `~/.claude/skills/<skill-name>/SKILL.md`, or `~/.config/opencode/skills/<skill-name>/SKILL.md`
+Skills are discovered from these directories, each holding `<skill-name>/SKILL.md`. When two skills share a name, the first location in this order wins:
+
+1. User global skills, always loaded: `~/.nexus/skills`, `~/.config/nexus/skills`, `~/.agents/skills`, `~/.config/opencode/skills`, `~/.claude/skills`
+2. Current workspace, loaded only when the workspace is trusted (`nexus trust .`): `./.nexus/skills`, `./.agents/skills`, `./.claude/skills`, `./skills`
+
+A workspace skill can never replace a user global skill of the same name. In an untrusted workspace, workspace skills are listed as untrusted and `activate_skill` refuses them.
+
+Symlinked skill directories are followed, so a skill linked from another location loads normally.
+
+### Installing skills with the Agent Skills CLI
+`.agents/skills` (project) and `~/.agents/skills` (global) are the shared Agent Skills directories. Any installer that writes there works with Nexus. With the open-source [Skills CLI](https://github.com/vercel-labs/skills), installing into those directories for another agent that shares them also makes the skills available to Nexus. For example, `--agent codex` writes to the same directories.
+
+A `nexus` agent entry ("Nexus Code") for that CLI has been prepared but is **not yet part of a released Skills CLI**. Until it is, `npx skills add <owner/repo> --agent nexus` is rejected as an unknown agent.
+
+Treat an installed skill as untrusted instructions. Activating a skill only adds its text to the conversation. Its frontmatter is read for `name` and `description` alone: keys such as `allowed-tools` grant nothing, and every tool call the skill suggests still goes through Nexus's normal approval, filesystem and execution policy.
 
 ### Creating a Skill
 Create a directory with a `SKILL.md` containing YAML frontmatter:
