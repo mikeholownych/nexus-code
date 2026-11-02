@@ -3,7 +3,7 @@
   "checkpoint_id": "01M6E703T0A7EFMF189C8R7E0H",
   "strategy": "manual-commit",
   "branch": "v1/wp-1105-evaluators",
-  "checkpoints_count": 125,
+  "checkpoints_count": 130,
   "files_touched": [
     "cli/src/agent.ts"
   ],
@@ -26,20 +26,27 @@
       "transcript": "/2/full.jsonl",
       "content_hash": "/2/content_hash.txt",
       "prompt": "/2/prompt.txt"
+    },
+    {
+      "metadata": "/3/metadata.json",
+      "transcript": "/3/full.jsonl",
+      "compact_transcript": "/3/transcript.jsonl",
+      "content_hash": "/3/content_hash.txt",
+      "prompt": "/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1246439,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 158935646,
-    "output_tokens": 320817,
-    "api_call_count": 1239,
+    "input_tokens": 1246475,
+    "cache_creation_tokens": 24257,
+    "cache_read_tokens": 162344245,
+    "output_tokens": 333113,
+    "api_call_count": 1255,
     "subagent_tokens": {
-      "input_tokens": 1291907,
-      "cache_creation_tokens": 0,
-      "cache_read_tokens": 19845632,
-      "output_tokens": 86423,
-      "api_call_count": 164
+      "input_tokens": 1292019,
+      "cache_creation_tokens": 437644,
+      "cache_read_tokens": 25455179,
+      "output_tokens": 120905,
+      "api_call_count": 217
     }
   },
   "redaction": {

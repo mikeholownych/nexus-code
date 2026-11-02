@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Q7SXQ6zGzt69jHTYQ4CzFV",
+  "agent_id": "a0871e21dc1f8ed82",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix PR396 review findings",
+  "token_usage": {
+    "input_tokens": 242,
+    "cache_creation_tokens": 410519,
+    "cache_read_tokens": 18116840,
+    "output_tokens": 78052,
+    "api_call_count": 120
+  },
+  "started_at": "2026-11-02T11:14:33.999896476Z",
+  "completed_at": "2026-11-02T12:44:03.57410789Z"
+}
