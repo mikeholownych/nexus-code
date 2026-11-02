@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { AutonomousAgent } from "../src/agent.js";
 import { ROLE_PROFILES, SPECIALIST_CONTRACTS, isReadOnlyRole, roleToolAllowList } from "../src/core/roles.js";
 import { validateOperationSpec } from "../src/operation_cli.js";
-import { teamUnits } from "../src/team.js";
+import { teamUnits, TeamOrchestrator } from "../src/team.js";
 
 const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-specialist-runtime-"));
 const agentFor = (role: any) =>
@@ -62,4 +62,64 @@ test("operation specs and team targets accept specialist roles", () => {
   const [unit] = teamUnits("call_site_analyzer", "trace callers of foo");
   assert.equal(unit.id, "call_site_analyzer");
   assert.equal(unit.role, "call_site_analyzer");
+});
+
+// ---------------------------------------------------------------- configured verifier and read-only specialists
+
+import { fakeClock, startGateway } from "./helpers/provider_fixture.js";
+
+test("an operator-configured verifier gates only roles that can write; read-only report roles are exempt", () => {
+  for (const role of ["researcher", "architect", "reviewer", ...Object.values(SPECIALIST_CONTRACTS).filter((c) => c.readOnly).map((c) => c.role)]) {
+    const agent = new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace, shell: "bash", role, authoritativeVerifierCommand: "true" } as any);
+    assert.equal((agent as any).configuredVerifierGatesCompletion(), false, role);
+  }
+  for (const role of ["implementer", "tester", "failure_debugger"]) {
+    const agent = new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace, shell: "bash", role, authoritativeVerifierCommand: "true" } as any);
+    assert.equal((agent as any).configuredVerifierGatesCompletion(), true, role);
+  }
+});
+
+test("a read-only specialist completes with a report even when an authoritative verifier is configured", async () => {
+  const gw = await startGateway(() => ({ kind: "tools", calls: [{ name: "task_completed", args: { summary: "callers: a.ts:3, b.ts:9" } }] }));
+  try {
+    for (const role of ["call_site_analyzer", "semantic_explorer", "security_reviewer", "acceptance_reviewer"]) {
+      const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 3, temperature: 0, workspace, shell: "bash", role, authoritativeVerifierCommand: "true" } as any, 1);
+      (agent as any).recoveryClock = fakeClock();
+      const turn = await agent.runTurn("trace callers of foo");
+      assert.equal(turn.execution, "COMPLETED", role);
+      assert.notEqual(turn.outcome, "UNVERIFIED", `${role}: ${turn.reason}`);
+    }
+  } finally {
+    await gw.close();
+  }
+});
+
+// ---------------------------------------------------------------- /team accepts specialist targets
+
+import { EXTENSION_HANDLERS } from "../src/slash/extension_commands.js";
+
+test("/team plans and runs a specialist role as a single-role target, through the real planner and executor", async () => {
+  const gw = await startGateway(() => ({ kind: "tools", calls: [{ name: "task_completed", args: { summary: "callers: a.ts:3" } }] }));
+  try {
+    const config = { endpoint: gw.url, model: "m", maxSteps: 3, temperature: 0, workspace, shell: "bash" } as any;
+    const host = { app: { getConfig: () => config } } as any;
+    const out = (await EXTENSION_HANDLERS.team({ host, args: "call_site_analyzer trace callers of foo", signal: new AbortController().signal } as any)) as { success: boolean; output: string };
+    assert.doesNotMatch(out.output, /Unknown role/);
+    assert.equal(out.success, true, out.output);
+    assert.match(out.output, /\[CALL_SITE_ANALYZER\] COMPLETE/);
+    const usage = (await EXTENSION_HANDLERS.team({ host, args: "", signal: new AbortController().signal } as any)) as { output: string };
+    for (const role of ["researcher", "reviewer", "semantic_explorer", "call_site_analyzer", "failure_debugger", "security_reviewer", "acceptance_reviewer", "full"]) assert.match(usage.output, new RegExp(role));
+    const bad = (await EXTENSION_HANDLERS.team({ host, args: "root do things", signal: new AbortController().signal } as any)) as { output: string };
+    assert.match(bad.output, /Unknown role root/);
+  } finally {
+    await gw.close();
+  }
+});
+
+test("TeamOrchestrator.plan builds a one-unit operation for each specialist target with that role's requirements", () => {
+  for (const role of Object.keys(SPECIALIST_CONTRACTS)) {
+    const op = new TeamOrchestrator({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 3, temperature: 0, workspace, shell: "bash" } as any).plan(role as any, "do the thing");
+    assert.deepEqual(op.units.map((u) => [u.id, u.role]), [[role, role]]);
+    assert.deepEqual(op.units[0].requires.capabilities, ["tools"]);
+  }
 });

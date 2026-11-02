@@ -12,13 +12,16 @@ import { isRequired, newOperation, type DurableOperationState, type OperationEve
 import { AgentWorkUnitExecutor, driveOperation, OperationStore, resourcesFromConfig, type WorkUnitExecutor } from "./core/operation_runner.js";
 import type { RecoveryClock } from "./core/provider_recovery.js";
 import type { ResourceDescriptor } from "./core/resources.js";
-import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, type AgentRole } from "./core/roles.js";
+import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, SPECIALIST_CONTRACTS, type AgentRole } from "./core/roles.js";
 import { mergeOperationPolicy } from "./config.js";
 import type { HarnessConfig } from "./types.js";
 
 export { ROLE_PROFILES, ROLE_REQUIREMENTS, type AgentRole, type TeamRole, type RoleProfile } from "./core/roles.js";
 
 export const TEAM_ROLES: AgentRole[] = ["researcher", "architect", "implementer", "tester", "reviewer"];
+
+/** Every role `/team` accepts as a single-role target: the five team roles and the specialist roles. */
+export const TEAM_TARGET_ROLES: AgentRole[] = [...TEAM_ROLES, ...(Object.keys(SPECIALIST_CONTRACTS) as AgentRole[])];
 
 export type TeamTarget = AgentRole | "full";
 

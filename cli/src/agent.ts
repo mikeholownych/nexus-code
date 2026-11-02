@@ -6356,7 +6356,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
    * work units have no parent turn to verify them; their configured verifier remains a completion gate.
    */
   private configuredVerifierGatesCompletion(): boolean {
-    const nonMutatingTeamRole = this.role === "researcher" || this.role === "architect" || this.role === "reviewer";
+    // Read-only roles (researcher, reviewer, the read-only specialists) cannot write or run a verifier; the architect
+    // plans without writing. A role that can write (implementer, tester, failure_debugger) is never exempt.
+    const nonMutatingTeamRole = this.role === "architect" || (isReadOnlyRole(this.role) && this.isReadOnly());
     return !this.runningAsSubagent && !nonMutatingTeamRole && Boolean(this.config.authoritativeVerifierCommand?.trim());
   }
 
