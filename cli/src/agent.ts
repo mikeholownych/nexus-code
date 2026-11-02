@@ -1899,7 +1899,7 @@ export class AutonomousAgent {
       // Only with an objective ledger: without one update_requirements returns nothing and read_objective has nothing to
       // read, but offered anyway the model spent a step on each (eval debug-logs trace).
       ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective ? [READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
-      ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective?.requirements.length ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
+      ...(this.offersRequirements() ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
       READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition,
       READ_ARCHIVE_CAPABILITY.toolDefinition as ToolDefinition,
       ...this.mcpManager.getToolDefinitions(),
@@ -2627,7 +2627,20 @@ export class AutonomousAgent {
     const input = this.objective && this.objective.execution === tracker.data
       ? recoveryInput(this.objective)
       : { objective: objectiveText, open: [], execution: tracker.data };
-    return renderRecoveryContext(input, { present: (id) => presentCalls.has(id), stagnationSteps });
+    return renderRecoveryContext(input, { present: (id) => presentCalls.has(id), stagnationSteps, permits: this.toolPermitted() });
+  }
+
+  /** Whether this agent may call a tool at all: offered to it, allowed for its role, and not refused as read-only. */
+  private toolPermitted(): (tool: string) => boolean {
+    const allowed = roleToolAllowList(this.role);
+    const readOnly = this.isReadOnly();
+    const requirements = this.offersRequirements();
+    return (tool) => (!allowed || allowed.has(tool)) && !(readOnly && isWriteOrExecTool(tool)) && (tool !== "update_requirements" || requirements);
+  }
+
+  /** update_requirements is offered only with an objective ledger that has requirements, to agents that own it. */
+  private offersRequirements(): boolean {
+    return (this.depth === 0 || this.role === "implementer" || this.role === "tester") && Boolean(this.objective?.requirements.length);
   }
 
   /**
@@ -2674,7 +2687,7 @@ export class AutonomousAgent {
     // A quarter of the context window (≈4 characters per token) for the objective when it must be carried in full.
     const budget = Math.max(8000, Math.floor(this.contextLimit() * 4 * 0.25));
     const { presentCalls } = observationPresence(messages);
-    const recovery = { present: (id: string) => presentCalls.has(id), stagnationSteps: this.config.continuation?.stagnationSteps ?? DEFAULT_CONTINUATION.stagnationSteps };
+    const recovery = { present: (id: string) => presentCalls.has(id), stagnationSteps: this.config.continuation?.stagnationSteps ?? DEFAULT_CONTINUATION.stagnationSteps, permits: this.toolPermitted() };
     return [messages[0], { role: "system", content: renderPinnedLedger(ledger, !inContext, budget, recovery) }, ...messages.slice(1)];
   }
 

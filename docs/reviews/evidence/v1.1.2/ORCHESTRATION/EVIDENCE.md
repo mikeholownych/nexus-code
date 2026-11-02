@@ -26,6 +26,8 @@ Ledger re-measured after the PR #396 runtime connection (claude-code), on Node.j
 | `cli/test/node_floor.test.ts` (Release Gates) | 6 | 6 | 0 | 0.3s | `tsx --test test/node_floor.test.ts` |
 | **Combined Orchestration & CERI Suite** | 50 | 50 | 0 | 13.1s | `node scripts/run_tests.mjs test/...` |
 | **Related runtime suites (operation, team, convergence, read-only, slash; Rust core built)** | 431 | 431 | 0 | — | same set at `717833d6`: 424/424; no test fails at either commit |
+| `cli/test/recovery_role_actions.test.ts` (PR #398 integration) | 4 | 4 | 0 | 1.7s | `tsx --test test/recovery_role_actions.test.ts` |
+| **Integrated with `main` @ `9ed440a7` (PR #398): runtime + recovery suites, 40 files** | 526 | 526 | 0 | — | the 27 of these files present on `main` @ `9ed440a7`: 472/472; no test fails on either tree |
 | **Type Check Gate** | 1 | 1 | 0 | — | `tsc --noEmit` |
 
 ---
@@ -70,6 +72,12 @@ Ledger re-measured after the PR #396 runtime connection (claude-code), on Node.j
   - The escalation machine (`escalation.ts`): superseded by the non-progress recovery in PR #398.
   - `TokenBudgetTracker`: duplicated `UsageLedger`'s `NEXUS_CLOUD_MAX_TOKENS` limit.
   - Their tests went with them.
+
+### 2.3.1 Integration with Non-Progress Recovery (PR #398, merged as `9ed440a7`)
+- `main` (with PR #398) is merged into this branch. The merge is textually clean; `cli/src/agent.ts` auto-merged.
+- Gap found in a trial merge: PR #398's `RECOVERY_REQUIRED` context always listed "edit files", "run a build, test or command" and `update_requirements` under "Permitted next actions". The role allow-list and read-only mode refuse those at dispatch for reviewer and specialist roles, and `update_requirements` is offered only to agents that own the ledger.
+- Fix: `renderRecoveryContext` takes a `permits(tool)` predicate. The agent builds it from `roleToolAllowList`, read-only mode and whether `update_requirements` is offered. The pinned ledger and the constrained note both use it. With no restriction, the text is byte-identical to PR #398's.
+- `cli/test/recovery_role_actions.test.ts` (4 tests) checks both renderings for unrestricted, implementer, reviewer, the read-only specialists, `failure_debugger` and read-only mode. Without the fix, the two restricted-role tests fail.
 
 ### 2.4 Adaptive Concurrency Throttle (not yet connected)
 - `AdaptiveConcurrencyThrottle`:

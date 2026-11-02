@@ -22,6 +22,7 @@ The v1.1.2 release line encompasses two complementary tiers:
   - The boundary complements `cli/src/core/independent_check.ts`, which decides whether a verifier pass is independent evidence. It does not replace it.
 - **Items 3 and 4, cut.** Nothing in the runtime routed on the micro-router. The escalation machine duplicated the non-progress recovery in PR #398, which is connected.
 - **`TokenBudgetTracker`, cut.** It duplicated `UsageLedger` (`cli/src/usage.ts`), which already enforces `NEXUS_CLOUD_MAX_TOKENS` with in-flight reservations.
+- **Integrated with PR #398.** The recovery context's "Permitted next actions" lists only actions the agent's role and mode allow (`renderRecoveryContext`'s `permits` predicate).
 - **Item 5 and the CERI and comparative harness entry points are not yet connected.** The throttle needs request latency from `cli/src/client.ts`. CERI needs a `nexus eval` command in `cli/src/index.ts`. Both files are claimed by other open work.
 
 ---
