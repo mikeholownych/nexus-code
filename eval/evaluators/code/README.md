@@ -22,6 +22,7 @@ from what the agent said about its own work.
 - **`typecheck_clean.mjs`**
   - Runs the baseline and candidate typecheck commands in separate workspaces.
   - Fails on any diagnostic line the candidate adds; existing diagnostics may remain. Duplicate lines are counted.
+  - Also fails when the candidate exits non-zero with a status different from the baseline's, even with no output.
   - A spawn failure, timeout or signal on either side fails closed.
   - The comparison is exact, so callers should normalize paths that differ between revisions.
 - **`diff_boundary.mjs`**
@@ -35,6 +36,7 @@ from what the agent said about its own work.
   - Any invalid call fails the result. So does having no tool calls recorded, since there is nothing to score.
   - The counts come from the parser and cover every tool call it recognizes, including structurally repaired write
     calls that are rejected.
+  - Tool calls made by a delegated subagent (`spawn_subagent`) are added to the parent turn's counts.
   - Not counted: calls in a response cut off at the output-token limit. Those are dropped and requested again before
     parsing, under the output-truncation recovery.
 

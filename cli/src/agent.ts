@@ -910,6 +910,11 @@ export class AutonomousAgent {
   private turnMutations: number = 0;
   /** Argument syntax of this turn's tool calls, as parsed (reported on the turn result for evaluation). */
   private turnToolCallSyntax: ToolCallSyntaxCounts = { native: 0, trailing: 0, structural: 0, invalid: 0 };
+
+  private addToolCallSyntax(counts?: ToolCallSyntaxCounts): void {
+    if (!counts) return;
+    for (const key of ["native", "trailing", "structural", "invalid"] as const) this.turnToolCallSyntax[key] += counts[key];
+  }
   /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
   private turnCarriedChanges = false;
   /** The operator-configured verifier's latest result in this turn (FAILED: it refused a completion and has not passed since). */
@@ -4452,6 +4457,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           this.totalTokens.requests += subStats.requests;
           this.totalTokens.reportedRequests += subStats.reportedRequests;
           this.totalTokens.estimatedRequests += subStats.estimatedRequests;
+          // The subagent's tool calls are model output of this turn: count their syntax with the parent's.
+          this.addToolCallSyntax(subagent.turnToolCallSyntax);
 
           // The child's workspace changes are this turn's changes: the parent's own completion must verify them.
           const childMutations = subagent.turnMutations;
@@ -5910,7 +5917,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Parse the response using hybrid parser
         const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
         const parsed = parseModelResponse(assistantMessage, { nativeTools });
-        for (const key of ["native", "trailing", "structural", "invalid"] as const) this.turnToolCallSyntax[key] += parsed.toolCallSyntax?.[key] ?? 0;
+        this.addToolCallSyntax(parsed.toolCallSyntax);
 
         // Update cumulative token usage
         const promptEst = calculateContextBudget(
@@ -6768,6 +6775,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       else this.totalTokens.estimatedRequests++;
       const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
       const parsed = parseModelResponse(assistantMessage, { nativeTools });
+      this.addToolCallSyntax(parsed.toolCallSyntax);
       this.uniqueCallIds(parsed.toolCalls, tracker);
       this.messages.push({
         role: "assistant",

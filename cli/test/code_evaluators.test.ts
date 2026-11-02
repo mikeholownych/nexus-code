@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
+import module from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -27,6 +28,9 @@ function workspace(files: Record<string, string>): string {
   return root;
 }
 
+/** Node's built-in TypeScript parser exists from Node.js 22.13; the engines floor is 22. */
+const HAS_TS_PARSER = typeof (module as any).stripTypeScriptTypes === "function";
+
 test("syntax_ast parses TypeScript, JavaScript and Python with the built-in parsers", async () => {
   const root = workspace({
     "src/ok.ts": "enum Mode { A }\nexport function f(x: string): Mode { return Mode.A; }\n",
@@ -37,6 +41,16 @@ test("syntax_ast parses TypeScript, JavaScript and Python with the built-in pars
     "py/bad.py": "def f(:\n",
   });
   try {
+    if (!HAS_TS_PARSER) {
+      // Older Node.js: TypeScript fails closed with the reason; JavaScript and Python still parse.
+      const ts = await ev.evaluateSyntaxAst({ root, files: ["src/ok.ts"] });
+      assert.equal(ts.passed, false);
+      assert.match(ts.details.failures[0].error, /22\.13/);
+      assert.equal((await ev.evaluateSyntaxAst({ root, files: ["lib/ok.mjs", "py/ok.py"] })).passed, true);
+      assert.equal((await ev.evaluateSyntaxAst({ root, files: ["lib/bad.cjs"] })).passed, false);
+      assert.equal((await ev.evaluateSyntaxAst({ root, files: ["py/bad.py"] })).passed, false);
+      return;
+    }
     const pass = await ev.evaluateSyntaxAst({ root, files: ["src/ok.ts", "lib/ok.mjs", "py/ok.py"] });
     assert.equal(pass.passed, true, JSON.stringify(pass.details));
     assert.deepEqual(pass.details.files, ["lib/ok.mjs", "py/ok.py", "src/ok.ts"]);
@@ -55,13 +69,15 @@ test("syntax_ast fails closed on unsafe paths, escaping symlinks, unsupported fi
   const outside = workspace({ "secret.ts": "export {};\n" });
   const root = workspace({ "a.rs": "fn main() {}\n", "b.tsx": "export const C = () => <div/>;\n", "c.txt": "x\n" });
   fs.symlinkSync(path.join(outside, "secret.ts"), path.join(root, "link.ts"));
+  fs.symlinkSync(outside, path.join(root, "linkdir"));
   try {
-    const result = await ev.evaluateSyntaxAst({ root, files: ["../outside.ts", "/etc/passwd", "link.ts", "a.rs", "b.tsx", "c.txt", "missing.ts"] });
+    const result = await ev.evaluateSyntaxAst({ root, files: ["../outside.ts", "/etc/passwd", "link.ts", "a.rs", "b.tsx", "c.txt", "missing.ts", "linkdir/secret.ts"] });
     assert.equal(result.passed, false);
     const why = Object.fromEntries(result.details.failures.map((f: any) => [f.file, f.error]));
     assert.match(why["../outside.ts"], /unsafe source path/);
     assert.match(why["/etc/passwd"], /unsafe source path/);
     assert.match(why["link.ts"], /escapes workspace/);
+    assert.match(why["linkdir/secret.ts"], /escapes workspace/, "a symlinked directory cannot reach outside the workspace");
     assert.match(why["a.rs"], /no rust AST parser configured/);
     assert.match(why["b.tsx"], /no tsx AST parser configured/);
     assert.match(why["c.txt"], /unsupported source extension/);
@@ -94,6 +110,14 @@ test("build passes only on a clean zero exit of the real command", async () => {
   // The command never runs through a shell.
   const run = runArgv(node, ["-e", "console.log(process.argv[1])", "$(echo injected)"]);
   assert.equal(run.stdout.trim(), "$(echo injected)");
+  // The command sees a minimal environment, not the evaluator's.
+  process.env.NEXUS_WP1105_SECRET = "leak";
+  try {
+    const env = runArgv(node, ["-e", "console.log(JSON.stringify(Object.keys(process.env).sort()))"]);
+    assert.deepEqual(JSON.parse(env.stdout), ["LANG", "LC_ALL", "PATH"]);
+  } finally {
+    delete process.env.NEXUS_WP1105_SECRET;
+  }
 });
 
 test("typecheck_clean fails only on diagnostics the candidate adds, and on infrastructure failure", async () => {
@@ -110,6 +134,9 @@ test("typecheck_clean fails only on diagnostics the candidate adds, and on infra
   const crashed = await ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/base"), candidate: spec("c", "/tmp/cand"), runner: async (c: string) => (c === "b" ? { status: 0 } : { status: null, signal: "SIGKILL" }) });
   assert.equal(crashed.passed, false);
   assert.equal(crashed.details.infrastructureFailure, true);
+  const silent = await ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/base"), candidate: spec("c", "/tmp/cand"), runner: async (c: string) => ({ status: c === "b" ? 0 : 2 }) });
+  assert.equal(silent.passed, false, "a candidate that newly fails without output does not pass");
+  assert.equal(silent.details.statusRegression, true);
   await assert.rejects(ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/x"), candidate: spec("c", "/tmp/x/") }), /must be separate/);
 });
 
@@ -152,6 +179,10 @@ test("the parser counts each recognized tool call as native, repaired or invalid
   const text = parseModelResponse({ role: "assistant", content: '<tool_call>{"name":"read_file","arguments":{"path":"a.txt",},}</tool_call><tool_call>{name: read_file ((</tool_call>' }, { nativeTools: false });
   assert.equal(text.toolCalls.length, 1);
   assert.deepEqual(text.toolCallSyntax, { native: 0, trailing: 1, structural: 0, invalid: 1 });
+  // A reply consisting solely of one fenced JSON call is counted like a tag.
+  const fenced = parseModelResponse({ role: "assistant", content: '```json\n{"name":"read_file","arguments":{"path":"a.txt"}}\n```' }, { nativeTools: false });
+  assert.equal(fenced.toolCalls.length, 1);
+  assert.deepEqual(fenced.toolCallSyntax, { native: 1, trailing: 0, structural: 0, invalid: 0 });
   assert.equal(parseModelResponse({ role: "assistant", content: "no tools here" }).toolCallSyntax, undefined);
 });
 
@@ -177,6 +208,47 @@ test("a real agent turn reports its tool-call syntax on the turn result", { time
     assert.deepEqual(turn.toolCallSyntax, { native: 1, trailing: 1, structural: 0, invalid: 0 });
     assert.equal(ev.evaluateJsonRepairRate(turn.toolCallSyntax).details.total, 2);
   } finally {
+    agent.shutdown();
+    await gw.close();
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a delegated subagent's tool calls are counted on the parent turn", { timeout: 60_000 }, async () => {
+  const repo = makeRepo({ "a.txt": "alpha\n" });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-code-evaluators-home-"));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  const isSubagent = (body: any) => JSON.stringify(body?.messages ?? []).includes("[Subagent Objective]");
+  const toolResults = (body: any) => (body?.messages ?? []).filter((m: any) => m.role === "tool").length;
+  const gw = await startGateway((_n, body) => {
+    if (isSubagent(body)) {
+      // The subagent's call has a trailing comma: parsed only after a repair, and counted on the parent's turn.
+      return toolResults(body) === 0
+        ? { kind: "tools", calls: [{ name: "read_file", args: '{"path":"a.txt",}' }] }
+        : { kind: "text", content: "Subagent report: a.txt says alpha." };
+    }
+    return toolResults(body) === 0
+      ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "Read a.txt and report." } }] }
+      : { kind: "text", content: "a.txt says alpha." };
+  });
+  const config = {
+    endpoint: gw.url, model: "m", maxSteps: 8, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true,
+    continuation: { ...DEFAULT_CONTINUATION, stagnationSteps: 30 },
+  } as HarnessConfig;
+  const agent = new AutonomousAgent(config);
+  (agent as any).ui = new Proxy({}, { get: () => () => {} });
+  const log = console.log;
+  console.log = () => {};
+  try {
+    const turn = await agent.runTurn("Use a subagent to read a.txt.");
+    assert.ok((gw.requests as any[]).some(isSubagent), "the subagent ran");
+    assert.deepEqual(turn.toolCallSyntax, { native: 1, trailing: 1, structural: 0, invalid: 0 }, JSON.stringify(turn.toolCallSyntax));
+  } finally {
+    console.log = log;
     agent.shutdown();
     await gw.close();
     if (saved === undefined) delete process.env.HOME;
