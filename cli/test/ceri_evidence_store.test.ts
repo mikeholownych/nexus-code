@@ -201,8 +201,12 @@ test("CeriEvidenceStore redacts whole values under credential keys and keeps cou
       apiKey: ["LEAK-array-1"], api_key: "LEAK-snake", "api-key": "LEAK-kebab", access_token: "LEAK-access", token: { value: "LEAK-object" },
       password: "LEAK-pw", passwd: "LEAK-passwd", secret: "LEAK-secret", secrets: ["LEAK-secrets"], credentials: { user: "LEAK-cred" }, credential: "LEAK-cred1",
       authorization: "LEAK-authz", auth: "LEAK-auth", cookie: "LEAK-cookie", cookies: "LEAK-cookies", bearer: "LEAK-bearer", jwt: "LEAK-jwt", private_key: "LEAK-pk", privateKey: "LEAK-pk2",
+      // Concatenated or split spellings of the same credential names.
+      accesstoken: "LEAK-c1", refreshtoken: "LEAK-c2", idtoken: "LEAK-c3", authtoken: "LEAK-c4", clientsecret: "LEAK-c5", privatekey: "LEAK-c6", secretkey: "LEAK-c7", accesskey: "LEAK-c8",
+      sessiontoken: "LEAK-c9", bearertoken: "LEAK-c10", DB_PASS: "LEAK-c11", dbPass: "LEAK-c12", passWord: "LEAK-c13", PASSWORD: "LEAK-c14", user_pass: "LEAK-c15", ADMIN_PASS: "LEAK-c16",
+      pwd: "LEAK-c17", client_secret: "LEAK-c18", ClientSecret: "LEAK-c19", AWS_SECRET_ACCESS_KEY: "LEAK-c20",
     };
-    const kept = { pass: 12, bypass: "kept-bypass", max_token: 4096, max_tokens: 8192, tokens: { input: 5, output: 7 }, passed: true, keyboard: "kept-kb", author: "kept-author" };
+    const kept = { pass: 12, bypass: "kept-bypass", max_token: 4096, max_tokens: 8192, tokens: { input: 5, output: 7 }, passed: true, keyboard: "kept-kb", author: "kept-author", compass: "kept-compass", passport: "kept-passport", tokenCount: 3, passes: 4, keys: 5 };
     store.appendEvent({ ...secrets, ...kept });
     store.recordAssertions([{ ...secrets, ...kept }]);
     store.recordReceipts([{ nested: { ...secrets, ...kept } }]);
