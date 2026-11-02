@@ -11,6 +11,7 @@
  * This module is presentation-free: callers (CLI, REPL, a future TUI) project it, they do not
  * reinterpret it. VERIFIED can only be produced from verifier evidence, never asserted.
  */
+import type { ToolCallSyntaxCounts } from "../parser.js";
 
 export type ExecutionState = "COMPLETED" | "INTERRUPTED" | "FAILED" | "BLOCKED" | "LIMIT_REACHED";
 
@@ -302,6 +303,8 @@ export interface TurnResult {
    * REGRESSION_FREE: the verifier's result stands, but the work may rest on observations the model no longer had.
    */
   contextNotRetained?: number;
+  /** Argument syntax of the tool calls the model issued this turn (native, repaired or invalid JSON); absent when none. */
+  toolCallSyntax?: ToolCallSyntaxCounts;
   /** Where the operator's objective stands: open requirements, the failed check and the next action. */
   objective?: {
     status: "completed" | "incomplete" | "blocked";
