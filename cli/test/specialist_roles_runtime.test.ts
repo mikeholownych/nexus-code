@@ -123,3 +123,36 @@ test("TeamOrchestrator.plan builds a one-unit operation for each specialist targ
     assert.deepEqual(op.units[0].requires.capabilities, ["tools"]);
   }
 });
+
+// ---------------------------------------------------------------- recovered read-only agents
+
+import { DurableStateManager } from "../src/core/state.js";
+
+test("a recovered read-only specialist completes with its report; roles that can write keep the unverified-change obligation", async () => {
+  const gw = await startGateway(() => ({ kind: "tools", calls: [{ name: "task_completed", args: { summary: "callers: a.ts:3" } }] }));
+  try {
+    const outcomes: Record<string, string> = {};
+    for (const role of ["semantic_explorer", "call_site_analyzer", "security_reviewer", "failure_debugger", "implementer"]) {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-spec-recover-"));
+      const make = () => {
+        const a = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 3, temperature: 0, workspace, shell: "bash", role } as any, 1, undefined, { durable: true, role } as any) as any;
+        a.recoveryClock = fakeClock();
+        a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+        return a;
+      };
+      const first = make();
+      const taskId = first.getTaskId();
+      first.checkpointDurableState("checkpoint");
+      first.shutdown();
+      const second = make();
+      await second.recoverFromTaskState(taskId);
+      const turn = await second.runTurn("report", undefined, { resume: true });
+      outcomes[role] = `${turn.outcome}`;
+      second.shutdown();
+    }
+    for (const role of ["semantic_explorer", "call_site_analyzer", "security_reviewer"]) assert.notEqual(outcomes[role], "UNVERIFIED", role);
+    for (const role of ["failure_debugger", "implementer"]) assert.equal(outcomes[role], "UNVERIFIED", `${role} keeps the obligation`);
+  } finally {
+    await gw.close();
+  }
+});

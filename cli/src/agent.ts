@@ -155,7 +155,7 @@ import {
 } from "./core/findings.js";
 import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnReason } from "./core/turn.js";
-import { isReadOnlyRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
+import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 
@@ -1678,10 +1678,12 @@ export class AutonomousAgent {
     // obligation pending after every recovery. A workspace-discovered or generic operator-configured verifier cannot
     // establish a pre-change state for the possibly modified workspace; resume stays unverified until a trusted
     // baseline or a task-specific authenticated verifier mechanism is available.
-    // The one exception is an independent review unit (reviewer or acceptance_reviewer, read-only by construction):
-    // it cannot have written anything and cannot run a verifier, so inheriting the obligation would make a retried
-    // review impossible to complete. Every other role, including a read-only researcher, keeps the obligation.
-    const pending = !((this.role === "reviewer" || this.role === "acceptance_reviewer") && this.isReadOnly());
+    // The exception is a review unit or a read-only specialist (read-only by construction): it cannot have written
+    // anything and cannot run a verifier, so inheriting the obligation would make its resumed report impossible to
+    // complete. Every other role keeps the obligation, including a read-only researcher (pinned by the team tests) and
+    // failure_debugger, which can run commands.
+    const readOnlyReporter = this.role === "reviewer" || (isSpecialistRole(this.role) && isReadOnlyRole(this.role));
+    const pending = !(readOnlyReporter && this.isReadOnly());
     this.hasPendingModifications = pending;
     this.verificationBaselineInvalidated = pending;
     if (pending) this.changeBaseline = null;
