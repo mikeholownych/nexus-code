@@ -2633,6 +2633,25 @@ export class AutonomousAgent {
     return renderRecoveryContext(input, { present: (id) => presentCalls.has(id), stagnationSteps });
   }
 
+  /**
+   * Gives each tool call an id that no other execution in this conversation or in the objective's coverage uses.
+   * Providers may repeat ids (e.g. "call_0" every turn); presence and coverage are judged per execution, so a reused id
+   * would let one call's output stand for another's. Nexus writes both the call and its result, so the pair stays
+   * consistent; ids that are already unique are kept unchanged.
+   */
+  private uniqueCallIds(calls: ToolCall[], tracker: ExecutionTracker): void {
+    if (!calls.length) return;
+    const used = new Set<string>(tracker.data.coverage.map((s) => s.key));
+    for (const m of this.messages) {
+      if (m.role === "assistant") for (const c of (m as any).tool_calls ?? []) if (typeof c?.id === "string") used.add(c.id);
+      if (m.role === "tool" && typeof m.tool_call_id === "string") used.add(m.tool_call_id);
+    }
+    for (const call of calls) {
+      if (typeof call.id !== "string" || !call.id || used.has(call.id)) call.id = `${typeof call.id === "string" && call.id ? call.id.slice(0, 40) : "call"}_nx${randomUUID().slice(0, 8)}`;
+      used.add(call.id);
+    }
+  }
+
   /** Whether requests carry the pinned Objective Ledger for this objective (and with it the live recovery context). */
   private pinsLedger(): boolean {
     return Boolean(this.objective && this.durable);
@@ -5535,6 +5554,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (this.objective && this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
         const stepStateBefore = stateNow;
         const verdicts: ObservationVerdict[] = [];
+        /** Evidence-backed progress earlier in this step: new information, or a successful change to the workspace. */
+        const progressedThisStep = () => verdicts.some((v) => v.informative || v.classification === "ARTIFACT_MODIFIED");
         let operatorInputApplied = this.applyQueuedSteering(currentStep) > 0;
         if (operatorInputApplied) {
           completionNudges = 0;
@@ -5618,6 +5639,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             ? `called ${name} with the same arguments ${count} times`
             : `obtained lines ${verdict.equivalence?.start}-${verdict.equivalence?.end} of ${verdict.equivalence?.path} ${count} times (most recently with ${name})`;
           tracker.stagnation(cumulativeStep, "repetition", `${verdict.record.action} ×${count} with the same result on an unchanged workspace -> ${verdict.record.outcome.slice(0, 160)}`);
+          // This step already made progress: it ends the recovery episode at endStep, so a repeat in it neither
+          // escalates nor exhausts recovery (later calls in the step still run).
+          if (progressedThisStep()) return;
           const transition = tracker.recordUnproductive(cumulativeStep, verdict.record.action, inputState, budget.maxRecoveries, allowedDenials);
           if (transition.outcome === "exhausted") {
             stopReason = "STAGNATION_DETECTED";
@@ -5646,6 +5670,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
          */
         const refuse = (call: ToolCall): string | undefined => {
           if (!budget) return undefined;
+          // An earlier call in this step already showed progress: recovery ends with this step, so nothing more in it is refused.
+          if (progressedThisStep()) return undefined;
           const name = call.function.name;
           const denial = tracker.recoveryDenial(cumulativeStep, name, call.function.arguments, inputStateFor(), this.config.workspace, presence(), (p) => fileSignature(this.config.workspace, p));
           if (!denial) return undefined;
@@ -5913,6 +5939,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
 
         // Record assistant's response in history
+        this.uniqueCallIds(parsed.toolCalls, tracker);
         this.messages.push({
           role: "assistant",
           content: assistantMessage.content || "",

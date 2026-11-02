@@ -465,4 +465,64 @@ describe("recovery state continuity", () => {
       fs.rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  test("progress earlier in a step suspends refusal for the rest of it: with the refusal budget spent, [new read, covered read, write] runs in full", { timeout: 120_000 }, async () => {
+    const repo = makeRepo({ "f.txt": lines("f", 10), "g.txt": lines("g", 10) });
+    let agent: AutonomousAgent | undefined;
+    const spent = () => {
+      const r = agent ? agent.getObjective()?.execution?.recovery : undefined;
+      return !!r && r.stage === "constrained" && r.denials === r.allowedDenials;
+    };
+    const gw = await startGateway((_n, body) => {
+      if (wrote(body, "fix.txt")) return text("Done: fix.txt written.");
+      if (spent()) return tools([read("g.txt"), read("f.txt"), { name: "write_file", args: { path: "fix.txt", content: "fixed\n" } }]);
+      return tools([read("f.txt")]);
+    });
+    agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const ran = dispatchLog(agent);
+    try {
+      const turn = await agent.runTurn("Inspect f.txt and g.txt, then write fix.txt.");
+      assert.equal(turn.execution, "COMPLETED", JSON.stringify(turn));
+      assert.ok(fs.existsSync(path.join(repo, "fix.txt")), "the write later in the step ran");
+      const batch = ran.slice(-3).map((r) => [r.name, JSON.parse(r.args).path]);
+      assert.deepEqual(batch, [["read_file", "g.txt"], ["read_file", "f.txt"], ["write_file", "fix.txt"]], "every call of the step ran");
+      const k = kinds(agent);
+      assert.ok(!k.includes("recovery_exhausted"), k.join(","));
+      assert.ok(k.includes("recovery_progress_detected") && k.includes("recovery_completed"), k.join(","));
+      assert.equal(recovery(agent).stage, "normal");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a provider that reuses tool-call ids: every execution gets its own id, so one call's output never stands for another's", { timeout: 120_000 }, async () => {
+    const repo = makeRepo({ "f.txt": lines("f", 10) });
+    // Every call this provider returns has id "call_0", across steps and within a batch.
+    const plan = { name: "update_plan", args: { plan: [{ step: "read f.txt", status: "in_progress" }] }, id: "call_0" };
+    const gw = await startGateway((n) => (n <= 3 ? tools([{ ...read("f.txt"), id: "call_0" }, plan]) : text("f.txt has 10 lines.")));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const ran = dispatchLog(agent);
+    try {
+      const turn = await agent.runTurn("Look at f.txt.");
+      assert.equal(turn.execution, "COMPLETED", JSON.stringify(turn));
+      const issued = agent.getMessages().flatMap((m: any) => (m.role === "assistant" ? m.tool_calls ?? [] : [])).map((c: any) => c.id);
+      assert.equal(issued.length, 6);
+      assert.equal(new Set(issued).size, issued.length, `ids unique: ${issued.join(",")}`);
+      // Each result answers exactly the call it belongs to, and dispatch saw the same ids.
+      const answered = toolMessages(agent).map((m) => m.tool_call_id);
+      assert.deepEqual([...answered].sort(), [...issued].sort());
+      assert.deepEqual(ran.map((r) => r.id), issued);
+      // Coverage is keyed by the read's own execution, never by the plan update's.
+      const readIds = new Set(callIds(agent, (name) => name === "read_file"));
+      const keys = agent.getObjective()!.execution!.coverage.map((c: any) => c.key);
+      assert.ok(keys.length >= 1);
+      for (const key of keys) assert.ok(readIds.has(key), `coverage key ${key} is a read_file call`);
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
 });

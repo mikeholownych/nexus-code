@@ -416,7 +416,7 @@ export interface ObservationVerdict {
   classification: ProgressClass;
   /** Third (or later) observation of the same lines of a file on a known unchanged state: a semantic loop. */
   equivalentLoop: boolean;
-  /** The equivalence record behind `equivalent` (per file and state). */
+  /** The record of these exact lines re-obtained on this state (set when the observation was equivalent); see `equivalentLoop`. */
   equivalence?: EquivalenceRecord;
 }
 
