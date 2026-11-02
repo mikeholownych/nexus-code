@@ -27,7 +27,7 @@ import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierT
 import { copyToClipboard, readFromClipboard } from "./clipboard.js";
 import { encodeImageFile, formatVisionContent } from "./image.js";
 import { ThemeManager } from "./theme.js";
-import { TeamOrchestrator, AgentRole, TEAM_ROLES } from "./team.js";
+import { TeamOrchestrator, AgentRole, TEAM_TARGET_ROLES } from "./team.js";
 import { TerminalDashboard } from "./tui.js";
 import { HunkStager } from "./stager.js";
 import { TurnResult, lifecycleStatusForTurn } from "./core/turn.js";
@@ -1594,11 +1594,11 @@ export class InteractiveRepl {
             const independentReview = task.startsWith("--independent-review");
             const objective = task.replace(/^--independent-review\s*/, "").trim();
             if (!subCmd || !objective) {
-              console.log(pc.yellow(`Usage: /team <${[...TEAM_ROLES, "full"].join("|")}> [--independent-review] <objective>\n`));
+              console.log(pc.yellow(`Usage: /team <${[...TEAM_TARGET_ROLES, "full"].join("|")}> [--independent-review] <objective>\n`));
               continue;
             }
-            if (subCmd !== "full" && !TEAM_ROLES.includes(subCmd as AgentRole)) {
-              console.log(pc.red(`Unknown role '${subCmd}'. Available: ${[...TEAM_ROLES, "full"].join(", ")}\n`));
+            if (subCmd !== "full" && !TEAM_TARGET_ROLES.includes(subCmd as AgentRole)) {
+              console.log(pc.red(`Unknown role '${subCmd}'. Available: ${[...TEAM_TARGET_ROLES, "full"].join(", ")}\n`));
               continue;
             }
 

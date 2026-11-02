@@ -6,8 +6,13 @@
  * resource, reroutes or parks when it becomes unavailable, and never runs a role on an unqualified one.
  */
 import type { WorkRequirements } from "./resources.js";
+import { SPECIALIST_CONTRACTS, type SpecialistRole } from "./specialist_profiles.js";
+export * from "./specialist_profiles.js";
 
-export type AgentRole = "researcher" | "architect" | "implementer" | "tester" | "reviewer";
+/** The roles `/team` composes into a pipeline. */
+export type TeamRole = "researcher" | "architect" | "implementer" | "tester" | "reviewer";
+/** Every role a work unit or agent can run as: the team roles and the bounded specialists. */
+export type AgentRole = TeamRole | SpecialistRole;
 
 export interface RoleProfile {
   role: AgentRole;
@@ -17,7 +22,7 @@ export interface RoleProfile {
   recommendedTools: string[];
 }
 
-export const ROLE_PROFILES: Record<AgentRole, RoleProfile> = {
+const TEAM_ROLE_PROFILES: Record<TeamRole, RoleProfile> = {
   researcher: {
     role: "researcher",
     title: "Codebase & Technology Researcher",
@@ -75,14 +80,50 @@ You are reviewing work produced by a different model. Do not assume it is correc
   },
 };
 
+function specialistProfile(role: SpecialistRole): RoleProfile {
+  const c = SPECIALIST_CONTRACTS[role];
+  const lines = [
+    `\n### Specialized Role: ${c.title.toUpperCase()}`,
+    c.description,
+    `- Use only these tools: ${c.permittedTools.join(", ")}.`,
+    c.readOnly ? "- Do not modify files." : "- Change files only as far as reproducing and diagnosing the failure requires.",
+    `- Required inputs: ${c.inputRequirements.join(", ")}. If any is missing from the task, say so in task_completed rather than guessing.`,
+    `- Escalate (report and stop) when: ${c.escalationCriteria.join("; ")}.`,
+  ];
+  return { role, title: c.title, description: c.description, systemPromptAddendum: lines.join("\n"), recommendedTools: [...c.permittedTools] };
+}
+
+export const ROLE_PROFILES: Record<AgentRole, RoleProfile> = {
+  ...TEAM_ROLE_PROFILES,
+  ...(Object.fromEntries(
+    (Object.keys(SPECIALIST_CONTRACTS) as SpecialistRole[]).map((role) => [role, specialistProfile(role)]),
+  ) as Record<SpecialistRole, RoleProfile>),
+};
+
 /**
  * Roles that run with a read-only tool set (DEC-07, REQ-AGT-119). The operation runner starts their units in read-only
  * mode, so a write or exec call is refused by the agent rather than relying on the prompt.
  */
-export const READ_ONLY_ROLES: ReadonlySet<AgentRole> = new Set<AgentRole>(["researcher", "reviewer"]);
+export const READ_ONLY_ROLES: ReadonlySet<AgentRole> = new Set<AgentRole>([
+  "researcher",
+  "reviewer",
+  ...(Object.values(SPECIALIST_CONTRACTS).filter((c) => c.readOnly).map((c) => c.role)),
+]);
 
 export function isReadOnlyRole(role: AgentRole | string | undefined): boolean {
   return role !== undefined && READ_ONLY_ROLES.has(role as AgentRole);
+}
+
+/**
+ * The only tools a role may call, or undefined when the role is not restricted. Read-only team roles are held to their
+ * recommended tools; a specialist is held to its contract's permitted tools whether or not it is read-only. The agent
+ * both advertises only these tools and refuses any other call, so a prompt cannot widen the set.
+ */
+export function roleToolAllowList(role: AgentRole | string | undefined): ReadonlySet<string> | undefined {
+  if (role === undefined || !Object.hasOwn(ROLE_PROFILES, role)) return undefined;
+  if (Object.hasOwn(SPECIALIST_CONTRACTS, role)) return new Set([...SPECIALIST_CONTRACTS[role as SpecialistRole].permittedTools, "task_completed"]);
+  if (isReadOnlyRole(role)) return new Set([...ROLE_PROFILES[role as AgentRole].recommendedTools, "task_completed"]);
+  return undefined;
 }
 
 export interface RoleRequirement {
@@ -99,6 +140,11 @@ export const ROLE_REQUIREMENTS: Record<AgentRole, RoleRequirement> = {
   implementer: { qualification: "implementation", capabilities: ["tools"] },
   tester: { qualification: "verification", capabilities: ["tools"], taskClass: "review" },
   reviewer: { qualification: "review", capabilities: ["tools"], taskClass: "review" },
+  semantic_explorer: { qualification: "research", capabilities: ["tools"], taskClass: "subagent" },
+  call_site_analyzer: { qualification: "research", capabilities: ["tools"], taskClass: "subagent" },
+  failure_debugger: { qualification: "verification", capabilities: ["tools"], taskClass: "review" },
+  security_reviewer: { qualification: "review", capabilities: ["tools"], taskClass: "review" },
+  acceptance_reviewer: { qualification: "review", capabilities: ["tools"], taskClass: "review" },
 };
 
 export function roleRequirements(role: AgentRole, extra: Partial<WorkRequirements> = {}): WorkRequirements {

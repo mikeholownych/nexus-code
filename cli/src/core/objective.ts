@@ -506,7 +506,7 @@ export function renderPinnedLedger(
   ledger: ObjectiveLedger,
   includeObjective: boolean,
   budgetChars = MAX_PINNED_OBJECTIVE_CHARS,
-  recovery: { present?: (callId: string) => boolean; stagnationSteps?: number } = {},
+  recovery: RecoveryContextOptions = {},
 ): string {
   const out: string[] = [PINNED_LEDGER_PREFIX];
   if (includeObjective) {
@@ -610,6 +610,14 @@ export function renderPinnedLedger(
   return out.join("\n");
 }
 
+/** How the recovery context is rendered: evidence presence, the stagnation limit, and which tools the agent may call. */
+export interface RecoveryContextOptions {
+  present?: (callId: string) => boolean;
+  stagnationSteps?: number;
+  /** Whether the agent may call a tool; actions it may not take are left out of "Permitted next actions". */
+  permits?: (tool: string) => boolean;
+}
+
 const clipText = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
 const fmtRanges = (ranges: Array<[number, number]>) => ranges.map(([a, b]) => (b < a ? "empty" : a === b ? `${a}` : `${a}-${b}`)).join(", ");
 
@@ -620,7 +628,7 @@ const fmtRanges = (ranges: Array<[number, number]>) => ranges.map(([a, b]) => (b
  */
 export function renderRecoveryContext(
   input: { objective: string; open: Array<{ id: string; text: string }>; execution: ExecutionTracking },
-  opts: { present?: (callId: string) => boolean; stagnationSteps?: number } = {},
+  opts: RecoveryContextOptions = {},
 ): string {
   const t = normalizeTracking(input.execution);
   const tracker = new ExecutionTracker(t);
@@ -654,10 +662,20 @@ export function renderRecoveryContext(
     "- Reading any of the line ranges above again, through any interface (read_file, batch_read, cat/head/sed), while that output is still in this conversation.",
     "- (Other calls are not refused, but repeating one that returns the same result on this unchanged workspace stops the turn.)",
   );
+  // Only actions the agent may take: a restricted role or read-only mode refuses the others at dispatch.
+  const can = opts.permits ?? (() => true);
+  const canAny = (...tools: string[]) => tools.some(can);
+  const actions = [
+    "use the output already in this conversation",
+    ...(canAny("read_file", "batch_read") ? ["read lines or files not listed above"] : []),
+    ...(canAny("search_code", "search_symbols") ? ["search for a specific symbol or string"] : []),
+    ...(canAny("write_file", "edit_file", "patch_file") ? ["edit files"] : []),
+    ...(canAny("run_command", "run_tests") ? ["run a build, test or command"] : []),
+  ].join("; ");
   out.push(
     "Permitted next actions:",
-    "- Use the output already in this conversation; read lines or files not listed above; search for a specific symbol or string; edit files; run a build, test or command;",
-    "- record a finding or a blocker with update_requirements (status \"blocked\" with the reason); or finish with a final message reporting what you found.",
+    `- ${actions.charAt(0).toUpperCase()}${actions.slice(1)};`,
+    `- ${can("update_requirements") ? "record a finding or a blocker with update_requirements (status \"blocked\" with the reason); or " : ""}finish with a final message reporting what you found.`,
   );
   const remaining = Math.max(0, r.allowedDenials - r.denials);
   const stagnation = opts.stagnationSteps !== undefined ? `; ${Math.max(0, opts.stagnationSteps - t.stepsWithoutProgress)} step(s) without progress left before the turn stops` : "";

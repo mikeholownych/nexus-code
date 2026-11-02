@@ -2,13 +2,13 @@ import * as path from "node:path";
 import { encodeImageFile, formatVisionContent } from "../image.js";
 import type { McpClientManager } from "../mcp.js";
 import type { OperationEvent } from "../core/operation.js";
-import { AgentRole, TEAM_ROLES, TeamOrchestrator } from "../team.js";
+import { AgentRole, TEAM_TARGET_ROLES, TeamOrchestrator } from "../team.js";
 import { SlashContext, SlashHandler, SlashOutcome, reply } from "./catalog.js";
 import { recall } from "./session_commands.js";
 
 const IMAGE_PROMPT = "Please analyze this image, describe its contents, and provide relevant technical solutions.";
-const ROLES: string[] = TEAM_ROLES;
-const TEAM_USAGE = `Usage: /team <${[...TEAM_ROLES, "full"].join("|")}> [--independent-review] <objective>`;
+const ROLES: string[] = TEAM_TARGET_ROLES;
+const TEAM_USAGE = `Usage: /team <${[...TEAM_TARGET_ROLES, "full"].join("|")}> [--independent-review] <objective>`;
 /** Longer waits leave the team WAITING durably (resumable) instead of holding the prompt. */
 const TEAM_INTERACTIVE_WAIT_MS = 60_000;
 

@@ -12,17 +12,20 @@ import { isRequired, newOperation, type DurableOperationState, type OperationEve
 import { AgentWorkUnitExecutor, driveOperation, OperationStore, resourcesFromConfig, type WorkUnitExecutor } from "./core/operation_runner.js";
 import type { RecoveryClock } from "./core/provider_recovery.js";
 import type { ResourceDescriptor } from "./core/resources.js";
-import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, type AgentRole } from "./core/roles.js";
+import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, SPECIALIST_CONTRACTS, type AgentRole } from "./core/roles.js";
 import { mergeOperationPolicy } from "./config.js";
 import type { HarnessConfig } from "./types.js";
 
-export { ROLE_PROFILES, ROLE_REQUIREMENTS, type AgentRole, type RoleProfile } from "./core/roles.js";
+export { ROLE_PROFILES, ROLE_REQUIREMENTS, type AgentRole, type TeamRole, type RoleProfile } from "./core/roles.js";
 
 export const TEAM_ROLES: AgentRole[] = ["researcher", "architect", "implementer", "tester", "reviewer"];
 
+/** Every role `/team` accepts as a single-role target: the five team roles and the specialist roles. */
+export const TEAM_TARGET_ROLES: AgentRole[] = [...TEAM_ROLES, ...(Object.keys(SPECIALIST_CONTRACTS) as AgentRole[])];
+
 export type TeamTarget = AgentRole | "full";
 
-const UNIT_ID: Record<AgentRole, string> = { researcher: "research", architect: "design", implementer: "implement", tester: "verify", reviewer: "review" };
+const UNIT_ID: Partial<Record<AgentRole, string>> = { researcher: "research", architect: "design", implementer: "implement", tester: "verify", reviewer: "review" };
 
 /** Role turns segment at 15 steps (durable checkpoint boundary; continues until completion, stagnation or cancel unless --no-continuation is set). */
 const ROLE_MAX_STEPS = 15;
@@ -34,7 +37,7 @@ const ROLE_MAX_STEPS = 15;
  */
 export function teamUnits(target: TeamTarget, objective: string, opts: { independentReview?: boolean } = {}): WorkUnitSpec[] {
   const unit = (role: AgentRole, dependsOn: string[], independentOf?: string[]): WorkUnitSpec => ({
-    id: UNIT_ID[role],
+    id: UNIT_ID[role] ?? role,
     title: ROLE_PROFILES[role].title,
     role,
     prompt: objective,
@@ -95,6 +98,7 @@ export class TeamOrchestrator {
       store,
       executor,
       signal: this.opts.signal,
+      workspace: this.config.workspace,
       ...(this.opts.clock ? { clock: this.opts.clock } : {}),
       ...(this.opts.onEvent ? { onEvent: this.opts.onEvent } : {}),
       ...(this.opts.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.opts.maxInProcessWaitMs } : {}),
