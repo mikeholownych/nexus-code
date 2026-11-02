@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6EA2FDX1GHT5ARH8GPF49HP",
+  "session_id": "ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-02T14:19:42.586508093Z",
+  "branch": "v1/pr396-takeover",
+  "checkpoints_count": 5,
+  "save_step_count": 60,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "36a4fdeae39b",
+  "checkpoint_transcript_start": 5447,
+  "transcript_lines_at_start": 5447,
+  "compact_transcript_start": 544,
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 25424,
+    "cache_read_tokens": 4619230,
+    "output_tokens": 14438,
+    "api_call_count": 19,
+    "subagent_tokens": {
+      "input_tokens": 136,
+      "cache_creation_tokens": 245527,
+      "cache_read_tokens": 6819787,
+      "output_tokens": 36360,
+      "api_call_count": 66
+    }
+  },
+  "redaction": {
+    "replacements": 8,
+    "layers": {
+      "betterleaks": 8,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01VqX83rM3YFUFf4WsjiwPqu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "claude-mem:cloud-sync"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1c96d5b30f60",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 41,
+        "end": 42,
+        "entry_ids": [
+          "c0a45187-7ac0-4f6d-bc3c-6fa91edda00f"
+        ],
+        "tool_use_id": "toolu_01VqX83rM3YFUFf4WsjiwPqu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VqX83rM3YFUFf4WsjiwPqu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: claude-mem:cloud-sync",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 60
+  }
+}
