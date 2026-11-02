@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01K1kU1wREPnAymFCDaG37cg",
+  "agent_id": "a6fe3209528d47eda",
+  "task_description": "Delta review of PR 401 nit fixes",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 31521,
+    "cache_read_tokens": 139811,
+    "output_tokens": 2515,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-02T20:19:42.165046913Z",
+  "completed_at": "2026-11-02T20:21:11.528938647Z"
+}

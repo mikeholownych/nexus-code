@@ -3,7 +3,7 @@
   "checkpoint_id": "01M6F1W4DQ32CME4TQDTS9K173",
   "strategy": "manual-commit",
   "branch": "v1/wp-1105-evaluators",
-  "checkpoints_count": 98,
+  "checkpoints_count": 102,
   "files_touched": [
     "cli/src/agent.ts"
   ],
@@ -26,20 +26,34 @@
       "transcript": "/2/full.jsonl",
       "content_hash": "/2/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/3/metadata.json",
+      "transcript": "/3/full.jsonl",
+      "compact_transcript": "/3/transcript.jsonl",
+      "content_hash": "/3/content_hash.txt",
+      "prompt": "/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 611301,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 56397562,
-    "output_tokens": 96720,
-    "api_call_count": 405,
+    "input_tokens": 611329,
+    "cache_creation_tokens": 6552,
+    "cache_read_tokens": 57525506,
+    "output_tokens": 100177,
+    "api_call_count": 416,
+    "subagent_tokens": {
+      "input_tokens": 8,
+      "cache_creation_tokens": 31521,
+      "cache_read_tokens": 139811,
+      "output_tokens": 2515,
+      "api_call_count": 4
+    },
     "subagent_tokens_complete": false
   },
   "redaction": {
-    "replacements": 1492,
+    "replacements": 1518,
     "layers": {
-      "betterleaks": 478,
+      "betterleaks": 504,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 157,
