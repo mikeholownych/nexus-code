@@ -3,29 +3,31 @@
   "checkpoint_id": "01M6E392NDQRF7MYVNM48FVSJD",
   "session_id": "ee800dc3-6bb6-4e55-89e6-d6c2e85af4b6",
   "strategy": "manual-commit",
-  "created_at": "2026-11-02T12:20:57.650103341Z",
+  "created_at": "2026-11-02T12:43:21.299932804Z",
   "branch": "v1/pr396-takeover",
   "checkpoints_count": 1,
   "save_step_count": 50,
-  "files_touched": [],
+  "files_touched": [
+    "cli/src/agent.ts"
+  ],
   "agent": "Claude Code",
   "model": "claude-sonnet-5-5",
   "turn_id": "9c8cf4ea3a98",
-  "checkpoint_transcript_start": 5187,
-  "transcript_lines_at_start": 5187,
-  "compact_transcript_start": 518,
+  "checkpoint_transcript_start": 5249,
+  "transcript_lines_at_start": 5249,
+  "compact_transcript_start": 522,
   "token_usage": {
-    "input_tokens": 8,
-    "cache_creation_tokens": 5916,
-    "cache_read_tokens": 591703,
-    "output_tokens": 3075,
-    "api_call_count": 3,
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
     "subagent_tokens": {
-      "input_tokens": 68,
-      "cache_creation_tokens": 22572,
-      "cache_read_tokens": 4853494,
-      "output_tokens": 10346,
-      "api_call_count": 34
+      "input_tokens": 56,
+      "cache_creation_tokens": 29622,
+      "cache_read_tokens": 5482529,
+      "output_tokens": 15489,
+      "api_call_count": 28
     }
   },
   "redaction": {
