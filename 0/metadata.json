@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6DVD35GNYF5PX9PPJEK77FW",
+  "session_id": "01a192c0-f277-7f60-8574-21ce71edb8c2",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-02T10:03:52.325318627Z",
+  "branch": "v1/v112-wp1104-integration",
+  "checkpoints_count": 11,
+  "save_step_count": 46,
+  "files_touched": [
+    "cli/scripts/run_tests.mjs",
+    "cli/src/eval_cli.ts",
+    "cli/src/index.ts",
+    "cli/test/eval_cli.test.ts",
+    "docs/v1.1.0/WP-1104-PLAN.md",
+    "eval/README.md",
+    "eval/package_runtime.test.mjs",
+    "eval/run.mjs",
+    "scripts/package-linux.sh",
+    "scripts/stage_eval_runtime.mjs"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "fd9008bf8563",
+  "checkpoint_transcript_start": 27983,
+  "transcript_lines_at_start": 27983,
+  "compact_transcript_start": 3817,
+  "token_usage": {
+    "input_tokens": 1235631,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 207333888,
+    "output_tokens": 304840,
+    "api_call_count": 1496,
+    "subagent_tokens": {
+      "input_tokens": 2293030,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 18538496,
+      "output_tokens": 70375,
+      "api_call_count": 125
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 1298,
+    "layers": {
+      "betterleaks": 415,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 153,
+      "credentialed_uri": 55,
+      "entropy": 944,
+      "key_context": 0,
+      "provider_token": 1,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 51
+  }
+}
