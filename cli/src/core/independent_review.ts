@@ -114,7 +114,12 @@ export function extractModifiedFilesFromDiff(diff: string): string[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (oldLeft > 0 || newLeft > 0) {
-      if (line.startsWith("\\")) continue; // "\ No newline at end of file"
+      // A file header pair followed by a hunk header cannot be hunk content (a body line never starts with "@@"), so a
+      // hunk whose counts overstate its body must not swallow the next file's headers.
+      if (line.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ") && lines[i + 2]?.startsWith("@@")) {
+        oldLeft = 0;
+        newLeft = 0;
+      } else if (line.startsWith("\\")) continue; // "\ No newline at end of file"
       if (line.startsWith(" ") || line === "") {
         oldLeft = Math.max(0, oldLeft - 1);
         newLeft = Math.max(0, newLeft - 1);
@@ -310,7 +315,7 @@ ${diffContent}
 
 INSTRUCTIONS FOR INDEPENDENT REVIEWER:
 1. Do not assume the implementation is correct. The implementer's self-assessed narrative has been excluded.
-2. Evaluate the code diff against the objective requirements and authorized scope.
+2. Evaluate the code diff against the objective requirements${pkg.authorizedScope ? " and authorized scope" : ""}.
 3. Check for regressions, unhandled edge cases, security boundaries, and incomplete logic.
 4. You MUST respond with a JSON block adhering strictly to this schema:
 \`\`\`json

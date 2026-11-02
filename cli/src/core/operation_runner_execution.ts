@@ -49,7 +49,8 @@ export function reviewCandidateDiff(workspace: string, baseCommit?: string): { b
     }
   };
   try {
-    const base = baseCommit ?? git(["rev-parse", "HEAD"]).trim();
+    // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
+    const base = git(["rev-parse", "--verify", "--end-of-options", `${baseCommit ?? "HEAD"}^{commit}`]).trim();
     let diff = git(["diff", "--no-color", "--no-ext-diff", base, "--"]);
     const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
     for (const file of untracked) {
@@ -578,7 +579,11 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     const candidate = (ctx.baseCommit ?? ctx.startCommit) === undefined && ctx.dependencies.length > 0
       ? { error: "no starting commit was recorded for this operation, so work done before this review (possibly committed) cannot be shown; start a new operation" }
       : reviewCandidateDiff(ctx.workspace ?? workspace, ctx.baseCommit ?? ctx.startCommit);
-    const verified = ctx.dependencies.find((d) => d.verification)?.verification;
+    // The worst result across every dependency that ran a verifier decides; order must not matter.
+    const verifications = ctx.dependencies.flatMap((d) => (d.verification ? [d.verification] : []));
+    const passing = (v: { status: string; hasExecutedTests: boolean }) => v.status === "PASSED" && v.hasExecutedTests;
+    const verified = verifications.find((v) => !passing(v)) ?? verifications[0];
+    const emptyDiff = "diff" in candidate && candidate.diff.trim() === "";
     // No operation or unit declares a file scope, so the package carries none (rather than an empty placeholder that
     // would read as "unrestricted"): the scope gate runs only for callers that supply one.
     return buildReviewEvidencePackage({
@@ -587,7 +592,12 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       objective: `${ctx.objective}\n\nReview task: ${unit.prompt}`,
       baselineCommit: "base" in candidate ? candidate.base : "unknown",
       unifiedDiff: "diff" in candidate ? candidate.diff : "",
-      ...("error" in candidate ? { diffError: candidate.error || "git diff failed" } : {}),
+      // An empty diff gives the reviewer nothing to judge, so it is a failure to collect evidence, not an accept.
+      ...("error" in candidate
+        ? { diffError: candidate.error || "git diff failed" }
+        : emptyDiff
+          ? { diffError: "the candidate diff is empty: there is no change against the base to review" }
+          : {}),
       ...(verified
         ? {
             verifierCommand: verified.command,

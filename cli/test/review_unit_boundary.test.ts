@@ -80,6 +80,7 @@ test("the reviewer prompt carries the diff and verifier receipt but not the auth
 
 test("a review unit completes only on a valid ACCEPT; prose, malformed or defect-bearing verdicts block it", () => {
   const dir = repo();
+  fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
   const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
   const ctx = { objective: "Fix add", workspace: dir, dependencies: [], observeSuccess() {} };
   const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
@@ -387,9 +388,93 @@ test("end to end: a change the implementer COMMITTED in a non-isolated operation
 test("a review after earlier work with no recorded starting commit blocks rather than reading an empty diff", () => {
   const dir = repo();
   const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
+  fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
   const ctx = { objective: "o", workspace: dir, dependencies: [{ id: "i", title: "I", summary: "s" }] };
   const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
   assert.match(pkg.diffError ?? "", /starting commit/);
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
   assert.equal(internals(executor).reviewEvidence(unit, { ...ctx, startCommit: head }, dir).diffError, undefined);
+});
+
+// ---------------------------------------------------------------- round 2
+
+test("R1: a legacy non-isolated operation with completed work and no recorded base blocks its review instead of diffing against the new HEAD", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-legacy-home-"));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  const prompts: string[] = [];
+  const gw = await startGateway((_n, body) => {
+    prompts.push(String((body.messages ?? []).length));
+    return { kind: "tools", calls: [{ name: "task_completed", args: { summary: verdict() } }] };
+  });
+  try {
+    const dir = repo();
+    fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
+    execFileSync("git", ["commit", "-qam", "fix add"], { cwd: dir, stdio: "pipe" });
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-legacy-state-"));
+    const clock = fakeClock();
+    const config: HarnessConfig = { endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: dir, shell: "bash" } as HarnessConfig;
+    const executor = new AgentWorkUnitExecutor({ baseConfig: config });
+    const resources = [{ id: "r1", provider: new URL(gw.url).origin, endpoint: gw.url, model: "r1", capabilities: ["tools"], rank: 0 }];
+    const state = newOperation("op-legacy", "Fix add", [
+      { id: "implement", role: "implementer", prompt: "fix" },
+      { id: "review", role: "reviewer", prompt: "review", dependsOn: ["implement"] },
+    ], resources as any, clock.now());
+    const impl = state.units.find((u) => u.id === "implement")!;
+    impl.status = "COMPLETE";
+    impl.runs = 1;
+    impl.result = { summary: "done", completedAt: new Date().toISOString(), resourceId: "r1", outcome: "NOT_REQUIRED" };
+    const out = await new TeamOrchestrator(config, { store: new OperationStore(dir, fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-legacy-s2-"))), executor, clock, resources } as any).drive(state);
+    const review = out.operation.units.find((u) => u.id === "review")!;
+    assert.equal(review.status, "BLOCKED", out.report);
+    assert.match(review.blocked?.reason ?? "", /starting commit/);
+    assert.equal(out.operation.startCommit, undefined, "a base recorded after the work would be the wrong base");
+  } finally {
+    await gw.close();
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+  }
+});
+
+test("R2: the worst dependency verification decides, whatever the order", () => {
+  const dir = repo();
+  fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
+  const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
+  const pass = { command: "make test", status: "PASSED", hasExecutedTests: true };
+  const fail = { command: "make test", status: "FAILED", hasExecutedTests: true };
+  const build = (...verifications: object[]) =>
+    internals(executor).reviewEvidence(unit, { objective: "o", workspace: dir, startCommit: head(dir), dependencies: verifications.map((v, i) => ({ id: `d${i}`, title: "D", summary: "s", verification: v })) }, dir);
+  assert.equal(build(pass, fail).verifierExitCode, 1);
+  assert.equal(build(fail, pass).verifierExitCode, 1);
+  assert.equal(build(pass, pass).verifierExitCode, 0);
+  assert.equal(build({ command: "a", status: "PASSED", hasExecutedTests: false }, pass).verifierExitCode, 1);
+});
+
+test("R3: an empty candidate diff is a failure to collect evidence, not something to accept", () => {
+  const dir = repo();
+  const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
+  const ctx = { objective: "o", workspace: dir, dependencies: [], observeSuccess() {} };
+  const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
+  assert.match(pkg.diffError ?? "", /empty/);
+  assert.equal(internals(executor).classify(unit, resource, done, verdict(), null, ctx, false, pkg).kind, "failed");
+});
+
+test("R7: a persisted base that looks like an option is refused, not passed to git", () => {
+  const dir = repo();
+  const target = path.join(dir, "..", `injected-${process.pid}`);
+  for (const bad of [`--output=${target}`, "-p", "not-a-commit", "HEAD; touch x"]) {
+    const out = reviewCandidateDiff(dir, bad);
+    assert.ok("error" in out, bad);
+  }
+  assert.equal(fs.existsSync(target), false);
+  assert.ok("diff" in reviewCandidateDiff(dir, head(dir)));
+});
+
+test("R8: the review instructions name the scope only when one is declared", () => {
+  const dir = repo();
+  fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
+  const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
+  const prompt = internals(executor).initialPrompt(unit, { objective: "o", workspace: dir, dependencies: [] }, undefined, internals(executor).reviewEvidence(unit, { objective: "o", workspace: dir, dependencies: [] }, dir));
+  assert.doesNotMatch(prompt, /authorized scope/i);
+  assert.match(prompt, /against the objective requirements/);
 });

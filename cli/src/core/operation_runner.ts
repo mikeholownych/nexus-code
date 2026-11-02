@@ -517,6 +517,9 @@ export class OperationRunner {
   /** First run of a non-isolated operation in a Git checkout: remember HEAD, the base a review diffs against. */
   private recordStartCommit(): void {
     if (this.state.git || this.state.startCommit || !this.opts.workspace) return;
+    // Only before any unit has started: HEAD after work began (an operation persisted before this was recorded) is
+    // not the operation's base, and leaving it unset makes a later review block rather than diff against it.
+    if (this.state.units.some((u) => u.runs > 0 || u.status === "COMPLETE" || u.status === "RUNNING" || u.agentTaskId)) return;
     try {
       this.state.startCommit = execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
         cwd: this.opts.workspace,

@@ -307,3 +307,30 @@ diff --git "a/bad
 `;
   assert.ok(extractModifiedFilesFromDiff(diff).some((f) => f.startsWith("<unparseable diff header")));
 });
+
+test("a plain-diff hunk whose counts overstate its body cannot swallow the next file's headers", () => {
+  const diff = `--- a/x.txt
++++ b/x.txt
+@@ -1,50 +1,50 @@
+-old
++new
+--- a/secret.txt
++++ b/secret.txt
+@@ -1 +1 @@
+-a
++b
+`;
+  assert.deepEqual(extractModifiedFilesFromDiff(diff).sort(), ["secret.txt", "x.txt"]);
+  assert.deepEqual(detectScopeViolations(diff, ["x.txt"]), ["secret.txt"]);
+  // Content that merely looks like a header pair is still content when no hunk header follows it.
+  const content = `--- a/x.txt
++++ b/x.txt
+@@ -1,4 +1,4 @@
+ keep
+--- before
++++ after
+ tail
+ end
+`;
+  assert.deepEqual(extractModifiedFilesFromDiff(content), ["x.txt"]);
+});
