@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01TdTwn11LdMa2ffzgwZd9Va",
+  "agent_id": "a5b23792846c4bee0",
+  "subagent_type": "general-purpose",
+  "task_description": "Independent review PR396 c34bf960",
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 123382,
+    "cache_read_tokens": 5012235,
+    "output_tokens": 22304,
+    "api_call_count": 54
+  },
+  "started_at": "2026-11-02T10:57:02.036390207Z",
+  "completed_at": "2026-11-02T12:11:53.148757955Z"
+}
