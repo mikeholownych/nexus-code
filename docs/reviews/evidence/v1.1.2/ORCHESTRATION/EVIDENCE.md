@@ -47,7 +47,7 @@ Ledger re-measured after the PR #396 runtime connection (claude-code), on Node.j
   - Freezes authorized change scope.
 - `detectScopeViolations`:
   - Successfully detects files touched in unified diff that are outside `authorizedScope`.
-  - Decodes Git's C-quoted paths (non-ASCII and tab characters, octal escapes) and bare paths containing spaces, checks both sides of renames, and ignores hunk lines that look like headers. A header it cannot parse is reported as a violation rather than skipped.
+  - Decodes Git's C-quoted paths (non-ASCII and tab characters, octal escapes) and bare paths containing spaces, checks both sides of renames, and consumes hunk lines by the `@@` counts, so a removed `-- before` / added `++ after` line pair (written `--- before` / `+++ after`) is not read as a file header. A header it cannot parse is reported as a violation rather than skipped.
 - `parseIndependentReviewVerdict`:
   - Valid `ACCEPT` with zero defects passes.
   - Deterministic verifier failure (`verifierExitCode !== 0`) overrides model `ACCEPT` and forces `REJECT`.
@@ -63,10 +63,12 @@ Ledger re-measured after the PR #396 runtime connection (claude-code), on Node.j
   - A `failure_debugger` agent is offered only its permitted tools. Its `write_file` call is refused at dispatch with `not permitted for role`, and no file is written.
   - A read-only specialist keeps the read-only refusal for writes. Its other non-permitted tools, such as `fetch_web`, are refused by role.
 - Review units run behind the independent review boundary (`cli/test/review_unit_boundary.test.ts`):
-  - The candidate diff covers tracked edits and new files against the base. A workspace without Git yields an error, never an empty diff.
+  - The candidate diff covers tracked edits and new files against the base. A diff that cannot be collected (no Git checkout, or output over the 4 MiB buffer) blocks the review before any model turn and, if it reaches the parser, forces `REJECT`; it is never used as evidence.
   - The reviewer prompt carries the diff and the dependency's verifier receipt, never the dependency's summary. Units that are not review units still see prerequisite summaries.
   - A review unit completes only on a valid `ACCEPT`. Prose, a malformed field, a reported defect or a `REJECT` blocks it with `review rejected:`.
-  - A failing dependency verifier turns a model `ACCEPT` into `REJECT`.
+  - A failing dependency verifier turns a model `ACCEPT` into `REJECT`. This is tested through `reviewEvidence`: a `FAILED`, `TIMED_OUT` or `PASSED`-without-executed-tests verification is mapped to exit code 1, and only a passing run that executed tests is exit code 0.
+  - The dependency's verification is forwarded from its integration receipt or, for non-isolated operations (`/team`), from the verification stored on its completed result, which survives a reload. With no verifier evidence at all, a diff over 20,000 characters is still rejected.
+  - The runtime package carries the real operation id and no `authorizedScope`; the scope gate is not applied to runtime reviews because no scope is declared anywhere.
 - Cut:
   - The micro-router (`micro_router.ts`): nothing in the runtime routed on it.
   - The escalation machine (`escalation.ts`): superseded by the non-progress recovery in PR #398.

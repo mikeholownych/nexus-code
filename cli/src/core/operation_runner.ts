@@ -32,6 +32,8 @@ export type { AgentExecutorOptions } from "./operation_runner_execution.js";
 export interface UnitRunContext {
   signal?: AbortSignal;
   objective: string;
+  /** The durable operation this unit belongs to. */
+  operationId?: string;
   dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean } }>;
   /** Isolated operations: the commit the operation started from, which a review unit diffs against. */
   baseCommit?: string;
@@ -309,11 +311,14 @@ export class OperationRunner {
     const ctx: UnitRunContext = {
       signal,
       objective: this.state.objective,
+      operationId: this.state.id,
       dependencies: unit.dependsOn.map((id) => {
         const dep = this.scheduler.unit(id);
-        // The verifier a dependency passed is recorded on its integration receipt (isolated operations only).
+        // The verifier a dependency ran: its integration receipt (isolated operations) or, where nothing was
+        // integrated, the verification its own completed result recorded.
         const receipt = [...(this.state.integrations ?? [])].reverse().find((entry) => entry.unitId === id);
-        return { id, title: dep.title, summary: dep.result?.summary ?? "", ...(receipt?.tests ? { verification: receipt.tests } : {}) };
+        const verification = receipt?.tests ?? dep.result?.verification;
+        return { id, title: dep.title, summary: dep.result?.summary ?? "", ...(verification ? { verification } : {}) };
       }),
       ...(this.state.git?.baseCommit ? { baseCommit: this.state.git.baseCommit } : {}),
       ...(unit.agentTaskId

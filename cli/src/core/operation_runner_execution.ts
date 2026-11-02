@@ -359,6 +359,17 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       let promptMessages = ctx.messages;
       let unusable: string | undefined;
       const review = isReviewRole(unit.role) ? this.reviewEvidence(unit, ctx, config.workspace) : undefined;
+      if (review?.diffError) {
+        // Nothing was collected to judge, so there is nothing a verdict could accept: stop before spending a model turn.
+        const detail = `candidate diff unavailable: ${review.diffError}`.slice(0, 300);
+        return {
+          kind: "failed",
+          cause: "EXECUTION_FAILED",
+          reason: `review rejected: ${detail}`,
+          question: `${unit.title} could not collect the candidate diff (${review.diffError}). Fix the workspace or reduce the change, then retry the review, or stop?`,
+          options: [{ label: "retry the review", action: { kind: "retry" } }],
+        };
+      }
       if (unit.agentTaskId) {
         let recovered: TaskRecoveryResult | undefined;
         try {
@@ -566,18 +577,21 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   private reviewEvidence(unit: WorkUnit, ctx: UnitRunContext, workspace: string): ReviewEvidencePackage {
     const candidate = reviewCandidateDiff(ctx.workspace ?? workspace, ctx.baseCommit);
     const verified = ctx.dependencies.find((d) => d.verification)?.verification;
+    // No operation or unit declares a file scope, so the package carries none (rather than an empty placeholder that
+    // would read as "unrestricted"): the scope gate runs only for callers that supply one.
     return buildReviewEvidencePackage({
-      operationId: ctx.objective.slice(0, 80),
+      ...(ctx.operationId ? { operationId: ctx.operationId } : {}),
       unitId: unit.id,
       objective: `${ctx.objective}\n\nReview task: ${unit.prompt}`,
-      authorizedScope: [],
       baselineCommit: "base" in candidate ? candidate.base : "unknown",
-      unifiedDiff: "diff" in candidate ? candidate.diff : `[Nexus could not compute the candidate diff: ${candidate.error}]`,
+      unifiedDiff: "diff" in candidate ? candidate.diff : "",
+      ...("error" in candidate ? { diffError: candidate.error || "git diff failed" } : {}),
       ...(verified
         ? {
             verifierCommand: verified.command,
             verifierOutput: `status ${verified.status}${verified.hasExecutedTests ? "" : " (no tests executed)"}`,
-            ...(verified.status === "PASSED" && verified.hasExecutedTests ? { verifierExitCode: 0 } : {}),
+            // Anything but a passing run that executed tests is a failure to the deterministic gate.
+            verifierExitCode: verified.status === "PASSED" && verified.hasExecutedTests ? 0 : 1,
           }
         : {}),
     });

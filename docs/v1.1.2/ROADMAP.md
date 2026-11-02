@@ -19,6 +19,9 @@ The v1.1.2 release line encompasses two complementary tiers:
 - **Item 2, connected.** Units with the `reviewer` or `acceptance_reviewer` role run behind the boundary:
   - Their prompt is the evidence package: the candidate diff against the operation's base commit, and the verifier receipt of the unit they depend on. Prerequisite summaries are withheld.
   - The unit completes only on a well-formed `ACCEPT` that survives the deterministic gates. Prose, a malformed verdict, a reported defect or a failed verifier blocks the unit for an operator decision.
+  - The verifier receipt comes from the dependency's integration receipt (isolated operations) or, where nothing was integrated (for example `/team`), from the verification recorded on the dependency's completed result. A verification that is not a passing run that executed tests reaches the package as a non-zero exit code. A large (truncated) diff with no passing verifier evidence is rejected.
+  - If the candidate diff cannot be collected (no Git checkout, or the diff exceeds the 4 MiB buffer), the review is blocked before any model turn. That failure is never presented to the reviewer as evidence.
+  - The runtime package names the real operation id and declares no file scope: no operation or unit declares one, so the scope gate (`detectScopeViolations`) applies only to a package that supplies `authorizedScope`.
   - The boundary complements `cli/src/core/independent_check.ts`, which decides whether a verifier pass is independent evidence. It does not replace it.
 - **Items 3 and 4, cut.** Nothing in the runtime routed on the micro-router. The escalation machine duplicated the non-progress recovery in PR #398, which is connected.
 - **`TokenBudgetTracker`, cut.** It duplicated `UsageLedger` (`cli/src/usage.ts`), which already enforces `NEXUS_CLOUD_MAX_TOKENS` with in-flight reservations.

@@ -524,6 +524,7 @@ export class ConvergenceScheduler {
           completedAt: at,
           resourceId,
           outcome: result.outcome,
+          ...(result.verification ? { verification: result.verification } : {}),
           ...(u.override?.overriding.length && u.override.resourceId === resourceId ? { overriding: u.override.overriding } : {}),
         };
         this.emit("WORK_COMPLETED", `${u.title} completed on ${resourceId}.`, { unitId, resourceId, detail: { outcome: result.outcome } });

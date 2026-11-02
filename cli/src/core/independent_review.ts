@@ -16,13 +16,16 @@
  */
 
 export interface ReviewEvidencePackage {
-  operationId: string;
+  operationId?: string;
   unitId: string;
   objective: string;
-  authorizedScope: readonly string[];
+  /** Files the change may touch. Absent when no scope was declared: the package then makes no scope claim. */
+  authorizedScope?: readonly string[];
   baselineCommit: string;
   candidateCommit?: string;
   unifiedDiff: string;
+  /** Why the candidate diff could not be collected. A package with no diff is not evidence: no ACCEPT survives it. */
+  diffError?: string;
   verifierCommand?: string;
   verifierOutput?: string;
   verifierExitCode?: number;
@@ -193,7 +196,7 @@ export function extractModifiedFilesFromDiff(diff: string): string[] {
  */
 export function detectScopeViolations(
   diff: string,
-  authorizedScope: readonly string[],
+  authorizedScope: readonly string[] = [],
 ): string[] {
   if (authorizedScope.length === 0) return [];
   const modifiedFiles = extractModifiedFilesFromDiff(diff);
@@ -214,13 +217,14 @@ export function detectScopeViolations(
  * Builds an objective evidence package. Strips any author-supplied narrative summaries.
  */
 export function buildReviewEvidencePackage(params: {
-  operationId: string;
+  operationId?: string;
   unitId: string;
   objective: string;
-  authorizedScope: readonly string[];
+  authorizedScope?: readonly string[];
   baselineCommit: string;
   candidateCommit?: string;
   unifiedDiff: string;
+  diffError?: string;
   verifierCommand?: string;
   verifierOutput?: string;
   verifierExitCode?: number;
@@ -230,10 +234,11 @@ export function buildReviewEvidencePackage(params: {
     operationId: params.operationId,
     unitId: params.unitId,
     objective: params.objective.trim(),
-    authorizedScope: Object.freeze([...params.authorizedScope]),
+    authorizedScope: params.authorizedScope ? Object.freeze([...params.authorizedScope]) : undefined,
     baselineCommit: params.baselineCommit.trim(),
     candidateCommit: params.candidateCommit?.trim(),
     unifiedDiff: params.unifiedDiff,
+    ...(params.diffError ? { diffError: params.diffError } : {}),
     verifierCommand: params.verifierCommand?.trim(),
     verifierOutput: params.verifierOutput,
     verifierExitCode: params.verifierExitCode,
@@ -263,12 +268,17 @@ export function formatIndependentReviewPrompt(
   pkg: ReviewEvidencePackage,
 ): string {
   const scopeViolations = detectScopeViolations(pkg.unifiedDiff, pkg.authorizedScope);
+  const scopeSection = pkg.authorizedScope
+    ? `Authorized Scope:\n${pkg.authorizedScope.length ? pkg.authorizedScope.map((s) => `- ${s}`).join("\n") : "Unrestricted (Repository-wide)"}\n`
+    : "";
   const scopeWarning = scopeViolations.length
     ? `\n[AUTOMATED SCOPE WARNING] The diff touches files outside authorizedScope: [${scopeViolations.join(", ")}]\n`
     : "";
 
   const isDiffTruncated = pkg.unifiedDiff.length > 20000;
-  const diffContent = isDiffTruncated
+  const diffContent = pkg.diffError
+    ? `[Nexus could not collect the candidate diff: ${pkg.diffError}. A review cannot be accepted without it.]`
+    : isDiffTruncated
     ? `${pkg.unifiedDiff.slice(0, 20000)}\n\n[TRUNCATED: Unified diff exceeded 20,000 characters. Remaining content omitted for context budget.]`
     : pkg.unifiedDiff;
 
@@ -276,14 +286,12 @@ export function formatIndependentReviewPrompt(
     ? `\n[AUTOMATED TRUNCATION WARNING] Unified diff exceeded 20,000 characters and was truncated. Complete independent inspection requires deterministic passing verifier evidence.\n`
     : "";
 
-  return `[Independent Review Task for Unit '${pkg.unitId}' in Operation '${pkg.operationId}']
+  return `[Independent Review Task for Unit '${pkg.unitId}'${pkg.operationId ? ` in Operation '${pkg.operationId}'` : ""}]
 
 Objective Requirements:
 ${pkg.objective}
 
-Authorized Scope:
-${pkg.authorizedScope.length ? pkg.authorizedScope.map((s) => `- ${s}`).join("\n") : "Unrestricted (Repository-wide)"}
-${scopeWarning}${diffWarning}
+${scopeSection}${scopeWarning}${diffWarning}
 Repository Baseline:
 - Base Commit: ${pkg.baselineCommit}${pkg.candidateCommit ? `\n- Candidate Commit: ${pkg.candidateCommit}` : ""}
 
@@ -379,6 +387,10 @@ export function parseIndependentReviewVerdict(
       const autoViolations = detectScopeViolations(pkg.unifiedDiff, pkg.authorizedScope);
       for (const v of autoViolations) {
         if (!scopeViolations.includes(v)) scopeViolations.push(v);
+      }
+      if (pkg.diffError) {
+        finalVerdict = "REJECT";
+        unprovenCriteria.push(`Candidate diff could not be collected (${pkg.diffError}); there is nothing to accept`);
       }
       if (pkg.verifierExitCode !== undefined && pkg.verifierExitCode !== 0) {
         finalVerdict = "REJECT";

@@ -143,7 +143,15 @@ export interface WorkUnit {
   pendingDecision?: { label: string; note?: string; restart?: boolean };
   decisions?: AppliedDecision[];
   dropped?: boolean;
-  result?: { summary: string; completedAt: string; resourceId: string; outcome: string; overriding?: string[] };
+  result?: {
+    summary: string;
+    completedAt: string;
+    resourceId: string;
+    outcome: string;
+    overriding?: string[];
+    /** The verifier run behind the outcome, kept so dependent review units see it where nothing was integrated. */
+    verification?: { command: string; status: string; hasExecutedTests: boolean };
+  };
   reroutes: Array<{ at: string; from: string; to: string; reason: string }>;
   runs: number;
   /** `runs` when the operator last authorized more attempts (the run budget counts from here). */
