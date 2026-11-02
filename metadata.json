@@ -3,7 +3,7 @@
   "checkpoint_id": "01M6E703T0A7EFMF189C8R7E0H",
   "strategy": "manual-commit",
   "branch": "v1/wp-1105-evaluators",
-  "checkpoints_count": 18,
+  "checkpoints_count": 125,
   "files_touched": [
     "cli/src/agent.ts"
   ],
@@ -20,14 +20,20 @@
       "transcript": "/1/full.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": "/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 948953,
+    "input_tokens": 1246439,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 125949532,
-    "output_tokens": 269102,
-    "api_call_count": 962,
+    "cache_read_tokens": 158935646,
+    "output_tokens": 320817,
+    "api_call_count": 1239,
     "subagent_tokens": {
       "input_tokens": 1291907,
       "cache_creation_tokens": 0,
@@ -37,14 +43,14 @@
     }
   },
   "redaction": {
-    "replacements": 1416,
+    "replacements": 1464,
     "layers": {
       "betterleaks": 464,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 156,
       "credentialed_uri": 61,
-      "entropy": 1032,
+      "entropy": 1080,
       "key_context": 0,
       "provider_token": 1,
       "shell_stdin": 0
