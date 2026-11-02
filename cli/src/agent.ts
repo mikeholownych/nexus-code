@@ -5554,8 +5554,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (this.objective && this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
         const stepStateBefore = stateNow;
         const verdicts: ObservationVerdict[] = [];
-        /** Evidence-backed progress earlier in this step: new information, or a successful change to the workspace. */
-        const progressedThisStep = () => verdicts.some((v) => v.informative || v.classification === "ARTIFACT_MODIFIED");
+        /**
+         * Evidence-backed progress earlier in this step: new information, or a successful change that is not a repeat
+         * of the same change on the same workspace state (an identical rewrite changes nothing). `except` is the
+         * verdict being judged, which never counts for itself.
+         */
+        const progressedThisStep = (except?: ObservationVerdict) =>
+          verdicts.some((v) => v !== except && (v.informative || (v.classification === "ARTIFACT_MODIFIED" && !v.repeat)));
         let operatorInputApplied = this.applyQueuedSteering(currentStep) > 0;
         if (operatorInputApplied) {
           completionNudges = 0;
@@ -5641,7 +5646,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           tracker.stagnation(cumulativeStep, "repetition", `${verdict.record.action} ×${count} with the same result on an unchanged workspace -> ${verdict.record.outcome.slice(0, 160)}`);
           // This step already made progress: it ends the recovery episode at endStep, so a repeat in it neither
           // escalates nor exhausts recovery (later calls in the step still run).
-          if (progressedThisStep()) return;
+          if (progressedThisStep(verdict)) return;
           const transition = tracker.recordUnproductive(cumulativeStep, verdict.record.action, inputState, budget.maxRecoveries, allowedDenials);
           if (transition.outcome === "exhausted") {
             stopReason = "STAGNATION_DETECTED";
@@ -6753,6 +6758,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       else this.totalTokens.estimatedRequests++;
       const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
       const parsed = parseModelResponse(assistantMessage, { nativeTools });
+      this.uniqueCallIds(parsed.toolCalls, tracker);
       this.messages.push({
         role: "assistant",
         content: assistantMessage.content || "",

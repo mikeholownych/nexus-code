@@ -57,7 +57,7 @@ same file signature, by a tool call whose own output (by tool call id, not by ar
 the conversation, and it is not a re-acquisition after
 compaction. Tool call ids are per execution: providers may repeat ids (e.g. `call_0` every turn), so before a reply is
 stored Nexus gives any call whose id is already used in the conversation, in the objective's coverage, or earlier in
-the same batch a fresh id (the call and its result carry the same one). The same range with a different fingerprint is new (the content decides). Obtaining the same lines (the same
+the same batch a fresh id (the call and its result carry the same one). Subagent loops do the same. The same range with a different fingerprint is new (the content decides). Obtaining the same lines (the same
 range of the same file) a third time is a semantic loop. Different slices of a file already read are redundant and
 not progress, but they are not a loop and are never escalated. Equivalent observations are classified `OBSERVATION_DUPLICATE` and are not progress.
 
@@ -74,9 +74,11 @@ ADVISORY|CONSTRAINED --evidence-backed progress or operator input--> NORMAL (rec
   restores it.
 - At most one escalation per step: the model always gets an inference to answer each note. Nothing is refused in the
   step that entered constrained recovery; refusal starts once the model has seen the note.
-- Progress earlier in a step (new information, or a successful change) ends the episode when the step ends, so later
-  calls in that step are neither refused nor counted toward escalation or exhaustion: a batch
-  `[new read, covered read, write]` runs in full even with the refusal budget spent.
+- Progress earlier in a step (new information, or a successful change that is not a repeat of the same change on the
+  same workspace state) suspends recovery for the rest of that step: later calls are neither refused nor counted toward
+  escalation or exhaustion, so a batch `[new read, covered read, write]` runs in full even with the refusal budget
+  spent. An identical rewrite is not progress; a call's own verdict never counts for itself, so a no-op write loop is
+  still constrained and stopped.
 - A later episode on the same objective, after its notes are spent, is constrained at once.
 - Refusals are not progress. They produce no verdict, so the stagnation counter keeps counting.
 - With `maxRecoveries` 0 the first loop stops the turn (the existing bound is kept).

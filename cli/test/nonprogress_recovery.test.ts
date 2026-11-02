@@ -497,6 +497,28 @@ describe("recovery state continuity", () => {
     }
   });
 
+  test("an identical rewrite is not progress: a no-op write loop (alone, or beside a covered read) is still constrained and stopped", { timeout: 120_000 }, async () => {
+    const noop: Call = { name: "write_file", args: { path: "x.txt", content: "same\n", overwrite: true } };
+    for (const calls of [[noop], [noop, read("f.txt")]]) {
+      const repo = makeRepo({ "f.txt": lines("f", 10), "x.txt": "same\n" });
+      const gw = await startGateway(() => tools(calls));
+      const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+      try {
+        const turn = await agent.runTurn("Fix it.");
+        assert.equal(turn.reason, "STAGNATION_DETECTED", JSON.stringify(turn));
+        const k = kinds(agent);
+        assert.ok(k.includes("recovery_constrained") && k.includes("recovery_exhausted"), `${calls.length} call(s): ${k.join(",")}`);
+        assert.ok(!k.includes("recovery_completed"), "an identical rewrite never ends the episode");
+        // Bounded by recovery (2 notes), not by the 30-step stagnation window.
+        assert.ok(gw.requests.length <= 8, `${calls.length} call(s): bounded by recovery: ${gw.requests.length} requests`);
+      } finally {
+        agent.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("a provider that reuses tool-call ids: every execution gets its own id, so one call's output never stands for another's", { timeout: 120_000 }, async () => {
     const repo = makeRepo({ "f.txt": lines("f", 10) });
     // Every call this provider returns has id "call_0", across steps and within a batch.
