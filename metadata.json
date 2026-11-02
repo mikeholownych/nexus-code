@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6F1W4DQ32CME4TQDTS9K173",
+  "strategy": "manual-commit",
+  "branch": "v1/wp-1105-evaluators",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "cli/src/agent.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 586895,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 54852608,
+    "output_tokens": 91377,
+    "api_call_count": 391,
+    "subagent_tokens_complete": false
+  },
+  "redaction": {
+    "replacements": 1442,
+    "layers": {
+      "betterleaks": 478,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 157,
+      "credentialed_uri": 63,
+      "entropy": 1048,
+      "key_context": 0,
+      "provider_token": 1,
+      "shell_stdin": 0
+    }
+  }
+}
