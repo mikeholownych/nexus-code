@@ -74,11 +74,11 @@ ADVISORY|CONSTRAINED --evidence-backed progress or operator input--> NORMAL (rec
   restores it.
 - At most one escalation per step: the model always gets an inference to answer each note. Nothing is refused in the
   step that entered constrained recovery; refusal starts once the model has seen the note.
-- Progress earlier in a step (new information, or a successful change that is not a repeat of the same change on the
-  same workspace state) suspends recovery for the rest of that step: later calls are neither refused nor counted toward
-  escalation or exhaustion, so a batch `[new read, covered read, write]` runs in full even with the refusal budget
-  spent. An identical rewrite is not progress; a call's own verdict never counts for itself, so a no-op write loop is
-  still constrained and stopped.
+- Progress earlier in a step, judged as the end of the step judges it (new information, or a successful change that
+  moved the workspace to a state not seen before), suspends recovery for the rest of that step: later calls are
+  neither refused nor counted toward escalation or exhaustion, so a batch `[new read, covered read, write]` runs in full
+  even with the refusal budget spent. A write that changes nothing is not progress however its arguments are spelled,
+  and a call's own verdict never counts for itself, so a no-op write loop is still constrained and stopped.
 - A later episode on the same objective, after its notes are spent, is constrained at once.
 - Refusals are not progress. They produce no verdict, so the stagnation counter keeps counting.
 - With `maxRecoveries` 0 the first loop stops the turn (the existing bound is kept).

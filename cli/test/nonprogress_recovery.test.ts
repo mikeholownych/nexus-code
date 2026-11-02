@@ -497,20 +497,26 @@ describe("recovery state continuity", () => {
     }
   });
 
-  test("an identical rewrite is not progress: a no-op write loop (alone, or beside a covered read) is still constrained and stopped", { timeout: 120_000 }, async () => {
-    const noop: Call = { name: "write_file", args: { path: "x.txt", content: "same\n", overwrite: true } };
-    for (const calls of [[noop], [noop, read("f.txt")]]) {
+  test("a write that changes nothing is not progress, however it is spelled: the loop is still constrained and stopped", { timeout: 240_000 }, async () => {
+    const noop = (args: Record<string, unknown> = {}): Call => ({ name: "write_file", args: { path: "x.txt", content: "same\n", overwrite: true, ...args } });
+    const variants: Array<[string, (n: number) => Call[]]> = [
+      ["identical write", () => [noop()]],
+      ["identical write + covered read", () => [noop(), read("f.txt")]],
+      ["path spelled differently each step + covered read", (n) => [noop({ path: `${"./".repeat(n)}x.txt` }), read("f.txt")]],
+      ["extra argument varied each step + covered read", (n) => [noop({ note: `n${n}` }), read("f.txt")]],
+    ];
+    for (const [label, script] of variants) {
       const repo = makeRepo({ "f.txt": lines("f", 10), "x.txt": "same\n" });
-      const gw = await startGateway(() => tools(calls));
+      const gw = await startGateway((n) => tools(script(n)));
       const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
       try {
         const turn = await agent.runTurn("Fix it.");
         assert.equal(turn.reason, "STAGNATION_DETECTED", JSON.stringify(turn));
         const k = kinds(agent);
-        assert.ok(k.includes("recovery_constrained") && k.includes("recovery_exhausted"), `${calls.length} call(s): ${k.join(",")}`);
-        assert.ok(!k.includes("recovery_completed"), "an identical rewrite never ends the episode");
+        assert.ok(k.includes("recovery_constrained") && k.includes("recovery_exhausted"), `${label}: ${k.join(",")}`);
+        assert.ok(!k.includes("recovery_completed"), `${label}: a write that changes nothing never ends the episode`);
         // Bounded by recovery (2 notes), not by the 30-step stagnation window.
-        assert.ok(gw.requests.length <= 8, `${calls.length} call(s): bounded by recovery: ${gw.requests.length} requests`);
+        assert.ok(gw.requests.length <= 8, `${label}: bounded by recovery: ${gw.requests.length} requests`);
       } finally {
         agent.shutdown();
         await gw.close();

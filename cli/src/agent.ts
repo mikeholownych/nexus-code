@@ -5555,12 +5555,17 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         const stepStateBefore = stateNow;
         const verdicts: ObservationVerdict[] = [];
         /**
-         * Evidence-backed progress earlier in this step: new information, or a successful change that is not a repeat
-         * of the same change on the same workspace state (an identical rewrite changes nothing). `except` is the
-         * verdict being judged, which never counts for itself.
+         * Evidence-backed progress earlier in this step, judged as endStep will judge it: new information, or a
+         * successful change that moved the workspace to a state not seen before. A write that changes nothing (however
+         * its arguments are spelled) is not progress. `except` is the verdict being judged, which never counts for itself.
          */
-        const progressedThisStep = (except?: ObservationVerdict) =>
-          verdicts.some((v) => v !== except && (v.informative || (v.classification === "ARTIFACT_MODIFIED" && !v.repeat)));
+        const progressedThisStep = (except?: ObservationVerdict): boolean => {
+          const earlier = verdicts.filter((v) => v !== except);
+          if (earlier.some((v) => v.informative)) return true;
+          if (!earlier.some((v) => v.classification === "ARTIFACT_MODIFIED")) return false;
+          const now = inputStateFor();
+          return now !== "unknown" && now !== stepStateBefore && !tracker.data.seenStates.includes(now);
+        };
         let operatorInputApplied = this.applyQueuedSteering(currentStep) > 0;
         if (operatorInputApplied) {
           completionNudges = 0;
