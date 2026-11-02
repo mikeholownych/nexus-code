@@ -29,7 +29,7 @@ function workspace(files: Record<string, string>): string {
 }
 
 /** Node's built-in TypeScript parser exists from Node.js 22.13; the engines floor is 22. */
-const HAS_TS_PARSER = typeof (module as any).stripTypeScriptTypes === "function";
+const HAS_TS_PARSER = typeof (module as { stripTypeScriptTypes?: unknown }).stripTypeScriptTypes === "function";
 
 test("syntax_ast parses TypeScript, JavaScript and Python with the built-in parsers", async () => {
   const root = workspace({
@@ -137,6 +137,14 @@ test("typecheck_clean fails only on diagnostics the candidate adds, and on infra
   const silent = await ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/base"), candidate: spec("c", "/tmp/cand"), runner: async (c: string) => ({ status: c === "b" ? 0 : 2 }) });
   assert.equal(silent.passed, false, "a candidate that newly fails without output does not pass");
   assert.equal(silent.details.statusRegression, true);
+  // A failing baseline's exit code may differ from the candidate's without a regression when diagnostics do not grow.
+  const fewer = await ev.evaluateTypecheckClean({
+    baseline: spec("b", "/tmp/base"), candidate: spec("c", "/tmp/cand"),
+    runner: async (c: string) => (c === "b" ? { status: 2, stderr: "e1\ne2" } : { status: 1, stderr: "e1" }),
+  });
+  assert.equal(fewer.passed, true, JSON.stringify(fewer.details));
+  const silentAfterFailure = await ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/base"), candidate: spec("c", "/tmp/cand"), runner: async (c: string) => (c === "b" ? { status: 2, stderr: "e1" } : { status: 2 }) });
+  assert.equal(silentAfterFailure.passed, false, "a failing candidate with no diagnostics is not a pass");
   await assert.rejects(ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/x"), candidate: spec("c", "/tmp/x/") }), /must be separate/);
 });
 

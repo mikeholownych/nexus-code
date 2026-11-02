@@ -7,8 +7,8 @@ function diagnosticLines(result) {
 }
 
 /**
- * Compare baseline and candidate typecheck diagnostics: new diagnostics fail, and so does a candidate exit status that is
- * non-zero and differs from the baseline's (a silent failure).
+ * Compare baseline and candidate typecheck diagnostics: new diagnostics fail, and so does a non-zero candidate exit when
+ * the baseline exited 0 or the candidate printed no diagnostics (a silent failure).
  */
 export async function evaluateTypecheckClean({ baseline, candidate, runner = runArgv }) {
   for (const revision of [baseline, candidate]) {
@@ -37,8 +37,10 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
   });
   const infrastructureFailure = [baselineResult, candidateResult].some((result) =>
     result?.status == null || result?.signal != null || result?.timedOut === true || result?.error != null);
-  // A candidate that fails where the baseline did not has regressed even when it printed nothing.
-  const statusRegression = !infrastructureFailure && candidateResult.status !== 0 && candidateResult.status !== baselineResult.status;
+  // A candidate that fails where the baseline passed, or that fails without printing any diagnostic, has regressed even
+  // though no new diagnostic line appears. A failing baseline's exit code alone is not compared: it varies with settings.
+  const statusRegression = !infrastructureFailure && candidateResult.status !== 0 &&
+    (baselineResult.status === 0 || candidateOutput.length === 0);
   const passed = !infrastructureFailure && !statusRegression && newDiagnostics.length === 0;
   return evaluatorResult("typecheck_clean", passed, passed ? 1 : 0, {
     baseline: { command: baseline.command, args: baseline.args ?? [], status: baselineResult.status ?? null },

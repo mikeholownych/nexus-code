@@ -22,7 +22,7 @@ from what the agent said about its own work.
 - **`typecheck_clean.mjs`**
   - Runs the baseline and candidate typecheck commands in separate workspaces.
   - Fails on any diagnostic line the candidate adds; existing diagnostics may remain. Duplicate lines are counted.
-  - Also fails when the candidate exits non-zero with a status different from the baseline's, even with no output.
+  - Also fails when the candidate exits non-zero and either the baseline exited 0 or the candidate printed nothing.
   - A spawn failure, timeout or signal on either side fails closed.
   - The comparison is exact, so callers should normalize paths that differ between revisions.
 - **`diff_boundary.mjs`**
