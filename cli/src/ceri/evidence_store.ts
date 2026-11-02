@@ -35,11 +35,12 @@ const SECRET_WORDS = new Set([
   "password", "passwords", "passwd", "passphrase", "pwd", "secret", "secrets", "credential", "credentials", "authorization", "auth", "cookie", "cookies", "bearer", "jwt", "apikey",
   // The same names written as one lowercase word.
   "accesstoken", "refreshtoken", "idtoken", "authtoken", "sessiontoken", "bearertoken", "apitoken", "clientsecret", "privatekey", "secretkey", "accesskey",
+  "dbpass", "userpass", "adminpass", "rootpass", "sshkey", "masterkey", "signingkey", "secretvalue", "pat",
 ]);
 /** Words that, before "pass", make it a password (`DB_PASS`, `user_pass`); bare `pass` and `bypass` are not credentials. */
 const PASS_CONTEXT = new Set(["db", "database", "user", "admin", "root", "login", "smtp", "mysql", "postgres", "redis", "ssh", "ftp", "sql", "mongo", "ldap", "wifi", "master"]);
 /** Words after "token" that make it a count or a limit (`tokenCount`, `token_limit`). */
-const COUNT_AFTER = new Set(["count", "counts", "limit", "limits", "budget", "usage", "total"]);
+const COUNT_AFTER = new Set(["count", "counts", "limit", "limits", "budget", "usage", "total", "used"]);
 /** Words that, before "token", make it a count or a limit rather than a credential. */
 const COUNT_WORDS = new Set(["max", "min", "total", "input", "output", "prompt", "completion", "num", "count", "context", "reasoning", "cached", "budget"]);
 
@@ -59,7 +60,7 @@ export function isSensitiveKey(key: string): boolean {
     if (SECRET_WORDS.has(w)) return true;
     if (w === "token") return !COUNT_WORDS.has(words[i - 1] ?? "") && !COUNT_AFTER.has(words[i + 1] ?? "");
     if (w === "pass") return PASS_CONTEXT.has(words[i - 1] ?? "") || ["word", "wd", "phrase"].includes(words[i + 1] ?? "");
-    if (w === "key") return ["api", "access", "private", "secret", "auth", "signing"].includes(words[i - 1] ?? "");
+    if (w === "key") return ["api", "access", "private", "secret", "auth", "signing", "ssh", "master", "encryption"].includes(words[i - 1] ?? "");
     return false;
   });
 }
