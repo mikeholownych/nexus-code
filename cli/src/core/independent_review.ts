@@ -45,10 +45,6 @@ export interface IndependentReviewVerdict {
 }
 
 /**
- * Parses files modified from a unified git diff.
- * Checks both source and destination headers, renames, and git index lines.
- */
-/**
  * Reads one path token as Git writes it: either bare, or C-quoted ("a/\303\251.ts", with \t, \", \\ and octal
  * byte escapes) when the path contains non-ASCII bytes, tabs, quotes or backslashes. Returns the decoded path and
  * the text after the token.
@@ -105,16 +101,43 @@ export function extractModifiedFilesFromDiff(diff: string): string[] {
   const add = (p: string | undefined) => {
     if (p) modified.add(p);
   };
-  // File headers (---/+++/rename) only appear before a file's first hunk; inside a hunk, a removed line such as
-  // "-- note" is written "--- note" and must not be read as a path.
+  // File headers (---/+++/rename) only appear outside a hunk. A hunk's `@@ -a,b +c,d @@` line says exactly how many
+  // old and new lines follow, so those lines are consumed by count: a removed line "-- note" is written "--- note"
+  // and an added "++ note" is written "+++ note", and neither is a path. A count that is omitted means 1.
   let inHeader = true;
+  let oldLeft = 0;
+  let newLeft = 0;
   const lines = diff.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (oldLeft > 0 || newLeft > 0) {
+      if (line.startsWith("\\")) continue; // "\ No newline at end of file"
+      if (line.startsWith(" ") || line === "") {
+        oldLeft = Math.max(0, oldLeft - 1);
+        newLeft = Math.max(0, newLeft - 1);
+        continue;
+      }
+      if (line.startsWith("-") && oldLeft > 0) {
+        oldLeft--;
+        continue;
+      }
+      if (line.startsWith("+") && newLeft > 0) {
+        newLeft--;
+        continue;
+      }
+      // The hunk ended earlier than its header promised: read this line as structure, not content.
+      oldLeft = 0;
+      newLeft = 0;
+    }
     // A plain unified diff (no "diff --git" lines) starts each later file with a "---"/"+++" pair.
     if (!inHeader && line.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ")) inHeader = true;
     if (line.startsWith("@@")) {
       inHeader = false;
+      const counts = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
+      if (counts) {
+        oldLeft = counts[1] === undefined ? 1 : Number(counts[1]);
+        newLeft = counts[2] === undefined ? 1 : Number(counts[2]);
+      }
       continue;
     }
     if (line.startsWith("diff --git ")) {

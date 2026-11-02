@@ -240,3 +240,70 @@ test("parseIndependentReviewVerdict rejects missing or malformed schema fields i
     assert.equal(parseIndependentReviewVerdict(JSON.stringify(body), pkg).verdict, "REJECT", label);
   }
 });
+
+// ---------------------------------------------------------------- hunk-aware file extraction
+
+test("a removed '-- before' line and an added '++ after' line inside a hunk are not file headers", () => {
+  const diff = `diff --git a/src/a.ts b/src/a.ts
+index 1111111..2222222 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,3 +1,3 @@
+ keep
+--- before
++++ after
+ tail
+`;
+  assert.deepEqual(extractModifiedFilesFromDiff(diff), ["src/a.ts"]);
+  assert.deepEqual(detectScopeViolations(diff, ["src/a.ts"]), []);
+});
+
+test("hunk counts are consumed across several files and hunks, with omitted counts meaning 1", () => {
+  const diff = `diff --git a/one.ts b/one.ts
+--- a/one.ts
++++ b/one.ts
+@@ -1,2 +1,2 @@
+--- gone
++++ here
+ same
+@@ -10 +10 @@
+--- second gone
++++ second here
+\\ No newline at end of file
+diff --git a/two.ts b/two.ts
+--- a/two.ts
++++ b/two.ts
+@@ -5 +5,2 @@
+ ctx
++added
+`;
+  assert.deepEqual(extractModifiedFilesFromDiff(diff).sort(), ["one.ts", "two.ts"]);
+});
+
+test("a plain unified diff with several files and hunks is still parsed, including hunk content that looks like headers", () => {
+  const diff = `--- a/one.ts\t2024-01-01
++++ b/one.ts\t2024-01-02
+@@ -1,2 +1,2 @@
+--- gone
++++ here
+ same
+--- a/two.ts
++++ b/two.ts
+@@ -1 +1 @@
+-old
++new
+`;
+  assert.deepEqual(extractModifiedFilesFromDiff(diff).sort(), ["one.ts", "two.ts"]);
+});
+
+test("a header that cannot be parsed after a completed hunk still fails closed", () => {
+  const diff = `diff --git a/one.ts b/one.ts
+--- a/one.ts
++++ b/one.ts
+@@ -1 +1 @@
+-a
++b
+diff --git "a/bad
+`;
+  assert.ok(extractModifiedFilesFromDiff(diff).some((f) => f.startsWith("<unparseable diff header")));
+});
