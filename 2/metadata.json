@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6F1W4DQ32CME4TQDTS9K173",
+  "session_id": "424a3749-6081-4a93-b524-386e99c9a5fc",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-02T21:16:17.791485571Z",
+  "branch": "v1/wp-1105-evaluators",
+  "checkpoints_count": 94,
+  "save_step_count": 262,
+  "files_touched": [
+    "cli/src/agent.ts"
+  ],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-medium",
+  "turn_id": "0c1992ad60c7",
+  "checkpoint_transcript_start": 1813,
+  "transcript_lines_at_start": 1813,
+  "redaction": {
+    "replacements": 48,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 48,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 262
+  }
+}

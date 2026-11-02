@@ -3,7 +3,7 @@
   "checkpoint_id": "01M6F1W4DQ32CME4TQDTS9K173",
   "strategy": "manual-commit",
   "branch": "v1/wp-1105-evaluators",
-  "checkpoints_count": 4,
+  "checkpoints_count": 98,
   "files_touched": [
     "cli/src/agent.ts"
   ],
@@ -20,6 +20,12 @@
       "transcript": "/1/full.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
@@ -31,14 +37,14 @@
     "subagent_tokens_complete": false
   },
   "redaction": {
-    "replacements": 1444,
+    "replacements": 1492,
     "layers": {
       "betterleaks": 478,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 157,
       "credentialed_uri": 63,
-      "entropy": 1050,
+      "entropy": 1098,
       "key_context": 0,
       "provider_token": 1,
       "shell_stdin": 0
