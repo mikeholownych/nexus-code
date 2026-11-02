@@ -333,6 +333,11 @@ export interface DurableOperationState {
   decisions?: AppliedDecision[];
   /** Present only for an isolated operation; absent keeps the original in-place behaviour. */
   git?: OperationGitState;
+  /**
+   * Non-isolated operations in a Git checkout: HEAD when the operation first ran. A review unit diffs against it, so
+   * work a unit committed is still part of the candidate. Isolated operations use `git.baseCommit` instead.
+   */
+  startCommit?: string;
   /** Accepted unit integrations, oldest first. */
   integrations?: IntegrationReceipt[];
   /** Operator-created conversation snapshots, oldest first. */

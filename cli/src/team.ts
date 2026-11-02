@@ -98,6 +98,7 @@ export class TeamOrchestrator {
       store,
       executor,
       signal: this.opts.signal,
+      workspace: this.config.workspace,
       ...(this.opts.clock ? { clock: this.opts.clock } : {}),
       ...(this.opts.onEvent ? { onEvent: this.opts.onEvent } : {}),
       ...(this.opts.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.opts.maxInProcessWaitMs } : {}),

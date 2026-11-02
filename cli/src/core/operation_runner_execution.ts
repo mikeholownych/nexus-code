@@ -575,7 +575,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   /** The objective evidence a review unit is given: requirements, scope, base, candidate diff and verifier receipts. */
   private reviewEvidence(unit: WorkUnit, ctx: UnitRunContext, workspace: string): ReviewEvidencePackage {
-    const candidate = reviewCandidateDiff(ctx.workspace ?? workspace, ctx.baseCommit);
+    const candidate = (ctx.baseCommit ?? ctx.startCommit) === undefined && ctx.dependencies.length > 0
+      ? { error: "no starting commit was recorded for this operation, so work done before this review (possibly committed) cannot be shown; start a new operation" }
+      : reviewCandidateDiff(ctx.workspace ?? workspace, ctx.baseCommit ?? ctx.startCommit);
     const verified = ctx.dependencies.find((d) => d.verification)?.verification;
     // No operation or unit declares a file scope, so the package carries none (rather than an empty placeholder that
     // would read as "unrestricted"): the scope gate runs only for callers that supply one.

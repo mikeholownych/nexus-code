@@ -1678,10 +1678,10 @@ export class AutonomousAgent {
     // obligation pending after every recovery. A workspace-discovered or generic operator-configured verifier cannot
     // establish a pre-change state for the possibly modified workspace; resume stays unverified until a trusted
     // baseline or a task-specific authenticated verifier mechanism is available.
-    // The one exception is a role that is read-only by construction (a reviewer, researcher or read-only specialist
-    // started in read-only mode): it cannot have written anything, and it cannot run a verifier, so inheriting the
-    // obligation would make a retried review impossible to complete.
-    const pending = !(isReadOnlyRole(this.role) && this.isReadOnly());
+    // The one exception is an independent review unit (reviewer or acceptance_reviewer, read-only by construction):
+    // it cannot have written anything and cannot run a verifier, so inheriting the obligation would make a retried
+    // review impossible to complete. Every other role, including a read-only researcher, keeps the obligation.
+    const pending = !((this.role === "reviewer" || this.role === "acceptance_reviewer") && this.isReadOnly());
     this.hasPendingModifications = pending;
     this.verificationBaselineInvalidated = pending;
     if (pending) this.changeBaseline = null;

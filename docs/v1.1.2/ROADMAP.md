@@ -12,7 +12,7 @@
 
 The v1.1.2 release line encompasses two complementary tiers:
 1. **Tier 1 (Completed in v1.1.2-rc.1):** Operational defect fix for multi-message prompt deduplication upon crash-resume ([PR #377](https://github.com/mikeholownych/nexus-code/pull/377)) and release documentation addendum.
-2. **Tier 2 (v1.1.2 Feature Enhancement):** Bounded specialist agent contracts, objective independent review boundaries (eliminating implementer confirmation bias), deterministic micro-routing, and telemetry-aware scheduling.
+2. **Tier 2 (v1.1.2 Feature Enhancement):** Bounded specialist agent contracts, objective independent review boundaries (eliminating implementer confirmation bias), deterministic micro-routing (cut from PR #396), and telemetry-aware scheduling.
 
 ### Status in PR #396 (owner decision: connect the new modules or cut them)
 - **Item 1, connected.** The specialist contracts are runtime roles in `cli/src/core/roles.ts`. An operation unit or `/team` target can run as one. The agent offers only the contract's permitted tools, and it refuses any other call when the call is dispatched (`roleToolAllowList`). That holds whether or not the role is read-only.
@@ -20,7 +20,9 @@ The v1.1.2 release line encompasses two complementary tiers:
   - Their prompt is the evidence package: the candidate diff against the operation's base commit, and the verifier receipt of the unit they depend on. Prerequisite summaries are withheld.
   - The unit completes only on a well-formed `ACCEPT` that survives the deterministic gates. Prose, a malformed verdict, a reported defect or a failed verifier blocks the unit for an operator decision.
   - The verifier receipt comes from the dependency's integration receipt (isolated operations) or, where nothing was integrated (for example `/team`), from the verification recorded on the dependency's completed result. A verification that is not a passing run that executed tests reaches the package as a non-zero exit code. A large (truncated) diff with no passing verifier evidence is rejected.
-  - Retrying a rejected review resumes the reviewer's conversation. A role that is read-only by construction does not inherit the write-verification obligation that recovery adds for writer units, since it can neither have written nor run a verifier; writer units keep the fail-closed obligation.
+  - Retrying a rejected review resumes the reviewer's conversation. A review unit (`reviewer`, `acceptance_reviewer`; read-only by construction) does not inherit the write-verification obligation that recovery adds for writer units, since it can neither have written nor run a verifier; writer units keep the fail-closed obligation.
+  - The base a review diffs against is the isolated operation's base commit or, for a non-isolated operation in a Git checkout, the HEAD recorded when the operation first ran (`startCommit`), so a change a unit committed is still in the diff. If work preceded the review and no base was recorded, the review blocks.
+  - `security_reviewer` is deliberately not behind the boundary: only `reviewer` and `acceptance_reviewer` are. It is a read-only specialist whose contract lists `unified_diff` as an input, and it keeps the ordinary prompt.
   - If the candidate diff cannot be collected (no Git checkout, or the diff exceeds the 4 MiB buffer), the review is blocked before any model turn. That failure is never presented to the reviewer as evidence.
   - The runtime package names the real operation id and declares no file scope: no operation or unit declares one, so the scope gate (`detectScopeViolations`) applies only to a package that supplies `authorizedScope`.
   - The boundary complements `cli/src/core/independent_check.ts`, which decides whether a verifier pass is independent evidence. It does not replace it.

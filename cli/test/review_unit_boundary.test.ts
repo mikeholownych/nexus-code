@@ -25,6 +25,8 @@ function repo(): string {
   return dir;
 }
 
+const head = (dir: string) => execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+
 const internals = (executor: AgentWorkUnitExecutor) =>
   executor as unknown as {
     reviewEvidence(unit: object, ctx: object, workspace: string): any;
@@ -63,6 +65,7 @@ test("the reviewer prompt carries the diff and verifier receipt but not the auth
   const ctx = {
     objective: "Fix add",
     workspace: dir,
+    startCommit: head(dir),
     dependencies: [{ id: "implement", title: "Implementer", summary: "I FIXED IT AND IT WORKS", verification: { command: "make test", status: "PASSED", hasExecutedTests: true } }],
   };
   const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
@@ -125,7 +128,7 @@ test("a candidate diff that cannot be collected blocks the review instead of bec
   const dir = repo();
   fs.writeFileSync(path.join(dir, "big.txt"), "x".repeat(5 * 1024 * 1024)); // untracked: exceeds the 4 MiB diff buffer
   const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
-  const ctx = { objective: "Fix add", workspace: dir, dependencies: [{ id: "i", title: "I", summary: "s", verification: { command: "make test", status: "PASSED", hasExecutedTests: true } }], observeSuccess() {} };
+  const ctx = { objective: "Fix add", workspace: dir, startCommit: head(dir), dependencies: [{ id: "i", title: "I", summary: "s", verification: { command: "make test", status: "PASSED", hasExecutedTests: true } }], observeSuccess() {} };
   assert.ok("error" in reviewCandidateDiff(dir), "the diff is not collectable");
   const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
   const reason = failedGate(internals(executor).classify(unit, resource, done, verdict(), null, ctx, false, pkg));
@@ -140,7 +143,7 @@ test("a failed or test-less dependency verification reaches the package as a non
   const dir = repo();
   fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
   const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
-  const dep = (verification: object) => ({ objective: "Fix add", workspace: dir, dependencies: [{ id: "i", title: "I", summary: "s", verification }], observeSuccess() {} });
+  const dep = (verification: object) => ({ objective: "Fix add", workspace: dir, startCommit: head(dir), dependencies: [{ id: "i", title: "I", summary: "s", verification }], observeSuccess() {} });
   const cases: Array<[object, number]> = [
     [{ command: "make test", status: "PASSED", hasExecutedTests: true }, 0],
     [{ command: "make test", status: "FAILED", hasExecutedTests: true }, 1],
@@ -215,7 +218,7 @@ test("a dependency that ran no verifier forwards none; a large diff then has no 
   fs.writeFileSync(path.join(dir, "big.txt"), Array.from({ length: 4000 }, (_, i) => `line ${i}`).join("\n") + "\n");
   const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
   const build = (verification?: object) =>
-    internals(executor).reviewEvidence(unit, { objective: "o", workspace: dir, dependencies: verification ? [{ id: "i", title: "I", summary: "s", verification }] : [] }, dir);
+    internals(executor).reviewEvidence(unit, { objective: "o", workspace: dir, startCommit: head(dir), dependencies: verification ? [{ id: "i", title: "I", summary: "s", verification }] : [] }, dir);
   const none = build();
   assert.ok(none.unifiedDiff.length > 20000);
   assert.equal(parseIndependentReviewVerdict(verdict(), none).verdict, "REJECT");
@@ -333,4 +336,60 @@ test("end to end: retrying a rejected review resumes read-only without inheritin
     if (saved === undefined) delete process.env.HOME;
     else process.env.HOME = saved;
   }
+});
+
+test("end to end: a change the implementer COMMITTED in a non-isolated operation is still in the reviewer's diff", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-commit-home-"));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  const prompts: string[] = [];
+  const gw = await startGateway((_n, body) => {
+    prompts.push((body.messages ?? []).filter((m: any) => m.role === "user").map((m: any) => String(m.content)).join("\n"));
+    return { kind: "tools", calls: [{ name: "task_completed", args: { summary: verdict() } }] };
+  });
+  try {
+    const dir = repo();
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-commit-state-"));
+    const clock = fakeClock();
+    const config: HarnessConfig = { endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: dir, shell: "bash" } as HarnessConfig;
+    const real = new AgentWorkUnitExecutor({
+      baseConfig: config,
+      createAgent: (c) => {
+        const agent = new AutonomousAgent(c, 1);
+        (agent as any).recoveryClock = clock;
+        (agent as any).stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [(agent as any).primaryWorkspacePathIdentity] });
+        return agent;
+      },
+    });
+    const executor = {
+      async run(u: WorkUnit, r: any, ctx: UnitRunContext): Promise<UnitRunResult> {
+        if (u.id !== "implement") return real.run(u, r, ctx);
+        fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
+        execFileSync("git", ["commit", "-qam", "fix add"], { cwd: dir, stdio: "pipe" });
+        return { kind: "completed", summary: "committed the fix", outcome: "NOT_REQUIRED" };
+      },
+    };
+    const resources = [{ id: "r1", provider: new URL(gw.url).origin, endpoint: gw.url, model: "r1", capabilities: ["tools"], rank: 0 }];
+    const state = newOperation("op-commit", "Fix add", [
+      { id: "implement", role: "implementer", prompt: "fix" },
+      { id: "review", role: "reviewer", prompt: "review", dependsOn: ["implement"] },
+    ], resources as any, clock.now());
+    const out = await new TeamOrchestrator(config, { store: new OperationStore(dir, stateDir), executor, clock, resources } as any).drive(state);
+    assert.equal(out.operation.units.find((u) => u.id === "review")?.status, "COMPLETE", out.report);
+    assert.ok(prompts.some((p) => /\+export const add = \(a, b\) => a \+ b;/.test(p)), "the committed change is in the reviewer's diff");
+  } finally {
+    await gw.close();
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+  }
+});
+
+test("a review after earlier work with no recorded starting commit blocks rather than reading an empty diff", () => {
+  const dir = repo();
+  const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
+  const ctx = { objective: "o", workspace: dir, dependencies: [{ id: "i", title: "I", summary: "s" }] };
+  const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
+  assert.match(pkg.diffError ?? "", /starting commit/);
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+  assert.equal(internals(executor).reviewEvidence(unit, { ...ctx, startCommit: head }, dir).diffError, undefined);
 });

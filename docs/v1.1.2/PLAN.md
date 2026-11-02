@@ -127,7 +127,9 @@ export interface IndependentReviewVerdict {
 
 ---
 
-## 4. Slice 3: Deterministic Micro-Routing Engine
+## 4. Slice 3: Deterministic Micro-Routing Engine (cut from PR #396)
+
+> Not delivered: nothing in the runtime routed on it, so `micro_router.ts` and its tests were removed. The design below is kept as history. See `ROADMAP.md`, "Status in PR #396".
 
 ### 4.1 Modules & Files Changed
 - **New Module:** `cli/src/core/micro_router.ts`
@@ -161,5 +163,5 @@ export interface RoutingDecision {
 
 1. **Milestone 1 (Specialist Profiles):** `specialist_profiles.test.ts` passes with 100% test coverage; tool whitelist rejections validated.
 2. **Milestone 2 (Review Boundary):** `independent_review.test.ts` passes; implementer narrative redaction verified; structured verdict parsing verified.
-3. **Milestone 3 (Micro-Router):** `micro_router.test.ts` passes; rule-based queries execute without LLM round-trips.
+3. **Milestone 3 (Micro-Router, cut from PR #396):** `micro_router.test.ts` passes; rule-based queries execute without LLM round-trips.
 4. **Milestone 4 (Full Regression):** Complete existing test suite (`npm --prefix cli test`) runs without regressions.
