@@ -15,6 +15,9 @@ export NEXUS_VERIFY_ATTESTATION=0
 mkdir -p "$TMP/release/download/$VERSION" "$TMP/prefix/bin"
 cp "$ARCHIVE" "$TMP/release/download/$VERSION/$NAME"
 (cd "$TMP/release/download/$VERSION" && sha256sum "$NAME" > SHA256SUMS)
+# Create the log before starting the server: the backgrounded redirect may not have created it by the
+# first poll, and under `set -e` a failed sed on a missing file aborts the script (exit 2).
+: > "$TMP/http.log"
 python3 "$(dirname "$0")/package-smoke-http.py" "$TMP/release" > "$TMP/http.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 50); do
