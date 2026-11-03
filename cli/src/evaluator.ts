@@ -7,6 +7,7 @@ import { HarnessConfig } from "./types.js";
 import { runTestSuiteWithExecutor } from "./tester.js";
 import { WorktreeManager, WorktreeCreateResult } from "./worktree.js";
 import pc from "picocolors";
+import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 import {
   CandidateTracker,
   CandidateIdentity,
@@ -139,7 +140,7 @@ export class BenchmarkEvaluator {
           instances.push(parsed as SweBenchInstance);
         }
       } catch (err: any) {
-        console.warn(pc.yellow(`Warning: Skipped malformed JSONL line ${i + 1}: ${err.message}`));
+        console.warn(pc.yellow(`Warning: Skipped malformed JSONL line ${i + 1}: ${redactDiagnosticForOutput(String(err?.message ?? err))}`));
       }
     }
 

@@ -24,10 +24,16 @@ import { TaskStateNotFoundError } from "./core/state.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
-import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, redactDiagnostic, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
+import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
 import { safeTerminal } from "./ui.js";
 import { isolateEvalCommandHome, runVersionedEvalCommand } from "./eval_cli.js";
+import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
+
+function formatCliDiagnostic(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return safeTerminal(redactDiagnosticForOutput(message));
+}
 
 function collectDeliverableFile(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -38,7 +44,7 @@ function buildConfig(options: any): HarnessConfig {
   try {
     return buildConfigOrThrow(options);
   } catch (err: any) {
-    console.error(pc.red(`Configuration error: ${err?.message ?? err}`));
+    console.error(pc.red(`Configuration error: ${formatCliDiagnostic(err)}`));
     process.exit(2);
   }
 }
@@ -69,7 +75,7 @@ if (startupArgs[0] === "upgrade" && startupArgs.includes("--check")) {
       throw new Error("Pending state restore must be recovered before running upgrade --check");
     }
   } catch (error: any) {
-    console.error(`[maintenance] ${error?.message ?? "Nexus restore state could not be verified"}`);
+    console.error(`[maintenance] ${formatCliDiagnostic(error?.message ?? "Nexus restore state could not be verified")}`);
     process.exit(2);
   }
 }
@@ -84,7 +90,7 @@ if (invocationKind === "restore" || (invocationKind === "client" && !startupRead
       throw new Error("Pending state restore could not be recovered; no state was admitted");
     }
   } catch (error: any) {
-    console.error(`[maintenance] ${error?.message ?? "Nexus restore recovery failed closed"}`);
+    console.error(`[maintenance] ${formatCliDiagnostic(error?.message ?? "Nexus restore recovery failed closed")}`);
     process.exit(2);
   }
 }
@@ -93,7 +99,7 @@ if (invocationKind === "client") {
     const lease = acquireClientLease(process.env.HOME || os.homedir());
     process.once("exit", () => releaseClientLease(lease));
   } catch (error: any) {
-    console.error(`[maintenance] ${error.message}`);
+    console.error(`[maintenance] ${formatCliDiagnostic(error)}`);
     process.exit(2);
   }
   loadEnvironment();
@@ -112,12 +118,12 @@ async function recoverInterruptedUpgrade(topLevelCommand: string): Promise<void>
   const journal = readJournal(packagedPrefix);
   if ((journal && !["idle", "complete", "rolled_back"].includes(journal.state)) || (!journal && fs.existsSync(getJournalPath(packagedPrefix)))) {
     const outcome = recoverUpgrade(packagedPrefix);
-    if (outcome.action === "upgrade_in_progress") console.error(`[upgrade] ${outcome.details}`);
+    if (outcome.action === "upgrade_in_progress") console.error(`[upgrade] ${formatCliDiagnostic(outcome.details)}`);
     if (outcome.action === "manual_intervention") {
-      console.error(`[upgrade] ${outcome.details}. Run nexus upgrade --recover after resolving the recorded failure.`);
+      console.error(`[upgrade] ${formatCliDiagnostic(outcome.details)}. Run nexus upgrade --recover after resolving the recorded failure.`);
       process.exit(2);
     }
-    if (outcome.recovered) console.warn(`[upgrade] ${outcome.details}`);
+    if (outcome.recovered) console.warn(`[upgrade] ${formatCliDiagnostic(outcome.details)}`);
   }
 }
 
@@ -189,7 +195,7 @@ function spawnTui(tuiBin: string, sidecarScript: string): void {
     { stdio: "inherit" }
   );
   if (result.error) {
-    console.error(`Failed to launch nexus-tui: ${result.error.message}`);
+    console.error(`Failed to launch nexus-tui: ${formatCliDiagnostic(result.error)}`);
     process.exit(1);
   }
   process.exit(result.status ?? (result.signal ? 1 : 0));
@@ -474,7 +480,7 @@ program
             .listTasks({ workspace: targetWorkspace })
             .filter((t) => t.taskId !== app.getTaskId());
           if (tasks.length === 0) {
-            console.error(`no task to resume in ${targetWorkspace}; see 'nexus status'`);
+            console.error(`no task to resume in ${formatCliDiagnostic(targetWorkspace)}; see 'nexus status'`);
             app.shutdown();
             exitAfterFlush(2);
             return;
@@ -507,17 +513,17 @@ program
           taskId: app.getTaskId(),
           success: false,
           status: "failed",
-          prompt,
+          prompt: redactDiagnosticForOutput(prompt),
           output: "",
           plan: [],
           milestones: [],
           validationReceipts: [],
           tokenStats: { prompt: 0, completion: 0, total: 0 },
           durationMs: 0,
-          error: err.message,
+          error: redactDiagnosticForOutput(String(err?.message ?? err)),
         }, null, 2));
       } else {
-        console.error(pc.red(`\nTask failed: ${safeTerminal(String(err?.message ?? err))}`));
+        console.error(pc.red(`\nTask failed: ${formatCliDiagnostic(err)}`));
       }
       const exitCode = (err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? 2 : 1;
       app.shutdown();
@@ -548,7 +554,7 @@ program
         }
       }
     } catch (err: any) {
-      console.error(pc.red(`Error: ${err.message}`));
+      console.error(pc.red(`Error: ${formatCliDiagnostic(err)}`));
     }
     console.log();
   });
@@ -597,7 +603,7 @@ async function doctorCommand(_options: any, cmd?: Command): Promise<void> {
     exitAfterFlush(doctorExitCode(report));
   } catch (err: any) {
     // The doctor itself failed (not a finding): exit 3 with a redacted message, JSON when asked for.
-    const message = redactDiagnostic(err?.message ?? String(err));
+    const message = formatCliDiagnostic(err);
     if (options.json) console.log(JSON.stringify({ schemaVersion: DOCTOR_SCHEMA_VERSION, tool: "nexus doctor", error: message }, null, 2));
     else console.error(`nexus doctor could not run: ${message}`);
     exitAfterFlush(DOCTOR_EXIT.error);
@@ -963,7 +969,7 @@ program
       }, delay);
       console.log();
     } catch (err: any) {
-      console.error(pc.red(`Replay error: ${err.message}`));
+      console.error(pc.red(`Replay error: ${formatCliDiagnostic(err)}`));
     }
   });
 
@@ -1176,7 +1182,7 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
   const name = topLevelCommand === program ? program.name() : topLevelCommand.name();
 
   if (operatorConfigStartupError && name !== "doctor" && name !== "check") {
-    console.error(pc.red(`Configuration error: ${operatorConfigStartupError.message}`));
+    console.error(pc.red(`Configuration error: ${formatCliDiagnostic(operatorConfigStartupError)}`));
     process.exit(2);
   }
 
