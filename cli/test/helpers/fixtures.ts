@@ -203,10 +203,14 @@ export async function waitUntil(cond: () => boolean, timeoutMs = 10000): Promise
 export function processGone(pid: number): boolean {
   try {
     process.kill(pid, 0);
-  } catch (error: any) {
-    return error?.code === "ESRCH";
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException)?.code === "ESRCH";
   }
-  const stat = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout?.trim() ?? "";
+  // The process exists or is a zombie. `ps -p` exits 1 with no output once the pid is gone; if ps cannot run, the
+  // process is not proven gone.
+  const ps = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+  if (ps.error || (ps.status !== 0 && ps.status !== 1)) return false;
+  const stat = ps.stdout.trim();
   return stat === "" || stat.startsWith("Z");
 }
 
