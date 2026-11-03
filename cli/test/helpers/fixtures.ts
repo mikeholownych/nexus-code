@@ -4,7 +4,7 @@ import type { Socket } from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 
 export type Reply =
   /** `truncated`: the reply hits the output limit (finish_reason=length) partway through its tool calls' arguments. */
@@ -194,6 +194,20 @@ export async function waitUntil(cond: () => boolean, timeoutMs = 10000): Promise
     if (Date.now() > deadline) throw new Error("timed out");
     await new Promise((r) => setTimeout(r, 10));
   }
+}
+
+/**
+ * True once `pid` has terminated. A zombie counts as terminated: under a PID 1 that does not reap (some containers), a
+ * killed process stays a zombie, and `kill(pid, 0)` still succeeds on it.
+ */
+export function processGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch (error: any) {
+    return error?.code === "ESRCH";
+  }
+  const stat = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout?.trim() ?? "";
+  return stat === "" || stat.startsWith("Z");
 }
 
 export async function waitForEvent(events: any[], pred: (e: any) => boolean, timeoutMs = 10000): Promise<any> {

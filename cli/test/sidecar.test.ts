@@ -10,7 +10,7 @@ import { ApplicationCore } from "../src/core/app.js";
 import { hasPendingStateRestore, restoreFromSources } from "../src/core/state_restore.js";
 import { SidecarOptions, SidecarServer } from "../src/sidecar.js";
 import { slashCatalog } from "../src/slash/catalog.js";
-import { startGateway, makeRepo, makeHome, waitForEvent, waitUntil, Reply } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, processGone, waitForEvent, waitUntil, Reply } from "./helpers/fixtures.js";
 
 interface Rig {
   server: SidecarServer;
@@ -314,8 +314,9 @@ describe("SidecarServer: cancellation", () => {
         assert.ok(Number.isInteger(childPid) && childPid > 0);
         process.kill(childPid, 0);
 
-        const cancelAt = Date.now();
         await send({ type: "cancel" });
+        // The cancelled run_command and the turn settle inside the accepted bound; a failure here leaves cleanup to the
+        // finally below.
         let timeout: NodeJS.Timeout | undefined;
         try {
           await Promise.race([
@@ -324,38 +325,20 @@ describe("SidecarServer: cancellation", () => {
               timeout = setTimeout(() => reject(new Error("sidecar did not settle cancelled run_command within 5s")), 5000);
             }),
           ]);
-        } catch (error) {
-          // The command group belongs to this fixture; kill it on a failed cancellation assertion so teardown cannot
-          // wait for the full synthetic sleep or leave a child behind.
-          try { process.kill(-shellPid!, "SIGKILL"); } catch (killError: any) { if (killError?.code !== "ESRCH") throw killError; }
-          throw error;
         } finally {
           if (timeout) clearTimeout(timeout);
         }
-        assert.ok(Date.now() - cancelAt < 5000, "cancelled run_command and turn settle inside the accepted bound");
         const result = events.find((e) => e.type === "turn.result" && e.turn_id === "t-run-command-cancel");
         assert.equal(result.turn.execution, "INTERRUPTED");
         assert.equal(result.turn.interruption?.outstandingTool, "run_command");
         assert.equal(result.turn.interruption?.outstandingToolSettled, true);
         assert.equal(fs.existsSync(path.join(repo, "finished.txt")), false, "cancelled command does not reach its post-sleep mutation");
-        await waitUntil(() => {
-          try {
-            process.kill(shellPid!, 0);
-            return false;
-          } catch (error: any) {
-            return error?.code === "ESRCH";
-          }
-        }, 2500);
-        await waitUntil(() => {
-          try {
-            process.kill(childPid, 0);
-            return false;
-          } catch (error: any) {
-            return error?.code === "ESRCH";
-          }
-        }, 2500);
+        await waitUntil(() => processGone(shellPid!), 2500);
+        await waitUntil(() => processGone(childPid), 2500);
         cancellationVerified = true;
       } finally {
+        // The command group belongs to this fixture: on any failure, kill it so teardown cannot wait for the full
+        // synthetic sleep or leave a child behind.
         if (shellPid && !cancellationVerified) {
           try { process.kill(-shellPid, "SIGKILL"); } catch (error: any) { if (error?.code !== "ESRCH") throw error; }
         }
