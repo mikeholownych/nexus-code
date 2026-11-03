@@ -43,7 +43,7 @@ import {
   type RecoveryDenial,
 } from "./core/execution_tracking.js";
 import { fileSignature, readCoverage, readRequests } from "./core/observation_identity.js";
-import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool } from "./parser.js";
+import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCallSyntaxCounts } from "./parser.js";
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
@@ -908,6 +908,13 @@ export class AutonomousAgent {
   private verificationEvidence?: VerificationEvidence;
   private verificationEvidenceRawOutput: string = "";
   private turnMutations: number = 0;
+  /** Argument syntax of this turn's tool calls, as parsed (reported on the turn result for evaluation). */
+  private turnToolCallSyntax: ToolCallSyntaxCounts = { native: 0, trailing: 0, structural: 0, invalid: 0 };
+
+  private addToolCallSyntax(counts?: ToolCallSyntaxCounts): void {
+    if (!counts) return;
+    for (const key of ["native", "trailing", "structural", "invalid"] as const) this.turnToolCallSyntax[key] += counts[key];
+  }
   /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
   private turnCarriedChanges = false;
   /** The operator-configured verifier's latest result in this turn (FAILED: it refused a completion and has not passed since). */
@@ -4465,6 +4472,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           this.totalTokens.requests += subStats.requests;
           this.totalTokens.reportedRequests += subStats.reportedRequests;
           this.totalTokens.estimatedRequests += subStats.estimatedRequests;
+          // The subagent's tool calls are model output of this turn: count their syntax with the parent's.
+          this.addToolCallSyntax(subagent.turnToolCallSyntax);
 
           // The child's workspace changes are this turn's changes: the parent's own completion must verify them.
           const childMutations = subagent.turnMutations;
@@ -5407,6 +5416,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.completionSummary = undefined;
     this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
     this.turnMutations = 0;
+    this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0 };
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnCarriedChanges = this.hasPendingModifications;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
@@ -5948,6 +5958,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Parse the response using hybrid parser
         const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
         const parsed = parseModelResponse(assistantMessage, { nativeTools });
+        this.addToolCallSyntax(parsed.toolCallSyntax);
 
         // Update cumulative token usage
         const promptEst = calculateContextBudget(
@@ -6416,6 +6427,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       ...(objective ? { objective } : {}),
       ...(this.turnPersistenceFailures.length ? { persistence: { durable: false as const, failures: [...new Set(this.turnPersistenceFailures)].slice(0, 8) } } : {}),
       ...(this.durable ? { tokenAccounting: this.tokenAccounting() } : {}),
+      ...(Object.values(this.turnToolCallSyntax).some((n) => n > 0) ? { toolCallSyntax: { ...this.turnToolCallSyntax } } : {}),
     };
 
     if (input.interruption) {
@@ -6806,6 +6818,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       else this.totalTokens.estimatedRequests++;
       const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
       const parsed = parseModelResponse(assistantMessage, { nativeTools });
+      this.addToolCallSyntax(parsed.toolCallSyntax);
       this.uniqueCallIds(parsed.toolCalls, tracker);
       this.messages.push({
         role: "assistant",
