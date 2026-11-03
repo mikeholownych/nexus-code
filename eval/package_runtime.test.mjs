@@ -16,6 +16,16 @@ const expectedRuntimeFiles = [
   "eval/runner_integrity.mjs", "eval/runner_api.mjs", "eval/oracle.mjs", "eval/infra.mjs",
   "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs",
   "eval/hardened_check.mjs", "eval/toolchain-versions.json", "eval/scan-compiler-exposure.mjs",
+  "eval/evaluators/code/index.mjs",
+  "eval/evaluators/code/syntax_ast.mjs",
+  "eval/evaluators/code/build.mjs",
+  "eval/evaluators/code/typecheck_clean.mjs",
+  "eval/evaluators/code/diff_boundary.mjs",
+  "eval/evaluators/code/json_repair_rate.mjs",
+  "eval/evaluators/code/parsers.mjs",
+  "eval/evaluators/code/command.mjs",
+  "eval/evaluators/code/result.mjs",
+  "eval/evaluators/code/README.md",
 ];
 
 test("installed candidate runs all public benchmark tasks with provenance", {

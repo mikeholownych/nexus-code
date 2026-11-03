@@ -22,6 +22,7 @@ import { observeT4Fixture } from "./t4_fixtures.mjs";
 import { assertDatasetTaskDigest, loadDataset } from "./dataset.mjs";
 import { createAgentLaunchPayload, serializeAgentLaunchPayload } from "./runner_api.mjs";
 import { assertTaskSnapshotDigest } from "./runner_integrity.mjs";
+import { evaluateSyntaxAst, evaluateBuild, evaluateTypecheckClean, evaluateDiffBoundary, evaluateJsonRepairRate } from "./evaluators/code/index.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -292,6 +293,7 @@ async function runOnce(task, run) {
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
     }
+    const evaluators = await runCodeEvaluators(task, ws, hiddenWs, agent, hardening);
     const turn = agent.json?.turn ?? null;
     // Nexus reports a structured outcome; for the other agents a clean exit within the budget is their completion claim.
     const claimedComplete = turn
@@ -311,6 +313,7 @@ async function runOnce(task, run) {
       falseVerified: turn?.outcome === "VERIFIED" && !hidden.pass,
       contaminated,
       tokens: agent.json?.tokenStats ?? null,
+      ...(evaluators.length ? { evaluators, evaluatorsPass: evaluators.every((r) => r.passed) } : {}),
       ...(hardening ? { hardened: { baseline: hardening.baseline, applied: hardening.applied.length, discarded: hardening.discarded, configChanges: hardening.configChanges } } : {}),
       ...(t3 ? { t3 } : {}),
       model,
@@ -327,6 +330,64 @@ async function runOnce(task, run) {
       fs.rmSync(home, { recursive: true, force: true });
     }
   }
+}
+
+async function runCodeEvaluators(task, ws, hiddenWs, agent, hardening) {
+  if (!task.evaluators || !Array.isArray(task.evaluators) || task.evaluators.length === 0) {
+    return [];
+  }
+  const results = [];
+  const changedFiles = hardening?.applied ?? [];
+  for (const item of task.evaluators) {
+    const spec = typeof item === "string" ? { type: item } : item;
+    if (!spec || typeof spec.type !== "string") continue;
+    switch (spec.type) {
+      case "syntax_ast": {
+        const files = spec.files ?? (changedFiles.length ? changedFiles : undefined);
+        if (files && files.length) {
+          results.push(await evaluateSyntaxAst({ root: ws, files, parsers: spec.parsers }));
+        } else {
+          results.push({ evaluator: "syntax_ast", passed: false, score: 0, details: { error: "no modified source files supplied", files: [] } });
+        }
+        break;
+      }
+      case "diff_boundary": {
+        const allowedPaths = spec.allowedPaths ?? task.allowedPaths ?? [];
+        results.push(evaluateDiffBoundary({ changedFiles, allowedPaths }));
+        break;
+      }
+      case "json_repair_rate": {
+        const syntax = agent.json?.turn?.toolCallSyntax;
+        results.push(evaluateJsonRepairRate(syntax));
+        break;
+      }
+      case "build": {
+        const command = spec.command ?? task.build?.command;
+        const args = spec.args ?? task.build?.args ?? [];
+        const timeoutMs = spec.timeoutMs ?? task.build?.timeoutMs;
+        if (!command) {
+          results.push({ evaluator: "build", passed: false, score: 0, details: { error: "no build command specified" } });
+        } else {
+          results.push(await evaluateBuild({ command, args, cwd: ws, timeoutMs }));
+        }
+        break;
+      }
+      case "typecheck_clean": {
+        const baseSpec = spec.baseline ?? task.typecheck?.baseline ?? { command: spec.command ?? task.typecheck?.command, args: spec.args ?? task.typecheck?.args ?? [], cwd: hiddenWs };
+        const candSpec = spec.candidate ?? task.typecheck?.candidate ?? { command: spec.command ?? task.typecheck?.command, args: spec.args ?? task.typecheck?.args ?? [], cwd: ws };
+        if (!baseSpec?.command || !candSpec?.command) {
+          results.push({ evaluator: "typecheck_clean", passed: false, score: 0, details: { error: "no typecheck command specified" } });
+        } else {
+          results.push(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec }));
+        }
+        break;
+      }
+      default:
+        results.push({ evaluator: spec.type, passed: false, score: 0, details: { error: `unknown evaluator type: ${spec.type}` } });
+        break;
+    }
+  }
+  return results;
 }
 
 async function prepareWorkspace(task, ws) {
@@ -731,7 +792,17 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/dataset.mjs", "eval/runner_api.mjs", "eval/runner_integrity.mjs", "eval/validate.mjs", "eval/t4_fixtures.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
+  const sourceFiles = [
+    "eval/run.mjs", "eval/dataset.mjs", "eval/runner_api.mjs", "eval/runner_integrity.mjs",
+    "eval/validate.mjs", "eval/t4_fixtures.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs",
+    "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs",
+    "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs",
+    "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs",
+    "eval/evaluators/code/index.mjs", "eval/evaluators/code/syntax_ast.mjs", "eval/evaluators/code/build.mjs",
+    "eval/evaluators/code/typecheck_clean.mjs", "eval/evaluators/code/diff_boundary.mjs",
+    "eval/evaluators/code/json_repair_rate.mjs", "eval/evaluators/code/parsers.mjs",
+    "eval/evaluators/code/command.mjs", "eval/evaluators/code/result.mjs",
+  ];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };

@@ -16,8 +16,8 @@ const MAX_TASK_TREE_BYTES = 512 * 1024 * 1024;
 const MAX_TASK_TREE_ENTRIES = 50_000;
 const MAX_TASK_TREE_DEPTH = 64;
 const EXAMPLE_KEYS = new Set(["id", "split", "domain", "objective", "taskDir", "tier", "class", "difficulty", "steps", "minutes"]);
-const ORACLE_KEYS = new Set(["id", "hidden", "regression"]);
-const TASK_KEYS = new Set(["id", "tier", "fixture", "repo", "setup", "steps", "minutes", "class", "difficulty", "faults", "t4Fixture", "t4RunnerFault"]);
+const ORACLE_KEYS = new Set(["id", "hidden", "regression", "evaluators", "allowedPaths", "build", "typecheck"]);
+const TASK_KEYS = new Set(["id", "tier", "fixture", "repo", "setup", "steps", "minutes", "class", "difficulty", "faults", "t4Fixture", "t4RunnerFault", "evaluators", "allowedPaths", "build", "typecheck"]);
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function readRegularFile(file, maxBytes) {
@@ -178,6 +178,14 @@ export function loadDataset(datasetPath, { split = null, only = null } = {}) {
     for (const key of ["class", "difficulty", "steps", "minutes"]) if (example[key] !== undefined) task[key] = example[key];
     task.hidden = oracle.hidden;
     task.regression = oracle.regression;
+    if (oracle.evaluators !== undefined) task.evaluators = oracle.evaluators;
+    else if (sourceTask.evaluators !== undefined) task.evaluators = sourceTask.evaluators;
+    if (oracle.allowedPaths !== undefined) task.allowedPaths = oracle.allowedPaths;
+    else if (sourceTask.allowedPaths !== undefined) task.allowedPaths = sourceTask.allowedPaths;
+    if (oracle.build !== undefined) task.build = oracle.build;
+    else if (sourceTask.build !== undefined) task.build = sourceTask.build;
+    if (oracle.typecheck !== undefined) task.typecheck = oracle.typecheck;
+    else if (sourceTask.typecheck !== undefined) task.typecheck = sourceTask.typecheck;
     return { id: example.id, split: example.split, domain: example.domain, dir: taskDir, treeSha256: manifest.tasks[example.id], task };
   });
   if (oracleById.size !== ids.size || [...oracleById.keys()].some((id) => !ids.has(id))) throw new Error("examples and oracles must contain the same ids");

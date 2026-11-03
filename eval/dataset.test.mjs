@@ -229,3 +229,88 @@ test("importable runner API passes only evaluator config and keeps credentials p
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test("dataset loader accepts and decouples code evaluator declarations", async () => {
+  const loadDataset = requiredLoader();
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-evaluator-decouple-"));
+  try {
+    const copy = path.join(temp, "dataset");
+    fs.cpSync(datasetRoot, copy, { recursive: true });
+    const oracleFile = path.join(copy, "oracles.jsonl");
+    const oracles = fs.readFileSync(oracleFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    oracles[0].evaluators = ["syntax_ast", "json_repair_rate"];
+    oracles[0].allowedPaths = ["repo/math.js"];
+    oracles[0].build = { command: "node", args: ["--check", "repo/math.js"] };
+    oracles[0].typecheck = { command: "node", args: ["--check"] };
+    const newOraclesText = oracles.map((o) => JSON.stringify(o)).join("\n") + "\n";
+    fs.writeFileSync(oracleFile, newOraclesText);
+    const manifestFile = path.join(copy, "manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+    const crypto = await import("node:crypto");
+    manifest.files["oracles.jsonl"] = crypto.createHash("sha256").update(Buffer.from(newOraclesText, "utf8")).digest("hex");
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + "\n");
+
+    const loaded = loadDataset(copy);
+    const row = loaded.rows.find((r) => r.id === oracles[0].id);
+    assert.ok(row);
+    assert.deepEqual(row.task.evaluators, ["syntax_ast", "json_repair_rate"]);
+    assert.deepEqual(row.task.allowedPaths, ["repo/math.js"]);
+    assert.deepEqual(row.task.build, { command: "node", args: ["--check", "repo/math.js"] });
+    assert.deepEqual(row.task.typecheck, { command: "node", args: ["--check"] });
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("scorer aggregates deterministic code evaluators in report", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-scorer-evaluators-"));
+  try {
+    const resultsFile = path.join(temp, "results.jsonl");
+    const run1 = {
+      config: "test-cfg",
+      task: "task-eval",
+      run: 1,
+      tier: "T2",
+      hiddenPass: true,
+      regressionPass: true,
+      evaluators: [
+        { evaluator: "syntax_ast", passed: true, score: 1, details: {} },
+        { evaluator: "json_repair_rate", passed: true, score: 0.9, details: {} },
+      ],
+      turn: { outcome: "VERIFIED", execution: "COMPLETED" },
+    };
+    const run2 = {
+      config: "test-cfg",
+      task: "task-eval",
+      run: 2,
+      tier: "T2",
+      hiddenPass: true,
+      regressionPass: true,
+      evaluators: [
+        { evaluator: "syntax_ast", passed: true, score: 1, details: {} },
+        { evaluator: "json_repair_rate", passed: false, score: 0.5, details: {} },
+      ],
+      turn: { outcome: "VERIFIED", execution: "COMPLETED" },
+    };
+    fs.writeFileSync(resultsFile, `${JSON.stringify(run1)}\n${JSON.stringify(run2)}\n`);
+    const scorerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "score.mjs");
+    const output = spawnSync(process.execPath, [scorerPath, resultsFile, "--json"], { encoding: "utf8" });
+    assert.equal(output.status, 0, output.stderr);
+    const report = JSON.parse(output.stdout);
+    assert.ok(Array.isArray(report.codeEvaluators));
+    const ast = report.codeEvaluators.find((e) => e.evaluator === "syntax_ast");
+    const json = report.codeEvaluators.find((e) => e.evaluator === "json_repair_rate");
+    assert.ok(ast, "syntax_ast must be present in codeEvaluators");
+    assert.equal(ast.runs, 2);
+    assert.equal(ast.passed, 2);
+    assert.equal(ast.passRate, 1);
+    assert.equal(ast.averageScore, 1);
+    assert.ok(json, "json_repair_rate must be present in codeEvaluators");
+    assert.equal(json.runs, 2);
+    assert.equal(json.passed, 1);
+    assert.equal(json.passRate, 0.5);
+    assert.equal(Math.round(json.averageScore * 10) / 10, 0.7);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
