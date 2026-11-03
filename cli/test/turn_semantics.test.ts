@@ -14,6 +14,7 @@ import { execSync, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { AutonomousAgent } from "../src/agent.js";
 import { LocalLlmClient, InferenceError } from "../src/client.js";
+import { processGone } from "./helpers/fixtures.js";
 import { discoverVerifier } from "../src/tester.js";
 import {
   assertTurnResultInvariants,
@@ -548,14 +549,7 @@ describe("A-2 cancellation", () => {
       assert.equal(r.interruption?.outstandingToolSettled, true);
       assert.equal(r.interruption?.undispatchedToolCalls, 1);
       assert.equal(fs.existsSync(path.join(repo, "finished.txt")), false, "the cancelled command must not continue to its post-sleep mutation");
-      await waitFor(() => {
-        try {
-          process.kill(commandPid, 0);
-          return false;
-        } catch (error: any) {
-          return error?.code === "ESRCH";
-        }
-      });
+      await waitFor(() => processGone(commandPid));
       assert.equal(fs.existsSync(path.join(repo, "never.txt")), false, "queued tool call was never dispatched");
       assert.equal(gw.requests.length, 1);
     });

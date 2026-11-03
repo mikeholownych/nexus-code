@@ -10,7 +10,7 @@ import { ApplicationCore } from "../src/core/app.js";
 import { hasPendingStateRestore, restoreFromSources } from "../src/core/state_restore.js";
 import { SidecarOptions, SidecarServer } from "../src/sidecar.js";
 import { slashCatalog } from "../src/slash/catalog.js";
-import { startGateway, makeRepo, makeHome, waitForEvent, waitUntil, Reply } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, processGone, waitForEvent, waitUntil, Reply } from "./helpers/fixtures.js";
 
 interface Rig {
   server: SidecarServer;
@@ -290,6 +290,59 @@ describe("SidecarServer: cancellation", () => {
       await server.idle();
       assert.equal(fs.existsSync(path.join(repo, "x.txt")), false);
       assert.equal(events.find((e) => e.type === "turn.result").turn.execution, "INTERRUPTED");
+    });
+  });
+
+  test("cancel during an approved run_command settles the process and turn promptly", async () => {
+    const script = (): Reply => ({ kind: "tools", calls: [{
+      name: "run_command",
+      args: { command: 'echo "$$" > shell.pid; sleep 8 & child=$!; echo "$child" > child.pid; touch started.txt; wait "$child"; touch finished.txt' },
+    }] });
+    await withSidecar(script, "review", async ({ server, events, repo, send }) => {
+      let shellPid: number | undefined;
+      let cancellationVerified = false;
+      try {
+        await send({ type: "prompt.submit", id: "t-run-command-cancel", text: "run the long command" });
+        const approval = await waitForEvent(events, (e) => e.type === "approval.request");
+        await send({ type: "approve", id: approval.id });
+        // Read the group leader as soon as the command creates its PID file so all later failure paths can clean it up.
+        await waitUntil(() => fs.existsSync(path.join(repo, "shell.pid")), 5000);
+        shellPid = Number(fs.readFileSync(path.join(repo, "shell.pid"), "utf8").trim());
+        await waitUntil(() => fs.existsSync(path.join(repo, "started.txt")) && fs.existsSync(path.join(repo, "child.pid")), 5000);
+        const childPid = Number(fs.readFileSync(path.join(repo, "child.pid"), "utf8").trim());
+        assert.ok(Number.isInteger(shellPid) && shellPid > 0);
+        assert.ok(Number.isInteger(childPid) && childPid > 0);
+        process.kill(childPid, 0);
+
+        await send({ type: "cancel" });
+        // The cancelled run_command and the turn settle inside the accepted bound; a failure here leaves cleanup to the
+        // finally below.
+        let timeout: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            server.idle(),
+            new Promise<void>((_, reject) => {
+              timeout = setTimeout(() => reject(new Error("sidecar did not settle cancelled run_command within 5s")), 5000);
+            }),
+          ]);
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
+        const result = events.find((e) => e.type === "turn.result" && e.turn_id === "t-run-command-cancel");
+        assert.equal(result.turn.execution, "INTERRUPTED");
+        assert.equal(result.turn.interruption?.outstandingTool, "run_command");
+        assert.equal(result.turn.interruption?.outstandingToolSettled, true);
+        assert.equal(fs.existsSync(path.join(repo, "finished.txt")), false, "cancelled command does not reach its post-sleep mutation");
+        await waitUntil(() => processGone(shellPid!), 2500);
+        await waitUntil(() => processGone(childPid), 2500);
+        cancellationVerified = true;
+      } finally {
+        // The command group belongs to this fixture: on any failure, kill it so teardown cannot wait for the full
+        // synthetic sleep or leave a child behind.
+        if (shellPid && !cancellationVerified) {
+          try { process.kill(-shellPid, "SIGKILL"); } catch (error: any) { if (error?.code !== "ESRCH") throw error; }
+        }
+      }
     });
   });
 });
