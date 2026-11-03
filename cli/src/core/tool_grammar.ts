@@ -54,15 +54,15 @@ export function generateToolArgumentsGbnf(
       throw new Error(`registered property ${toolName}.${name} must be a flat schema object`);
     }
     const property = raw as Record<string, unknown>;
-    rejectUnknownKeys(property, new Set(["type", "description"]), `${toolName}.${name} schema`);
-    if (typeof property.description !== "undefined" && typeof property.description !== "string") {
-      throw new Error(`registered property ${toolName}.${name} has an invalid description`);
-    }
     const valueRule = property.type === "string" ? "json-string"
       : property.type === "number" ? "json-number"
         : property.type === "boolean" ? "json-boolean"
           : undefined;
     if (!valueRule) throw new Error(`unsupported JSON Schema type for ${toolName}.${name}`);
+    rejectUnknownKeys(property, new Set(["type", "description"]), `${toolName}.${name} schema`);
+    if (typeof property.description !== "undefined" && typeof property.description !== "string") {
+      throw new Error(`registered property ${toolName}.${name} has an invalid description`);
+    }
     return { name, index, valueRule };
   });
 
