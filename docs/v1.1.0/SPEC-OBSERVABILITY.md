@@ -15,7 +15,7 @@
 Provide Nexus Code with a structured, standards-compliant observability and evaluation layer that enables:
 1. **Hierarchical Execution Visibility:** Real-time and retrospective inspection of agent turns, model calls, tool executions, and context compaction.
 2. **Local-First Privacy:** Zero network egress of prompt text, source code, or credentials by default.
-3. **OpenTelemetry Interoperability:** Conformance with OpenTelemetry GenAI Semantic Conventions (`v1.27.0+`), allowing pluggable export to Jaeger, SigNoz, Langfuse, or LangSmith.
+3. **OpenTelemetry Interoperability:** OTLP/JSON-compatible traces using the current OpenTelemetry GenAI client-inference conventions, allowing local inspection and later pluggable export.
 4. **Structured Evaluation:** Versioned datasets with strict separation of agent stimulus (`examples.jsonl`) from evaluation assertions (`oracles.jsonl`).
 5. **Deterministic Replay:** Containerized reproduction of tool call sequences without re-invoking inference models.
 
@@ -28,13 +28,13 @@ Every agent execution is modeled as a tree of OpenTelemetry-compatible spans:
 ```
 [Trace: Agent Session (Thread)]
  └── [Span: Turn 1 (Root)]
-      ├── [Span: Model Inference Request] (gen_ai.system=openai, model=qwen2.5-coder)
+      ├── [Span: Model Inference Request] (gen_ai.provider.name=openai, gen_ai.request.model=qwen2.5-coder)
       ├── [Span: Tool Invocation: read_file] (agent.tool.name=read_file, path=cli/src/agent.ts)
       ├── [Span: Tool Invocation: run_command] (agent.tool.name=run_command, cmd=npm test)
       │    └── [Event: Process Spawned] (pid=45812)
       │    └── [Event: Process Exited] (exit_code=0)
       ├── [Span: Context Compaction] (nexus.compaction.reason=token_ceiling)
-      └── [Span: Model Inference Request] (gen_ai.system=openai, model=qwen2.5-coder)
+      └── [Span: Model Inference Request] (gen_ai.provider.name=openai, gen_ai.request.model=qwen2.5-coder)
 ```
 
 ### 2.1 Span Specifications
@@ -51,11 +51,12 @@ Every agent execution is modeled as a tree of OpenTelemetry-compatible spans:
   - `nexus.turn.duration_ms`: Wall-clock execution time in milliseconds
 
 #### Model Inference Span
-- **Name:** `gen_ai.client.chat`
+- **Name:** `{gen_ai.operation.name} {gen_ai.request.model}` (for example, `chat qwen2.5-coder`)
 - **Kind:** `CLIENT`
 - **Attributes (OTel Standard):**
-  - `gen_ai.system`: Provider classification (`openai`, `vllm`, `anthropic`, `ollama`)
-  - `gen_ai.request.model`: Requested model name
+  - `gen_ai.operation.name`: Required operation name, such as `chat` or `text_completion`
+  - `gen_ai.provider.name`: Required provider classification (for example `openai`, `anthropic`, or a documented custom provider)
+  - `gen_ai.request.model`: Required when available from the request
   - `gen_ai.response.model`: Actual model returned by endpoint
   - `gen_ai.request.temperature`: Temperature float
   - `gen_ai.request.max_tokens`: Configured output token limit
@@ -64,6 +65,8 @@ Every agent execution is modeled as a tree of OpenTelemetry-compatible spans:
   - `gen_ai.response.finish_reasons`: `["stop"]` | `["tool_calls"]` | `["length"]`
   - `nexus.inference.endpoint`: Base URL of inference endpoint (with credentials stripped)
   - `nexus.inference.token_accounting_mode`: `STRICT_MEASURED` | `CLIENT_ESTIMATE`
+
+The semantic-convention source used for WP-1101 is the OpenTelemetry GenAI conventions repository, [client inference](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/client-inference.md), checked 2026-10-31. That document is marked **Development** and its current required client span attributes are `gen_ai.operation.name` and `gen_ai.provider.name`; `gen_ai.request.model` is conditionally required when available. Record the revision or release tag used when the release implementation is frozen; do not describe the moving `main` document as a versioned stable release. The general OpenTelemetry semantic-conventions registry identifies itself as 1.44.0, and marks moved legacy GenAI fields as deprecated. In particular, do not emit `gen_ai.system` (use `gen_ai.provider.name`), `gen_ai.usage.prompt_tokens` (use `gen_ai.usage.input_tokens`), or `gen_ai.usage.completion_tokens` (use `gen_ai.usage.output_tokens`). The legacy `gen_ai.prompt`, `gen_ai.completion`, `gen_ai.input.messages`, and `gen_ai.output.messages` fields are also deprecated or moved; this design omits them both for migration compatibility and because their contents can contain sensitive prompt/output data. See the [GenAI registry migration entries](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/) and the [registry version](https://opentelemetry.io/docs/specs/semconv/).
 
 #### Tool Execution Span
 - **Name:** `nexus.tool.execute`
@@ -106,14 +109,18 @@ Before any span or event is written to disk or memory:
 Traces are stored per session in newline-delimited JSON (`ndjson`):
 ```text
 ~/.local/share/nexus/
-└── sessions/
+├── sessions/
+│   └── <session-id>/
+│       ├── session.json      # Session state and history
+│       └── journal.log       # Durable transaction log
+└── traces/
     └── <session-id>/
-        ├── session.json      # Session state and history
-        ├── journal.log       # Durable transaction log
         └── trace.jsonl       # OTel span records (v1.1+)
 ```
 
-Each line in `trace.jsonl` is a self-contained OpenTelemetry Span JSON record conforming to the OTLP/JSON schema. This allows external tools (`jq`, Python scripts, OTel collector file receivers) to read and parse traces without custom libraries.
+Each line in `trace.jsonl` is an OTLP/JSON file-exporter envelope containing a completed span under `resourceSpans[].scopeSpans[].spans[]`. This allows external tools (`jq`, Python scripts, OTel collector file receivers) to read and parse traces without custom libraries.
+
+The earlier draft placed `trace.jsonl` beside session state under `sessions/<session-id>/`. WP-1101 follows release gate G1.1-1, which explicitly requires traces under `~/.local/share/nexus/traces/`; the diagram above is the reconciled normative path. Session state remains under `sessions/`, and trace files are stored once under `traces/`.
 
 ---
 
