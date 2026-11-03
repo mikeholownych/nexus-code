@@ -4,6 +4,7 @@
  * restarted process continues from the same decision point.
  */
 import { credentialStorageHome, storedCredentialFor } from "../client.js";
+import { execFileSync } from "node:child_process";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
@@ -32,7 +33,13 @@ export type { AgentExecutorOptions } from "./operation_runner_execution.js";
 export interface UnitRunContext {
   signal?: AbortSignal;
   objective: string;
-  dependencies: Array<{ id: string; title: string; summary: string }>;
+  /** The durable operation this unit belongs to. */
+  operationId?: string;
+  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean } }>;
+  /** Isolated operations: the commit the operation started from, which a review unit diffs against. */
+  baseCommit?: string;
+  /** Non-isolated operations: HEAD when the operation first ran (absent outside Git, or for older operations). */
+  startCommit?: string;
   /** Why the unit is being resumed on this resource (undefined on its first run). */
   resumeReason?: string;
   /** Operator decision applied since the unit last ran (told to the unit). `restart` authorizes starting it over. */
@@ -65,6 +72,8 @@ export interface OperationRunnerOptions {
   onEvent?(event: OperationEvent): void;
   /** Receives fixed, secret-free debug events for best-effort checks. */
   onDiagnostic?: OperationDiagnosticHandler;
+  /** The workspace the units run in. Lets a non-isolated operation record the commit it started from. */
+  workspace?: string;
   /** Provider waits longer than this hand the unit back to the scheduler (shorter blips are waited in place). */
   inPlaceMaxWaitMs?: number;
   /**
@@ -146,6 +155,7 @@ export class OperationRunner {
         return this.state;
       }
     }
+    this.recordStartCommit();
     this.reconcileIntegrated();
     this.scheduler.reconcileInterruptedRuns();
     // Persist every interrupted-run accounting transition before the first revalidation await.
@@ -307,10 +317,17 @@ export class OperationRunner {
     const ctx: UnitRunContext = {
       signal,
       objective: this.state.objective,
+      operationId: this.state.id,
       dependencies: unit.dependsOn.map((id) => {
         const dep = this.scheduler.unit(id);
-        return { id, title: dep.title, summary: dep.result?.summary ?? "" };
+        // The verifier a dependency ran: its integration receipt (isolated operations) or, where nothing was
+        // integrated, the verification its own completed result recorded.
+        const receipt = [...(this.state.integrations ?? [])].reverse().find((entry) => entry.unitId === id);
+        const verification = receipt?.tests ?? dep.result?.verification;
+        return { id, title: dep.title, summary: dep.result?.summary ?? "", ...(verification ? { verification } : {}) };
       }),
+      ...(this.state.git?.baseCommit ? { baseCommit: this.state.git.baseCommit } : {}),
+      ...(!this.state.git && this.state.startCommit ? { startCommit: this.state.startCommit } : {}),
       ...(unit.agentTaskId
         ? {
             resumeReason:
@@ -495,6 +512,25 @@ export class OperationRunner {
     this.git!.disposeUnit(unit.id);
     this.save();
     return result;
+  }
+
+  /** First run of a non-isolated operation in a Git checkout: remember HEAD, the base a review diffs against. */
+  private recordStartCommit(): void {
+    if (this.state.git || this.state.startCommit || !this.opts.workspace) return;
+    // Only before any unit has started: HEAD after work began (an operation persisted before this was recorded) is
+    // not the operation's base, and leaving it unset makes a later review block rather than diff against it.
+    if (this.state.units.some((u) => u.runs > 0 || u.status === "COMPLETE" || u.status === "RUNNING" || u.agentTaskId)) return;
+    try {
+      this.state.startCommit = execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
+        cwd: this.opts.workspace,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10_000,
+      }).trim();
+      this.save();
+    } catch {
+      // Not a Git checkout (or no commits yet): a review then has no base to diff against and says so.
+    }
   }
 
   /**

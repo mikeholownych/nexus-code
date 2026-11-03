@@ -155,7 +155,7 @@ import {
 } from "./core/findings.js";
 import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnReason } from "./core/turn.js";
-import { isReadOnlyRole, ROLE_PROFILES, type AgentRole } from "./core/roles.js";
+import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 
@@ -1685,7 +1685,12 @@ export class AutonomousAgent {
     // obligation pending after every recovery. A workspace-discovered or generic operator-configured verifier cannot
     // establish a pre-change state for the possibly modified workspace; resume stays unverified until a trusted
     // baseline or a task-specific authenticated verifier mechanism is available.
-    const pending = true;
+    // The exception is a review unit or a read-only specialist (read-only by construction): it cannot have written
+    // anything and cannot run a verifier, so inheriting the obligation would make its resumed report impossible to
+    // complete. Every other role keeps the obligation, including a read-only researcher (pinned by the team tests) and
+    // failure_debugger, which can run commands.
+    const readOnlyReporter = this.role === "reviewer" || (isSpecialistRole(this.role) && isReadOnlyRole(this.role));
+    const pending = !(readOnlyReporter && this.isReadOnly());
     this.hasPendingModifications = pending;
     this.verificationBaselineInvalidated = pending;
     if (pending) this.changeBaseline = null;
@@ -1906,17 +1911,14 @@ export class AutonomousAgent {
       // Only with an objective ledger: without one update_requirements returns nothing and read_objective has nothing to
       // read, but offered anyway the model spent a step on each (eval debug-logs trace).
       ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective ? [READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
-      ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective?.requirements.length ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
+      ...(this.offersRequirements() ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
       READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition,
       READ_ARCHIVE_CAPABILITY.toolDefinition as ToolDefinition,
       ...this.mcpManager.getToolDefinitions(),
       ...this.pluginManager.getCustomToolDefinitions(),
     ];
-    if (this.role && isReadOnlyRole(this.role)) {
-      const allowed = new Set(ROLE_PROFILES[this.role]?.recommendedTools || []);
-      allowed.add("task_completed");
-      tools = tools.filter((t) => allowed.has(t.function.name));
-    }
+    const allowed = roleToolAllowList(this.role);
+    if (allowed) tools = tools.filter((t) => allowed.has(t.function.name));
     return tools;
   }
 
@@ -2637,7 +2639,20 @@ export class AutonomousAgent {
     const input = this.objective && this.objective.execution === tracker.data
       ? recoveryInput(this.objective)
       : { objective: objectiveText, open: [], execution: tracker.data };
-    return renderRecoveryContext(input, { present: (id) => presentCalls.has(id), stagnationSteps });
+    return renderRecoveryContext(input, { present: (id) => presentCalls.has(id), stagnationSteps, permits: this.toolPermitted() });
+  }
+
+  /** Whether this agent may call a tool at all: offered to it, allowed for its role, and not refused as read-only. */
+  private toolPermitted(): (tool: string) => boolean {
+    const allowed = roleToolAllowList(this.role);
+    const readOnly = this.isReadOnly();
+    const requirements = this.offersRequirements();
+    return (tool) => (!allowed || allowed.has(tool)) && !(readOnly && isWriteOrExecTool(tool)) && (tool !== "update_requirements" || requirements);
+  }
+
+  /** update_requirements is offered only with an objective ledger that has requirements, to agents that own it. */
+  private offersRequirements(): boolean {
+    return (this.depth === 0 || this.role === "implementer" || this.role === "tester") && Boolean(this.objective?.requirements.length);
   }
 
   /**
@@ -2684,7 +2699,7 @@ export class AutonomousAgent {
     // A quarter of the context window (≈4 characters per token) for the objective when it must be carried in full.
     const budget = Math.max(8000, Math.floor(this.contextLimit() * 4 * 0.25));
     const { presentCalls } = observationPresence(messages);
-    const recovery = { present: (id: string) => presentCalls.has(id), stagnationSteps: this.config.continuation?.stagnationSteps ?? DEFAULT_CONTINUATION.stagnationSteps };
+    const recovery = { present: (id: string) => presentCalls.has(id), stagnationSteps: this.config.continuation?.stagnationSteps ?? DEFAULT_CONTINUATION.stagnationSteps, permits: this.toolPermitted() };
     return [messages[0], { role: "system", content: renderPinnedLedger(ledger, !inContext, budget, recovery) }, ...messages.slice(1)];
   }
 
@@ -4774,6 +4789,32 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       };
     }
 
+    // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
+    // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
+    const roleAllowed = roleToolAllowList(this.role);
+    if (roleAllowed && !roleAllowed.has(toolName) && !(this.isReadOnly() && isWriteOrExecTool(toolName))) {
+      return {
+        receipt: {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+          toolName,
+          targetResources: [],
+          success: false,
+          output: "",
+          error: `Tool "${toolName}" is not permitted for role '${this.role}'. Permitted tools: ${[...roleAllowed].join(", ")}.`,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        },
+        shouldExit: false,
+      };
+    }
+
     try {
       const isPublicEgress = ["search_web", "fetch_web", "browser_navigate", "browser_type"].includes(toolName);
       if (!isPublicEgress) {
@@ -6328,7 +6369,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
    * work units have no parent turn to verify them; their configured verifier remains a completion gate.
    */
   private configuredVerifierGatesCompletion(): boolean {
-    const nonMutatingTeamRole = this.role === "researcher" || this.role === "architect" || this.role === "reviewer";
+    // Read-only roles (researcher, reviewer, the read-only specialists) cannot write or run a verifier; the architect
+    // plans without writing. A role that can write (implementer, tester, failure_debugger) is never exempt.
+    const nonMutatingTeamRole = this.role === "architect" || (isReadOnlyRole(this.role) && this.isReadOnly());
     return !this.runningAsSubagent && !nonMutatingTeamRole && Boolean(this.config.authoritativeVerifierCommand?.trim());
   }
 
