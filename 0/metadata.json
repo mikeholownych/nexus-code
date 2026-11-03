@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6GR57YG5Z12NP7VWHWR6KNH",
+  "session_id": "01a192c0-f277-7f60-8574-21ce71edb8c2",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-03T13:05:26.91344047Z",
+  "branch": "v1/v112-wp1101-tracing",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "cli/src/agent.ts"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "e26ba158f2a2",
+  "checkpoint_transcript_start": 60412,
+  "transcript_lines_at_start": 60412,
+  "compact_transcript_start": 8585,
+  "token_usage": {
+    "input_tokens": 1090540,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 190196864,
+    "output_tokens": 254976,
+    "api_call_count": 1279,
+    "subagent_tokens_complete": false
+  },
+  "redaction": {
+    "replacements": 1906,
+    "layers": {
+      "betterleaks": 647,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 218,
+      "credentialed_uri": 85,
+      "entropy": 1353,
+      "key_context": 0,
+      "provider_token": 1,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 70
+  }
+}
