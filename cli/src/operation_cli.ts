@@ -204,6 +204,7 @@ async function drive(op: DurableOperationState, config: HarnessConfig, store: Op
     const out = await driveOperation(op, {
       store,
       signal: controller.signal,
+      workspace: config.workspace,
       executor: new AgentWorkUnitExecutor({ baseConfig: config, discoverCatalog }),
       ...(json ? {} : { onEvent: printEvent }),
     });

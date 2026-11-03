@@ -429,7 +429,7 @@ describe("slash router: extensions and turns", () => {
     await withRig(async ({ reply }) => {
       const usages: Array<[string, string]> = [
         ["tdd", "Usage: /tdd <issue description>"],
-        ["team", "Usage: /team <researcher|architect|implementer|tester|reviewer|full> [--independent-review] <objective>"],
+        ["team", "Usage: /team <researcher|architect|implementer|tester|reviewer|semantic_explorer|call_site_analyzer|failure_debugger|security_reviewer|acceptance_reviewer|full> [--independent-review] <objective>"],
         ["browse", "Usage: /browse <url>"],
         ["skill", "Usage: /skill <name> or /skill init <name>"],
       ];
@@ -439,7 +439,7 @@ describe("slash router: extensions and turns", () => {
         assert.equal(out.output, usage);
       }
       assert.match((await reply("mcp", "add only-a-name")).output, /^Usage: \/mcp add/);
-      assert.equal((await reply("team", "juggler do it")).output, "Unknown role juggler. Roles: researcher, architect, implementer, tester, reviewer, full");
+      assert.equal((await reply("team", "juggler do it")).output, "Unknown role juggler. Roles: researcher, architect, implementer, tester, reviewer, semantic_explorer, call_site_analyzer, failure_debugger, security_reviewer, acceptance_reviewer, full");
     });
   });
 
