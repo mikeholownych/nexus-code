@@ -81,6 +81,7 @@ test("versioned dataset candidate receives stimulus without oracle sentinels", {
     assert.equal(runManifest.dataset.version, "1.1.0");
     assert.equal(runManifest.dataset.manifestSha256, createHash("sha256").update(fs.readFileSync(manifestFile)).digest("hex"));
     assert.ok(runManifest.harness.sourceDigests.some((entry: any) => entry.file === "eval/dataset.mjs"), "run identity includes the dataset loader source");
+    assert.ok(runManifest.harness.sourceDigests.some((entry: any) => entry.file === "eval/evaluators/code/runner.mjs"), "run identity includes the evaluator runner source");
     assert.ok(gateway.requests.some((body: any) => JSON.stringify(body).includes("1. Add math.js")), "provider request contains the selected stimulus");
     assert.ok(gateway.requests.every((body: any) => !JSON.stringify(body).includes(sentinel)), "oracle sentinel never reaches a candidate request or tool result");
     const toolResults = gateway.requests.flatMap((body: any) => body.messages ?? []).filter((message: any) => message.role === "tool");

@@ -21,6 +21,7 @@ const expectedRuntimeFiles = [
   "eval/evaluators/code/build.mjs",
   "eval/evaluators/code/typecheck_clean.mjs",
   "eval/evaluators/code/diff_boundary.mjs",
+  "eval/evaluators/code/runner.mjs",
   "eval/evaluators/code/json_repair_rate.mjs",
   "eval/evaluators/code/parsers.mjs",
   "eval/evaluators/code/command.mjs",

@@ -16,18 +16,21 @@ from what the agent said about its own work.
   - Fails closed on: a language with no parser, an unsupported extension, an unreadable file, a path that is
     absolute, contains traversal, or escapes the workspace through a symlink, and an empty file list.
 - **`build.mjs`**
-  - Runs an explicit command and argv through `command.mjs`: `spawnSync` with no shell, a minimal environment and a
-    timeout.
+  - Runs an explicit command and argv through `command.mjs` inside the Bubblewrap workspace sandbox.
+  - The sandbox unshares networking, exposes the candidate workspace plus the exact runtime executable and system runtime mounts, and clears the inherited environment.
+  - Wall time, captured output and process cleanup are bounded. If the sandbox or an allowlisted runtime is unavailable, the evaluator fails closed without a host fallback.
   - Passes only on exit status 0 with no timeout, signal or spawn error.
 - **`typecheck_clean.mjs`**
-  - Runs the baseline and candidate typecheck commands in separate workspaces.
+  - Runs the baseline and candidate typecheck commands in separate Bubblewrap workspaces under the same filesystem, network, environment, output and process limits as `build.mjs`.
   - Fails on any diagnostic line the candidate adds; existing diagnostics may remain. Duplicate lines are counted.
   - Also fails when the candidate exits non-zero and either the baseline exited 0 or the candidate printed nothing.
-  - A spawn failure, timeout or signal on either side fails closed.
+  - A containment failure, timeout, output overflow or signal on either side fails closed.
   - The comparison is exact, so callers should normalize paths that differ between revisions.
 - **`diff_boundary.mjs`**
   - Checks Git-style relative paths against exact allowed paths and directory prefixes ending in `/`.
   - Absolute paths, traversal, empty or `.` segments, NUL bytes and backslashes fail closed.
+  - `runner.mjs` supplies paths by comparing a bounded pre-agent workspace snapshot with the post-agent workspace; this includes modified, deleted and untracked files and does not depend on candidate-controlled Git metadata.
+  - Missing or empty change evidence fails closed. Snapshot traversal skips only root `.git` metadata, never follows symlinks, rejects special files, and is bounded by depth, incrementally read entries, file bytes and wall time.
 - **`json_repair_rate.mjs`**
   - Scores the agent's own tool-call syntax telemetry: the `toolCallSyntax` counts on each turn result
     (`nexus run --json` → `turn.toolCallSyntax`).
@@ -40,5 +43,5 @@ from what the agent said about its own work.
   - Not counted: calls in a response cut off at the output-token limit. Those are dropped and requested again before
     parsing, under the output-truncation recovery.
 
-The modules are a library. The dataset runner (`eval/run.mjs`, WP-1103/1104) is responsible for calling them: it
-supplies the modified-file list, isolated baseline and candidate workspaces, any extra parsers, and the turn results.
+The modules are a library. The dataset runner (`eval/run.mjs`, WP-1103/1104) supplies the pre-agent workspace snapshot,
+candidate and baseline workspaces, any extra parsers, and the turn results.

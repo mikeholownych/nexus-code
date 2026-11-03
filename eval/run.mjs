@@ -22,7 +22,7 @@ import { observeT4Fixture } from "./t4_fixtures.mjs";
 import { assertDatasetTaskDigest, loadDataset } from "./dataset.mjs";
 import { createAgentLaunchPayload, serializeAgentLaunchPayload } from "./runner_api.mjs";
 import { assertTaskSnapshotDigest } from "./runner_integrity.mjs";
-import { evaluateSyntaxAst, evaluateBuild, evaluateTypecheckClean, evaluateDiffBoundary, evaluateJsonRepairRate } from "./evaluators/code/index.mjs";
+import { captureWorkspaceSnapshot, runCodeEvaluators } from "./evaluators/code/runner.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -202,13 +202,25 @@ async function runOnce(task, run) {
   const scratch = config.resources?.workspaceRoot ?? os.tmpdir();
   const ws = fs.mkdtempSync(path.join(scratch, `nexus-eval-${task.id}-`));
   const checkDirs = [];
+  let typecheckBaselineWorkspace = null;
   const home = fs.mkdtempSync(path.join(scratch, "nexus-eval-home-"));
   const budget = effectiveBudget(task, config);
   const base = { task: task.id, tier: task.tier, ...(task.tier === "T3" ? { t3SteeringItems: task.steering.length } : {}), config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
     await prepareWorkspace(task, ws);
+    const needsTypecheckBaseline = task.evaluators?.some((item) => {
+      const spec = typeof item === "string" ? { type: item } : item;
+      return spec?.type === "typecheck_clean" && !spec.baseline && !task.typecheck?.baseline;
+    });
+    if (needsTypecheckBaseline) {
+      typecheckBaselineWorkspace = fs.mkdtempSync(path.join(scratch, `nexus-eval-typecheck-baseline-${task.id}-`));
+      checkDirs.push(typecheckBaselineWorkspace);
+      cloneWorkspace(ws, typecheckBaselineWorkspace);
+    }
     // Taken now, while .git is the harness's own: after the agent runs, nothing executes git against its workspace.
     const baselineTree = gitRev(ws, "HEAD^{tree}");
+    const needsChangedFiles = task.evaluators?.some((item) => ["syntax_ast", "diff_boundary"].includes(typeof item === "string" ? item : item?.type));
+    const evaluatorBaseline = needsChangedFiles ? captureWorkspaceSnapshot(ws) : null;
     const t3Baseline = task.tier === "T3" ? steeringBaseline(task, ws) : null;
     // On the per-run task copy, so the steering hook in runAgent can read it. The commands run on a throwaway copy of
     // the staged workspace, so the agent starts on exactly the staged tree.
@@ -293,7 +305,7 @@ async function runOnce(task, run) {
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
     }
-    const evaluators = await runCodeEvaluators(task, ws, hiddenWs, agent, hardening);
+    const evaluators = await runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline });
     const turn = agent.json?.turn ?? null;
     // Nexus reports a structured outcome; for the other agents a clean exit within the budget is their completion claim.
     const claimedComplete = turn
@@ -330,64 +342,6 @@ async function runOnce(task, run) {
       fs.rmSync(home, { recursive: true, force: true });
     }
   }
-}
-
-async function runCodeEvaluators(task, ws, hiddenWs, agent, hardening) {
-  if (!task.evaluators || !Array.isArray(task.evaluators) || task.evaluators.length === 0) {
-    return [];
-  }
-  const results = [];
-  const changedFiles = hardening?.applied ?? [];
-  for (const item of task.evaluators) {
-    const spec = typeof item === "string" ? { type: item } : item;
-    if (!spec || typeof spec.type !== "string") continue;
-    switch (spec.type) {
-      case "syntax_ast": {
-        const files = spec.files ?? (changedFiles.length ? changedFiles : undefined);
-        if (files && files.length) {
-          results.push(await evaluateSyntaxAst({ root: ws, files, parsers: spec.parsers }));
-        } else {
-          results.push({ evaluator: "syntax_ast", passed: false, score: 0, details: { error: "no modified source files supplied", files: [] } });
-        }
-        break;
-      }
-      case "diff_boundary": {
-        const allowedPaths = spec.allowedPaths ?? task.allowedPaths ?? [];
-        results.push(evaluateDiffBoundary({ changedFiles, allowedPaths }));
-        break;
-      }
-      case "json_repair_rate": {
-        const syntax = agent.json?.turn?.toolCallSyntax;
-        results.push(evaluateJsonRepairRate(syntax));
-        break;
-      }
-      case "build": {
-        const command = spec.command ?? task.build?.command;
-        const args = spec.args ?? task.build?.args ?? [];
-        const timeoutMs = spec.timeoutMs ?? task.build?.timeoutMs;
-        if (!command) {
-          results.push({ evaluator: "build", passed: false, score: 0, details: { error: "no build command specified" } });
-        } else {
-          results.push(await evaluateBuild({ command, args, cwd: ws, timeoutMs }));
-        }
-        break;
-      }
-      case "typecheck_clean": {
-        const baseSpec = spec.baseline ?? task.typecheck?.baseline ?? { command: spec.command ?? task.typecheck?.command, args: spec.args ?? task.typecheck?.args ?? [], cwd: hiddenWs };
-        const candSpec = spec.candidate ?? task.typecheck?.candidate ?? { command: spec.command ?? task.typecheck?.command, args: spec.args ?? task.typecheck?.args ?? [], cwd: ws };
-        if (!baseSpec?.command || !candSpec?.command) {
-          results.push({ evaluator: "typecheck_clean", passed: false, score: 0, details: { error: "no typecheck command specified" } });
-        } else {
-          results.push(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec }));
-        }
-        break;
-      }
-      default:
-        results.push({ evaluator: spec.type, passed: false, score: 0, details: { error: `unknown evaluator type: ${spec.type}` } });
-        break;
-    }
-  }
-  return results;
 }
 
 async function prepareWorkspace(task, ws) {
@@ -801,7 +755,7 @@ function harnessIdentity() {
     "eval/evaluators/code/index.mjs", "eval/evaluators/code/syntax_ast.mjs", "eval/evaluators/code/build.mjs",
     "eval/evaluators/code/typecheck_clean.mjs", "eval/evaluators/code/diff_boundary.mjs",
     "eval/evaluators/code/json_repair_rate.mjs", "eval/evaluators/code/parsers.mjs",
-    "eval/evaluators/code/command.mjs", "eval/evaluators/code/result.mjs",
+    "eval/evaluators/code/command.mjs", "eval/evaluators/code/runner.mjs", "eval/evaluators/code/result.mjs",
   ];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
