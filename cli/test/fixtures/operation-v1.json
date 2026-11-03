@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 2,
+  "taskId": "op-v100-fixture",
+  "sessionId": "op-v100-fixture",
+  "id": "op-v100-fixture",
+  "title": "Operation: Prove the v1.1 migration reads a real v1.0.0 record",
+  "workspacePath": "<recorded-workspace>",
+  "workspace": "<recorded-workspace>",
+  "createdAt": "2026-09-21T14:13:20.000Z",
+  "updatedAt": "2026-10-31T17:58:18.447Z",
+  "status": "in_progress",
+  "activePlan": [
+    {
+      "name": "Implement the change",
+      "status": "completed",
+      "detail": "COMPLETE"
+    },
+    {
+      "name": "Test the change",
+      "status": "pending",
+      "detail": "RUNNABLE"
+    }
+  ],
+  "milestones": [],
+  "validationReceipts": [],
+  "currentOperation": null,
+  "operation": {
+    "schemaVersion": 1,
+    "id": "op-v100-fixture",
+    "objective": "Prove the v1.1 migration reads a real v1.0.0 record",
+    "status": "RUNNING",
+    "createdAt": "2026-09-21T14:13:20.000Z",
+    "updatedAt": "2026-09-21T14:13:20.000Z",
+    "units": [
+      {
+        "id": "impl",
+        "title": "Implement the change",
+        "role": "implementer",
+        "prompt": "Implement it",
+        "dependsOn": [],
+        "requires": {},
+        "status": "COMPLETE",
+        "reroutes": [],
+        "runs": 0,
+        "unknownResumes": 0,
+        "modelsUsed": [],
+        "result": {
+          "summary": "implemented",
+          "completedAt": "2026-10-29T10:00:00.000Z",
+          "resourceId": "primary",
+          "outcome": "VERIFIED"
+        },
+        "agentTaskId": "task-impl"
+      },
+      {
+        "id": "test",
+        "title": "Test the change",
+        "role": "tester",
+        "prompt": "Test it",
+        "dependsOn": [
+          "impl"
+        ],
+        "requires": {},
+        "status": "RUNNABLE",
+        "reroutes": [],
+        "runs": 0,
+        "unknownResumes": 0,
+        "modelsUsed": []
+      }
+    ],
+    "resources": [
+      {
+        "id": "primary",
+        "provider": "https://api.test",
+        "endpoint": "https://api.test/v1",
+        "model": "model-primary",
+        "capabilities": [
+          "tools"
+        ],
+        "rank": 0
+      },
+      {
+        "id": "secondary",
+        "provider": "https://api.test",
+        "endpoint": "https://api.test/v1",
+        "model": "model-secondary",
+        "capabilities": [
+          "tools"
+        ],
+        "rank": 1
+      }
+    ],
+    "conditions": [],
+    "events": [
+      {
+        "type": "WORK_STARTED",
+        "at": "2026-10-29T09:58:00.000Z",
+        "message": "Implement the change started on primary.",
+        "unitId": "impl",
+        "resourceId": "primary"
+      },
+      {
+        "type": "WORK_COMPLETED",
+        "at": "2026-10-29T10:00:00.000Z",
+        "message": "Implement the change completed on primary.",
+        "unitId": "impl",
+        "resourceId": "primary"
+      }
+    ],
+    "policy": {
+      "maxWaitMs": 43200000,
+      "unknownResumeBudget": 2,
+      "maxRunsPerUnit": 25,
+      "minWaitMs": 1000
+    }
+  },
+  "messageLog": null
+}

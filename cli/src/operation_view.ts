@@ -8,7 +8,7 @@ import type { DurableOperationState, OperationEvent, WorkUnit } from "./core/ope
 import { ResourceRegistry, type Eligibility, type ResourceConditionRecord, type ResourceDescriptor } from "./core/resources.js";
 import { safeTerminal } from "./ui.js";
 
-export const OPERATION_VIEW_SCHEMA_VERSION = 1;
+export const OPERATION_VIEW_SCHEMA_VERSION = 2;
 
 export interface OperationViewUnit {
   id: string;
@@ -33,7 +33,7 @@ export interface OperationViewUnit {
   /** Operator cap on the unit's prompt context, when set. */
   contextBudget?: number;
   /** The unit's last start-prompt estimate and the budget it was checked against. */
-  context?: { estimatedPromptTokens: number; budgetTokens: number; contextLimit: number; at: string };
+  context?: { estimatedPromptTokens: number; budgetTokens: number; contextLimit: number; at: string; source?: string };
 }
 
 export interface OperationViewResource {
@@ -87,6 +87,21 @@ export interface OperationViewEvent {
   resourceId?: string;
 }
 
+/** One row of the recorded timeline. Index is 1-based and contiguous so a reader can cite a step. */
+export interface ReplayEntry {
+  index: number;
+  at: string;
+  type: OperationEvent["type"];
+  message: string;
+  unitId?: string;
+  resourceId?: string;
+}
+
+export interface ReplayDocument {
+  schemaVersion: 1;
+  entries: ReplayEntry[];
+}
+
 export interface OperationViewDag {
   nodes: Array<{ id: string; status: WorkUnit["status"]; dependsOn: string[]; required: boolean }>;
   edges: Array<{ from: string; to: string }>;
@@ -127,6 +142,8 @@ export interface OperationView {
   decisions: OperationViewDecision[];
   dag: OperationViewDag;
   events: OperationViewEvent[];
+  /** Present only when the view was built for replay. */
+  replay?: ReplayDocument;
 }
 
 export interface WatchOptions {
@@ -207,6 +224,8 @@ export interface OperationViewOptions {
   events?: number;
   /** Clock for eligibility; defaults to now. */
   now?: number;
+  /** Include the recorded timeline (read-only replay). */
+  replay?: boolean;
 }
 
 function detailFor(unit: WorkUnit): string | undefined {
@@ -465,7 +484,41 @@ export function buildOperationView(
       cycles,
     },
     events,
+    ...(options.replay ? { replay: buildReplay(state) } : {}),
   };
+}
+
+/**
+ * The recorded timeline, read-only. Events are ordered by their timestamp with the original array index as the
+ * stable tie-break, so two events recorded in the same millisecond keep their recording order. `index` is 1-based and
+ * contiguous: a reader (or a test) can cite "step 7" and mean one row.
+ */
+export function buildReplay(state: DurableOperationState): ReplayDocument {
+  const entries = state.events
+    .map((event: OperationEvent, position: number) => ({ event, position }))
+    .sort((a, b) => (a.event.at === b.event.at ? a.position - b.position : a.event.at < b.event.at ? -1 : 1))
+    .map(({ event }, index) => ({
+      index: index + 1,
+      at: event.at,
+      type: event.type,
+      message: event.message,
+      ...(event.unitId ? { unitId: event.unitId } : {}),
+      ...(event.resourceId ? { resourceId: event.resourceId } : {}),
+    }));
+  return { schemaVersion: 1, entries };
+}
+
+/** Human-readable replay. Same text() sanitiser as the live view: an event message is untrusted text. */
+export function renderReplay(replay: ReplayDocument, options: RenderOptions = {}): string {
+  const width = options.width ?? 0;
+  if (!replay.entries.length) return "No events were recorded for this operation.";
+  return replay.entries
+    .map((entry) => {
+      const target = entry.unitId ? ` ${text(entry.unitId, width)}` : entry.resourceId ? ` ${text(entry.resourceId, width)}` : "";
+      const at = entry.at.length >= 19 ? entry.at.slice(11, 19) : entry.at;
+      return `${String(entry.index).padStart(3)}. ${text(at, width)} ${text(entry.type, width)}${target} — ${text(entry.message, width)}`;
+    })
+    .join("\n");
 }
 
 const STATUS_MARK: Record<WorkUnit["status"], string> = {
@@ -497,7 +550,7 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
   const lines: string[] = [];
   const counts = view.counts;
   lines.push(
-    `Operation ${text(view.id, width)}: ${view.status} (${counts.complete}/${counts.total} complete` +
+    `Operation ${text(view.id, width)}: ${text(view.status, width)} (${counts.complete}/${counts.total} complete` +
       `${counts.running ? `, ${counts.running} running` : ""}` +
       `${counts.ready ? `, ${counts.ready} ready` : ""}` +
       `${counts.blocked ? `, ${counts.blocked} blocked` : ""}` +
@@ -525,7 +578,7 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
           ? ` · budget ${unit.contextBudget}`
           : "";
       lines.push(
-        `${indent}${mark} ${text(unit.id, width)}${role} ${text(unit.title, width)}  ${unit.status}${runs}${durable}${integrated}${budget}`,
+        `${indent}${mark} ${text(unit.id, width)}${role} ${text(unit.title, width)}  ${text(unit.status, width)}${runs}${durable}${integrated}${budget}`,
       );
       if (unit.detail) lines.push(`${indent}  ${text(unit.detail, width)}`);
       if (unit.dependsOn.length) lines.push(`${indent}  after: ${unit.dependsOn.map((id) => text(id, width)).join(", ")}`);

@@ -32,7 +32,7 @@
       ],
       "properties": {
         "schemaVersion": {
-          "const": 1
+          "const": 2
         },
         "id": {
           "type": "string"
@@ -270,6 +270,13 @@
                   },
                   "at": {
                     "type": "string"
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "agent-estimate",
+                      "operator-budget"
+                    ]
                   }
                 }
               }
@@ -601,6 +608,59 @@
               }
             }
           }
+        },
+        "replay": {
+          "$ref": "#/$defs/replay"
+        }
+      }
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "entries"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/replayEntry"
+          }
+        }
+      }
+    },
+    "replayEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "at",
+        "type",
+        "message"
+      ],
+      "properties": {
+        "index": {
+          "type": "number",
+          "minimum": 1
+        },
+        "at": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "unitId": {
+          "type": "string"
+        },
+        "resourceId": {
+          "type": "string"
         }
       }
     }

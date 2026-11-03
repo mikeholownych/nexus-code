@@ -27,8 +27,10 @@ enforce what GitHub *can* check: required CI, no history rewriting, and immutabl
 - changes only through a pull request (0 required approvals, for the reason above), merged with a **merge commit
   only** (`allowed_merge_methods: ["merge"]`). A squash or rebase merge would create new commits, leaving the RC tag
   commit or the stable commit `S` off `main`;
-- required checks: `test-matrix (20)`, `test-matrix (22)`, `test-matrix (24)` and `linux-x86_64`, all from
-  GitHub Actions. The retired contest-contract check is not required;
+- required checks: `test-matrix (22)`, `test-matrix (24)` and `linux-x86_64`, all from GitHub Actions. These are
+  exactly the contexts the workflow produces (`.github/workflows/ci.yml`, matrix `node: [22, 24]`), and they match
+  `rulesets/protected-branches.json`. The retired contest-contract check is not required. An earlier revision of this
+  paragraph listed `test-matrix (20)`, which the workflow can never report; the list above is the authoritative one;
 - the strict "branch must be up to date" policy is **off**. See the deadlock analysis below. CONCURRENCY §5.4
   (rebase onto the base, then rerun) remains the process rule.
 

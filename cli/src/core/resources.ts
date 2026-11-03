@@ -53,6 +53,11 @@ export interface ResourceDescriptor {
   rateLimitScope?: "model" | "account" | "provider";
   /** X-Task-Class routing hint sent with requests. */
   taskClass?: string;
+  /**
+   * Units this resource may serve at once. Absent means 1: a resource is a single inference slot until the operator
+   * says otherwise. Bounded by `MAX_CONCURRENT_UNITS`; see `operation_schema.ts`.
+   */
+  maxConcurrentUnits?: number;
 }
 
 export interface ResourceConditionRecord {

@@ -48,13 +48,18 @@ test("generated acyclic operations schedule only after dependencies complete and
       const decision = scheduler.decide();
       assert.equal(decision.kind, "run", `seed ${seed}, step ${step}`);
       if (decision.kind !== "run") break;
-      assert.ok(
-        decision.unit.dependsOn.every((dependency) => completed.has(dependency)),
-        `seed ${seed}: ${decision.unit.id} ran before its dependencies`,
-      );
-      scheduler.start(decision);
-      scheduler.apply(decision.unit.id, { kind: "completed", summary: "done", outcome: "VERIFIED" });
-      completed.add(decision.unit.id);
+      // A default operation has one resource slot, so the due-set is one unit; iterate anyway so the property holds
+      // if the fixture ever gains capacity.
+      assert.equal(decision.assignments.length, 1, `seed ${seed}: default concurrency must assign one unit`);
+      for (const assignment of decision.assignments) {
+        assert.ok(
+          assignment.unit.dependsOn.every((dependency) => completed.has(dependency)),
+          `seed ${seed}: ${assignment.unit.id} ran before its dependencies`,
+        );
+        scheduler.start(assignment);
+        scheduler.apply(assignment.unit.id, { kind: "completed", summary: "done", outcome: "VERIFIED" });
+        completed.add(assignment.unit.id);
+      }
     }
 
     assert.equal(completed.size, count, `seed ${seed}: every generated unit should run`);

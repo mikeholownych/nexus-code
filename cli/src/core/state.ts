@@ -346,6 +346,18 @@ export class DurableStateManager {
     return this.getStateFilePath(taskId).replace(/\.json$/, ".messages.jsonl");
   }
 
+  /** Nested operation version for the store's preflight, read under the same restore/transaction barrier as other reads. */
+  public readRawOperationSchemaVersion(taskId: string): unknown {
+    return withStateStoreGuard(this.baseDir, () => {
+      try {
+        const raw = JSON.parse(fs.readFileSync(this.getStateFilePath(taskId), "utf8"));
+        return raw?.operation?.schemaVersion;
+      } catch {
+        return undefined;
+      }
+    });
+  }
+
   /** Read the atomic progress envelope without trusting a schema or a sidecar path from disk. */
   private readStoredRecord(taskId: string, missingAllowed = false): StoredTaskRecord | null {
     const filePath = this.getStateFilePath(taskId);

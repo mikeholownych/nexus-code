@@ -659,3 +659,28 @@ test("the CLI checkpoints, lists and restores a unit conversation", () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test("ACC-V11-CTX-01: the budget decision names the binding bound, the estimate and its source", async () => {
+  const fake = fakeAgent({ estimatedPromptTokens: 20_000, contextLimit: 100_000, completionReserve: 8_192, toolResponseReserve: 4_096, admissible: true });
+  const executor = new AgentWorkUnitExecutor({ baseConfig: { endpoint: "https://api.test/v1", model: "m", workspace: "/tmp" } as any, createAgent: () => fake.agent });
+  const work = unit({ contextBudget: 15_000 });
+
+  const outcome = await executor.run(work, resource, context());
+  assert.equal(outcome.kind, "failed");
+  if (outcome.kind !== "failed") return;
+  assert.match(outcome.question!, /binding bound is the operator cap/);
+  assert.match(outcome.question!, /source operator-budget/);
+  assert.match(outcome.question!, /needs about 32288 tokens/);
+  assert.equal(work.context?.source, "operator-budget");
+  // The offered remedy must be the one that can actually unblock the unit: the cap, not reassignment.
+  assert.deepEqual(outcome.options.map((option) => option.action.kind), ["lift_context_budget"]);
+  assert.doesNotMatch(outcome.question!, /Assign it to a resource with more context/);
+});
+
+test("a budget at or above the resource limit records the resource as the source", async () => {
+  const fake = fakeAgent({ estimatedPromptTokens: 2_000, contextLimit: 100_000, completionReserve: 8_192, toolResponseReserve: 4_096, admissible: true });
+  const executor = new AgentWorkUnitExecutor({ baseConfig: { endpoint: "https://api.test/v1", model: "m", workspace: "/tmp" } as any, createAgent: () => fake.agent });
+  const work = unit({ contextBudget: 100_000 });
+  await executor.run(work, resource, context());
+  assert.equal(work.context?.source, "agent-estimate");
+});

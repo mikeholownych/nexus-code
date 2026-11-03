@@ -678,7 +678,7 @@ describe("provider catalog enrichment (optional)", () => {
     const s = new ConvergenceScheduler(state, new ResourceRegistry(state.resources, [], clock), clock.now);
     const d = s.decide();
     assert.equal(d.kind, "run");
-    assert.equal((d as any).unit.id, "a");
+    assert.equal((d as any).assignments[0].unit.id, "a");
     assert.equal(state.units[1].status, "WAITING_ON_DEPENDENCY");
   });
 });

@@ -1,5 +1,5 @@
 /** Fixed, bounded debug events for best-effort operation work. Never attach raw provider or filesystem errors. */
-export type OperationDiagnosticArea = "executor" | "persistence" | "revalidation" | "scheduler";
+export type OperationDiagnosticArea = "executor" | "persistence" | "revalidation" | "scheduler" | "runner";
 
 export interface OperationDiagnostic {
   level: "debug";

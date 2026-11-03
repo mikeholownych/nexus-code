@@ -8,7 +8,8 @@ import { providerDefinition } from "../providers.js";
 import { providerApiKey } from "../credentials.js";
 import type { ChatMessage, HarnessConfig } from "../types.js";
 import type { TaskRecoveryResult } from "./state.js";
-import { unitBaseTask, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { unitBaseTask, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { messagesBlock } from "./operation_messages.js";
 import { redactForPersistence } from "./persistence_protection.js";
 import { ROLE_PROFILES, isReadOnlyRole, type AgentRole } from "./roles.js";
 import { applyProviderCatalog, ResourceRegistry, type ResourceConditionRecord, type ResourceDescriptor } from "./resources.js";
@@ -18,6 +19,49 @@ import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./op
 import { isTestPath } from "../tester.js";
 import { isContextAdmissible } from "../tokens.js";
 import { ensurePrivateDir, writePrivateFile } from "./durable_file.js";
+import { execFileSync } from "node:child_process";
+import {
+  buildReviewEvidencePackage,
+  formatIndependentReviewPrompt,
+  parseIndependentReviewVerdict,
+  type ReviewEvidencePackage,
+} from "./independent_review.js";
+
+/** Roles whose result is an independent review verdict rather than an artifact. */
+export function isReviewRole(role: AgentRole | undefined): boolean {
+  return role === "reviewer" || role === "acceptance_reviewer";
+}
+
+const REVIEW_DIFF_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The candidate a review unit judges: tracked changes against the operation's base commit (HEAD when the operation is
+ * not isolated) plus untracked files, as Git renders them. A workspace that is not a Git checkout yields no diff; the
+ * reviewer is told so rather than shown nothing.
+ */
+export function reviewCandidateDiff(workspace: string, baseCommit?: string): { base: string; diff: string } | { error: string } {
+  const git = (args: string[], okExit: number[] = [0]): string => {
+    try {
+      return execFileSync("git", args, { cwd: workspace, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000, maxBuffer: REVIEW_DIFF_MAX_BYTES });
+    } catch (err: any) {
+      if (typeof err?.status === "number" && okExit.includes(err.status) && typeof err.stdout === "string") return err.stdout;
+      throw err;
+    }
+  };
+  try {
+    // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
+    const base = git(["rev-parse", "--verify", "--end-of-options", `${baseCommit ?? "HEAD"}^{commit}`]).trim();
+    let diff = git(["diff", "--no-color", "--no-ext-diff", base, "--"]);
+    const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
+    for (const file of untracked) {
+      // `git diff --no-index` exits 1 when the files differ, which is always the case against /dev/null.
+      diff += git(["diff", "--no-color", "--no-ext-diff", "--no-index", "--", "/dev/null", file], [1]);
+    }
+    return { base, diff };
+  } catch (err: any) {
+    return { error: String(err?.stderr || err?.message || err).trim().slice(0, 300) };
+  }
+}
 
 function origin(endpoint: string): string {
   try {
@@ -90,15 +134,38 @@ function resumeHistoryProblem(messages: ChatMessage[], unit: WorkUnit): string |
 /** Nothing happened in the conversation yet (for example, its first prompt was withdrawn before inference). */
 const conversationNotStarted = (messages: ChatMessage[]): boolean => messages.length === 1 && messages[0].role === "system";
 
+function isSubmittedUnitPrompt(message: ChatMessage): boolean {
+  if (message.role !== "user" || typeof message.content !== "string") return false;
+  const initial = message.content.startsWith("[Work unit ") &&
+    message.content.includes("Part of the operation:") &&
+    message.content.includes("Task:\n");
+  const resumed = message.content.startsWith("[Work unit resumed on ") &&
+    message.content.includes("The unit's authorized task");
+  return initial || resumed;
+}
+
+/** Whether a submitted prompt's messages block carries `message`'s entry, at any position among its messages. */
+function promptCarriesMessage(prompt: string, message: OperationMessage): boolean {
+  const block = messagesBlock([message]);
+  const entryStart = block.indexOf("\n- [");
+  const header = block.slice(0, entryStart + 1);
+  const entry = block.slice(entryStart);
+  const at = prompt.indexOf(header);
+  return at >= 0 && prompt.indexOf(entry, at + header.length - 1) >= 0;
+}
+
+function unsubmittedMessages(history: ChatMessage[], messages?: OperationMessage[]): OperationMessage[] | undefined {
+  if (!messages?.length) return messages;
+  const prompts = history.filter(isSubmittedUnitPrompt).map((message) => message.content as string);
+  return messages.filter((message) => !prompts.some((prompt) => promptCarriesMessage(prompt, message)));
+}
+
 /**
  * Runs a work unit as one truthful agent turn pinned to the chosen resource. The unit's conversation is its own
  * durable task, so a parked or rerouted unit resumes from its history (tools already run are not repeated) on
  * whichever qualified resource the scheduler picks next.
  */
 export class AgentWorkUnitExecutor implements WorkUnitExecutor {
-  /** Workspace of the unit currently running (its isolated worktree when the operation isolates units). */
-  private runWorkspace: string | undefined;
-
   constructor(private readonly opts: AgentExecutorOptions) {}
 
   configFor(resource: ResourceDescriptor, unit?: WorkUnit, workspace?: string): HarnessConfig {
@@ -157,6 +224,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       budgetTokens: unit.contextBudget,
       contextLimit: estimate.contextLimit,
       at: new Date().toISOString(),
+      source: unit.contextBudget < estimate.contextLimit ? "operator-budget" : "agent-estimate",
     };
     // If the prompt does not fit the resource, admission/compaction owns it (it may compact and continue): the
     // operator's cap is only the binding constraint when the prompt would otherwise be admitted.
@@ -179,7 +247,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       question:
         `${unit.title} needs about ${total} tokens (prompt ${estimate.estimatedPromptTokens}, completion ` +
         `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over its ${unit.contextBudget}-token ` +
-        `budget. Assign it to a resource with more context, revise it, or stop?`,
+        `operator budget (resource limit ${estimate.contextLimit}; the binding bound is ` +
+        `${unit.contextBudget < estimate.contextLimit ? "the operator cap" : "the resource limit"}, ` +
+        `source ${unit.contextBudget < estimate.contextLimit ? "operator-budget" : "agent-estimate"}). ` +
+        `Lift the budget, or stop?`,
       // Reassigning cannot clear a cap (the cap travels with the unit) and revise only grows the prompt, so the offered
       // remedy changes the thing that blocks: the budget itself.
       options: [{ label: "lift this unit's context budget", action: { kind: "lift_context_budget" } }],
@@ -206,7 +277,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   }
 
   /** Verified RED evidence for this exact unit task, or undefined when absent or stale. */
-  private readTddEvidence(agent: AutonomousAgent, unit: WorkUnit): TddRedEvidence | undefined {
+  private readTddEvidence(agent: AutonomousAgent, unit: WorkUnit, workspace: string): TddRedEvidence | undefined {
     const file = this.tddStateFile(agent);
     if (!file) return undefined;
     try {
@@ -216,7 +287,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       if (typeof parsed.command !== "string" || !parsed.command) return undefined;
       if (!Array.isArray(parsed.tests) || parsed.tests.some((entry: unknown) => typeof entry !== "string")) return undefined;
       if (!parsed.testHashes || typeof parsed.testHashes !== "object" || Array.isArray(parsed.testHashes)) return undefined;
-      const current = this.tddTestSnapshot(agent);
+      const current = this.tddTestSnapshot(agent, workspace);
       for (const test of parsed.tests) {
         if (typeof parsed.testHashes[test] !== "string" || current.get(test) !== parsed.testHashes[test]) return undefined;
       }
@@ -259,10 +330,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   }
 
   /** Content hashes of test files currently changed against HEAD. */
-  private tddTestSnapshot(agent: AutonomousAgent): Map<string, string> {
+  private tddTestSnapshot(agent: AutonomousAgent, workspace: string): Map<string, string> {
     const snapshot = new Map<string, string>();
     try {
-      const identity = agent.getCandidateTracker().computeCandidateIdentitySync(this.runWorkspace ?? this.opts.baseConfig.workspace);
+      const identity = agent.getCandidateTracker().computeCandidateIdentitySync(workspace);
       for (const entry of [...identity.trackedChanges, ...identity.untrackedFiles]) {
         if (entry.status !== "deleted" && isTestPath(entry.path)) snapshot.set(entry.path, entry.contentHash);
       }
@@ -275,7 +346,6 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   async run(unit: WorkUnit, resource: ResourceDescriptor, ctx: UnitRunContext): Promise<UnitRunResult> {
     const config = this.configFor(resource, unit, ctx.workspace);
-    this.runWorkspace = config.workspace;
     const agent = this.opts.createAgent
       ? this.opts.createAgent(config, 1, { durable: true, role: unit.role, unitId: unit.id })
       : new AutonomousAgent(config, 1, undefined, { durable: true, role: unit.role, unitId: unit.id });
@@ -287,7 +357,20 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     let lastCondition: ResourceConditionRecord | null = null;
     try {
       let prompt: string;
+      let promptMessages = ctx.messages;
       let unusable: string | undefined;
+      const review = isReviewRole(unit.role) ? this.reviewEvidence(unit, ctx, config.workspace) : undefined;
+      if (review?.diffError) {
+        // Nothing was collected to judge, so there is nothing a verdict could accept: stop before spending a model turn.
+        const detail = `candidate diff unavailable: ${review.diffError}`.slice(0, 300);
+        return {
+          kind: "failed",
+          cause: "EXECUTION_FAILED",
+          reason: `review rejected: ${detail}`,
+          question: `${unit.title} could not collect the candidate diff (${review.diffError}). Fix the workspace or reduce the change, then retry the review, or stop?`,
+          options: [{ label: "retry the review", action: { kind: "retry" } }],
+        };
+      }
       if (unit.agentTaskId) {
         let recovered: TaskRecoveryResult | undefined;
         try {
@@ -318,7 +401,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           // conversation describes discarded files, so never resume that history on the fresh worktree.
           agent.restartConversation(!recovered?.obligationRecordPresent);
           prompt =
-            `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
+            `${this.initialPrompt(unit, ctx, promptMessages, review)}\n\n${decision}` +
             "Note: this unit was explicitly restarted after recovery. Its earlier conversation is not being continued. " +
             "Earlier workspace history may be incomplete; inspect any changes that remain, because they remain unverified.";
         } else if (unusable) {
@@ -336,25 +419,26 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           // changes are unknown, so they count as unverified.
           agent.restartConversation(!recovered || !recovered.obligationRecordPresent);
           prompt =
-            `${this.initialPrompt(unit, ctx)}\n\n${decision}` +
+            `${this.initialPrompt(unit, ctx, promptMessages, review)}\n\n${decision}` +
             `Note: earlier task history was unusable (${unusable}). Prior workspace changes may be unknown and remain unverified; inspect the workspace before relying on them.`;
         } else if (notStarted) {
           const restartNotice = ctx.operatorDecision?.restart
             ? "\n\nNote: this unit was explicitly restarted after recovery. Earlier workspace history may be incomplete, and any prior changes remain unverified; inspect the workspace before relying on them."
             : "";
-          prompt = `${this.initialPrompt(unit, ctx)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
+          prompt = `${this.initialPrompt(unit, ctx, promptMessages, review)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
         } else {
           const op = recovered?.state.currentOperation;
           const stopped = op?.status === "interrupted"
             ? `Nexus stopped while ${op.toolName} ${op.argsSummary ?? ""} was running or before its result was saved; it may have partially run. Check its effects before relying on them.\n`
             : "";
+          promptMessages = unsubmittedMessages(agent.getMessages(), ctx.messages);
           prompt =
             `[Work unit resumed on ${resource.id} (${resource.model}) after: ${ctx.resumeReason ?? "a resource change"}]\n${decision}` +
-            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${stopped}` +
+            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${stopped}${messagesBlock(promptMessages)}` +
             `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
         }
       } else {
-        prompt = this.initialPrompt(unit, ctx);
+        prompt = this.initialPrompt(unit, ctx, promptMessages, review);
       }
       ctx.bindAgentTask(agent.getTaskId());
       if (agent.durable && !unit.agentTaskId) {
@@ -378,15 +462,16 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       const tddEnabled = this.opts.tdd === true || this.opts.baseConfig.tdd === true || process.env.NEXUS_TDD === "1";
       const tdd = tddEnabled && (unit.role === undefined || unit.role === "implementer");
       if (tdd && (ctx.operatorDecision?.restart || unusable)) this.clearTddEvidence(agent);
-      let redEvidence = tdd ? this.readTddEvidence(agent, unit) : undefined;
+      let redEvidence = tdd ? this.readTddEvidence(agent, unit, config.workspace) : undefined;
       let redVerifiedNow = false;
       if (tdd && !redEvidence) {
-        const beforeRed = this.tddTestSnapshot(agent);
+        const beforeRed = this.tddTestSnapshot(agent, config.workspace);
         const redPrompt = `${prompt}\n\n${TDD_RED_PROTOCOL}`;
         const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt);
         if (budgetFailure) return budgetFailure;
         const redTurn = await agent.runTurn(redPrompt, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
-        const afterRed = this.tddTestSnapshot(agent);
+        if (redTurn.capacity?.pendingMessageRetained !== false && redTurn.persistence?.durable !== false) ctx.messagesSubmitted?.();
+        const afterRed = this.tddTestSnapshot(agent, config.workspace);
         const testPaths = [...afterRed]
           .filter(([file, hash]) => !beforeRed.has(file) || beforeRed.get(file) !== hash)
           .map(([file]) => file)
@@ -455,6 +540,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       const budgetFailure = this.contextBudgetFailure(agent, unit, greenPrompt);
       if (budgetFailure) return budgetFailure;
       const turn = await agent.runTurn(greenPrompt, undefined, { signal: ctx.signal, resume: isResume || (tdd && redEvidence !== undefined) });
+      if (turn.capacity?.pendingMessageRetained !== false && turn.persistence?.durable !== false) ctx.messagesSubmitted?.();
       const configuredVerifier = config.authoritativeVerifierCommand?.trim();
       const testerVerifiedThisTurn = unit.role === "tester" &&
         (agent.getObjective()?.verification.slice(priorVerificationAttempts).some((attempt) => {
@@ -470,7 +556,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       } catch {
         reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "turn_checkpoint_failed");
       }
-      const outcome = this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx, testerVerifiedThisTurn);
+      const outcome = this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx, testerVerifiedThisTurn, review);
       if (outcome.kind === "completed" && turn.verification?.command) {
         return {
           ...outcome,
@@ -488,13 +574,57 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     }
   }
 
-  private initialPrompt(unit: WorkUnit, ctx: UnitRunContext): string {
+  /** The objective evidence a review unit is given: requirements, scope, base, candidate diff and verifier receipts. */
+  private reviewEvidence(unit: WorkUnit, ctx: UnitRunContext, workspace: string): ReviewEvidencePackage {
+    const candidate = (ctx.baseCommit ?? ctx.startCommit) === undefined && ctx.dependencies.length > 0
+      ? { error: "no starting commit was recorded for this operation, so work done before this review (possibly committed) cannot be shown; start a new operation" }
+      : reviewCandidateDiff(ctx.workspace ?? workspace, ctx.baseCommit ?? ctx.startCommit);
+    // The worst result across every dependency that ran a verifier decides; order must not matter.
+    const verifications = ctx.dependencies.flatMap((d) => (d.verification ? [d.verification] : []));
+    const passing = (v: { status: string; hasExecutedTests: boolean }) => v.status === "PASSED" && v.hasExecutedTests;
+    const verified = verifications.find((v) => !passing(v)) ?? verifications[0];
+    const emptyDiff = "diff" in candidate && candidate.diff.trim() === "";
+    // No operation or unit declares a file scope, so the package carries none (rather than an empty placeholder that
+    // would read as "unrestricted"): the scope gate runs only for callers that supply one.
+    return buildReviewEvidencePackage({
+      ...(ctx.operationId ? { operationId: ctx.operationId } : {}),
+      unitId: unit.id,
+      objective: `${ctx.objective}\n\nReview task: ${unit.prompt}`,
+      baselineCommit: "base" in candidate ? candidate.base : "unknown",
+      unifiedDiff: "diff" in candidate ? candidate.diff : "",
+      // An empty diff gives the reviewer nothing to judge, so it is a failure to collect evidence, not an accept.
+      ...("error" in candidate
+        ? { diffError: candidate.error || "git diff failed" }
+        : emptyDiff
+          ? { diffError: "the candidate diff is empty: there is no change against the base to review" }
+          : {}),
+      ...(verified
+        ? {
+            verifierCommand: verified.command,
+            verifierOutput: `status ${verified.status}${verified.hasExecutedTests ? "" : " (no tests executed)"}`,
+            // Anything but a passing run that executed tests is a failure to the deterministic gate.
+            verifierExitCode: verified.status === "PASSED" && verified.hasExecutedTests ? 0 : 1,
+          }
+        : {}),
+    });
+  }
+
+  private initialPrompt(unit: WorkUnit, ctx: UnitRunContext, messages?: OperationMessage[], review?: ReviewEvidencePackage): string {
     const role = unit.role ? ROLE_PROFILES[unit.role]?.systemPromptAddendum ?? "" : "";
+    if (review) {
+      // The independent review boundary: the reviewer sees objective evidence only. Prerequisite summaries are the
+      // authors' own narrative, so they are withheld.
+      return (
+        `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${messagesBlock(messages)}\n` +
+        `${formatIndependentReviewPrompt(review)}\n` +
+        "Inspect the workspace as needed, then call task_completed with the JSON verdict as its summary."
+      );
+    }
     const deps = ctx.dependencies.length
       ? `\nCompleted prerequisite work:\n${ctx.dependencies.map((d) => `- ${d.title}: ${d.summary}`).join("\n")}\n`
       : "";
     return (
-      `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${deps}\n` +
+      `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${deps}${messagesBlock(messages)}\n` +
       `Task:\n${unit.prompt}\n\nCall task_completed with a concise summary when done.`
     );
   }
@@ -507,8 +637,22 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     condition: ResourceConditionRecord | null,
     ctx: UnitRunContext,
     testerVerifiedThisTurn = false,
+    review?: ReviewEvidencePackage,
   ): UnitRunResult {
     if (turn.execution === "INTERRUPTED") return { kind: "cancelled" };
+    if (turn.persistence?.durable === false) {
+      const why = turn.persistence.failures?.length ? turn.persistence.failures.join("; ") : "durable state persistence failed";
+      return {
+        kind: "failed",
+        cause: "EXECUTION_FAILED",
+        reason: `persistence failure: ${why}`,
+        question: `${unit.title}: durable state persistence failed (${why}). Retry it, or revise it?`,
+        options: [
+          { label: "retry", action: { kind: "retry" } },
+          { label: "revise the unit (note required)", action: { kind: "revise" } },
+        ],
+      };
+    }
     if (turnSucceeded(turn)) {
       if (
         (turn.modelStop === "FINAL_TEXT" ||
@@ -528,6 +672,27 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         };
       }
       ctx.observeSuccess();
+      if (review) {
+        // A review completes only with a well-formed ACCEPT that survives the deterministic gates; anything else,
+        // including prose, a malformed verdict or an out-of-scope diff, is a REJECT the operator must act on.
+        const verdict = parseIndependentReviewVerdict(summary ?? turn.detail ?? "", review);
+        if (verdict.verdict !== "ACCEPT") {
+          const defects = verdict.suspectedDefects.map((d) => `${d.path}${d.line ? `:${d.line}` : ""} ${d.description}`);
+          const why = [...verdict.scopeViolations.map((v) => `scope: ${v}`), ...defects, ...verdict.unprovenCriteria.map((c) => `unproven: ${c}`)];
+          const detail = (why.length ? why.join("; ") : verdict.reviewerConfidenceNote).slice(0, 300);
+          return {
+            kind: "failed",
+            cause: "EXECUTION_FAILED",
+            reason: `review rejected: ${detail}`,
+            question: `${unit.title} rejected the candidate (${detail}). Revise the work under review, retry the review, or stop?`,
+            options: [
+              { label: "retry the review", action: { kind: "retry" } },
+              { label: "revise the unit (note required)", action: { kind: "revise" } },
+            ],
+          };
+        }
+        return { kind: "completed", summary: `ACCEPT: ${verdict.verifiedObservations.join("; ") || verdict.reviewerConfidenceNote}`.slice(0, 2000), outcome: turn.outcome };
+      }
       return {
         kind: "completed",
         summary: summary ?? turn.detail ?? "completed",
