@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
       - run: sudo apt-get update
       - run: sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.22.12'
       - name: Install pinned evaluator toolchains
