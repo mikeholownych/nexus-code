@@ -5364,7 +5364,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return this.activeTurn?.controller.signal;
   }
 
-  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean }): Promise<TurnResult> {
+  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
     // same establishment and resolution boundary as one-shot `run` tasks.
     if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
@@ -5433,10 +5433,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     const priorLedger = this.objective ? structuredClone(this.objective) : undefined;
     let continuingObjective = false;
     const isResume = Boolean(options?.resume);
+    const isStep = Boolean(options?.step ?? this.config.step);
     if (typeof taskPrompt === "string" && this.durable) {
       let ledger = this.objective;
-      continuingObjective = Boolean(ledger && (isResume || !isNewObjective(ledger, taskPrompt)));
-      if (!ledger || (!isResume && isNewObjective(ledger, taskPrompt))) {
+      continuingObjective = Boolean(ledger && (isResume || isStep || !isNewObjective(ledger, taskPrompt)));
+      if (!ledger || (!isResume && !isStep && isNewObjective(ledger, taskPrompt))) {
         const carried = ledger?.steering.filter((s) => s.status === "queued") ?? [];
         ledger = createLedger(taskPrompt, undefined, this.unitId);
         ledger.steering.push(...carried);
@@ -5445,7 +5446,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           ledger.unitId = this.unitId;
         }
         const isHarnessResume = /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
-        if (!isHarnessResume) {
+        if (!isHarnessResume && !isStep && taskPrompt.trim() !== "") {
           // The unfinished objective is kept; numbered items in the follow-up are added as further requirements.
           amendObjective(ledger, taskPrompt);
         }
@@ -5486,17 +5487,25 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         runtimeContext += `\n[Active Plan: ${this.activePlan.map((p, i) => `${i + 1}. [${p.status}] ${p.name}`).join(" -> ")}]`;
       }
 
+      const skipPromptSubmission =
+        (isStep || isResume) &&
+        typeof taskPrompt === "string" &&
+        taskPrompt.trim() === "" &&
+        (this.messages.length > 0 || continuingObjective);
+
       const effectiveUserContent = typeof taskPrompt === "string"
         ? (runtimeContext ? `${taskPrompt}\n${runtimeContext}` : taskPrompt)
         : taskPrompt;
 
       const historyBeforeSubmission = this.messages.length;
-      this.messages.push({
-        role: "user",
-        content: effectiveUserContent,
-      });
-      // The objective is durable before anything acts on it.
-      this.persistProgress({ messages: true });
+      if (!skipPromptSubmission) {
+        this.messages.push({
+          role: "user",
+          content: effectiveUserContent,
+        });
+        // The objective is durable before anything acts on it.
+        this.persistProgress({ messages: true });
+      }
       const pendingMessageChars = typeof effectiveUserContent === "string" ? effectiveUserContent.length : JSON.stringify(effectiveUserContent).length;
 
       let capacityBlock: CapacityRecord | null = null;
@@ -5543,7 +5552,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       tracker.beginTurn();
       if (continuingObjective) {
         const isHarnessResume = typeof taskPrompt === "string" && /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
-        if (!isHarnessResume && !options?.resume) {
+        if (!isHarnessResume && !options?.resume && !isStep) {
           tracker.operatorInput(tracker.data.cumulativeSteps, `operator follow-up: ${promptText.slice(0, 160)}`);
         }
       }
@@ -6213,6 +6222,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           finalOutputComplete = false;
         }
 
+        if (isStep && modelStop === "NONE" && !interruption && !inferenceFailure && !persistenceFailure) {
+          stopReason = "STEP_PAUSED";
+          stopDetail = "paused after one model/tool cycle (--step)";
+          break;
+        }
+
         endStep();
       }
       turn.closing = true;
@@ -6466,9 +6481,15 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }));
     }
     if (input.limitReached) {
+      const stepPaused = input.stopReason === "STEP_PAUSED";
       return deepFreezeTurn(assertTurnResultInvariants({
-        ...base, execution: "LIMIT_REACHED", outcome: "NOT_ESTABLISHED", reason: input.stopReason ?? "STEP_LIMIT_REACHED",
-        ...(input.stopDetail ? { detail: input.stopDetail } : {}), finalOutputComplete: false,
+        ...base,
+        execution: "LIMIT_REACHED",
+        outcome: "NOT_ESTABLISHED",
+        reason: input.stopReason ?? "STEP_LIMIT_REACHED",
+        ...(stepPaused ? { stepPaused: true } : {}),
+        ...(input.stopDetail ? { detail: input.stopDetail } : {}),
+        finalOutputComplete: false,
       }));
     }
     // A finished turn with operator requirements still open or blocked established nothing about the objective, whatever
@@ -6613,7 +6634,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (!done && !nextAction) {
       if (failedCheck && turn.verification?.command) nextAction = `Fix the failing check (${failedCheck}) and rerun ${turn.verification.command}.`;
       else if (turn.reason === "STAGNATION_DETECTED") nextAction = "Review the repeated action and give the agent new direction (steer or a narrower request).";
-      else if (turn.reason === "STEP_BUDGET_EXHAUSTED" || turn.reason === "TIME_BUDGET_EXHAUSTED") nextAction = "Send a follow-up to continue from the saved state, or raise the budget.";
+      else if (turn.reason === "STEP_BUDGET_EXHAUSTED" || turn.reason === "TIME_BUDGET_EXHAUSTED" || turn.reason === "STEP_PAUSED") nextAction = "Send a follow-up to continue from the saved state, or raise the budget.";
       else if (remaining.length) nextAction = `Continue with ${remaining[0]}.`;
     }
     return {
@@ -6625,7 +6646,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     };
   }
 
-  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
+  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; step?: boolean }): Promise<TurnResult> {
     this.ui.banner();
     console.log(`🎯 Task: ${safeTerminal(typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]")}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);

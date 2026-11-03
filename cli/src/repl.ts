@@ -180,13 +180,13 @@ export class InteractiveRepl {
   }
 
   /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
-  private async runInteractiveTurn(prompt: string | any[], titlePrompt?: string): Promise<TurnResult> {
-    const label = titlePrompt ?? (typeof prompt === "string" ? prompt : "[multimodal]");
+  private async runInteractiveTurn(prompt: string | any[], titlePrompt?: string, options?: { step?: boolean; resume?: boolean }): Promise<TurnResult> {
+    const label = titlePrompt ?? (typeof prompt === "string" && prompt ? prompt : "[step]");
     let result: TurnResult;
     // Work done so far, and changes still awaiting verification, survive the process ending mid-turn.
     this.agent.setProgressListener(() => this.saveCurrentSession(label));
     try {
-      result = await this.agent.runTurn(prompt, (tool, args) => this.confirmAction(tool, args));
+      result = await this.agent.runTurn(prompt, (tool, args) => this.confirmAction(tool, args), options);
     } finally {
       this.agent.setProgressListener(undefined);
       // Persist even if the turn threw, so the transcript of work done so far is not lost (synced: the turn ended).
@@ -362,6 +362,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/doctor"))}             Diagnose this session's configuration and runtime (--deep, --fix [--yes])`);
     console.log(`  ${pc.bold(pc.yellow("/clear"))}              Reset conversation context memory`);
     console.log(`  ${pc.bold(pc.yellow("/compact"))}            Condense earlier messages to free token budget`);
+    console.log(`  ${pc.bold(pc.yellow("/step"))}               Advance unresolved objective by one model/tool cycle`);
     console.log(`  ${pc.bold(pc.yellow("/mode [auto|review]"))} Toggle autonomous execution vs human review approval`);
     console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
     console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
@@ -848,6 +849,20 @@ export class InteractiveRepl {
               console.log(result.ok ? pc.green(`✔ ${result.message}\n`) : pc.red(`✖ ${result.message}\n`));
             } finally {
               this.agent.setProgressListener(undefined);
+            }
+            continue;
+          } else if (cmd === "step") {
+            const ledger = this.agent.getObjective();
+            if (!ledger || ledger.outcome?.status === "completed") {
+              console.log(pc.yellow("No unresolved objective to step. Provide a prompt to start a task.\n"));
+              continue;
+            }
+            try {
+              if (await this.prepareTurnCheckpoint(`Step: ${ledger.objective.slice(0, 30)}`)) {
+                await this.runInteractiveTurn("", undefined, { step: true, resume: true });
+              }
+            } catch (err: any) {
+              console.error(pc.red(`\nStep error: ${err.message}\n`));
             }
             continue;
           } else if (cmd === "doctor") {

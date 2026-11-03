@@ -120,6 +120,8 @@ export interface HarnessConfig {
     maxRunsPerUnit: number;
     minWaitMs: number;
   }>;
+  /** Execute one model/tool cycle and pause deterministically for operator confirmation (WP-1106). */
+  step?: boolean;
 }
 
 export interface ExecutionResult {

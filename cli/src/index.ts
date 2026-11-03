@@ -408,6 +408,7 @@ program
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("-r, --resume [id]", "Resume previous session or task state")
+  .option("--step", "Execute one model/tool cycle and pause deterministically")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
     // Preserve inherited CLI values when the command-level duplicate only has
     // its default; explicitly supplied command options still take precedence.
@@ -481,13 +482,14 @@ program
           resumeTaskId = tasks[0].taskId;
         }
         if (!prompt) {
-          prompt = "continue";
+          prompt = options.step ? "" : "continue";
         }
       }
       const result = await app.runTask(prompt, {
         json: isJson,
         resumeTaskId,
         signal: abort.signal,
+        step: Boolean(options.step),
       });
 
       const cloud = UsageLedger.global().cloudTotals();
