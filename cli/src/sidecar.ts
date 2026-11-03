@@ -1069,7 +1069,7 @@ export function formatSafeSidecarText(value: string): string {
   try {
     const safe = redactForPersistence(value);
     if (typeof safe !== "string") throw new Error("unexpected sanitized value type");
-    return visibleControls(safe);
+    return visibleControls(redactSecrets(safe));
   } catch {
     return "[diagnostic suppressed: credential sanitization failed]";
   }
@@ -1078,7 +1078,13 @@ export function formatSafeSidecarText(value: string): string {
 /** Apply canonical redaction to every protocol field, including nested projected turn/history records. */
 export function formatSafeSidecarEvent(event: SidecarEvent): SidecarEvent | undefined {
   try {
-    return redactForPersistence(event);
+    // `workspace` is an operator-selected filesystem location surfaced as
+    // protocol state. Keep that typed path intact; recursive entropy scanning
+    // mistakes generated path components for credentials.
+    const workspace = event.type === "session.state" ? event.workspace : undefined;
+    const safe = redactForPersistence(event);
+    if (workspace !== undefined && safe.type === "session.state") safe.workspace = workspace;
+    return safe;
   } catch {
     // Drop the complete event if classification fails; never serialize a partially sanitized structure.
     return undefined;
@@ -1217,7 +1223,8 @@ function isEntryPoint(argv1: string | undefined, moduleUrl: string): boolean {
 
 if (isEntryPoint(process.argv[1], import.meta.url)) {
   main(process.argv).catch((err) => {
-    process.stderr.write(`nexus sidecar failed to start: ${formatSafeSidecarDiagnostic([err])}\n`);
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`nexus sidecar failed to start: ${formatSafeSidecarText(message)}\n`);
     process.exit(1);
   });
 }
