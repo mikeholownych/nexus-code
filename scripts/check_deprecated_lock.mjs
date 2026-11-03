@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fail closed when the release-tool dependency lock contains a deprecated npm package.
+// Fail closed when a supported npm dependency lock contains a deprecated package.
 import fs from "node:fs";
 import path from "node:path";
 import { registryPackageName } from "./registry-package-name.mjs";
@@ -12,7 +12,7 @@ if (!lockPath) {
 
 const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
 if (lock.lockfileVersion < 2 || !lock.packages || typeof lock.packages !== "object") {
-  throw new Error("release-tool lockfile must use npm lockfileVersion 2 or newer");
+  throw new Error("lockfile must use npm lockfileVersion 2 or newer");
 }
 
 function packageName(location) {
@@ -64,12 +64,12 @@ async function worker() {
 
 await Promise.all(Array.from({ length: Math.min(8, packages.length) }, () => worker()));
 if (failed) {
-  console.error(`release dependency deprecation check failed closed: ${failed}`);
+  console.error(`dependency deprecation check failed closed: ${failed}`);
   process.exit(1);
 }
 if (deprecated.length) {
-  console.error(`release lock contains ${deprecated.length} deprecated npm package version(s):`);
+  console.error(`lockfile contains ${deprecated.length} deprecated npm package version(s):`);
   for (const item of deprecated.sort()) console.error(`- ${item}`);
   process.exit(1);
 }
-console.log(`release lock deprecation check passed: ${packages.length} unique npm package versions verified`);
+console.log(`lockfile deprecation check passed: ${packages.length} unique npm package versions verified`);
