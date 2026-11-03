@@ -69,12 +69,12 @@ export function loadEnvironment(): void {
   }
   const operatorHome = credentialAuthorityRecorded ? credentialStorageHome() : os.homedir();
   // 1. Installation directory defaults
-  loadDotenv({ path: installEnv });
+  loadDotenv({ path: installEnv, quiet: true });
   // 2. Global user config (~/.config/nexus/config.env)
   const globalConfig = path.join(operatorHome, ".config/nexus/config.env");
   userConfigFile = {};
   if (fs.existsSync(globalConfig)) {
-    loadDotenv({ path: globalConfig, override: true });
+    loadDotenv({ path: globalConfig, override: true, quiet: true });
     userConfigFile = parseDotenv(fs.readFileSync(globalConfig));
   }
   // Structured operator settings are separate from the legacy dotenv file. They are read only from the
