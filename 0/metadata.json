@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6J50S8K9CK1CH58CWGBVW0F",
+  "session_id": "01a192c0-f277-7f60-8574-21ce71edb8c2",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-04T02:09:13.393512108Z",
+  "branch": "v1/v112-wp1101-integration",
+  "checkpoints_count": 3,
+  "save_step_count": 2,
+  "files_touched": [
+    "cli/src/client.ts",
+    "cli/src/core/provider_capabilities.ts",
+    "cli/src/core/tool_grammar_provider.ts",
+    "cli/test/client_tool_grammar.test.ts",
+    "cli/test/provider_capabilities.test.ts",
+    "docs/releases/v1.1.2-qualification.md",
+    "docs/v1.1.0/WP-1107-PLAN.md",
+    "eval/tool_grammar_matrix.mjs",
+    "eval/tool_grammar_matrix.test.mjs"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "a6529f90086f",
+  "checkpoint_transcript_start": 79195,
+  "transcript_lines_at_start": 79195,
+  "compact_transcript_start": 11297,
+  "token_usage": {
+    "input_tokens": 1597241,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 195452416,
+    "output_tokens": 402858,
+    "api_call_count": 1408,
+    "subagent_tokens_complete": false
+  },
+  "redaction": {
+    "replacements": 2233,
+    "layers": {
+      "betterleaks": 773,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 265,
+      "credentialed_uri": 105,
+      "entropy": 1549,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 70
+  }
+}
