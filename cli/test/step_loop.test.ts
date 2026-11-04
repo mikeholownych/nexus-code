@@ -80,6 +80,44 @@ describe("WP-1106: Single-step agent loop mode", () => {
     }
   });
 
+  test("AC1b: --step pauses after a cycle whose tool calls are parallel reads", { timeout: 60_000 }, async () => {
+    const home = makeHome();
+    const repo = makeRepo({ "a.txt": "alpha\n", "b.txt": "beta\n" });
+    trustWorkspace(home, repo);
+    const prevHome = process.env.HOME;
+    process.env.HOME = home;
+
+    const gw = await startGateway((n) => {
+      if (n === 1) {
+        return {
+          kind: "tools",
+          calls: [
+            { name: "read_file", args: { path: "a.txt" } },
+            { name: "read_file", args: { path: "b.txt" } },
+          ],
+        };
+      }
+      return write("after-reads.txt", "must not exist\n");
+    });
+
+    const app = new ApplicationCore(cfg(gw.url, repo));
+    try {
+      const result = await app.runTask("Read both files, then write a file", { step: true });
+
+      assert.equal(gw.requests.length, 1, "a parallel-read cycle must still end the step: only 1 provider request");
+      assert.ok(!fs.existsSync(path.join(repo, "after-reads.txt")), "the edit after the reads must not run in the same --step");
+      assert.equal(result.turn.reason, "STEP_PAUSED");
+      assert.equal(result.turn.stepPaused, true);
+      assert.equal(result.turn.steps.used, 1);
+    } finally {
+      app.shutdown();
+      await gw.close();
+      process.env.HOME = prevHome;
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("AC2: /step advances the current objective by exactly one cycle", { timeout: 60_000 }, async () => {
     const home = makeHome();
     const repo = makeRepo();
