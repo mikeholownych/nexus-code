@@ -26,7 +26,8 @@ export const FAULT_KINDS = ["refuse", "overloaded", "stream_cut", "truncate", "c
  * Standalone profiles (DEC-16, REQ-PRV-106): the agent sees a plain OpenAI-compatible server instead of the gateway.
  * Every gateway extension is removed (limits and capabilities in /models, /tokenize, X-AIHost-* headers). An emulated
  * profile also answers as that server would about its context (llama.cpp /props, Ollama /api/show, vLLM max_model_len)
- * and reshapes context-overflow errors into its format; the numbers are the gateway's real ones.
+ * and completes the provider identity handshakes (vLLM `/version`, Ollama `/api/version` and `/api/show`) before
+ * reshaping context-overflow errors into its format; the context numbers are the gateway's real ones.
  */
 export const PROFILES = ["plain", "llamacpp", "vllm", "ollama"];
 const OWNER = { plain: "organization", llamacpp: "llamacpp", vllm: "vllm", ollama: "library" };
@@ -121,7 +122,13 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
     const urlPath = (req.url ?? "").split("?")[0];
     const relativePath = urlPath.startsWith(`${basePath}/`) ? urlPath.slice(basePath.length) : null;
     const routeKind = relativePath === null ? null : allowedRoutes.get(`${req.method} ${relativePath}`);
-    const localProfileRoute = Boolean(profile && ((profile === "llamacpp" && req.method === "GET" && urlPath === "/props") || (profile === "ollama" && req.method === "POST" && urlPath === "/api/show") || urlPath.endsWith("/tokenize")));
+    const localProfileRoute = Boolean(profile && (
+      (profile === "llamacpp" && req.method === "GET" && urlPath === "/props") ||
+      (profile === "vllm" && req.method === "GET" && urlPath === "/version") ||
+      (profile === "ollama" && req.method === "GET" && urlPath === "/api/version") ||
+      (profile === "ollama" && req.method === "POST" && urlPath === "/api/show") ||
+      urlPath.endsWith("/tokenize")
+    ));
     if (!routeKind && !localProfileRoute) {
       req.resume();
       return void sendJson(res, 404, { error: { type: "not_found", message: "evaluation proxy route is not permitted" } });
@@ -149,6 +156,14 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
     }
     if (profile) {
       // The server's own endpoints for its loaded context, answered here with the gateway's real numbers.
+      if (profile === "vllm" && req.method === "GET" && urlPath === "/version") {
+        req.resume();
+        return void sendJson(res, 200, { version: "0.10.1" });
+      }
+      if (profile === "ollama" && req.method === "GET" && urlPath === "/api/version") {
+        req.resume();
+        return void sendJson(res, 200, { version: "0.12.3" });
+      }
       if (profile === "llamacpp" && req.method === "GET" && urlPath === "/props") {
         req.resume();
         stats.profileContextLookups++;

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import { ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
-import { LocalLlmClient } from "./client.js";
+import { LocalLlmClient, normalizeNullableOptionalToolArguments } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
 import {
   CanonicalCapability,
@@ -4841,7 +4841,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     onConfirm?: ConfirmHandler
   ): Promise<{ receipt: ExecutionReceipt; shouldExit: boolean }> {
     const toolName = call.function.name;
-    let args: Record<string, any> = {};
+    let args: any = {};
     let structurallyRepaired = (call as any).repaired === "structural";
 
     try {
@@ -4885,6 +4885,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         shouldExit: false,
       };
     }
+
+    args = normalizeNullableOptionalToolArguments(toolName, args, this.getEffectiveTools());
 
     // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
     // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.

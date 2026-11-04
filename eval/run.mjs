@@ -22,7 +22,7 @@ import { observeT4Fixture } from "./t4_fixtures.mjs";
 import { assertDatasetTaskDigest, loadDataset } from "./dataset.mjs";
 import { createAgentLaunchPayload, serializeAgentLaunchPayload } from "./runner_api.mjs";
 import { assertTaskSnapshotDigest } from "./runner_integrity.mjs";
-import { captureWorkspaceSnapshot, runCodeEvaluators } from "./evaluators/code/runner.mjs";
+import { captureWorkspaceSnapshot, needsEvaluatorConfigurationBaseline, runCodeEvaluators } from "./evaluators/code/runner.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -208,11 +208,7 @@ async function runOnce(task, run) {
   const base = { task: task.id, tier: task.tier, ...(task.tier === "T3" ? { t3SteeringItems: task.steering.length } : {}), config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
     await prepareWorkspace(task, ws);
-    const needsTypecheckBaseline = task.evaluators?.some((item) => {
-      const spec = typeof item === "string" ? { type: item } : item;
-      return spec?.type === "typecheck_clean" && !spec.baseline && !task.typecheck?.baseline;
-    });
-    if (needsTypecheckBaseline) {
+    if (needsEvaluatorConfigurationBaseline(task)) {
       typecheckBaselineWorkspace = fs.mkdtempSync(path.join(scratch, `nexus-eval-typecheck-baseline-${task.id}-`));
       checkDirs.push(typecheckBaselineWorkspace);
       cloneWorkspace(ws, typecheckBaselineWorkspace);

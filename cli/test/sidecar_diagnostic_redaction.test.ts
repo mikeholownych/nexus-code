@@ -80,3 +80,26 @@ test("sidecar protocol boundary redacts nested history fields and drops events i
     InformationFlowBoundary.setGlobalInstance(original);
   }
 });
+
+test("sidecar session state preserves the workspace name alongside its typed path", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    const workspace = "/tmp/nexus-sidecar-otKj5G";
+    const event = formatSafeSidecarEvent({
+      type: "session.state",
+      workspace,
+      workspace_name: "nexus-sidecar-otKj5G",
+      model: "m",
+      mode: "auto",
+      git: null,
+      busy: false,
+    });
+
+    assert.ok(event && event.type === "session.state");
+    assert.equal(event.workspace, workspace);
+    assert.equal(event.workspace_name, "nexus-sidecar-otKj5G");
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});

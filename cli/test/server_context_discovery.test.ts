@@ -103,6 +103,7 @@ describe("discovery against a local server", () => {
   test("an Ollama server is recognised from its catalog and asked only through its own endpoint", async () => {
     const srv = await server({
       "GET /v1/models": () => ({ data: [{ id: "m", object: "model", owned_by: "library" }] }),
+      "GET /api/version": () => ({ version: "0.12.3" }),
       "POST /api/show": () => ({ model_info: { "qwen2.context_length": 32768 } }),
     });
     try {
@@ -110,14 +111,15 @@ describe("discovery against a local server", () => {
       assert.equal(found.advertised?.via, "ollama");
       assert.equal(serverKindOfAdvertisement(found.advertised), "ollama");
       assert.equal(found.advertised?.contextLength, 32768);
-      assert.deepEqual(srv.seen.slice(1), ["POST /api/show"], "only the recognised server's endpoint is asked");
+      assert.deepEqual(srv.seen.slice(1), ["GET /api/version", "POST /api/show"], "identity and context are read only from Ollama endpoints");
     } finally {
       await srv.close();
     }
   });
-  test("a vLLM server advertises max_model_len directly in /v1/models", async () => {
+  test("a vLLM server requires its version identity before enabling provider behavior", async () => {
     const srv = await server({
-      "GET /v1/models": () => ({ data: [{ id: "m", object: "model", max_model_len: 16384 }] }),
+      "GET /v1/models": () => ({ data: [{ id: "m", object: "model", owned_by: "vllm", max_model_len: 16384 }] }),
+      "GET /version": () => ({ version: "0.10.1" }),
     });
     try {
       const found = await new LocalLlmClient({ endpoint: srv.url, model: "m", workspace: "/tmp", maxSteps: 1 } as any).discoverAdvertisement();
@@ -125,7 +127,7 @@ describe("discovery against a local server", () => {
       assert.equal(found.advertised?.via, "vllm");
       assert.equal(serverKindOfAdvertisement(found.advertised), "vllm");
       assert.equal(found.advertised?.contextLength, 16384);
-      assert.deepEqual(srv.seen, ["GET /v1/models"]);
+      assert.deepEqual(srv.seen, ["GET /v1/models", "GET /version"]);
     } finally {
       await srv.close();
     }
@@ -143,6 +145,7 @@ describe("discovery against a local server", () => {
       assert.equal(propsCallsBefore, 1);
       const second = await client.discoverAdvertisement();
       assert.equal(second.advertised?.contextLength, 8192);
+      assert.equal(client.getDetectedServerKind(), "llamacpp");
       const propsCallsAfter = srv.seen.filter((s) => s.startsWith("GET /props")).length;
       assert.equal(propsCallsAfter, 1, "no second probe made to /props due to caching");
     } finally {

@@ -9,8 +9,11 @@ import {
   advertisementChanged,
   parseAdmissionHeaders,
   parseAdvertisement,
+  parseOllamaVersion,
   parseTokenizeResponse,
   resolveLimits,
+  serverKindOf,
+  serverKindOfAdvertisement,
   toolHeadroomPolicy,
 } from "../src/core/provider_capabilities.js";
 
@@ -28,6 +31,11 @@ const gatewayEntry = {
 };
 
 describe("advertisements", () => {
+  test("generic context catalogs remain unknown until a vLLM version handshake succeeds", () => {
+    assert.equal(serverKindOf({ id: "m", context_length: 32768 }), "unknown");
+    assert.equal(serverKindOf({ id: "m", max_model_len: 32768 }), "unknown");
+  });
+
   test("the gateway entry is read as a gateway advertisement with request counting", () => {
     const ad = parseAdvertisement(gatewayEntry)!;
     assert.equal(ad.via, "aihost_gateway");
@@ -38,8 +46,18 @@ describe("advertisements", () => {
     assert.equal(ad.tokenize, true);
   });
 
-  test("vLLM-style max_model_len is capacity without request counting; a bare catalog advertises nothing", () => {
-    assert.deepEqual(parseAdvertisement({ id: "m", max_model_len: 32768 }), { via: "vllm", contextLength: 32768, tokenize: false });
+  test("generic catalog metadata does not identify vLLM", () => {
+    for (const entry of [{ id: "m", context_length: 32768 }, { id: "m", max_model_len: 32768 }]) {
+      const advertisement = parseAdvertisement(entry)!;
+      assert.equal(advertisement.via, "catalog");
+      assert.equal(advertisement.contextLength, 32768);
+      assert.equal(serverKindOf(entry), "unknown");
+      assert.equal(serverKindOfAdvertisement(advertisement), "unknown");
+    }
+  });
+
+  test("generic max_model_len is capacity without request counting; a bare catalog advertises nothing", () => {
+    assert.deepEqual(parseAdvertisement({ id: "m", max_model_len: 32768 }), { via: "catalog", contextLength: 32768, tokenize: false });
     assert.deepEqual(parseAdvertisement({ id: "m" }), { via: "catalog", tokenize: false });
     assert.equal(parseAdvertisement(undefined), undefined);
   });
@@ -58,6 +76,13 @@ describe("advertisements", () => {
     assert.equal(advertisementChanged(a, parseAdvertisement({ ...gatewayEntry, context_length: 32768 })), true);
     assert.equal(advertisementChanged(a, parseAdvertisement({ ...gatewayEntry, serving: [{ worker_id: "w2" }] })), true);
   });
+});
+
+test("Ollama identity requires a non-empty version string", () => {
+  assert.equal(parseOllamaVersion({ version: "0.12.3" }), "0.12.3");
+  assert.equal(parseOllamaVersion({ version: "  " }), undefined);
+  assert.equal(parseOllamaVersion({ version: 7 }), undefined);
+  assert.equal(parseOllamaVersion(null), undefined);
 });
 
 describe("limits in effect", () => {

@@ -3,7 +3,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { parse as parseDotenv } from "dotenv";
-import { parseAdmissionHeaders, parseAdvertisement, parseServerContext, parseTokenizeResponse, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
+import { parseAdmissionHeaders, parseAdvertisement, parseOllamaVersion, parseServerContext, parseTokenizeResponse, parseVllmVersion, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
+import { adaptToolDefinitionsForServer } from "./core/tool_grammar_provider.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
@@ -37,6 +38,38 @@ import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
 import { providerDefinition } from "./providers.js";
 
 type OAuthCredential = Extract<StoredCredential, { type: "oauth" }>;
+
+/** Remove nulls from optional top-level arguments using the tool schema the agent originally declared. */
+export function normalizeNullableOptionalToolArguments(toolName: string, rawArgs: unknown, tools: readonly ToolDefinition[]): unknown {
+  const tool = tools.find((candidate) => candidate.type === "function" && candidate.function.name === toolName);
+  if (!tool || !tool.function.parameters || !rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) return rawArgs;
+
+  const required = new Set(tool.function.parameters.required ?? []);
+  const properties = tool.function.parameters.properties ?? {};
+  let normalized: Record<string, unknown> | undefined;
+  for (const name of Object.keys(properties)) {
+    if (required.has(name) || (rawArgs as Record<string, unknown>)[name] !== null) continue;
+    normalized ??= { ...(rawArgs as Record<string, unknown>) };
+    delete normalized[name];
+  }
+  return normalized ?? rawArgs;
+}
+
+function normalizeNullableOptionalArguments(message: ChatMessage, tools: readonly ToolDefinition[]): ChatMessage {
+  if (!message.tool_calls?.length) return message;
+  let changed = false;
+  const toolCalls = message.tool_calls.map((call) => {
+    const rawArgs = call.function.arguments;
+    let parsed: unknown;
+    try { parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs; }
+    catch { return call; }
+    const normalized = normalizeNullableOptionalToolArguments(call.function.name, parsed, tools);
+    if (normalized === parsed) return call;
+    changed = true;
+    return { ...call, function: { ...call.function, arguments: JSON.stringify(normalized) } };
+  });
+  return changed ? { ...message, tool_calls: toolCalls } : message;
+}
 
 function originOf(url: string | undefined): string | undefined {
   if (!url?.trim()) return undefined;
@@ -808,13 +841,8 @@ export class LocalLlmClient {
   private routingHeaders(): Record<string, string> {
     if (!this.conn.sendTaskClass) return {};
     const kind = LocalLlmClient.serverKindCache.get(this.endpoint);
-    if (
-      kind &&
-      kind !== "gateway" &&
-      kind !== "unknown" &&
-      !operatorSetting("NEXUS_TASK_CLASS") &&
-      !operatorSetting("LOCAL_LLM_TASK_CLASS")
-    ) {
+    const operatorOverride = operatorSetting("NEXUS_TASK_CLASS") || operatorSetting("LOCAL_LLM_TASK_CLASS");
+    if (!operatorOverride && kind !== "gateway") {
       return {};
     }
     return this.taskClass && /^[A-Za-z0-9_.-]{1,64}$/.test(this.taskClass) ? { "X-Task-Class": this.taskClass } : {};
@@ -1132,6 +1160,7 @@ export class LocalLlmClient {
    */
   async discoverAdvertisement(signal?: AbortSignal): Promise<{ state: "supported" | "unsupported" | "unavailable"; advertised?: Advertisement; detail?: string }> {
     const ep = this.endpoint;
+    const previousKind = LocalLlmClient.serverKindCache.get(ep);
     if (this.conn.protocol !== "openai-chat") return { state: "unsupported", detail: `${this.conn.protocol} connection` };
     const url = `${ep}/models`;
     try {
@@ -1142,24 +1171,54 @@ export class LocalLlmClient {
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
         ...this.fetchPolicy(),
       });
-      if (res.status === 404) return { state: "unsupported", detail: "no /models catalog" };
-      if (!res.ok) return { state: "unavailable", detail: `HTTP ${res.status}` };
+      if (res.status === 404) {
+        // A catalog-less response does not contradict an identity verified earlier on this same endpoint.
+        if (previousKind) LocalLlmClient.serverKindCache.set(ep, previousKind);
+        return { state: "unsupported", detail: "no /models catalog" };
+      }
+      if (!res.ok) {
+        return { state: "unavailable", detail: `HTTP ${res.status}` };
+      }
       const data = (await res.json()) as { data?: Array<Record<string, any>> };
       const entry = Array.isArray(data?.data) ? data.data.find((e) => e?.id === this.model) : undefined;
-      if (!entry) return { state: "unsupported", detail: `model ${this.model} not listed` };
-      const advertised = parseAdvertisement(entry);
-      const entryKind = advertised?.serverKind ?? serverKindOf(entry);
-      LocalLlmClient.serverKindCache.set(ep, entryKind);
+      // A catalog that cannot identify this model provides no contradictory identity evidence.
+      if (!entry) {
+        if (previousKind) LocalLlmClient.serverKindCache.set(ep, previousKind);
+        return { state: "unsupported", detail: `model ${this.model} not listed` };
+      }
+      let advertised = parseAdvertisement(entry);
+      let entryKind = advertised?.serverKind ?? serverKindOf(entry);
+      const vllmCatalogMarker = typeof entry.owned_by === "string" && entry.owned_by.toLowerCase() === "vllm";
+      if (!this.conn.providerId) {
+        if (entryKind === "llamacpp" && (process.env.NEXUS_SERVER_PROBE === "0" || !(await this.discoverServerContext(entry, signal))) ) {
+          entryKind = "unknown";
+        } else if (entryKind === "ollama" && (process.env.NEXUS_SERVER_PROBE === "0" || !(await this.discoverOllamaIdentity(signal))) ) {
+          entryKind = "unknown";
+        } else if (vllmCatalogMarker && entryKind === "unknown" && process.env.NEXUS_SERVER_PROBE !== "0") {
+          const version = await this.discoverVllmVersion(signal);
+          if (version) {
+            entryKind = "vllm";
+            if (advertised) advertised = { ...advertised, via: "vllm" };
+          } else if (previousKind === "vllm") {
+            // Keep strict mode and the /tokenize fallback through a transient version-route outage.
+            entryKind = "vllm";
+          }
+        }
+      }
+      // A readable generic entry clears a stale identity; only unavailable discovery, an absent model, or the
+      // specifically verified vLLM identity above may retain the previous kind.
       if (!advertised || (advertised.contextLength === undefined && advertised.maxCompletionTokens === undefined)) {
         // An OpenAI-style catalog without limits (llama.cpp, LM Studio, Ollama): ask the server itself what it loaded.
         // Only for a plain endpoint: cloud provider connections have no such endpoints.
-        const local = this.conn.providerId ? undefined : await this.discoverServerContext(entry, signal);
+        const local = this.conn.providerId || entryKind === "unknown" ? undefined : await this.discoverServerContext(entry, signal);
         if (local) {
-          if (local.serverKind) LocalLlmClient.serverKindCache.set(ep, local.serverKind);
+          LocalLlmClient.serverKindCache.set(ep, local.serverKind ?? entryKind);
           return { state: "supported", advertised: local };
         }
+        LocalLlmClient.serverKindCache.set(ep, entryKind);
         return { state: "unsupported", advertised, detail: "catalog lists no limits" };
       }
+      LocalLlmClient.serverKindCache.set(ep, entryKind);
       return { state: "supported", advertised };
     } catch (err: any) {
       if (signal?.aborted) throw abortedError(randomUUID());
@@ -1169,6 +1228,63 @@ export class LocalLlmClient {
 
   private static serverContextCache = new Map<string, Advertisement>();
   private static serverKindCache = new Map<string, ServerKind>();
+  private static serverShowCache = new Map<string, unknown>();
+
+  /** Provider identity detected for the active endpoint after capability discovery; unknown until a positive handshake. */
+  getDetectedServerKind(): ServerKind {
+    return LocalLlmClient.serverKindCache.get(this.endpoint) ?? "unknown";
+  }
+
+  private async discoverVllmVersion(signal?: AbortSignal): Promise<string | undefined> {
+    const root = this.endpoint.replace(/\/v1\/?$/, "");
+    const url = `${root}/version`;
+    try {
+      await this.prepareCredential(this.endpoint);
+      const res = await fetch(url, {
+        headers: { ...this.authorization(url), "X-Nexus-Purpose": "capabilities" },
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(2_000)]) : AbortSignal.timeout(2_000),
+        ...this.fetchPolicy(),
+      });
+      if (!res.ok) return undefined;
+      return parseVllmVersion(await res.json());
+    } catch (err: any) {
+      if (signal?.aborted) throw abortedError(randomUUID());
+      return undefined;
+    }
+  }
+
+  private async discoverOllamaIdentity(signal?: AbortSignal): Promise<boolean> {
+    const root = this.endpoint.replace(/\/v1\/?$/, "");
+    const versionUrl = `${root}/api/version`;
+    const showUrl = `${root}/api/show`;
+    const cacheKey = `${this.endpoint}::${this.model}`;
+    try {
+      await this.prepareCredential(this.endpoint);
+      const versionResponse = await fetch(versionUrl, {
+        headers: { ...this.authorization(versionUrl), "X-Nexus-Purpose": "capabilities" },
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(2_000)]) : AbortSignal.timeout(2_000),
+        ...this.fetchPolicy(),
+      });
+      if (!versionResponse.ok || !parseOllamaVersion(await versionResponse.json())) return false;
+      const showResponse = await fetch(showUrl, {
+        method: "POST",
+        headers: { ...this.authorization(showUrl), "content-type": "application/json", "X-Nexus-Purpose": "capabilities" },
+        body: JSON.stringify({ model: this.model }),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(2_000)]) : AbortSignal.timeout(2_000),
+        ...this.fetchPolicy(),
+      });
+      if (!showResponse.ok) return false;
+      const show = await showResponse.json();
+      if (!show || typeof show !== "object" || Array.isArray(show)) return false;
+      const showRecord = show as Record<string, unknown>;
+      if (typeof showRecord.model === "string" && showRecord.model !== this.model) return false;
+      LocalLlmClient.serverShowCache.set(cacheKey, show);
+      return true;
+    } catch (err: any) {
+      if (signal?.aborted) throw abortedError(randomUUID());
+      return false;
+    }
+  }
 
   /**
    * The loaded context of a local server that lists no limits in its catalog, from that server's own endpoint (llama.cpp
@@ -1182,6 +1298,11 @@ export class LocalLlmClient {
     const cacheKey = `${this.endpoint}::${this.model}`;
     const cached = LocalLlmClient.serverContextCache.get(cacheKey);
     if (cached) return cached;
+    if (kind === "ollama" && LocalLlmClient.serverShowCache.has(cacheKey)) {
+      const found = parseServerContext(kind, LocalLlmClient.serverShowCache.get(cacheKey), this.model);
+      if (found) LocalLlmClient.serverContextCache.set(cacheKey, found);
+      return found;
+    }
     const root = this.endpoint.replace(/\/v1\/?$/, "");
     const probes: Array<{ kind: "llamacpp" | "lmstudio" | "ollama"; url: string; init?: RequestInit }> = [
       { kind: "llamacpp" as const, url: `${root}/props` },
@@ -1322,9 +1443,10 @@ export class LocalLlmClient {
     /** Receipt role override for auxiliary calls (e.g. "compaction"). */
     purpose?: string,
   ): Promise<ChatMessage> {
-    return this.withReceipt(requestId, purpose, () =>
+    const response = await this.withReceipt(requestId, purpose, () =>
       this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
     );
+    return normalizeNullableOptionalArguments(response, tools);
   }
 
   private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal): Promise<ChatMessage> {
@@ -1373,6 +1495,7 @@ export class LocalLlmClient {
         }
         outboundTools = toolsEgress.sanitizedPayload || tools;
       }
+      outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(currentEp) ?? "unknown", outboundTools);
 
       const payload: any = {
         model: this.model,
@@ -1476,11 +1599,12 @@ export class LocalLlmClient {
     requestId: string = randomUUID(),
     signal?: AbortSignal,
   ): Promise<ChatMessage> {
-    return this.withReceipt(requestId, undefined, () =>
+    const response = await this.withReceipt(requestId, undefined, () =>
       this.withOAuthRetry(this.endpoint, requestId, () =>
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
       ),
     );
+    return normalizeNullableOptionalArguments(response, tools);
   }
 
   /**
@@ -1527,6 +1651,7 @@ export class LocalLlmClient {
       }
       outboundTools = toolsEgress.sanitizedPayload || tools;
     }
+    outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(currentEp) ?? "unknown", outboundTools);
 
     const payload: any = {
       model: this.model,

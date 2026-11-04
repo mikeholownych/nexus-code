@@ -9,6 +9,10 @@ const EXTENSIONS = new Map([
   [".rs", "rust"], [".py", "python"],
 ]);
 
+export function isSupportedSyntaxPath(relativePath) {
+  return typeof relativePath === "string" && EXTENSIONS.has(path.extname(relativePath).toLowerCase());
+}
+
 function confinedFile(root, relativePath) {
   if (typeof relativePath !== "string" || !relativePath || path.isAbsolute(relativePath) || relativePath.includes("\\") || relativePath.includes("\0")) {
     throw new Error(`unsafe source path: ${String(relativePath)}`);

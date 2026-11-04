@@ -7,6 +7,26 @@ import { AutonomousAgent, AgentObserver, observationKey } from "../src/agent.js"
 import { startGateway, makeRepo } from "./helpers/fixtures.js";
 
 describe("AgentObserver", () => {
+  test("normalized nullable optional arguments produce canonical observation identity", async () => {
+    const gw = await startGateway((n) => n === 1
+      ? { kind: "tools", calls: [{ name: "read_file", args: { path: "a.txt", start_line: null } }] }
+      : { kind: "text", content: "read complete" });
+    const repo = makeRepo({ "a.txt": "alpha\n" });
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash" } as any);
+    let observed: Record<string, unknown> | undefined;
+    agent.setObserver({ onToolStart: (event) => { if (event.tool === "read_file") observed = event.args; } });
+    try {
+      const turn = await agent.runTurn("read the file");
+      assert.equal(turn.outcome, "NOT_REQUIRED");
+      assert.deepEqual(observed, { path: "a.txt" });
+      assert.equal(observationKey("read_file", observed), observationKey("read_file", { path: "a.txt" }));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("receives tool start/end and streamed assistant text in order", async () => {
     const gw = await startGateway((n) => n === 1
       ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] }

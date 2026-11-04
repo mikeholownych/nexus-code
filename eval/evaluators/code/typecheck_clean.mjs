@@ -35,8 +35,11 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
     seenCandidate.set(line, seen);
     return seen > (baselineCounts.get(line) ?? 0);
   });
+  const recognizedDiagnostic = (lines) => lines.some((line) => /\berror(?:\s+TS\d+|\[E\d+\])?:/i.test(line));
   const infrastructureFailure = [baselineResult, candidateResult].some((result) =>
-    result?.status == null || result?.signal != null || result?.timedOut === true || result?.error != null);
+    result?.status == null || result?.signal != null || result?.timedOut === true || result?.error != null) ||
+    (baselineResult.status !== 0 && !recognizedDiagnostic(baselineOutput)) ||
+    (candidateResult.status !== 0 && !recognizedDiagnostic(candidateOutput));
   // A candidate that fails where the baseline passed, or that fails without printing any diagnostic, has regressed even
   // though no new diagnostic line appears. A failing baseline's exit code alone is not compared: it varies with settings.
   const statusRegression = !infrastructureFailure && candidateResult.status !== 0 &&
