@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_014A9haT533Gk131xHnMp91z",
+  "agent_id": "ab4af241e6e1cd968",
+  "task_description": "Review v1.1.2 release docs truthfulness",
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 112119,
+    "cache_read_tokens": 1851964,
+    "output_tokens": 21213,
+    "api_call_count": 23
+  },
+  "started_at": "2026-11-04T18:25:59.949925816Z",
+  "completed_at": "2026-11-04T18:30:09.215890482Z"
+}
