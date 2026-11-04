@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01WMFWd2TuczsgDpQB36gwAu",
+  "agent_id": "a1538d06a33e30102",
+  "task_description": "Survey Worktrunk upstream",
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 115259,
+    "cache_read_tokens": 2290429,
+    "output_tokens": 18663,
+    "api_call_count": 26
+  },
+  "started_at": "2026-11-04T20:35:13.402368127Z",
+  "completed_at": "2026-11-04T20:40:10.098394373Z"
+}
