@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 export const TOOL_NAMES = Object.freeze(["read_file", "write_file", "edit_file", "run_command"]);
@@ -232,6 +234,104 @@ async function loadInstalledRuntime(installRoot) {
   };
 }
 
+function archiveEntryPath(entry) {
+  if (typeof entry !== "string" || !entry || /[\r\n\\\0]/.test(entry) || entry.startsWith("/") || /^[a-zA-Z]:/.test(entry)) {
+    throw new TypeError("candidate archive contains an unsafe path");
+  }
+  const directory = entry.endsWith("/");
+  const parts = (directory ? entry.slice(0, -1) : entry).split("/");
+  if (parts.length < 1 || parts.some((part) => !part || part === "." || part === "..")) throw new TypeError("candidate archive contains an unsafe path");
+  if (parts[0] !== "nexus") throw new TypeError("candidate archive must contain only the nexus package root");
+  return { relative: parts.join("/"), directory };
+}
+
+function listArchiveEntries(archivePath) {
+  const names = execFileSync("tar", ["-tzf", archivePath], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).split("\n");
+  if (names.at(-1) === "") names.pop();
+  const types = execFileSync("tar", ["-tvzf", archivePath], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).split("\n");
+  if (types.at(-1) === "") types.pop();
+  if (names.length === 0 || names.length !== types.length) throw new TypeError("candidate archive entry listing is malformed");
+  const seen = new Set();
+  for (let index = 0; index < names.length; index++) {
+    const parsed = archiveEntryPath(names[index]);
+    if (seen.has(parsed.relative)) throw new TypeError("candidate archive contains duplicate paths");
+    seen.add(parsed.relative);
+    const type = types[index]?.[0];
+    if ((parsed.directory && type !== "d") || (!parsed.directory && type !== "-")) {
+      throw new TypeError("candidate archive contains a symlink, hard link, or non-regular entry");
+    }
+  }
+  return names;
+}
+
+function verifyPackageTree(packageRoot) {
+  const rootStat = fs.lstatSync(packageRoot);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new TypeError("candidate package root is not a real directory");
+  const files = new Set();
+  const walk = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      const stat = fs.lstatSync(fullPath);
+      if (stat.isSymbolicLink()) throw new TypeError("candidate package contains a symlink");
+      if (stat.isDirectory()) walk(fullPath);
+      else if (stat.isFile()) files.add(path.relative(packageRoot, fullPath).split(path.sep).join("/"));
+      else throw new TypeError("candidate package contains a non-regular file");
+    }
+  };
+  walk(packageRoot);
+  const manifestPath = path.join(packageRoot, "MANIFEST.sha256");
+  if (!files.has("MANIFEST.sha256")) throw new TypeError("candidate package is missing MANIFEST.sha256");
+  const manifestStat = fs.lstatSync(manifestPath);
+  if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) throw new TypeError("candidate manifest is not a regular file");
+  const manifest = fs.readFileSync(manifestPath, "utf8");
+  const expected = new Map();
+  for (const line of manifest.split("\n")) {
+    if (!line) continue;
+    const match = /^([a-f0-9]{64})  (?:\*)?(.+)$/i.exec(line);
+    if (!match) throw new TypeError("candidate manifest has a malformed entry");
+    const relative = match[2].startsWith("./") ? match[2].slice(2) : match[2];
+    if (!relative || /[\r\n\\\0]/.test(relative) || relative.startsWith("/") || relative.split("/").some((part) => !part || part === "." || part === "..")) {
+      throw new TypeError("candidate manifest contains an unsafe path");
+    }
+    if (relative === "MANIFEST.sha256" || expected.has(relative)) throw new TypeError("candidate manifest contains a duplicate or self-referential path");
+    expected.set(relative, match[1].toLowerCase());
+  }
+  const actual = new Set([...files].filter((relative) => relative !== "MANIFEST.sha256"));
+  if (actual.size !== expected.size || [...actual].some((relative) => !expected.has(relative))) {
+    throw new TypeError("candidate manifest does not describe the exact package file set");
+  }
+  for (const [relative, digest] of expected) {
+    const fullPath = path.join(packageRoot, ...relative.split("/"));
+    const stat = fs.lstatSync(fullPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || sha256(fs.readFileSync(fullPath)) !== digest) {
+      throw new TypeError("candidate package file does not match MANIFEST.sha256");
+    }
+  }
+  for (const runtimePath of ["lib/cli/dist/client.js", "lib/cli/dist/core/capabilities.js", "lib/cli/dist/parser.js", "lib/cli/dist/core/tool_grammar_provider.js"]) {
+    if (!actual.has(runtimePath)) throw new TypeError("candidate package is missing an installed runtime module");
+  }
+  expected.set("MANIFEST.sha256", sha256(fs.readFileSync(manifestPath)));
+  return expected;
+}
+
+function createVerifiedArchiveSnapshot(archivePath, expectedDigest) {
+  const snapshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-candidate-snapshot-"));
+  try {
+    fs.chmodSync(snapshotRoot, 0o700);
+    const snapshotArchive = path.join(snapshotRoot, "candidate.tar.gz");
+    fs.copyFileSync(archivePath, snapshotArchive, fs.constants.COPYFILE_EXCL);
+    if (sha256(fs.readFileSync(snapshotArchive)) !== expectedDigest) throw new TypeError("private candidate archive snapshot digest changed");
+    listArchiveEntries(snapshotArchive);
+    execFileSync("tar", ["-xzf", snapshotArchive, "-C", snapshotRoot, "--no-same-owner", "--no-same-permissions"], { maxBuffer: 64 * 1024 * 1024 });
+    const packageRoot = path.join(snapshotRoot, "nexus");
+    const packageFiles = verifyPackageTree(packageRoot);
+    return { snapshotRoot, packageRoot, packageFiles };
+  } catch (error) {
+    fs.rmSync(snapshotRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 function promptFor(toolName, hybrid) {
   return `Call the ${toolName} tool exactly once with arguments that satisfy its supplied JSON Schema.${hybrid ? " Think before the call and emit a non-empty <think>...</think> block." : " Do not add prose."}`;
 }
@@ -256,16 +356,47 @@ function validProviderIdentity(provider) {
   return expected;
 }
 
-function verifyInstalledArchive(installRoot, archiveSha256, sourceCommit) {
-  const provenancePath = path.join(path.resolve(installRoot), ".provenance.json");
+function verifyInstalledArchive(installRoot, archiveSha256, sourceCommit, expectedPackageFiles) {
+  const resolvedInstallRoot = path.resolve(installRoot);
+  const rootStat = fs.lstatSync(resolvedInstallRoot);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || fs.realpathSync(resolvedInstallRoot) !== resolvedInstallRoot) {
+    throw new TypeError("installed candidate root is not a real directory");
+  }
+  const provenancePath = path.join(resolvedInstallRoot, ".provenance.json");
   let provenance;
   try {
+    const provenanceStat = fs.lstatSync(provenancePath);
+    if (!provenanceStat.isFile() || provenanceStat.isSymbolicLink()) throw new Error("provenance is not a regular file");
     provenance = JSON.parse(fs.readFileSync(provenancePath, "utf8"));
   } catch {
     throw new TypeError("installed candidate has no readable installer provenance");
   }
   if (provenance.method !== "installer" || provenance.archiveSha256 !== archiveSha256 || provenance.revision !== sourceCommit) {
     throw new TypeError("installed candidate provenance does not bind the exact archive and source commit");
+  }
+  const installedFiles = new Map();
+  const walk = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      const relative = path.relative(resolvedInstallRoot, fullPath).split(path.sep).join("/");
+      const stat = fs.lstatSync(fullPath);
+      if (stat.isSymbolicLink()) throw new TypeError("installed candidate package contains a symlink");
+      if (stat.isDirectory()) walk(fullPath);
+      else if (stat.isFile()) {
+        if (relative !== ".provenance.json") installedFiles.set(relative, sha256(fs.readFileSync(fullPath)));
+      } else {
+        throw new TypeError("installed candidate package contains a non-regular file");
+      }
+    }
+  };
+  walk(resolvedInstallRoot);
+  if (installedFiles.size !== expectedPackageFiles.size || [...expectedPackageFiles.keys()].some((relative) => !installedFiles.has(relative))) {
+    throw new TypeError("installed candidate package file set does not match the verified archive manifest");
+  }
+  for (const [relative, expectedDigest] of expectedPackageFiles) {
+    if (installedFiles.get(relative) !== expectedDigest) {
+      throw new TypeError(`installed candidate file does not match the verified archive manifest: ${relative}`);
+    }
   }
 }
 
@@ -278,13 +409,15 @@ export async function runToolGrammarMatrix(options) {
   const archivePath = fs.realpathSync(options.archivePath);
   const archiveSha256 = sha256(fs.readFileSync(archivePath));
   if (options.archiveSha256 && options.archiveSha256 !== archiveSha256) throw new TypeError("candidate archive SHA-256 does not match the pinned digest");
-  verifyInstalledArchive(options.installRoot, archiveSha256, options.sourceCommit);
-  if (!Array.isArray(options.providers) || options.providers.length !== 3) throw new TypeError("exactly one configuration per supported provider is required");
-  const configuredProviders = options.providers.map((provider) => {
-    validProviderIdentity(provider);
-    return provider;
-  });
-  const runtime = await loadInstalledRuntime(options.installRoot);
+  const snapshot = createVerifiedArchiveSnapshot(archivePath, archiveSha256);
+  try {
+    verifyInstalledArchive(options.installRoot, archiveSha256, options.sourceCommit, snapshot.packageFiles);
+    if (!Array.isArray(options.providers) || options.providers.length !== 3) throw new TypeError("exactly one configuration per supported provider is required");
+    const configuredProviders = options.providers.map((provider) => {
+      validProviderIdentity(provider);
+      return provider;
+    });
+    const runtime = await loadInstalledRuntime(snapshot.packageRoot);
   const tools = validateTools(runtime.tools);
   const clientFactory = runtime.clientFactory;
   const repairJsonWithClass = runtime.repairJsonWithClass;
@@ -363,7 +496,10 @@ export async function runToolGrammarMatrix(options) {
   const validation = validateMatrixEvidence(evidence);
   evidence.passed = validation.passed;
   if (options.outputPath) writeEvidence(options.outputPath, evidence);
-  return evidence;
+    return evidence;
+  } finally {
+    fs.rmSync(snapshot.snapshotRoot, { recursive: true, force: true });
+  }
 }
 
 /** Write immutable JSON evidence and a detached SHA-256 sidecar. */

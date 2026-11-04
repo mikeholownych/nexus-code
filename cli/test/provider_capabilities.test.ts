@@ -13,6 +13,7 @@ import {
   parseTokenizeResponse,
   resolveLimits,
   serverKindOf,
+  serverKindOfAdvertisement,
   toolHeadroomPolicy,
 } from "../src/core/provider_capabilities.js";
 
@@ -45,8 +46,18 @@ describe("advertisements", () => {
     assert.equal(ad.tokenize, true);
   });
 
-  test("vLLM-style max_model_len is capacity without request counting; a bare catalog advertises nothing", () => {
-    assert.deepEqual(parseAdvertisement({ id: "m", max_model_len: 32768 }), { via: "vllm", contextLength: 32768, tokenize: false });
+  test("generic catalog metadata does not identify vLLM", () => {
+    for (const entry of [{ id: "m", context_length: 32768 }, { id: "m", max_model_len: 32768 }]) {
+      const advertisement = parseAdvertisement(entry)!;
+      assert.equal(advertisement.via, "catalog");
+      assert.equal(advertisement.contextLength, 32768);
+      assert.equal(serverKindOf(entry), "unknown");
+      assert.equal(serverKindOfAdvertisement(advertisement), "unknown");
+    }
+  });
+
+  test("generic max_model_len is capacity without request counting; a bare catalog advertises nothing", () => {
+    assert.deepEqual(parseAdvertisement({ id: "m", max_model_len: 32768 }), { via: "catalog", contextLength: 32768, tokenize: false });
     assert.deepEqual(parseAdvertisement({ id: "m" }), { via: "catalog", tokenize: false });
     assert.equal(parseAdvertisement(undefined), undefined);
   });

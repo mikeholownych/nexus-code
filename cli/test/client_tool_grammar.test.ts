@@ -52,7 +52,7 @@ test("client enables vLLM strict mode for allowlisted tool schemas", async () =>
   let versionRequests = 0;
   let sent: any;
   await withEndpoint((req, res, body) => {
-    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", max_model_len: 8192 }] });
+    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", owned_by: "vllm", max_model_len: 8192 }] });
     if (req.url === "/version") {
       versionRequests++;
       return json(res, { version: "0.10.0" });
@@ -111,7 +111,7 @@ test("vLLM strict adaptation makes optional flat parameters nullable and closes 
 test("client preserves vLLM strict schemas in a non-streaming completion", async () => {
   let sent: any;
   await withEndpoint((req, res, body) => {
-    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", max_model_len: 8192 }] });
+    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", owned_by: "vllm", max_model_len: 8192 }] });
     if (req.url === "/version") return json(res, { version: "0.10.0" });
     if (req.url === "/v1/chat/completions") {
       sent = JSON.parse(body);
@@ -132,7 +132,7 @@ test("client preserves vLLM strict schemas in a non-streaming completion", async
 test("client preserves vLLM strict schemas in a streaming completion", async () => {
   let sent: any;
   await withEndpoint((req, res, body) => {
-    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", max_model_len: 8192 }] });
+    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", owned_by: "vllm", max_model_len: 8192 }] });
     if (req.url === "/version") return json(res, { version: "0.10.0" });
     if (req.url === "/v1/chat/completions") {
       sent = JSON.parse(body);
@@ -179,29 +179,48 @@ test("unsupported vLLM discovery does not enable strict tool adaptation", async 
   assert.equal(versionRequests, 0, "generic catalogs must not receive vLLM-specific probes");
 });
 
-test("vLLM model marker without catalog limits still needs a successful context handshake before adaptation", async () => {
-  let sent: any;
-  let versionRequests = 0;
-  await withEndpoint((req, res, body) => {
-    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", owned_by: "vllm" }] });
-    if (req.url === "/version") { versionRequests++; return json(res, { version: "0.10.0" }); }
-    if (req.url === "/props") { res.statusCode = 404; res.end(); return; }
-    if (req.url === "/v1/chat/completions") {
-      sent = JSON.parse(body);
-      return completion(res);
-    }
-    res.statusCode = 404;
-    res.end();
-  }, async (endpoint) => {
-    const client = new LocalLlmClient({ model: "model-a", endpoint, apiKey: "test" } as any);
-    assert.equal((await client.discoverAdvertisement()).state, "unsupported");
-    assert.equal(client.getDetectedServerKind(), "unknown");
-    await client.chatCompletion([{ role: "user", content: "read it" }], [readFileTool] as any);
-  });
+test("vLLM adaptation requires owned_by vllm and a version handshake", async () => {
+  const observe = async (entry: Record<string, unknown>, versionBody: unknown) => {
+    let sent: any;
+    let versionRequests = 0;
+    let detectedKind = "unknown";
+    let advertisedVia: string | undefined;
+    await withEndpoint((req, res, body) => {
+      if (req.url === "/v1/models") return json(res, { data: [entry] });
+      if (req.url === "/version") { versionRequests++; return json(res, versionBody); }
+      if (req.url === "/props") { res.statusCode = 404; res.end(); return; }
+      if (req.url === "/v1/chat/completions") {
+        sent = JSON.parse(body);
+        return completion(res);
+      }
+      res.statusCode = 404;
+      res.end();
+    }, async (endpoint) => {
+      const client = new LocalLlmClient({ model: "model-a", endpoint, apiKey: "test" } as any);
+      const discovery = await client.discoverAdvertisement();
+      advertisedVia = discovery.advertised?.via;
+      detectedKind = client.getDetectedServerKind();
+      await client.chatCompletion([{ role: "user", content: "read it" }], [readFileTool] as any);
+    });
+    return { sent, versionRequests, detectedKind, advertisedVia };
+  };
 
-  assert.equal(versionRequests, 1);
-  assert.equal(sent.tools[0].function.strict, undefined);
-  assert.equal("additionalProperties" in sent.tools[0].function.parameters, false);
+  const generic = await observe({ id: "model-a", context_length: 8192 }, { version: "0.10.0" });
+  assert.equal(generic.versionRequests, 0, "generic capacity metadata must not trigger a vLLM identity probe");
+  assert.equal(generic.detectedKind, "unknown");
+  assert.equal(generic.advertisedVia, "catalog");
+  assert.equal(generic.sent.tools[0].function.strict, undefined);
+
+  const missingVersion = await observe({ id: "model-a", owned_by: "vllm" }, { version: "  " });
+  assert.equal(missingVersion.versionRequests, 1);
+  assert.equal(missingVersion.detectedKind, "unknown");
+  assert.equal(missingVersion.sent.tools[0].function.strict, undefined);
+
+  const identified = await observe({ id: "model-a", owned_by: "VLLM" }, { version: "0.10.0" });
+  assert.equal(identified.versionRequests, 1);
+  assert.equal(identified.detectedKind, "vllm");
+  assert.equal(identified.advertisedVia, "vllm");
+  assert.equal(identified.sent.tools[0].function.strict, true);
 });
 
 test("client preserves llama.cpp native tool schemas without incompatible grammar field", async () => {

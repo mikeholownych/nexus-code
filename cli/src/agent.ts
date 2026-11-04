@@ -4841,7 +4841,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     onConfirm?: ConfirmHandler
   ): Promise<{ receipt: ExecutionReceipt; shouldExit: boolean }> {
     const toolName = call.function.name;
-    let args: Record<string, any> = {};
+    let args: any = {};
     let structurallyRepaired = (call as any).repaired === "structural";
 
     try {
@@ -4884,6 +4884,17 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         },
         shouldExit: false,
       };
+    }
+
+    if (args && typeof args === "object" && !Array.isArray(args)) {
+      // Rust serde defaults apply when these optional fields are omitted (core/src/file_ops.rs:33, core/src/runner.rs:7).
+      const nullableOptionalArgs = new Map<string, readonly string[]>([
+        ["write_file", ["overwrite"]],
+        ["run_command", ["background", "timeout_secs", "shell"]],
+      ]);
+      for (const key of nullableOptionalArgs.get(toolName) ?? []) {
+        if (args[key] === null) delete args[key];
+      }
     }
 
     // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or

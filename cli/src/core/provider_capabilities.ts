@@ -119,7 +119,7 @@ export function parseAdvertisement(entry: Record<string, any> | undefined): Adve
     ? { ...(typeof entry.reasoning.mode === "string" ? { mode: entry.reasoning.mode } : {}), ...(positiveInt(entry.reasoning.budget) ? { budget: positiveInt(entry.reasoning.budget) } : {}) }
     : undefined;
   return {
-    via: gateway ? "aihost_gateway" : contextLength !== undefined ? "vllm" : "catalog",
+    via: gateway ? "aihost_gateway" : "catalog",
     ...(contextLength !== undefined ? { contextLength } : {}),
     ...(positiveInt(entry.max_completion_tokens) ? { maxCompletionTokens: positiveInt(entry.max_completion_tokens) } : {}),
     ...(gateway ? { limitsVersion: entry.limits_version } : {}),

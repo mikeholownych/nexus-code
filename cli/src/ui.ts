@@ -141,13 +141,13 @@ export class TerminalUI {
   }
 
   private humanTool(name: string): string {
-    const labels: Record<string, string> = {
-      read_file: "Reading file", batch_read: "Reading files", list_dir: "Exploring workspace",
-      run_command: "Running command", run_tests: "Validating", write_file: "Writing file",
-      edit_file: "Updating file", patch_file: "Applying change", search_files: "Searching workspace",
-      git_status: "Checking changes", git_diff: "Reviewing diff",
-    };
-    return labels[name] || name.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+    const labels = new Map<string, string>([
+      ["read_file", "Reading file"], ["batch_read", "Reading files"], ["list_dir", "Exploring workspace"],
+      ["run_command", "Running command"], ["run_tests", "Validating"], ["write_file", "Writing file"],
+      ["edit_file", "Updating file"], ["patch_file", "Applying change"], ["search_files", "Searching workspace"],
+      ["git_status", "Checking changes"], ["git_diff", "Reviewing diff"],
+    ]);
+    return labels.get(name) ?? name.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
   }
 
   /** Terminal projection of a TurnResult. Reads the structured result; adds no semantics of its own. */

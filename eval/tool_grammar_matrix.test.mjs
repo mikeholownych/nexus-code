@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import {
   classifyToolArguments,
@@ -39,7 +40,7 @@ export function adaptToolDefinitionsForServer(kind, definitions) {
 `);
   fs.writeFileSync(path.join(cliRoot, "client.js"), `
 export class LocalLlmClient {
-  constructor(config) { this.config = config; this.provider = globalThis.__wp1107MatrixFixture.providers[config.endpoint]; }
+  constructor(config) { const state = globalThis.__wp1107MatrixFixture; state.clientCreations = (state.clientCreations ?? 0) + 1; this.config = config; this.provider = state.providers[config.endpoint]; }
   async discoverAdvertisement() { return { state: "supported" }; }
   getDetectedServerKind() { return this.provider.serverKind; }
   async chatCompletion(messages, offered) {
@@ -56,6 +57,35 @@ export class LocalLlmClient {
   }
 }
 `);
+}
+
+function createCandidateFixture(root, sourceCommit, tools, afterManifest = () => {}) {
+  const packageRoot = path.join(root, "nexus");
+  const archivePath = path.join(root, "candidate.tar.gz");
+  const installRoot = path.join(root, "installed");
+  fs.mkdirSync(packageRoot, { recursive: true });
+  writeInstalledRuntimeFixture(packageRoot, tools);
+  const files = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(fullPath);
+      else if (entry.isFile()) files.push(fullPath);
+      else assert.fail(`unexpected fixture entry ${fullPath}`);
+    }
+  };
+  visit(packageRoot);
+  const manifest = files.map((filePath) => `${createHash("sha256").update(fs.readFileSync(filePath)).digest("hex")}  ./${path.relative(packageRoot, filePath).split(path.sep).join("/")}`).join("\n") + "\n";
+  fs.writeFileSync(path.join(packageRoot, "MANIFEST.sha256"), manifest);
+  afterManifest(packageRoot);
+  execFileSync("tar", ["-czf", archivePath, "-C", root, "nexus"]);
+  fs.cpSync(packageRoot, installRoot, { recursive: true });
+  fs.writeFileSync(path.join(installRoot, ".provenance.json"), JSON.stringify({
+    method: "installer",
+    archiveSha256: createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex"),
+    revision: sourceCommit,
+  }));
+  return { archivePath, installRoot };
 }
 
 function endpointResult(nativeValid, repaired = 0, schemaInvalid = 0, invalid = 0) {
@@ -162,23 +192,14 @@ test("tool grammar matrix preserves missing hybrid reasoning as a failed endpoin
 
 test("tool grammar matrix runner records archive and per-endpoint identity", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-matrix-test-"));
-  const archivePath = path.join(root, "candidate.tar.gz");
-  const archiveBytes = Buffer.from("candidate fixture bytes");
-  fs.writeFileSync(archivePath, archiveBytes);
-  const installRoot = path.join(root, "installed");
-  fs.mkdirSync(installRoot);
   const sourceCommit = "b".repeat(40);
-  fs.writeFileSync(path.join(installRoot, ".provenance.json"), JSON.stringify({
-    method: "installer",
-    archiveSha256: createHash("sha256").update(archiveBytes).digest("hex"),
-    revision: sourceCommit,
-  }));
   const tools = [
     ["read_file", { path: { type: "string" }, start_line: { type: "number" } }, ["path"]],
     ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
     ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
     ["run_command", { command: { type: "string" } }, ["command"]],
   ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const { archivePath, installRoot } = createCandidateFixture(root, sourceCommit, tools);
   const providers = ["llamacpp", "vllm", "ollama"].map((provider) => ({
     provider, serverKind: provider, endpointUrl: `http://127.0.0.1:8000/${provider}/v1`, modelName: "m",
     serverVersion: provider === "vllm" ? "0.10.0" : "1.0.0",
@@ -188,7 +209,6 @@ test("tool grammar matrix runner records archive and per-endpoint identity", asy
   }));
   const calls = { providers: Object.fromEntries(providers.map((provider) => [provider.endpointUrl, provider])) };
   globalThis.__wp1107MatrixFixture = { ...calls, calls: 0, failVllm: false };
-  writeInstalledRuntimeFixture(installRoot, tools);
   const runtime = { tools: [], clientFactory: async () => assert.fail("caller runtime must never be invoked") };
   await assert.rejects(
     runToolGrammarMatrix({ archivePath, installRoot, sourceCommit, runtime, providers }),
@@ -224,19 +244,123 @@ test("tool grammar matrix runner records archive and per-endpoint identity", asy
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test("tool grammar matrix binds imported runtime to the verified archive snapshot", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-matrix-snapshot-"));
+  const sourceCommit = "b".repeat(40);
+  const tools = [
+    ["read_file", { path: { type: "string" }, start_line: { type: "number" } }, ["path"]],
+    ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
+    ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
+    ["run_command", { command: { type: "string" } }, ["command"]],
+  ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const { archivePath, installRoot } = createCandidateFixture(root, sourceCommit, tools);
+  globalThis.__wp1107MatrixFixture = {
+    providers: Object.fromEntries(["llamacpp", "vllm", "ollama"].map((provider) => [`http://127.0.0.1:8000/${provider}/v1`, { provider, serverKind: provider }])),
+    calls: 0,
+    failVllm: false,
+  };
+  const providers = ["llamacpp", "vllm", "ollama"].map((provider) => ({
+    provider,
+    serverKind: provider,
+    endpointUrl: `http://127.0.0.1:8000/${provider}/v1`,
+    modelName: "m",
+    serverVersion: "1.0.0",
+    imageDigest: `sha256:${"1".repeat(64)}`,
+    modelDigest: `sha256:${"2".repeat(64)}`,
+    contextSize: 32768,
+    sampling: { temperature: 0 },
+    toolChoice: "auto",
+    serverFlags: [],
+    compatibilityMode: "openai-chat",
+  }));
+  Object.defineProperty(providers[2], "provider", {
+    get() {
+      const clientPath = path.join(installRoot, "lib", "cli", "dist", "client.js");
+      fs.writeFileSync(clientPath, `export class LocalLlmClient { constructor() { throw new Error("installed runtime substitution was imported"); } }\n`);
+      return "ollama";
+    },
+  });
+
+  try {
+    const evidence = await runToolGrammarMatrix({ archivePath, installRoot, sourceCommit, providers });
+    assert.equal(evidence.passed, true);
+    assert.equal(globalThis.__wp1107MatrixFixture.calls, 600);
+  } finally {
+    delete globalThis.__wp1107MatrixFixture;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("tool grammar matrix rejects archive symlinks and files missing from the exact manifest", async () => {
+  const sourceCommit = "b".repeat(40);
+  const tools = [];
+  for (const [label, addUntrustedEntry, expectedError] of [
+    ["extra file", (packageRoot) => fs.writeFileSync(path.join(packageRoot, "unmanifested.txt"), "not in manifest"), /exact package file set/i],
+    ["symlink", (packageRoot) => fs.symlinkSync("client.js", path.join(packageRoot, "lib", "cli", "dist", "linked-client.js")), /symlink|non-regular entry/i],
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `wp1107-matrix-${label.replaceAll(" ", "-")}-`));
+    try {
+      const { archivePath, installRoot } = createCandidateFixture(root, sourceCommit, tools, addUntrustedEntry);
+      await assert.rejects(runToolGrammarMatrix({ archivePath, installRoot, sourceCommit, providers: [] }), expectedError);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("tool grammar matrix rejects installed runtime substitution with matching provenance", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-installed-mismatch-"));
+  const sourceCommit = "c".repeat(40);
+  const tools = [
+    ["read_file", { path: { type: "string" } }, ["path"]],
+    ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
+    ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
+    ["run_command", { command: { type: "string" } }, ["command"]],
+  ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const { archivePath, installRoot } = createCandidateFixture(root, sourceCommit, tools);
+  const archiveSha256 = createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex");
+  fs.writeFileSync(path.join(installRoot, "lib", "cli", "dist", "client.js"), "export class LocalLlmClient { constructor() { throw new Error('modified installed runtime'); } }\n");
+  fs.writeFileSync(path.join(installRoot, ".provenance.json"), JSON.stringify({
+    method: "installer", archiveSha256, revision: sourceCommit,
+  }));
+  const evidencePath = path.join(root, "evidence.json");
+  globalThis.__wp1107MatrixFixture = {
+    providers: Object.fromEntries(["llamacpp", "vllm", "ollama"].map((provider) => [`http://127.0.0.1:8000/${provider}/v1`, { provider, serverKind: provider }])),
+    calls: 0,
+    clientCreations: 0,
+    failVllm: false,
+  };
+  const providers = ["llamacpp", "vllm", "ollama"].map((provider) => ({
+    provider,
+    serverKind: provider,
+    endpointUrl: `http://127.0.0.1:8000/${provider}/v1`,
+    modelName: "m",
+    serverVersion: "1.0.0",
+    imageDigest: `sha256:${"1".repeat(64)}`,
+    modelDigest: `sha256:${"2".repeat(64)}`,
+    contextSize: 32768,
+    sampling: { temperature: 0 },
+    toolChoice: "auto",
+    serverFlags: [],
+    compatibilityMode: "openai-chat",
+  }));
+
+  try {
+    await assert.rejects(runToolGrammarMatrix({ archivePath, installRoot, sourceCommit, providers, outputPath: evidencePath }), /installed.*(archive|manifest|digest)|runtime.*(archive|manifest|digest)/i);
+    assert.equal(globalThis.__wp1107MatrixFixture.clientCreations, 0, "installed byte mismatch must fail before client initialization");
+    assert.equal(globalThis.__wp1107MatrixFixture.calls, 0, "installed byte mismatch must fail before inference");
+    assert.equal(fs.existsSync(evidencePath), false, "rejected installed bytes must not produce qualification evidence");
+  } finally {
+    delete globalThis.__wp1107MatrixFixture;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("tool grammar matrix rejects credential-like server flags before inference", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-secret-flags-"));
-  const archivePath = path.join(root, "candidate.tar.gz");
-  const archiveBytes = Buffer.from("candidate fixture bytes");
-  fs.writeFileSync(archivePath, archiveBytes);
-  const installRoot = path.join(root, "installed");
-  fs.mkdirSync(installRoot);
   const sourceCommit = "b".repeat(40);
-  fs.writeFileSync(path.join(installRoot, ".provenance.json"), JSON.stringify({
-    method: "installer",
-    archiveSha256: createHash("sha256").update(archiveBytes).digest("hex"),
-    revision: sourceCommit,
-  }));
+  const tools = [["read_file", { path: { type: "string" } }, ["path"]], ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]], ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]], ["run_command", { command: { type: "string" } }, ["command"]]].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const { archivePath, installRoot } = createCandidateFixture(root, sourceCommit, tools);
   let calls = 0;
   const providers = ["llamacpp", "vllm", "ollama"].map((provider) => ({
     provider, serverKind: provider, endpointUrl: "http://127.0.0.1:8000/v1", modelName: "m",

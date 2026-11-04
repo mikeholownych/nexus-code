@@ -809,13 +809,8 @@ export class LocalLlmClient {
   private routingHeaders(): Record<string, string> {
     if (!this.conn.sendTaskClass) return {};
     const kind = LocalLlmClient.serverKindCache.get(this.endpoint);
-    if (
-      kind &&
-      kind !== "gateway" &&
-      kind !== "unknown" &&
-      !operatorSetting("NEXUS_TASK_CLASS") &&
-      !operatorSetting("LOCAL_LLM_TASK_CLASS")
-    ) {
+    const operatorOverride = operatorSetting("NEXUS_TASK_CLASS") || operatorSetting("LOCAL_LLM_TASK_CLASS");
+    if (!operatorOverride && kind !== "gateway") {
       return {};
     }
     return this.taskClass && /^[A-Za-z0-9_.-]{1,64}$/.test(this.taskClass) ? { "X-Task-Class": this.taskClass } : {};
@@ -1133,10 +1128,8 @@ export class LocalLlmClient {
    */
   async discoverAdvertisement(signal?: AbortSignal): Promise<{ state: "supported" | "unsupported" | "unavailable"; advertised?: Advertisement; detail?: string }> {
     const ep = this.endpoint;
+    const previousKind = LocalLlmClient.serverKindCache.get(ep);
     if (this.conn.protocol !== "openai-chat") return { state: "unsupported", detail: `${this.conn.protocol} connection` };
-    // An explicit rediscovery is the freshness boundary for endpoint identity. Keep the loaded-context caches,
-    // but do not let a prior provider classification override the catalog we are about to read.
-    LocalLlmClient.serverKindCache.delete(ep);
     const url = `${ep}/models`;
     try {
       await this.prepareCredential(ep);
@@ -1146,23 +1139,35 @@ export class LocalLlmClient {
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
         ...this.fetchPolicy(),
       });
-      if (res.status === 404) return { state: "unsupported", detail: "no /models catalog" };
-      if (!res.ok) return { state: "unavailable", detail: `HTTP ${res.status}` };
+      if (res.status === 404) {
+        LocalLlmClient.serverKindCache.set(ep, "unknown");
+        return { state: "unsupported", detail: "no /models catalog" };
+      }
+      if (!res.ok) {
+        if (LocalLlmClient.serverKindCache.get(ep) === previousKind && previousKind !== "gateway") {
+          LocalLlmClient.serverKindCache.delete(ep);
+        }
+        return { state: "unavailable", detail: `HTTP ${res.status}` };
+      }
       const data = (await res.json()) as { data?: Array<Record<string, any>> };
       const entry = Array.isArray(data?.data) ? data.data.find((e) => e?.id === this.model) : undefined;
+      // A successful catalog response replaces the prior endpoint classification, even when it is generic or empty.
+      LocalLlmClient.serverKindCache.set(ep, "unknown");
       if (!entry) return { state: "unsupported", detail: `model ${this.model} not listed` };
-      const advertised = parseAdvertisement(entry);
-      const cachedKind = LocalLlmClient.serverKindCache.get(ep);
-      const identityCached = cachedKind !== undefined && cachedKind !== "unknown";
-      let entryKind = identityCached ? cachedKind : advertised?.serverKind ?? serverKindOf(entry);
-      const vllmCatalogMarker = advertised?.via === "vllm" || (typeof entry.owned_by === "string" && entry.owned_by.toLowerCase() === "vllm");
+      let advertised = parseAdvertisement(entry);
+      let entryKind = advertised?.serverKind ?? serverKindOf(entry);
+      const vllmCatalogMarker = typeof entry.owned_by === "string" && entry.owned_by.toLowerCase() === "vllm";
       if (!this.conn.providerId) {
-        if (entryKind === "llamacpp" && (process.env.NEXUS_SERVER_PROBE === "0" || (!identityCached && !(await this.discoverServerContext(entry, signal)))) ) {
+        if (entryKind === "llamacpp" && (process.env.NEXUS_SERVER_PROBE === "0" || !(await this.discoverServerContext(entry, signal))) ) {
           entryKind = "unknown";
-        } else if (entryKind === "ollama" && (process.env.NEXUS_SERVER_PROBE === "0" || (!identityCached && !(await this.discoverOllamaIdentity(signal)))) ) {
+        } else if (entryKind === "ollama" && (process.env.NEXUS_SERVER_PROBE === "0" || !(await this.discoverOllamaIdentity(signal))) ) {
           entryKind = "unknown";
-        } else if (!identityCached && vllmCatalogMarker && entryKind === "unknown" && process.env.NEXUS_SERVER_PROBE !== "0" && await this.discoverVllmVersion(signal)) {
-          entryKind = "vllm";
+        } else if (vllmCatalogMarker && entryKind === "unknown" && process.env.NEXUS_SERVER_PROBE !== "0") {
+          const version = await this.discoverVllmVersion(signal);
+          if (version) {
+            entryKind = "vllm";
+            if (advertised) advertised = { ...advertised, via: "vllm" };
+          }
         }
       }
       if (!advertised || (advertised.contextLength === undefined && advertised.maxCompletionTokens === undefined)) {
@@ -1173,12 +1178,16 @@ export class LocalLlmClient {
           LocalLlmClient.serverKindCache.set(ep, local.serverKind ?? entryKind);
           return { state: "supported", advertised: local };
         }
+        LocalLlmClient.serverKindCache.set(ep, entryKind);
         return { state: "unsupported", advertised, detail: "catalog lists no limits" };
       }
       LocalLlmClient.serverKindCache.set(ep, entryKind);
       return { state: "supported", advertised };
     } catch (err: any) {
       if (signal?.aborted) throw abortedError(randomUUID());
+      if (LocalLlmClient.serverKindCache.get(ep) === previousKind && previousKind !== "gateway") {
+        LocalLlmClient.serverKindCache.delete(ep);
+      }
       return { state: "unavailable", detail: redactSecrets(String(err?.message ?? err)).slice(0, 160) };
     }
   }
