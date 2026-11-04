@@ -39,6 +39,24 @@ const readFileTool = {
     },
   },
 };
+const nullableTool = {
+  type: "function",
+  function: {
+    name: "read_file",
+    description: "Read a file.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        start_line: { type: "number" },
+        end_line: { type: "number" },
+        include_hidden: { type: "boolean" },
+        label: { type: "string" },
+      },
+      required: ["path"],
+    },
+  },
+};
 const unrelatedTool = {
   type: "function",
   function: { name: "other_tool", description: "Not in the GBNF allowlist.", parameters: { type: "object", properties: {} } },
@@ -77,6 +95,37 @@ test("client enables vLLM strict mode for allowlisted tool schemas", async () =>
   assert.equal("response_format" in sent, false, "tool arguments must not be constrained by response-level format");
   assert.equal(versionRequests, 1);
   assert.equal((readFileTool.function as any).strict, undefined, "provider adaptation must not mutate registered schemas");
+});
+
+test("transient vLLM version failure retains verified identity and strict schemas", async () => {
+  let versionRequests = 0;
+  let sent: any;
+  await withEndpoint((req, res, body) => {
+    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", owned_by: "vllm", max_model_len: 8192 }] });
+    if (req.url === "/version") {
+      versionRequests++;
+      if (versionRequests > 1) {
+        res.statusCode = 503;
+        return res.end("temporary version failure");
+      }
+      return json(res, { version: "0.10.0" });
+    }
+    if (req.url === "/v1/chat/completions") {
+      sent = JSON.parse(body);
+      return completion(res);
+    }
+    res.statusCode = 404;
+    res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    await client.discoverAdvertisement();
+    assert.equal(client.getDetectedServerKind(), "vllm");
+    const refresh = await client.discoverAdvertisement();
+    assert.equal(refresh.state, "supported");
+    assert.equal(client.getDetectedServerKind(), "vllm", "a temporary version failure is not contradictory provider identity");
+    await client.chatCompletion([{ role: "user", content: "hello" }], [readFileTool]);
+    assert.equal(sent.tools[0].function.strict, true, "the previously verified vLLM strict schema remains active");
+  });
 });
 
 test("vLLM strict adaptation makes optional flat parameters nullable and closes the object schema", () => {
@@ -152,6 +201,41 @@ test("client preserves vLLM strict schemas in a streaming completion", async () 
   assert.equal(sent.stream, true);
   assert.equal(sent.tools[0].function.strict, true);
   assert.equal("response_format" in sent, false);
+});
+
+test("client normalizes nullable optional arguments in streamed and non-streamed calls", async () => {
+  const wireArgs = { path: null, start_line: null, end_line: 0, include_hidden: false, label: "" };
+  const expected = { path: null, end_line: 0, include_hidden: false, label: "" };
+  const observed: unknown[] = [];
+  const run = async (stream: boolean) => withEndpoint((req, res, body) => {
+    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", owned_by: "vllm", max_model_len: 8192 }] });
+    if (req.url === "/version") return json(res, { version: "0.10.0" });
+    if (req.url === "/v1/chat/completions") {
+      const sent = JSON.parse(body);
+      assert.equal(sent.tools[0].function.strict, true);
+      if (stream) {
+        res.setHeader("Content-Type", "text/event-stream");
+        res.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "read_file", arguments: JSON.stringify(wireArgs) } }] } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`);
+      } else {
+        json(res, { choices: [{ message: { role: "assistant", tool_calls: [{ id: "call-1", type: "function", function: { name: "read_file", arguments: JSON.stringify(wireArgs) } }] }, finish_reason: "tool_calls" }] });
+      }
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    await client.discoverAdvertisement();
+    const messages = [{ role: "user" as const, content: "read it" }];
+    const message = stream
+      ? await client.chatCompletionStream(messages, [nullableTool] as any)
+      : await client.chatCompletion(messages, [nullableTool] as any, "request-id");
+    observed.push(JSON.parse(message.tool_calls![0].function.arguments));
+  });
+
+  await run(false);
+  await run(true);
+  assert.deepEqual(observed, [expected, expected]);
 });
 
 test("unsupported vLLM discovery does not enable strict tool adaptation", async () => {

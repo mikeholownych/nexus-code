@@ -122,6 +122,80 @@ test("task class is suppressed without a positive gateway handshake", async () =
   }
 });
 
+test("unavailable rediscovery retains verified provider kind and header policy", async () => {
+  let catalogMode: "verified" | "unavailable" | "missing-model" = "verified";
+  let lastChatHeaders: http.IncomingHttpHeaders = {};
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/v1/models") {
+        if (catalogMode === "unavailable") {
+          res.statusCode = 503;
+          return res.end("temporarily unavailable");
+        }
+        if (catalogMode === "missing-model") return res.end(JSON.stringify({ data: [{ id: "other", owned_by: "gateway", limits_version: "lv" }] }));
+        return res.end(JSON.stringify({ data: [{ id: "m", owned_by: "llamacpp", meta: { n_ctx_train: 32768 } }] }));
+      }
+      if (req.url === "/props") return res.end(JSON.stringify({ default_generation_settings: { n_ctx: 16384 } }));
+      lastChatHeaders = req.headers;
+      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: {} }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address() as AddressInfo;
+    const client = new LocalLlmClient({ model: "m", endpoint: `http://127.0.0.1:${port}/v1`, apiKey: "k", taskClass: "subagent" } as any);
+    assert.equal((await client.discoverAdvertisement()).state, "supported");
+    assert.equal(client.getDetectedServerKind(), "llamacpp");
+    catalogMode = "unavailable";
+    assert.equal((await client.discoverAdvertisement()).state, "unavailable");
+    assert.equal(client.getDetectedServerKind(), "llamacpp", "temporary catalog outage must not erase positive endpoint identity");
+    catalogMode = "missing-model";
+    assert.equal((await client.discoverAdvertisement()).state, "unsupported");
+    assert.equal(client.getDetectedServerKind(), "llamacpp", "an absent selected model is not a contradictory provider handshake");
+    await client.chatCompletion([{ role: "user", content: "hello" }], []);
+    assert.equal(lastChatHeaders["x-task-class"], undefined, "standalone provider must continue suppressing task class");
+  } finally {
+    server.closeAllConnections?.();
+    server.close();
+  }
+});
+
+test("gateway task class survives unavailable rediscovery", async () => {
+  let failCatalog = false;
+  let lastChatHeaders: http.IncomingHttpHeaders = {};
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/v1/models") {
+        if (failCatalog) {
+          res.statusCode = 503;
+          return res.end("temporarily unavailable");
+        }
+        return res.end(JSON.stringify({ data: [{ id: "m", owned_by: "gateway", context_length: 32768, limits_version: "lv-1" }] }));
+      }
+      lastChatHeaders = req.headers;
+      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: {} }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address() as AddressInfo;
+    const client = new LocalLlmClient({ model: "m", endpoint: `http://127.0.0.1:${port}/v1`, apiKey: "k", taskClass: "subagent" } as any);
+    await client.discoverAdvertisement();
+    failCatalog = true;
+    assert.equal((await client.discoverAdvertisement()).state, "unavailable");
+    assert.equal(client.getDetectedServerKind(), "gateway");
+    await client.chatCompletion([{ role: "user", content: "hello" }], []);
+    assert.equal(lastChatHeaders["x-task-class"], "subagent", "positive gateway identity permits its configured task class");
+  } finally {
+    server.closeAllConnections?.();
+    server.close();
+  }
+});
+
 test("failed rediscovery retains gateway identity only for the same endpoint", async () => {
   let failModels = false;
   let lastChatHeaders: http.IncomingHttpHeaders = {};

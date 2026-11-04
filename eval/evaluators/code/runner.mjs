@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { evaluateSyntaxAst } from "./syntax_ast.mjs";
+import { evaluateSyntaxAst, isSupportedSyntaxPath } from "./syntax_ast.mjs";
 import { evaluateBuild } from "./build.mjs";
 import { evaluateTypecheckClean } from "./typecheck_clean.mjs";
 import { evaluateDiffBoundary } from "./diff_boundary.mjs";
@@ -142,6 +143,103 @@ function changedWorkspacePaths(baseline, candidate) {
   return changed;
 }
 
+const excludedBuildConfiguration = /(?:^|\/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]+)?\.json|(?:webpack|vite|rollup|postcss|babel|jest|vitest|eslint|next|nuxt|tsup|turbo|metro)\.config\.[^/]+|scripts\/(?:build|compile|typecheck)\.[cm]?[jt]s)$/i;
+
+function sourceOverlayPath(relative) {
+  return isSupportedSyntaxPath(relative) && !excludedBuildConfiguration.test(relative);
+}
+
+function readVerifiedCandidateFile(root, relative, snapshotEntry) {
+  const segments = relative.split("/");
+  if (!segments.length || segments.some((part) => !part || part === "." || part === "..")) throw new Error(`unsafe candidate source path: ${relative}`);
+  let directory = fs.openSync(root, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+  try {
+    if (!fs.fstatSync(directory).isDirectory()) throw new Error("candidate workspace is not a real directory");
+    for (const segment of segments.slice(0, -1)) {
+      const child = fs.openSync(`/proc/self/fd/${directory}/${segment}`, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+      fs.closeSync(directory);
+      directory = child;
+    }
+    const filePath = `/proc/self/fd/${directory}/${segments.at(-1)}`;
+    const before = fs.lstatSync(filePath);
+    if (!before.isFile() || before.isSymbolicLink() || snapshotEntry.kind !== "file" || before.size !== snapshotEntry.size) {
+      throw new Error(`candidate source is not a stable regular file: ${relative}`);
+    }
+    const descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const opened = fs.fstatSync(descriptor);
+      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) throw new Error(`candidate source changed while opening: ${relative}`);
+      const bytes = fs.readFileSync(descriptor);
+      const after = fs.fstatSync(descriptor);
+      if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size ||
+          createHash("sha256").update(bytes).digest("hex") !== snapshotEntry.digest) {
+        throw new Error(`candidate source changed while copying: ${relative}`);
+      }
+      return { bytes, mode: after.mode & 0o777 };
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } finally {
+    fs.closeSync(directory);
+  }
+}
+
+function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorkspace) {
+  if (!baselineWorkspace) throw new Error("no pre-agent build configuration workspace is available");
+  const baseline = captureWorkspaceSnapshot(baselineWorkspace);
+  const candidate = captureWorkspaceSnapshot(candidateWorkspace);
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-evaluator-pinned-config-"));
+  const pinnedWorkspace = path.join(tempRoot, "workspace");
+  try {
+    fs.cpSync(baselineWorkspace, pinnedWorkspace, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
+    const paths = new Set([...baseline.keys(), ...candidate.keys()]);
+    for (const relative of paths) {
+      if (!sourceOverlayPath(relative)) continue;
+      const before = baseline.get(relative);
+      const after = candidate.get(relative);
+      if (before && after && sameEntry(before, after)) continue;
+      const target = path.join(pinnedWorkspace, ...relative.split("/"));
+      if (!after) {
+        fs.rmSync(target, { force: true });
+        continue;
+      }
+      const { bytes, mode } = readVerifiedCandidateFile(candidateWorkspace, relative, after);
+      const targetParent = path.dirname(target);
+      const parents = [];
+      let current = targetParent;
+      while (current !== pinnedWorkspace && current.startsWith(`${pinnedWorkspace}${path.sep}`)) {
+        parents.push(current);
+        current = path.dirname(current);
+      }
+      for (const directory of parents.reverse()) {
+        try {
+          const stat = fs.lstatSync(directory);
+          if (stat.isSymbolicLink() || !stat.isDirectory()) {
+            fs.rmSync(directory, { recursive: true, force: true });
+            fs.mkdirSync(directory, { recursive: false });
+          }
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+          fs.mkdirSync(directory, { recursive: true });
+        }
+      }
+      fs.writeFileSync(target, bytes, { mode });
+      fs.chmodSync(target, mode);
+    }
+    return { tempRoot, workspace: pinnedWorkspace };
+  } catch (error) {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export function needsEvaluatorConfigurationBaseline(task) {
+  return Array.isArray(task?.evaluators) && task.evaluators.some((entry) => {
+    const type = typeof entry === "string" ? entry : entry?.type;
+    return type === "build" || type === "typecheck_clean";
+  });
+}
+
 /** Run the deterministic evaluator set against the actual candidate workspace and pre-agent snapshot. */
 export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorkspace, typecheckBaselineWorkspace, agent, baselineSnapshot }) {
   if (!task.evaluators || !Array.isArray(task.evaluators) || task.evaluators.length === 0) return [];
@@ -152,56 +250,83 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
     try { changedFiles = changedWorkspacePaths(baselineSnapshot, candidateWorkspace); }
     catch (error) { changedFilesError = String(error?.message ?? error); }
   }
-  for (const item of task.evaluators) {
-    const spec = typeof item === "string" ? { type: item } : item;
-    if (!spec || typeof spec.type !== "string") continue;
-    switch (spec.type) {
-      case "syntax_ast": {
-        if (changedFilesError) {
-          results.push(evaluatorResult("syntax_ast", false, 0, { error: changedFilesError, files: [] }));
-        } else {
-          const files = spec.files ?? changedFiles;
-          results.push(await evaluateSyntaxAst({ root: candidateWorkspace, files, parsers: spec.parsers }));
-        }
-        break;
-      }
-      case "diff_boundary": {
-        if (changedFilesError) {
-          results.push(evaluatorResult("diff_boundary", false, 0, { error: changedFilesError, accepted: [], violations: [] }));
-        } else {
-          const allowedPaths = spec.allowedPaths ?? task.allowedPaths ?? [];
-          results.push(evaluateDiffBoundary({ changedFiles, allowedPaths }));
-        }
-        break;
-      }
-      case "json_repair_rate": {
-        results.push(evaluateJsonRepairRate(agent?.json?.turn?.toolCallSyntax));
-        break;
-      }
-      case "build": {
-        const command = spec.command ?? task.build?.command;
-        const args = spec.args ?? task.build?.args ?? [];
-        const timeoutMs = spec.timeoutMs ?? task.build?.timeoutMs;
-        if (!command) results.push(evaluatorResult("build", false, 0, { error: "no build command specified" }));
-        else results.push(await evaluateBuild({ command, args, cwd: candidateWorkspace, timeoutMs }));
-        break;
-      }
-      case "typecheck_clean": {
-        const explicitBaseline = spec.baseline ?? task.typecheck?.baseline;
-        const baseSpec = explicitBaseline ?? (typecheckBaselineWorkspace ? {
-          command: spec.command ?? task.typecheck?.command,
-          args: spec.args ?? task.typecheck?.args ?? [],
-          cwd: typecheckBaselineWorkspace,
-        } : null);
-        const candSpec = spec.candidate ?? task.typecheck?.candidate ?? { command: spec.command ?? task.typecheck?.command, args: spec.args ?? task.typecheck?.args ?? [], cwd: candidateWorkspace };
-        if (!baseSpec?.command || !candSpec?.command) results.push(evaluatorResult("typecheck_clean", false, 0, { error: explicitBaseline ? "no typecheck command specified" : "no pre-agent typecheck baseline workspace" }));
-        else results.push(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec }));
-        break;
-      }
-      default:
-        results.push(evaluatorResult(spec.type, false, 0, { error: `unknown evaluator type: ${spec.type}` }));
-        break;
+  let pinnedWorkspace = null;
+  let pinnedWorkspaceRoot = null;
+  let pinnedWorkspaceError = null;
+  if (needsEvaluatorConfigurationBaseline(task)) {
+    try {
+      const pinned = createPinnedCandidateWorkspace(typecheckBaselineWorkspace, candidateWorkspace);
+      pinnedWorkspace = pinned.workspace;
+      pinnedWorkspaceRoot = pinned.tempRoot;
+    } catch (error) {
+      pinnedWorkspaceError = String(error?.message ?? error);
     }
+  }
+  try {
+    for (const item of task.evaluators) {
+      const spec = typeof item === "string" ? { type: item } : item;
+      if (!spec || typeof spec.type !== "string") continue;
+      switch (spec.type) {
+        case "syntax_ast": {
+          if (changedFilesError) {
+            results.push(evaluatorResult("syntax_ast", false, 0, { error: changedFilesError, files: [] }));
+          } else {
+            const files = spec.files ?? changedFiles.filter((relative) => {
+              if (!isSupportedSyntaxPath(relative)) return false;
+              try { fs.lstatSync(path.join(candidateWorkspace, ...relative.split("/"))); return true; }
+              catch (error) { return error?.code !== "ENOENT"; }
+            });
+            if (spec.files === undefined && files.length === 0) {
+              results.push(evaluatorResult("syntax_ast", true, 1, { files: [], failures: [] }));
+            } else {
+              results.push(await evaluateSyntaxAst({ root: candidateWorkspace, files, parsers: spec.parsers }));
+            }
+          }
+          break;
+        }
+        case "diff_boundary": {
+          if (changedFilesError) {
+            results.push(evaluatorResult("diff_boundary", false, 0, { error: changedFilesError, accepted: [], violations: [] }));
+          } else {
+            const allowedPaths = spec.allowedPaths ?? task.allowedPaths ?? [];
+            results.push(evaluateDiffBoundary({ changedFiles, allowedPaths }));
+          }
+          break;
+        }
+        case "json_repair_rate": {
+          results.push(evaluateJsonRepairRate(agent?.json?.turn?.toolCallSyntax));
+          break;
+        }
+        case "build": {
+          const command = spec.command ?? task.build?.command;
+          const args = spec.args ?? task.build?.args ?? [];
+          const timeoutMs = spec.timeoutMs ?? task.build?.timeoutMs;
+          if (!command) results.push(evaluatorResult("build", false, 0, { error: "no build command specified" }));
+          else if (!pinnedWorkspace) results.push(evaluatorResult("build", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
+          else results.push(await evaluateBuild({ command, args, cwd: pinnedWorkspace, timeoutMs }));
+          break;
+        }
+        case "typecheck_clean": {
+          const explicitBaseline = spec.baseline ?? task.typecheck?.baseline;
+          const baseSpec = explicitBaseline ?? (typecheckBaselineWorkspace ? {
+            command: spec.command ?? task.typecheck?.command,
+            args: spec.args ?? task.typecheck?.args ?? [],
+            cwd: typecheckBaselineWorkspace,
+          } : null);
+          const candidateSpec = spec.candidate ?? task.typecheck?.candidate ?? { command: spec.command ?? task.typecheck?.command, args: spec.args ?? task.typecheck?.args ?? [], cwd: candidateWorkspace };
+          const candSpec = { ...candidateSpec, cwd: pinnedWorkspace ?? candidateWorkspace };
+          if (!baseSpec?.command || !candSpec?.command) results.push(evaluatorResult("typecheck_clean", false, 0, { error: explicitBaseline ? "no typecheck command specified" : "no pre-agent typecheck baseline workspace" }));
+          else if (!pinnedWorkspace) results.push(evaluatorResult("typecheck_clean", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
+          else results.push(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec }));
+          break;
+        }
+        default:
+          results.push(evaluatorResult(spec.type, false, 0, { error: `unknown evaluator type: ${spec.type}` }));
+          break;
+      }
+    }
+  } finally {
+    if (pinnedWorkspaceRoot) fs.rmSync(pinnedWorkspaceRoot, { recursive: true, force: true });
   }
   return results;
 }

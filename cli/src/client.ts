@@ -39,6 +39,38 @@ import { providerDefinition } from "./providers.js";
 
 type OAuthCredential = Extract<StoredCredential, { type: "oauth" }>;
 
+/** Remove nulls from optional top-level arguments using the tool schema the agent originally declared. */
+export function normalizeNullableOptionalToolArguments(toolName: string, rawArgs: unknown, tools: readonly ToolDefinition[]): unknown {
+  const tool = tools.find((candidate) => candidate.type === "function" && candidate.function.name === toolName);
+  if (!tool || !tool.function.parameters || !rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) return rawArgs;
+
+  const required = new Set(tool.function.parameters.required ?? []);
+  const properties = tool.function.parameters.properties ?? {};
+  let normalized: Record<string, unknown> | undefined;
+  for (const name of Object.keys(properties)) {
+    if (required.has(name) || (rawArgs as Record<string, unknown>)[name] !== null) continue;
+    normalized ??= { ...(rawArgs as Record<string, unknown>) };
+    delete normalized[name];
+  }
+  return normalized ?? rawArgs;
+}
+
+function normalizeNullableOptionalArguments(message: ChatMessage, tools: readonly ToolDefinition[]): ChatMessage {
+  if (!message.tool_calls?.length) return message;
+  let changed = false;
+  const toolCalls = message.tool_calls.map((call) => {
+    const rawArgs = call.function.arguments;
+    let parsed: unknown;
+    try { parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs; }
+    catch { return call; }
+    const normalized = normalizeNullableOptionalToolArguments(call.function.name, parsed, tools);
+    if (normalized === parsed) return call;
+    changed = true;
+    return { ...call, function: { ...call.function, arguments: JSON.stringify(normalized) } };
+  });
+  return changed ? { ...message, tool_calls: toolCalls } : message;
+}
+
 function originOf(url: string | undefined): string | undefined {
   if (!url?.trim()) return undefined;
   try {
@@ -1140,20 +1172,20 @@ export class LocalLlmClient {
         ...this.fetchPolicy(),
       });
       if (res.status === 404) {
-        LocalLlmClient.serverKindCache.set(ep, "unknown");
+        // A catalog-less response does not contradict an identity verified earlier on this same endpoint.
+        if (previousKind) LocalLlmClient.serverKindCache.set(ep, previousKind);
         return { state: "unsupported", detail: "no /models catalog" };
       }
       if (!res.ok) {
-        if (LocalLlmClient.serverKindCache.get(ep) === previousKind && previousKind !== "gateway") {
-          LocalLlmClient.serverKindCache.delete(ep);
-        }
         return { state: "unavailable", detail: `HTTP ${res.status}` };
       }
       const data = (await res.json()) as { data?: Array<Record<string, any>> };
       const entry = Array.isArray(data?.data) ? data.data.find((e) => e?.id === this.model) : undefined;
-      // A successful catalog response replaces the prior endpoint classification, even when it is generic or empty.
-      LocalLlmClient.serverKindCache.set(ep, "unknown");
-      if (!entry) return { state: "unsupported", detail: `model ${this.model} not listed` };
+      // A catalog that cannot identify this model provides no contradictory identity evidence.
+      if (!entry) {
+        if (previousKind) LocalLlmClient.serverKindCache.set(ep, previousKind);
+        return { state: "unsupported", detail: `model ${this.model} not listed` };
+      }
       let advertised = parseAdvertisement(entry);
       let entryKind = advertised?.serverKind ?? serverKindOf(entry);
       const vllmCatalogMarker = typeof entry.owned_by === "string" && entry.owned_by.toLowerCase() === "vllm";
@@ -1167,9 +1199,14 @@ export class LocalLlmClient {
           if (version) {
             entryKind = "vllm";
             if (advertised) advertised = { ...advertised, via: "vllm" };
+          } else if (previousKind === "vllm") {
+            // Keep strict mode and the /tokenize fallback through a transient version-route outage.
+            entryKind = "vllm";
           }
         }
       }
+      // A readable generic entry clears a stale identity; only unavailable discovery, an absent model, or the
+      // specifically verified vLLM identity above may retain the previous kind.
       if (!advertised || (advertised.contextLength === undefined && advertised.maxCompletionTokens === undefined)) {
         // An OpenAI-style catalog without limits (llama.cpp, LM Studio, Ollama): ask the server itself what it loaded.
         // Only for a plain endpoint: cloud provider connections have no such endpoints.
@@ -1185,9 +1222,6 @@ export class LocalLlmClient {
       return { state: "supported", advertised };
     } catch (err: any) {
       if (signal?.aborted) throw abortedError(randomUUID());
-      if (LocalLlmClient.serverKindCache.get(ep) === previousKind && previousKind !== "gateway") {
-        LocalLlmClient.serverKindCache.delete(ep);
-      }
       return { state: "unavailable", detail: redactSecrets(String(err?.message ?? err)).slice(0, 160) };
     }
   }
@@ -1409,9 +1443,10 @@ export class LocalLlmClient {
     /** Receipt role override for auxiliary calls (e.g. "compaction"). */
     purpose?: string,
   ): Promise<ChatMessage> {
-    return this.withReceipt(requestId, purpose, () =>
+    const response = await this.withReceipt(requestId, purpose, () =>
       this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
     );
+    return normalizeNullableOptionalArguments(response, tools);
   }
 
   private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal): Promise<ChatMessage> {
@@ -1564,11 +1599,12 @@ export class LocalLlmClient {
     requestId: string = randomUUID(),
     signal?: AbortSignal,
   ): Promise<ChatMessage> {
-    return this.withReceipt(requestId, undefined, () =>
+    const response = await this.withReceipt(requestId, undefined, () =>
       this.withOAuthRetry(this.endpoint, requestId, () =>
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
       ),
     );
+    return normalizeNullableOptionalArguments(response, tools);
   }
 
   /**

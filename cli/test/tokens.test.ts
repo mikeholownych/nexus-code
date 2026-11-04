@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { countTokens } from "../src/tokens.js";
@@ -202,4 +203,46 @@ describe("ACC-VER-07 & REQ-AGT-118: Conservative token estimator and calibration
       await new Promise<void>((r) => srv.close(() => r()));
     }
   });
+});
+
+test("vLLM token counting survives same-endpoint rediscovery outage", async () => {
+  let modelRequests = 0;
+  const seen: string[] = [];
+  const srv = http.createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    req.resume();
+    req.on("end", () => {
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/v1/models") {
+        modelRequests++;
+        if (modelRequests > 1) {
+          res.statusCode = 503;
+          return res.end("temporarily unavailable");
+        }
+        return res.end(JSON.stringify({ data: [{ id: "m", owned_by: "vllm", max_model_len: 16384 }] }));
+      }
+      if (req.url === "/version") return res.end(JSON.stringify({ version: "0.10.1" }));
+      if (req.url === "/v1/tokenize") {
+        res.statusCode = 404;
+        return res.end("not found");
+      }
+      if (req.url === "/tokenize") return res.end(JSON.stringify({ count: 42, max_model_len: 16384 }));
+      res.statusCode = 404;
+      res.end("not found");
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  try {
+    const endpoint = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`;
+    const client = new LocalLlmClient({ endpoint, model: "m", workspace: "/tmp", maxSteps: 1 } as any);
+    await client.discoverAdvertisement();
+    assert.equal(client.getDetectedServerKind(), "vllm");
+    assert.equal((await client.discoverAdvertisement()).state, "unavailable");
+    const count = await client.countRequestTokens([{ role: "user", content: "hello" }], [], "req-after-outage");
+    assert.equal(count.promptTokens, 42);
+    assert.equal(count.source, "exact_sampled_worker");
+    assert.ok(seen.includes("POST /tokenize"), "the verified vLLM root-tokenize fallback remains active");
+  } finally {
+    await new Promise<void>((resolve) => srv.close(() => resolve()));
+  }
 });

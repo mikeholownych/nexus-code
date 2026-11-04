@@ -164,16 +164,96 @@ test("typecheck_clean fails only on diagnostics the candidate adds, and on infra
   assert.equal(crashed.details.infrastructureFailure, true);
   const silent = await ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/base"), candidate: spec("c", "/tmp/cand"), runner: async (c: string) => ({ status: c === "b" ? 0 : 2 }) });
   assert.equal(silent.passed, false, "a candidate that newly fails without output does not pass");
-  assert.equal(silent.details.statusRegression, true);
+  assert.equal(silent.details.infrastructureFailure, true, "a nonzero checker run without a recognized diagnostic is not a valid comparison");
   // A failing baseline's exit code may differ from the candidate's without a regression when diagnostics do not grow.
   const fewer = await ev.evaluateTypecheckClean({
     baseline: spec("b", "/tmp/base"), candidate: spec("c", "/tmp/cand"),
-    runner: async (c: string) => (c === "b" ? { status: 2, stderr: "e1\ne2" } : { status: 1, stderr: "e1" }),
+    runner: async (c: string) => (c === "b" ? { status: 2, stderr: "error TS1001: e1\nerror TS1002: e2" } : { status: 1, stderr: "error TS1001: e1" }),
   });
   assert.equal(fewer.passed, true, JSON.stringify(fewer.details));
-  const silentAfterFailure = await ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/base"), candidate: spec("c", "/tmp/cand"), runner: async (c: string) => (c === "b" ? { status: 2, stderr: "e1" } : { status: 2 }) });
+  const silentAfterFailure = await ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/base"), candidate: spec("c", "/tmp/cand"), runner: async (c: string) => (c === "b" ? { status: 2, stderr: "error TS1001: e1" } : { status: 2 }) });
   assert.equal(silentAfterFailure.passed, false, "a failing candidate with no diagnostics is not a pass");
   await assert.rejects(ev.evaluateTypecheckClean({ baseline: spec("b", "/tmp/x"), candidate: spec("c", "/tmp/x/") }), /must be separate/);
+});
+
+test("typecheck_clean rejects unavailable checkers on both revisions", async () => {
+  const spec = (cwd: string) => ({ command: "tsc", args: ["--noEmit"], cwd });
+  const unavailable = await ev.evaluateTypecheckClean({
+    baseline: spec("/tmp/wp1105-baseline"),
+    candidate: spec("/tmp/wp1105-candidate"),
+    runner: async () => ({ status: 127, stdout: "", stderr: "Cannot find module 'typescript'" }),
+  });
+  assert.equal(unavailable.passed, false);
+  assert.equal(unavailable.details.infrastructureFailure, true);
+});
+
+test("build and typecheck use pinned baseline configuration after candidate config edits", async () => {
+  const root = temporaryDirectory("code-evaluator-pinned-config-");
+  const baseline = path.join(root, "baseline");
+  const candidate = path.join(root, "candidate");
+  for (const directory of [baseline, candidate]) fs.mkdirSync(directory, { recursive: true });
+  fs.mkdirSync(path.join(baseline, "src"));
+  fs.writeFileSync(path.join(baseline, "src/main.ts"), "export const value: number = 1;\n");
+  fs.writeFileSync(path.join(baseline, "package.json"), JSON.stringify({ scripts: {
+    build: `node -e 'const fs=require("node:fs"); process.exit(fs.readFileSync("src/main.ts","utf8").includes("TYPE_ERROR")?1:0)'`,
+    typecheck: `node -e 'const fs=require("node:fs"); const c=JSON.parse(fs.readFileSync("tsconfig.json","utf8")); const bad=c.files.some((f)=>fs.readFileSync(f,"utf8").includes("TYPE_ERROR")); if(bad) console.error("error TS9999: candidate source error"); process.exit(bad?1:0)'`,
+  } }));
+  fs.writeFileSync(path.join(baseline, "tsconfig.json"), JSON.stringify({ files: ["src/main.ts"] }));
+  fs.cpSync(baseline, candidate, { recursive: true });
+  fs.writeFileSync(path.join(candidate, "src/main.ts"), "export const value: number = TYPE_ERROR;\n");
+  fs.writeFileSync(path.join(candidate, "package.json"), JSON.stringify({ scripts: { build: "node -e 'process.exit(0)'", typecheck: "node -e 'process.exit(0)'" } }));
+  fs.writeFileSync(path.join(candidate, "tsconfig.json"), JSON.stringify({ files: [] }));
+  try {
+    const { needsEvaluatorConfigurationBaseline, runCodeEvaluators } = await runner();
+    assert.equal(needsEvaluatorConfigurationBaseline({ evaluators: ["build"] }), true, "build-only tasks also need the pre-agent config snapshot");
+    const [build, typecheck] = await runCodeEvaluators({
+      task: {
+        evaluators: ["build", "typecheck_clean"],
+        build: { command: "npm", args: ["run", "build"] },
+        typecheck: { command: "npm", args: ["run", "typecheck"] },
+      },
+      candidateWorkspace: candidate,
+      hiddenWorkspace: candidate,
+      typecheckBaselineWorkspace: baseline,
+    });
+    assert.deepEqual({ build: build.passed, typecheck: typecheck.passed }, { build: false, typecheck: false }, JSON.stringify({ build: build.details, typecheck: typecheck.details }));
+    assert.deepEqual(typecheck.details.newDiagnostics, ["error TS9999: candidate source error"], JSON.stringify(typecheck.details));
+
+    const [buildOnly] = await runCodeEvaluators({
+      task: { evaluators: ["build"], build: { command: "npm", args: ["run", "build"] } },
+      candidateWorkspace: candidate,
+      typecheckBaselineWorkspace: baseline,
+    });
+    assert.equal(buildOnly.passed, false, JSON.stringify(buildOnly.details));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("syntax_ast defaults to existing supported changed source files", async () => {
+  const root = temporaryDirectory("code-evaluator-syntax-defaults-");
+  const baseline = path.join(root, "baseline");
+  const candidate = path.join(root, "candidate");
+  fs.mkdirSync(path.join(baseline, "src"), { recursive: true });
+  fs.writeFileSync(path.join(baseline, "src/main.js"), "export const value = 1;\n");
+  fs.writeFileSync(path.join(baseline, "src/deleted.js"), "export const deleted = 1;\n");
+  fs.writeFileSync(path.join(baseline, "README.md"), "before\n");
+  fs.cpSync(baseline, candidate, { recursive: true });
+  fs.writeFileSync(path.join(candidate, "src/main.js"), "export const value = 2;\n");
+  fs.unlinkSync(path.join(candidate, "src/deleted.js"));
+  fs.writeFileSync(path.join(candidate, "README.md"), "after\n");
+  try {
+    const { captureWorkspaceSnapshot, runCodeEvaluators } = await runner();
+    const [result] = await runCodeEvaluators({
+      task: { evaluators: ["syntax_ast"] },
+      candidateWorkspace: candidate,
+      baselineSnapshot: captureWorkspaceSnapshot(baseline),
+    });
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+    assert.deepEqual(result.details.files, ["src/main.js"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("diff_boundary accepts exact paths and directory prefixes and rejects everything else", () => {
@@ -500,11 +580,13 @@ test("typecheck_clean compares candidate diagnostics with a preserved pre-agent 
   const root = temporaryDirectory("code-evaluator-typecheck-baseline-");
   const baseline = path.join(root, "baseline");
   const candidate = path.join(root, "candidate");
-  for (const directory of [baseline, candidate]) fs.mkdirSync(directory);
-  const probe = 'import fs from "node:fs"; if (fs.existsSync("introduced-diagnostic")) process.stdout.write("error TS1234: introduced\\n");';
+  fs.mkdirSync(path.join(baseline, "src"), { recursive: true });
+  fs.writeFileSync(path.join(baseline, "src/main.ts"), "export const value = 1;\n");
+  fs.cpSync(baseline, candidate, { recursive: true });
+  const probe = 'import fs from "node:fs"; if (fs.readFileSync("src/main.ts", "utf8").includes("introduced")) process.stdout.write("error TS1234: introduced\\n");';
   fs.writeFileSync(path.join(baseline, "probe.mjs"), probe);
   fs.writeFileSync(path.join(candidate, "probe.mjs"), probe);
-  fs.writeFileSync(path.join(candidate, "introduced-diagnostic"), "candidate-only\n");
+  fs.writeFileSync(path.join(candidate, "src/main.ts"), "export const value = introduced;\n");
   try {
     const { runCodeEvaluators } = await runner();
     const [result] = await runCodeEvaluators({

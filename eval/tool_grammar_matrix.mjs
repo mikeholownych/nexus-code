@@ -400,15 +400,43 @@ function verifyInstalledArchive(installRoot, archiveSha256, sourceCommit, expect
   }
 }
 
+function verifyCandidateCheckout(checkoutRoot, sourceCommit) {
+  if (typeof checkoutRoot !== "string" || !checkoutRoot) throw new TypeError("explicit candidate Git checkout root is required");
+  const resolvedRoot = path.resolve(checkoutRoot);
+  const stat = fs.lstatSync(resolvedRoot);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(resolvedRoot) !== resolvedRoot) {
+    throw new TypeError("candidate checkout root must be a real directory");
+  }
+  const git = (args) => execFileSync("git", args, { cwd: resolvedRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  let gitRoot;
+  let head;
+  let status;
+  try {
+    gitRoot = git(["rev-parse", "--show-toplevel"]);
+    head = git(["rev-parse", "HEAD"]);
+    status = git(["status", "--porcelain", "--untracked-files=all"]);
+  } catch {
+    throw new TypeError("candidate checkout root is not a readable Git worktree");
+  }
+  if (path.resolve(gitRoot) !== resolvedRoot) throw new TypeError("candidate checkout root must be the Git worktree root");
+  if (head !== sourceCommit) throw new TypeError("candidate source commit does not match Git HEAD");
+  if (status) throw new TypeError("candidate checkout must be clean before matrix qualification");
+  return head;
+}
+
 /** Invoke the exact installed candidate client for 50 attempts/tool and retain only non-secret aggregate evidence. */
 export async function runToolGrammarMatrix(options) {
   if (!options || typeof options.archivePath !== "string" || typeof options.installRoot !== "string") throw new TypeError("candidate archive and installed root are required");
   if (Object.hasOwn(options, "runtime")) throw new TypeError("caller-supplied runtime is not accepted; runtime must be loaded from the installed candidate");
   if (Object.hasOwn(options, "tools")) throw new TypeError("tool schemas must be loaded from the exact installed candidate");
   if (!commitPattern.test(options.sourceCommit)) throw new TypeError("full candidate source commit is required");
+  verifyCandidateCheckout(options.candidateCheckoutRoot, options.sourceCommit);
+  if (typeof options.archiveSha256 !== "string" || !sha256Pattern.test(options.archiveSha256)) {
+    throw new TypeError("pinned candidate archive SHA-256 is required");
+  }
   const archivePath = fs.realpathSync(options.archivePath);
   const archiveSha256 = sha256(fs.readFileSync(archivePath));
-  if (options.archiveSha256 && options.archiveSha256 !== archiveSha256) throw new TypeError("candidate archive SHA-256 does not match the pinned digest");
+  if (options.archiveSha256.replace(/^sha256:/i, "").toLowerCase() !== archiveSha256) throw new TypeError("candidate archive SHA-256 does not match the pinned digest");
   const snapshot = createVerifiedArchiveSnapshot(archivePath, archiveSha256);
   try {
     verifyInstalledArchive(options.installRoot, archiveSha256, options.sourceCommit, snapshot.packageFiles);

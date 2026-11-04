@@ -33,18 +33,34 @@ test("vllm nullable optional tool arguments execute through the Rust RPC bridge"
   };
 
   try {
-    const firstWrite = await (agent as any).dispatchToolCall(
-      call("write_file", { path: "nullable.txt", content: "first", overwrite: null }),
+    fs.writeFileSync(path.join(workspace, "read-me.txt"), "line one\nline two\n");
+    const nullableRead = await (agent as any).dispatchToolCall(
+      call("read_file", { path: "read-me.txt", start_line: null, end_line: null, offset: null, length: null }),
       1,
       "agent",
     );
-    assert.equal("overwrite" in bridgeArgs[0].args, false, JSON.stringify(bridgeArgs));
+    assert.equal(nullableRead.receipt.success, true, nullableRead.receipt.error);
+    assert.deepEqual(bridgeArgs[0].args, { path: "read-me.txt" }, JSON.stringify(bridgeArgs));
+    const requiredNull = await (agent as any).dispatchToolCall(
+      call("read_file", { path: null, start_line: null }),
+      2,
+      "agent",
+    );
+    assert.equal(requiredNull.receipt.success, false);
+    assert.match(requiredNull.receipt.error, /Missing required parameter 'path'|Invalid read_file arguments|invalid type/i);
+
+    const firstWrite = await (agent as any).dispatchToolCall(
+      call("write_file", { path: "nullable.txt", content: "first", overwrite: null }),
+      3,
+      "agent",
+    );
+    assert.equal("overwrite" in bridgeArgs[1].args, false, JSON.stringify(bridgeArgs));
     assert.equal(firstWrite.receipt.success, true, firstWrite.receipt.error);
     assert.equal(fs.readFileSync(path.join(workspace, "nullable.txt"), "utf8"), "first");
 
     const overwrite = await (agent as any).dispatchToolCall(
       call("write_file", { path: "nullable.txt", content: "second", overwrite: true }),
-      2,
+      4,
       "agent",
     );
     assert.equal(overwrite.receipt.success, true, overwrite.receipt.error);
@@ -52,7 +68,7 @@ test("vllm nullable optional tool arguments execute through the Rust RPC bridge"
 
     const defaultedCommand = await (agent as any).dispatchToolCall(
       call("run_command", { command: "printf rpc-default-ok", background: null, timeout_secs: null, shell: null }),
-      3,
+      5,
       "agent",
     );
     assert.equal(defaultedCommand.receipt.success, true, defaultedCommand.receipt.error);
@@ -61,7 +77,7 @@ test("vllm nullable optional tool arguments execute through the Rust RPC bridge"
 
     const explicitCommand = await (agent as any).dispatchToolCall(
       call("run_command", { command: "printf rpc-explicit-ok", background: false, timeout_secs: 5, shell: "bash" }),
-      4,
+      6,
       "agent",
     );
     assert.equal(explicitCommand.receipt.success, true, explicitCommand.receipt.error);

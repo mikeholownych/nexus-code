@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import { ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
-import { LocalLlmClient } from "./client.js";
+import { LocalLlmClient, normalizeNullableOptionalToolArguments } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
 import {
   CanonicalCapability,
@@ -4886,16 +4886,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       };
     }
 
-    if (args && typeof args === "object" && !Array.isArray(args)) {
-      // Rust serde defaults apply when these optional fields are omitted (core/src/file_ops.rs:33, core/src/runner.rs:7).
-      const nullableOptionalArgs = new Map<string, readonly string[]>([
-        ["write_file", ["overwrite"]],
-        ["run_command", ["background", "timeout_secs", "shell"]],
-      ]);
-      for (const key of nullableOptionalArgs.get(toolName) ?? []) {
-        if (args[key] === null) delete args[key];
-      }
-    }
+    args = normalizeNullableOptionalToolArguments(toolName, args, this.getEffectiveTools());
 
     // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
     // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
