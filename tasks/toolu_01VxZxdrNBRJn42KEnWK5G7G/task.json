@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01VxZxdrNBRJn42KEnWK5G7G",
+  "agent_id": "a3b3d6a1263e94923",
+  "task_description": "Review WP-1107 provider change",
+  "token_usage": {
+    "input_tokens": 136,
+    "cache_creation_tokens": 186204,
+    "cache_read_tokens": 8816883,
+    "output_tokens": 46668,
+    "api_call_count": 68
+  },
+  "started_at": "2026-11-04T02:11:40.342599634Z",
+  "completed_at": "2026-11-04T02:22:25.436406374Z"
+}

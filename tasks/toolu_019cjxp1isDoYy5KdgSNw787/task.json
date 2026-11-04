@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_019cjxp1isDoYy5KdgSNw787",
+  "agent_id": "af493d2d4e7877ca2",
+  "task_description": "Delta review of PR 400 typecheck fix",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 46036,
+    "cache_read_tokens": 127028,
+    "output_tokens": 2161,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-03T00:15:30.918341967Z",
+  "completed_at": "2026-11-03T00:16:38.235874772Z"
+}

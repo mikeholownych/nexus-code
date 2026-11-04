@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01QomGdfPfE9UuS5Y9fjTr1s",
+  "agent_id": "adbbe02442696cf99",
+  "task_description": "Delta review of PR 401 round 3",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 48915,
+    "cache_read_tokens": 224273,
+    "output_tokens": 3126,
+    "api_call_count": 6
+  },
+  "started_at": "2026-11-02T22:19:41.954199842Z",
+  "completed_at": "2026-11-02T22:21:07.84780613Z"
+}

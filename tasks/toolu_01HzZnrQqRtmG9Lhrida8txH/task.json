@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01HzZnrQqRtmG9Lhrida8txH",
+  "agent_id": "a98c30542a9e71065",
+  "task_description": "Final short review c198a33f",
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 163069,
+    "cache_read_tokens": 2891149,
+    "output_tokens": 26133,
+    "api_call_count": 38
+  },
+  "started_at": "2026-11-04T15:54:09.302532265Z",
+  "completed_at": "2026-11-04T16:35:31.714830909Z"
+}
