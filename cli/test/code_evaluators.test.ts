@@ -187,6 +187,41 @@ test("typecheck_clean rejects unavailable checkers on both revisions", async () 
   assert.equal(unavailable.details.infrastructureFailure, true);
 });
 
+test("typecheck_clean rejects generic module errors as unavailable checker failures", async () => {
+  const spec = (cwd: string) => ({ command: "tsc", args: ["--noEmit"], cwd });
+  const unavailable = await ev.evaluateTypecheckClean({
+    baseline: spec("/tmp/wp1105-baseline-without-typescript"),
+    candidate: spec("/tmp/wp1105-candidate-without-typescript"),
+    runner: async () => ({ status: 1, stderr: "Error: Cannot find module 'typescript'" }),
+  });
+  assert.equal(unavailable.passed, false, "the same missing-checker error on both sides cannot count as a clean comparison");
+  assert.equal(unavailable.score, 0);
+  assert.equal(unavailable.details.infrastructureFailure, true);
+});
+
+test("typecheck_clean rejects candidate syntax failures even when the checker is unavailable", async () => {
+  const root = temporaryDirectory("typecheck-missing-typescript-");
+  const baseline = path.join(root, "baseline");
+  const candidate = path.join(root, "candidate");
+  fs.mkdirSync(path.join(baseline, "src"), { recursive: true });
+  fs.mkdirSync(path.join(candidate, "src"), { recursive: true });
+  fs.writeFileSync(path.join(baseline, "src/index.ts"), "export const value = 1;\n");
+  fs.writeFileSync(path.join(candidate, "src/index.ts"), "export const value: = ;\n");
+  try {
+    const spec = (cwd: string) => ({ command: "tsc", args: ["--noEmit"], cwd });
+    const unavailable = await ev.evaluateTypecheckClean({
+      baseline: spec(baseline),
+      candidate: spec(candidate),
+      runner: async () => ({ status: 1, stderr: "Error: Cannot find module 'typescript'" }),
+    });
+    assert.equal(unavailable.passed, false, "a missing checker must not hide the candidate's syntax error");
+    assert.equal(unavailable.score, 0);
+    assert.equal(unavailable.details.infrastructureFailure, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("typecheck_clean compares Rust diagnostics across baseline and candidate", async () => {
   const spec = (command: string, cwd: string) => ({ command, args: ["check"], cwd });
   const baselineDiagnostic = "error[E0308]: mismatched types at src/main.rs:2";
