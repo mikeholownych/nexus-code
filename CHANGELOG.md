@@ -6,10 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
-## [v1.1.2] - 2026-11-01
+## [v1.1.2] - Unreleased
 
-See [`docs/releases/v1.1.2.md`](docs/releases/v1.1.2.md) (and candidate notes [`docs/releases/v1.1.2-rc.1.md`](docs/releases/v1.1.2-rc.1.md)) for full release notes.
-Patch release: a crash-resumed work unit no longer receives the second and later messages of a multi-message prompt twice. The v1.1.1 notes carry a matching addendum.
+See [`docs/releases/v1.1.2.md`](docs/releases/v1.1.2.md) for the full release notes and [`docs/releases/v1.1.2-qualification.md`](docs/releases/v1.1.2-qualification.md) for the qualification record. The date is set when the release is tagged.
+Delivers the WP-1101 to WP-1108 roadmap (local OpenTelemetry tracing, flight-recorder redaction, versioned evaluation datasets, standalone `nexus eval`, deterministic code evaluators, single-step loop mode, bounded tool schemas with vLLM strict schemas, dependency modernisation), non-progress recovery and specialist orchestration, and fixes the duplicate re-injection of a multi-message prompt after a crash-resume. Ships with known limitations accepted by the owner; the 99.5% constrained-decoding target was not measured. Version numbers: no `v1.1.2-rc.*` was published.
 
 ## [v1.1.1] - 2026-11-01
 
