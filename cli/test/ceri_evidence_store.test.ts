@@ -115,7 +115,7 @@ test("CeriEvidenceStore rejects path traversal in evaluationId and runId", () =>
       model: { name: "model-x", parameters: { temperature: 0 } },
       routingConfig: { gatewayUrl: "http://localhost", specialistRouting: false },
       agentProfileVersion: "1.1.2",
-      harnessVersion: "1.1.2-rc.2",
+      harnessVersion: "1.1.2",
       toolchainVersions: {},
       environment: { os: "Linux", kernel: "x", nodeVersion: "22" },
       hardware: { cpuModel: "Intel", totalMemoryBytes: 1000 },
