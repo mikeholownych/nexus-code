@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "name": "core-v1",
+  "version": "1.1.0",
+  "description": "Versioned development and benchmark tasks migrated from eval/tasks.",
+  "createdAt": "2026-10-31T00:00:00Z",
+  "splits": {
+    "regression": {
+      "count": 1
+    },
+    "benchmark": {
+      "count": 6
+    }
+  },
+  "domains": [
+    "harness-integrity",
+    "coding-task"
+  ],
+  "files": {
+    "examples.jsonl": "b16cbc374ddbadf9f652b2eea5336b428da1c5ff6e0badfe654f2e85789a4018",
+    "oracles.jsonl": "d5109d77b4d38fc99d318505a3336604c74059f2e4cf28fc383113e46fd28516"
+  },
+  "tasks": {
+    "selftest-add": "44759ecf54855bca4487eb4a5bd3b110ada1f74b3639b17e7aae64957a9759cf",
+    "t2-bugfix-csv": "6a1ed7beb4b4b5f1fe4326795648f64f47a90a814f63157d1b69e9c706917fa8",
+    "t2-bugfix-duration": "8529090965b72eff940cf1545943295730a0fbf60e92cea5438a49c1f140b696",
+    "t2-debug-logs": "440e635553fdfd39508bb565e3664063b6688ce8f9a1c7b366cab4446a9087d4",
+    "t2-feature-inventory": "fc706e7cf98b47e9a17d00717aa00262a734e165352e2fc489e853dcc59ffd46",
+    "t2-feature-slugify": "a187297977130bf7c4dcf0bf7956297ae380c2ae402a25b85482c34067dc6301",
+    "t2-refactor-tax": "e94cbd1fd2c787e09425ffd6141b8e333ba8dadea08509a0ab0b685e83aa42ad"
+  }
+}

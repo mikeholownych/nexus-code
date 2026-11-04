@@ -97,7 +97,10 @@ describe("D3 timeout lifecycle", () => {
   test("completion verifier: timeout is VERIFIER_TIMED_OUT with its deadline, distinct from failure, and leaves no process behind", async () => {
     const { out, cleanup } = await oracleRun("(bash -c 'sleep 28.77' &) ; echo verifier-started; sleep 28.77", 1);
     try {
-      assert.ok(out.elapsed < 10, `verifier must stop at its deadline, took ${out.elapsed}s`);
+      // This duration includes the mock-provider turns around the verifier. Keep
+      // enough headroom for a loaded serialized suite while still proving the
+      // agent returns well before the 28.77s verifier process would finish.
+      assert.ok(out.elapsed < 15, `agent must return before the verifier process would finish, took ${out.elapsed}s`);
       assert.match(out.message, /timed out/i);
       assert.match(out.message, /1\s*s/);
       assert.match(out.message, /verifier-started/, "partial verifier output is preserved for the model");

@@ -1,0 +1,7 @@
+{"id":"selftest-add","hidden":{"dir":"hidden","into":"hidden","command":"node hidden/math.hidden.test.js"},"regression":{"command":"npm test --silent"}}
+{"id":"t2-bugfix-csv","hidden":{"dir":"hidden","command":"node hidden/csv.hidden.test.js"},"regression":{"command":"npm test --silent"}}
+{"id":"t2-bugfix-duration","hidden":{"dir":"hidden","command":"python3 hidden/test_duration_hidden.py"},"regression":{"command":"python3 -m unittest discover -s tests"}}
+{"id":"t2-debug-logs","hidden":{"dir":"hidden","command":"node hidden/report.hidden.test.js"},"regression":{"command":"npm test --silent"}}
+{"id":"t2-feature-inventory","hidden":{"dir":"hidden","command":"python3 hidden/test_inventory_hidden.py"},"regression":{"command":"python3 -m unittest discover -s tests"}}
+{"id":"t2-feature-slugify","hidden":{"dir":"hidden","command":"node hidden/slugify.hidden.test.js"},"regression":{"command":"npm test --silent"}}
+{"id":"t2-refactor-tax","hidden":{"dir":"hidden","command":"python3 hidden/test_tax_hidden.py"},"regression":{"command":"python3 -m unittest discover -s tests"}}

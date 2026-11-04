@@ -315,9 +315,28 @@ export const SESSION_HANDLERS: Record<string, SlashHandler> = {
   onboard,
   theme,
   receipt: ({ host }) => reply("receipt", receiptText(host.receipt())),
+  step: stepSlash,
   upgrade: upgradeSlash,
   exit: () => reply("exit", "Press q, or ctrl+c with an empty composer, to quit."),
 };
+
+/**
+ * `/step`: advance the active task by exactly one model/tool cycle and pause.
+ */
+async function stepSlash({ host, signal }: SlashContext): Promise<SlashOutcome> {
+  const agent = host.app.getAgent();
+  const ledger = agent.getObjective();
+  if (!ledger || ledger.outcome?.status === "completed") {
+    return reply("step", "No unresolved objective to step. Provide a prompt to start a task.", false);
+  }
+  const confirm = host.mode() === "auto" ? undefined : host.confirm(signal);
+  try {
+    const turn = await agent.runTurn("", confirm, { signal, step: true, resume: true });
+    return reply("step", `Step completed: ${turn.execution}.`, turn.execution !== "FAILED");
+  } catch (err: any) {
+    return reply("step", `Step failed: ${err.message || String(err)}`, false);
+  }
+}
 
 /**
  * `/upgrade [--check] [--version <v>] [--yes] [--force]`: compare the installed version with a published

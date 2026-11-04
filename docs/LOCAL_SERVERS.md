@@ -51,7 +51,7 @@ chmod 700 "$HOME/.config/nexus"
    LOCAL_LLM_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct
    LOCAL_LLM_API_KEY=local
    ```
-3. **Context discovery:** vLLM publishes `max_model_len` directly in `GET /v1/models`. Nexus reads it from the catalog entry and reports `provider_advertised` in `/status` and `nexus doctor`.
+3. **Context discovery:** vLLM publishes `max_model_len` directly in `GET /v1/models`. Nexus reads it as capacity and reports `provider_advertised` in `/status` and `nexus doctor`; generic capacity fields alone do not identify the server. Nexus enables vLLM strict tool schemas only when the selected model entry has `owned_by: "vllm"` (case-insensitive) and `GET /version` returns a non-empty `version` string. Missing or malformed identity evidence leaves tool schemas unmodified.
 
 ### Ollama (`http://127.0.0.1:11434/v1`)
 1. Pull and serve a model with Ollama:

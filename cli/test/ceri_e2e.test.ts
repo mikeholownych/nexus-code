@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getBuildIdentity } from "../src/build_identity.js";
 import {
   CeriEvaluationRunner,
   CeriEvidenceStore,
@@ -79,6 +80,7 @@ test("Full CERI Foundational Vertical Slice: Definition -> Execution -> Manifest
 
     // Verify manifest
     assert.equal(result.manifest.evaluationId, "eval-scoped-impl-01");
+    assert.equal(result.manifest.harnessVersion, getBuildIdentity().version);
     assert.equal(result.manifest.status, "FAILED"); // because assert-clean-diff failed
     assert.ok(result.integrityHash, "Tamper-evident integrity hash generated");
 

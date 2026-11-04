@@ -11,6 +11,7 @@
  * This module is presentation-free: callers (CLI, REPL, a future TUI) project it, they do not
  * reinterpret it. VERIFIED can only be produced from verifier evidence, never asserted.
  */
+import type { ToolCallSyntaxCounts } from "../parser.js";
 
 export type ExecutionState = "COMPLETED" | "INTERRUPTED" | "FAILED" | "BLOCKED" | "LIMIT_REACHED";
 
@@ -36,6 +37,7 @@ export type TurnReason =
   | "VERIFIER_TIMED_OUT"
   | "INFERENCE_FAILED"
   | "STEP_LIMIT_REACHED"
+  | "STEP_PAUSED"
   /** Continued turn: the total step budget across segments is spent. */
   | "STEP_BUDGET_EXHAUSTED"
   /** Continued turn: the wall-clock budget is spent. */
@@ -302,6 +304,10 @@ export interface TurnResult {
    * REGRESSION_FREE: the verifier's result stands, but the work may rest on observations the model no longer had.
    */
   contextNotRetained?: number;
+  /** Argument syntax of the tool calls the model issued this turn (native, repaired or invalid JSON); absent when none. */
+  toolCallSyntax?: ToolCallSyntaxCounts;
+  /** True when the turn paused deterministically after one model/tool cycle under step mode. */
+  stepPaused?: boolean;
   /** Where the operator's objective stands: open requirements, the failed check and the next action. */
   objective?: {
     status: "completed" | "incomplete" | "blocked";
@@ -418,6 +424,9 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
   if (exec === "LIMIT_REACHED") {
     const c = t.continuation;
     const segments = c && c.segments > 1 ? ` across ${c.segments} segments of ${c.segmentSteps}` : "";
+    if (t.reason === "STEP_PAUSED") {
+      return { heading: "STEP PAUSED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (STEP_PAUSED: ${t.detail ?? "paused after one model/tool cycle"})` };
+    }
     if (t.reason === "STAGNATION_DETECTED") {
       return { heading: "STOPPED - NO PROGRESS", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (STAGNATION_DETECTED${t.detail ? `: ${t.detail}` : ""}; ${t.steps.used} steps${segments})` };
     }

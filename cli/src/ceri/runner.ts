@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import { execSync } from "node:child_process";
+import { getBuildIdentity } from "../build_identity.js";
 import {
   type EvaluationDefinition,
   type RunManifest,
@@ -96,7 +97,7 @@ export class CeriEvaluationRunner {
         specialistRouting: options.specialistRouting ?? false,
       },
       agentProfileVersion: "1.1.2",
-      harnessVersion: "1.1.2-rc.1",
+      harnessVersion: getBuildIdentity().version,
       toolchainVersions: { node: process.version },
       environment: CeriEvaluationRunner.getEnvironmentMetadata(),
       hardware: CeriEvaluationRunner.getHardwareMetadata(),

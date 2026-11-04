@@ -36,6 +36,8 @@ export interface RunTaskOptions {
   resumeTaskId?: string;
   /** Operator cancellation authority for this task. */
   signal?: AbortSignal;
+  /** Execute one model/tool cycle and pause deterministically (WP-1106). */
+  step?: boolean;
 }
 
 export interface TaskExecutionResult {
@@ -234,6 +236,7 @@ export class ApplicationCore extends EventEmitter {
       turn = await this.agent.run(prompt, options.onConfirm, {
         signal: options.signal,
         resume: Boolean(options.resumeTaskId),
+        step: Boolean(options.step),
       });
     } catch (err: any) {
       taskError = err;

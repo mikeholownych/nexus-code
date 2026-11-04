@@ -26,7 +26,7 @@ const json = (res: http.ServerResponse, body: unknown) => {
   res.end(JSON.stringify(body));
 };
 
-test("setModel switches the model in place and keeps the routing hint", async () => {
+test("setModel switches the model in place and suppresses the routing hint without a positive handshake", async () => {
   const seen: { model?: string; taskClass?: string | string[] }[] = [];
   await withServer(
     (req, res, body) => {
@@ -41,8 +41,8 @@ test("setModel switches the model in place and keeps the routing hint", async ()
     },
   );
   assert.deepEqual(seen, [
-    { model: "a", taskClass: "review" },
-    { model: "b", taskClass: "review" },
+    { model: "a", taskClass: undefined },
+    { model: "b", taskClass: undefined },
   ]);
 });
 

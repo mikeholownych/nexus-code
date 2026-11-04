@@ -128,6 +128,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "team", usage: "/team <role|full> [--independent-review] <objective>", summary: "[experimental] Run a role or the full team as a durable operation (researcher, architect, implementer, tester, reviewer)" },
   { name: "theme", usage: "/theme [name]", summary: "Show or save the colour theme" },
   { name: "recover", usage: "/recover [task-id]", summary: "Recover durable task state" },
+  { name: "step", usage: "/step", summary: "Advance the active task by one single model/tool cycle and pause" },
   { name: "upgrade", usage: "/upgrade [--check] [--version <v>] [--yes] [--force]", summary: "Check for updates or safely upgrade Nexus to the latest stable or pinned release" },
   { name: "exit", usage: "/exit", summary: "Quit Nexus", aliases: ["quit", "q"] },
 ];

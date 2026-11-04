@@ -57,6 +57,16 @@ jobs:
           test "$(env PATH=/usr/bin:/bin /usr/bin/npm --version)" = "$(npm --version)"
       - run: node scripts/sync-version.mjs --check
       - run: node scripts/check_requirements.mjs
+      - name: Reject deprecated packages in supported npm lockfiles
+        run: |
+          for lockfile in \
+            cli/package-lock.json \
+            demo/package-lock.json \
+            experiments/cloudflare-artifacts-vertical-slice/package-lock.json \
+            experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/package-lock.json \
+            scripts/release-tools/package-lock.json; do
+            node scripts/check_deprecated_lock.mjs "$lockfile"
+          done
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - run: git diff --exit-code -- cli/dist
@@ -80,6 +90,24 @@ jobs:
         # Normal runs take 12-20 minutes; a test process that never exits must fail the job, not hold it for 6 hours.
         timeout-minutes: 45
         run: npm --prefix cli test
+
+  cloudflare-experiment:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: experiments/cloudflare-artifacts-vertical-slice/package-lock.json
+      - run: npm ci --prefix experiments/cloudflare-artifacts-vertical-slice
+      - run: npm run typecheck --prefix experiments/cloudflare-artifacts-vertical-slice
+      - run: npm run build --prefix experiments/cloudflare-artifacts-vertical-slice
+      - run: npm run build --prefix experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture
 
   linux-x86_64:
     needs: [test-matrix]

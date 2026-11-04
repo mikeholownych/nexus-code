@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import { ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
-import { LocalLlmClient } from "./client.js";
+import { LocalLlmClient, normalizeNullableOptionalToolArguments } from "./client.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
 import {
   CanonicalCapability,
@@ -43,7 +43,7 @@ import {
   type RecoveryDenial,
 } from "./core/execution_tracking.js";
 import { fileSignature, readCoverage, readRequests } from "./core/observation_identity.js";
-import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool } from "./parser.js";
+import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCallSyntaxCounts } from "./parser.js";
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
@@ -113,6 +113,7 @@ import {
   recoveryPolicyFromEnv,
   startupEndpointWarning,
 } from "./core/provider_recovery.js";
+import { LocalTraceRecorder, type SpanHandle, type TraceAttributes, type TraceStatus } from "./core/trace.js";
 import {
   ObjectiveLedger,
   RequirementUpdate,
@@ -908,6 +909,13 @@ export class AutonomousAgent {
   private verificationEvidence?: VerificationEvidence;
   private verificationEvidenceRawOutput: string = "";
   private turnMutations: number = 0;
+  /** Argument syntax of this turn's tool calls, as parsed (reported on the turn result for evaluation). */
+  private turnToolCallSyntax: ToolCallSyntaxCounts = { native: 0, trailing: 0, structural: 0, invalid: 0 };
+
+  private addToolCallSyntax(counts?: ToolCallSyntaxCounts): void {
+    if (!counts) return;
+    for (const key of ["native", "trailing", "structural", "invalid"] as const) this.turnToolCallSyntax[key] += counts[key];
+  }
   /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
   private turnCarriedChanges = false;
   /** The operator-configured verifier's latest result in this turn (FAILED: it refused a completion and has not passed since). */
@@ -978,8 +986,15 @@ export class AutonomousAgent {
   private approvalPolicy: ApprovalPolicy = defaultApprovalPolicy;
   private verifiedWorktreeCompletion: boolean = false;
   private worktreeRunTurnAuthorized: boolean = false;
+  private worktreeDelegatedTurnInProgress: boolean = false;
   private managedWorktreeWorkspaceSwitch: boolean = false;
   private flightRecorder?: FlightRecorder;
+  private traceRecorder?: LocalTraceRecorder;
+  private traceSessionId?: string;
+  private traceContextSessionId?: string;
+  private traceDisabled = false;
+  private activeTraceSpanId?: string;
+  private activeCompactionTrace?: { span: SpanHandle; ended: boolean };
   private worktreeManager: WorktreeManager;
   private activeWorktree?: { taskId: string; worktreePath: string; branch: string };
   private originalWorkspace?: string;
@@ -3569,7 +3584,7 @@ export class AutonomousAgent {
       ];
       let text = "";
       try {
-        const res = await client.chatCompletion(prompt, [], randomUUID(), signal);
+        const res = await this.submitGenAiRequest(client, () => client.chatCompletion(prompt, [], randomUUID(), signal));
         text = typeof res.content === "string" ? res.content.trim() : "";
         const reported = client.getProviderId?.() ? client.getLastUsage?.() : undefined;
         this.totalTokens.prompt += reported?.inputTokens ?? calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
@@ -3787,6 +3802,36 @@ export class AutonomousAgent {
     compacted: ChatMessage[],
     meta: { trigger: "auto" | "manual" | "manual_llm"; step: number; beforeTokens: number; afterTokens: number; pressureOnly: boolean; summary?: string },
   ): CompactionOutcome {
+    const trace = this.activeCompactionTrace;
+    const span = trace?.span ?? this.safeStartTraceSpan("nexus.context.compaction", {
+      "nexus.compaction.trigger": meta.trigger,
+      "nexus.compaction.step": meta.step,
+      "nexus.compaction.before_tokens": meta.beforeTokens,
+      "nexus.compaction.after_tokens": meta.afterTokens,
+      "nexus.compaction.pressure_only": meta.pressureOnly,
+    });
+    try {
+      const outcome = this.commitCompactionImpl(original, compacted, meta);
+      if (outcome.archived > 0) {
+        this.safeEndTraceSpan(span, "ok", {
+          "nexus.compaction.archived_messages": outcome.archived,
+          "nexus.compaction.durable": outcome.durable,
+        });
+        if (trace) trace.ended = true;
+      }
+      return outcome;
+    } catch (error) {
+      this.safeEndTraceSpan(span, "error", { "nexus.compaction.committed": false });
+      if (trace) trace.ended = true;
+      throw error;
+    }
+  }
+
+  private commitCompactionImpl(
+    original: ChatMessage[],
+    compacted: ChatMessage[],
+    meta: { trigger: "auto" | "manual" | "manual_llm"; step: number; beforeTokens: number; afterTokens: number; pressureOnly: boolean; summary?: string },
+  ): CompactionOutcome {
     const kept = new Set(compacted);
     const replaced = original.filter((message, index) => index > 0 && !kept.has(message) && message.role !== "system");
     const id = `c${this.compactions + 1}-${randomUUID().slice(0, 8)}`;
@@ -3904,6 +3949,39 @@ export class AutonomousAgent {
 
   /** As compactConversation, returning the outcome instead of throwing (used by the queue and the hosts). */
   public async compactNow(useLlm: boolean, signal?: AbortSignal, step = 0): Promise<{ ok: boolean; durable: boolean; message: string; outcome?: CompactionOutcome }> {
+    const previousParent = this.activeTraceSpanId;
+    const previousTrace = this.activeCompactionTrace;
+    const span = this.safeStartTraceSpan("nexus.context.compaction", {
+      "nexus.compaction.trigger": useLlm ? "manual_llm" : "manual",
+      "nexus.compaction.step": step,
+    });
+    const trace = span ? { span, ended: false } : undefined;
+    if (trace) {
+      this.activeCompactionTrace = trace;
+      // Active-turn requests remain siblings of the compaction span. Out-of-turn
+      // requests use the compaction span as their root parent.
+      if (!previousParent) this.activeTraceSpanId = trace.span.spanId;
+    }
+    try {
+      const result = await this.compactNowImpl(useLlm, signal, step);
+      if (trace && !trace.ended) {
+        this.safeEndTraceSpan(span, result.ok ? "ok" : "error", { "nexus.compaction.committed": Boolean(result.outcome) });
+        trace.ended = true;
+      }
+      return result;
+    } catch (error) {
+      if (trace && !trace.ended) {
+        this.safeEndTraceSpan(span, "error", { "nexus.compaction.committed": false });
+        trace.ended = true;
+      }
+      throw error;
+    } finally {
+      this.activeTraceSpanId = previousParent;
+      this.activeCompactionTrace = previousTrace;
+    }
+  }
+
+  private async compactNowImpl(useLlm: boolean, signal?: AbortSignal, step = 0): Promise<{ ok: boolean; durable: boolean; message: string; outcome?: CompactionOutcome }> {
     if (this.messages.length <= 2) {
       return { ok: true, durable: true, message: "Conversation is already compact." };
     }
@@ -3934,7 +4012,7 @@ export class AutonomousAgent {
           this.messages = original;
           this.pendingCompaction = undefined;
         }
-        const res = await this.client.chatCompletion(admittedPrompt, [], requestId, signal, "compaction");
+        const res = await this.submitGenAiRequest(this.client, () => this.client.chatCompletion(admittedPrompt, [], requestId, signal, "compaction"));
         if (typeof res.content === "string" && res.content.trim()) {
           summaryText += `\nExecutive Summary:\n${res.content.trim()}\n`;
         } else {
@@ -4439,6 +4517,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           inheritedWorktreeScope,
           { durable: false }
         );
+        subagent.inheritTraceContext(this);
         const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, this.activeTurn?.controller.signal);
         this.ui.stopSpinner(subResult.completed);
         if (!subResult.completed) {
@@ -4465,6 +4544,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           this.totalTokens.requests += subStats.requests;
           this.totalTokens.reportedRequests += subStats.reportedRequests;
           this.totalTokens.estimatedRequests += subStats.estimatedRequests;
+          // The subagent's tool calls are model output of this turn: count their syntax with the parent's.
+          this.addToolCallSyntax(subagent.turnToolCallSyntax);
 
           // The child's workspace changes are this turn's changes: the parent's own completion must verify them.
           const childMutations = subagent.turnMutations;
@@ -4735,7 +4816,32 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     onConfirm?: ConfirmHandler
   ): Promise<{ receipt: ExecutionReceipt; shouldExit: boolean }> {
     const toolName = call.function.name;
-    let args: Record<string, any> = {};
+    const span = this.safeStartTraceSpan("nexus.agent.tool", {
+      "nexus.tool.name": toolName,
+      "nexus.tool.actor": actor,
+      "nexus.tool.step": currentStep,
+    });
+    try {
+      const result = await this.dispatchToolCallImpl(call, currentStep, actor, onConfirm);
+      this.safeEndTraceSpan(span, result.receipt.success ? "ok" : "error", {
+        "nexus.tool.success": result.receipt.success,
+        "nexus.tool.duration_ms": result.receipt.durationMs,
+      });
+      return result;
+    } catch (error) {
+      this.safeEndTraceSpan(span, "error", { "nexus.tool.success": false });
+      throw error;
+    }
+  }
+
+  private async dispatchToolCallImpl(
+    call: ToolCall,
+    currentStep: number,
+    actor: "agent" | "subagent" = "agent",
+    onConfirm?: ConfirmHandler
+  ): Promise<{ receipt: ExecutionReceipt; shouldExit: boolean }> {
+    const toolName = call.function.name;
+    let args: any = {};
     let structurallyRepaired = (call as any).repaired === "structural";
 
     try {
@@ -4779,6 +4885,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         shouldExit: false,
       };
     }
+
+    args = normalizeNullableOptionalToolArguments(toolName, args, this.getEffectiveTools());
 
     // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
     // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
@@ -5355,7 +5463,37 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return this.activeTurn?.controller.signal;
   }
 
-  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean }): Promise<TurnResult> {
+  async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
+    const ownsWorktreeDelegation = this.config.worktree && !this.worktreeRunTurnAuthorized;
+    const delegatedWorktreeCall = this.worktreeRunTurnAuthorized && this.worktreeDelegatedTurnInProgress;
+    const span = delegatedWorktreeCall ? undefined : this.safeStartTraceSpan("nexus.agent.turn", { "nexus.task.id": this.currentTaskId });
+    const previousParent = this.activeTraceSpanId;
+    if (span) {
+      this.activeTraceSpanId = span.spanId;
+    }
+    if (ownsWorktreeDelegation) this.worktreeDelegatedTurnInProgress = true;
+    let result: TurnResult | undefined;
+    try {
+      result = await this.runTurnImpl(taskPrompt, onConfirm, options);
+      return result;
+    } finally {
+      if (result) {
+        this.safeEndTraceSpan(span, this.traceStatusForExecution(result.execution), {
+          "nexus.turn.execution": result.execution,
+          "nexus.turn.outcome": result.outcome,
+        });
+      } else {
+        this.safeEndTraceSpan(span, "error", {
+          "nexus.turn.execution": "FAILED",
+          "nexus.turn.outcome": "NOT_ESTABLISHED",
+        });
+      }
+      this.activeTraceSpanId = previousParent;
+      if (ownsWorktreeDelegation) this.worktreeDelegatedTurnInProgress = false;
+    }
+  }
+
+  private async runTurnImpl(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
     // same establishment and resolution boundary as one-shot `run` tasks.
     if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
@@ -5407,6 +5545,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.completionSummary = undefined;
     this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
     this.turnMutations = 0;
+    this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0 };
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnCarriedChanges = this.hasPendingModifications;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
@@ -5423,10 +5562,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     const priorLedger = this.objective ? structuredClone(this.objective) : undefined;
     let continuingObjective = false;
     const isResume = Boolean(options?.resume);
+    const isStep = Boolean(options?.step ?? this.config.step);
     if (typeof taskPrompt === "string" && this.durable) {
       let ledger = this.objective;
-      continuingObjective = Boolean(ledger && (isResume || !isNewObjective(ledger, taskPrompt)));
-      if (!ledger || (!isResume && isNewObjective(ledger, taskPrompt))) {
+      continuingObjective = Boolean(ledger && (isResume || isStep || !isNewObjective(ledger, taskPrompt)));
+      if (!ledger || (!isResume && !isStep && isNewObjective(ledger, taskPrompt))) {
         const carried = ledger?.steering.filter((s) => s.status === "queued") ?? [];
         ledger = createLedger(taskPrompt, undefined, this.unitId);
         ledger.steering.push(...carried);
@@ -5435,7 +5575,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           ledger.unitId = this.unitId;
         }
         const isHarnessResume = /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
-        if (!isHarnessResume) {
+        if (!isHarnessResume && !isStep && taskPrompt.trim() !== "") {
           // The unfinished objective is kept; numbered items in the follow-up are added as further requirements.
           amendObjective(ledger, taskPrompt);
         }
@@ -5476,17 +5616,25 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         runtimeContext += `\n[Active Plan: ${this.activePlan.map((p, i) => `${i + 1}. [${p.status}] ${p.name}`).join(" -> ")}]`;
       }
 
+      const skipPromptSubmission =
+        (isStep || isResume) &&
+        typeof taskPrompt === "string" &&
+        taskPrompt.trim() === "" &&
+        (this.messages.length > 0 || continuingObjective);
+
       const effectiveUserContent = typeof taskPrompt === "string"
         ? (runtimeContext ? `${taskPrompt}\n${runtimeContext}` : taskPrompt)
         : taskPrompt;
 
       const historyBeforeSubmission = this.messages.length;
-      this.messages.push({
-        role: "user",
-        content: effectiveUserContent,
-      });
-      // The objective is durable before anything acts on it.
-      this.persistProgress({ messages: true });
+      if (!skipPromptSubmission) {
+        this.messages.push({
+          role: "user",
+          content: effectiveUserContent,
+        });
+        // The objective is durable before anything acts on it.
+        this.persistProgress({ messages: true });
+      }
       const pendingMessageChars = typeof effectiveUserContent === "string" ? effectiveUserContent.length : JSON.stringify(effectiveUserContent).length;
 
       let capacityBlock: CapacityRecord | null = null;
@@ -5533,7 +5681,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       tracker.beginTurn();
       if (continuingObjective) {
         const isHarnessResume = typeof taskPrompt === "string" && /^\[(?:Nexus|Work unit resumed)/.test(taskPrompt);
-        if (!isHarnessResume && !options?.resume) {
+        if (!isHarnessResume && !options?.resume && !isStep) {
           tracker.operatorInput(tracker.data.cumulativeSteps, `operator follow-up: ${promptText.slice(0, 160)}`);
         }
       }
@@ -5823,22 +5971,24 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         try {
           assistantMessage = await recovery.run(requestId, {
-            submit: (s) => this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request) =>
-              activeClient.chatCompletionStream(
-                request,
-                this.getEffectiveTools(),
-                (token: string) => {
-                  if (!streamedTokens) {
-                    this.ui.stopSpinner(true);
-                    process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
-                    streamedTokens = true;
-                  }
-                  process.stdout.write(safeTerminal(token));
-                  this.observer?.onAssistantDelta?.(token);
-                },
-                s.requestId,
-                signal,
-              )),
+            submit: (s) => this.submitGenAiRequest(activeClient, () =>
+              this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request) =>
+                  activeClient.chatCompletionStream(
+                    request,
+                    this.getEffectiveTools(),
+                    (token: string) => {
+                      if (!streamedTokens) {
+                        this.ui.stopSpinner(true);
+                        process.stdout.write(pc.bold(pc.magenta("\n💭 Assistant: ")));
+                        streamedTokens = true;
+                      }
+                      process.stdout.write(safeTerminal(token));
+                      this.observer?.onAssistantDelta?.(token);
+                    },
+                    s.requestId,
+                    signal,
+                  )),
+            ),
             probe: (probeSignal, opts) =>
               typeof activeClient.probeAvailability === "function"
                 ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
@@ -5948,6 +6098,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Parse the response using hybrid parser
         const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
         const parsed = parseModelResponse(assistantMessage, { nativeTools });
+        this.addToolCallSyntax(parsed.toolCallSyntax);
 
         // Update cumulative token usage
         const promptEst = calculateContextBudget(
@@ -6109,6 +6260,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             });
           }
           this.persistProgress({ messages: true });
+          // A cycle of parallel reads is still one model/tool cycle: --step pauses here as it does after the sequential path.
+          if (isStep && modelStop === "NONE" && !interruption && !inferenceFailure && !persistenceFailure && !signal.aborted) {
+            stopReason = "STEP_PAUSED";
+            stopDetail = "paused after one model/tool cycle (--step)";
+            break;
+          }
           endStep();
           continue;
         }
@@ -6200,6 +6357,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (modelStop === "TASK_COMPLETED_TOOL" && this.hasQueuedSteering()) {
           modelStop = "NONE";
           finalOutputComplete = false;
+        }
+
+        if (isStep && modelStop === "NONE" && !interruption && !inferenceFailure && !persistenceFailure) {
+          stopReason = "STEP_PAUSED";
+          stopDetail = "paused after one model/tool cycle (--step)";
+          break;
         }
 
         endStep();
@@ -6416,6 +6579,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       ...(objective ? { objective } : {}),
       ...(this.turnPersistenceFailures.length ? { persistence: { durable: false as const, failures: [...new Set(this.turnPersistenceFailures)].slice(0, 8) } } : {}),
       ...(this.durable ? { tokenAccounting: this.tokenAccounting() } : {}),
+      ...(Object.values(this.turnToolCallSyntax).some((n) => n > 0) ? { toolCallSyntax: { ...this.turnToolCallSyntax } } : {}),
     };
 
     if (input.interruption) {
@@ -6454,9 +6618,15 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }));
     }
     if (input.limitReached) {
+      const stepPaused = input.stopReason === "STEP_PAUSED";
       return deepFreezeTurn(assertTurnResultInvariants({
-        ...base, execution: "LIMIT_REACHED", outcome: "NOT_ESTABLISHED", reason: input.stopReason ?? "STEP_LIMIT_REACHED",
-        ...(input.stopDetail ? { detail: input.stopDetail } : {}), finalOutputComplete: false,
+        ...base,
+        execution: "LIMIT_REACHED",
+        outcome: "NOT_ESTABLISHED",
+        reason: input.stopReason ?? "STEP_LIMIT_REACHED",
+        ...(stepPaused ? { stepPaused: true } : {}),
+        ...(input.stopDetail ? { detail: input.stopDetail } : {}),
+        finalOutputComplete: false,
       }));
     }
     // A finished turn with operator requirements still open or blocked established nothing about the objective, whatever
@@ -6601,7 +6771,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (!done && !nextAction) {
       if (failedCheck && turn.verification?.command) nextAction = `Fix the failing check (${failedCheck}) and rerun ${turn.verification.command}.`;
       else if (turn.reason === "STAGNATION_DETECTED") nextAction = "Review the repeated action and give the agent new direction (steer or a narrower request).";
-      else if (turn.reason === "STEP_BUDGET_EXHAUSTED" || turn.reason === "TIME_BUDGET_EXHAUSTED") nextAction = "Send a follow-up to continue from the saved state, or raise the budget.";
+      else if (turn.reason === "STEP_BUDGET_EXHAUSTED" || turn.reason === "TIME_BUDGET_EXHAUSTED" || turn.reason === "STEP_PAUSED") nextAction = "Send a follow-up to continue from the saved state, or raise the budget.";
       else if (remaining.length) nextAction = `Continue with ${remaining[0]}.`;
     }
     return {
@@ -6613,7 +6783,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     };
   }
 
-  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean }): Promise<TurnResult> {
+  async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; step?: boolean }): Promise<TurnResult> {
     this.ui.banner();
     console.log(`🎯 Task: ${safeTerminal(typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]")}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
@@ -6760,8 +6930,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           everSucceeded: typeof activeClient.hasEverSucceeded === "function" ? activeClient.hasEverSucceeded() : true,
           endpoint: activeClient.endpoint,
         }).run(requestId, {
-          submit: (s) => this.submitGuardingLength(lengthGuard, this.messages, (request) =>
-            activeClient.chatCompletion(request, this.getEffectiveTools(), s.requestId, signal)),
+          submit: (s) => this.submitGenAiRequest(activeClient, () =>
+            this.submitGuardingLength(lengthGuard, this.messages, (request) =>
+              activeClient.chatCompletion(request, this.getEffectiveTools(), s.requestId, signal))),
           probe: (probeSignal, opts) =>
             typeof activeClient.probeAvailability === "function"
               ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
@@ -6806,6 +6977,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       else this.totalTokens.estimatedRequests++;
       const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
       const parsed = parseModelResponse(assistantMessage, { nativeTools });
+      this.addToolCallSyntax(parsed.toolCallSyntax);
       this.uniqueCallIds(parsed.toolCalls, tracker);
       this.messages.push({
         role: "assistant",
@@ -6874,6 +7046,87 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
       finalSummary = parsed.thoughtText || finalSummary;
       currentStep++;
+    }
+  }
+
+  private getTraceRecorder(): LocalTraceRecorder | undefined {
+    if (this.traceDisabled) return undefined;
+    const sessionId = this.traceContextSessionId ?? this.currentTaskId;
+    if (this.traceRecorder && this.traceSessionId === sessionId) return this.traceRecorder;
+    try {
+      this.traceRecorder = new LocalTraceRecorder({ sessionId, homeDir: os.homedir() });
+      this.traceSessionId = sessionId;
+      return this.traceRecorder;
+    } catch {
+      this.traceDisabled = true;
+      return undefined;
+    }
+  }
+
+  private safeStartTraceSpan(
+    name: string,
+    attributes: TraceAttributes = {},
+    parentSpanId: string | undefined = this.activeTraceSpanId,
+  ): SpanHandle | undefined {
+    try {
+      return this.getTraceRecorder()?.startSpan({ name, attributes, ...(parentSpanId ? { parentSpanId } : {}) });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private safeStartGenAiInference(options: { operationName: string; providerName: string; requestModel?: string }): SpanHandle | undefined {
+    try {
+      const recorder = this.getTraceRecorder();
+      return recorder?.startGenAiInference({ ...options, ...(this.activeTraceSpanId ? { parentSpanId: this.activeTraceSpanId } : {}) });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async submitGenAiRequest<T>(client: LocalLlmClient, submit: () => Promise<T>): Promise<T> {
+    let providerName = "unknown";
+    let requestModel = this.config.model;
+    try {
+      providerName = client.getProviderId?.() || providerName;
+      requestModel = client.getModel?.() || requestModel;
+    } catch {
+      // Provider metadata is optional telemetry and must not interrupt inference.
+    }
+    const span = this.safeStartGenAiInference({ operationName: "chat", providerName, requestModel });
+    try {
+      const response = await submit();
+      this.safeEndTraceSpan(span, "ok");
+      return response;
+    } catch (error) {
+      this.safeEndTraceSpan(span, "error");
+      throw error;
+    }
+  }
+
+  private inheritTraceContext(parent: AutonomousAgent): void {
+    this.traceContextSessionId = parent.traceContextSessionId ?? parent.currentTaskId;
+    this.traceRecorder = parent.getTraceRecorder();
+    this.traceSessionId = this.traceContextSessionId;
+    this.traceDisabled = parent.traceDisabled;
+    this.activeTraceSpanId = parent.activeTraceSpanId;
+  }
+
+  private safeEndTraceSpan(span: SpanHandle | undefined, status: TraceStatus, attributes?: TraceAttributes): void {
+    try {
+      span?.end({ status, ...(attributes ? { attributes } : {}) });
+    } catch {
+      // Local telemetry is best-effort and must never change task execution.
+    }
+  }
+
+  private traceStatusForExecution(execution: TurnResult["execution"]): TraceStatus {
+    switch (execution) {
+      case "COMPLETED": return "ok";
+      case "FAILED":
+      case "BLOCKED": return "error";
+      case "INTERRUPTED":
+      case "LIMIT_REACHED": return "unset";
     }
   }
 

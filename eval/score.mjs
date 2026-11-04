@@ -211,11 +211,41 @@ const t3 = t3Runs.length ? (() => {
   return summary;
 })() : null;
 
+const evaluatorRuns = records.filter((r) => Array.isArray(r.evaluators) && r.evaluators.length > 0);
+const evaluatorStats = new Map();
+for (const r of evaluatorRuns) {
+  for (const ev of r.evaluators) {
+    if (!ev || typeof ev.evaluator !== "string") continue;
+    let stat = evaluatorStats.get(ev.evaluator);
+    if (!stat) {
+      stat = { evaluator: ev.evaluator, runs: 0, passed: 0, totalScore: 0 };
+      evaluatorStats.set(ev.evaluator, stat);
+    }
+    stat.runs++;
+    if (ev.passed) stat.passed++;
+    stat.totalScore += (typeof ev.score === "number" ? ev.score : (ev.passed ? 1 : 0));
+  }
+}
+const codeEvaluators = [...evaluatorStats.values()].map((s) => ({
+  evaluator: s.evaluator,
+  runs: s.runs,
+  passed: s.passed,
+  passRate: s.runs ? s.passed / s.runs : 0,
+  averageScore: s.runs ? s.totalScore / s.runs : 0,
+}));
+
 if (process.argv.includes("--json")) {
-  console.log(JSON.stringify({ totals, pooled, rows, faults: faultRows, t4, ...(t3 ? { t3 } : {}), replacements, ...(peerComparison ? { peerComparison } : {}) }, null, 2));
+  console.log(JSON.stringify({ totals, pooled, rows, faults: faultRows, t4, ...(t3 ? { t3 } : {}), ...(codeEvaluators.length ? { codeEvaluators } : {}), replacements, ...(peerComparison ? { peerComparison } : {}) }, null, 2));
 } else {
   const pct = (x) => `${Math.round(x * 100)}%`;
   console.log(`runs ${totals.runs} · false VERIFIED ${totals.falseVerified} · crashed ${totals.crashed} · harness errors ${totals.errors} · contaminated ${totals.contaminated} (excluded from pass rates) · replaced by rerun ${totals.replacedByRerun}\n`);
+  if (codeEvaluators.length) {
+    console.log("| evaluator | runs | passed | pass rate | avg score |\n|---|---:|---:|---:|---:|");
+    for (const e of codeEvaluators) {
+      console.log(`| ${e.evaluator} | ${e.runs} | ${e.passed} | ${pct(e.passRate)} | ${e.averageScore.toFixed(3)} |`);
+    }
+    console.log("");
+  }
   console.log("| config | scored runs | correct | pass rate (95% CI) | false VERIFIED | crash rate | regressions | tokens / correct | wall s / correct |\n|---|---|---|---|---|---|---|---|---|");
   for (const p of pooled) console.log(`| ${p.config} | ${p.n} | ${p.correct} | ${pct(p.rate)} (${pct(p.ci[0])}–${pct(p.ci[1])}) | ${p.falseVerified} | ${pct(p.crashRate)} | ${p.regressions} | ${p.tokensPerCorrect?.toFixed(0) ?? "–"} | ${p.wallSecondsPerCorrect?.toFixed(0) ?? "–"} |`);
   if (faultRows.length) {

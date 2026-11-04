@@ -24,9 +24,16 @@ import { TaskStateNotFoundError } from "./core/state.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
-import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, redactDiagnostic, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
+import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
 import { safeTerminal } from "./ui.js";
+import { isolateEvalCommandHome, runVersionedEvalCommand } from "./eval_cli.js";
+import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
+
+function formatCliDiagnostic(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return safeTerminal(redactDiagnosticForOutput(message));
+}
 
 function collectDeliverableFile(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -37,7 +44,7 @@ function buildConfig(options: any): HarnessConfig {
   try {
     return buildConfigOrThrow(options);
   } catch (err: any) {
-    console.error(pc.red(`Configuration error: ${err?.message ?? err}`));
+    console.error(pc.red(`Configuration error: ${formatCliDiagnostic(err)}`));
     process.exit(2);
   }
 }
@@ -52,6 +59,7 @@ const __dirname = path.dirname(__filename);
 // Keep the lease for the full frontend/sidecar lifetime, including synchronous
 // TUI dispatch. Maintenance recovery acquires its own exclusive lease instead.
 const startupArgs = process.argv.slice(2);
+const restoreEvalStartupHome = isolateEvalCommandHome(startupArgs);
 const { acquireClientLease, releaseClientLease, clientInvocationKind } = await import("./core/client_lease.js");
 const invocationKind = clientInvocationKind(startupArgs);
 const startupReadOnly = invocationKind === "metadata" || (startupArgs[0] === "upgrade" && startupArgs.includes("--check"));
@@ -67,7 +75,7 @@ if (startupArgs[0] === "upgrade" && startupArgs.includes("--check")) {
       throw new Error("Pending state restore must be recovered before running upgrade --check");
     }
   } catch (error: any) {
-    console.error(`[maintenance] ${error?.message ?? "Nexus restore state could not be verified"}`);
+    console.error(`[maintenance] ${formatCliDiagnostic(error?.message ?? "Nexus restore state could not be verified")}`);
     process.exit(2);
   }
 }
@@ -82,7 +90,7 @@ if (invocationKind === "restore" || (invocationKind === "client" && !startupRead
       throw new Error("Pending state restore could not be recovered; no state was admitted");
     }
   } catch (error: any) {
-    console.error(`[maintenance] ${error?.message ?? "Nexus restore recovery failed closed"}`);
+    console.error(`[maintenance] ${formatCliDiagnostic(error?.message ?? "Nexus restore recovery failed closed")}`);
     process.exit(2);
   }
 }
@@ -91,12 +99,14 @@ if (invocationKind === "client") {
     const lease = acquireClientLease(process.env.HOME || os.homedir());
     process.once("exit", () => releaseClientLease(lease));
   } catch (error: any) {
-    console.error(`[maintenance] ${error.message}`);
+    console.error(`[maintenance] ${formatCliDiagnostic(error)}`);
     process.exit(2);
   }
   loadEnvironment();
   operatorConfigStartupError = operatorConfigLoadError();
 }
+// Release the HOME-scoped client lease before deleting the temporary HOME.
+if (restoreEvalStartupHome) process.once("exit", restoreEvalStartupHome);
 
 async function recoverInterruptedUpgrade(topLevelCommand: string): Promise<void> {
   // Diagnose interrupted upgrades before launching a new CLI/TUI session.
@@ -108,12 +118,12 @@ async function recoverInterruptedUpgrade(topLevelCommand: string): Promise<void>
   const journal = readJournal(packagedPrefix);
   if ((journal && !["idle", "complete", "rolled_back"].includes(journal.state)) || (!journal && fs.existsSync(getJournalPath(packagedPrefix)))) {
     const outcome = recoverUpgrade(packagedPrefix);
-    if (outcome.action === "upgrade_in_progress") console.error(`[upgrade] ${outcome.details}`);
+    if (outcome.action === "upgrade_in_progress") console.error(`[upgrade] ${formatCliDiagnostic(outcome.details)}`);
     if (outcome.action === "manual_intervention") {
-      console.error(`[upgrade] ${outcome.details}. Run nexus upgrade --recover after resolving the recorded failure.`);
+      console.error(`[upgrade] ${formatCliDiagnostic(outcome.details)}. Run nexus upgrade --recover after resolving the recorded failure.`);
       process.exit(2);
     }
-    if (outcome.recovered) console.warn(`[upgrade] ${outcome.details}`);
+    if (outcome.recovered) console.warn(`[upgrade] ${formatCliDiagnostic(outcome.details)}`);
   }
 }
 
@@ -185,7 +195,7 @@ function spawnTui(tuiBin: string, sidecarScript: string): void {
     { stdio: "inherit" }
   );
   if (result.error) {
-    console.error(`Failed to launch nexus-tui: ${result.error.message}`);
+    console.error(`Failed to launch nexus-tui: ${formatCliDiagnostic(result.error)}`);
     process.exit(1);
   }
   process.exit(result.status ?? (result.signal ? 1 : 0));
@@ -404,6 +414,7 @@ program
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("-r, --resume [id]", "Resume previous session or task state")
+  .option("--step", "Execute one model/tool cycle and pause deterministically")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
     // Preserve inherited CLI values when the command-level duplicate only has
     // its default; explicitly supplied command options still take precedence.
@@ -469,7 +480,7 @@ program
             .listTasks({ workspace: targetWorkspace })
             .filter((t) => t.taskId !== app.getTaskId());
           if (tasks.length === 0) {
-            console.error(`no task to resume in ${targetWorkspace}; see 'nexus status'`);
+            console.error(`no task to resume in ${formatCliDiagnostic(targetWorkspace)}; see 'nexus status'`);
             app.shutdown();
             exitAfterFlush(2);
             return;
@@ -477,13 +488,14 @@ program
           resumeTaskId = tasks[0].taskId;
         }
         if (!prompt) {
-          prompt = "continue";
+          prompt = options.step ? "" : "continue";
         }
       }
       const result = await app.runTask(prompt, {
         json: isJson,
         resumeTaskId,
         signal: abort.signal,
+        step: Boolean(options.step),
       });
 
       const cloud = UsageLedger.global().cloudTotals();
@@ -501,17 +513,17 @@ program
           taskId: app.getTaskId(),
           success: false,
           status: "failed",
-          prompt,
+          prompt: redactDiagnosticForOutput(prompt),
           output: "",
           plan: [],
           milestones: [],
           validationReceipts: [],
           tokenStats: { prompt: 0, completion: 0, total: 0 },
           durationMs: 0,
-          error: err.message,
+          error: redactDiagnosticForOutput(String(err?.message ?? err)),
         }, null, 2));
       } else {
-        console.error(pc.red(`\nTask failed: ${safeTerminal(String(err?.message ?? err))}`));
+        console.error(pc.red(`\nTask failed: ${formatCliDiagnostic(err)}`));
       }
       const exitCode = (err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? 2 : 1;
       app.shutdown();
@@ -542,7 +554,7 @@ program
         }
       }
     } catch (err: any) {
-      console.error(pc.red(`Error: ${err.message}`));
+      console.error(pc.red(`Error: ${formatCliDiagnostic(err)}`));
     }
     console.log();
   });
@@ -591,7 +603,7 @@ async function doctorCommand(_options: any, cmd?: Command): Promise<void> {
     exitAfterFlush(doctorExitCode(report));
   } catch (err: any) {
     // The doctor itself failed (not a finding): exit 3 with a redacted message, JSON when asked for.
-    const message = redactDiagnostic(err?.message ?? String(err));
+    const message = formatCliDiagnostic(err);
     if (options.json) console.log(JSON.stringify({ schemaVersion: DOCTOR_SCHEMA_VERSION, tool: "nexus doctor", error: message }, null, 2));
     else console.error(`nexus doctor could not run: ${message}`);
     exitAfterFlush(DOCTOR_EXIT.error);
@@ -957,7 +969,7 @@ program
       }, delay);
       console.log();
     } catch (err: any) {
-      console.error(pc.red(`Replay error: ${err.message}`));
+      console.error(pc.red(`Replay error: ${formatCliDiagnostic(err)}`));
     }
   });
 
@@ -1015,16 +1027,48 @@ program
   });
 
 program
-  .command("eval <dataset>")
-  .description("[experimental] Evaluate SWE-bench / benchmark dataset against Nexus Code harness")
+  .command("eval [legacy-dataset]")
+  .description("[experimental] Evaluate a versioned dataset or a legacy benchmark file")
+  .option("--dataset <path>", "Versioned dataset directory (legacy files remain supported)")
+  .option("--split <name>", "Versioned dataset split: regression or benchmark")
+  .option("--runs <count>", "Number of independent evaluation runs", "1")
+  .option("--isolated-home", "Run with a temporary HOME and isolated XDG state directories")
+  .option("--format <format>", "Versioned score artifact format: json", "json")
   .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
   .option("-m, --model <name>", "Model name identifier (default: active model in LM Studio/vLLM)")
   .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
   .option("-s, --max-steps <number>", "Maximum steps per task instance", "30")
   .option("-t, --temperature <number>", "Model temperature", "0.2")
-  .option("--output <path>", "Output file path for Markdown scorecard", "eval-scorecard.md")
-  .option("--limit <number>", "Limit number of benchmark instances to evaluate")
-  .action(async (datasetPath: string, options: any) => {
+  .option("--max-minutes <number>", "Maximum minutes per task instance", "120")
+  .option("--output <path>", "Output file path for the score artifact")
+  .option("--limit <number>", "Limit legacy dataset instances (not supported for versioned datasets)")
+  .action(async (legacyDataset: string | undefined, options: any) => {
+    const datasetPath = options.dataset || legacyDataset;
+    if (!datasetPath) throw new Error("provide --dataset <path>");
+    if (options.dataset && legacyDataset) throw new Error("provide the dataset path once, using either --dataset or the legacy positional argument");
+    let datasetIsDirectory = false;
+    try { datasetIsDirectory = fs.statSync(datasetPath).isDirectory(); } catch {}
+    if ((datasetIsDirectory || options.split) && options.limit !== undefined) {
+      throw new Error("--limit is not supported for versioned datasets; select a split or provide a dataset with the desired task population");
+    }
+    if (options.split && !datasetIsDirectory) throw new Error("--split is available only with a versioned dataset directory");
+    if (options.format !== "json") throw new Error("--format currently supports only json");
+    if (datasetIsDirectory) {
+      const report = await runVersionedEvalCommand({
+        dataset: datasetPath,
+        split: options.split,
+        runs: options.runs,
+        limit: options.limit,
+        output: options.output,
+        workspace: options.workspace,
+        maxSteps: options.maxSteps,
+        maxMinutes: options.maxMinutes,
+        temperature: options.temperature,
+      }, buildConfig(options));
+      console.log(report.output);
+      console.error(pc.dim(`Structured score saved to ${path.resolve(options.output || "eval-score.json")}; run artifacts: ${report.runner.outputDir}`));
+      return;
+    }
     const config = buildConfig(options);
     console.log(pc.bold(pc.cyan(`\n📊 Loading evaluation dataset: ${datasetPath}`)));
     let instances = BenchmarkEvaluator.loadDataset(datasetPath);
@@ -1138,7 +1182,7 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
   const name = topLevelCommand === program ? program.name() : topLevelCommand.name();
 
   if (operatorConfigStartupError && name !== "doctor" && name !== "check") {
-    console.error(pc.red(`Configuration error: ${operatorConfigStartupError.message}`));
+    console.error(pc.red(`Configuration error: ${formatCliDiagnostic(operatorConfigStartupError)}`));
     process.exit(2);
   }
 

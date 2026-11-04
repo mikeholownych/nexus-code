@@ -477,6 +477,7 @@ export function buildConfig(options: any): HarnessConfig {
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(anthropicThinkingBudget ? { anthropicThinkingBudget } : {}),
     ...(operationPolicy ? { operationPolicy } : {}),
+    ...(options.step ? { step: true } : {}),
   };
 }
 

@@ -10,8 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startModelProxy } from "./model_proxy.mjs";
-import { asUserSpec, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusContextLimitArgs, nexusLimitsProblem, qualificationBudgetProblem, runtimeCorpusOverlapProblem, taskTreeDigest, validateTask } from "./validate.mjs";
-import { agentSandboxArgv, assertNoSymlinks, candidateAgentPath, confinedPath, grantRunAsAccess, hiddenOutputHasTests, isolatedProcessArgv, normalizeRunAsPermissions, runIsolated, runIsolatedProcess, sandboxAvailable, stageHiddenFiles } from "./isolate.mjs";
+import { asUserSpec, corpusManifestProblem, corpusTaskRows, fetchModelEntry, hiddenTestIsolationProblem, modelFingerprint, nexusLimitsProblem, qualificationBudgetProblem, runtimeCorpusOverlapProblem, taskTreeDigest, validateTask } from "./validate.mjs";
+import { agentSandboxArgv, assertNoSymlinks, confinedPath, grantRunAsAccess, hiddenOutputHasTests, isolatedProcessArgv, normalizeRunAsPermissions, runIsolated, runIsolatedProcess, sandboxAvailable, stageHiddenFiles } from "./isolate.mjs";
 import { runBlackBoxOracle } from "./oracle.mjs";
 import { stageRepoWorkspace } from "./workspace.mjs";
 import { applyAgentChanges, cloneWorkspace } from "./hardened_check.mjs";
@@ -19,18 +19,31 @@ import { containmentProblem, resourceProbeProblem, spawnContained } from "./reso
 import { StringDecoder } from "node:string_decoder";
 import { commandBaseline, countCompactions, createT3Driver, scoreT3Run, steeringBaseline, steeringPrecondition, t3Snapshot } from "./t3.mjs";
 import { observeT4Fixture } from "./t4_fixtures.mjs";
+import { assertDatasetTaskDigest, loadDataset } from "./dataset.mjs";
+import { createAgentLaunchPayload, serializeAgentLaunchPayload } from "./runner_api.mjs";
+import { assertTaskSnapshotDigest } from "./runner_integrity.mjs";
+import { captureWorkspaceSnapshot, needsEvaluatorConfigurationBaseline, runCodeEvaluators } from "./evaluators/code/runner.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
 if (args.out) args.out = path.resolve(args.out); // agents run elsewhere: paths handed to them must be absolute
-if (!args.config || !args.out) {
-  console.error("usage: eval/run.mjs --config eval/configs/<name>.json --out <dir> [--tasks eval/tasks] [--only id,id] [--runs N]");
+if (!args.config || !args.out || (args.dataset && (args.dataset === true || args.tasks)) || (Object.hasOwn(args, "split") && !args.dataset)) {
+  console.error("usage: eval/run.mjs --config eval/configs/<name>.json --out <dir> [--dataset eval/datasets/<name> [--split regression|benchmark] | --tasks eval/tasks] [--only id,id] [--runs N]");
   process.exit(2);
 }
 const configBytes = fs.readFileSync(args.config);
 const configSha256 = createHash("sha256").update(configBytes).digest("hex");
 const config = JSON.parse(configBytes.toString("utf8"));
-const tasksDir = path.resolve(args.tasks ?? path.join(ROOT, "eval/tasks"));
+const datasetRoot = args.dataset ? path.resolve(args.dataset) : null;
+const only = args.only ? new Set(String(args.only).split(",")) : null;
+let dataset = null;
+try {
+  if (datasetRoot) dataset = loadDataset(datasetRoot, { split: args.split ?? null, only });
+} catch (error) {
+  console.error(`eval/run.mjs: dataset invalid: ${error.message}`);
+  process.exit(2);
+}
+const tasksDir = dataset ? path.join(datasetRoot, "tasks") : path.resolve(args.tasks ?? path.join(ROOT, "eval/tasks"));
 function custodyCorpusPathsForRun() {
   return [
     config.corpusCustody?.reportPath,
@@ -47,7 +60,6 @@ function protectedCorpusPathsForRun() {
   return [tasksDir, ...(includeParent ? [parent] : []), ...custodyCorpusPathsForRun()];
 }
 const runs = Number(args.runs ?? config.runs ?? 1);
-const only = args.only ? new Set(String(args.only).split(",")) : null;
 // --pairs "task run,task run": rerun exactly these (runs that failed on infrastructure; see eval/infra.mjs).
 const pairs = args.pairs ? String(args.pairs).split(",").filter(Boolean).map((p) => p.trim().split(/\s+/)) : null;
 fs.mkdirSync(path.dirname(args.out), { recursive: true });
@@ -61,10 +73,8 @@ try {
   }
   throw error;
 }
-const resultsFile = path.join(args.out, "results.jsonl");
-
 const identity = harnessIdentity();
-const availableTaskIds = fs.readdirSync(tasksDir).filter((d) => {
+const availableTaskIds = dataset ? dataset.rows.map((row) => row.id).sort() : fs.readdirSync(tasksDir).filter((d) => {
   const entry = path.join(tasksDir, d);
   try { return fs.lstatSync(entry).isDirectory() && fs.existsSync(path.join(entry, "task.json")); }
   catch { return false; }
@@ -75,14 +85,23 @@ fs.chmodSync(taskSnapshots, 0o700);
 process.on("exit", () => fs.rmSync(taskSnapshots, { recursive: true, force: true }));
 const taskRecords = [];
 for (const id of tasks) {
-  const source = confinedPath(tasksDir, id);
-  assertNoSymlinks(source);
-  const before = taskTreeDigest(source);
+  const datasetRow = dataset?.rows.find((row) => row.id === id);
+  const source = datasetRow?.dir ?? confinedPath(tasksDir, id);
+  let before;
+  if (datasetRow) {
+    assertDatasetTaskDigest(source, datasetRow.treeSha256, id);
+    before = datasetRow.treeSha256;
+  } else {
+    assertNoSymlinks(source);
+    before = taskTreeDigest(source);
+  }
   const snapshot = path.join(taskSnapshots, id);
   fs.cpSync(source, snapshot, { recursive: true, verbatimSymlinks: true });
-  if (taskTreeDigest(snapshot) !== before) throw new Error(`task ${id} changed while the runner froze its input`);
+  if (datasetRow) assertDatasetTaskDigest(snapshot, datasetRow.treeSha256, id);
+  else if (taskTreeDigest(snapshot) !== before) throw new Error(`task ${id} changed while the runner froze its input`);
   const taskFile = confinedPath(snapshot, "task.json");
-  taskRecords.push({ id, dir: snapshot, treeSha256: before, task: JSON.parse(fs.readFileSync(taskFile, "utf8")) });
+  const frozenTask = JSON.parse(fs.readFileSync(taskFile, "utf8"));
+  taskRecords.push({ id, dir: snapshot, treeSha256: before, task: datasetRow ? { ...datasetRow.task, dir: snapshot } : frozenTask, split: datasetRow?.split ?? null, versionedDataset: Boolean(datasetRow) });
 }
 if (config.qualification === true && only) {
   console.error("eval/run.mjs: qualification task subsets are forbidden; use a frozen corpus run or an explicitly recorded infrastructure-pair rerun");
@@ -146,12 +165,16 @@ if (problems.length) {
   console.error(`eval/run.mjs: not starting; ${problems.length} problem(s):\n${problems.map((p) => `  - ${p}`).join("\n")}`);
   process.exit(2);
 }
+const resultsFile = path.join(args.out, "results.jsonl");
+// The scorer consumes this file even when the selected dataset split is empty.
+fs.writeFileSync(resultsFile, "", { flag: "wx" });
 const frozenTaskRows = taskRecords.map(({ id }) => corpusTaskRows(taskSnapshots, [id])[0]);
 fs.writeFileSync(path.join(args.out, "manifest.json"), JSON.stringify({
   createdAt: new Date().toISOString(),
   harness: identity,
   config: redactConfig(config),
   configSha256,
+  dataset: dataset ? { name: dataset.manifest.name, version: dataset.manifest.version, split: args.split ?? null, manifestSha256: dataset.manifestSha256, taskIds: tasks } : null,
   qualificationCorpus: config.qualification === true ? { manifestSha256: config.corpusManifestSha256, tasks: frozenTaskRows } : null,
   fingerprint,
   agentVersion: agentIdentity.record,
@@ -164,9 +187,9 @@ fs.writeFileSync(path.join(args.out, "manifest.json"), JSON.stringify({
 
 // Run-major order (every task once, then again): a pass cut short still has the same number of runs per task.
 for (let run = 1; run <= runs; run++) {
-  for (const { id, dir, treeSha256, task: taskData } of taskRecords) {
+  for (const { id, dir, treeSha256, task: taskData, versionedDataset } of taskRecords) {
     if (pairs && !pairs.some(([t, r]) => t === id && Number(r) === run)) continue;
-    if (taskTreeDigest(dir) !== treeSha256) throw new Error(`frozen task ${id} changed after manifest creation`);
+    assertTaskSnapshotDigest({ dir, treeSha256, id, versionedDataset });
     const task = { ...taskData, dir };
     const record = await runOnce(task, run);
     fs.appendFileSync(resultsFile, JSON.stringify(record) + "\n");
@@ -179,13 +202,21 @@ async function runOnce(task, run) {
   const scratch = config.resources?.workspaceRoot ?? os.tmpdir();
   const ws = fs.mkdtempSync(path.join(scratch, `nexus-eval-${task.id}-`));
   const checkDirs = [];
+  let typecheckBaselineWorkspace = null;
   const home = fs.mkdtempSync(path.join(scratch, "nexus-eval-home-"));
   const budget = effectiveBudget(task, config);
   const base = { task: task.id, tier: task.tier, ...(task.tier === "T3" ? { t3SteeringItems: task.steering.length } : {}), config: config.name, agent: config.agent ?? "nexus", agentVersion: agentIdentity.record, budget, run, harness: identity.string, model: config.model, startedAt: new Date().toISOString() };
   try {
     await prepareWorkspace(task, ws);
+    if (needsEvaluatorConfigurationBaseline(task)) {
+      typecheckBaselineWorkspace = fs.mkdtempSync(path.join(scratch, `nexus-eval-typecheck-baseline-${task.id}-`));
+      checkDirs.push(typecheckBaselineWorkspace);
+      cloneWorkspace(ws, typecheckBaselineWorkspace);
+    }
     // Taken now, while .git is the harness's own: after the agent runs, nothing executes git against its workspace.
     const baselineTree = gitRev(ws, "HEAD^{tree}");
+    const needsChangedFiles = task.evaluators?.some((item) => ["syntax_ast", "diff_boundary"].includes(typeof item === "string" ? item : item?.type));
+    const evaluatorBaseline = needsChangedFiles ? captureWorkspaceSnapshot(ws) : null;
     const t3Baseline = task.tier === "T3" ? steeringBaseline(task, ws) : null;
     // On the per-run task copy, so the steering hook in runAgent can read it. The commands run on a throwaway copy of
     // the staged workspace, so the agent starts on exactly the staged tree.
@@ -270,6 +301,7 @@ async function runOnce(task, run) {
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
     }
+    const evaluators = await runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline });
     const turn = agent.json?.turn ?? null;
     // Nexus reports a structured outcome; for the other agents a clean exit within the budget is their completion claim.
     const claimedComplete = turn
@@ -289,6 +321,7 @@ async function runOnce(task, run) {
       falseVerified: turn?.outcome === "VERIFIED" && !hidden.pass,
       contaminated,
       tokens: agent.json?.tokenStats ?? null,
+      ...(evaluators.length ? { evaluators, evaluatorsPass: evaluators.every((r) => r.passed) } : {}),
       ...(hardening ? { hardened: { baseline: hardening.baseline, applied: hardening.applied.length, discarded: hardening.discarded, configChanges: hardening.configChanges } } : {}),
       ...(t3 ? { t3 } : {}),
       model,
@@ -342,20 +375,23 @@ async function resolveAgentIdentity(config) {
   let command;
   let argsPrefix = [];
   if (agent === "nexus") {
-    if (config.qualification === true) {
+    if (config.qualification === true && (typeof config.nexusExecutable !== "string" || !path.isAbsolute(config.nexusExecutable))) {
+      return { record: null, problem: "qualification requires nexusExecutable to be the absolute path of the installed RC" };
+    }
+    if (config.qualification === true && (typeof config.expectedAgentVersion !== "string" || !config.expectedAgentVersion.trim())) {
+      return { record: null, problem: "qualification requires expectedAgentVersion to pin the installed RC" };
+    }
+    if (config.qualification === true && !/^[0-9a-f]{64}$/.test(config.nexusPackageSha256 ?? "")) {
+      return { record: null, problem: "qualification requires nexusPackageSha256 from the installed RC release asset" };
+    }
+    if (config.nexusExecutable !== undefined) {
       if (typeof config.nexusExecutable !== "string" || !path.isAbsolute(config.nexusExecutable)) {
-        return { record: null, problem: "qualification requires nexusExecutable to be the absolute path of the installed RC" };
-      }
-      if (typeof config.expectedAgentVersion !== "string" || !config.expectedAgentVersion.trim()) {
-        return { record: null, problem: "qualification requires expectedAgentVersion to pin the installed RC" };
-      }
-      if (!/^[0-9a-f]{64}$/.test(config.nexusPackageSha256 ?? "")) {
-        return { record: null, problem: "qualification requires nexusPackageSha256 from the installed RC release asset" };
+        return { record: null, problem: "nexusExecutable must be an absolute installed Nexus executable path" };
       }
       command = path.resolve(config.nexusExecutable);
       try {
         if (fs.realpathSync(command) === fs.realpathSync(path.join(ROOT, "cli/dist/index.js"))) {
-          return { record: null, problem: "qualification must use the installed RC, not the checkout cli/dist/index.js" };
+          return { record: null, problem: "runner API must use the installed Nexus executable, not the checkout cli/dist/index.js" };
         }
       } catch {}
     } else {
@@ -464,69 +500,6 @@ function sha256File(file) {
   });
 }
 
-function agentCommand(task, ws, home, budget, agentIdentity, localToken) {
-  const sampling = config.sampling ?? { temperature: 0.2 };
-  const limits = config.limits ?? { context: 65536, output: 8192 };
-  const forbiddenEnv = Object.keys(config.env ?? {}).find((key) => /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(key));
-  if (forbiddenEnv) throw new Error(`candidate configuration may not contain credential-like environment key ${forbiddenEnv}`);
-  const ep = "http://127.0.0.1:40127/v1";
-  const env = {
-    PATH: candidateAgentPath(config.env?.PATH), LANG: config.env?.LANG ?? "C.UTF-8", LC_ALL: config.env?.LC_ALL ?? "C.UTF-8",
-    TERM: config.env?.TERM ?? "dumb", HOME: "/home/eval", PWD: "/workspace", CI: "1",
-    LOCAL_LLM_API_KEY: localToken, OPENAI_API_KEY: localToken, GW_KEY: localToken,
-    XDG_CONFIG_HOME: "/home/eval/.config", XDG_DATA_HOME: "/home/eval/.local/share", XDG_STATE_HOME: "/home/eval/.local/state",
-  };
-  const agent = config.agent ?? "nexus";
-  if (agent === "nexus") {
-    if (task.t4Fixture) env.NEXUS_EVAL_TOOL_RECEIPTS = "1";
-    env.LOCAL_LLM_ENDPOINT = ep;
-    const contextArgs = nexusContextLimitArgs(config, limits.context);
-    if (task.tier === "T3") {
-      // T3 drives the sidecar, the operator channel that carries steering, with the same model, budgets and limits.
-      const checkout = agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js");
-      // An installed package is <package>/bin/nexus with the sidecar at <package>/lib/cli/dist/sidecar.js.
-      const packageDir = checkout ? null : path.dirname(path.dirname(fs.realpathSync(agentIdentity.command)));
-      const sidecar = checkout ? path.join(ROOT, "cli/dist/sidecar.js") : path.join(packageDir, "lib/cli/dist/sidecar.js");
-      if (!fs.existsSync(sidecar)) throw new Error(`T3 needs the Nexus sidecar at ${sidecar}`);
-      if (packageDir) {
-        // The launcher is bypassed, so the package itself must be mounted: it has to sit under sandboxRuntimeRoots.
-        const roots = (config.sandboxRuntimeRoots ?? []).flatMap((root) => { try { return [fs.realpathSync(root)]; } catch { return []; } });
-        if (!roots.some((root) => packageDir === root || packageDir.startsWith(`${root}${path.sep}`))) throw new Error(`T3 runs the sidecar from ${packageDir}, which must be under sandboxRuntimeRoots`);
-        env.NEXUS_HOME = packageDir;
-      }
-      const sidecarArgs = [sidecar, "--yes", "-w", "/workspace", "-e", ep, "-m", config.model, "-t", String(sampling.temperature), "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...contextArgs, ...(config.args ?? [])];
-      return checkout ? { cmd: process.execPath, argv: sidecarArgs, env, protocol: true } : { cmd: "/usr/bin/env", argv: ["node", ...sidecarArgs], env, protocol: true };
-    }
-    return { cmd: agentIdentity.command, argv: [...agentIdentity.argsPrefix, "run", "--yes", "--json", "-w", "/workspace", "-e", ep, "-m", config.model, "-t", String(sampling.temperature), "-s", "30", "--max-total-steps", String(budget.steps), "--max-turn-minutes", String(budget.minutes), ...contextArgs, ...(config.args ?? []), task.objective], env };
-  }
-  if (agent === "aider") {
-    return { cmd: agentIdentity.command, argv: ["--model", `openai/${config.model}`, "--openai-api-base", ep, "--yes-always", "--no-auto-commits", "--no-dirty-commits", "--no-gitignore", "--no-show-model-warnings", "--no-check-update", "--analytics-disable", "--no-pretty", "--no-fancy-input", ...(config.args ?? []), "--message", task.objective], env };
-  }
-  if (agent === "opencode") {
-    const dir = path.join(home, ".config/opencode");
-    fs.mkdirSync(dir, { recursive: true });
-    const modelOptions = { temperature: sampling.temperature, ...(sampling.seed !== undefined ? { seed: sampling.seed } : {}) };
-    fs.writeFileSync(path.join(dir, "opencode.json"), JSON.stringify({
-      $schema: "https://opencode.ai/config.json",
-      autoupdate: false,
-      share: "disabled",
-      permission: { edit: "allow", bash: "allow", webfetch: "deny" },
-      agent: { "nexus-eval": { mode: "primary", steps: budget.steps } },
-      provider: { gw: { npm: "@ai-sdk/openai-compatible", name: "gateway", options: { baseURL: ep, apiKey: "{env:GW_KEY}" }, models: { [config.model]: { name: config.model, limit: limits, options: modelOptions } } } },
-      model: `gw/${config.model}`,
-    }, null, 2));
-    // Provider packages are cached across runs (not per run): the cache holds code, not state.
-    env.XDG_CACHE_HOME = path.join(home, ".cache");
-    return { cmd: agentIdentity.command, argv: ["run", "--agent", "nexus-eval", "--model", `gw/${config.model}`, ...(config.args ?? []), task.objective], env };
-  }
-  if (agent === "goose") {
-    const u = new URL(ep);
-    Object.assign(env, { GOOSE_PROVIDER: "openai", GOOSE_MODEL: config.model, OPENAI_HOST: u.origin, OPENAI_BASE_PATH: `${u.pathname.replace(/^\/|\/$/g, "")}/chat/completions`, GOOSE_MODE: "auto", GOOSE_DISABLE_KEYRING: "1", GOOSE_CONTEXT_LIMIT: String(limits.context), GOOSE_MAX_TOKENS: String(limits.output), GOOSE_MAX_TURNS: String(budget.steps), GOOSE_TEMPERATURE: String(sampling.temperature) });
-    return { cmd: agentIdentity.command, argv: ["run", "--no-session", "--with-builtin", "developer", "--max-turns", String(budget.steps), ...(config.args ?? []), "-t", task.objective], env };
-  }
-  throw new Error(`agent ${agent} has no adapter`);
-}
-
 async function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, proxy) {
   if (task.t4RunnerFault !== "sigterm_resume") {
     return runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken);
@@ -560,7 +533,7 @@ async function runAgent(task, ws, home, budget, agentIdentity, proxyDirectory, l
 }
 
 function runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, localToken, { signalAfterAnswer = false, proxy = null, resume = false } = {}) {
-  const { cmd, argv, env, protocol } = agentCommand(task, ws, home, budget, agentIdentity, localToken);
+  const { command: cmd, argv, env, protocol } = createAgentLaunchPayload({ task, config, agentIdentity, home, budget, localToken });
   if (resume) {
     if ((config.agent ?? "nexus") !== "nexus" || protocol) throw new Error("T4 resume is supported only by Nexus run mode");
     const promptIndex = argv.lastIndexOf(task.objective);
@@ -607,9 +580,9 @@ function runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, 
     }) : null;
     child.stdin.on("error", () => {});
     if (driver) {
-      child.stdin.write(`${JSON.stringify({ command: cmd, argv, env, protocol: true })}\n`);
+      child.stdin.write(serializeAgentLaunchPayload({ command: cmd, argv, env, protocol: true }));
       driver.done.then(() => setTimeout(() => child.stdin.end(), 2000).unref());
-    } else child.stdin.end(JSON.stringify({ command: cmd, argv, env }));
+    } else child.stdin.end(serializeAgentLaunchPayload({ command: cmd, argv, env }));
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -769,7 +742,17 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = ["eval/run.mjs", "eval/validate.mjs", "eval/t4_fixtures.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs"];
+  const sourceFiles = [
+    "eval/run.mjs", "eval/dataset.mjs", "eval/runner_api.mjs", "eval/runner_integrity.mjs",
+    "eval/validate.mjs", "eval/t4_fixtures.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs",
+    "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs",
+    "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs",
+    "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs",
+    "eval/evaluators/code/index.mjs", "eval/evaluators/code/syntax_ast.mjs", "eval/evaluators/code/build.mjs",
+    "eval/evaluators/code/typecheck_clean.mjs", "eval/evaluators/code/diff_boundary.mjs",
+    "eval/evaluators/code/json_repair_rate.mjs", "eval/evaluators/code/parsers.mjs",
+    "eval/evaluators/code/command.mjs", "eval/evaluators/code/runner.mjs", "eval/evaluators/code/result.mjs",
+  ];
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };

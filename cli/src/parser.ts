@@ -24,6 +24,20 @@ export interface ParsedModelOutput {
   reasoningText?: string;
   toolCalls: ToolCall[];
   notices?: string[];
+  /** How the arguments of each recognized tool call parsed; present when the response carried one. */
+  toolCallSyntax?: ToolCallSyntaxCounts;
+}
+
+/**
+ * Tool-call argument syntax, counted per recognized call: valid JSON as sent (`native`), JSON that parsed only after a
+ * trailing or structural repair, or arguments that did not parse at all (`invalid`). Calls rejected for needing
+ * structural repair are still counted under `structural`.
+ */
+export interface ToolCallSyntaxCounts {
+  native: number;
+  trailing: number;
+  structural: number;
+  invalid: number;
 }
 
 export interface ParseModelResponseOptions {
@@ -338,14 +352,14 @@ function mergeRepairClass(a: JsonRepairClass, b: JsonRepairClass): JsonRepairCla
   return "none";
 }
 
-function normalizeToolArgsWithClass(args: any): { args: string; repaired: JsonRepairClass } {
+function normalizeToolArgsWithClass(args: any): { args: string; repaired: JsonRepairClass; invalid?: true } {
   if (typeof args === "string") {
     try {
       const { value: parsed, repaired } = repairJsonWithClass(args);
       const inner = normalizeToolArgsWithClass(parsed);
-      return { args: inner.args, repaired: mergeRepairClass(repaired, inner.repaired) };
+      return { args: inner.args, repaired: mergeRepairClass(repaired, inner.repaired), ...(inner.invalid ? { invalid: true as const } : {}) };
     } catch {
-      return { args, repaired: "structural" };
+      return { args, repaired: "structural", invalid: true };
     }
   }
   if (typeof args === "object" && args !== null) {
@@ -491,6 +505,23 @@ export function parseModelResponse(
   message: ChatMessage,
   optionsOrOffered?: Iterable<string> | ParseModelResponseOptions
 ): ParsedModelOutput {
+  const syntax: ToolCallSyntaxCounts = { native: 0, trailing: 0, structural: 0, invalid: 0 };
+  const parsed = parseModelResponseCounting(message, optionsOrOffered, syntax);
+  return syntax.native + syntax.trailing + syntax.structural + syntax.invalid > 0 ? { ...parsed, toolCallSyntax: syntax } : parsed;
+}
+
+function parseModelResponseCounting(
+  message: ChatMessage,
+  optionsOrOffered: Iterable<string> | ParseModelResponseOptions | undefined,
+  syntax: ToolCallSyntaxCounts,
+): ParsedModelOutput {
+  const count = (normalized: { repaired: JsonRepairClass; invalid?: true }, outer: JsonRepairClass = "none") => {
+    if (normalized.invalid) syntax.invalid += 1;
+    else {
+      const repaired = mergeRepairClass(outer, normalized.repaired);
+      syntax[repaired === "none" ? "native" : repaired] += 1;
+    }
+  };
   let offered: Iterable<string> | undefined;
   let nativeTools: boolean | undefined;
 
@@ -542,6 +573,7 @@ export function parseModelResponse(
           continue;
         }
         const normalized = normalizeToolArgsWithClass(tc.function.arguments);
+        count(normalized);
         if (normalized.repaired === "structural" && isWriteOrExecTool(name)) {
           notices.push(
             `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
@@ -587,6 +619,7 @@ export function parseModelResponse(
         continue;
       }
       const normalized = normalizeToolArgsWithClass(tc.function.arguments);
+      count(normalized);
       if (normalized.repaired === "structural" && isWriteOrExecTool(name)) {
         notices.push(
           `Tool call "${name}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`
@@ -634,6 +667,7 @@ export function parseModelResponse(
       if (name && typeof name === "string") {
         if (known(name)) {
           const normalized = normalizeToolArgsWithClass(args);
+          count(normalized, outerRepaired);
           const repaired = mergeRepairClass(outerRepaired, normalized.repaired);
           if (repaired === "structural" && isWriteOrExecTool(name)) {
             notices.push(
@@ -654,7 +688,8 @@ export function parseModelResponse(
         }
       }
     } catch {
-      // Ignore invalid JSON inside tool_call tag
+      // Invalid JSON inside a tool_call tag: not executed, but counted as an attempted call that did not parse.
+      syntax.invalid += 1;
     }
   }
 
@@ -680,6 +715,7 @@ export function parseModelResponse(
         if (name && typeof name === "string") {
           if (known(name)) {
             const normalized = normalizeToolArgsWithClass(args);
+            count(normalized, outerRepaired);
             const repaired = mergeRepairClass(outerRepaired, normalized.repaired);
             if (repaired === "structural" && isWriteOrExecTool(name)) {
               notices.push(

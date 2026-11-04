@@ -1,0 +1,7 @@
+{
+  "id": "t2-bugfix-csv",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 60,
+  "minutes": 20
+}

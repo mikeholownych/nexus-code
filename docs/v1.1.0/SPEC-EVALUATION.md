@@ -18,7 +18,7 @@ Nexus Code v1.0.0 established basic evaluation fixtures (`eval/tasks/`) and stat
 
 ### Core Design Goals
 1. **Separation of Stimulus and Assertion:** Agent execution tasks must never expose assertions, ground truth diffs, or verification commands to the agent during prompt generation or turn execution.
-2. **Versioned Task Governance:** Evaluation datasets must be immutable, version-tagged, and split into distinct partitions (`regression`, `benchmark`, `held-out`) to prevent benchmark contamination.
+2. **Versioned Task Governance:** Evaluation datasets must be immutable, version-tagged, and split into distinct `regression` and `benchmark` partitions. Held-out qualification corpora retain their separate custody and sealing process.
 3. **Pluggable Evaluator Hierarchy:** Support deterministic code evaluators, reference-based assertion oracles, LLM-as-judge graders, and pairwise evaluators under a uniform scoring interface.
 4. **Statistical Rigor:** All pass rates must compute Wilson score 95% confidence intervals across repeated configurations (minimum 5 runs per task configuration per DEC-05).
 5. **Zero-Egress Hermetic Execution:** All evaluation runs must execute inside containerized bubblewrap sandboxes with isolated `$HOME` and zero outbound network egress.
@@ -74,14 +74,14 @@ eval/datasets/core-regression-v1/
 ### 3.1 `manifest.json`
 ```json
 {
+  "schemaVersion": 1,
   "name": "core-regression-v1",
   "version": "1.1.0",
   "description": "Core regression and safety suite for Nexus Code autonomous coding",
   "createdAt": "2026-10-21T00:00:00Z",
   "splits": {
-    "benchmark": { "count": 30, "targetPassRate": 0.90 },
-    "regression": { "count": 15, "targetPassRate": 1.00 },
-    "adversarial": { "count": 10, "targetPassRate": 1.00 }
+    "benchmark": { "count": 6 },
+    "regression": { "count": 1 }
   },
   "domains": [
     "security-boundary",
@@ -89,7 +89,11 @@ eval/datasets/core-regression-v1/
     "retention-state",
     "tool-confinement",
     "upgrade-safety"
-  ]
+  ],
+  "files": {
+    "examples.jsonl": "<sha256 of exact file bytes>",
+    "oracles.jsonl": "<sha256 of exact file bytes>"
+  }
 }
 ```
 
@@ -100,14 +104,10 @@ eval/datasets/core-regression-v1/
   "split": "regression",
   "domain": "retention-state",
   "objective": "Verify that detached legacy client restore does not overwrite active leases.",
-  "workspaceFixture": "fixtures/retention_race_repo.tar.gz",
-  "maxTurns": 6,
-  "timeoutSeconds": 180,
-  "metadata": {
-    "difficulty": "high",
-    "severity": "blocker",
-    "sourcePr": 101
-  }
+  "taskDir": "tasks/TASK-RETENTION-001",
+  "tier": "T2",
+  "steps": 60,
+  "minutes": 20
 }
 ```
 
@@ -115,31 +115,17 @@ eval/datasets/core-regression-v1/
 ```json
 {
   "id": "TASK-RETENTION-001",
-  "assertions": [
-    {
-      "type": "test_command",
-      "command": "npm --prefix cli test -- test/retention_state_v2.test.ts",
-      "expectedExitCode": 0
-    },
-    {
-      "type": "file_exists",
-      "path": "cli/src/core/state_restore.ts"
-    },
-    {
-      "type": "code_evaluator",
-      "evaluator": "ast_no_bare_restore",
-      "targetFile": "cli/src/core/state_restore.ts"
-    },
-    {
-      "type": "diff_boundary",
-      "allowedPaths": [
-        "cli/src/core/state_restore.ts",
-        "cli/test/retention_state_v2.test.ts"
-      ]
-    }
-  ]
+  "hidden": { "protocol": "blackbox-v1", "casesFile": "oracles/TASK-RETENTION-001.json" },
+  "regression": { "command": "npm test --silent" }
 }
 ```
+
+`examples.jsonl` and `oracles.jsonl` contain one record per line and the same unique IDs. The manifest pins each JSONL
+file by SHA-256, records each task tree by SHA-256, and records exact counts for `regression` and `benchmark`. Example records use a closed allowlist of
+stimulus and task metadata fields; oracle records use a separate evaluator-only schema. The loader rejects unknown
+fields, digest/count mismatch, duplicate or unmatched IDs, unsupported splits, symlinks, and task paths outside the
+dataset. The loader itself does not exercise a candidate. Runner integration must prove the AC1/AC2 guarantee: the
+candidate receives only the objective and staged workspace, with oracle records and validator sources outside its mounts.
 
 ---
 

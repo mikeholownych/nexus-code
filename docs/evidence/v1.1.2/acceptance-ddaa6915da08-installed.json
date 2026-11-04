@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "candidate": {
+    "packageArchiveSha256": "ddaa6915da0808b8a95ac115c54a076411351c45229af7538ffc0236e59dad7c",
+    "launcherSha256": "320d7dc1603d30f863a9560a9101ab3fe1a57f164b7119c49e01d9ace40792c4",
+    "cliBundleSha256": "b35396a1814a54e896b620edfa8abef8b9890352ea66c927b3c3851a87dd51da",
+    "coreBinarySha256": "5a3ca7e8e9878bc8aec0e391e9e082372f03b678a7c6c0f3d86753211f97cc84"
+  },
+  "dataset": {
+    "name": "core-v1",
+    "version": "1.1.0",
+    "split": "benchmark",
+    "manifestSha256": "05ee2fa33ae5f6d6afc35df2e003c913de3f7bf0f817d2f76c709c16fb640d43",
+    "manifestSha256Source": "recomputed from final integrated eval/datasets/core-v1/manifest.json"
+  },
+  "provider": {
+    "kind": "loopback-deterministic-fake",
+    "capturedRequests": 6
+  },
+  "expectedTaskIds": [
+    "t2-bugfix-csv",
+    "t2-bugfix-duration",
+    "t2-debug-logs",
+    "t2-feature-inventory",
+    "t2-feature-slugify",
+    "t2-refactor-tax"
+  ],
+  "missingTaskIds": [],
+  "skippedTaskIds": [],
+  "results": [
+    {
+      "taskId": "t2-bugfix-csv",
+      "invocations": 1,
+      "requestSha256": "0ecfa5104ddb0efbbf09d90c71c9d46bf21a30ecbec994a8db780dd18a086e44",
+      "validatorResult": {
+        "hiddenPass": false,
+        "regressionPass": false,
+        "exitCode": 0,
+        "timedOut": false
+      },
+      "scorerResult": {
+        "claimed": 1,
+        "correct": 0,
+        "errors": 0,
+        "regressions": 1
+      }
+    },
+    {
+      "taskId": "t2-bugfix-duration",
+      "invocations": 1,
+      "requestSha256": "09ae06956013a429b999ac14ad2e844df3c60be8a312a1ef0909d9c615fb772f",
+      "validatorResult": {
+        "hiddenPass": false,
+        "regressionPass": false,
+        "exitCode": 0,
+        "timedOut": false
+      },
+      "scorerResult": {
+        "claimed": 1,
+        "correct": 0,
+        "errors": 0,
+        "regressions": 1
+      }
+    },
+    {
+      "taskId": "t2-debug-logs",
+      "invocations": 1,
+      "requestSha256": "57f5474b1e2f4fb89e7d8a307f559a10e4612f384d7c86299a711b4f2d7a8f65",
+      "validatorResult": {
+        "hiddenPass": false,
+        "regressionPass": true,
+        "exitCode": 0,
+        "timedOut": false
+      },
+      "scorerResult": {
+        "claimed": 1,
+        "correct": 0,
+        "errors": 0,
+        "regressions": 0
+      }
+    },
+    {
+      "taskId": "t2-feature-inventory",
+      "invocations": 1,
+      "requestSha256": "b2a2cd4c817f62a5f60555b6ad93efb29d40fe0c72eac03d2439328d6f3415f2",
+      "validatorResult": {
+        "hiddenPass": false,
+        "regressionPass": true,
+        "exitCode": 0,
+        "timedOut": false
+      },
+      "scorerResult": {
+        "claimed": 1,
+        "correct": 0,
+        "errors": 0,
+        "regressions": 0
+      }
+    },
+    {
+      "taskId": "t2-feature-slugify",
+      "invocations": 1,
+      "requestSha256": "f4eb7d9fa1cec06e9c1063ecad66492e0375c0a1bb93d02a55f2817294ca9b41",
+      "validatorResult": {
+        "hiddenPass": false,
+        "regressionPass": true,
+        "exitCode": 0,
+        "timedOut": false
+      },
+      "scorerResult": {
+        "claimed": 1,
+        "correct": 0,
+        "errors": 0,
+        "regressions": 0
+      }
+    },
+    {
+      "taskId": "t2-refactor-tax",
+      "invocations": 1,
+      "requestSha256": "c0fd5ceb25b0d39f62becfef32433d9683c24d665b032229304c0507237e3710",
+      "validatorResult": {
+        "hiddenPass": false,
+        "regressionPass": true,
+        "exitCode": 0,
+        "timedOut": false
+      },
+      "scorerResult": {
+        "claimed": 1,
+        "correct": 0,
+        "errors": 0,
+        "regressions": 0
+      }
+    }
+  ]
+}
