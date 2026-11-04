@@ -1078,12 +1078,16 @@ export function formatSafeSidecarText(value: string): string {
 /** Apply canonical redaction to every protocol field, including nested projected turn/history records. */
 export function formatSafeSidecarEvent(event: SidecarEvent): SidecarEvent | undefined {
   try {
-    // `workspace` is an operator-selected filesystem location surfaced as
-    // protocol state. Keep that typed path intact; recursive entropy scanning
-    // mistakes generated path components for credentials.
+    // The workspace path and its display name are operator-selected protocol
+    // state. Keep both intact; recursive entropy scanning mistakes generated
+    // path components for credentials.
     const workspace = event.type === "session.state" ? event.workspace : undefined;
+    const workspaceName = event.type === "session.state" ? event.workspace_name : undefined;
     const safe = redactForPersistence(event);
-    if (workspace !== undefined && safe.type === "session.state") safe.workspace = workspace;
+    if (safe.type === "session.state") {
+      if (workspace !== undefined) safe.workspace = workspace;
+      if (workspaceName !== undefined) safe.workspace_name = workspaceName;
+    }
     return safe;
   } catch {
     // Drop the complete event if classification fails; never serialize a partially sanitized structure.
