@@ -187,6 +187,30 @@ test("typecheck_clean rejects unavailable checkers on both revisions", async () 
   assert.equal(unavailable.details.infrastructureFailure, true);
 });
 
+test("typecheck_clean compares Rust diagnostics across baseline and candidate", async () => {
+  const spec = (command: string, cwd: string) => ({ command, args: ["check"], cwd });
+  const baselineDiagnostic = "error[E0308]: mismatched types at src/main.rs:2";
+  const candidateDiagnostic = "error[E0425]: cannot find value `missing` at src/main.rs:3";
+  const unchanged = await ev.evaluateTypecheckClean({
+    baseline: spec("cargo", "/tmp/rust-baseline"),
+    candidate: spec("cargo", "/tmp/rust-candidate"),
+    runner: async () => ({ status: 101, stderr: `${baselineDiagnostic}\n` }),
+  });
+  assert.equal(unchanged.passed, true, JSON.stringify(unchanged.details));
+
+  const added = await ev.evaluateTypecheckClean({
+    baseline: spec("cargo", "/tmp/rust-baseline"),
+    candidate: spec("cargo", "/tmp/rust-candidate"),
+    runner: async (_command: string, _args: string[], options: { cwd: string }) => ({
+      status: 101,
+      stderr: options.cwd.endsWith("baseline") ? baselineDiagnostic : `${baselineDiagnostic}\n${candidateDiagnostic}`,
+    }),
+  });
+  assert.equal(added.passed, false);
+  assert.deepEqual(added.details.newDiagnostics, [candidateDiagnostic]);
+  assert.equal(added.details.infrastructureFailure, false);
+});
+
 test("build and typecheck use pinned baseline configuration after candidate config edits", async () => {
   const root = temporaryDirectory("code-evaluator-pinned-config-");
   const baseline = path.join(root, "baseline");
@@ -225,6 +249,32 @@ test("build and typecheck use pinned baseline configuration after candidate conf
       typecheckBaselineWorkspace: baseline,
     });
     assert.equal(buildOnly.passed, false, JSON.stringify(buildOnly.details));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pinned candidate workspace replaces baseline symlinks before overlaying candidate source", async () => {
+  const root = temporaryDirectory("code-evaluator-symlink-overlay-");
+  const baseline = path.join(root, "baseline");
+  const candidate = path.join(root, "candidate");
+  const outside = path.join(root, "outside-marker.txt");
+  for (const directory of [baseline, candidate]) fs.mkdirSync(path.join(directory, "src"), { recursive: true });
+  fs.writeFileSync(outside, "outside marker must remain unchanged\n");
+  fs.symlinkSync(outside, path.join(baseline, "src/main.ts"));
+  fs.cpSync(baseline, candidate, { recursive: true });
+  fs.unlinkSync(path.join(candidate, "src/main.ts"));
+  fs.writeFileSync(path.join(candidate, "src/main.ts"), "export const candidate = true;\n");
+
+  try {
+    const { runCodeEvaluators } = await runner();
+    const [build] = await runCodeEvaluators({
+      task: { evaluators: ["build"], build: { command: "/usr/bin/node", args: ["-e", "process.exit(0)"] } },
+      candidateWorkspace: candidate,
+      typecheckBaselineWorkspace: baseline,
+    });
+    assert.equal(build.passed, true, JSON.stringify(build.details));
+    assert.equal(fs.readFileSync(outside, "utf8"), "outside marker must remain unchanged\n");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

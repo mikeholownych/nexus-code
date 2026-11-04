@@ -35,7 +35,7 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
     seenCandidate.set(line, seen);
     return seen > (baselineCounts.get(line) ?? 0);
   });
-  const recognizedDiagnostic = (lines) => lines.some((line) => /\berror\s+TS\d+:/i.test(line));
+  const recognizedDiagnostic = (lines) => lines.some((line) => /\berror(?:\s+TS\d+|\[E\d+\])?:/i.test(line));
   const infrastructureFailure = [baselineResult, candidateResult].some((result) =>
     result?.status == null || result?.signal != null || result?.timedOut === true || result?.error != null) ||
     (baselineResult.status !== 0 && !recognizedDiagnostic(baselineOutput)) ||

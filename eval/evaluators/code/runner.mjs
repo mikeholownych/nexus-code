@@ -223,8 +223,21 @@ function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorkspace) {
           fs.mkdirSync(directory, { recursive: true });
         }
       }
-      fs.writeFileSync(target, bytes, { mode });
-      fs.chmodSync(target, mode);
+      // The copied baseline can contain a symlink at this path. Remove the
+      // entry itself, then create exclusively so a final-component symlink
+      // can never redirect candidate bytes outside the pinned workspace.
+      fs.rmSync(target, { recursive: true, force: true });
+      const descriptor = fs.openSync(
+        target,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0),
+        mode,
+      );
+      try {
+        fs.writeFileSync(descriptor, bytes);
+        fs.fchmodSync(descriptor, mode);
+      } finally {
+        fs.closeSync(descriptor);
+      }
     }
     return { tempRoot, workspace: pinnedWorkspace };
   } catch (error) {

@@ -128,6 +128,38 @@ test("transient vLLM version failure retains verified identity and strict schema
   });
 });
 
+test("positive rediscovery replaces vLLM identity with gateway identity", async () => {
+  let modelReads = 0;
+  let sent: any;
+  let taskClassHeader: string | undefined;
+  await withEndpoint((req, res, body) => {
+    if (req.url === "/v1/models") {
+      modelReads++;
+      return json(res, { data: [modelReads === 1
+        ? { id: "model-a", owned_by: "vllm", max_model_len: 8192 }
+        : { id: "model-a", limits_version: "1", context_length: 4096 }] });
+    }
+    if (req.url === "/version") return json(res, { version: "0.10.0" });
+    if (req.url === "/v1/chat/completions") {
+      sent = JSON.parse(body);
+      taskClassHeader = req.headers["x-task-class"] as string | undefined;
+      return completion(res);
+    }
+    res.statusCode = 404;
+    res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a", taskClass: "subagent" } as any);
+    await client.discoverAdvertisement();
+    assert.equal(client.getDetectedServerKind(), "vllm");
+    await client.discoverAdvertisement();
+    assert.equal(client.getDetectedServerKind(), "gateway", "positive gateway identity replaces the cached vLLM kind");
+    await client.chatCompletion([{ role: "user", content: "hello" }], [readFileTool]);
+  });
+
+  assert.equal(taskClassHeader, "subagent", "the newly verified gateway identity enables the gateway task-class header");
+  assert.equal(sent.tools[0].function.strict, undefined, "the replaced vLLM identity no longer forces strict schema mode");
+});
+
 test("vLLM strict adaptation makes optional flat parameters nullable and closes the object schema", () => {
   const optionalTool = {
     type: "function",
