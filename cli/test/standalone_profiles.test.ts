@@ -65,11 +65,13 @@ describe("standalone profiles of the model proxy", () => {
   for (const [profile, via] of [["llamacpp", "llamacpp"], ["vllm", "vllm"], ["ollama", "ollama"]] as const) {
     test(`${profile}: Nexus finds the gateway's real context the way that server reports it`, async () => {
       await withProxy(profile, async (p) => {
-        const found = await discover(p);
+        const client = new LocalLlmClient({ endpoint: p, model: "m", workspace: "/tmp", maxSteps: 1, apiKey: "local" } as any);
+        const found = await client.discoverAdvertisement();
         assert.equal(found.state, "supported", JSON.stringify(found));
         assert.equal(found.advertised?.via, via);
         assert.equal(found.advertised?.contextLength, 8192);
         assert.equal(found.advertised?.tokenize, false);
+        assert.equal(client.getDetectedServerKind(), via);
       });
     });
   }

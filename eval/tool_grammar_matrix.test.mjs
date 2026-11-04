@@ -1,0 +1,266 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { test } from "node:test";
+import {
+  classifyToolArguments,
+  endpointPasses,
+  runToolGrammarMatrix,
+  validateMatrixEvidence,
+  writeEvidence,
+} from "./tool_grammar_matrix.mjs";
+
+const schema = {
+  type: "object",
+  properties: { path: { type: "string" } },
+  required: ["path"],
+};
+
+function writeInstalledRuntimeFixture(installRoot, tools) {
+  const cliRoot = path.join(installRoot, "lib", "cli", "dist");
+  fs.mkdirSync(path.join(cliRoot, "core"), { recursive: true });
+  fs.writeFileSync(path.join(cliRoot, "package.json"), JSON.stringify({ type: "module" }));
+  fs.writeFileSync(path.join(cliRoot, "core", "capabilities.js"), `export const HARNESS_TOOLS = ${JSON.stringify(tools)};\n`);
+  fs.writeFileSync(path.join(cliRoot, "parser.js"), `export function repairJsonWithClass(raw) { return { value: JSON.parse(raw), repaired: "none" }; }\n`);
+  fs.writeFileSync(path.join(cliRoot, "core", "tool_grammar_provider.js"), `
+export function adaptToolDefinitionsForServer(kind, definitions) {
+  if (kind !== "vllm") return definitions;
+  return definitions.map((tool) => {
+    const params = tool.function.parameters;
+    const properties = Object.fromEntries(Object.entries(params.properties).map(([name, property]) => [
+      name,
+      (params.required ?? []).includes(name) ? property : { ...property, type: [property.type, "null"] },
+    ]));
+    return { ...tool, function: { ...tool.function, strict: true, parameters: { ...params, properties, required: Object.keys(properties), additionalProperties: false } } };
+  });
+}
+`);
+  fs.writeFileSync(path.join(cliRoot, "client.js"), `
+export class LocalLlmClient {
+  constructor(config) { this.config = config; this.provider = globalThis.__wp1107MatrixFixture.providers[config.endpoint]; }
+  async discoverAdvertisement() { return { state: "supported" }; }
+  getDetectedServerKind() { return this.provider.serverKind; }
+  async chatCompletion(messages, offered) {
+    const state = globalThis.__wp1107MatrixFixture;
+    state.calls++;
+    if (state.failVllm && this.provider.provider === "vllm") return { content: "", tool_calls: [] };
+    const name = offered[0].function.name;
+    const args = name === "read_file" ? { path: "safe fixture", ...(this.provider.provider === "vllm" ? { start_line: null } : {}) }
+      : name === "write_file" ? { path: "safe fixture", content: "fixture" }
+        : name === "edit_file" ? { path: "safe fixture", old_content: "a", new_content: "b" }
+          : { command: "true" };
+    const hybrid = messages[0].content.includes("<think>");
+    return { content: hybrid ? "<think>check arguments</think>" : "", tool_calls: [{ function: { name, arguments: JSON.stringify(args) } }] };
+  }
+}
+`);
+}
+
+function endpointResult(nativeValid, repaired = 0, schemaInvalid = 0, invalid = 0) {
+  return {
+    attempts: 200,
+    tools: Object.fromEntries(["read_file", "write_file", "edit_file", "run_command"].map((name) => [name, {
+      attempts: 50,
+      native_valid: name === "read_file" ? nativeValid : 50,
+      repaired: name === "read_file" ? repaired : 0,
+      schema_invalid: name === "read_file" ? schemaInvalid : 0,
+      invalid: name === "read_file" ? invalid : 0,
+      hybrid_attempts: 5,
+      hybrid_reasoning_present: 5,
+      hybrid_schema_valid: 5,
+    }])),
+    totals: { attempts: 200, native_valid: nativeValid + 150, repaired, schema_invalid: schemaInvalid, invalid },
+    passed: false,
+  };
+}
+
+function identifiedEndpoint(provider, result = endpointResult(50)) {
+  const initial = provider === "llamacpp" ? "1" : provider === "vllm" ? "c" : "f";
+  const model = provider === "llamacpp" ? "2" : provider === "vllm" ? "d" : "a";
+  return {
+    provider,
+    serverKind: provider,
+    serverVersion: provider === "vllm" ? "0.10.0" : "1.0.0",
+    imageDigest: `sha256:${initial.repeat(64)}`,
+    modelName: "reasoning-model",
+    modelDigest: `sha256:${model.repeat(64)}`,
+    contextSize: 32768,
+    sampling: { temperature: 0 },
+    toolChoice: "auto",
+    promptFixtureSha256: "e".repeat(64),
+    serverFlags: [],
+    compatibilityMode: "openai-chat",
+    ...result,
+    passed: endpointPasses(result),
+  };
+}
+
+function evidenceWith(endpoints = ["llamacpp", "vllm", "ollama"].map((provider) => identifiedEndpoint(provider))) {
+  return { schemaVersion: 1, candidate: { archiveSha256: "a".repeat(64), sourceCommit: "b".repeat(40) }, endpoints };
+}
+
+test("tool grammar matrix evidence schema rejects invalid counts and identity omissions", () => {
+  assert.equal(validateMatrixEvidence(evidenceWith()).valid, true);
+
+  const omittedIdentity = evidenceWith([identifiedEndpoint("llamacpp"), { provider: "vllm", ...endpointResult(50) }, identifiedEndpoint("ollama")]);
+  assert.throws(() => validateMatrixEvidence(omittedIdentity), /identity/i);
+
+  const badCounts = evidenceWith([identifiedEndpoint("llamacpp"), { ...identifiedEndpoint("vllm"), totals: { ...endpointResult(50).totals, invalid: -1 } }, identifiedEndpoint("ollama")]);
+  assert.throws(() => validateMatrixEvidence(badCounts), /count|attempt/i);
+
+  const secretMetadata = evidenceWith();
+  secretMetadata.endpoints[0].sampling.apiKey = "must not be recorded";
+  assert.throws(() => validateMatrixEvidence(secretMetadata), /sensitive/i);
+});
+
+test("tool grammar matrix computes endpoint pass without percentage rounding", () => {
+  const atThreshold = identifiedEndpoint("vllm", endpointResult(49, 1));
+  assert.equal(endpointPasses(atThreshold), true, "199/200 is exactly the inclusive 99.5% boundary");
+  const belowThreshold = identifiedEndpoint("vllm", endpointResult(48, 2));
+  assert.equal(endpointPasses(belowThreshold), false, "198/200 must fail even if a rounded display says 99%");
+});
+
+test("tool grammar matrix rejects schema-invalid tool arguments", () => {
+  const result = classifyToolArguments({ schema, rawArguments: '{"path":4}', repairJsonWithClass: () => assert.fail("valid JSON must not be repaired") });
+  assert.deepEqual(result, { category: "schema_invalid", parsed: true, schemaValid: false, repaired: false });
+});
+
+test("tool grammar matrix accepts nullable optional fields from strict provider schemas", () => {
+  const strictSchema = {
+    type: "object",
+    properties: { path: { type: "string" }, start_line: { type: ["number", "null"] } },
+    required: ["path", "start_line"],
+    additionalProperties: false,
+  };
+  const result = classifyToolArguments({ schema: strictSchema, rawArguments: '{"path":"a","start_line":null}', repairJsonWithClass: () => assert.fail("valid JSON must not be repaired") });
+  assert.deepEqual(result, { category: "native_valid", parsed: true, schemaValid: true, repaired: false });
+});
+
+test("matrix evidence retains a measured provider miss as a failed result", () => {
+  const missed = identifiedEndpoint("vllm", endpointResult(48, 1, 1));
+  missed.passed = false;
+  const result = validateMatrixEvidence(evidenceWith([identifiedEndpoint("llamacpp"), missed, identifiedEndpoint("ollama")]));
+  assert.deepEqual(result, { valid: true, passed: false });
+});
+
+test("matrix evidence rejects caller-supplied tool schemas instead of replacing installed schemas", async () => {
+  await assert.rejects(runToolGrammarMatrix({ archivePath: "unused", installRoot: "unused", tools: [] }), /exact installed candidate/i);
+});
+
+test("tool grammar matrix preserves missing hybrid reasoning as a failed endpoint", () => {
+  const endpoint = identifiedEndpoint("vllm");
+  endpoint.tools.read_file.hybrid_reasoning_present = 4;
+  endpoint.passed = false;
+  assert.equal(endpointPasses(endpoint), false);
+  assert.deepEqual(
+    validateMatrixEvidence(evidenceWith([identifiedEndpoint("llamacpp"), endpoint, identifiedEndpoint("ollama")])),
+    { valid: true, passed: false },
+  );
+});
+
+test("tool grammar matrix runner records archive and per-endpoint identity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-matrix-test-"));
+  const archivePath = path.join(root, "candidate.tar.gz");
+  const archiveBytes = Buffer.from("candidate fixture bytes");
+  fs.writeFileSync(archivePath, archiveBytes);
+  const installRoot = path.join(root, "installed");
+  fs.mkdirSync(installRoot);
+  const sourceCommit = "b".repeat(40);
+  fs.writeFileSync(path.join(installRoot, ".provenance.json"), JSON.stringify({
+    method: "installer",
+    archiveSha256: createHash("sha256").update(archiveBytes).digest("hex"),
+    revision: sourceCommit,
+  }));
+  const tools = [
+    ["read_file", { path: { type: "string" }, start_line: { type: "number" } }, ["path"]],
+    ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
+    ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
+    ["run_command", { command: { type: "string" } }, ["command"]],
+  ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const providers = ["llamacpp", "vllm", "ollama"].map((provider) => ({
+    provider, serverKind: provider, endpointUrl: `http://127.0.0.1:8000/${provider}/v1`, modelName: "m",
+    serverVersion: provider === "vllm" ? "0.10.0" : "1.0.0",
+    imageDigest: `sha256:${(provider === "llamacpp" ? "1" : provider === "vllm" ? "c" : "f").repeat(64)}`,
+    modelDigest: `sha256:${(provider === "llamacpp" ? "2" : provider === "vllm" ? "d" : "a").repeat(64)}`,
+    contextSize: 32768, sampling: { temperature: 0 }, toolChoice: "auto", serverFlags: [], compatibilityMode: "openai-chat",
+  }));
+  const calls = { providers: Object.fromEntries(providers.map((provider) => [provider.endpointUrl, provider])) };
+  globalThis.__wp1107MatrixFixture = { ...calls, calls: 0, failVllm: false };
+  writeInstalledRuntimeFixture(installRoot, tools);
+  const runtime = { tools: [], clientFactory: async () => assert.fail("caller runtime must never be invoked") };
+  await assert.rejects(
+    runToolGrammarMatrix({ archivePath, installRoot, sourceCommit, runtime, providers }),
+    /caller-supplied runtime/i,
+    "production evidence collection must never accept a substitute for the installed candidate runtime",
+  );
+  const evidence = await runToolGrammarMatrix({
+    archivePath,
+    installRoot,
+    sourceCommit,
+    providers,
+    attemptsPerTool: 50,
+    hybridAttemptsPerTool: 5,
+  });
+
+  assert.equal(globalThis.__wp1107MatrixFixture.calls, 600);
+  assert.equal(evidence.candidate.archiveSha256.length, 64);
+  assert.deepEqual(evidence.endpoints.map((endpoint) => endpoint.provider), ["llamacpp", "vllm", "ollama"]);
+  assert.equal(evidence.endpoints[1].serverKind, "vllm");
+  assert.equal("endpointUrl" in evidence.endpoints[0], false);
+  assert.equal(evidence.endpoints[0].totals.attempts, 200);
+  assert.equal(evidence.endpoints[1].tools.read_file.schema_invalid, 0, "nullable vLLM parameters must be checked against the adapted candidate schema");
+  assert.equal(evidence.passed, true);
+
+  globalThis.__wp1107MatrixFixture.failVllm = true;
+  const failedPath = path.join(root, "provider-miss.json");
+  const failed = await runToolGrammarMatrix({ archivePath, installRoot, sourceCommit, providers, outputPath: failedPath });
+  assert.equal(failed.passed, false);
+  assert.equal(failed.endpoints.find((endpoint) => endpoint.provider === "vllm").passed, false);
+  assert.equal(failed.endpoints.find((endpoint) => endpoint.provider === "vllm").totals.invalid, 200);
+  assert.equal(fs.existsSync(failedPath), true, "failed endpoint counts must be written before returning failure status");
+  delete globalThis.__wp1107MatrixFixture;
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("tool grammar matrix rejects credential-like server flags before inference", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-secret-flags-"));
+  const archivePath = path.join(root, "candidate.tar.gz");
+  const archiveBytes = Buffer.from("candidate fixture bytes");
+  fs.writeFileSync(archivePath, archiveBytes);
+  const installRoot = path.join(root, "installed");
+  fs.mkdirSync(installRoot);
+  const sourceCommit = "b".repeat(40);
+  fs.writeFileSync(path.join(installRoot, ".provenance.json"), JSON.stringify({
+    method: "installer",
+    archiveSha256: createHash("sha256").update(archiveBytes).digest("hex"),
+    revision: sourceCommit,
+  }));
+  let calls = 0;
+  const providers = ["llamacpp", "vllm", "ollama"].map((provider) => ({
+    provider, serverKind: provider, endpointUrl: "http://127.0.0.1:8000/v1", modelName: "m",
+    serverVersion: "1.0.0", imageDigest: `sha256:${"1".repeat(64)}`,
+    modelDigest: `sha256:${"2".repeat(64)}`, contextSize: 32768,
+    sampling: { temperature: 0 }, toolChoice: "auto", serverFlags: ["--api-key=redacted"],
+    compatibilityMode: "openai-chat",
+  }));
+
+  await assert.rejects(runToolGrammarMatrix({
+    archivePath, installRoot, sourceCommit, providers,
+  }), /credential|authentication|sensitive/i);
+  assert.equal(calls, 0, "credential-bearing configuration must fail before provider initialization");
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("tool grammar matrix evidence is immutable and has a detached SHA-256 sidecar", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-evidence-test-"));
+  const outputPath = path.join(root, "wp-1107-provider-matrix.json");
+  const result = writeEvidence(outputPath, evidenceWith());
+  const bytes = fs.readFileSync(outputPath);
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), result.sha256);
+  assert.equal(fs.readFileSync(`${outputPath}.sha256`, "utf8"), `${result.sha256}  ${path.basename(outputPath)}\n`);
+  assert.throws(() => writeEvidence(outputPath, evidenceWith()), /exist/i);
+  assert.equal(createHash("sha256").update(fs.readFileSync(outputPath)).digest("hex"), result.sha256);
+  fs.rmSync(root, { recursive: true, force: true });
+});

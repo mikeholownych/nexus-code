@@ -69,8 +69,9 @@ export interface ProviderCapabilities {
 const positiveInt = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined);
 
 /**
- * Which server kind an entry represents: gateway (limits_version), vLLM (context_length/max_model_len),
- * llama.cpp (owned_by llamacpp or n_ctx_train meta), LM Studio (organization_owner), Ollama (library or ollama), or unknown.
+ * Which server kind an entry positively identifies: gateway (limits_version), llama.cpp (owned_by llamacpp or
+ * n_ctx_train meta), LM Studio (organization_owner), Ollama (library or ollama), or unknown. Generic context fields
+ * describe capacity, not the server implementation; vLLM is identified separately with its /version response.
  */
 export function serverKindOf(entry: Record<string, any> | undefined): ServerKind {
   if (!entry || typeof entry !== "object") return "unknown";
@@ -79,9 +80,21 @@ export function serverKindOf(entry: Record<string, any> | undefined): ServerKind
   if (owner === "llamacpp" || (entry.meta && typeof entry.meta === "object" && "n_ctx_train" in entry.meta)) return "llamacpp";
   if (owner === "organization_owner") return "lmstudio";
   if (owner === "library" || owner === "ollama") return "ollama";
-  const contextLength = entry.context_length === null ? null : (positiveInt(entry.context_length) ?? positiveInt(entry.max_model_len));
-  if (contextLength !== undefined) return "vllm";
   return "unknown";
+}
+
+/** The vLLM GET /version contract; capacity fields in a generic model catalog are not identity evidence. */
+export function parseVllmVersion(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const version = (body as Record<string, unknown>).version;
+  return typeof version === "string" && version.trim().length > 0 ? version.trim() : undefined;
+}
+
+/** The Ollama GET /api/version contract; malformed or empty versions do not identify the endpoint. */
+export function parseOllamaVersion(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const version = (body as Record<string, unknown>).version;
+  return typeof version === "string" && version.trim().length > 0 ? version.trim() : undefined;
 }
 
 export function serverKindOfAdvertisement(ad: Advertisement | undefined): ServerKind {

@@ -156,8 +156,12 @@ describe("ACC-VER-07 & REQ-AGT-118: Conservative token estimator and calibration
         if (mode === "llamacpp") {
           res.end(JSON.stringify({ data: [{ id: "m", object: "model", owned_by: "llamacpp", meta: { n_ctx_train: 32768 } }] }));
         } else {
-          res.end(JSON.stringify({ data: [{ id: "m", object: "model", max_model_len: 16384 }] }));
+          res.end(JSON.stringify({ data: [{ id: "m", object: "model", owned_by: "vllm", max_model_len: 16384 }] }));
         }
+        return;
+      }
+      if (req.url === "/version") {
+        res.end(JSON.stringify({ version: "0.10.1" }));
         return;
       }
       if (req.url === "/props") {

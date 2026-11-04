@@ -9,8 +9,10 @@ import {
   advertisementChanged,
   parseAdmissionHeaders,
   parseAdvertisement,
+  parseOllamaVersion,
   parseTokenizeResponse,
   resolveLimits,
+  serverKindOf,
   toolHeadroomPolicy,
 } from "../src/core/provider_capabilities.js";
 
@@ -28,6 +30,11 @@ const gatewayEntry = {
 };
 
 describe("advertisements", () => {
+  test("generic context catalogs remain unknown until a vLLM version handshake succeeds", () => {
+    assert.equal(serverKindOf({ id: "m", context_length: 32768 }), "unknown");
+    assert.equal(serverKindOf({ id: "m", max_model_len: 32768 }), "unknown");
+  });
+
   test("the gateway entry is read as a gateway advertisement with request counting", () => {
     const ad = parseAdvertisement(gatewayEntry)!;
     assert.equal(ad.via, "aihost_gateway");
@@ -58,6 +65,13 @@ describe("advertisements", () => {
     assert.equal(advertisementChanged(a, parseAdvertisement({ ...gatewayEntry, context_length: 32768 })), true);
     assert.equal(advertisementChanged(a, parseAdvertisement({ ...gatewayEntry, serving: [{ worker_id: "w2" }] })), true);
   });
+});
+
+test("Ollama identity requires a non-empty version string", () => {
+  assert.equal(parseOllamaVersion({ version: "0.12.3" }), "0.12.3");
+  assert.equal(parseOllamaVersion({ version: "  " }), undefined);
+  assert.equal(parseOllamaVersion({ version: 7 }), undefined);
+  assert.equal(parseOllamaVersion(null), undefined);
 });
 
 describe("limits in effect", () => {
