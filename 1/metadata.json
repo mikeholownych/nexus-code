@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6PKG2Q9FXBVTC01V6M07AQS",
+  "session_id": "07c4ba7b-9c73-4646-9b50-78dba0055fa3",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-05T19:39:06.630756002Z",
+  "branch": "fix/skill-catalog-budget",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "cli/src/agent.ts"
+  ],
+  "agent": "Antigravity",
+  "model": "gemini-3.8-flash-medium",
+  "turn_id": "2044b26313c8",
+  "token_usage": {
+    "input_tokens": 17233,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 992290,
+    "output_tokens": 3148,
+    "api_call_count": 9
+  },
+  "redaction": {
+    "replacements": 33,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 0,
+      "entropy": 28,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 11
+  }
+}
