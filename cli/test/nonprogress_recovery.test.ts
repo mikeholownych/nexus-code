@@ -147,6 +147,32 @@ describe("regression fixture NONPROGRESS-20261101-DOCTOR", () => {
     }
   });
 
+  test("--step: a stagnation stop reached in a cycle of parallel reads is reported, never replaced by the step pause", { timeout: 120_000 }, async () => {
+    const files = Object.fromEntries(Object.entries(fixture.files as Record<string, { lines: number; prefix: string }>).map(([p, f]) => [p, lines(f.prefix, f.lines)]));
+    const repo = makeRepo(files);
+    const prelude = fixture.prelude as Array<{ content: string; calls: Call[] }>;
+    const gw = await startGateway((n) => {
+      if (n <= prelude.length) return tools(prelude[n - 1].calls, prelude[n - 1].content);
+      const i = n - prelude.length - 1;
+      return tools(fixture.repeat.calls, fixture.repeat.contents[i % fixture.repeat.contents.length]);
+    });
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, { step: true })));
+    try {
+      const reasons: string[] = [];
+      for (let i = 0; i < 16; i++) {
+        const turn = await agent.runTurn(i === 0 ? "Find and fix a real bug in the doctor command, with a regression test." : "Continue.");
+        reasons.push(String(turn.reason));
+        if (turn.reason !== "STEP_PAUSED") break;
+      }
+      assert.equal(reasons[reasons.length - 1], "STAGNATION_DETECTED", `step turns ended with: ${reasons.join(",")}`);
+      assert.ok(reasons.slice(0, -1).every((r) => r === "STEP_PAUSED"), `only pauses before the stop: ${reasons.join(",")}`);
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("after the constrained note the agent takes another path: the work continues and recovery completes", { timeout: 120_000 }, async () => {
     const repo = makeRepo({ "f.txt": lines("f", 40) });
     const gw = await startGateway((n, body) => {
