@@ -453,3 +453,52 @@ describe("WP-1106: Single-step agent loop mode", () => {
     }
   });
 });
+
+const readA = (): Reply => ({ kind: "tools", calls: [{ name: "read_file", args: { path: "a.txt" } }] });
+
+/** Runs an objective with one step, then /step until the turn stops for a reason other than STEP_PAUSED. */
+async function stepUntilStopped(continuation: Partial<HarnessConfig["continuation"]>, maxSteps = 10) {
+  const home = makeHome();
+  const repo = makeRepo({ "a.txt": "alpha\n" });
+  trustWorkspace(home, repo);
+  const prevHome = process.env.HOME;
+  process.env.HOME = home;
+  const gw = await startGateway(readA);
+  const app = new ApplicationCore(cfg(gw.url, repo, { continuation: { ...DEFAULT_CONTINUATION, ...continuation } }));
+  const agent = quiet(app.getAgent());
+  try {
+    const reasons: string[] = [];
+    let turn = await agent.runTurn("Read a.txt", undefined, { step: true });
+    reasons.push(turn.reason);
+    while (turn.reason === "STEP_PAUSED" && reasons.length < maxSteps) {
+      turn = await agent.runTurn("", undefined, { step: true, resume: true });
+      reasons.push(turn.reason);
+    }
+    const messages = agent.getMessages().map((m) => (typeof m.content === "string" ? m.content : ""));
+    return { reasons, turn, messages, requests: gw.requests.length };
+  } finally {
+    app.shutdown();
+    await gw.close();
+    process.env.HOME = prevHome;
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+describe("WP-1301: /step in the TUI and the step pause", () => {
+  test("the step pause keeps a STAGNATION_DETECTED set during the cycle (recovery exhausted)", { timeout: 60_000 }, async () => {
+    // Only recovery exhaustion can stop this run: the no-progress limit is out of reach.
+    const { reasons, turn, messages } = await stepUntilStopped({ maxRecoveries: 1, stagnationSteps: 100 });
+    assert.equal(turn.reason, "STAGNATION_DETECTED", `reasons: ${reasons.join(", ")}`);
+    assert.match((turn as any).detail ?? "", /recovery exhausted|repeated read_file/);
+    // endStep ran at each pause: the recovery note reached the conversation.
+    assert.ok(messages.some((m) => m.startsWith("[Nexus recovery")), "the recovery note was delivered");
+  });
+  test("steps without progress accumulate across /step calls until STAGNATION_DETECTED", { timeout: 60_000 }, async () => {
+    // Recovery cannot exhaust here: only the no-progress count can stop the run.
+    const { reasons, turn } = await stepUntilStopped({ maxRecoveries: 50, stagnationSteps: 3 });
+    assert.equal(turn.reason, "STAGNATION_DETECTED", `reasons: ${reasons.join(", ")}`);
+    assert.match((turn as any).detail ?? "", /consecutive steps without progress/);
+    assert.ok(reasons.length <= 6, `stopped within a few /step calls: ${reasons.join(", ")}`);
+  });
+});

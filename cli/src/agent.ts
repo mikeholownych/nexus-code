@@ -5716,6 +5716,15 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           markInterrupted("between_steps");
           break;
         }
+        // --step: one model/tool cycle per turn. Every path that continues the loop ends its cycle with endStep (recovery
+        // note delivered, progress evaluated) and comes back here, so this one boundary covers the sequential, parallel-read
+        // and notice paths alike; a stop set by the cycle or by the checks above (STAGNATION_DETECTED, a budget, a cancel)
+        // is reported instead. currentStep advances only in endStep, so it is past 1 once this turn finished a cycle.
+        if (isStep && currentStep > 1) {
+          stopReason = "STEP_PAUSED";
+          stopDetail = "paused after one model/tool cycle (--step)";
+          break;
+        }
         // Operator /compact queued during the previous step runs here: its inference and tool batch have settled.
         if (this.compactionQueue.length) {
           try {
@@ -6260,13 +6269,6 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             });
           }
           this.persistProgress({ messages: true });
-          // A cycle of parallel reads is still one model/tool cycle: --step pauses here as it does after the sequential path,
-          // unless the cycle already set a stop (for example STAGNATION_DETECTED), which the loop top then reports.
-          if (isStep && modelStop === "NONE" && !stopReason && !interruption && !inferenceFailure && !persistenceFailure && !signal.aborted) {
-            stopReason = "STEP_PAUSED";
-            stopDetail = "paused after one model/tool cycle (--step)";
-            break;
-          }
           endStep();
           continue;
         }
@@ -6358,12 +6360,6 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (modelStop === "TASK_COMPLETED_TOOL" && this.hasQueuedSteering()) {
           modelStop = "NONE";
           finalOutputComplete = false;
-        }
-
-        if (isStep && modelStop === "NONE" && !interruption && !inferenceFailure && !persistenceFailure) {
-          stopReason = "STEP_PAUSED";
-          stopDetail = "paused after one model/tool cycle (--step)";
-          break;
         }
 
         endStep();
