@@ -244,7 +244,7 @@ export class SkillManager {
    * The skill catalog for the system prompt, at most `maxChars` long. Every discovered skill is advertised on every
    * request, so a large install (hundreds of skills under ~/.agents and ~/.claude) must not crowd out the task: when
    * the full listing does not fit, descriptions are shortened, then dropped, then names past the budget are counted.
-   * Source and trust stay on the `activate_skill` output either way.
+   * Source and trust stay on the `activate_skill` output either way. The result is never longer than `maxChars`.
    */
   public getPromptSection(maxChars: number = SKILL_CATALOG_MAX_CHARS): string {
     // Workspace skills first: they are the most specific to the task and survive any cut.
@@ -282,7 +282,8 @@ export class SkillManager {
       head + note + [...names.slice(0, shown), ...(shown < names.length ? [`…and ${names.length - shown} more (an unknown name passed to \`activate_skill\` lists them all)`] : [])].join(", ") + "\n";
     let shown = names.length;
     while (shown > 0 && listing(shown).length > maxChars) shown--;
-    return listing(shown);
+    // A window too small for even the heading gets no catalog; `activate_skill` still works by name.
+    return listing(shown).length <= maxChars ? listing(shown) : "";
   }
 
   private watchers: fs.FSWatcher[] = [];

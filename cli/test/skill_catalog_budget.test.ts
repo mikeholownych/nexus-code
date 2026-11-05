@@ -11,7 +11,7 @@ import path from "node:path";
 import { AutonomousAgent } from "../src/agent.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { skillCatalogBudget } from "../src/skills.js";
-import { startGateway, makeRepo } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, Reply } from "./helpers/fixtures.js";
 
 let home = "";
 const saved = { HOME: process.env.HOME, XDG: process.env.XDG_CONFIG_HOME, STATE: process.env.NEXUS_STATE_DIR };
@@ -52,6 +52,11 @@ const cfg = (endpoint: string, workspace: string): HarnessConfig => ({
   approvalMode: "auto",
   fullAccess: true,
 });
+const HEADER = "### Specialized Agent Skills Available:";
+const withoutCatalog = (system: string): string => {
+  const start = system.indexOf(HEADER);
+  return system.slice(0, start) + system.slice(system.indexOf("\n### ", start + 1));
+};
 const catalogOf = (request: any): string => {
   const system = request.messages[0].content as string;
   const start = system.indexOf("### Specialized Agent Skills Available:");
@@ -87,5 +92,53 @@ describe("skill catalog is sized to the reported context window", () => {
     const catalog = await firstRequestCatalog(16_384);
     assert.ok(catalog.length <= skillCatalogBudget(16_384), `catalog is ${catalog.length} chars`);
     assert.match(catalog, /…and \d+ more/);
+  });
+
+  test("only the catalog is re-sized, once, and the system prompt is then stable across steps", { timeout: 60_000 }, async () => {
+    const repo = makeRepo();
+    const write: Reply = { kind: "tools", calls: [{ name: "write_file", args: { path: "a.txt", content: "a\n" } }] };
+    const gw = await startGateway((n) => (n === 1 ? write : { kind: "text", content: "done" }), {
+      models: () => [{ id: "m", context_length: 131_072, max_model_len: 131_072, max_completion_tokens: 1_024 }],
+    });
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    try {
+      const built = agent.getMessages()[0].content as string;
+      await agent.runTurn("Write a.txt with the line a, then say done.");
+      assert.ok(gw.requests.length >= 2, `requests: ${gw.requests.length}`);
+      const prompts = gw.requests.map((r: any) => r.messages[0].content as string);
+      assert.notEqual(prompts[0], built, "the catalog was re-sized for the advertised window");
+      assert.equal(withoutCatalog(prompts[0]), withoutCatalog(built), "nothing but the catalog changed");
+      for (const p of prompts.slice(1)) assert.equal(p, prompts[0], "messages[0] is byte-stable after the first re-size");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("after the provider's window is known the catalog only shrinks, so alternating windows cannot flip it", { timeout: 60_000 }, async () => {
+    const repo = makeRepo();
+    const gw = await startGateway(() => ({ kind: "text", content: "done" }), {
+      models: () => [{ id: "m", context_length: 131_072, max_model_len: 131_072, max_completion_tokens: 1_024 }],
+    });
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    try {
+      await agent.runTurn("Say done.");
+      const internals = agent as any;
+      const system = () => agent.getMessages()[0].content as string;
+      const large = system();
+      internals.contextLimit = () => 32_768; // e.g. a coder client with a smaller window
+      internals.resizeSkillCatalog();
+      const small = system();
+      assert.ok(small.length < large.length, "a smaller window shrinks the catalog");
+      assert.ok(catalogOf({ messages: [{ content: small }] }).length <= skillCatalogBudget(32_768));
+      internals.contextLimit = () => 131_072; // the planner client again
+      internals.resizeSkillCatalog();
+      assert.equal(system(), small, "a larger window later does not grow it back");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
