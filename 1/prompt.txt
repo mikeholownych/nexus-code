@@ -1,0 +1,45 @@
+now that v1.1.3 is published, it is time for some housekeeping.
+
+---
+
+switch to main. there are no other agents that should be working in the repo at this time. determine what housekeeping is required... if there are further questions.. ask..
+
+---
+
+<task-notification>
+<task-id>b32yo7ys1</task-id>
+<tool-use-id>toolu_01MxNrZrj71eAp44UEKCkwaJ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/b32yo7ys1.output</output-file>
+<status>completed</status>
+<summary>Background command "Inventory worktrees, dirty state, PRs, claims" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4q1nk27r</task-id>
+<tool-use-id>toolu_01SNQ9N1dXejyzP73ThD1mfC</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/b4q1nk27r.output</output-file>
+<status>failed</status>
+<summary>Background command "Check open PRs, stashes, claims, untracked contents" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bu5al5sh7</task-id>
+<tool-use-id>toolu_01V8znpehv7bhPacUndKA5Ht</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/bu5al5sh7.output</output-file>
+<status>completed</status>
+<summary>Background command "Run worktree cleanup in background" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>boyiyb2aq</task-id>
+<tool-use-id>toolu_01Pt9J2bF9TN9SGt5qrEM5Fd</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/boyiyb2aq.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait until worktree cleanup finishes" completed (exit code 0)</summary>
+</task-notification>
