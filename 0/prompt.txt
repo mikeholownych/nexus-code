@@ -1,0 +1,34 @@
+<task-notification>
+<task-id>a7b70484fef56bfb6</task-id>
+<tool-use-id>toolu_01FpshuLCPhusahVKeSGUUG8</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/a7b70484fef56bfb6.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR #404 docs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**ACCEPT-WITH-FIX.** One stale row needs retagging; everything else checks out.
+
+**Required fix**
+- `FINDINGS.md:42` (section B row "WP-1105 | Candidate build-config edits silently ignored; ... legacy text-mode calls not counted by toolCallSyntax; README stale") is still tagged `WP-1302`. It contains the `toolCallSyntax` item that now belongs to `WP-1302b` (`cli/src/parser.ts`, claude-code), and the commit removed that bullet from PLAN WP-1302. Split the row so the `toolCallSyntax` and README part is tagged `WP-1302b`, or re-tag the whole row. Otherwise the ledger still routes a `cli/src/parser.ts` item to the codex-root `eval/` package, which is exactly the ownership problem this delta fixes.
+
+**Code citations (origin/main): all confirmed**
+- `sidecar.ts:323`, `:353` and `:454` are each `this.runJob(id, undefined, (signal) =&gt; this.turn(id, text, text, ..., signal))`.
+- `sidecar.ts:557` is `private async turn(...)`.
+- `repl.ts:196` is `private runInteractiveTurn`, `:212` is `private prepareTurnCheckpoint`, and `:874` calls `prepareTurnCheckpoint` in the `/step` branch.
+- The new WP-1301 wording is therefore accurate. Those REPL methods are private, so the TUI should not call them.
+- Minor note: `sidecar.ts:762` already dispatches slash commands through `runJob(id, findSlash(command), ...)`. When the fix is implemented, check how `cancellable` is decided for a `runJob` call with `spec` undefined, so the separate `/step is not cancellable` bullet is actually closed. That is an implementation check, not a doc error.
+
+**Other consistency checks: pass**
+- **Sibling default:** PLAN:113 (WP-1310) now has `.nexus/worktrees/{{ branch | sanitize }}` as the default and the sibling layout as opt-in. That matches §6 decision 1 (PLAN:169).
+- **PLAN:87:** "default sibling `repo.branch`" describes Worktrunk's own default in the survey, so it is correct and not a contradiction.
+- **PLAN:101:** `../repo.feature` is only an example of a user-named path, so it is fine.
+- **§5 escape bullet (PLAN:161):** it is generic ("a path template that escapes is refused"), and the WP-1310 escape rule is now consistent with it. No change is needed. Optionally, add "outside `.nexus/worktrees/`" so the test pins the new default.
+- **Sequencing (PLAN:153):** WP-1302 is described as "`eval/` only, codex-root per decision 3" and WP-1302b as "`cli/src/parser.ts`, claude-code". There is no leftover "eval-only" wording that conflicts.
+- **`01M6FBTFPF6K` row:** it correctly stays `WP-1302` (`eval/.../json_repair_rate.mjs`). The three `parser.ts` rows (`01M6FBXYBC9A`, `01M6FBXYBPJM`, `01M6FBTFP1AA`) are correctly re-tagged `WP-1302b`.
+- **Decision 3 (PLAN:171):** it is titled "`eval/` (WP-1302)", which is still accurate.
+- **Ownership:** WP-1302b assigns claude-code as owner and notes that decision 3 does not cover `cli/`, which is a sound reading of §6.
+
+The WP-1302b numbering fits the §2 numbering note, because the "b" suffix introduces no collision with the v1.1.0 IDs.
+
+Files: /home/mike/nexus-code/docs/v1.1.4/PLAN.md, /home/mike/nexus-code/docs/v1.1.4/FINDINGS.md</result>
+<usage><subagent_tokens>91276</subagent_tokens><tool_uses>2</tool_uses><duration_ms>18707</duration_ms></usage>
+</task-notification>
