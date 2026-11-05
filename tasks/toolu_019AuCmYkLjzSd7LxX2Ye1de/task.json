@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019AuCmYkLjzSd7LxX2Ye1de",
+  "agent_id": "a0e513bb73e56046b",
+  "subagent_type": "general-purpose",
+  "task_description": "Harness² review write-up (#69)",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 117771,
+    "cache_read_tokens": 2047539,
+    "output_tokens": 19815,
+    "api_call_count": 29
+  },
+  "started_at": "2026-11-05T16:06:30.443948558Z",
+  "completed_at": "2026-11-05T16:12:30.89354937Z"
+}

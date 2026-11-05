@@ -1,0 +1,63 @@
+1. yes
+2. yes
+
+---
+
+<task-notification>
+<task-id>a0e513bb73e56046b</task-id>
+<tool-use-id>toolu_019AuCmYkLjzSd7LxX2Ye1de</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/a0e513bb73e56046b.output</output-file>
+<status>completed</status>
+<summary>Agent "Harness² review write-up (#69)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The Harness² review is written, committed and pushed. No PR was opened, nothing was merged, and the issue is untouched.
+
+- **Branch:** `docs/v114-harness2-review`, branched from `origin/v1/v113-plan`
+- **Commit:** `3d3b38c5`, one file: `docs/v1.1.4/HARNESS2-REVIEW.md` (86 lines)
+- **Worktree:** `/home/mike/nexus-code/.claude/worktrees/agent-a0e513bb73e56046b`
+
+The sandbox's git guard refused plain `git` here, so I ran every git command as `/usr/bin/git -C &lt;worktree&gt;`. That did not change what was committed.
+
+Bottom line per question:
+
+1. **Contrastive probing without ground truth: borrow it offline, skip it as an online per-turn mechanism.**
+   - It needs a rerun of the same task, which is costly and has side effects in a live turn.
+   - Our 2026-10-04 context research already rejected a per-turn context planner.
+   - A different prompt per task would also break the byte-stable prompt prefix that `buildSystemPrompt()` keeps for the cache.
+   - Our tuned and dogfood sets have verifiers, so a plain pass-rate comparison is stronger evidence there.
+   - The useful part is diagnosis from signals Nexus already records: execution tracking, `trace.jsonl`, compaction events, tool-call recovery, and verification receipts.
+
+2. **Eight-component taxonomy: borrow the vocabulary as a checklist, skip making components model-editable.**
+   - Nexus has counterparts for six of the eight; scripts have no first-class counterpart.
+   - The real gap is an editable overlay, because the operating rules, tool guidance and few-shots are compiled into TypeScript.
+   - Skills are the only close one-to-one match.
+   - Guardrails, subagent contracts and plugins must stay in code or operator control.
+
+3. **Durable lessons memory: borrow the record format and admission discipline, skip automatic admission.**
+   - From Harness² I would take the `cue / lesson / evidence / confidence` record, the `confounded` verdict, and writing no entry by default.
+   - Its drift control is thin: I found no decay, pruning or re-validation in `library.py`.
+   - Nexus memory is operator-saved and trust-gated, and its memory-safety rules are stricter.
+   - Model-written lessons that reach prompts without an operator would violate those rules.
+   - I could not find a "layered memory" section in `docs/v1.1.0/ROADMAP.md`, and the write-up says so.
+
+4. **Parallel versus sequential budgets: skip anything above k=1, borrow the cost ledger.**
+   - `recursion.py` schedules 4k rollouts and 3k improvement stages per task, so even k=1 is 4 task runs plus 3 editor sessions.
+   - Our qualification runs are serial on one gateway-backed model, so parallel width buys no wall-clock time; it only multiplies spend on cloud providers.
+   - The paper's k=1 to 5 gains are about 3 to 4 points, at several times the cost.
+   - My estimate of roughly 25 minutes of rollouts per k=1 step is arithmetic from one measured 351 s plain run, not a measurement, and is labelled that way.
+
+5. **Overall: skip adopting the framework, borrow four ideas.**
+   - It is Python plus Vertex AI, supports only OpenCode and Codex, targets professional-work benchmarks rather than coding, and defaults to unrestricted network access with Codex's sandbox off.
+   - Its own guide reports a rubric download during validation, which conflicts with our zero-egress held-out rules.
+   - The four ideas to borrow are the offline trajectory contrast, the `confounded` / write-nothing lesson standard, a grader-verdict tripwire, and per-stage cost accounting.
+
+The document also lists the trial constraints and five follow-up work packages, proposals only.
+
+What I could not verify:
+- **Paper text:** the PDF was unreadable. I read the arXiv HTML through a summarising fetch, so paper numbers are extractions rather than verbatim, and the figures and part of appendix D.2 were not available.
+- **Repo code:** I read `recursion.py`, `library.py`, `prompts.py`, `context.py` and `selection.py` directly. I did not read `proposer.py`, `judge.py`, `schedule.py` or the benchmark adapters.
+- **Gains:** none were reproduced, and the document flags them all as the paper's own.
+- **Nexus architecture:** the facts come from the October context-architecture doc plus spot checks of current source. `graphify-out/` does not exist in this worktree.</result>
+<usage><subagent_tokens>120240</subagent_tokens><tool_uses>46</tool_uses><duration_ms>361560</duration_ms></usage>
+<worktree><worktreePath>/home/mike/nexus-code/.claude/worktrees/agent-a0e513bb73e56046b</worktreePath><worktreeBranch>worktree-agent-a0e513bb73e56046b</worktreeBranch></worktree>
+</task-notification>
