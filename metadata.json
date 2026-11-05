@@ -3,7 +3,7 @@
   "checkpoint_id": "01M6NM1FEXF3SSJFN0QWH2FKDR",
   "strategy": "manual-commit",
   "branch": "v1/v113-plan",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
     "docs/codebase-review-enhancements.md",
     "docs/enhancement-opportunities.md",
@@ -45,17 +45,38 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 4379,
+    "cache_read_tokens": 422130,
+    "output_tokens": 2136,
+    "api_call_count": 4,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
   "redaction": {
-    "replacements": 2800,
+    "replacements": 2864,
     "layers": {
-      "betterleaks": 991,
+      "betterleaks": 1017,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 354,
       "credentialed_uri": 136,
-      "entropy": 1900,
+      "entropy": 1944,
       "key_context": 0,
       "provider_token": 4,
       "shell_stdin": 0
