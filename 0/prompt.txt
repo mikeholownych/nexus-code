@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>a1bd11fa41f2e2616</task-id>
+<tool-use-id>toolu_01C5cAExyBwTDqMaFhKCSDJ6</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/380160dd-d550-47da-ab0b-fb97518ef209/tasks/a1bd11fa41f2e2616.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR #409" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: ACCEPT** at head `96bdf612eb83fe4d89f4923f2ca05d66fad4607b`. I confirmed `git rev-parse HEAD` matches. All 13 tests pass across `skill_catalog_budget.test.ts` and `skills_agents_dir.test.ts`. I modified nothing. I found no high-severity issues and no blockers; the five low items below are optional.
+
+## Earlier findings
+
+- **Finding 1 (rebuild refreshed other prompt state): fixed.** `resizeSkillCatalog` (`agent.ts:4100-4112`) now swaps only the recorded catalog text. The Acceptance Requirements block, project rules, verifier command and knowledge section are no longer re-read. The new test `withoutCatalog(prompts[0]) === withoutCatalog(built)` checks this.
+- **Finding 2 (cache and journal churn): fixed for the cases I could see.** The resize happens once, when `this.capabilities` first becomes known, and after that only if the window shrinks. Growth is ignored, so alternating planner and coder windows cannot flip it. The byte-stability test sends two or more requests and asserts `messages[0]` is identical after the first resize. The shrink-only test checks both directions.
+- **Finding 3 (output over budget at tiny limits): fixed.** `getPromptSection` returns `""` when even the shortest listing exceeds `maxChars`. The new test covers budgets -5, 0, 150 and 307. A NaN budget also gives `""`, because every comparison is false and the final `&lt;=` check fails.
+- **Finding 4 (unknown-name hint lists every skill): left as-is.** That is acceptable because WP-1308 replaces that path.
+- **Finding 5 (test gaps): mostly fixed.** Only step-to-step stability and shrink-only are new. Resume and the budget interplay still have no test. The tests call `agent.contextLimit` and `resizeSkillCatalog` directly through `as any`, which is fine for white-box checks.
+
+## Other things I checked
+
+- **`indexOf` matching the wrong occurrence:** the recorded text starts with the unique heading and is matched in full. The project-rules section sits before the skills section, so a mismatch would need rules text that quotes the entire catalog verbatim. That is not realistic. If `indexOf` returns -1, nothing is changed. If the new text equals the old, nothing is rewritten.
+- **`Boolean(this.capabilities)` as "discovered":**
+  - `capabilities` is assigned only at `agent.ts:2937`, after a `discoverAdvertisement` call returns.
+  - It is set even when discovery reports "unsupported" or "unavailable", in which case the limit falls back to the operator or default value. That still counts as a legitimate first discovery, and the later shrink-only rule applies.
+  - Clients without `discoverAdvertisement` never set it, so the first-discovery resize never triggers, and shrink-only still applies via `limit &gt;= sized.limit`.
+- **`resetConversation` interplay:** each reset calls `buildSystemPrompt`, which re-records `skillCatalog`. After a reset with capabilities already known, it is built with `discovered = true` at the advertised window.
+- **Subagents:** each instance has its own `skillCatalog`. `refreshCapabilities` returns early when `depth &gt; 0` and capabilities exist, so a subagent that inherited capabilities does not resize. One that discovers its own gets the same once-then-shrink-only behaviour.
+
+## Remaining low-severity items
+
+1. **Low — `agent.ts:4100-4112`: resumed sessions keep an oversized catalog.**
+   - A conversation saved before this fix holds the 110K-character catalog in its saved `messages[0]` (`this.messages = state.messages`, around line 1671).
+   - The fresh-build catalog text will not match unless the skills and window are identical, so nothing is replaced and the saved prompt is left as it was.
+   - The reporter's original session therefore stays blocked on resume. The workaround is a new conversation.
+   - This is a design choice the coordinator stated, not a regression, but it is worth a release note. If it matters, detect the catalog by its heading up to the next `"\n### "` when the recorded text is not found.
+2. **Low — `agent.ts:4108`: `skillCatalog` is updated even when the replacement is skipped.** If `indexOf` fails, state records text that is not in the prompt, and later calls stay inert. This is harmless, but resuming a session would be cleaner if the update were skipped when `at &lt; 0`.
+3. **Low — `agent.ts:4106`: a catalog that has shrunk to `""` cannot be restored.** The `sized.text ? ... : -1` guard skips it, which is consistent with shrink-only. It is only reachable with sub-3K-token windows.
+4. **Low — `skills.ts:285`: `listing(shown)` is built twice in the return line.** Store the result in a variable.
+5. **Low — no test covers the resume path or the first-discovery condition (`discovered &amp;&amp; !sized.discovered`) in isolation.** The existing tests only reach it through the full turn.
+
+## Relevant files
+- `/home/mike/nexus-code/cli/src/agent.ts` (lines 892, 4090-4125, 5940)
+- `/home/mike/nexus-code/cli/src/skills.ts` (lines 243-287)
+- `/home/mike/nexus-code/cli/test/skill_catalog_budget.test.ts`
+- `/home/mike/nexus-code/cli/test/skills_agents_dir.test.ts`</result>
+<usage><subagent_tokens>53256</subagent_tokens><tool_uses>4</tool_uses><duration_ms>54001</duration_ms></usage>
+</task-notification>
