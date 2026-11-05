@@ -396,8 +396,9 @@ describe("WP-1106: Single-step agent loop mode", () => {
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stdout += d.toString()));
     const closed = new Promise<void>((resolve) => child.on("close", () => resolve()));
-    // The REPL reads one line per prompt: send the next line only when the n-th prompt is showing.
-    const prompts = () => stdout.split("❯ ").length - 1;
+    // The REPL reads one line per prompt: send the next line only when the n-th prompt is showing. Colour codes are
+    // stripped first: with CI set, picocolors colours a piped stdout and the prompt becomes "❯\x1b[39m\x1b[22m ".
+    const prompts = () => stdout.replace(/\x1b\[[0-9;]*m/g, "").split("❯ ").length - 1;
     const send = async (n: number, line: string): Promise<number> => {
       await waitUntil(() => prompts() >= n, 30_000);
       child.stdin.write(`${line}\n`);
