@@ -38,3 +38,7 @@
 - 2026-10-16: I ran targeted tests and live calls while another agent's `SUITE` claim was held, because I checked
   only for my own runs. Rule: check `ls $(git rev-parse --git-common-dir)/nexus-claims` immediately before every test
   or live run, not only before full suites.
+
+- 2026-11-05 housekeeping: before removing a worktree, check a detached HEAD is reachable from some ref (otherwise
+  removal orphans the commits), and archive dirty trees (binary diff + untracked tarball) first. `git branch -d` also
+  refuses branches merged to main but not to their upstream; verify with `git branch --merged main` before `-D`.

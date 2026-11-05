@@ -58,3 +58,16 @@ allowance inside a tool call (about 173 s of generation); output_truncated was a
 - [x] 4. Tests: truncated tool call → chunked write completes; two in a row → fails as before; truncated prose never
       accepted as final; no tool from a truncated reply runs
 - [ ] Full `make test` on a snapshot; docs (USER_MANUAL / COMPACTION_AND_CONTINUITY) updated
+
+# Post-v1.1.3 housekeeping (2026-11-05)
+
+Branch `chore/housekeeping-post-v113` from main 46fd5045 (v1.1.3 stable, published).
+
+- [x] Root clutter (check-in scripts, session dumps, continuity-validation, stale root package-lock.json) moved to
+      `~/nexus-archive/housekeeping-20261105/root-clutter/`; `.gitignore` now ignores `/nexus-session-*.json`
+- [x] 220 stale claims renamed `*.released-<UTC>` and logged; `GATEWAY` (codex-root, RC15 E5, 2026-10-31) left active
+- [x] Worktrees 875 → 137: 657 clean removed; 81 dirty archived to `~/nexus-archive/housekeeping-20261105/worktrees/`
+      (tracked.patch + untracked.tgz + meta.txt) then removed; 136 detached-HEAD trees kept (commits on no ref)
+- [x] Local branches 596 → 206: 364 merged into main deleted; 31 unmerged with a remote copy deleted
+- [ ] Open: 203 unmerged local branches with no remote copy; 136 unreachable detached worktrees; 4 stashes;
+      194 merged remote branches; `GATEWAY` claim; v1.1.4 plan PR #404

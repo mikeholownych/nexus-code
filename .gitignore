@@ -64,3 +64,6 @@ docs/reviews/evidence/nexus_maturity_2026-10-11_verification/baseline_57c070d_se
 # Built TypeScript distribution
 cli/dist/
 .aider*
+
+# Exported TUI session dumps written to the cwd
+/nexus-session-*.json
