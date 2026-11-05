@@ -1,7 +1,7 @@
 # Nexus Code v1.1.4 Plan
 
-**Status:** Draft for owner review. **Base:** `main` after the v1.1.2 merge and tag.
-**Scope (owner, 2026-11-04):** (1) resolve every open finding from v1.1.2; (2) add Worktrunk functionality in the best-integrated way.
+**Status:** Plan and owner decisions recorded (section 6); execution starts when this PR merges. **Base:** `main` at v1.1.3 (published 2026-11-05, `46fd5045`).
+**Scope (owner, 2026-11-04):** (1) resolve every open finding from the v1.1.2 source (shipped as v1.1.3); (2) add Worktrunk functionality in the best-integrated way.
 
 ## 1. Principles
 
