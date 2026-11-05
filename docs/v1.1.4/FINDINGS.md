@@ -54,3 +54,16 @@ Every row ends as FIXED (commit and test), WITHDRAWN (evidence) or DEFERRED (own
 |---|---|---|---|---|---|---|
 | 146 | medium | `01M6NE024XMN` | cli/src/agent.ts:~6363 | WP-1301 | Sequential-path step pause still replaces an existing `STAGNATION_DETECTED` with `STEP_PAUSED` (twin of `01M6KXHHESMA`; the parallel-read path was fixed in v1.1.2 with `&& !stopReason`). Fix both at one shared cycle boundary. | OPEN (documented known limitation in v1.1.2 notes) |
 | gate 3 | low | n/a | cli/test/agent_observer.test.ts "subagent model requests are nested under the parent turn" | WP-1305 | Counts inference spans; a provider retry on the parent step adds a 4th span and fails the test (seen once in the exact-head gate on 5e2e871b, 3/3 pass alone). Make the assertion retry-tolerant or pin the provider so no retry occurs. | OPEN |
+
+## C. Recovered from orphaned worktree commits, 2026-11-05 (WP-1306) and research item (WP-1307)
+
+| Source | Sev | Item | Location | WP | Summary | Status |
+|---|---|---|---|---|---|---|
+| orphan `5be3f6d0`..`cf4f2e07` | medium | doctor message-journal integrity | cli/src/doctor.ts `state.integrity` | WP-1306 | No schema-2 message-journal validation: missing, future-schema and unreadable journals are not distinguished from malformed state, and a large scan cannot be cancelled. | OPEN (confirmed absent on main) |
+| orphan `468a74b4` | medium | `config.env` can change `HOME` | cli/src/config.ts `loadEnvironment` | WP-1306 | `config.env` is loaded with `override: true`; a `HOME=` line moves `os.homedir()` away from the operator home used for state and credentials. | OPEN (reproduce first) |
+| orphan `89a570f6`, `c1bd29cb` | medium | session save drops recovery fields | cli/src/session.ts | WP-1306 | `operation`, `providerRecovery`, `changeBaseline` are not written by `SessionManager.save`. | OPEN (verify against DurableTaskState) |
+| orphan `b733f069`, `eed469dd` | medium | read-only admission precedence | cli/src/config.ts:372-391 | WP-1306 | `NEXUS_MODE=read-only` and `--mode read-only` should set the read-only flag, not only the approval mode. | OPEN (verify) |
+| orphan `845cd1b6`, `244c97cc`, `7df4aea5` | low | Commander option precedence | cli/src/index.ts:424 | WP-1306 | Global-only and REPL options must survive subcommand defaults. | OPEN (verify) |
+| orphan `cac400ea` | low | mode after a checkpoint-free turn | cli/src/sidecar.ts, TUI | WP-1306 | `repl.ts` resets the read-only checkpoint fallback; check the sidecar and TUI paths. | OPEN (verify) |
+| issue #69 | n/a | Harness² review | docs/v1.1.4/HARNESS2-REVIEW.md | WP-1307 | Research write-up with an adopt, borrow or skip recommendation per mechanism. | OPEN |
+
