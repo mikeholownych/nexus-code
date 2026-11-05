@@ -158,7 +158,7 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 - `FINDINGS.md`: 0 open findings; every FIXED row names its commit and test; every DEFERRED row names the owner decision.
 - Entire trail for the release PR: 0 unresolved high findings.
 - `make test` exits 0 on the exact head with the CI fixtures set (CLI, Rust, terminal scope, security) without separate reruns.
-- `nexus worktree` commands pass an end-to-end test against a real temporary repository (create, copy-ignored, list, merge, prune, remove), including: a dirty worktree refuses removal, a path template that escapes is refused, a project hook without approval does not run, a hook template change re-prompts, Git hooks do not run during creation, read-only mode refuses every mutating subcommand.
+- `nexus worktree` commands pass an end-to-end test against a real temporary repository (create, copy-ignored, list, merge, prune, remove), including: a dirty worktree refuses removal, a path template that escapes `.nexus/worktrees/` (or, with the sibling layout enabled, the repository's parent directory) is refused, a project hook without approval does not run, a hook template change re-prompts, Git hooks do not run during creation, read-only mode refuses every mutating subcommand.
 - WP-1306: every recovered item is FIXED with a red-first test or WITHDRAWN with evidence, and the `recovery/orphan-*` branches and the bundle are removed only after that.
 - WP-1307: `docs/v1.1.4/HARNESS2-REVIEW.md` is merged and issue #69 is closed with a link to it.
 - G1.1-4 measured or still explicitly "not met".

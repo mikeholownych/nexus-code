@@ -39,7 +39,8 @@ Every row ends as FIXED (commit and test), WITHDRAWN (evidence) or DEFERRED (own
 | WP-1105 | Command path symlink or .. escape resolves outside the workspace (trusted config; low exposure) | WP-1302 | OPEN |
 | WP-1105 | typecheck_clean: coded diagnostics only; line-shift false failures; identical recognised config errors (TS5057) pass; --pretty output | WP-1302 | OPEN |
 | WP-1105 | node --check accepts ESM-syntax .js with a syntax error | WP-1302 | OPEN |
-| WP-1105 | Candidate build-config edits silently ignored; dangling-symlink overlay fails closed (EEXIST); pinned workspace under os.tmpdir(); spec.candidate.cwd overridden; legacy text-mode calls not counted by toolCallSyntax; README stale | WP-1302 | OPEN |
+| WP-1105 | Candidate build-config edits silently ignored; dangling-symlink overlay fails closed (EEXIST); pinned workspace under os.tmpdir(); spec.candidate.cwd overridden; README stale | WP-1302 | OPEN |
+| WP-1105 | Legacy text-mode calls not counted by toolCallSyntax (`cli/src/parser.ts`) | WP-1302b | OPEN |
 | WP-1107 | serverKindCache: no TTL/invalidation; process-wide, keyed only by endpoint; gateway kept on 404/missing model sends X-Task-Class to a replaced non-gateway server (REQ-PRV-109) | WP-1303 | OPEN |
 | WP-1107 | Null normalisation misses repaired and text-mode calls; strips explicit null from nullable properties for all providers; done twice | WP-1303 | OPEN |
 | WP-1107 | Retained vLLM kind loses advertised.via so request counting probably turns off; transient /version and Ollama /api/version failures downgrade a known kind | WP-1303 | OPEN |
