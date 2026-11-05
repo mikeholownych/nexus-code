@@ -7,8 +7,9 @@ import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { InteractiveRepl } from "../src/repl.js";
+import { SidecarServer } from "../src/sidecar.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
-import { startGateway, makeRepo, makeHome, trustWorkspace, Reply } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, trustWorkspace, waitUntil, Reply } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcIndex = path.resolve(here, "../src/index.ts");
@@ -485,7 +486,126 @@ async function stepUntilStopped(continuation: Partial<HarnessConfig["continuatio
   }
 }
 
+interface StepRig {
+  server: SidecarServer;
+  events: any[];
+  repo: string;
+  app: ApplicationCore;
+  /** Replaces the provider's script; `k` counts requests from the change (1-based). */
+  script(next: (k: number) => Reply): void;
+  send(msg: Record<string, unknown>): Promise<void>;
+}
+
+/** A TUI sidecar whose first prompt fails at inference, so it leaves an unresolved objective for /step. */
+async function withStepSidecar(fn: (rig: StepRig) => Promise<void>): Promise<void> {
+  let current: (k: number) => Reply = () => ({ kind: "http", status: 400, body: '{"error":"bad request"}' });
+  let base = 0;
+  const gw = await startGateway((n) => current(n - base));
+  const repo = makeRepo();
+  const home = makeHome();
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  const app = new ApplicationCore(cfg(gw.url, repo, { maxSteps: 6 }));
+  const events: any[] = [];
+  const server = new SidecarServer({ app, mode: "auto", write: (line) => events.push(JSON.parse(line)) });
+  server.start();
+  const send = (msg: Record<string, unknown>) => server.handleLine(JSON.stringify({ v: 1, ...msg }));
+  try {
+    await fn({
+      server, events, repo, app, send,
+      script: (next) => {
+        base = gw.requests.length;
+        current = next;
+      },
+    });
+  } finally {
+    await send({ type: "cancel" });
+    await server.idle();
+    app.shutdown();
+    await gw.close();
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
 describe("WP-1301: /step in the TUI and the step pause", () => {
+  test("TUI /step runs as a sidecar turn: checkpoint, live tool events, saved session, turn.result", { timeout: 60_000 }, async () => {
+    await withStepSidecar(async ({ server, events, repo, app, script, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "Create the files" });
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "turn.result" && e.turn_id === "t1")?.turn.execution, "FAILED");
+      const checkpointsBefore = app.getCheckpointManager().listCheckpoints().length;
+
+      script((k) => (k === 1 ? write("tui_step_a.txt", "a\n") : write("tui_step_b.txt", "must not exist\n")));
+      await send({ type: "slash", id: "s1", command: "step" });
+      await server.idle();
+
+      assert.ok(fs.existsSync(path.join(repo, "tui_step_a.txt")), "the stepped cycle ran its tool call");
+      assert.ok(!fs.existsSync(path.join(repo, "tui_step_b.txt")), "/step paused after one cycle");
+      const checkpoints = app.getCheckpointManager().listCheckpoints();
+      assert.equal(checkpoints.length, checkpointsBefore + 1, "/step made a rollback checkpoint before it ran");
+      assert.match(checkpoints[0].name, /^Step: Create the files/, "the newest checkpoint is the step's");
+      const start = events.find((e) => e.type === "tool.start" && e.turn_id === "s1");
+      assert.equal(start?.tool, "write_file", "the stepped tool call streamed as a live tool event");
+      const result = events.find((e) => e.type === "turn.result" && e.turn_id === "s1");
+      assert.ok(result, "/step reports through turn.result");
+      assert.equal(result.turn.execution, "LIMIT_REACHED");
+      assert.equal(result.turn.reason, "STEP_PAUSED");
+      assert.equal(app.getSessionManager().listSessions().length, 1, "the session was saved");
+      assert.equal(events.some((e) => e.type === "slash.result" && /Step completed/.test(e.output ?? "")), false);
+    });
+  });
+  test("TUI /step: /undo rolls back only the step, not the turn before it", { timeout: 60_000 }, async () => {
+    await withStepSidecar(async ({ server, events, repo, script, send }) => {
+      // The first turn changes the workspace, then fails at inference: its objective stays unresolved.
+      script((k) => (k === 1 ? write("turn_one.txt", "kept\n") : { kind: "http", status: 400, body: '{"error":"bad request"}' }));
+      await send({ type: "prompt.submit", id: "t1", text: "Create the files" });
+      await server.idle();
+      assert.ok(fs.existsSync(path.join(repo, "turn_one.txt")));
+
+      script((k) => (k === 1 ? write("step_one.txt", "undone\n") : write("step_two.txt", "must not exist\n")));
+      await send({ type: "slash", id: "s1", command: "step" });
+      await server.idle();
+      assert.ok(fs.existsSync(path.join(repo, "step_one.txt")));
+
+      await send({ type: "slash", id: "u1", command: "undo" });
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "slash.result" && e.id === "u1")?.success, true);
+      assert.ok(!fs.existsSync(path.join(repo, "step_one.txt")), "/undo removed the step's change");
+      assert.ok(fs.existsSync(path.join(repo, "turn_one.txt")), "/undo kept the previous turn's change");
+    });
+  });
+  test("TUI /step whose inference fails is reported as FAILED through turn.result, never as Step completed", { timeout: 60_000 }, async () => {
+    await withStepSidecar(async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "Create the files" });
+      await server.idle();
+      await send({ type: "slash", id: "s1", command: "step" });
+      await server.idle();
+      const result = events.find((e) => e.type === "turn.result" && e.turn_id === "s1");
+      assert.equal(result?.turn.execution, "FAILED");
+      assert.equal(events.some((e) => e.type === "slash.result" && e.id === "s1" && /Step completed/.test(e.output ?? "")), false);
+    });
+  });
+  test("TUI /step can be cancelled, during inference and immediately after it is sent", { timeout: 60_000 }, async () => {
+    for (const delayBeforeCancel of [200, 0]) {
+      await withStepSidecar(async ({ server, events, repo, script, send }) => {
+        await send({ type: "prompt.submit", id: "t1", text: "Create the files" });
+        await server.idle();
+        script(() => ({ ...write("slow_step.txt", "must not exist\n"), delayMs: 3000 }));
+        const started = Date.now();
+        await send({ type: "slash", id: "s1", command: "step" });
+        if (delayBeforeCancel) await new Promise((r) => setTimeout(r, delayBeforeCancel));
+        await send({ type: "cancel" });
+        await server.idle();
+        assert.ok(Date.now() - started < 2500, `cancel (after ${delayBeforeCancel} ms) ended /step before the provider replied`);
+        assert.equal(events.some((e) => e.type === "notice" && /cannot be cancelled/.test(e.text)), false);
+        assert.equal(events.find((e) => e.type === "turn.result" && e.turn_id === "s1")?.turn.execution, "INTERRUPTED");
+        assert.ok(!fs.existsSync(path.join(repo, "slow_step.txt")));
+      });
+    }
+  });
   test("the step pause keeps a STAGNATION_DETECTED set during the cycle (recovery exhausted)", { timeout: 60_000 }, async () => {
     // Only recovery exhaustion can stop this run: the no-progress limit is out of reach.
     const { reasons, turn, messages } = await stepUntilStopped({ maxRecoveries: 1, stagnationSteps: 100 });
