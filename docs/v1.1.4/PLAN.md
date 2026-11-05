@@ -12,7 +12,7 @@
 
 ## 2. Findings ledger
 
-**Numbering.** `WP-1301` to `WP-1307` and `WP-1310` to `WP-1315` below are the v1.1.4 work packages. They supersede the same IDs in `docs/v1.1.0/ROADMAP.md` (OTLP exporter, provenance graph, macOS builds, knowledge freshness, cgroup limits, Composio mesh), which were never scheduled. Those roadmap items keep their own IDs only inside that document; in commits, claims and findings, `WP-13xx` means this plan. If one of them is scheduled later, give it a new ID.
+**Numbering.** `WP-1301` to `WP-1308` and `WP-1310` to `WP-1315` below are the v1.1.4 work packages. They supersede the same IDs in `docs/v1.1.0/ROADMAP.md` (OTLP exporter, provenance graph, macOS builds, knowledge freshness, cgroup limits, Composio mesh), which were never scheduled. Those roadmap items keep their own IDs only inside that document; in commits, claims and findings, `WP-13xx` means this plan. If one of them is scheduled later, give it a new ID.
 
 Sources: my independent reviews on PR #402 (WP-1105 evaluators, WP-1107 provider work), Entire trail 145 (15 open findings after the `--step` HIGH was fixed in v1.1.2), Entire trail 140, Entire trail 146, the gate-3 flake recorded in the findings ledger, and the known limitations in `docs/releases/v1.1.2.md` and `docs/releases/v1.1.3.md`. Every item below must end as FIXED (with a test), WITHDRAWN (with evidence it is not a defect) or DEFERRED (owner decision, with a reason). Work packages are ordered by risk.
 
@@ -80,6 +80,15 @@ Tracked in https://github.com/mikeholownych/nexus-code/issues/69. It was parked 
 4. Parallel versus sequential recursion budgets against our inference cost profile (gateway-preferred local plus DEC-06 cloud providers).
 5. Adopt the framework, borrow ideas, or skip?
 Constraints, carried over from the issue: never run it on held-out T2/T3 tasks (per-task refinement is tuning); a Nexus executor adapter would be needed first and is **out of scope** for v1.1.4; any trial runs inside the Nexus sandbox and network policy (its default is unrestricted network and a disabled Codex sandbox); models only through the gateway or DEC-06 providers; adopted harness edits are candidate changes re-validated on frozen held-out evaluation by someone other than the tuner. Reported gains are the paper's own and unverified. The write-up reads the paper (arXiv 2610.14224) and the Apache-2.0 repository; it does not execute them. It closes the issue only when the write-up merges, and any adopt or borrow item becomes a separate, owner-approved work package for a later release.
+
+### WP-1308 Relevance-based skill injection
+Source: owner report 2026-11-05. On v1.1.3 a single prompt in a repository on a host with 305 installed skills was refused on step 1 (`Context is full`, 59,105 + 8,192 + 4,096 > 65,536): the system prompt advertised every skill with path and full description, 110,548 characters. The immediate defect is fixed in PR #409 (the catalog takes at most 5% of the context window and degrades to shorter descriptions, then names only). At that scale the catalog is names only, so the model chooses a skill by name alone. This package makes the useful descriptions reach the model when they are relevant, without growing the stable prompt.
+- **Keep the bounded catalog** from PR #409 in the system prompt so the prefix stays byte-stable for local prefix caching (vLLM, llama.cpp).
+- **Per-turn matching:** score the operator's prompt against each trusted skill's name and description with a local lexical ranker (no model call, no new dependency). When the top scores clear a threshold, add the top 3 to 5 with full descriptions as a system note beside the user message (the `requestMessages` decoration point, as the pinned objective uses), never in `messages[0]`. The note is bounded by its own share of the window and is recomputed only on a new operator message.
+- **Lookup during the task:** `activate_skill` accepts a query when no skill has that exact name and returns ranked matches (name and description), or a separate read-only `find_skills` tool; whichever adds less tool-schema weight. This covers work that drifts from the opening prompt.
+- **Trust is unchanged:** matching only advertises a description; it never activates a skill or loads its body. Untrusted workspace skills are never matched or listed. Skill frontmatter grants nothing.
+- **Tests:** a prompt that names a skill's domain gets that skill's description beside the user message; an unrelated prompt gets no note; the system prompt is byte-identical across turns with different prompts; a query to `activate_skill` returns ranked matches; untrusted skills never appear; the note stays within its budget with 300+ skills.
+- **Measure:** report the first-request estimate and the note size on the 305-skill host before and after, and record whether the matched skills for the original citable prompt are plausible.
 
 ## 3. Worktrunk integration
 
@@ -150,7 +159,7 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 ## 4. Sequencing
 
 1. **Week 0 (day 1):** branch `v1/v113-plan` from `main`, this plan and the findings ledger committed; claims taken per work package.
-2. **Findings first, in parallel with the Worktrunk core:** WP-1301 and WP-1303 (they touch `agent.ts`, `client.ts`, `slash/*`), WP-1302 (`eval/` only, codex-root per decision 3), WP-1302b (`cli/src/parser.ts`, claude-code), WP-1304, WP-1305, WP-1306 (doctor journal first, then the `HOME` override: both are confirmed by reading the code; the rest need a red test first) and WP-1307 (documentation only, no claim needed). Worktrunk WP-1310 starts with the git-common-dir anchor and the registry because WP-1311 to WP-1314 depend on them.
+2. **Findings first, in parallel with the Worktrunk core:** WP-1301 and WP-1303 (they touch `agent.ts`, `client.ts`, `slash/*`), WP-1302 (`eval/` only, codex-root per decision 3), WP-1302b (`cli/src/parser.ts`, claude-code), WP-1304, WP-1305, WP-1306 (doctor journal first, then the `HOME` override: both are confirmed by reading the code; the rest need a red test first), WP-1308 (after PR #409 merges; touches `cli/src/skills.ts`, `cli/src/agent.ts` request assembly and the `activate_skill` handler, so sequence it after WP-1301 releases `agent.ts`) and WP-1307 (documentation only, no claim needed). Worktrunk WP-1310 starts with the git-common-dir anchor and the registry because WP-1311 to WP-1314 depend on them.
 3. WP-1311 and WP-1312 after WP-1310. WP-1313 after WP-1312 (merge needs `pre-merge`). WP-1314 and WP-1315 last.
 4. Each work package: red test, fix, focused tests (SUITE claim for any run), independent reviewer on the diff with the findings text in the brief, then the exact-head gate on the integration branch. Release candidate only after every finding in `FINDINGS.md` is FIXED, WITHDRAWN or DEFERRED with an owner decision.
 
@@ -160,6 +169,7 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 - `make test` exits 0 on the exact head with the CI fixtures set (CLI, Rust, terminal scope, security) without separate reruns.
 - `nexus worktree` commands pass an end-to-end test against a real temporary repository (create, copy-ignored, list, merge, prune, remove), including: a dirty worktree refuses removal, a path template that escapes `.nexus/worktrees/` (or, with the sibling layout enabled, the repository's parent directory) is refused, a project hook without approval does not run, a hook template change re-prompts, Git hooks do not run during creation, read-only mode refuses every mutating subcommand.
 - WP-1306: every recovered item is FIXED with a red-first test or WITHDRAWN with evidence, and the `recovery/orphan-*` branches and the bundle are removed only after that.
+- WP-1308: the citable prompt on the 305-skill host starts without a capacity block; per-turn skill notes and the lookup pass the tests listed under WP-1308; the system prompt is byte-identical across turns.
 - WP-1307: `docs/v1.1.4/HARNESS2-REVIEW.md` is merged and issue #69 is closed with a link to it.
 - G1.1-4 measured or still explicitly "not met".
 - No new runtime dependency, no SBOM component change, `cargo deny` and `npm audit` clean.
