@@ -375,40 +375,57 @@ describe("WP-1106: Single-step agent loop mode", () => {
     }
   });
 
-  test("REPL /step command rejects when no unresolved objective exists", async () => {
+  test("REPL /step (real handler): refuses without an unresolved objective, then checkpoints and runs one cycle", { timeout: 60_000 }, async () => {
     const home = makeHome();
     const repo = makeRepo();
     trustWorkspace(home, repo);
-    const prevHome = process.env.HOME;
-    process.env.HOME = home;
-
-    const app = new ApplicationCore(cfg("http://127.0.0.1:9/v1", repo));
-    const repl = new InteractiveRepl(app, "auto");
+    // The first prompt's inference fails, which leaves its objective unresolved; /step then runs one cycle.
+    let phase: "fail" | "work" = "fail";
+    let workRequests = 0;
+    const gw = await startGateway(() => {
+      if (phase === "fail") return { kind: "http", status: 400, body: '{"error":"bad request"}' };
+      workRequests++;
+      return workRequests === 1 ? write("repl_step_a.txt", "a\n") : write("repl_step_b.txt", "must not exist\n");
+    });
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", srcIndex, "repl", "-y", "-w", repo, "-e", gw.url, "-m", "m"],
+      { cwd: cliRoot, env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") }, stdio: ["pipe", "pipe", "pipe"] },
+    );
+    let stdout = "";
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", (d) => (stdout += d.toString()));
+    const closed = new Promise<void>((resolve) => child.on("close", () => resolve()));
+    // The REPL reads one line per prompt: send the next line only when the n-th prompt is showing.
+    const prompts = () => stdout.split("❯ ").length - 1;
+    const send = async (n: number, line: string): Promise<number> => {
+      await waitUntil(() => prompts() >= n, 30_000);
+      child.stdin.write(`${line}\n`);
+      return stdout.length;
+    };
     try {
-      // No objective exists yet
-      assert.equal(app.getAgent().getObjective(), undefined);
+      await send(1, "/step");
+      const afterRefusal = await send(2, "Create the files");
+      // The failed turn left the objective unresolved; switch the provider to working replies before /step.
+      await waitUntil(() => prompts() >= 3, 30_000);
+      phase = "work";
+      const beforeFirstListing = await send(3, "/checkpoints");
+      const beforeStep = await send(4, "/step");
+      const beforeSecondListing = await send(5, "/checkpoints");
+      await waitUntil(() => prompts() >= 6, 30_000);
+      child.stdin.end();
+      await closed;
 
-      let loggedWarning = false;
-      const origLog = console.log;
-      console.log = (...args: any[]) => {
-        const str = args.join(" ");
-        if (str.includes("No unresolved objective to step")) {
-          loggedWarning = true;
-        }
-      };
-      try {
-        // Run /step branch in repl
-        const ledger = app.getAgent().getObjective();
-        if (!ledger || ledger.outcome?.status === "completed") {
-          console.log("No unresolved objective to step. Provide a prompt to start a task.\n");
-        }
-        assert.equal(loggedWarning, true);
-      } finally {
-        console.log = origLog;
-      }
+      assert.match(stdout.slice(0, afterRefusal), /No unresolved objective to step/, "the real /step handler refuses without an objective");
+      assert.equal(workRequests, 1, "/step ran exactly one model request");
+      assert.ok(fs.existsSync(path.join(repo, "repl_step_a.txt")), "/step ran the cycle's tool call");
+      assert.ok(!fs.existsSync(path.join(repo, "repl_step_b.txt")), "/step paused after one cycle");
+      // /step made its own rollback checkpoint, named after the objective: only the listing after /step shows it.
+      assert.doesNotMatch(stdout.slice(beforeFirstListing, beforeStep), /Step: Create the files/);
+      assert.match(stdout.slice(beforeSecondListing), /Step: Create the files/, `no /step checkpoint listed after /step:\n${stdout}`);
     } finally {
-      app.shutdown();
-      process.env.HOME = prevHome;
+      if (child.exitCode === null) child.kill();
+      await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -557,6 +574,7 @@ describe("WP-1301: /step in the TUI and the step pause", () => {
       assert.equal(events.some((e) => e.type === "slash.result" && /Step completed/.test(e.output ?? "")), false);
     });
   });
+
   test("TUI /step: /undo rolls back only the step, not the turn before it", { timeout: 60_000 }, async () => {
     await withStepSidecar(async ({ server, events, repo, script, send }) => {
       // The first turn changes the workspace, then fails at inference: its objective stays unresolved.
@@ -577,6 +595,7 @@ describe("WP-1301: /step in the TUI and the step pause", () => {
       assert.ok(fs.existsSync(path.join(repo, "turn_one.txt")), "/undo kept the previous turn's change");
     });
   });
+
   test("TUI /step whose inference fails is reported as FAILED through turn.result, never as Step completed", { timeout: 60_000 }, async () => {
     await withStepSidecar(async ({ server, events, send }) => {
       await send({ type: "prompt.submit", id: "t1", text: "Create the files" });
@@ -588,6 +607,7 @@ describe("WP-1301: /step in the TUI and the step pause", () => {
       assert.equal(events.some((e) => e.type === "slash.result" && e.id === "s1" && /Step completed/.test(e.output ?? "")), false);
     });
   });
+
   test("TUI /step can be cancelled, during inference and immediately after it is sent", { timeout: 60_000 }, async () => {
     for (const delayBeforeCancel of [200, 0]) {
       await withStepSidecar(async ({ server, events, repo, script, send }) => {
@@ -606,6 +626,7 @@ describe("WP-1301: /step in the TUI and the step pause", () => {
       });
     }
   });
+
   test("the step pause keeps a STAGNATION_DETECTED set during the cycle (recovery exhausted)", { timeout: 60_000 }, async () => {
     // Only recovery exhaustion can stop this run: the no-progress limit is out of reach.
     const { reasons, turn, messages } = await stepUntilStopped({ maxRecoveries: 1, stagnationSteps: 100 });
@@ -614,6 +635,7 @@ describe("WP-1301: /step in the TUI and the step pause", () => {
     // endStep ran at each pause: the recovery note reached the conversation.
     assert.ok(messages.some((m) => m.startsWith("[Nexus recovery")), "the recovery note was delivered");
   });
+
   test("steps without progress accumulate across /step calls until STAGNATION_DETECTED", { timeout: 60_000 }, async () => {
     // Recovery cannot exhaust here: only the no-progress count can stop the run.
     const { reasons, turn } = await stepUntilStopped({ maxRecoveries: 50, stagnationSteps: 3 });
