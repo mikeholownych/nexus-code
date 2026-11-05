@@ -570,7 +570,14 @@ describe("WP-1301: /step in the TUI and the step pause", () => {
       assert.ok(result, "/step reports through turn.result");
       assert.equal(result.turn.execution, "LIMIT_REACHED");
       assert.equal(result.turn.reason, "STEP_PAUSED");
-      assert.equal(app.getSessionManager().listSessions().length, 1, "the session was saved");
+      const sessions = app.getSessionManager().listSessions();
+      assert.equal(sessions.length, 1, "the step saved into the same session as the turn before it");
+      const saved = app.getSessionManager().loadSession(sessions[0].id);
+      assert.equal(saved?.lastTurn?.reason, "STEP_PAUSED", "the session saved after the step records the step's result");
+      assert.ok(
+        saved?.messages.some((m: any) => m.role === "tool" && m.name === "write_file"),
+        "the saved session holds the step's write_file tool message",
+      );
       assert.equal(events.some((e) => e.type === "slash.result" && /Step completed/.test(e.output ?? "")), false);
     });
   });
