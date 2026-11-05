@@ -3,10 +3,11 @@
   "checkpoint_id": "01M6PKG2Q9FXBVTC01V6M07AQS",
   "strategy": "manual-commit",
   "branch": "fix/skill-catalog-budget",
-  "checkpoints_count": 64,
+  "checkpoints_count": 67,
   "files_touched": [
     "cli/src/agent.ts",
     "cli/src/skills.ts",
+    "cli/test/skill_catalog_budget.test.ts",
     "cli/test/skills_agents_dir.test.ts"
   ],
   "sessions": [
@@ -28,24 +29,31 @@
       "transcript": "/2/full.jsonl",
       "content_hash": "/2/content_hash.txt",
       "prompt": "/2/prompt.txt"
+    },
+    {
+      "metadata": "/3/metadata.json",
+      "transcript": "/3/full.jsonl",
+      "compact_transcript": "/3/transcript.jsonl",
+      "content_hash": "/3/content_hash.txt",
+      "prompt": "/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 17233,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 992290,
-    "output_tokens": 3148,
-    "api_call_count": 9
+    "input_tokens": 17389,
+    "cache_creation_tokens": 168608,
+    "cache_read_tokens": 9764338,
+    "output_tokens": 43881,
+    "api_call_count": 85
   },
   "redaction": {
-    "replacements": 2881,
+    "replacements": 2913,
     "layers": {
       "betterleaks": 991,
       "connection_string": 0,
       "credential_key": 0,
-      "credential_value": 359,
+      "credential_value": 364,
       "credentialed_uri": 136,
-      "entropy": 1976,
+      "entropy": 2003,
       "key_context": 0,
       "provider_token": 4,
       "shell_stdin": 0

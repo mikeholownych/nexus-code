@@ -1,0 +1,22 @@
+v1.1.3 has landed.. though, a single prompt of "Review the citable codebase. Determine next priorities for enhancement." in the citable (/home/mike/Projects/citable) repo results in: "× Context is full  The request would exceed the model's context (59105+8192+4096>65536 tokens).
+  → next: /compact, then send again · v receipt"
+
+---
+
+make it a share..
+is it possible to only inject skills into the prompt when they are relevant?
+
+---
+
+<task-notification>
+<task-id>b40h6c5mv</task-id>
+<tool-use-id>toolu_018kbCMSSCbBoywkuFhVLniv</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/380160dd-d550-47da-ab0b-fb97518ef209/tasks/b40h6c5mv.output</output-file>
+<status>completed</status>
+<summary>Background command "Run affected suites with core binary built" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+1. yes
+2. v1.1.4 plan
