@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_013aGCPEtUuoGXqzoxEkpsvZ",
+  "agent_id": "a7b70484fef56bfb6",
+  "subagent_type": "reviewer",
+  "task_description": "Independent review of PR #404 docs",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 65693,
+    "cache_read_tokens": 467758,
+    "output_tokens": 11062,
+    "api_call_count": 11
+  },
+  "started_at": "2026-11-05T16:51:39.001368066Z",
+  "completed_at": "2026-11-05T16:53:15.930596669Z"
+}
