@@ -2,7 +2,7 @@
 
 Date: 2026-11-05. Status: research write-up. No runtime change, no dependency, nothing executed, `eval/` untouched.
 
-Sources: the paper (arXiv 2610.14224v1, submitted 2026-10-09, cs.AI) and the Apache-2.0 repository `google-research/harness2` (README, `docs/EXPERIMENTS.md`, and the code in `harness2/core/recursion.py`, `library.py`, `prompts.py`, `context.py`, `selection.py`), read over the web and never cloned or run. Every gain quoted below is the paper's own, produced on its benchmarks with its executors, and is **unverified by us**.
+Sources: the paper (arXiv 2610.14224v1, submitted 2026-10-09, cs.AI) and the Apache-2.0 repository `google-research/harness2` (README, `docs/EXPERIMENTS.md`, and the code in `harness2/core/recursion.py`, `library.py`, `prompts.py`, `context.py`, `selection.py`), read over the web and never cloned or run. Every gain quoted below is the paper's own, produced on its benchmarks with its executors, and is **unverified by us**. Paper figures were taken from a summariser's extraction of the arXiv HTML (see the last section), not read verbatim.
 
 ## What Harness² is
 
@@ -24,7 +24,7 @@ It leaves model weights fixed and edits the harness through eight mounted files:
 | Harness² component | Nexus counterpart | Editable by a model today? | Verdict |
 |---|---|---|---|
 | System prompt | Operating rules in `buildSystemPrompt()` (`agent.ts:4091`), plus trusted `AGENTS.md`/`CLAUDE.md` rules | Compiled TypeScript; only the project rules file is data | Borrow idea; would need an overlay layer |
-| Guardrails | Code, not text: approval policy, `file_guard.ts`, `egress.ts`, `sandbox.ts`, `authority.ts`, workspace trust | No, deliberately | Skip. Must never be model-editable |
+| Guardrails | Code, not text: approval policy, `cli/src/core/file_guard.ts`, `cli/src/core/egress.ts`, `sandbox.ts`, `cli/src/core/authority.ts`, workspace trust | No, deliberately | Skip. Must never be model-editable |
 | Memory | `KnowledgeGraph` (`.nexus/knowledge.json`, auto-extract off by default, DEC-15); compaction's durable task state | knowledge.json is data | See question 3 |
 | Tool guidance | Tool schemas in `cli/src/tools.ts`, canonical few-shots (`cli/src/fewshots.ts`), on-demand groups (`core/tool_groups.ts`, `enable_tools`) | Compiled | Best-fit target for a future contrast study |
 | Subagents | `ROLE_PROFILES` in `team.ts`; bounded contracts in `core/specialist_profiles.ts` (read-only, tool whitelists, budgets) | Compiled | Skip. Contracts are safety properties |
@@ -32,7 +32,7 @@ It leaves model weights fixed and edits the harness through eight mounted files:
 | Scripts | No first-class equivalent; the model uses `run_command` | n/a | Skip |
 | Plugin | JavaScript plugins (`cli/src/plugins.ts`) that run in-process | Files, but executable | Skip. Model-authored executable code conflicts with the trust model |
 
-Net: Nexus already has analogues for six of the eight. The gap is not a missing component but a missing editable overlay: tool guidance, the operating rules and few-shots are compiled in.
+Net: Nexus already has analogues for seven of the eight (scripts have none). The gap is not a missing component but a missing editable overlay: tool guidance, the operating rules and few-shots are compiled in.
 
 ## 3. The durable lessons memory
 
@@ -42,7 +42,7 @@ What Harness² does (read in `library.py` and `prompts.py`): an entry is the ful
 
 What I did not find: decay, pruning, contradiction handling or re-validation of a stored lesson in `library.py` (`forget` and `retain` exist to keep an evaluation stream causal, not to age entries). Drift and over-generalisation control therefore rests on the reflector's judgement plus Propose re-checking facts per task. That is the same model-judging-itself weakness the paper concedes in its limitations.
 
-Against Nexus: today's memory is operator-saved, trust-gated key/value data, and freshness (CTX-002) was descoped to post-v1 on exactly that basis (`docs/v1.0.0/DECISIONS.md`). Cross-task semantic retrieval is deferred to v1.2 (`docs/v1.1.0/CONTEXT_MANAGEMENT.md`, DEC-V11-13). The layered-memory roadmap is not on `main`: it exists only on the local branch `v1/docs-v11-layered-memory` (`docs/v1.1.0/ROADMAP.md`, kept for that reason), and this review did not read it. Read it before choosing any memory work package. The Nexus memory-safety requirements (`TURN-SPECIFIC-CONTEXT-ENGINEERING-HYPOTHESIS.md` section 8: no stored model text in the instruction channel, applicability against a current fingerprint, provenance on every item) are stricter than anything in Harness², and `CandidateTracker` receipts (`core/candidate.ts`) already model "historical PASS is not current PASS". Model-written lessons that flow into prompts without an operator would violate those requirements, so any Nexus version must be operator-reviewed and carry an applicability fingerprint.
+Against Nexus: today's memory is operator-saved, trust-gated key/value data, and freshness (CTX-002) was descoped to post-v1 on exactly that basis (`docs/v1.0.0/DECISIONS.md`). Cross-task semantic retrieval is deferred to v1.2 (`docs/v1.1.0/CONTEXT_MANAGEMENT.md`, DEC-V11-13). `docs/v1.1.0/ROADMAP.md` on `main` has no layered-memory work package. The layered-memory roadmap exists only on the owner's local branch `v1/docs-v11-layered-memory` (its own `docs/v1.1.0/ROADMAP.md`), and this review did not read it, so the memory recommendation above is conditional: read that branch before choosing any memory work package. The Nexus memory-safety requirements (`TURN-SPECIFIC-CONTEXT-ENGINEERING-HYPOTHESIS.md` section 8: no stored model text in the instruction channel, applicability against a current fingerprint, provenance on every item) are stricter than anything in Harness², and `CandidateTracker` receipts (`core/candidate.ts`) already model "historical PASS is not current PASS". Model-written lessons that flow into prompts without an operator would violate those requirements, so any Nexus version must be operator-reviewed and carry an applicability fingerprint.
 
 ## 4. Parallel versus sequential budgets
 
