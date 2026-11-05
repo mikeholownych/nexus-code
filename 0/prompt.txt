@@ -1,0 +1,7 @@
+drop the stashes 
+do any of the orphaned commits have any relevant work that isn't already in place?
+delete the merged remote branches
+
+---
+
+any genuinely missing and required orphaned work should be integrated with v1.1.4. Also for v1.1.4, review gh issue #69
