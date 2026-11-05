@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SkillManager } from "../src/skills.js";
+import { SkillManager, SKILL_CATALOG_MAX_CHARS } from "../src/skills.js";
 
 function withHome(run: (home: string, ws: string) => void): void {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-skills-home-"));
@@ -128,6 +128,59 @@ describe("Agent Skills .agents/skills interoperability", () => {
       assert.deepEqual(Object.keys(skill).sort(), ["content", "description", "isWorkspaceSkill", "name", "path", "trusted"]);
       assert.equal(sm.getSkill("ws-grabby"), null, "a skill's own 'trusted: true' must not bypass workspace trust");
       assert.equal(sm.getUntrustedSkill("ws-grabby")?.trusted, false);
+    });
+  });
+});
+
+describe("skill catalog stays within its prompt budget", () => {
+  const description = (i: number) =>
+    `Skill number ${i} for a specific engineering workflow. Use when the task involves area ${i}, its tooling, its tests, and the review checklist that goes with it.`;
+
+  test("a few skills keep the full listing with source and trust", () => {
+    withHome((home, ws) => {
+      const dir = writeSkill(path.join(home, ".agents", "skills"), "solo", "name: solo\ndescription: Only one");
+      const section = new SkillManager(ws, { trusted: false }).getPromptSection();
+      assert.ok(section.includes(`- **solo** [source: ${path.join(dir, "SKILL.md")}] [trust: trusted]: Only one`));
+      assert.ok(!section.includes("abbreviated"));
+    });
+  });
+
+  test("hundreds of installed skills do not fill a 64K context (citable report: 305 skills, 110K-char catalog)", () => {
+    withHome((home, ws) => {
+      for (let i = 0; i < 305; i++) writeSkill(path.join(home, ".agents", "skills"), `skill-${i}`, `name: skill-${i}\ndescription: ${description(i)}`);
+      writeSkill(path.join(ws, ".nexus", "skills"), "ws-only", "name: ws-only\ndescription: The workspace's own skill");
+
+      const sm = new SkillManager(ws, { trusted: true });
+      const section = sm.getPromptSection();
+      assert.ok(section.length <= SKILL_CATALOG_MAX_CHARS, `catalog is ${section.length} chars`);
+      assert.ok(section.includes("306 skills"), "the abbreviation is stated with the real count");
+      assert.ok(section.includes("ws-only"), "workspace skills are listed first and survive the cut");
+      assert.ok(!section.includes("[source:"), "paths are dropped from an abbreviated catalog");
+      for (let i = 0; i < 305; i++) assert.ok(sm.getSkill(`skill-${i}`), "every skill stays activatable");
+    });
+  });
+
+  test("tighter budgets shorten descriptions, then list names, then count the rest", () => {
+    withHome((home, ws) => {
+      for (let i = 0; i < 20; i++) writeSkill(path.join(home, ".agents", "skills"), `skill-${i}`, `name: skill-${i}\ndescription: ${description(i)}`);
+      const sm = new SkillManager(ws, { trusted: false });
+
+      const shortened = sm.getPromptSection(3_000);
+      assert.ok(shortened.length <= 3_000);
+      assert.match(shortened, /- \*\*skill-0\*\*: Skill number 0 .*…\n/);
+
+      const namesOnly = sm.getPromptSection(800);
+      assert.ok(namesOnly.length <= 800);
+      assert.ok(namesOnly.includes("skill-19") && !namesOnly.includes("Skill number"));
+
+      const counted = sm.getPromptSection(500);
+      assert.ok(counted.length <= 500, `catalog is ${counted.length} chars`);
+      assert.match(counted, /…and \d+ more \(an unknown name passed to `activate_skill` lists them all\)\n$/);
+
+      for (const budget of [-5, 0, 150, 307]) {
+        assert.ok(sm.getPromptSection(budget).length <= Math.max(0, budget), `budget ${budget} is never exceeded`);
+      }
+      assert.equal(sm.getPromptSection(0), "", "a window too small for the heading gets no catalog");
     });
   });
 });
