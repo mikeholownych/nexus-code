@@ -6260,8 +6260,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             });
           }
           this.persistProgress({ messages: true });
-          // A cycle of parallel reads is still one model/tool cycle: --step pauses here as it does after the sequential path.
-          if (isStep && modelStop === "NONE" && !interruption && !inferenceFailure && !persistenceFailure && !signal.aborted) {
+          // A cycle of parallel reads is still one model/tool cycle: --step pauses here as it does after the sequential path,
+          // unless the cycle already set a stop (for example STAGNATION_DETECTED), which the loop top then reports.
+          if (isStep && modelStop === "NONE" && !stopReason && !interruption && !inferenceFailure && !persistenceFailure && !signal.aborted) {
             stopReason = "STEP_PAUSED";
             stopDetail = "paused after one model/tool cycle (--step)";
             break;
