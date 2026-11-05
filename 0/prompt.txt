@@ -1,0 +1,200 @@
+<task-notification>
+<task-id>bpadplyek</task-id>
+<tool-use-id>toolu_01WdPDFPX4K2r2TEKo7rvpgh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/bpadplyek.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for linux-x86_64 and Entire Gates to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b1ni9bsmu</task-id>
+<tool-use-id>toolu_01TtpegxUfnCjjqyTfMPrpwJ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/b1ni9bsmu.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for all checks on the new head" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bbxzxae6z</task-id>
+<tool-use-id>toolu_01FmWuMhCFmavqdrcx17QTyM</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/bbxzxae6z.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for all checks on head 79cb6603" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bi0incpho</task-id>
+<tool-use-id>toolu_01QANSQP6imt5fM1J3eWhcwv</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/bi0incpho.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch the CI run on the exact head to completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+I'm showing #404 as all green
+
+---
+
+proceed with next work
+
+---
+
+<task-notification>
+<task-id>a97accaac42da75eb</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/a97accaac42da75eb.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement WP-1301 TUI /step fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Status: Complete. Four commits are pushed to `origin/v1/wp-1301-step-mode`, with no PR and no merge. The full CLI suite was not clean, but the same failures occur on main.
+
+I checked that `HEAD` is `19daf466`, that the remote matches it, that each commit ends with the `Co-Authored-By: Claude Sonnet 5.5 &lt;noreply@anthropic.com&gt;` line, and that no scratch worktrees are left. The rest of this report comes from the implementation subagent, and I have not re-run its tests. The independent review is still to come.
+
+### Commits
+1. `f94ba721` fix(step): pause --step at one shared cycle boundary after endStep
+2. `342d47c7` fix(step): run TUI /step as a sidecar turn through SidecarServer.turn()
+3. `5c1f12dd` test(step): drive the real REPL /step handler instead of re-implementing it
+4. `19daf466` docs(v1.1.4): mark the WP-1301 findings fixed
+
+### What changed
+- **`cli/src/agent.ts`**: the two separate step pauses are gone. One check now sits at the top of the loop (`isStep &amp;&amp; currentStep &gt; 1`), after the stop-reason, budget, stagnation and cancel checks. Every path that continues the loop runs `endStep()` first, so `STAGNATION_DETECTED` is no longer overwritten.
+- **`cli/src/slash/session_commands.ts`**: `stepSlash` no longer calls `agent.runTurn` itself. It returns a turn outcome with `step: true`.
+- **`cli/src/sidecar.ts`**: that outcome goes through `turn(..., step)`, which sets `{step: true, resume: true}`, makes the checkpoint `Step: &lt;objective&gt;`, labels the turn `[step]` and sends `turn.result`. The old `Step completed` reply is gone.
+- **`cli/src/slash/catalog.ts`**: `/step` is now `cancellable: true`.
+- **`cli/test/step_loop.test.ts`**: the test that re-implemented the handler is replaced. New tests cover TUI sidecar routing, `/undo` scope, FAILED reporting, cancel, two stagnation cases, and the real REPL `/step` running as a `nexus repl` subprocess.
+- **`docs/v1.1.4/FINDINGS.md`**: six WP-1301 rows are now FIXED; the details are below.
+- Diff stat: 6 files changed, 250 insertions, 67 deletions.
+
+### Commands and results
+Every run used `HOME=$(mktemp -d)` and `XDG_CONFIG_HOME`, with a claims check first.
+- **`npm ci`**: PASS.
+- **Rust core build** (`cargo build --release ... --bin harness-core`): PASS. It was needed because the first test run failed with `Core engine handshake failed`; that run was thrown away.
+- **Red run on unchanged source** (`node scripts/run_tests.mjs test/step_loop.test.ts`): 9 passed, 6 failed, as intended. Failures included:
+  - routing: `checkpoint actual: 1, expected: 2`
+  - `/undo`: `kept the previous turn's change`
+  - FAILED reporting: `actual: undefined, expected: 'FAILED'`
+  - cancel: `ended /step before the provider replied actual: false`
+  - both stagnation tests: `STEP_PAUSED` instead of `STAGNATION_DETECTED`
+
+  The log is at `/tmp/claude-1000/-home-mike-nexus-code/f6b4e590-3758-454e-b724-4142e6ceef6f/scratchpad/red_unmodified_source.log`.
+- **REPL test**: it passes on main because the REPL `/step` was already correct. To show it tests the real handler, the subagent renamed the REPL `step` branch in a scratch copy and the test FAILED.
+- **Catalog check**: with `cancellable: true` removed, the cancel test FAILS when the cancel is sent immediately.
+- **`npx tsc --noEmit -p .`**: PASS. `cli/` has no lint script, and test files are not typechecked because tsconfig only covers `src/`.
+- **Focused run** (step_loop, nonprogress_recovery, slash_router and three sidecar test files): 141 of 142 at first. The one failure was a bug in the new test, and after the fix `step_loop.test.ts` passes 15 of 15, including AC1b.
+- **Full suite** (`npm test`, under the SUITE claim, on a snapshot worktree of `5c1f12dd`): FAIL, with 2313 passed, 63 failed and 7 skipped.
+  - The failures are in doctor, eval*, harness_entry, upgrade_cli, experimental_and_readonly and the PTY `_e2e` tests. They need a built `cli/dist`, `nexus-tui` and the eval sandbox, which the snapshot did not have.
+  - The same 20 files on a `b194b8a9` snapshot fail on exactly the same test names.
+  - Because `npm test` stopped at the first failure, `test-scope-procs.sh` never ran. `cargo test` and `security_gates.sh` were not run either (no Rust changed).
+- **Flakiness**: none seen. The REPL subprocess test's run time varied about 5x with machine load; its timeouts are 30 s.
+
+### FINDINGS status changes
+- **`01M6KXHHESMA`, `01M6NE024XMN`** → FIXED (`f94ba721`, the two stagnation tests).
+- **`01M6KXTK354H`** → FIXED (`342d47c7`, the cancel test).
+- **`01M6KXHHFE7Y`** → FIXED (`342d47c7`, the routing and FAILED-reporting tests).
+- **`01M6KXTK2V6Q`** → FIXED (`342d47c7`, the `/undo` test).
+- **`01M6KXHHFWR6`** → FIXED (`5c1f12dd`, the real REPL handler test).
+- **`01M6KXTK2G0S`**: still FIXED from v1.1.3. A note was added that the pause moved and AC1b still passes.
+
+### Gaps in the evidence
+- **BLOCKED outcome**: the finding names a BLOCKED turn, but the test uses FAILED, because a BLOCKED turn is hard to cause. Every outcome now goes through `turn.result`, so `Step completed` can no longer appear.
+- **Two weak checks in the routing test**: the live-tool-events check would also pass on main, and the "session saved" check only counts sessions, which an earlier turn already satisfies.
+
+### Decisions for you to review
+1. **Step-mode behaviour change**: several other paths that used to make another model request inside the same `/step` now pause after their cycle. These are the empty, notice, truncated and capacity-retry replies, queued steering and the requirements nudge.
+   - If a step or time budget runs out in the same cycle, that budget reason is reported instead of `STEP_PAUSED`.
+   - The "two empty or truncated replies in a row" counters now reset on each `/step`.
+2. **Steering during a TUI `/step`**: it is now queued like any other turn and comes back as cancelled when the step pauses. Before, it was refused with "a command is running".
+3. **Labels**: a TUI `/step` now uses the REPL's labels, `[step]` for the user line and session title and `Step: &lt;objective&gt;` for the checkpoint.
+4. **Rebase conflict to watch**: PR #409 (skill-catalog-budget) also edits `cli/src/agent.ts` around line 5911. The claims log says the hunks don't overlap.
+
+### Claims
+- **SUITE** and **`FILE_docs_v1.1.4_FINDINGS.md`** were taken and released, with lines in the claims log.
+- **Still held by you, as instructed**: `WP-1301_TUI_STEP_MODE` and the FILE_ claims for `agent.ts`, `sidecar.ts`, `slash/catalog.ts`, `slash/session_commands.ts` and `step_loop.test.ts`.
+- **Held by someone else**: `FILE_cli_src_skills.ts`, the two skill test files and `FILE_docs_v1.1.4_PLAN.md`. They are not part of this work.
+- **Untracked in `/home/mike/nexus-wt/wp-1301-step`**: the built `core/target` and `cli/node_modules`.</result>
+<usage><subagent_tokens>49913</subagent_tokens><tool_uses>3</tool_uses><duration_ms>4772814</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae46b1dc2c7202361</task-id>
+<tool-use-id>toolu_01VUHsLE98y3TcSLyiagkSpE</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/7e8eb8c6-8cc5-47ad-8801-3d3ca3c03245/tasks/ae46b1dc2c7202361.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of WP-1301 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: ACCEPT-WITH-FIXES.** There are no blockers. The loop change is correct, and the fixes below are small and mostly about tests and docs.
+
+## Blockers
+None.
+
+## Loop verification (agent.ts)
+I read every `continue` in the loop and the diff against the original.
+
+- **Paths that run endStep() before `continue`:** truncated-reply retry (6053), capacity retry (6086), notices (6175), queued steering (6181), empty reply (6196), requirements nudge (6214), parallel reads (6272).
+- **Other `continue`s:** the one at 6251 is the refusal `continue` inside the per-call `for` loop. It only moves to the next call, so it does not start a new cycle. The one at 6310 is the same kind.
+- **Second model request:** none of these paths can issue one in a single `--step` cycle. Each ends in `endStep()` (so `currentStep` goes to 2) and returns to the loop top, where the pause fires.
+- **Recovery note:** `endStep()` pushes `pendingRecoveryNote` and runs `tracker.evaluateStep`. Both now happen on every pause.
+- **Recovery retry:** there is no separate recovery-retry continue. Refusals are handled inside the tool loop, so nothing is lost.
+- **Off-by-one:** `currentStep` starts at 1 and advances only in `endStep()`, so `&gt; 1` means a full cycle finished. Paths that `break` without `endStep` (final text, task_completed, cancel, inference failure, capacity block) never reach the pause, which is correct.
+- **Precedence:** it checks `stopReason`, then the step budget, the time budget, STAGNATION_DETECTED, cancel (`signal.aborted`), and finally the step pause.
+  - STAGNATION can now fire at the end of a `/step` because `endStep` advanced `stepsWithoutProgress`. That is the intended behaviour.
+  - A cancel after the cycle reports INTERRUPTED rather than STEP_PAUSED, which is right.
+
+The three behaviour changes the implementer listed:
+1. **Budget reason instead of STEP_PAUSED when the budget is exhausted in the same cycle:** acceptable and more truthful. It only matters with a tiny `maxTotalSteps` (1) or `--no-continuation` with `maxSteps=1`. The reported reason is then STEP_BUDGET_EXHAUSTED or STEP_LIMIT_REACHED, not STEP_PAUSED.
+2. **Empty/truncated reply counters reset per `/step`:** acceptable. Previously an empty or truncated reply in step mode started a second model request in the same cycle, which broke the one-cycle contract. Repeated empty replies now accrue as no-progress steps and end in STAGNATION.
+3. **Steering queued during a step comes back cancelled:** acceptable. This is the same behaviour the old bottom check already had for the TASK_COMPLETED + steering case. The operator is told it was cancelled and the text returns to the composer (`cancelQueuedSteering`).
+
+## Sidecar and slash path
+- **Checkpoint:** `stepSlash` returns `kind: "turn"` with a `Step:` checkpoint name. `turn()` creates the checkpoint, including the sensitive/failure choice prompt, before `runTurn`. Nothing mutates the workspace before it.
+- **Observer and session:** `turn()` sets the observer, the progress listener and `saveSession`, and emits `turn.result` exactly once. `failedTurnFromError` covers a thrown error, so a failed turn is not reported as success.
+- **Signal and resume:** the abort signal and `resume: true` are passed through.
+- **Cancellable:** `activeSpec` is cleared when a turn outcome is returned, so cancel works for the whole turn. `cancellable: true` covers the window before that. The `slash.result` with `prompt: "[step]"` is emitted once, then `turn.result` follows.
+- **Objective amend:** skipping the amend notice for `step` is correct.
+- **REPL path:** it already called `prepareTurnCheckpoint` and was not changed.
+
+## Suggestions
+1. `cli/test/step_loop.test.ts:~573` ("session saved"): `listSessions().length === 1` is already true after turn t1, which uses the same sessionId. Deleting `saveSession` after the step would still pass.
+   - Fix: assert the saved session file contains the step's `write_file` tool message, or that its message count grew after `/step`.
+2. `cli/test/step_loop.test.ts:~570` (live tool events): this check is weak but not a hole. The slash wrapper clears the observer in its `finally`, so `tool.start` with `turn_id` s1 only appears if `turn()` set the observer.
+3. New pause behaviour has no direct test: empty reply, notice, truncated reply and queued steering now pause after `endStep`. Add one scripted empty-reply or notice `--step` test that expects STEP_PAUSED with exactly one model request. This is what protects the "no second request" claim.
+4. `cli/src/slash/session_commands.ts:332`: the label `"[step]"` becomes the saved session title (`sessionTitle = label`), so a stepped session lists as "[step]". The REPL does the same, so it is consistent, but it is ugly. Consider `label: ledger.objective` for the title.
+5. FINDINGS.md row `01M6KXHHESMA`: it names `pendingRecoveryNote` and the stagnation counters. The test at line 636 checks the recovery note and the accumulate test checks the counters, so the row is backed, but only via the stagnation scenarios. Keep the wording as it is. Do not extend it to the other continue paths until suggestion 3 exists.
+
+## FINDINGS.md rows
+All six rows marked FIXED are backed by a commit and a named test. None is overstated.
+- `01M6KXTK2G0S`, the parallel-read pause: honest, since it says AC1b still passes (it does).
+- `01M6KXHHFWR6`, the fake REPL test: replaced by a real-handler test. That test also passes on `origin/main`, which is expected because the REPL code is unchanged, so it guards but does not prove a fix.
+
+## What I ran
+- **Branch, `test/step_loop.test.ts`:** 15 tests, 15 pass, 0 fail. `npx tsc --noEmit -p .` printed no errors.
+- **Throwaway worktree of `origin/main`** with the branch's test file copied in: 15 tests, 9 pass, 6 fail. The six failing tests are the new ones: TUI sidecar routing, `/undo`, FAILED reporting, cancel, the stagnation-kept test, and the accumulate test.
+  - The existing tests AC1 to AC5, AC1b, the REPL real-handler test and the index test pass on main.
+  - The worktree is removed.
+- **Other related files on the branch:**
+
+  | File | Tests | Result |
+  |---|---|---|
+  | `nonprogress_recovery` | 18 | all pass |
+  | `sidecar` | 56 | all pass |
+  | `execution_tracking` | 20 | all pass |
+  | `slash_router` | 34 | all pass |
+  | `sidecar_steering_diff` | 16 | all pass |
+  | `agent_observer` | 12 | all pass |
+  | `sidecar_surface` | 4 | all pass |
+  | `provider_recovery_agent` | 17 | all pass |
+
+- **Not run:** the full suite, since I did not want to go beyond focused runs. `durable_continuity`, `team_convergence` and `compaction_continuity` also mention step logic but exercise it only by name or the "step limit" text. I did not run them.
+- **Claims:** no SUITE claim was held (only released ones). The only claim in play was the implementer's own `WP-1301_TUI_STEP_MODE`.
+
+Files: `/home/mike/nexus-wt/wp-1301-step/cli/src/agent.ts`, `/home/mike/nexus-wt/wp-1301-step/cli/src/sidecar.ts`, `/home/mike/nexus-wt/wp-1301-step/cli/src/slash/session_commands.ts`, `/home/mike/nexus-wt/wp-1301-step/cli/src/slash/catalog.ts`, `/home/mike/nexus-wt/wp-1301-step/cli/test/step_loop.test.ts`, `/home/mike/nexus-wt/wp-1301-step/docs/v1.1.4/FINDINGS.md`.</result>
+<usage><subagent_tokens>80477</subagent_tokens><tool_uses>21</tool_uses><duration_ms>427051</duration_ms></usage>
+</task-notification>
