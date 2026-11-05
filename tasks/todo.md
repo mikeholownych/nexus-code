@@ -73,4 +73,8 @@ Branch `chore/housekeeping-post-v113` from main 46fd5045 (v1.1.3 stable, publish
       `backup/agent-work-product-ae474637` with LANGSMITH_REVIEW.md) plus `v1/v113-plan`; the other 202 local branches
       bundled to `~/nexus-archive/housekeeping-20261105/unmerged-branches.bundle` (tips in `branch-tips.txt`) then deleted
 - [x] Last stale claim (`GATEWAY`) released; no unreleased claims remain
-- [ ] Open: 136 unreachable detached worktrees; 4 stashes; 194 merged remote branches; v1.1.4 plan PR #404
+- [x] 4 stashes archived (`~/nexus-archive/housekeeping-20261105/stashes/`) and dropped; ~154 ancestor-merged remote branches deleted
+      (`v1/integration` is rule-protected and stays); 136 orphaned detached worktrees removed (22 dirty ones archived; all 118
+      distinct heads bundled in `orphan-heads.bundle`); missing orphan fixes recorded as v1.1.4 WP-1306 (local anchors `recovery/orphan-*`)
+- [x] Issue #69 (Harness2) review written: `docs/v1.1.4/HARNESS2-REVIEW.md` on PR #404 (WP-1307)
+- [ ] Open: 47 remote branches that are not ancestors of main (4 have merged PRs); issue #69 stays open until the write-up merges
