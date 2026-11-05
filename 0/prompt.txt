@@ -1,0 +1,2 @@
+auto-merge has been set on PRs #407 and #408, once CI is fully green.
+proceed with PR #404.. it is still in draft.
