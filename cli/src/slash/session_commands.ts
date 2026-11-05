@@ -329,7 +329,7 @@ function stepSlash({ host }: SlashContext): SlashOutcome {
   if (!ledger || ledger.outcome?.status === "completed") {
     return reply("step", "No unresolved objective to step. Provide a prompt to start a task.", false);
   }
-  return { kind: "turn", command: "step", prompt: "", label: "[step]", checkpoint: `Step: ${ledger.objective.slice(0, 30)}`, step: true };
+  return { kind: "turn", command: "step", prompt: "", label: "[step]", title: ledger.objective, checkpoint: `Step: ${ledger.objective.slice(0, 30)}`, step: true };
 }
 
 /**

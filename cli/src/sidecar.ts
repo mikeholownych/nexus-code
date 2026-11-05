@@ -771,7 +771,7 @@ export class SidecarServer {
       if (outcome.kind === "turn") {
         this.activeSpec = undefined;
         this.emit({ type: "slash.result", id, command: outcome.command, success: true, output: "", prompt: capText(formatSafeSidecarText(outcome.label)) });
-        await this.turn(id, outcome.prompt, outcome.label, outcome.checkpoint, signal, outcome.step);
+        await this.turn(id, outcome.prompt, outcome.title ?? outcome.label, outcome.checkpoint, signal, outcome.step);
         return;
       }
       if (outcome.command === "clear" && outcome.success) this.lastTurn = null;

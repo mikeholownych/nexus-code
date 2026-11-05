@@ -574,6 +574,8 @@ describe("WP-1301: /step in the TUI and the step pause", () => {
       assert.equal(sessions.length, 1, "the step saved into the same session as the turn before it");
       const saved = app.getSessionManager().loadSession(sessions[0].id);
       assert.equal(saved?.lastTurn?.reason, "STEP_PAUSED", "the session saved after the step records the step's result");
+      assert.equal(saved?.title, "Create the files", "a stepped session is titled by its objective, not by the [step] marker");
+      assert.equal(events.find((e) => e.type === "slash.result" && e.id === "s1")?.prompt, "[step]", "the TUI user line still shows [step]");
       assert.ok(
         saved?.messages.some((m: any) => m.role === "tool" && m.name === "write_file"),
         "the saved session holds the step's write_file tool message",

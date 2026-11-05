@@ -61,6 +61,8 @@ export interface SlashTurn {
   command: string;
   prompt: string | any[];
   label: string;
+  /** The saved session's title when it should not be the label (default: the label). */
+  title?: string;
   checkpoint: string;
   /** Run one model/tool cycle of the unfinished objective and pause (`/step`): the prompt is empty. */
   step?: boolean;
