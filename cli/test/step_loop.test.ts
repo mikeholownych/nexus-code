@@ -634,6 +634,40 @@ describe("WP-1301: /step in the TUI and the step pause", () => {
     }
   });
 
+  // The provider replies that make up one model request (an empty stream is re-requested once without streaming), and
+  // the note that continuation path leaves for the model's next cycle.
+  const continuations: Array<[string, Reply[], RegExp]> = [
+    ["an empty reply", [text(""), text("")], /your reply was empty/],
+    ["a reply whose only tool call is dropped with a notice", [{ kind: "tools", calls: [{ name: " ", args: {} }] }], /Malformed native tool call dropped/],
+    ["a reply cut off at the output limit", [{ ...write("cut.txt", "x".repeat(200)), truncated: true }], /output limit/],
+  ];
+  for (const [name, cycle, note] of continuations) {
+    test(`--step pauses after ${name}: one provider request, no second cycle`, { timeout: 60_000 }, async () => {
+      const home = makeHome();
+      const repo = makeRepo();
+      trustWorkspace(home, repo);
+      const prevHome = process.env.HOME;
+      process.env.HOME = home;
+      const gw = await startGateway((n) => cycle[n - 1] ?? write("second_cycle.txt", "must not exist\n"));
+      const app = new ApplicationCore(cfg(gw.url, repo));
+      try {
+        const agent = quiet(app.getAgent());
+        const turn = await agent.runTurn("Write the file", undefined, { step: true });
+        assert.equal(gw.requests.length, cycle.length, "one model request per --step");
+        const last = agent.getMessages().at(-1);
+        assert.match(typeof last?.content === "string" ? last.content : "", note, "the cycle took the continuation path under test");
+        assert.equal(turn.reason, "STEP_PAUSED");
+        assert.ok(!fs.existsSync(path.join(repo, "second_cycle.txt")));
+      } finally {
+        app.shutdown();
+        await gw.close();
+        process.env.HOME = prevHome;
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("the step pause keeps a STAGNATION_DETECTED set during the cycle (recovery exhausted)", { timeout: 60_000 }, async () => {
     // Only recovery exhaustion can stop this run: the no-progress limit is out of reach.
     const { reasons, turn, messages } = await stepUntilStopped({ maxRecoveries: 1, stagnationSteps: 100 });
