@@ -58,3 +58,23 @@ allowance inside a tool call (about 173 s of generation); output_truncated was a
 - [x] 4. Tests: truncated tool call → chunked write completes; two in a row → fails as before; truncated prose never
       accepted as final; no tool from a truncated reply runs
 - [ ] Full `make test` on a snapshot; docs (USER_MANUAL / COMPACTION_AND_CONTINUITY) updated
+
+# Post-v1.1.3 housekeeping (2026-11-05)
+
+Branch `chore/housekeeping-post-v113` from main 46fd5045 (v1.1.3 stable, published).
+
+- [x] Root clutter (check-in scripts, session dumps, continuity-validation, stale root package-lock.json) moved to
+      `~/nexus-archive/housekeeping-20261105/root-clutter/`; `.gitignore` now ignores `/nexus-session-*.json`
+- [x] 220 stale claims renamed `*.released-<UTC>` and logged; `GATEWAY` (codex-root, RC15 E5, 2026-10-31) left active
+- [x] Worktrees 875 → 137: 657 clean removed; 81 dirty archived to `~/nexus-archive/housekeeping-20261105/worktrees/`
+      (tracked.patch + untracked.tgz + meta.txt) then removed; 136 detached-HEAD trees kept (commits on no ref)
+- [x] Local branches 596 → 206: 364 merged into main deleted; 31 unmerged with a remote copy deleted
+- [x] Owner follow-up: kept only branches with roadmap/planning content not on main (`v1/docs-v11-layered-memory`,
+      `backup/agent-work-product-ae474637` with LANGSMITH_REVIEW.md) plus `v1/v113-plan`; the other 202 local branches
+      bundled to `~/nexus-archive/housekeeping-20261105/unmerged-branches.bundle` (tips in `branch-tips.txt`) then deleted
+- [x] Last stale claim (`GATEWAY`) released; no unreleased claims remain
+- [x] 4 stashes archived (`~/nexus-archive/housekeeping-20261105/stashes/`) and dropped; ~154 ancestor-merged remote branches deleted
+      (`v1/integration` is rule-protected and stays); 136 orphaned detached worktrees removed (22 dirty ones archived; all 118
+      distinct heads bundled in `orphan-heads.bundle`); missing orphan fixes recorded as v1.1.4 WP-1306 (local anchors `recovery/orphan-*`)
+- [x] Issue #69 (Harness2) review written: `docs/v1.1.4/HARNESS2-REVIEW.md` on PR #404 (WP-1307)
+- [ ] Open: 47 remote branches that are not ancestors of main (4 have merged PRs); issue #69 stays open until the write-up merges
