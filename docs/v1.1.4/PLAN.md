@@ -17,7 +17,7 @@
 Sources: my independent reviews on PR #402 (WP-1105 evaluators, WP-1107 provider work), Entire trail 145 (15 open findings after the `--step` HIGH was fixed in v1.1.2), Entire trail 140, Entire trail 146, the gate-3 flake recorded in the findings ledger, and the known limitations in `docs/releases/v1.1.2.md` and `docs/releases/v1.1.3.md`. Every item below must end as FIXED (with a test), WITHDRAWN (with evidence it is not a defect) or DEFERRED (owner decision, with a reason). Work packages are ordered by risk.
 
 ### WP-1301 Single-step mode and the TUI (WP-1106)
-- TUI `/step` calls `agent.runTurn` directly: no rollback checkpoint, no live tool events, no saved session, a blocked turn reported as success. Route it through the normal sidecar turn runner (`prepareTurnCheckpoint` + `runInteractiveTurn`).
+- TUI `/step` calls `agent.runTurn` directly: no rollback checkpoint, no live tool events, no saved session, a blocked turn reported as success. Dispatch it as a normal sidecar job, `runJob(id, undefined, (signal) => this.turn(...))` as the other turn commands do (`cli/src/sidecar.ts:323`, `:353`, `:454`; the runner is `turn()` at `sidecar.ts:557`), so it gets the checkpoint, observer, saved session and `turn.result`. The REPL `/step` already uses `InteractiveRepl.prepareTurnCheckpoint` and `runInteractiveTurn` (`cli/src/repl.ts:196`, `:212`, `:874-875`), which are private to the REPL and are not what the TUI should call.
 - `/step` is not `cancellable`.
 - The step pause overwrites a `STAGNATION_DETECTED` stop and skips `endStep()`; guard on `!stopReason` and call `endStep()` before pausing, so stagnation detection advances across `/step` calls.
 - Tests: drive the real REPL `/step` handler and the TUI `stepSlash`; the current REPL test re-implements the logic and would pass if the handler were deleted.
@@ -32,7 +32,13 @@ Sources: my independent reviews on PR #402 (WP-1105 evaluators, WP-1107 provider
 - `diff_boundary` counts evaluator-staged hidden tests as agent changes for non-hardened tasks with `hidden.dir` (run evaluators before staging, or snapshot separately).
 - Candidate edits to build configuration are silently ignored: report them.
 - Dangling-symlink overlay fails closed with `EEXIST`; pinned workspace under `os.tmpdir()`; `spec.candidate.cwd` overridden; README stale.
-- `toolCallSyntax` does not count legacy text-mode calls.
+
+### WP-1302b Tool-call syntax counting (`cli/src/parser.ts`)
+Split out of WP-1302 because these items edit `cli/src/parser.ts`, not `eval/`. **Owner: claude-code** (decision 3 gives `eval/` to codex-root and does not cover `cli/`); the `eval/evaluators/code/json_repair_rate.mjs` rows in FINDINGS stay with WP-1302.
+- `toolCallSyntax` does not count legacy text-mode calls (`NEXUS_TEXT_TOOL_PARSING=legacy` code-block and balanced-object paths never call `count`).
+- Native calls whose `function.arguments` is Markdown-fenced JSON are counted as `native`; classify fence removal as a repair before counting.
+- Correct the `ToolCallSyntaxCounts` doc and the README to match what is counted.
+- Tests drive `parseToolCalls` for each syntax and assert `evaluateJsonRepairRate` output, so an evaluator change cannot hide a counting regression.
 
 ### WP-1303 Provider handling (WP-1107)
 - `serverKindCache`: add a TTL, invalidate on endpoint, provider and account switch, key by more than the endpoint string. Fix the gateway-on-404 case that sends `X-Task-Class` to a replaced non-gateway server (REQ-PRV-109 must hold for every path, not only the success path).
@@ -104,7 +110,7 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 ### 3.4 Work packages
 **WP-1310 Core: named worktrees**
 - `nexus worktree switch <branch> [-c] [--base B] [--no-copy]`, `list [--json]`, `remove <branch>... [--force] [--delete-unmerged]`, `path <branch>`. Branch shortcuts: `^` default branch, `@` current, `-` previous. Accept a worktree path wherever a branch is accepted.
-- Path template: default `{{ repo_path }}/../{{ repo }}.{{ branch | sanitize }}`; variables `repo_path`, `repo`, `owner`, `branch`; filters `sanitize`, `hash_port`, `codename`; implemented by a small expression evaluator (no template dependency). A rendered path outside the repository's parent directory, or into an existing non-worktree directory, is refused unless the operator config allows it.
+- Path template: default `{{ repo_path }}/.nexus/worktrees/{{ branch | sanitize }}` (owner decision 1); the sibling layout `{{ repo_path }}/../{{ repo }}.{{ branch | sanitize }}` is opt-in through a one-time operator config line and is never the default; variables `repo_path`, `repo`, `owner`, `branch`; filters `sanitize`, `hash_port`, `codename`; implemented by a small expression evaluator (no template dependency). A rendered path outside `.nexus/worktrees/` (or, with the sibling layout enabled, outside the repository's parent directory), or into an existing non-worktree directory, is refused unless the operator config allows it.
 - `list` from one `git status --porcelain=v2 -z` call per worktree plus `rev-list --left-right --count`: dirty, ahead and behind the default branch, integrated (same commit, ancestor, empty three-dot diff, equal tree, patch-id), age, agent marker. JSON schema versioned from day one.
 - Slash commands `/worktree switch|list|remove` (the existing `/worktree status|merge|discard` keep working), CLI subcommand, sidecar catalogue entry, completion in the TUI, read-only rules, redaction of branch names and paths.
 - `nexus run --worktree` keeps its behaviour. A new `--worktree-branch <name>` creates a named worktree for the task instead of `nexus/<taskId>` (opt-in, same sandbox requirement).
@@ -144,7 +150,7 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 ## 4. Sequencing
 
 1. **Week 0 (day 1):** branch `v1/v113-plan` from `main`, this plan and the findings ledger committed; claims taken per work package.
-2. **Findings first, in parallel with the Worktrunk core:** WP-1301 and WP-1303 (they touch `agent.ts`, `client.ts`, `slash/*`), WP-1302 (`eval/` only, owner of the claim must be explicit), WP-1304, WP-1305, WP-1306 (doctor journal first, then the `HOME` override: both are confirmed by reading the code; the rest need a red test first) and WP-1307 (documentation only, no claim needed). Worktrunk WP-1310 starts with the git-common-dir anchor and the registry because WP-1311 to WP-1314 depend on them.
+2. **Findings first, in parallel with the Worktrunk core:** WP-1301 and WP-1303 (they touch `agent.ts`, `client.ts`, `slash/*`), WP-1302 (`eval/` only, codex-root per decision 3), WP-1302b (`cli/src/parser.ts`, claude-code), WP-1304, WP-1305, WP-1306 (doctor journal first, then the `HOME` override: both are confirmed by reading the code; the rest need a red test first) and WP-1307 (documentation only, no claim needed). Worktrunk WP-1310 starts with the git-common-dir anchor and the registry because WP-1311 to WP-1314 depend on them.
 3. WP-1311 and WP-1312 after WP-1310. WP-1313 after WP-1312 (merge needs `pre-merge`). WP-1314 and WP-1315 last.
 4. Each work package: red test, fix, focused tests (SUITE claim for any run), independent reviewer on the diff with the findings text in the brief, then the exact-head gate on the integration branch. Release candidate only after every finding in `FINDINGS.md` is FIXED, WITHDRAWN or DEFERRED with an owner decision.
 
