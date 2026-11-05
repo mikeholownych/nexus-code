@@ -1,0 +1,81 @@
+proceed
+
+---
+
+<task-notification>
+<task-id>a1bd11fa41f2e2616</task-id>
+<tool-use-id>toolu_018LvNKqUv7NJ5vBKimPygRy</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/380160dd-d550-47da-ab0b-fb97518ef209/tasks/a1bd11fa41f2e2616.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR #409" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: ACCEPT** at head `15c84729a12fb778608cba15be46ff57e9505bf4`. I confirmed the branch HEAD matches that SHA. Both test files pass: 11 of 11 tests across `skill_catalog_budget.test.ts` and `skills_agents_dir.test.ts`. I found no high-severity issues. The two medium and three low findings below are all verified in the code.
+
+## Findings
+
+**1. Medium — `cli/src/agent.ts:5917-5918`: the rebuild also refreshes other prompt state, not just the catalog.**
+- `buildSystemPrompt()` also emits the "Acceptance Requirements" block when `this.objective?.requirements.length` is set. It also re-reads project rules, the verifier command, the knowledge section and the few-shots.
+- The initial prompt is built in `resetConversation` (`agent.ts:2349-2360`) with `objective = undefined`. The objective is assigned later, in `runTurn` (`agent.ts:5588`).
+- Today the only rebuild is the new one, so on any provider that advertises a window, step 1 will now pick up the Acceptance Requirements block. A provider that advertises nothing never gets it. Prompt content therefore depends on whether the window changed.
+- The code does not make this deliberate. If it is not intended, rebuild only the catalog by replacing the `### Specialized Agent Skills Available:` section in `messages[0]`. Otherwise add a test that pins the intended behaviour.
+
+**2. Medium — `cli/src/agent.ts:5917`: a rebuild invalidates the prefix cache and rewrites the whole task message log.**
+- `task_message_log.ts:243` computes `keep` by comparing messages with `JSON.stringify`. A changed `messages[0]` gives `keep = 0`, so the entire conversation is re-appended as a delta.
+- On step 1 this is cheap, and it also resets the provider prefix cache once.
+- `contextLimit()` is derived from `capabilities.advertised`, which `refreshCapabilities(activeClient, …)` re-reads for each step's client, and that client comes from `selectCognitiveClient`. I did not trace whether that function returns different clients across steps.
+- If clients with different windows alternate across steps, `skillCatalogLimit` flips every step. That means a full journal rewrite and cache bust each time. In-session changes to `--context-limit` or a refreshed advertisement would do the same, though much less often.
+- Consider rebuilding only when `skillCatalogBudget(new)` differs from `skillCatalogBudget(old)`, or only on step 1.
+- No test covers a stable `messages[0]` across steps.
+
+**3. Low — `cli/src/skills.ts:290-296`: output exceeds `maxChars` when the budget is below the fixed text.**
+- The head plus the note total about 420 characters, and the "…and N more" suffix adds to that. When `shown` reaches 0, `listing(0)` is returned even though it is over budget.
+- I ran it against 5 skills:
+
+| Context limit | Budget (chars) | Output (chars) |
+|---|---|---|
+| -5 | 0 | 448 |
+| 0 | 0 | 448 |
+| 1000 | 150 | 448 |
+| 2048 | 307 | 448 |
+| 4096 | 614 | 395 |
+
+- This only affects windows under about 3K tokens, for example an operator `--context-limit` set very low. The overshoot is bounded at about 450 characters.
+- Add a floor such as `Math.max(maxChars, head.length + note.length + 80)`, or return `""` when `maxChars` cannot hold the head. Either way, document the contract.
+
+**4. Low — `cli/src/skills.ts:292`: the "unknown name lists them all" hint leads to an unbounded tool result.**
+- The `activate_skill` not-found branch (`agent.ts:4722`) returns every skill name, which is about 305 names for the reporter. The tool-output cap, if any, is not bounded by this PR.
+- It only fires if the model uses the hint, and it lands as a tool result that compaction can drop. Acceptable, but a cap or a dedicated list path would be tidier.
+
+**5. Low — tests: coverage gaps against the claims.**
+- The rebuild test confirms the 128K and 16K catalogs are re-sized, and the `&lt;=` assertions plus `&gt; budget(64K)` do prove the rebuild happened.
+- Not covered:
+  - no rebuild or oscillation across multiple steps;
+  - no resume from a saved session, where `skillCatalogLimit` is undefined and the saved system prompt gets replaced on the first step;
+  - no budgets below the fixed text (finding 3);
+  - no check that all-short descriptions (under 40 characters) still fit.
+- HOME, XDG and state-dir isolation is correct (temp dir, restored in `after`). I saw no flakiness: the tests use a local gateway and fixed data.
+
+## Checked and fine
+
+- **Binary search** (`skills.ts:269-275`): `mid = ceil((lo+hi)/2)` with `lo = mid` on a fit and `hi = mid - 1` on a miss terminates, and the result is the largest length that fits. If every description is shorter than 40 characters then `hi &lt; lo`, the loop is skipped, and `described(40)` is returned if it fits. `Math.max(...)` is safe because `skills` is non-empty. There are no infinite loops, and the names loop decrements `shown` toward 0.
+- **Trust:** `listSkills()` reads only `this.skills`. Untrusted workspace skills go to `untrustedSkills` (`skills.ts:167-173`), are never advertised, and `activate_skill` refuses them. The abbreviated form drops `[source]` and `[trust]`, which loses no information, since everything advertised is trusted. Frontmatter grants nothing, and the existing test for that still passes.
+- **Ordering and recording:** the workspace-first sort is stable. `skillCatalogLimit` is set inside `buildSystemPrompt` before the comparison, and `contextLimit()` is deterministic for a given advertisement and config, so there is no oscillation unless the limit really changes.
+
+## Relevant files
+- `/home/mike/nexus-code/cli/src/agent.ts` (lines 893, 4093-4097, 5913-5919)
+- `/home/mike/nexus-code/cli/src/skills.ts` (lines 6-21, 243-286)
+- `/home/mike/nexus-code/cli/src/core/task_message_log.ts` (line 243)
+- `/home/mike/nexus-code/cli/test/skill_catalog_budget.test.ts`
+- `/home/mike/nexus-code/cli/test/skills_agents_dir.test.ts`</result>
+<usage><subagent_tokens>41283</subagent_tokens><tool_uses>11</tool_uses><duration_ms>85707</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>blnhi9hjd</task-id>
+<tool-use-id>toolu_016QHfuRck9Df62tF937tjns</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/380160dd-d550-47da-ab0b-fb97518ef209/tasks/blnhi9hjd.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun affected suites after review fixes" completed (exit code 0)</summary>
+</task-notification>
