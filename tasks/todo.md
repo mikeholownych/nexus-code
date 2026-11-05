@@ -69,5 +69,8 @@ Branch `chore/housekeeping-post-v113` from main 46fd5045 (v1.1.3 stable, publish
 - [x] Worktrees 875 → 137: 657 clean removed; 81 dirty archived to `~/nexus-archive/housekeeping-20261105/worktrees/`
       (tracked.patch + untracked.tgz + meta.txt) then removed; 136 detached-HEAD trees kept (commits on no ref)
 - [x] Local branches 596 → 206: 364 merged into main deleted; 31 unmerged with a remote copy deleted
-- [ ] Open: 203 unmerged local branches with no remote copy; 136 unreachable detached worktrees; 4 stashes;
-      194 merged remote branches; `GATEWAY` claim; v1.1.4 plan PR #404
+- [x] Owner follow-up: kept only branches with roadmap/planning content not on main (`v1/docs-v11-layered-memory`,
+      `backup/agent-work-product-ae474637` with LANGSMITH_REVIEW.md) plus `v1/v113-plan`; the other 202 local branches
+      bundled to `~/nexus-archive/housekeeping-20261105/unmerged-branches.bundle` (tips in `branch-tips.txt`) then deleted
+- [x] Last stale claim (`GATEWAY`) released; no unreleased claims remain
+- [ ] Open: 136 unreachable detached worktrees; 4 stashes; 194 merged remote branches; v1.1.4 plan PR #404
