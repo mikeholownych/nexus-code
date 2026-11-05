@@ -47,7 +47,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager } from "./skills.js";
+import { SkillManager, skillCatalogBudget } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -889,6 +889,8 @@ export class AutonomousAgent {
   private depth: number;
   private runningAsSubagent = false;
   private skillManager: SkillManager;
+  /** Context window the system prompt's skill catalog was sized for; the prompt is rebuilt when the window changes. */
+  private skillCatalogLimit?: number;
   private mcpManager: McpClientManager;
   private pluginManager: PluginManager;
   private securityManager: SecurityManager;
@@ -4091,7 +4093,8 @@ export class AutonomousAgent {
   private buildSystemPrompt(): string {
     const projectRules = trustedProjectRules(this.config.workspace);
     const rulesSection = projectRules ? `\n${projectRules}\n` : "";
-    const skillsSection = this.skillManager ? `\n${this.skillManager.getPromptSection()}` : "";
+    this.skillCatalogLimit = this.contextLimit();
+    const skillsSection = this.skillManager ? `\n${this.skillManager.getPromptSection(skillCatalogBudget(this.skillCatalogLimit))}` : "";
     const knowledgeSection = this.knowledge ? `\n${this.knowledge.exportPromptSection()}` : "";
 
     // Invariant prompt prefix optimization for local AI:
@@ -5910,6 +5913,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Provider limits for this step's connection (cached; re-read on change or after the TTL). Optional capability.
         await this.refreshCapabilities(activeClient, this.capabilitiesStale ?? "step", Boolean(this.capabilitiesStale), signal);
         this.capabilitiesStale = undefined;
+        // The prompt is built before the provider reports its window; re-size the skill catalog once it is known.
+        if (this.skillCatalogLimit !== this.contextLimit() && this.messages[0]?.role === "system") {
+          this.messages[0] = { ...this.messages[0], content: this.buildSystemPrompt() };
+        }
         try {
           await this.admitWithFindings(activeClient, currentStep, requestId, signal);
           await this.measureAdmission(activeClient, currentStep, requestId, signal);

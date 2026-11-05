@@ -3,6 +3,22 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 
+/**
+ * Share of the context window the skill catalog in the system prompt may take. A user with hundreds of installed
+ * skills otherwise sends ~37K tokens of catalog with every request and cannot start a turn on a 64K-context model.
+ */
+export const SKILL_CATALOG_CONTEXT_SHARE = 0.05;
+/** The client token estimator's rate for prose (tokens.ts counts ~3 characters per token). */
+const CHARS_PER_TOKEN = 3;
+/** Character budget for the skill catalog in a window of `contextLimit` tokens. */
+export function skillCatalogBudget(contextLimit: number): number {
+  return Math.floor(Math.max(0, contextLimit) * SKILL_CATALOG_CONTEXT_SHARE * CHARS_PER_TOKEN);
+}
+/** The budget when no window is known: the client default context of 65,536 tokens. */
+export const SKILL_CATALOG_MAX_CHARS = skillCatalogBudget(65_536);
+/** Descriptions shorter than this stop helping the model pick a skill; below it the catalog lists names only. */
+const MIN_DESCRIPTION_CHARS = 40;
+
 export interface Skill {
   name: string;
   description: string;
@@ -224,20 +240,49 @@ export class SkillManager {
     return this.untrustedSkills.get(name) || null;
   }
 
-  public getPromptSection(): string {
-    const skills = this.listSkills();
+  /**
+   * The skill catalog for the system prompt, at most `maxChars` long. Every discovered skill is advertised on every
+   * request, so a large install (hundreds of skills under ~/.agents and ~/.claude) must not crowd out the task: when
+   * the full listing does not fit, descriptions are shortened, then dropped, then names past the budget are counted.
+   * Source and trust stay on the `activate_skill` output either way.
+   */
+  public getPromptSection(maxChars: number = SKILL_CATALOG_MAX_CHARS): string {
+    // Workspace skills first: they are the most specific to the task and survive any cut.
+    const skills = this.listSkills().sort((a, b) => Number(Boolean(b.isWorkspaceSkill)) - Number(Boolean(a.isWorkspaceSkill)));
     if (skills.length === 0) {
       return "";
     }
 
-    let out = "### Specialized Agent Skills Available:\n";
-    out += "You have access to specialized skills. If a user task matches a skill's description, call the `activate_skill` tool with the skill's name to load its specialized workflows and guidelines into context.\n\n";
+    const head =
+      "### Specialized Agent Skills Available:\n" +
+      "You have access to specialized skills. If a user task matches a skill's description, call the `activate_skill` tool with the skill's name to load its specialized workflows and guidelines into context.\n";
 
-    for (const s of skills) {
-      out += `- **${s.name}** [source: ${s.path}] [trust: ${s.trusted ? "trusted" : "untrusted"}]: ${s.description}\n`;
+    const full = head + "\n" + skills.map((s) => `- **${s.name}** [source: ${s.path}] [trust: ${s.trusted ? "trusted" : "untrusted"}]: ${s.description}\n`).join("");
+    if (full.length <= maxChars) return full;
+
+    const note = `The list below is abbreviated to fit the context window (${skills.length} skills); \`activate_skill\` shows each skill's source and full instructions.\n\n`;
+    const clip = (d: string, n: number) => (d.length <= n ? d : `${d.slice(0, Math.max(0, n - 1)).trimEnd()}…`);
+    const described = (n: number) => head + note + skills.map((s) => `- **${s.name}**: ${clip(s.description, n)}\n`).join("");
+
+    // Longest uniform description length that fits; below MIN_DESCRIPTION_CHARS a description no longer helps choose.
+    let lo = MIN_DESCRIPTION_CHARS;
+    let hi = Math.max(...skills.map((s) => s.description.length));
+    if (described(lo).length <= maxChars) {
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (described(mid).length <= maxChars) lo = mid;
+        else hi = mid - 1;
+      }
+      return described(lo);
     }
 
-    return out;
+    // Names only, then as many names as fit with a count of the rest.
+    const names = skills.map((s) => s.name);
+    const listing = (shown: number) =>
+      head + note + [...names.slice(0, shown), ...(shown < names.length ? [`…and ${names.length - shown} more (an unknown name passed to \`activate_skill\` lists them all)`] : [])].join(", ") + "\n";
+    let shown = names.length;
+    while (shown > 0 && listing(shown).length > maxChars) shown--;
+    return listing(shown);
   }
 
   private watchers: fs.FSWatcher[] = [];
