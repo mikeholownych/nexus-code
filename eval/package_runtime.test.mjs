@@ -91,7 +91,7 @@ test("installed candidate runs all public benchmark tasks with provenance", {
           frame({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) + "data: [DONE]\n\n");
       } catch (error) {
         res.writeHead(400, { "content-type": "text/plain" });
-        res.end(String(error));
+        res.end("invalid JSON request body");
       }
     });
   });
