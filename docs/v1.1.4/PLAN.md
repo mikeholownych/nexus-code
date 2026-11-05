@@ -89,6 +89,13 @@ Source: owner report 2026-11-05. On v1.1.3 a single prompt in a repository on a 
 - **Trust is unchanged:** matching only advertises a description; it never activates a skill or loads its body. Untrusted workspace skills are never matched or listed. Skill frontmatter grants nothing.
 - **Tests:** a prompt that names a skill's domain gets that skill's description beside the user message; an unrelated prompt gets no note; the system prompt is byte-identical across turns with different prompts; a query to `activate_skill` returns ranked matches; untrusted skills never appear; the note stays within its budget with 300+ skills.
 - **Measure:** report the first-request estimate and the note size on the 305-skill host before and after, and record whether the matched skills for the original citable prompt are plausible.
+- **Carried from the PR #409 review** (independent ACCEPT at `96bdf612`, low findings left for this package):
+  - A conversation saved before PR #409 keeps its full catalog in the saved `messages[0]`, because `resizeSkillCatalog` only replaces catalog text it recorded itself. Such a session stays blocked on resume; a new conversation works. Recognise the catalog by its heading and line format when the recorded text is absent, with a test that resumes a pre-#409 session.
+  - `resizeSkillCatalog` records the new catalog even when the old text was not found in `messages[0]`; record it only after a replacement.
+  - A catalog that shrank to nothing (windows under about 3K tokens) cannot come back; decide whether it should.
+  - `getPromptSection` builds the final listing twice; keep it in a variable.
+  - Test the first-discovery condition and the resume path directly, not only through a full turn.
+  - The `activate_skill` not-found error lists every skill name; replace it with the ranked lookup above.
 
 ## 3. Worktrunk integration
 
