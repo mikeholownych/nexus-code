@@ -6,7 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
-## [v1.1.2] - Unreleased
+## [v1.1.3] - Unreleased
+
+See [`docs/releases/v1.1.3.md`](docs/releases/v1.1.3.md) (and candidate notes [`docs/releases/v1.1.3-rc.1.md`](docs/releases/v1.1.3-rc.1.md)). This release carries the whole v1.1.2 scope unchanged, with the same known limitations. The date is set when the release is tagged.
+
+## [v1.1.2] - Not released (shipped as v1.1.3)
+
+The `v1.1.2` tag was rejected by the release workflow (no `v1.1.2-rc.N` parent) and nothing was published; see [`docs/releases/v1.1.3.md`](docs/releases/v1.1.3.md).
 
 See [`docs/releases/v1.1.2.md`](docs/releases/v1.1.2.md) for the full release notes and [`docs/releases/v1.1.2-qualification.md`](docs/releases/v1.1.2-qualification.md) for the qualification record. The date is set when the release is tagged.
 Delivers the WP-1101 to WP-1108 roadmap (local OpenTelemetry tracing, flight-recorder redaction, versioned evaluation datasets, standalone `nexus eval`, deterministic code evaluators, single-step loop mode, bounded tool schemas with vLLM strict schemas, dependency modernisation), non-progress recovery and specialist orchestration, and fixes the duplicate re-injection of a multi-message prompt after a crash-resume. Ships with known limitations accepted by the owner; the 99.5% constrained-decoding target was not measured. Version numbers: no `v1.1.2-rc.*` was published.
