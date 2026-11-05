@@ -1,4 +1,4 @@
-# Nexus Code v1.1.3 Plan
+# Nexus Code v1.1.4 Plan
 
 **Status:** Draft for owner review. **Base:** `main` after the v1.1.2 merge and tag.
 **Scope (owner, 2026-11-04):** (1) resolve every open finding from v1.1.2; (2) add Worktrunk functionality in the best-integrated way.
@@ -50,7 +50,7 @@ Sources: my independent reviews on PR #402 (WP-1105 evaluators, WP-1107 provider
 
 ### WP-1305 Release hygiene
 - Make the CI fixture variables part of the documented local `make test` invocation (or a `make test-ci` target) so a local gate runs through; make `make test` run the terminal-scope and security steps even when the CLI suite fails, or document the abort.
-- Keep the findings ledger in `docs/v1.1.3/FINDINGS.md`, updated per closed item with the commit.
+- Keep the findings ledger in `docs/v1.1.4/FINDINGS.md`, updated per closed item with the commit.
 
 ## 3. Worktrunk integration
 
@@ -116,7 +116,7 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 - No user config exists (`~/.config/worktrunk/config.toml` absent) and the project has no `.config/wt.toml`, so interoperability with `wt` config files is optional; the native config comes first.
 - Add to acceptance: a live smoke test that runs only when `wt` is on PATH and reports `wt 0.81.0` or newer, and a contract test against the recorded fixture otherwise.
 
-**Deferred beyond v1.1.3:** the skim-style picker, CI status columns (forge CLIs), PR checkout (`pr:N`, needs `gh`; reconsider after WP-1310), `relocate/promote/tether`, a shell `cd` wrapper (the harness changes its own directory), exposing worktree tools to the model.
+**Deferred beyond v1.1.4:** the skim-style picker, CI status columns (forge CLIs), PR checkout (`pr:N`, needs `gh`; reconsider after WP-1310), `relocate/promote/tether`, a shell `cd` wrapper (the harness changes its own directory), exposing worktree tools to the model.
 
 ## 4. Sequencing
 
@@ -125,7 +125,7 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 3. WP-1311 and WP-1312 after WP-1310. WP-1313 after WP-1312 (merge needs `pre-merge`). WP-1314 and WP-1315 last.
 4. Each work package: red test, fix, focused tests (SUITE claim for any run), independent reviewer on the diff with the findings text in the brief, then the exact-head gate on the integration branch. Release candidate only after every finding in `FINDINGS.md` is FIXED, WITHDRAWN or DEFERRED with an owner decision.
 
-## 5. Acceptance (v1.1.3)
+## 5. Acceptance (v1.1.4)
 - `FINDINGS.md`: 0 open findings; every FIXED row names its commit and test; every DEFERRED row names the owner decision.
 - Entire trail for the release PR: 0 unresolved high findings.
 - `make test` exits 0 on the exact head with the CI fixtures set (CLI, Rust, terminal scope, security) without separate reruns.
@@ -133,8 +133,9 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 - G1.1-4 measured or still explicitly "not met".
 - No new runtime dependency, no SBOM component change, `cargo deny` and `npm audit` clean.
 
-## 6. Open decisions for the owner
-1. **Named worktree location.** Default sibling layout `../repo.branch` (Worktrunk-compatible, outside the repository) versus staying under `.nexus/worktrees/` (safer for confinement, not compatible with existing Worktrunk worktrees). Recommended: sibling layout, opt-in through a one-time operator config line, with `.nexus/worktrees/` as the default until set.
-2. **Project hooks.** Run project-declared hooks after a recorded approval (recommended) versus operator-config hooks only in v1.1.3.
-3. **`eval/` ownership.** WP-1302 is entirely under `eval/`, which agents are told not to touch. Name who edits it (codex-root, or explicit permission for this agent) before work starts.
-4. **G1.1-4 measurement** needs the shared `GATEWAY` claim; say who schedules it.
+## 6. Owner decisions (answered 2026-11-05)
+Renumbered: the v1.1.2 scope ships as v1.1.3 (the `v1.1.2` tag was rejected by the release workflow), so this plan is v1.1.4.
+1. **Named worktree location:** the recommended layout. Sibling `../repo.branch` is opt-in through a one-time operator config line; `.nexus/worktrees/` stays the default until set.
+2. **Project hooks:** approval-gated. Project-declared hooks run only after a recorded operator approval stored outside the repository, keyed by template hash.
+3. **`eval/` (WP-1302):** codex-root edits it. This agent does not touch `eval/`.
+4. **G1.1-4 measurement:** this agent (claude-code) schedules the shared `GATEWAY` claim.

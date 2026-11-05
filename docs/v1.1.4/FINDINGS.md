@@ -1,6 +1,6 @@
-# v1.1.3 findings ledger
+# v1.1.4 findings ledger
 
-Every row ends as FIXED (commit and test), WITHDRAWN (evidence) or DEFERRED (owner decision). Updated per closed item. Source of truth for the v1.1.3 release acceptance.
+Every row ends as FIXED (commit and test), WITHDRAWN (evidence) or DEFERRED (owner decision). Updated per closed item. Source of truth for the v1.1.4 release acceptance.
 
 ## A. Entire automated review (trail 145 = PR #402, trail 140 = PR #400), exported 2026-11-04
 

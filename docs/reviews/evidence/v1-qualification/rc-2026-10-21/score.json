@@ -1,0 +1,164 @@
+{
+  "totals": {
+    "runs": 25,
+    "falseVerified": 0,
+    "errors": 0,
+    "contaminated": 0,
+    "replacedByRerun": 17
+  },
+  "pooled": [
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "n": 25,
+      "correct": 23,
+      "rate": 0.92,
+      "ci": [
+        0.7503348787704218,
+        0.977780066308908
+      ],
+      "falseVerified": 0
+    }
+  ],
+  "rows": [
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "selftest-add",
+      "tier": "T1",
+      "n": 4,
+      "claimed": 4,
+      "correct": 4,
+      "correctCI": [
+        0.5100999795960008,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 17.654,
+      "medianSteps": 6,
+      "medianTokens": 30418.5
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-bugfix-csv",
+      "tier": "T2",
+      "n": 4,
+      "claimed": 4,
+      "correct": 4,
+      "correctCI": [
+        0.5100999795960008,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 27.680500000000002,
+      "medianSteps": 6.5,
+      "medianTokens": 39207.5
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-bugfix-duration",
+      "tier": "T2",
+      "n": 4,
+      "claimed": 4,
+      "correct": 4,
+      "correctCI": [
+        0.5100999795960008,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 18.000500000000002,
+      "medianSteps": 5,
+      "medianTokens": 27413
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-debug-logs",
+      "tier": "T2",
+      "n": 4,
+      "claimed": 4,
+      "correct": 4,
+      "correctCI": [
+        0.5100999795960008,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 39.7875,
+      "medianSteps": 8,
+      "medianTokens": 54182
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-feature-inventory",
+      "tier": "T2",
+      "n": 3,
+      "claimed": 3,
+      "correct": 3,
+      "correctCI": [
+        0.43849391955098227,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 28.207,
+      "medianSteps": 6,
+      "medianTokens": 36980
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-feature-slugify",
+      "tier": "T2",
+      "n": 3,
+      "claimed": 3,
+      "correct": 1,
+      "correctCI": [
+        0.0614903152761605,
+        0.7923450448735121
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 41.616,
+      "medianSteps": 8,
+      "medianTokens": 55538
+    },
+    {
+      "config": "nexus@gateway/engineering/lead",
+      "task": "t2-refactor-tax",
+      "tier": "T2",
+      "n": 3,
+      "claimed": 3,
+      "correct": 3,
+      "correctCI": [
+        0.43849391955098227,
+        1
+      ],
+      "falseVerified": 0,
+      "regressions": 0,
+      "errors": 0,
+      "contaminated": 0,
+      "timedOut": 0,
+      "medianWallS": 34.786,
+      "medianSteps": 9,
+      "medianTokens": 56798
+    }
+  ]
+}

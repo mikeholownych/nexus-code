@@ -1,0 +1,12 @@
+{
+  "provider": "compatible",
+  "model": "engineering/b0",
+  "date": "2026-10-21T01:06:54.800Z",
+  "passed": true,
+  "endpoint": "https://10.0.8.5:8443/v1",
+  "steps": [
+    {"step": "streamed completion", "ok": true, "detail": "reply \"READY\", 5 chars streamed"},
+    {"step": "tool call", "ok": true, "detail": "echo_token({\"token\":\"n29d493a6\"}) complete, 1 call(s)"},
+    {"step": "tool result round trip", "ok": true, "detail": "final answer cites the tool result"}
+  ]
+}
