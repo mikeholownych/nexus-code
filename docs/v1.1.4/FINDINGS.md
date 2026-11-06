@@ -66,5 +66,5 @@ Every row ends as FIXED (commit and test), WITHDRAWN (evidence) or DEFERRED (own
 | orphan `b733f069`, `eed469dd` | medium | read-only admission precedence | cli/src/config.ts:372-391 | WP-1306 | `NEXUS_APPROVAL_MODE=read-only` and `--mode read-only` set only the approval mode, not the `readOnly` flag; `readOnlyModeSelected` (`agent.ts:1445`) may make that intentional. | OPEN (red test or WITHDRAWN) |
 | orphan `845cd1b6`, `244c97cc`, `7df4aea5` | low | Commander option precedence | cli/src/index.ts:424 | WP-1306 | Global-only and REPL options must survive subcommand defaults. | OPEN (verify) |
 | orphan `cac400ea` | low | mode after a checkpoint-free turn | cli/src/sidecar.ts, TUI | WP-1306 | `repl.ts` resets the read-only checkpoint fallback; check the sidecar and TUI paths. | OPEN (verify) |
-| issue #69 | n/a | Harness² review | docs/v1.1.4/HARNESS2-REVIEW.md | WP-1307 | Research write-up with an adopt, borrow or skip recommendation per mechanism. | OPEN |
+| issue #69 | n/a | Harness² review | docs/v1.1.4/HARNESS2-REVIEW.md | WP-1307 | Research write-up with an adopt, borrow or skip recommendation per mechanism. | FIXED (PR #416; documentation only, no test) |
 
