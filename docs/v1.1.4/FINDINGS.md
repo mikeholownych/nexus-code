@@ -82,5 +82,5 @@ Every row is reproduced by the audit. Rows A1 to A3 and A5 to A9 restate earlier
 | A5 | P2 | `normalizeNullableOptionalToolArguments` strips nulls the schema allows | WP-1303 | OPEN. Duplicates `01M6KXHHHPE9` and the section B null-normalisation row |
 | A6 | P2 | Gateway identity cache survives endpoint replacement (`X-Task-Class` after 404) | WP-1303 | OPEN. Duplicates the section B `serverKindCache` row |
 | A7 | P2 | `--isolated-home` applied only when `eval` is `argv[0]` | WP-1304 | OPEN. Duplicates `01M6KXHHJHVE` |
-| A8 | P2 | Fenced native args counted `native`; legacy prose JSON uncounted | WP-1302b | OPEN. Duplicates `01M6FBXYBC9A`, `01M6FBXYBPJM`, `01M6FBTFP1AA` (PR in flight) |
+| A8 | P2 | Fenced native args counted `native`; legacy prose JSON uncounted | WP-1302b | FIXED via the three rows it duplicates (`01M6FBXYBC9A`, `01M6FBXYBPJM`, `01M6FBTFP1AA`: PR #419, merged `0e1f9d6e`) |
 | A9 | P2 | Evaluator commands have no memory, pid or disk budget | WP-1302 | OPEN. Duplicates the section B "No memory/pid/disk limits" row |
