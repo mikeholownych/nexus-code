@@ -72,4 +72,4 @@ test-fixture-notice:
 # then unmounts and removes only what it created. One-time host setup (not run here):
 # scripts/install-evaluator-toolchains.sh, scripts/ensure-ci-bubblewrap.sh, scripts/ensure-ci-user-cgroups.sh.
 test-ci:
-	bash scripts/with-ci-fixtures.sh -- $(MAKE) test
+	+@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then echo 'dry run: would run scripts/with-ci-fixtures.sh -- make test'; else bash scripts/with-ci-fixtures.sh -- $(MAKE) test; fi
