@@ -47,7 +47,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager } from "./skills.js";
+import { SkillManager, skillCatalogBudget } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -889,6 +889,8 @@ export class AutonomousAgent {
   private depth: number;
   private runningAsSubagent = false;
   private skillManager: SkillManager;
+  /** The skill catalog in `messages[0]`, the window it was sized for, and whether that window came from the provider. */
+  private skillCatalog?: { text: string; limit: number; discovered: boolean };
   private mcpManager: McpClientManager;
   private pluginManager: PluginManager;
   private securityManager: SecurityManager;
@@ -4088,10 +4090,35 @@ export class AutonomousAgent {
     if (!this.observer?.onCompaction) console.log(pc.dim(`[compact] ${status}: ${result.message}`));
   }
 
+  /**
+   * The system prompt is built before the provider reports its window, so its skill catalog is sized for the operator
+   * setting or the client default. Re-size it once when the provider's window is first known, and after that only
+   * when the window shrinks: planner and coder clients can report different windows, and every change to
+   * `messages[0]` rewrites the message journal and drops the provider's prefix cache. Only the catalog text is
+   * replaced; the rest of the prompt stays as built. A resumed conversation, whose catalog text is not known, is left
+   * as saved.
+   */
+  private resizeSkillCatalog(): void {
+    const sized = this.skillCatalog;
+    const first = this.messages[0];
+    if (!sized || !this.skillManager || first?.role !== "system" || typeof first.content !== "string") return;
+    const limit = this.contextLimit();
+    const discovered = Boolean(this.capabilities);
+    if (!(discovered && !sized.discovered) && limit >= sized.limit) return;
+    const text = this.skillManager.getPromptSection(skillCatalogBudget(limit));
+    const at = sized.text ? first.content.indexOf(sized.text) : -1;
+    this.skillCatalog = { text, limit, discovered };
+    if (at < 0 || text === sized.text) return;
+    this.messages[0] = { ...first, content: first.content.slice(0, at) + text + first.content.slice(at + sized.text.length) };
+  }
+
   private buildSystemPrompt(): string {
     const projectRules = trustedProjectRules(this.config.workspace);
     const rulesSection = projectRules ? `\n${projectRules}\n` : "";
-    const skillsSection = this.skillManager ? `\n${this.skillManager.getPromptSection()}` : "";
+    const limit = this.contextLimit();
+    const catalog = this.skillManager ? this.skillManager.getPromptSection(skillCatalogBudget(limit)) : "";
+    this.skillCatalog = { text: catalog, limit, discovered: Boolean(this.capabilities) };
+    const skillsSection = this.skillManager ? `\n${catalog}` : "";
     const knowledgeSection = this.knowledge ? `\n${this.knowledge.exportPromptSection()}` : "";
 
     // Invariant prompt prefix optimization for local AI:
@@ -5919,6 +5946,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Provider limits for this step's connection (cached; re-read on change or after the TTL). Optional capability.
         await this.refreshCapabilities(activeClient, this.capabilitiesStale ?? "step", Boolean(this.capabilitiesStale), signal);
         this.capabilitiesStale = undefined;
+        this.resizeSkillCatalog();
         try {
           await this.admitWithFindings(activeClient, currentStep, requestId, signal);
           await this.measureAdmission(activeClient, currentStep, requestId, signal);
