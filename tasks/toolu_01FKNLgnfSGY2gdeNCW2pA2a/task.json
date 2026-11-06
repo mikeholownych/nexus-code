@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FKNLgnfSGY2gdeNCW2pA2a",
+  "agent_id": "ac727c3858a71e44e",
+  "subagent_type": "reviewer",
+  "task_description": "Re-review PR 412 delta",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 20610,
+    "cache_read_tokens": 32889,
+    "output_tokens": 1658,
+    "api_call_count": 3
+  },
+  "started_at": "2026-11-06T18:56:36.80934943Z",
+  "completed_at": "2026-11-06T18:57:44.260334627Z"
+}
