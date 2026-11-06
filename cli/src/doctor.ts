@@ -872,7 +872,7 @@ function validStateConversation(data: any, taskRecord: boolean): boolean {
 
 interface JournalValidationResult {
   ok: boolean;
-  kind?: "corrupt" | "future" | "io" | "aborted";
+  kind?: "corrupt" | "future" | "missing" | "io" | "aborted";
 }
 
 /**
@@ -910,6 +910,7 @@ const stateIntegrityCheck: Check = async (ctx, signal) => {
   const corrupt: string[] = [];
   const future: string[] = [];
   const unreadableJournals: string[] = [];
+  const missingJournals: string[] = [];
   const temps: string[] = [];
   const unreadable: string[] = [];
   const limit = ctx.deep ? 5000 : 300;
@@ -940,6 +941,7 @@ const stateIntegrityCheck: Check = async (ctx, signal) => {
           if (validation.kind === "aborted") break;
           if (!validation.ok) {
             if (validation.kind === "future") future.push(full);
+            else if (validation.kind === "missing") missingJournals.push(full);
             else if (validation.kind === "corrupt") corrupt.push(full);
             else unreadableJournals.push(full);
           }
@@ -956,12 +958,13 @@ const stateIntegrityCheck: Check = async (ctx, signal) => {
   const evidence = [`${checked} record(s) checked${ctx.deep ? " (newest 5000 per directory)" : " (newest 300 per directory; --deep checks up to 5000)"}`];
   const issues: string[] = [];
   if (corrupt.length) issues.push(`${corrupt.length} saved record(s) are malformed and may not load`);
+  if (missingJournals.length) issues.push(`${missingJournals.length} message journal(s) are missing, so the saved conversation cannot be loaded`);
   if (future.length) issues.push(`${future.length} message journal(s) require a newer Nexus`);
   if (unreadableJournals.length) issues.push(`${unreadableJournals.length} message journal(s) could not be read`);
   if (temps.length) issues.push(`${temps.length} recognized atomic-write temporary file(s) are present; a write may still be active, so doctor cannot determine whether they are stale`);
   if (unreadable.length) issues.push(`${unreadable.length} state director${unreadable.length === 1 ? "y" : "ies"} could not be read, so doctor cannot determine whether the saved state is healthy`);
   if (issues.length) {
-    return f("state.integrity", "state", "warn", `${issues.join("; ")}.`, [...evidence, ...corrupt.slice(0, 5), ...future.slice(0, 5), ...unreadableJournals.slice(0, 5), ...unreadable, ...temps.slice(0, 3)], "Inspect the listed paths and their permissions; doctor never deletes or repairs session or task files.");
+    return f("state.integrity", "state", "warn", `${issues.join("; ")}.`, [...evidence, ...corrupt.slice(0, 5), ...missingJournals.slice(0, 5), ...future.slice(0, 5), ...unreadableJournals.slice(0, 5), ...unreadable, ...temps.slice(0, 3)], "Inspect the listed paths and their permissions; doctor never deletes or repairs session or task files.");
   }
   return f("state.integrity", "state", "pass", "Every checked session and task-state record parses and has an id plus valid conversation metadata.", evidence);
 };

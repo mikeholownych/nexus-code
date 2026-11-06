@@ -325,6 +325,8 @@ describe("doctor findings name the actual failure", () => {
       const report = await runDoctor({ home: h, config: cfg() });
       const finding = find(report, "state.integrity")!;
       assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /message journal\(s\) are missing/);
+      assert.doesNotMatch(finding.explanation, /malformed/, "a missing journal is not malformed state");
       assert.ok(finding.evidence.includes(primary));
       assert.ok(fs.existsSync(primary), "doctor does not quarantine or delete state");
       assert.throws(() => manager.loadTaskState("journal-task"), CorruptStateError);
@@ -424,7 +426,7 @@ describe("doctor findings name the actual failure", () => {
       const signal = new AbortController().signal;
       assert.deepEqual(await validateMessageJournal(journal, "worker-task", record.messageLog, signal), { ok: true });
       assert.equal((await validateMessageJournal(journal, "worker-task", { ...record.messageLog, schemaVersion: 3 }, signal)).kind, "future", "a cursor from a newer Nexus is future, not corrupt");
-      assert.equal((await validateMessageJournal(journal + ".missing", "worker-task", record.messageLog, signal)).kind, "corrupt");
+      assert.equal((await validateMessageJournal(journal + ".missing", "worker-task", record.messageLog, signal)).kind, "missing", "an absent journal is missing, not malformed");
     } finally {
       fs.rmSync(h, { recursive: true, force: true });
     }
