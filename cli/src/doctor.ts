@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { parse as parseDotenv } from "dotenv";
 import { LocalLlmClient, credentialStorageHome } from "./client.js";
 import { credentialsPath } from "./credentials.js";
@@ -29,6 +30,7 @@ import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES, isWorkspaceTrusted }
 import { BuildIdentity, getBuildIdentity } from "./build_identity.js";
 import { defaultSessionsDir } from "./session.js";
 import { defaultTaskStateDir } from "./core/state.js";
+import type { TaskMessageCursor } from "./core/task_message_log.js";
 import { coreCargoManifest, resolveCoreBinary } from "./tools.js";
 import { isProjectEnvKey } from "./config.js";
 import { classifyLocality } from "./core/egress.js";
@@ -868,10 +870,46 @@ function validStateConversation(data: any, taskRecord: boolean): boolean {
   return Boolean(identity) && Array.isArray(data.messages);
 }
 
+interface JournalValidationResult {
+  ok: boolean;
+  kind?: "corrupt" | "future" | "io" | "aborted";
+}
+
+/**
+ * Validates a schema-2 message journal in a worker thread. Reading and hashing a large journal is synchronous, so it
+ * must not run on the event loop: aborting the signal terminates the worker and resolves immediately.
+ */
+export function validateMessageJournal(file: string, taskId: string, cursor: TaskMessageCursor, signal: AbortSignal, workerModule: URL = new URL("../dist/doctor_message_worker.js", import.meta.url)): Promise<JournalValidationResult> {
+  if (signal.aborted) return Promise.resolve({ ok: false, kind: "aborted" });
+  let worker: Worker;
+  try {
+    worker = new Worker(workerModule, { workerData: { file, taskId, cursor } });
+  } catch {
+    return Promise.resolve({ ok: false, kind: "io" });
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: JournalValidationResult) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      void worker.terminate();
+      resolve(result);
+    };
+    const onAbort = () => finish({ ok: false, kind: "aborted" });
+    signal.addEventListener("abort", onAbort, { once: true });
+    worker.once("message", (result: JournalValidationResult) => finish(result));
+    worker.once("error", () => finish({ ok: false, kind: "io" }));
+    worker.once("exit", () => finish({ ok: false, kind: "io" }));
+  });
+}
+
 const stateIntegrityCheck: Check = async (ctx, signal) => {
   const dirs = [path.join(ctx.home, ".nexus", "sessions"), path.join(ctx.home, ".nexus", "tasks")];
   let checked = 0;
   const corrupt: string[] = [];
+  const future: string[] = [];
+  const unreadableJournals: string[] = [];
   const temps: string[] = [];
   const unreadable: string[] = [];
   const limit = ctx.deep ? 5000 : 300;
@@ -895,7 +933,17 @@ const stateIntegrityCheck: Check = async (ctx, signal) => {
         const text = await fs.promises.readFile(full, { encoding: "utf8", signal });
         if (signal.aborted) break;
         const data = JSON.parse(text);
-        if (!validStateConversation(data, path.basename(dir) === "tasks")) corrupt.push(full);
+        if (!validStateConversation(data, path.basename(dir) === "tasks")) {
+          corrupt.push(full);
+        } else if (path.basename(dir) === "tasks" && data.schemaVersion === 2 && data.messageLog) {
+          const validation = await validateMessageJournal(full.replace(/\.json$/, ".messages.jsonl"), data.taskId, data.messageLog, signal);
+          if (validation.kind === "aborted") break;
+          if (!validation.ok) {
+            if (validation.kind === "future") future.push(full);
+            else if (validation.kind === "corrupt") corrupt.push(full);
+            else unreadableJournals.push(full);
+          }
+        }
       } catch (error: any) {
         if (signal.aborted || error?.name === "AbortError") break;
         corrupt.push(full);
@@ -908,10 +956,12 @@ const stateIntegrityCheck: Check = async (ctx, signal) => {
   const evidence = [`${checked} record(s) checked${ctx.deep ? " (newest 5000 per directory)" : " (newest 300 per directory; --deep checks up to 5000)"}`];
   const issues: string[] = [];
   if (corrupt.length) issues.push(`${corrupt.length} saved record(s) are malformed and may not load`);
+  if (future.length) issues.push(`${future.length} message journal(s) require a newer Nexus`);
+  if (unreadableJournals.length) issues.push(`${unreadableJournals.length} message journal(s) could not be read`);
   if (temps.length) issues.push(`${temps.length} recognized atomic-write temporary file(s) are present; a write may still be active, so doctor cannot determine whether they are stale`);
   if (unreadable.length) issues.push(`${unreadable.length} state director${unreadable.length === 1 ? "y" : "ies"} could not be read, so doctor cannot determine whether the saved state is healthy`);
   if (issues.length) {
-    return f("state.integrity", "state", "warn", `${issues.join("; ")}.`, [...evidence, ...corrupt.slice(0, 5), ...unreadable, ...temps.slice(0, 3)], "Inspect the listed paths and their permissions; doctor never deletes or repairs session or task files.");
+    return f("state.integrity", "state", "warn", `${issues.join("; ")}.`, [...evidence, ...corrupt.slice(0, 5), ...future.slice(0, 5), ...unreadableJournals.slice(0, 5), ...unreadable, ...temps.slice(0, 3)], "Inspect the listed paths and their permissions; doctor never deletes or repairs session or task files.");
   }
   return f("state.integrity", "state", "pass", "Every checked session and task-state record parses and has an id plus valid conversation metadata.", evidence);
 };
@@ -1295,10 +1345,16 @@ export interface RepairOptions extends DoctorOptions {
 export async function runRepairs(report: DoctorReport, options: RepairOptions): Promise<DoctorReport> {
   const plans = planRepairs(report);
   const result = (status: RepairResult["status"], detail: string) => plans.map((p): RepairResult => ({ id: p.id, findingId: p.findingId, description: p.description, status, detail }));
+  const cancelled = () => ({ ...report, cancelled: true, repairs: result("refused", "Cancelled; no change was made.") });
+  // A cancelled scan is incomplete, so its findings are not a safe basis for changing anything.
+  if (report.cancelled || options.signal?.aborted) return cancelled();
   if (!plans.length) return { ...report, repairs: [] };
   if (options.readOnly) return { ...report, repairs: result("refused", "Read-only policy is in effect; no change was made.") };
   const proposals = plans.map(({ id, findingId, description }) => ({ id, findingId, description }));
-  if (!(await options.confirm(proposals))) return { ...report, repairs: result("declined", "Not confirmed; no change was made.") };
+  const confirmed = await options.confirm(proposals);
+  // Cancellation wins over a late answer, whichever way it went.
+  if (options.signal?.aborted) return cancelled();
+  if (!confirmed) return { ...report, repairs: result("declined", "Not confirmed; no change was made.") };
 
   const home = options.home ?? credentialStorageHome();
   const nexusDir = path.join(home, ".nexus");
@@ -1318,6 +1374,7 @@ export async function runRepairs(report: DoctorReport, options: RepairOptions): 
   if (!lockIdentity) return { ...report, repairs: result("skipped", `Another doctor --fix holds ${lock}; no change was made.`) };
   const repairs: RepairResult[] = [];
   try {
+    if (options.signal?.aborted) return cancelled();
     const backupDir = path.join(nexusDir, "doctor-backups");
     const manifest = path.join(backupDir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}.json`);
     const backups = plans.filter((p) => p.previousMode !== undefined).map((p) => ({ path: p.target, previousMode: p.previousMode!.toString(8), repair: p.id }));
@@ -1331,7 +1388,11 @@ export async function runRepairs(report: DoctorReport, options: RepairOptions): 
         return { ...report, repairs };
       }
     }
-    for (const plan of plans) {
+    for (const [index, plan] of plans.entries()) {
+      if (options.signal?.aborted) {
+        repairs.push(...plans.slice(index).map((p): RepairResult => ({ id: p.id, findingId: p.findingId, description: p.description, status: "refused", detail: "Cancelled; no change was made to this repair target." })));
+        return { ...report, cancelled: true, repairs };
+      }
       try {
         plan.apply(home);
         repairs.push({ id: plan.id, findingId: plan.findingId, description: plan.description, status: "applied", detail: backups.some((b) => b.path === plan.target) ? `Previous mode recorded in ${manifest}.` : "Applied." });
@@ -1429,6 +1490,7 @@ export function renderDoctorText(report: DoctorReport): string {
 }
 
 export function doctorExitCode(report: DoctorReport): number {
+  if (report.cancelled) return DOCTOR_EXIT.error;
   if (report.findings.some((item) => item.status === "fail")) return DOCTOR_EXIT.failures;
   if (report.findings.some((item) => item.status === "warn")) return DOCTOR_EXIT.warnings;
   return DOCTOR_EXIT.healthy;
