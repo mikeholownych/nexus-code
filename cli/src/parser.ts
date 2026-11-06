@@ -29,9 +29,13 @@ export interface ParsedModelOutput {
 }
 
 /**
- * Tool-call argument syntax, counted per recognized call: valid JSON as sent (`native`), JSON that parsed only after a
- * trailing or structural repair, or arguments that did not parse at all (`invalid`). Calls rejected for needing
- * structural repair are still counted under `structural`.
+ * Tool-call argument syntax, counted once per call the parser recognizes, on every path that can produce one: native
+ * `tool_calls`, `<tool_call>` tags, a reply that is solely one fenced JSON call, and, under
+ * `NEXUS_TEXT_TOOL_PARSING=legacy`, fenced code blocks and balanced JSON objects in prose. Each is `native` (valid JSON
+ * as sent), `trailing` (parsed after a trailing-class repair, which includes removing a wrapping Markdown fence),
+ * `structural` (parsed only after closing truncated brackets or strings) or `invalid` (did not parse). Calls rejected
+ * for needing structural repair are still counted under `structural`. Not counted: tool names that are not offered,
+ * malformed native entries dropped for lacking a function name, and responses cut off at the output-token limit.
  */
 export interface ToolCallSyntaxCounts {
   native: number;
@@ -250,6 +254,14 @@ function convertSingleQuotedStrings(str: string): string {
 
 export function repairJsonWithClass<T = any>(raw: string): { value: T; repaired: JsonRepairClass } {
   if (typeof raw !== "string") return { value: raw as unknown as T, repaired: "none" };
+  const result = repairJsonUnfenced<T>(raw);
+  // Removing a wrapping Markdown fence is itself a (trailing-class) repair: the text was not JSON as sent.
+  return /^```(?:json)?\s*[\s\S]*?\s*```$/i.test(raw.trim())
+    ? { value: result.value, repaired: mergeRepairClass("trailing", result.repaired) }
+    : result;
+}
+
+function repairJsonUnfenced<T = any>(raw: string): { value: T; repaired: JsonRepairClass } {
   let str = raw.trim();
 
   // Strip wrapping markdown code blocks if present
@@ -766,12 +778,14 @@ function parseModelResponseCounting(
           const name = parsed.name || parsed.tool || parsed.action;
           const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
           if (name && typeof name === "string" && known(name)) {
+            const normalized = normalizeToolArgsWithClass(args);
+            count(normalized, (parsed as any).repaired ?? "none");
             toolCalls.push({
               id: `call_${Math.random().toString(36).substring(2, 9)}`,
               type: "function",
               function: {
                 name,
-                arguments: normalizeToolArgs(args),
+                arguments: normalized.args,
               },
             });
           }
@@ -795,12 +809,14 @@ function parseModelResponseCounting(
         const name = item.parsed.name || item.parsed.tool || item.parsed.action;
         const args = item.parsed.arguments || item.parsed.parameters || item.parsed.args || item.parsed.input;
         if (name && typeof name === "string" && known(name)) {
+          const normalized = normalizeToolArgsWithClass(args);
+          count(normalized, (item.parsed as any).repaired ?? "none");
           toolCalls.push({
             id: `call_${Math.random().toString(36).substring(2, 9)}`,
             type: "function",
             function: {
               name,
-              arguments: normalizeToolArgs(args),
+              arguments: normalized.args,
             },
           });
           thoughtText = thoughtText.replace(item.raw, "").trim();
