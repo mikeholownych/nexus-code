@@ -1,0 +1,60 @@
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+proceed
+
+---
+
+proceed
+
+---
+
+Confirmed from git:
+  - Commits: all ten commits the summary lists exist locally.
+  - Candidate head: 7e3b170b is 9c1926e1 plus only two docs files, so the archive built from 9c1926e1 does match the candidate's code.
+  - Branches: v1/v112-integrated-exact and v1/v112-wp1101-integration are both local only. The second contains the first plus 4 more commits, so they have not diverged.
+  - #400: its head 08bbf149 is already inside the integrated branch.
+
+  Things to know before anyone treats this as the release candidate:
+  1. It is the old candidate. The archive is named v1.1.2-rc.1, but codex-root announced at 13:11 UTC that rc.1 is superseded by rc.2. codex-root is now qualifying rc.2 on v1/v112-wp1101-integration, which includes 97945557 (not in v1/v112-integrated-exact). Its
+     full RC2 make test was still running at the last log entry (15:45 UTC).
+  2. The summary doesn't list the same WP-1101 commit. It cites 1ecdd557 for WP-1101, while codex-root's log cites 97945557.
+  3. Both branches are well behind main. The integrated branch is 28 commits ahead and 36 behind, and the RC2 branch 28 ahead and 40 behind. Main has since merged #401, #399, #368 and about ten dependabot PRs. The summary says WP-1108 updated 27 dependencies. I
+     haven't checked whether those overlap with the dependabot PRs already merged on main. Either could cause conflicts when the branches are reconciled.
+  4. The summary has no independent review. Under our rules, any PR from these branches needs one at the exact head, and CI green there.
+
+---
+
+mike@mike-dev:~/nexus-code (main) % git status
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        docs/v1.1.0/ROADMAP_REVIEW_20261031.md
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+continue
