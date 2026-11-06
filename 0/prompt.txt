@@ -1,0 +1,13 @@
+what's the next priority for v1.1.4?
+
+---
+
+proceed
+
+---
+
+commit, push, PR
+
+---
+
+continue with the HOME override
