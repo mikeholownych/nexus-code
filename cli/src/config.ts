@@ -372,7 +372,7 @@ export function buildConfig(options: any): HarnessConfig {
   const readOnly = Boolean(options.readOnly);
   const yes = Boolean(options.yes);
   const approve = Boolean(options.approve);
-  const modeOption = options.mode ? String(options.mode).toLowerCase() : undefined;
+  const modeOption = options.mode ? String(options.mode).trim().toLowerCase() : undefined;
   const envMode = (operatorSetting("NEXUS_APPROVAL_MODE") || process.env.NEXUS_APPROVAL_MODE)?.trim().toLowerCase();
 
   let approvalMode: ApprovalMode;
