@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6REMDVX25A174AH6VBTNWZF",
+  "session_id": "e1c73ade-8d57-44e6-8088-bde54062e885",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-06T12:51:46.639023251Z",
+  "branch": "v1/v114-wp1306-doctor-journal",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cli/src/doctor.ts",
+    "cli/src/doctor_message_worker.ts",
+    "cli/test/doctor.test.ts",
+    "docs/v1.1.4/FINDINGS.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "837222440953",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 243253,
+    "cache_read_tokens": 4044969,
+    "output_tokens": 23297,
+    "api_call_count": 45
+  },
+  "redaction": {
+    "replacements": 9,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 6,
+      "key_context": 0,
+      "provider_token": 3,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 2
+  }
+}
