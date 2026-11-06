@@ -553,7 +553,7 @@ program
   .option("--provider <id>", "Cloud inference provider (openrouter, openai, anthropic, compatible)")
   .option("--base-url <url>", "Override the provider's base URL")
   .action(async (_options: any, cmd: Command) => {
-    const options = cmd.optsWithGlobals();
+    const options = commandOptions(cmd);
     const config = buildConfig(options);
     const client = new LocalLlmClient(config);
     console.log(pc.cyan(`\nQuerying models from ${config.endpoint}...`));
@@ -575,7 +575,7 @@ program
 
 /** Shared by `doctor` and its compatibility alias `check`. */
 async function doctorCommand(_options: any, cmd?: Command): Promise<void> {
-  const options = cmd?.optsWithGlobals ? cmd.optsWithGlobals() : _options;
+  const options = cmd?.optsWithGlobals ? commandOptions(cmd) : _options;
   const controller = new AbortController();
   const onInterrupt = () => controller.abort();
   process.once("SIGINT", onInterrupt);

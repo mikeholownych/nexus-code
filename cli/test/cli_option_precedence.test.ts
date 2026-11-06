@@ -86,3 +86,75 @@ test("the subcommand default applies when the option is given nowhere", async ()
   const r = await requestTemperature((e) => ["-e", e, "run", "--json", "-m", "m", "hello"]);
   assert.equal(r.temperature, 0.2, r.out);
 });
+
+/** The model asks to write a file on its first completion; returns whether the file reached the workspace. */
+async function modelWriteLands(args: (endpoint: string) => string[]): Promise<{ landed: boolean; out: string }> {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      if (req.url?.endsWith("/models")) { res.setHeader("Content-Type", "application/json"); return res.end(JSON.stringify({ data: [{ id: "m" }] })); }
+      calls++;
+      res.setHeader("Content-Type", "text/event-stream");
+      const chunk = (delta: object, finish: string | null) => `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+      if (calls === 1) {
+        res.write(chunk({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "marker.txt", content: "written" }) } }] }, null));
+        res.write(chunk({}, "tool_calls"));
+      } else {
+        res.write(chunk({ content: "done" }, null));
+        res.write(chunk({}, "stop"));
+      }
+      res.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-optprec-ro-"));
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-optprec-ro-ws-"));
+  try {
+    const out = await new Promise<string>((resolve) => {
+      const child = spawn(TSX, ["src/index.ts", ...args(endpoint), "-w", ws], { cwd: CLI_DIR, env: { ...hostNeutralEnv(), HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache") } });
+      let buf = "";
+      child.stdout.on("data", (c) => (buf += c));
+      child.stderr.on("data", (c) => (buf += c));
+      const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
+      child.on("close", () => { clearTimeout(timer); resolve(buf); });
+    });
+    return { landed: fs.existsSync(path.join(ws, "marker.txt")), out };
+  } finally {
+    server.closeAllConnections?.();
+    server.close();
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+}
+
+test("--read-only given before the subcommand is not dropped: a model write does not land", async () => {
+  const open = await modelWriteLands((e) => ["--yes", "-e", e, "run", "--json", "-m", "m", "write it"]);
+  assert.equal(open.landed, true, `control run (--yes) must write the file\n${open.out}`);
+  const locked = await modelWriteLands((e) => ["--read-only", "-e", e, "run", "--json", "-m", "m", "write it"]);
+  assert.equal(locked.landed, false, `read-only before the subcommand must block the write\n${locked.out}`);
+});
+
+test("nexus models: an endpoint after the subcommand wins over the one before it", async () => {
+  const server = http.createServer((req, res) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ data: [{ id: "near-model" }] })); });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const near = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-optprec-models-"));
+  try {
+    const out = await new Promise<string>((resolve) => {
+      const child = spawn(TSX, ["src/index.ts", "-e", "http://127.0.0.1:9/v1", "models", "-e", near], { cwd: CLI_DIR, env: { ...hostNeutralEnv(), HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache") } });
+      let buf = "";
+      child.stdout.on("data", (c) => (buf += c));
+      child.stderr.on("data", (c) => (buf += c));
+      const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+      child.on("close", () => { clearTimeout(timer); resolve(buf); });
+    });
+    assert.match(out, /near-model/, out);
+  } finally {
+    server.closeAllConnections?.();
+    server.close();
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
