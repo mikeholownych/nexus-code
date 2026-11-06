@@ -5,6 +5,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
@@ -22,7 +23,10 @@ import {
   renderDoctorText,
   runDoctor,
   runRepairs,
+  validateMessageJournal,
 } from "../src/doctor.js";
+import { CorruptStateError, DurableStateManager } from "../src/core/state.js";
+import { WorkspacePath } from "../src/core/workspace_path.js";
 import type { HarnessConfig } from "../src/types.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, writeExclusiveVerified } from "../src/safe_fs.js";
 
@@ -30,6 +34,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, "../..");
 const LAUNCHER = path.join(ROOT, "harness.sh");
 const SECRET = "sk-doctor-supersecret-0123456789abcdef";
+
+function savedTask(home: string, tasks: string, taskId: string): DurableStateManager {
+  const manager = new DurableStateManager({ baseDir: tasks, workspacePaths: [WorkspacePath.fromSelectedWorkspace(home)] });
+  const now = new Date().toISOString();
+  manager.saveTaskState({ schemaVersion: 2, taskId, sessionId: taskId, title: taskId, workspacePath: home, createdAt: now, updatedAt: now, status: "pending", messages: [{ role: "user", content: "safe fixture" }] });
+  return manager;
+}
 
 interface Mock {
   url: string;
@@ -284,8 +295,7 @@ describe("doctor findings name the actual failure", () => {
     fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
     fs.mkdirSync(tasks, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(sessions, "index.json"), JSON.stringify({ schemaVersion: 1, sessions: [] }));
-    const record = { schemaVersion: 2, taskId: "task-abc", messageLog: { schemaVersion: 2, sha256: "a".repeat(64), offset: 0, bytes: 1, count: 0 } };
-    fs.writeFileSync(path.join(tasks, "task-abc.json"), JSON.stringify(record));
+    savedTask(h, tasks, "task-abc");
     fs.writeFileSync(path.join(tasks, "task-empty.json"), JSON.stringify({ schemaVersion: 2, taskId: "task-empty", messageLog: null }));
     fs.writeFileSync(path.join(tasks, "task-bad.json"), JSON.stringify({ schemaVersion: 2, taskId: "task-bad", messageLog: "not-a-cursor" }));
     try {
@@ -300,6 +310,123 @@ describe("doctor findings name the actual failure", () => {
       assert.ok(fs.existsSync(path.join(tasks, "task-abc.json")), "valid state remains untouched");
       assert.ok(fs.existsSync(path.join(tasks, "task-empty.json")), "valid empty-history state remains untouched");
       assert.ok(fs.existsSync(path.join(tasks, "task-bad.json")), "malformed state remains untouched");
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("state integrity reports a missing committed schema-2 message journal without quarantining it", async () => {
+    const h = tmp("nexus-doctor-schema2-journal-");
+    const tasks = path.join(h, ".nexus", "tasks");
+    const manager = savedTask(h, tasks, "journal-task");
+    const primary = path.join(tasks, "journal-task.json");
+    fs.rmSync(manager.getMessageLogFilePath("journal-task"));
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const finding = find(report, "state.integrity")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /message journal\(s\) are missing/);
+      assert.doesNotMatch(finding.explanation, /malformed/, "a missing journal is not malformed state");
+      assert.ok(finding.evidence.includes(primary));
+      assert.ok(fs.existsSync(primary), "doctor does not quarantine or delete state");
+      assert.throws(() => manager.loadTaskState("journal-task"), CorruptStateError);
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("state integrity names a future-schema message journal as needing a newer Nexus, not as malformed", async () => {
+    const h = tmp("nexus-doctor-schema2-future-");
+    const tasks = path.join(h, ".nexus", "tasks");
+    const manager = savedTask(h, tasks, "future-task");
+    const primary = path.join(tasks, "future-task.json");
+    // A valid cursor over a committed record written by a newer Nexus (the shape task_state_v2.test.ts uses).
+    const journalRecord = Buffer.from(JSON.stringify({ schemaVersion: 99, taskId: "future-task" }));
+    fs.writeFileSync(manager.getMessageLogFilePath("future-task"), Buffer.concat([journalRecord, Buffer.from("\n")]));
+    const record = JSON.parse(fs.readFileSync(primary, "utf8"));
+    record.messageLog = { schemaVersion: 2, offset: 0, bytes: journalRecord.length, count: 0, sha256: createHash("sha256").update(journalRecord).digest("hex") };
+    fs.writeFileSync(primary, JSON.stringify(record));
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const finding = find(report, "state.integrity")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /1 message journal\(s\) require a newer Nexus/);
+      assert.doesNotMatch(finding.explanation, /malformed/);
+      assert.ok(finding.evidence.includes(primary));
+      assert.ok(fs.existsSync(primary));
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("state integrity reports an unreadable message journal as unreadable, not malformed", async (t) => {
+    if (process.getuid?.() === 0) return t.skip("root can read a mode-000 file");
+    const h = tmp("nexus-doctor-schema2-unreadable-");
+    const tasks = path.join(h, ".nexus", "tasks");
+    const manager = savedTask(h, tasks, "locked-task");
+    const journal = manager.getMessageLogFilePath("locked-task");
+    fs.chmodSync(journal, 0o000);
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const finding = find(report, "state.integrity")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /1 message journal\(s\) could not be read/);
+      assert.doesNotMatch(finding.explanation, /malformed/);
+      assert.ok(finding.evidence.includes(path.join(tasks, "locked-task.json")));
+    } finally {
+      fs.chmodSync(journal, 0o600);
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("state integrity reports a tampered message journal as malformed", async () => {
+    const h = tmp("nexus-doctor-schema2-tampered-");
+    const tasks = path.join(h, ".nexus", "tasks");
+    const manager = savedTask(h, tasks, "tampered-task");
+    fs.appendFileSync(manager.getMessageLogFilePath("tampered-task"), "garbage\n");
+    const journal = manager.getMessageLogFilePath("tampered-task");
+    fs.writeFileSync(journal, fs.readFileSync(journal, "utf8").replace("safe fixture", "edited fixtur"));
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const finding = find(report, "state.integrity")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /1 saved record\(s\) are malformed/);
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("message journal validation runs off the event loop and a hanging worker is terminated on abort", async () => {
+    const dir = tmp("nexus-doctor-hang-worker-");
+    const hang = path.join(dir, "hang.mjs");
+    fs.writeFileSync(hang, "setInterval(() => {}, 1000);\n");
+    const cursor = { schemaVersion: 2 as const, sha256: "a".repeat(64), offset: 0, bytes: 1, count: 0 };
+    const controller = new AbortController();
+    try {
+      const started = Date.now();
+      const pending = validateMessageJournal(path.join(dir, "x.messages.jsonl"), "x", cursor, controller.signal, new URL(`file://${hang}`));
+      setTimeout(() => controller.abort(), 50);
+      const result = await pending;
+      assert.equal(result.kind, "aborted");
+      assert.ok(Date.now() - started < 2000, "abort resolved without waiting for the worker");
+      const already = await validateMessageJournal(path.join(dir, "x.messages.jsonl"), "x", cursor, controller.signal, new URL(`file://${hang}`));
+      assert.equal(already.kind, "aborted", "an already-aborted signal never starts a worker");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the shipped journal worker validates a real journal and classifies failures", async () => {
+    const h = tmp("nexus-doctor-worker-");
+    const tasks = path.join(h, ".nexus", "tasks");
+    const manager = savedTask(h, tasks, "worker-task");
+    const record = JSON.parse(fs.readFileSync(path.join(tasks, "worker-task.json"), "utf8"));
+    const journal = manager.getMessageLogFilePath("worker-task");
+    try {
+      const signal = new AbortController().signal;
+      assert.deepEqual(await validateMessageJournal(journal, "worker-task", record.messageLog, signal), { ok: true });
+      assert.equal((await validateMessageJournal(journal, "worker-task", { ...record.messageLog, schemaVersion: 3 }, signal)).kind, "future", "a cursor from a newer Nexus is future, not corrupt");
+      assert.equal((await validateMessageJournal(journal + ".missing", "worker-task", record.messageLog, signal)).kind, "missing", "an absent journal is missing, not malformed");
     } finally {
       fs.rmSync(h, { recursive: true, force: true });
     }
@@ -579,6 +706,57 @@ describe("controlled repairs", () => {
       const refused = await runRepairs(report, { home: h, config: cfg(), readOnly: true, confirm: async () => true });
       assert.ok(refused.repairs!.every((r) => r.status === "refused"));
       assert.equal(mode(sessions), 0o777);
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("a cancelled run applies no repair and exits as an error", async () => {
+    const { h, sessions } = prepared();
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const controller = new AbortController();
+      controller.abort();
+      let asked = false;
+      const result = await runRepairs(report, { home: h, config: cfg(), signal: controller.signal, confirm: async () => ((asked = true), true) });
+      assert.equal(result.cancelled, true);
+      assert.ok(result.repairs!.length >= 3 && result.repairs!.every((r) => r.status === "refused" && /Cancelled/.test(r.detail)));
+      assert.equal(asked, false, "a cancelled run never asks for confirmation");
+      assert.equal(mode(sessions), 0o777);
+      assert.equal(doctorExitCode(result), DOCTOR_EXIT.error);
+      // An incomplete report from the scan itself is also never repaired.
+      const incomplete = await runRepairs({ ...report, cancelled: true }, { home: h, config: cfg(), confirm: async () => true });
+      assert.equal(incomplete.cancelled, true);
+      assert.equal(mode(sessions), 0o777);
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("cancelling while the confirmation is pending wins over a late yes and over a late no", async () => {
+    for (const answer of [true, false]) {
+      const { h, sessions } = prepared();
+      try {
+        const report = await runDoctor({ home: h, config: cfg() });
+        const controller = new AbortController();
+        const result = await runRepairs(report, { home: h, config: cfg(), signal: controller.signal, confirm: async () => (controller.abort(), answer) });
+        assert.equal(result.cancelled, true, `answer=${answer}`);
+        assert.ok(result.repairs!.every((r) => r.status === "refused"), `answer=${answer}`);
+        assert.equal(mode(sessions), 0o777);
+      } finally {
+        fs.rmSync(h, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a cancelled run with nothing to repair is still reported as cancelled", async () => {
+    const h = tmp("nexus-doctor-cancel-empty-");
+    try {
+      const report = await runDoctor({ home: h, config: cfg() });
+      const controller = new AbortController();
+      controller.abort();
+      const result = await runRepairs(report, { home: h, config: cfg(), signal: controller.signal, confirm: async () => true });
+      assert.equal(result.cancelled, true);
     } finally {
       fs.rmSync(h, { recursive: true, force: true });
     }

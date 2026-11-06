@@ -139,6 +139,10 @@ export class SessionManager {
       candidateIdentity: session.candidateIdentity || null,
       validationReceipts: session.validationReceipts || [],
       currentOperation: session.currentOperation || null,
+      // Present-or-absent, not defaulted: an explicit null is a recorded "none", and absence must not invent a value.
+      ...(session.providerRecovery !== undefined ? { providerRecovery: session.providerRecovery } : {}),
+      ...(session.operation !== undefined ? { operation: session.operation } : {}),
+      ...(session.changeBaseline !== undefined ? { changeBaseline: session.changeBaseline } : {}),
       messages: session.messages || [],
       ...(session.pinned !== undefined ? { pinned: session.pinned } : {}),
       ...(session.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: session.unverifiedChangesPending } : {}),

@@ -1,0 +1,22 @@
+// Worker thread for `doctor`'s schema-2 message-journal check. Journal reads are synchronous and hash the whole file,
+// so they run here and the parent terminates this thread on cancellation. Compiled to dist/ with the rest of src/.
+import fs from "node:fs";
+import { parentPort, workerData } from "node:worker_threads";
+import { readTaskMessages } from "./core/task_message_log.js";
+
+try {
+  // An absent journal is reported as such: readTaskMessages folds it into "corrupt", which doctor would then count as malformed state.
+  if (!fs.lstatSync(workerData.file, { throwIfNoEntry: false })) {
+    parentPort?.postMessage({ ok: false, kind: "missing" });
+  } else {
+    readTaskMessages(workerData.file, workerData.taskId, workerData.cursor);
+    parentPort?.postMessage({ ok: true });
+  }
+} catch (error: any) {
+  parentPort?.postMessage({
+    ok: false,
+    kind: error?.kind === "corrupt" || error?.kind === "future" ? error.kind : "io",
+    code: error?.code,
+    message: error?.message ?? String(error),
+  });
+}

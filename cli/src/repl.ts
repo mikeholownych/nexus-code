@@ -281,6 +281,8 @@ export class InteractiveRepl {
   private saveCurrentSession(titlePrompt?: string, turn?: TurnResult): void {
     const messages = this.agent.getMessages();
     if (messages.length <= 1) return;
+    // The recovery fields live in the agent's durable checkpoint; the session record replaces the whole task record.
+    const durableState = this.app.getTaskState();
     this.sessionManager.saveSession({
       id: this.currentSessionId,
       title: titlePrompt ? titlePrompt.slice(0, 60).replace(/\n/g, " ") : "Active Session",
@@ -295,6 +297,9 @@ export class InteractiveRepl {
       objective: this.agent.getObjective() ?? null,
       findings: this.agent.getFindings(),
       history: this.agent.getHistoryCompleteness(),
+      providerRecovery: durableState.providerRecovery,
+      operation: durableState.operation,
+      changeBaseline: durableState.changeBaseline,
       ...(turn ? { status: lifecycleStatusForTurn(turn), lastTurn: turn } : {}),
     }, this.agent.getWorkspacePathIdentity());
   }
