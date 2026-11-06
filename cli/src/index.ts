@@ -284,6 +284,26 @@ async function runDefault(options: any): Promise<void> {
   await startRepl(options);
 }
 
+/**
+ * A command's effective options. An option given on the command line wins, nearest command first
+ * (`nexus -t 0.9 run -t 0.4` is 0.4, `nexus -t 0.9 run` is 0.9). A value a command only holds as its default, or does
+ * not hold at all, never replaces one given elsewhere on the path.
+ */
+function commandOptions(cmd: Command): Record<string, any> {
+  const options = cmd.optsWithGlobals();
+  for (const option of cmd.options) {
+    const name = option.attributeName();
+    for (let c: Command | null = cmd; c; c = c.parent) {
+      const source = c.getOptionValueSource(name);
+      if (source !== undefined && source !== "default") {
+        options[name] = c.opts()[name];
+        break;
+      }
+    }
+  }
+  return options;
+}
+
 const program = new Command();
 
 // Options given before a subcommand belong to the top-level launch (`nexus --provider X` opens the TUI with it);
@@ -372,7 +392,7 @@ program
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
   .action(async (_options: any, cmd: Command) => {
-    const options = cmd.optsWithGlobals();
+    const options = commandOptions(cmd);
     await startRepl(options);
   });
 
@@ -416,13 +436,7 @@ program
   .option("-r, --resume [id]", "Resume previous session or task state")
   .option("--step", "Execute one model/tool cycle and pause deterministically")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
-    // Preserve inherited CLI values when the command-level duplicate only has
-    // its default; explicitly supplied command options still take precedence.
-    const options = cmd.optsWithGlobals();
-    for (const option of cmd.options) {
-      const name = option.attributeName();
-      if (cmd.getOptionValueSource(name) !== "default") options[name] = _options[name];
-    }
+    const options = commandOptions(cmd);
     let prompt = promptParts.join(" ").trim();
     const config = buildConfig(options);
     config.surface = "headless";
