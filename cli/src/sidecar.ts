@@ -553,8 +553,8 @@ export class SidecarServer {
     };
   }
 
-  /** One agent turn: checkpoint, run, save the session, report the result. */
-  private async turn(turnId: string, prompt: string | any[], label: string, checkpoint: string, signal: AbortSignal): Promise<void> {
+  /** One agent turn: checkpoint, run, save the session, report the result. `step`: one cycle of the unfinished objective. */
+  private async turn(turnId: string, prompt: string | any[], label: string, checkpoint: string, signal: AbortSignal, step = false): Promise<void> {
     const agent = this.app.getAgent();
     let allowSensitiveCheckpoint = false;
     if (this.app.getConfig().readOnly) {
@@ -615,7 +615,7 @@ export class SidecarServer {
         }
       }
     }
-    if (typeof prompt === "string") {
+    if (typeof prompt === "string" && !step) {
       const decision = agent.objectiveDecision(prompt);
       if (decision.kind === "amend") {
         this.emit({
@@ -630,7 +630,7 @@ export class SidecarServer {
     agent.setProgressListener(() => this.saveSession(label));
     let turn: TurnResult;
     try {
-      turn = await agent.runTurn(prompt, this.confirmFor(turnId, signal), { signal });
+      turn = await agent.runTurn(prompt, this.confirmFor(turnId, signal), step ? { signal, step: true, resume: true } : { signal });
     } catch (err) {
       turn = failedTurnFromError(err, this.app.getConfig().maxSteps, agent.hasUnverifiedChanges());
     } finally {
@@ -771,7 +771,7 @@ export class SidecarServer {
       if (outcome.kind === "turn") {
         this.activeSpec = undefined;
         this.emit({ type: "slash.result", id, command: outcome.command, success: true, output: "", prompt: capText(formatSafeSidecarText(outcome.label)) });
-        await this.turn(id, outcome.prompt, outcome.label, outcome.checkpoint, signal);
+        await this.turn(id, outcome.prompt, outcome.title ?? outcome.label, outcome.checkpoint, signal, outcome.step);
         return;
       }
       if (outcome.command === "clear" && outcome.success) this.lastTurn = null;

@@ -7,8 +7,9 @@ import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { InteractiveRepl } from "../src/repl.js";
+import { SidecarServer } from "../src/sidecar.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
-import { startGateway, makeRepo, makeHome, trustWorkspace, Reply } from "./helpers/fixtures.js";
+import { startGateway, makeRepo, makeHome, trustWorkspace, waitUntil, Reply } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcIndex = path.resolve(here, "../src/index.ts");
@@ -374,40 +375,58 @@ describe("WP-1106: Single-step agent loop mode", () => {
     }
   });
 
-  test("REPL /step command rejects when no unresolved objective exists", async () => {
+  test("REPL /step (real handler): refuses without an unresolved objective, then checkpoints and runs one cycle", { timeout: 60_000 }, async () => {
     const home = makeHome();
     const repo = makeRepo();
     trustWorkspace(home, repo);
-    const prevHome = process.env.HOME;
-    process.env.HOME = home;
-
-    const app = new ApplicationCore(cfg("http://127.0.0.1:9/v1", repo));
-    const repl = new InteractiveRepl(app, "auto");
+    // The first prompt's inference fails, which leaves its objective unresolved; /step then runs one cycle.
+    let phase: "fail" | "work" = "fail";
+    let workRequests = 0;
+    const gw = await startGateway(() => {
+      if (phase === "fail") return { kind: "http", status: 400, body: '{"error":"bad request"}' };
+      workRequests++;
+      return workRequests === 1 ? write("repl_step_a.txt", "a\n") : write("repl_step_b.txt", "must not exist\n");
+    });
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", srcIndex, "repl", "-y", "-w", repo, "-e", gw.url, "-m", "m"],
+      { cwd: cliRoot, env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") }, stdio: ["pipe", "pipe", "pipe"] },
+    );
+    let stdout = "";
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", (d) => (stdout += d.toString()));
+    const closed = new Promise<void>((resolve) => child.on("close", () => resolve()));
+    // The REPL reads one line per prompt: send the next line only when the n-th prompt is showing. Colour codes are
+    // stripped first: with CI set, picocolors colours a piped stdout and the prompt becomes "❯\x1b[39m\x1b[22m ".
+    const prompts = () => stdout.replace(/\x1b\[[0-9;]*m/g, "").split("❯ ").length - 1;
+    const send = async (n: number, line: string): Promise<number> => {
+      await waitUntil(() => prompts() >= n, 30_000);
+      child.stdin.write(`${line}\n`);
+      return stdout.length;
+    };
     try {
-      // No objective exists yet
-      assert.equal(app.getAgent().getObjective(), undefined);
+      await send(1, "/step");
+      const afterRefusal = await send(2, "Create the files");
+      // The failed turn left the objective unresolved; switch the provider to working replies before /step.
+      await waitUntil(() => prompts() >= 3, 30_000);
+      phase = "work";
+      const beforeFirstListing = await send(3, "/checkpoints");
+      const beforeStep = await send(4, "/step");
+      const beforeSecondListing = await send(5, "/checkpoints");
+      await waitUntil(() => prompts() >= 6, 30_000);
+      child.stdin.end();
+      await closed;
 
-      let loggedWarning = false;
-      const origLog = console.log;
-      console.log = (...args: any[]) => {
-        const str = args.join(" ");
-        if (str.includes("No unresolved objective to step")) {
-          loggedWarning = true;
-        }
-      };
-      try {
-        // Run /step branch in repl
-        const ledger = app.getAgent().getObjective();
-        if (!ledger || ledger.outcome?.status === "completed") {
-          console.log("No unresolved objective to step. Provide a prompt to start a task.\n");
-        }
-        assert.equal(loggedWarning, true);
-      } finally {
-        console.log = origLog;
-      }
+      assert.match(stdout.slice(0, afterRefusal), /No unresolved objective to step/, "the real /step handler refuses without an objective");
+      assert.equal(workRequests, 1, "/step ran exactly one model request");
+      assert.ok(fs.existsSync(path.join(repo, "repl_step_a.txt")), "/step ran the cycle's tool call");
+      assert.ok(!fs.existsSync(path.join(repo, "repl_step_b.txt")), "/step paused after one cycle");
+      // /step made its own rollback checkpoint, named after the objective: only the listing after /step shows it.
+      assert.doesNotMatch(stdout.slice(beforeFirstListing, beforeStep), /Step: Create the files/);
+      assert.match(stdout.slice(beforeSecondListing), /Step: Create the files/, `no /step checkpoint listed after /step:\n${stdout}`);
     } finally {
-      app.shutdown();
-      process.env.HOME = prevHome;
+      if (child.exitCode === null) child.kill();
+      await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -451,5 +470,221 @@ describe("WP-1106: Single-step agent loop mode", () => {
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+const readA = (): Reply => ({ kind: "tools", calls: [{ name: "read_file", args: { path: "a.txt" } }] });
+
+/** Runs an objective with one step, then /step until the turn stops for a reason other than STEP_PAUSED. */
+async function stepUntilStopped(continuation: Partial<HarnessConfig["continuation"]>, maxSteps = 10) {
+  const home = makeHome();
+  const repo = makeRepo({ "a.txt": "alpha\n" });
+  trustWorkspace(home, repo);
+  const prevHome = process.env.HOME;
+  process.env.HOME = home;
+  const gw = await startGateway(readA);
+  const app = new ApplicationCore(cfg(gw.url, repo, { continuation: { ...DEFAULT_CONTINUATION, ...continuation } }));
+  const agent = quiet(app.getAgent());
+  try {
+    const reasons: string[] = [];
+    let turn = await agent.runTurn("Read a.txt", undefined, { step: true });
+    reasons.push(turn.reason);
+    while (turn.reason === "STEP_PAUSED" && reasons.length < maxSteps) {
+      turn = await agent.runTurn("", undefined, { step: true, resume: true });
+      reasons.push(turn.reason);
+    }
+    const messages = agent.getMessages().map((m) => (typeof m.content === "string" ? m.content : ""));
+    return { reasons, turn, messages, requests: gw.requests.length };
+  } finally {
+    app.shutdown();
+    await gw.close();
+    process.env.HOME = prevHome;
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+interface StepRig {
+  server: SidecarServer;
+  events: any[];
+  repo: string;
+  app: ApplicationCore;
+  /** Replaces the provider's script; `k` counts requests from the change (1-based). */
+  script(next: (k: number) => Reply): void;
+  send(msg: Record<string, unknown>): Promise<void>;
+}
+
+/** A TUI sidecar whose first prompt fails at inference, so it leaves an unresolved objective for /step. */
+async function withStepSidecar(fn: (rig: StepRig) => Promise<void>): Promise<void> {
+  let current: (k: number) => Reply = () => ({ kind: "http", status: 400, body: '{"error":"bad request"}' });
+  let base = 0;
+  const gw = await startGateway((n) => current(n - base));
+  const repo = makeRepo();
+  const home = makeHome();
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  const app = new ApplicationCore(cfg(gw.url, repo, { maxSteps: 6 }));
+  const events: any[] = [];
+  const server = new SidecarServer({ app, mode: "auto", write: (line) => events.push(JSON.parse(line)) });
+  server.start();
+  const send = (msg: Record<string, unknown>) => server.handleLine(JSON.stringify({ v: 1, ...msg }));
+  try {
+    await fn({
+      server, events, repo, app, send,
+      script: (next) => {
+        base = gw.requests.length;
+        current = next;
+      },
+    });
+  } finally {
+    await send({ type: "cancel" });
+    await server.idle();
+    app.shutdown();
+    await gw.close();
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+describe("WP-1301: /step in the TUI and the step pause", () => {
+  test("TUI /step runs as a sidecar turn: checkpoint, live tool events, saved session, turn.result", { timeout: 60_000 }, async () => {
+    await withStepSidecar(async ({ server, events, repo, app, script, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "Create the files" });
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "turn.result" && e.turn_id === "t1")?.turn.execution, "FAILED");
+      const checkpointsBefore = app.getCheckpointManager().listCheckpoints().length;
+
+      script((k) => (k === 1 ? write("tui_step_a.txt", "a\n") : write("tui_step_b.txt", "must not exist\n")));
+      await send({ type: "slash", id: "s1", command: "step" });
+      await server.idle();
+
+      assert.ok(fs.existsSync(path.join(repo, "tui_step_a.txt")), "the stepped cycle ran its tool call");
+      assert.ok(!fs.existsSync(path.join(repo, "tui_step_b.txt")), "/step paused after one cycle");
+      const checkpoints = app.getCheckpointManager().listCheckpoints();
+      assert.equal(checkpoints.length, checkpointsBefore + 1, "/step made a rollback checkpoint before it ran");
+      assert.match(checkpoints[0].name, /^Step: Create the files/, "the newest checkpoint is the step's");
+      const start = events.find((e) => e.type === "tool.start" && e.turn_id === "s1");
+      assert.equal(start?.tool, "write_file", "the stepped tool call streamed as a live tool event");
+      const result = events.find((e) => e.type === "turn.result" && e.turn_id === "s1");
+      assert.ok(result, "/step reports through turn.result");
+      assert.equal(result.turn.execution, "LIMIT_REACHED");
+      assert.equal(result.turn.reason, "STEP_PAUSED");
+      const sessions = app.getSessionManager().listSessions();
+      assert.equal(sessions.length, 1, "the step saved into the same session as the turn before it");
+      const saved = app.getSessionManager().loadSession(sessions[0].id);
+      assert.equal(saved?.lastTurn?.reason, "STEP_PAUSED", "the session saved after the step records the step's result");
+      assert.equal(saved?.title, "Create the files", "a stepped session is titled by its objective, not by the [step] marker");
+      assert.equal(events.find((e) => e.type === "slash.result" && e.id === "s1")?.prompt, "[step]", "the TUI user line still shows [step]");
+      assert.ok(
+        saved?.messages.some((m: any) => m.role === "tool" && m.name === "write_file"),
+        "the saved session holds the step's write_file tool message",
+      );
+      assert.equal(events.some((e) => e.type === "slash.result" && /Step completed/.test(e.output ?? "")), false);
+    });
+  });
+
+  test("TUI /step: /undo rolls back only the step, not the turn before it", { timeout: 60_000 }, async () => {
+    await withStepSidecar(async ({ server, events, repo, script, send }) => {
+      // The first turn changes the workspace, then fails at inference: its objective stays unresolved.
+      script((k) => (k === 1 ? write("turn_one.txt", "kept\n") : { kind: "http", status: 400, body: '{"error":"bad request"}' }));
+      await send({ type: "prompt.submit", id: "t1", text: "Create the files" });
+      await server.idle();
+      assert.ok(fs.existsSync(path.join(repo, "turn_one.txt")));
+
+      script((k) => (k === 1 ? write("step_one.txt", "undone\n") : write("step_two.txt", "must not exist\n")));
+      await send({ type: "slash", id: "s1", command: "step" });
+      await server.idle();
+      assert.ok(fs.existsSync(path.join(repo, "step_one.txt")));
+
+      await send({ type: "slash", id: "u1", command: "undo" });
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "slash.result" && e.id === "u1")?.success, true);
+      assert.ok(!fs.existsSync(path.join(repo, "step_one.txt")), "/undo removed the step's change");
+      assert.ok(fs.existsSync(path.join(repo, "turn_one.txt")), "/undo kept the previous turn's change");
+    });
+  });
+
+  test("TUI /step whose inference fails is reported as FAILED through turn.result, never as Step completed", { timeout: 60_000 }, async () => {
+    await withStepSidecar(async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "Create the files" });
+      await server.idle();
+      await send({ type: "slash", id: "s1", command: "step" });
+      await server.idle();
+      const result = events.find((e) => e.type === "turn.result" && e.turn_id === "s1");
+      assert.equal(result?.turn.execution, "FAILED");
+      assert.equal(events.some((e) => e.type === "slash.result" && e.id === "s1" && /Step completed/.test(e.output ?? "")), false);
+    });
+  });
+
+  test("TUI /step can be cancelled, during inference and immediately after it is sent", { timeout: 60_000 }, async () => {
+    for (const delayBeforeCancel of [200, 0]) {
+      await withStepSidecar(async ({ server, events, repo, script, send }) => {
+        await send({ type: "prompt.submit", id: "t1", text: "Create the files" });
+        await server.idle();
+        script(() => ({ ...write("slow_step.txt", "must not exist\n"), delayMs: 3000 }));
+        const started = Date.now();
+        await send({ type: "slash", id: "s1", command: "step" });
+        if (delayBeforeCancel) await new Promise((r) => setTimeout(r, delayBeforeCancel));
+        await send({ type: "cancel" });
+        await server.idle();
+        assert.ok(Date.now() - started < 2500, `cancel (after ${delayBeforeCancel} ms) ended /step before the provider replied`);
+        assert.equal(events.some((e) => e.type === "notice" && /cannot be cancelled/.test(e.text)), false);
+        assert.equal(events.find((e) => e.type === "turn.result" && e.turn_id === "s1")?.turn.execution, "INTERRUPTED");
+        assert.ok(!fs.existsSync(path.join(repo, "slow_step.txt")));
+      });
+    }
+  });
+
+  // The provider replies that make up one model request (an empty stream is re-requested once without streaming), and
+  // the note that continuation path leaves for the model's next cycle.
+  const continuations: Array<[string, Reply[], RegExp]> = [
+    ["an empty reply", [text(""), text("")], /your reply was empty/],
+    ["a reply whose only tool call is dropped with a notice", [{ kind: "tools", calls: [{ name: " ", args: {} }] }], /Malformed native tool call dropped/],
+    ["a reply cut off at the output limit", [{ ...write("cut.txt", "x".repeat(200)), truncated: true }], /output limit/],
+  ];
+  for (const [name, cycle, note] of continuations) {
+    test(`--step pauses after ${name}: one provider request, no second cycle`, { timeout: 60_000 }, async () => {
+      const home = makeHome();
+      const repo = makeRepo();
+      trustWorkspace(home, repo);
+      const prevHome = process.env.HOME;
+      process.env.HOME = home;
+      const gw = await startGateway((n) => cycle[n - 1] ?? write("second_cycle.txt", "must not exist\n"));
+      const app = new ApplicationCore(cfg(gw.url, repo));
+      try {
+        const agent = quiet(app.getAgent());
+        const turn = await agent.runTurn("Write the file", undefined, { step: true });
+        assert.equal(gw.requests.length, cycle.length, "one model request per --step");
+        const last = agent.getMessages().at(-1);
+        assert.match(typeof last?.content === "string" ? last.content : "", note, "the cycle took the continuation path under test");
+        assert.equal(turn.reason, "STEP_PAUSED");
+        assert.ok(!fs.existsSync(path.join(repo, "second_cycle.txt")));
+      } finally {
+        app.shutdown();
+        await gw.close();
+        process.env.HOME = prevHome;
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("the step pause keeps a STAGNATION_DETECTED set during the cycle (recovery exhausted)", { timeout: 60_000 }, async () => {
+    // Only recovery exhaustion can stop this run: the no-progress limit is out of reach.
+    const { reasons, turn, messages } = await stepUntilStopped({ maxRecoveries: 1, stagnationSteps: 100 });
+    assert.equal(turn.reason, "STAGNATION_DETECTED", `reasons: ${reasons.join(", ")}`);
+    assert.match((turn as any).detail ?? "", /recovery exhausted|repeated read_file/);
+    // endStep ran at each pause: the recovery note reached the conversation.
+    assert.ok(messages.some((m) => m.startsWith("[Nexus recovery")), "the recovery note was delivered");
+  });
+
+  test("steps without progress accumulate across /step calls until STAGNATION_DETECTED", { timeout: 60_000 }, async () => {
+    // Recovery cannot exhaust here: only the no-progress count can stop the run.
+    const { reasons, turn } = await stepUntilStopped({ maxRecoveries: 50, stagnationSteps: 3 });
+    assert.equal(turn.reason, "STAGNATION_DETECTED", `reasons: ${reasons.join(", ")}`);
+    assert.match((turn as any).detail ?? "", /consecutive steps without progress/);
+    assert.ok(reasons.length <= 6, `stopped within a few /step calls: ${reasons.join(", ")}`);
   });
 });
