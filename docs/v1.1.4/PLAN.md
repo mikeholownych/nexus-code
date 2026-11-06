@@ -97,6 +97,9 @@ Source: owner report 2026-11-05. On v1.1.3 a single prompt in a repository on a 
   - Test the first-discovery condition and the resume path directly, not only through a full turn.
   - The `activate_skill` not-found error lists every skill name; replace it with the ranked lookup above, and update the names-only catalog's "an unknown name passed to `activate_skill` lists them all" hint (`cli/src/skills.ts`) to describe the lookup.
 
+### WP-1316 Specialist contract enforcement
+From the 2026-11-06 readiness audit (FINDINGS section D, A4). `maxContextTokens` is never consumed, `validateSpecialistOutput` has no runtime caller, required inputs are prompt advice only, and the independent-review verdict gate covers reviewer units only. Enforce ceilings at admission, validate inputs and results through the operation executor, retain raw rejected output, add tests through the executor. Also required before release: a real suspend, restart and resume test for A1.
+
 ## 3. Worktrunk integration
 
 ### 3.1 What Worktrunk is (survey, 2026-11-04)
