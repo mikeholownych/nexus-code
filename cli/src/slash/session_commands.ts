@@ -321,21 +321,15 @@ export const SESSION_HANDLERS: Record<string, SlashHandler> = {
 };
 
 /**
- * `/step`: advance the active task by exactly one model/tool cycle and pause.
+ * `/step`: advance the active task by exactly one model/tool cycle and pause. It runs as a normal sidecar turn (rollback
+ * checkpoint, live events, saved session, `turn.result`), so its outcome is reported like any other turn's.
  */
-async function stepSlash({ host, signal }: SlashContext): Promise<SlashOutcome> {
-  const agent = host.app.getAgent();
-  const ledger = agent.getObjective();
+function stepSlash({ host }: SlashContext): SlashOutcome {
+  const ledger = host.app.getAgent().getObjective();
   if (!ledger || ledger.outcome?.status === "completed") {
     return reply("step", "No unresolved objective to step. Provide a prompt to start a task.", false);
   }
-  const confirm = host.mode() === "auto" ? undefined : host.confirm(signal);
-  try {
-    const turn = await agent.runTurn("", confirm, { signal, step: true, resume: true });
-    return reply("step", `Step completed: ${turn.execution}.`, turn.execution !== "FAILED");
-  } catch (err: any) {
-    return reply("step", `Step failed: ${err.message || String(err)}`, false);
-  }
+  return { kind: "turn", command: "step", prompt: "", label: "[step]", title: ledger.objective, checkpoint: `Step: ${ledger.objective.slice(0, 30)}`, step: true };
 }
 
 /**
