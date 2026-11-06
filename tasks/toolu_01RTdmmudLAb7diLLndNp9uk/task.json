@@ -1,0 +1,17 @@
+{
+  "tool_use_id": "toolu_01RTdmmudLAb7diLLndNp9uk",
+  "agent_id": "a2df53077708e63f9",
+  "task_description": "WP-1305 release hygiene",
+  "files": [
+    "cli/test/zz_red.test.ts"
+  ],
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 73214,
+    "cache_read_tokens": 2811366,
+    "output_tokens": 21385,
+    "api_call_count": 41
+  },
+  "started_at": "2026-11-06T19:00:13.817391324Z",
+  "completed_at": "2026-11-06T19:06:41.48833579Z"
+}
