@@ -1,0 +1,88 @@
+I need you to fully audit the entire codebase. Ensure all functionality is complete, working, and frontier coding client ready. Once everything is verified and complete, land and release v1.1.4
+
+---
+
+<task-notification>
+<task-id>a6d6e89b6a176b546</task-id>
+<tool-use-id>toolu_019Tr7hBCVpJ8uawCiariAnt</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/a6d6e89b6a176b546.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 413 config HOME" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: ACCEPT** at head `a1203599b6a933af3c2854e290fb9fb5158dc885`. There are no blockers.
+
+**Checks**
+1. **Diff.** It touches four files: `cli/src/config.ts`, `cli/src/index.ts`, `cli/test/config.test.ts` and `docs/v1.1.4/FINDINGS.md`.
+2. **HOME restore on the throw path.** `config.ts:82-86` compares the resolved `process.env.HOME || os.homedir()` with the resolved `operatorHome`. On a mismatch it restores `shellEnvironment.HOME`, or deletes `HOME` if the shell had none, before throwing.
+   - I ran two variants by hand: `HOME=` (empty) and `export HOME="/tmp/zz"` (exported and quoted). Both threw, and `process.env.HOME` was back to the operator value afterwards.
+   - A `config.env` that repeats the same HOME is accepted. A test covers it.
+3. **Other config.env keys.** `LOCAL_LLM_MODEL=kept` still loads with a same-HOME `config.env`. The diff doesn't touch USERPROFILE or `XDG_*`, so I saw no regression there.
+4. **Cached home.** The throw comes before `setCredentialAuthority` and before `credentialAuthorityRecorded = true`, so `credentialStorageHome()` never sees the rejected path. The first test asserts it still returns the original home.
+5. **CLI startup.** `index.ts:105-110` prints `[config] &lt;message&gt;` and calls `process.exit(2)`.
+   - The message is static and passes through `formatCliDiagnostic`, so it never includes the contents of `config.env`.
+   - The test checks exit code 2, no stack trace, and nothing written under the selected home.
+6. **Tests.** I ran `node scripts/run_tests.mjs test/config.test.ts`, which sets an isolated HOME. All 16 tests pass. With `src/config.ts` and `src/index.ts` reverted to `a872a94d`, the two rejection tests fail and the other 14 pass. That makes them red-first. I restored the files afterwards, and the worktree is clean.
+7. **FINDINGS.md.** The row is marked FIXED and names all three tests. It cites no commit hash, though, and the project convention is "FIXED (commit and test)".
+
+**Suggestions (non-blocking)**
+- `docs/v1.1.4/FINDINGS.md:64`: add the fix commit SHA to the FIXED row, which is only available after merge.
+- `cli/src/config.ts:82-86`: other `config.env` keys already applied to `process.env` stay set after the throw. The CLI exits straight away, so this is harmless there. The other caller, `loadEnvironment()` at `cli/src/sidecar.ts:1188`, now throws on this path. I didn't trace whether its caller catches that. A one-line check would confirm the sidecar fails with a clean diagnostic instead of an unhandled rejection.
+- `cli/src/config.ts:82`: `path.resolve` doesn't resolve symlinks, so a `config.env` HOME that points at the same directory through a symlink is rejected. That is the safer failure, and the error message is clear enough.
+
+**Good**
+- The fix refuses and restores HOME instead of trying to merge two home authorities.
+- The error points the operator at `NEXUS_STATE_DIR`.
+- The tests spawn real subprocesses and cover the library path, the CLI exit path and the allowed case.</result>
+<usage><subagent_tokens>32184</subagent_tokens><tool_uses>7</tool_uses><duration_ms>88575</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af4593b1df7a1313d</task-id>
+<tool-use-id>toolu_01KALQoPFR55kCfhqUgioNjh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/af4593b1df7a1313d.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 412 doctor journal" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: REQUEST CHANGES** at head `77115480dcc0dc9fc51dd9301ef00eefdd3d46e4`.
+
+The fix is sound and the tests pass. Two items don't meet the finding's stated scope: a missing journal is still reported as malformed, and the FINDINGS row has no commit.
+
+I ran `node scripts/run_tests.mjs test/doctor.test.ts` with an isolated HOME after `npm run build`. It reported fail 0, and the new worker test passes. I did not run the mutation check (removing the new code and confirming the tests go red). From reading the tests, the journal tests assert a `warn` and specific explanation text that main never produces, so they should fail without the fix.
+
+### Blockers
+- `cli/src/core/task_message_log.ts:161` with `cli/src/doctor.ts:939-946` — the finding says missing, future-schema and unreadable journals must be distinguished from malformed state. A missing journal is not distinguished.
+  - `readTaskMessages` turns ENOENT into `corrupt("Committed message log is missing")`, so the worker reports `kind: "corrupt"`.
+  - Doctor then counts it under "N saved record(s) are malformed", which is the conflation being fixed.
+  - Test `...reports a missing committed schema-2 message journal...` (`cli/test/doctor.test.ts`) only checks `warn` and that the path is in the evidence. It never checks the wording, so it can't catch this.
+  - Fix:
+    - In the worker, check `fs.lstatSync(file, {throwIfNoEntry:false})` before reading, and post `kind: "missing"` when the file is absent.
+    - Add `missing` to `JournalValidationResult`.
+    - Add a `"N message journal(s) are missing"` issue line in `doctor.ts`.
+    - Assert `doesNotMatch(/malformed/)` and `match(/missing/)` in the test.
+- `docs/v1.1.4/FINDINGS.md:63` — the row says FIXED and lists the tests, but gives no commit, though the table's own rule is "FIXED (commit and test)". Add `77115480`, or its merge SHA after merge.
+
+### Suggestions
+- `cli/src/doctor.ts:877` — a missing or stale `dist/doctor_message_worker.js` is silent.
+  - `new Worker` on an absent file does not throw. It emits `error`, which maps to `io`.
+  - Doctor then says every journal "could not be read", which is misleading.
+  - The same applies when the unit tests run from `src` against a stale or unbuilt `dist`: they exercise whatever was last built.
+  - Fix: check `fs.existsSync(workerModule)` once and return a distinct finding such as "doctor worker missing, reinstall". Have the test script run `tsc` first.
+- `cli/src/doctor.ts:938` — a new worker is spawned per task, up to 5000 in `--deep`. Startup costs roughly tens of milliseconds each. Fix: reuse one worker per scan with a request/response protocol, terminated in a `finally`.
+- `cli/src/doctor.ts:877` — no per-journal timeout or `resourceLimits`. Abort is handled, but a non-interactive caller with no signal can hang on a pathological journal. Fix: pass `resourceLimits: { maxOldGenerationSizeMb }` and optionally a timeout.
+- `cli/test/doctor.test.ts` — the tampered test appends garbage and then also edits a byte. The append is redundant, so keep one.
+
+### Checked and fine
+1. **Shipped:** `cli/src/doctor_message_worker.ts` compiles to `cli/dist/doctor_message_worker.js` through `tsc`, and `scripts/package-linux.sh:64` copies `cli/dist` wholesale. The path `../dist/doctor_message_worker.js` resolves to the same file from both `src/doctor.ts` and `dist/doctor.js`. The brief named `scripts/doctor_message_worker.mjs`, but the actual file is `cli/src/doctor_message_worker.ts`.
+2. **No deletion or quarantine:** the diff only reads. The test asserts the primary file still exists, and the advice text still says doctor never deletes.
+3. **Abort and leaks:**
+   - `finish` is idempotent and removes the abort listener.
+   - It calls `worker.terminate()` and resolves immediately.
+   - An already-aborted signal never spawns a worker.
+   - A hang-worker test covers abort.
+   - The `break` on aborted feeds the existing cancelled path.
+4. **Security:** `openRegular` rejects symlinks and hardlinks (`nlink !== 1`) and uses `O_NOFOLLOW` and a dev/ino check. The worker's `code` and `message` fields are never rendered. Evidence lists only the primary `.json` path under the user's own home. The journal path follows `getMessageLogFilePath`.
+5. **Repairs:** abort is checked before confirm, after confirm (so cancel beats a late yes or no), before the backup manifest, and per plan. A cancelled report is never repaired, and the exit code is `error`. Tests cover all of these.</result>
+<usage><subagent_tokens>34885</subagent_tokens><tool_uses>7</tool_uses><duration_ms>127262</duration_ms></usage>
+</task-notification>
