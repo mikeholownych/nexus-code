@@ -281,6 +281,9 @@ export class ApplicationCore extends EventEmitter {
       validationReceipts: durableState.validationReceipts,
       worktreeBinding: durableState.worktreeBinding,
       findings: durableState.findings,
+      providerRecovery: durableState.providerRecovery,
+      operation: durableState.operation,
+      changeBaseline: durableState.changeBaseline,
       objective: this.agent.getObjective() ?? null,
       // Compactions this record commits; their originals are archived beside the task state (`<task>.history.jsonl`).
       history: this.agent.getHistoryCompleteness(),
