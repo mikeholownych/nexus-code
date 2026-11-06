@@ -4,17 +4,15 @@
 #   NEXUS_EVAL_TEST_RUNTIME_ROOT    a public runtime directory (mode 0711, owned by the caller)
 # Same paths, size and modes as CI. The tmpfs and directories are removed when the command ends,
 # but only if this script created them; anything that already exists is refused, never reused or deleted.
-# Usage: scripts/with-ci-fixtures.sh [--check] -- <command> [args...]
+# Usage: scripts/with-ci-fixtures.sh -- <command> [args...]
 set -euo pipefail
 
 readonly WORKSPACE_ROOT=/mnt/nexus-eval-ci
 readonly RUNTIME_ROOT=/opt/nexus-eval-ci-runtime
 
-check_only=0
-if [[ "${1:-}" == "--check" ]]; then check_only=1; shift; fi
 if [[ "${1:-}" == "--" ]]; then shift; fi
-if [[ $check_only -eq 0 && $# -eq 0 ]]; then
-  echo "usage: $0 [--check] -- <command> [args...]" >&2
+if [[ $# -eq 0 ]]; then
+  echo "usage: $0 -- <command> [args...]" >&2
   exit 64
 fi
 
@@ -28,10 +26,6 @@ for dir in "$WORKSPACE_ROOT" "$RUNTIME_ROOT"; do
     echo "with-ci-fixtures: $dir already exists; remove it (when empty) and retry" >&2; exit 2
   fi
 done
-if [[ $check_only -eq 1 ]]; then
-  echo "with-ci-fixtures: would mount a 128m tmpfs at $WORKSPACE_ROOT and create $RUNTIME_ROOT (needs sudo)"
-  exit 0
-fi
 
 mounted=0; created_workspace=0; created_runtime=0; child=0
 cleanup() {
@@ -45,7 +39,7 @@ cleanup() {
   if [[ $mounted -eq 1 ]]; then
     sudo umount "$WORKSPACE_ROOT" 2>/dev/null || sudo umount -l "$WORKSPACE_ROOT" || echo "with-ci-fixtures: could not unmount $WORKSPACE_ROOT; unmount it by hand" >&2
   fi
-  if [[ $created_workspace -eq 1 && $mounted -eq 0 ]] || { [[ $created_workspace -eq 1 ]] && ! mountpoint -q "$WORKSPACE_ROOT" 2>/dev/null; }; then sudo rmdir "$WORKSPACE_ROOT" || true; fi
+  if [[ $created_workspace -eq 1 ]] && ! mountpoint -q "$WORKSPACE_ROOT" 2>/dev/null; then sudo rmdir "$WORKSPACE_ROOT" || true; fi
   if [[ $created_runtime -eq 1 ]]; then sudo rm -rf --one-file-system -- "$RUNTIME_ROOT"; fi
   exit "$status"
 }

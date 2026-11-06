@@ -49,13 +49,14 @@ verify-reproducibility:
 	@echo "[+] Reproducible build verification succeeded (byte-identical artifacts)."
 
 # `make test` runs every gate and fails at the end, so a CLI failure does not hide the terminal-scope or
-# security result. The CLI suite and terminal-scope steps are the two halves of `npm --prefix cli test`.
+# security result. It calls the two halves of `npm --prefix cli test` by name (test:cli, test:scope), so the
+# step list lives only in cli/package.json.
 # CI evaluator fixtures (tmpfs workspace and runtime root) come from `make test-ci`; see docs/DEVELOPMENT.md.
 test: test-fixture-notice
 	@rc=0; \
 	cargo test --manifest-path core/Cargo.toml || { echo "[!] FAILED: cargo test"; rc=1; }; \
-	(cd cli && node scripts/run_tests.mjs) || { echo "[!] FAILED: CLI suite"; rc=1; }; \
-	bash scripts/terminal-acceptance/test-scope-procs.sh || { echo "[!] FAILED: terminal scope"; rc=1; }; \
+	npm --prefix cli run test:cli || { echo "[!] FAILED: CLI suite"; rc=1; }; \
+	npm --prefix cli run test:scope || { echo "[!] FAILED: terminal scope"; rc=1; }; \
 	bash scripts/security_gates.sh || { echo "[!] FAILED: security gates"; rc=1; }; \
 	if [ $$rc -ne 0 ]; then echo "[!] make test: one or more steps failed (all steps ran)"; fi; \
 	exit $$rc
