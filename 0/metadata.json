@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6SH1T0ZV94NVA0JG5WNTSSB",
+  "session_id": "6473a60e-9fa2-4bd9-9d0c-35324295cf68",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-06T22:53:15.188501893Z",
+  "branch": "v1/v114-wp1306-cli-precedence-restore-mode",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cli/src/index.ts",
+    "cli/test/cli_option_precedence.test.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "cea5fcc1559f",
+  "checkpoint_transcript_start": 1098,
+  "transcript_lines_at_start": 1098,
+  "compact_transcript_start": 108,
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 24312,
+    "cache_read_tokens": 4076173,
+    "output_tokens": 10939,
+    "api_call_count": 17,
+    "subagent_tokens": {
+      "input_tokens": 2,
+      "cache_creation_tokens": 6093,
+      "cache_read_tokens": 7836,
+      "output_tokens": 103,
+      "api_call_count": 1
+    }
+  },
+  "redaction": {
+    "replacements": 16,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 16,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 10
+  }
+}
