@@ -72,6 +72,26 @@ describe("config", () => {
     }
   });
 
+  test("an explicit --mode read-only is not weakened by --yes, --approve or --full-access", () => {
+    const previousApprovalMode = process.env.NEXUS_APPROVAL_MODE;
+    delete process.env.NEXUS_APPROVAL_MODE;
+    try {
+      for (const extra of [{ yes: true }, { approve: true }, { fullAccess: true }, { yes: true, approve: true, fullAccess: true }]) {
+        const config = buildConfig({ endpoint: "e", model: "x", mode: "read-only", ...extra });
+        assert.equal(config.approvalMode, "read-only", `--mode read-only with ${JSON.stringify(extra)}`);
+        assert.equal(config.fullAccess, false, "read-only never carries full access");
+      }
+      // The explicit launch flag already won; an env-selected read-only still yields to an explicit --yes on the command line.
+      assert.equal(buildConfig({ endpoint: "e", model: "x", readOnly: true, yes: true }).approvalMode, "read-only");
+      process.env.NEXUS_APPROVAL_MODE = "read-only";
+      assert.equal(buildConfig({ endpoint: "e", model: "x" }).approvalMode, "read-only");
+      assert.equal(buildConfig({ endpoint: "e", model: "x", yes: true }).approvalMode, "auto");
+    } finally {
+      if (previousApprovalMode === undefined) delete process.env.NEXUS_APPROVAL_MODE;
+      else process.env.NEXUS_APPROVAL_MODE = previousApprovalMode;
+    }
+  });
+
   test("workspace trust does not select the tool approval mode", () => {
     const previousTrustOverride = process.env.NEXUS_TRUST_WORKSPACE;
     const previousApprovalMode = process.env.NEXUS_APPROVAL_MODE;

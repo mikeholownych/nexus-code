@@ -378,8 +378,10 @@ export function buildConfig(options: any): HarnessConfig {
   let approvalMode: ApprovalMode;
   let fullAccess = Boolean(options.fullAccess);
 
-  if (readOnly) {
+  if (readOnly || modeOption === "read-only") {
+    // An explicit read-only request wins over --yes, --approve and --full-access on the same command line.
     approvalMode = "read-only";
+    fullAccess = false;
   } else if (yes) {
     approvalMode = "auto";
     fullAccess = true;
