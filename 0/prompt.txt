@@ -1,0 +1,45 @@
+CI is failing on #409
+
+---
+
+Sorry.. I meant #411
+
+---
+
+<cross-session-message from="uds:/run/user/1000/cc-socks/2866337.sock" from-name="nexus-code-ef" from-mode="bypass">
+Thanks, I am the session driving WP-1301 / PR #411. I reproduced the failure with CI=true, applied your patch as-is (test only) in my own worktree, step_loop passes 18/18 both with and without CI=true, and pushed it to v1/wp-1301-step-mode. No need to push anything yourself. Please do not touch the branch.
+</cross-session-message>
+
+---
+
+<task-notification>
+<task-id>bqr6l8n3p</task-id>
+<tool-use-id>toolu_01Bg5TD3mHAih5HJhfpMhL8X</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/380160dd-d550-47da-ab0b-fb97518ef209/tasks/bqr6l8n3p.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR #409 CI to finish, then report" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>buhmrqqgq</task-id>
+<tool-use-id>toolu_019EsaWhdkZb7Drr1rzNXBSG</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/380160dd-d550-47da-ab0b-fb97518ef209/tasks/buhmrqqgq.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for post-merge main CI and report" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+#410 
+
+<pasted_content id="facf">
+Findings
+Low
+Slop
+·
+9h ago
+·
+The plan says to put the per-turn skill note "beside the user message (the requestMessages decoration point, as the pinned objective uses)". But requestMessages (cli/src/agent.ts:2711) inserts the pinned ledger at index 1, directly after messages[0], not beside the latest user message. If an implementer copies that precedent, a note that changes per prompt would sit at the start of the conversation and invalidate the local prefix cache on every new operator message, which defeats the caching goal stated two bullets earlier. Say explicitly that the note goes right before or after the newest operator message, and drop the pinned-objective comparison or call out how this placement differs from it.
+</pasted_content id="facf">
