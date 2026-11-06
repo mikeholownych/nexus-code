@@ -30,10 +30,17 @@ done
 mounted=0; created_workspace=0; created_runtime=0; child=0
 cleanup() {
   local status=$?
-  trap - EXIT TERM INT HUP
-  # Never tear the fixtures down under a live command: stop it first, then wait for it to exit.
-  if [[ $child -ne 0 ]] && kill -0 "$child" 2>/dev/null; then
-    kill -TERM -- "-$child" 2>/dev/null || kill -TERM "$child" 2>/dev/null || true
+  # Ignore further signals while tearing down: a second Ctrl-C must not leave the mount behind.
+  trap '' EXIT TERM INT HUP
+  # Never tear the fixtures down under a live command. Signal the whole process group (also when the leader
+  # already exited and left helpers holding files), give it a few seconds, then SIGKILL and wait.
+  if [[ $child -ne 0 ]]; then
+    kill -TERM -- "-$child" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 -- "-$child" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -KILL -- "-$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
   fi
   if [[ $mounted -eq 1 ]]; then
