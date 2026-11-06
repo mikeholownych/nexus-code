@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6SFH2A5MN2PR3W2KE5AJY2D",
+  "strategy": "manual-commit",
+  "branch": "v1/v114-wp1306-cli-precedence-restore-mode",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cli/src/index.ts",
+    "cli/test/cli_option_precedence.test.ts",
+    "cli/test/restore_mode_checkpoint_free_turn.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 2415,
+    "cache_read_tokens": 417770,
+    "output_tokens": 1578,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 4,
+      "cache_creation_tokens": 16639,
+      "cache_read_tokens": 14179,
+      "output_tokens": 455,
+      "api_call_count": 2
+    }
+  },
+  "redaction": {
+    "replacements": 16,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 16,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
