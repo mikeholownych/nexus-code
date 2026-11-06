@@ -319,42 +319,51 @@ describe("Agent local tracing", () => {
     }
   });
 
-  test("subagent model requests are nested under the parent turn", async () => {
-    const gw = await startGateway((_n, body) => {
-      const messages = body?.messages ?? [];
-      const isSubagent = JSON.stringify(messages).includes("[Subagent Objective]");
-      if (isSubagent) return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "subagent-response-marker" } }] };
-      const toolResults = messages.filter((message: any) => message.role === "tool").length;
-      return toolResults === 0
-        ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "Inspect the workspace." } }] }
-        : { kind: "text", content: "parent-response-marker" };
+  // The inference-span count depends on provider retries, which are timing-dependent in CI: a transient failure
+  // of the parent step adds an errored attempt span. Assert nesting for every attempt and an exact count only for
+  // successful requests (parent, subagent, parent-final), which the script makes deterministic.
+  for (const failFirstParent of [false, true]) {
+    test(`subagent model requests are nested under the parent turn${failFirstParent ? " (parent step retried after a provider failure)" : ""}`, async () => {
+      let parentFailures = 0;
+      const gw = await startGateway((_n, body) => {
+        const messages = body?.messages ?? [];
+        const isSubagent = JSON.stringify(messages).includes("[Subagent Objective]");
+        if (isSubagent) return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "subagent-response-marker" } }] };
+        const toolResults = messages.filter((message: any) => message.role === "tool").length;
+        if (failFirstParent && toolResults === 0 && parentFailures === 0) { parentFailures++; return { kind: "http", status: 503, body: "{}" }; }
+        return toolResults === 0
+          ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "Inspect the workspace." } }] }
+          : { kind: "text", content: "parent-response-marker" };
+      });
+      const repo = makeRepo();
+      const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash" } as any);
+      try {
+        const result = await agent.runTurn("Use a subagent to inspect the workspace.");
+        assert.equal(result.execution, "COMPLETED");
+        const spans = traceSpans(agent.getTaskId());
+        const root = spans.find((span) => span.name === "nexus.agent.turn");
+        const requests = spans.filter((span) => span.kind === 3);
+        assert.ok(root, "parent turn root exists");
+        if (failFirstParent) assert.equal(parentFailures, 1, "the forced provider failure was served");
+        for (const request of requests) {
+          assert.equal(request.parentSpanId, root.spanId, "every inference attempt, retried or not, is nested under the parent turn");
+          assert.equal(spanAttribute(request, "gen_ai.operation.name"), "chat");
+          assert.equal(spanAttribute(request, "gen_ai.request.model"), "m");
+        }
+        const succeeded = requests.filter((request) => request.status.code === 1);
+        assert.equal(succeeded.length, 3, "parent, subagent, and parent-final requests share the task trace");
+        assert.ok(requests.length >= 3, "no attempt span is lost");
+        const serialized = fs.readFileSync(traceFileFor(agent.getTaskId()), "utf8");
+        for (const secret of ["Inspect the workspace", "subagent-response-marker", "parent-response-marker"]) {
+          assert.equal(serialized.includes(secret), false);
+        }
+      } finally {
+        agent.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
     });
-    const repo = makeRepo();
-    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash" } as any);
-    try {
-      const result = await agent.runTurn("Use a subagent to inspect the workspace.");
-      assert.equal(result.execution, "COMPLETED");
-      const spans = traceSpans(agent.getTaskId());
-      const root = spans.find((span) => span.name === "nexus.agent.turn");
-      const requests = spans.filter((span) => span.kind === 3);
-      assert.ok(root, "parent turn root exists");
-      assert.equal(requests.length, 3, "parent, subagent, and parent-final requests share the task trace");
-      for (const request of requests) {
-        assert.equal(request.parentSpanId, root.spanId);
-        assert.equal(request.status.code, 1);
-        assert.equal(spanAttribute(request, "gen_ai.operation.name"), "chat");
-        assert.equal(spanAttribute(request, "gen_ai.request.model"), "m");
-      }
-      const serialized = fs.readFileSync(traceFileFor(agent.getTaskId()), "utf8");
-      for (const secret of ["Inspect the workspace", "subagent-response-marker", "parent-response-marker"]) {
-        assert.equal(serialized.includes(secret), false);
-      }
-    } finally {
-      agent.shutdown();
-      await gw.close();
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
-  });
+  }
 
   test("tool spans record safe identity and outcome only", async () => {
     const gw = await startGateway((n) => n === 1
