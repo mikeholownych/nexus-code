@@ -916,6 +916,8 @@ export class SidecarServer {
     // (which names the committed compactions in `history`) is written.
     const receipt = this.app.getActiveValidationReceipt();
     const lastTurn = turn ?? agent.getLastTurnResult();
+    // The recovery fields live in the agent's durable checkpoint; the session record replaces the whole task record.
+    const durableState = this.app.getTaskState();
     manager.saveSession(
       {
         id: this.sessionId,
@@ -934,6 +936,9 @@ export class SidecarServer {
         objective: agent.getObjective() ?? null,
         findings: agent.getFindings(),
         history: agent.getHistoryCompleteness(),
+        providerRecovery: durableState.providerRecovery,
+        operation: durableState.operation,
+        changeBaseline: durableState.changeBaseline,
         ...(turn ? { status: lifecycleStatusForTurn(turn) } : {}),
         ...(lastTurn ? { lastTurn } : {}),
       },
