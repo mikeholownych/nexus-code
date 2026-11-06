@@ -24,7 +24,7 @@ It leaves model weights fixed and edits the harness through eight mounted files:
 | Harness² component | Nexus counterpart | Editable by a model today? | Verdict |
 |---|---|---|---|
 | System prompt | Operating rules in `buildSystemPrompt()` (`agent.ts:4115`), plus trusted `AGENTS.md`/`CLAUDE.md` rules | Compiled TypeScript; only the project rules file is data | Borrow idea; would need an overlay layer |
-| Guardrails | Code, not text: approval policy, `cli/src/core/file_guard.ts`, `cli/src/core/egress.ts`, `sandbox.ts`, `cli/src/core/authority.ts`, workspace trust | No, deliberately | Skip. Must never be model-editable |
+| Guardrails | Code, not text: approval policy, `cli/src/core/file_guard.ts`, `cli/src/core/egress.ts`, `cli/src/sandbox.ts`, `cli/src/core/authority.ts`, workspace trust | No, deliberately | Skip. Must never be model-editable |
 | Memory | `KnowledgeGraph` (`cli/src/knowledge.ts`; `.nexus/knowledge.json`; entries carry `category`, `key`, `value`, `confidence`, `tags`; exported into the system prompt by `exportPromptSection()`; auto-extract off by default, DEC-15); compaction's durable task state | knowledge.json is data | See question 3 |
 | Tool guidance | Tool schemas in `cli/src/tools.ts`, canonical few-shots (`cli/src/fewshots.ts`, picked per workspace by `selectRelevantFewShots`), on-demand groups (`core/tool_groups.ts`, `enable_tools`) | Compiled | Best-fit target for a future contrast study |
 | Subagents | `ROLE_PROFILES` in `cli/src/core/roles.ts` (re-exported by `team.ts`); bounded contracts in `core/specialist_profiles.ts` (read-only, tool whitelists, budgets) | Compiled | Skip. Contracts are safety properties |
