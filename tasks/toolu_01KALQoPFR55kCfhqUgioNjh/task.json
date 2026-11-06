@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01KALQoPFR55kCfhqUgioNjh",
+  "agent_id": "af4593b1df7a1313d",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR 412 doctor journal",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 32821,
+    "cache_read_tokens": 143968,
+    "output_tokens": 4197,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-06T18:40:34.908365644Z",
+  "completed_at": "2026-11-06T18:42:41.750133996Z"
+}

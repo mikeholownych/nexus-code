@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019Tr7hBCVpJ8uawCiariAnt",
+  "agent_id": "a6d6e89b6a176b546",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR 413 config HOME",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 22969,
+    "cache_read_tokens": 150427,
+    "output_tokens": 3653,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-06T18:40:38.93273002Z",
+  "completed_at": "2026-11-06T18:42:07.184095242Z"
+}
