@@ -54,9 +54,11 @@ from what the agent said about its own work.
     explicit candidate typecheck `cwd` inside the workspace maps to the same directory in the copy; one outside it fails.
   - Budgets: the run's resource contract (`config.resources`: cgroup CPU, memory and process limits) applies to these
     commands; independently, a single file write is capped (`maxFileBytes`, default 1 GiB, via `prlimit`) and core dumps
-    are off. A relative command must stay inside the workspace after `..` and symlinks resolve. It runs
+    are off. A relative command must stay inside its working directory after `..` and symlinks resolve (the check is against
+    the command's `cwd`, not the workspace root, so `../tool` from a subdirectory is refused). It runs
     as `/workspace/<path>` inside the sandbox, so no host runtime mount is needed. A command killed by the memory limit
-    (cgroup `oomKills`) fails with an error rather than comparing its partial output. `maxFileBytes` can be set on a
+    (cgroup `oomKills` above zero, which also counts a kill of any descendant) fails with an error rather than comparing
+    its partial output; this is deliberately conservative. `maxFileBytes` can be set on a
     `build` or `typecheck_clean` spec (or `task.build` / `task.typecheck`).
 - **`typecheck_clean.mjs`**
   - The candidate side runs in the same pinned workspace as `build.mjs` (so the carrying rules above apply, and `details.ignoredCandidateChanges` lists what was not carried). Runs the baseline and candidate typecheck commands in separate Bubblewrap workspaces under the same filesystem, network, environment, output and process limits as `build.mjs`.
