@@ -49,6 +49,12 @@ from what the agent said about its own work.
       and `tools/*.js`.
     A layout that neither a manifest nor the conventional folders declare (a directory of plugins with no `workspaces` entry)
     has no package roots below the project root, and its nested tool configs are carried like ordinary source.
+    Over-pinning is visible but not scored. A pinned path is listed in `ignoredCandidateChanges`, and its edit does not reach
+    the build, so a legitimate change to a source file that happens to carry a pinned name below a package root (for example
+    `packages/x/build.ts`) is not counted toward the build or typecheck result. Task authors should read that list: a task
+    whose deliverable lives in a pinned name needs a different layout, not a wider carry rule.
+    A YAML alias or merge key in `pnpm-workspace.yaml` is not resolved: the roots found literally and the conventional folders
+    still apply, and the gap is reported as `details.workspaceNotes`. Trailing comments and `&anchor` on `packages:` are handled.
     Everything else is carried if it is a source or data type, so ordinary source such as `src/config/database.config.ts`
     or `src/build.ts` reaches the build. A changed path that is not a source or data type (shell scripts, Gradle/Maven/
     Ruby/Just files, `.ini`, `.xml`, binaries) and any symlink or special file is not carried either, and is reported.

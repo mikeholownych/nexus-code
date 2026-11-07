@@ -222,6 +222,9 @@ function tomlStringArray(text, key) {
  */
 export function workspacePackagePatterns(baselineWorkspace) {
   const patterns = [];
+  // Things the parsers could not resolve; the conventional folders and the other manifests still apply, and the note is
+  // reported with the evaluator result so the gap is visible.
+  patterns.notes = [];
   const packageJson = readManifest(baselineWorkspace, "package.json");
   if (packageJson) {
     try {
@@ -231,14 +234,18 @@ export function workspacePackagePatterns(baselineWorkspace) {
   }
   const pnpm = readManifest(baselineWorkspace, "pnpm-workspace.yaml");
   if (pnpm) {
-    const flow = /(?:^|\n)packages\s*:\s*\[([^\]]*)\]/.exec(pnpm);
+    // `packages:` may carry an anchor (`&name`) and a trailing comment; items may carry a trailing comment.
+    const flow = /(?:^|\n)packages\s*:\s*(?:&\S+\s*)?\[([^\]]*)\]/.exec(pnpm);
     if (flow) for (const item of flow[1].matchAll(/["']([^"']+)["']/g)) patterns.push(item[1]);
     let inPackages = false;
     for (const line of pnpm.split("\n")) {
-      if (/^packages\s*:\s*$/.test(line)) { inPackages = true; continue; }
+      if (/^packages\s*:\s*(?:&\S+\s*)?(?:#.*)?$/.test(line)) { inPackages = true; continue; }
       if (inPackages && /^\S/.test(line) && !/^\s*#/.test(line)) inPackages = false;
-      const item = inPackages ? /^\s*-\s*["']?([^"'#\s]+)["']?/.exec(line) : null;
+      const item = inPackages ? /^\s*-\s*["']?([^"'#\s*&][^"'#\s]*)["']?/.exec(line) : null;
       if (item) patterns.push(item[1]);
+    }
+    if (/^\s*(?:-\s*)?\*\S+|<<\s*:|^packages\s*:\s*\*/m.test(pnpm)) {
+      patterns.notes.push("pnpm-workspace.yaml uses a YAML alias or merge key that is not resolved; its package roots are only those found literally, plus the conventional folders");
     }
   }
   const lerna = readManifest(baselineWorkspace, "lerna.json");
@@ -353,7 +360,8 @@ export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorks
   const baseline = captureWorkspaceSnapshot(baselineWorkspace, snapshotOptions);
   const candidate = captureWorkspaceSnapshot(candidateWorkspace, snapshotOptions);
   const ignored = [];
-  const isPackageRoot = packageRootMatcher(workspacePackagePatterns(baselineWorkspace));
+  const workspacePatterns = workspacePackagePatterns(baselineWorkspace);
+  const isPackageRoot = packageRootMatcher(workspacePatterns);
   const tempRoot = fs.mkdtempSync(path.join(scratchRoot, "nexus-evaluator-pinned-config-"));
   const pinnedWorkspace = path.join(tempRoot, "workspace");
   try {
@@ -413,7 +421,7 @@ export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorks
         fs.closeSync(descriptor);
       }
     }
-    return { tempRoot, workspace: pinnedWorkspace, ignored: ignored.sort() };
+    return { tempRoot, workspace: pinnedWorkspace, ignored: ignored.sort(), notes: workspacePatterns.notes };
   } catch (error) {
     fs.rmSync(tempRoot, { recursive: true, force: true });
     throw error;
@@ -441,14 +449,16 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
   let pinnedWorkspaceRoot = null;
   let pinnedWorkspaceError = null;
   let pinnedIgnored = [];
+  let pinnedNotes = [];
   // Candidate edits to pinned build configuration are not applied; say so in the result rather than dropping them.
-  const withIgnored = (result) => ({ ...result, details: { ...result.details, ignoredCandidateChanges: pinnedIgnored } });
+  const withIgnored = (result) => ({ ...result, details: { ...result.details, ignoredCandidateChanges: pinnedIgnored, ...(pinnedNotes.length ? { workspaceNotes: pinnedNotes } : {}) } });
   if (needsEvaluatorConfigurationBaseline(task)) {
     try {
       const pinned = createPinnedCandidateWorkspace(typecheckBaselineWorkspace, candidateWorkspace, { scratchRoot });
       pinnedWorkspace = pinned.workspace;
       pinnedWorkspaceRoot = pinned.tempRoot;
       pinnedIgnored = pinned.ignored;
+      pinnedNotes = pinned.notes;
     } catch (error) {
       pinnedWorkspaceError = String(error?.message ?? error);
     }
