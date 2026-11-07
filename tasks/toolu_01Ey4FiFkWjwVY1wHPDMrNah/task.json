@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Ey4FiFkWjwVY1wHPDMrNah",
+  "agent_id": "a11bb7e5aa5dc7d39",
+  "subagent_type": "general-purpose",
+  "task_description": "Review PR 423 server-kind cache",
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 76948,
+    "cache_read_tokens": 3143384,
+    "output_tokens": 15912,
+    "api_call_count": 45
+  },
+  "started_at": "2026-11-07T14:51:04.05883042Z",
+  "completed_at": "2026-11-07T15:09:21.483371633Z"
+}
