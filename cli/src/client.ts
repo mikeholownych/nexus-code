@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { parse as parseDotenv } from "dotenv";
 import { parseAdmissionHeaders, parseAdvertisement, parseOllamaVersion, parseServerContext, parseTokenizeResponse, parseVllmVersion, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
 import { adaptToolDefinitionsForServer } from "./core/tool_grammar_provider.js";
@@ -36,6 +36,7 @@ import { UsageLedger, type UsageReport } from "./usage.js";
 import { localEndpointCredential, localEndpointCredentials, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
 import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
 import { providerDefinition } from "./providers.js";
+import { ServerKindCache } from "./core/server_kind_cache.js";
 
 type OAuthCredential = Extract<StoredCredential, { type: "oauth" }>;
 
@@ -840,7 +841,7 @@ export class LocalLlmClient {
 
   private routingHeaders(): Record<string, string> {
     if (!this.conn.sendTaskClass) return {};
-    const kind = LocalLlmClient.serverKindCache.get(this.endpoint);
+    const kind = LocalLlmClient.serverKindCache.get(this.kindKey());
     const operatorOverride = operatorSetting("NEXUS_TASK_CLASS") || operatorSetting("LOCAL_LLM_TASK_CLASS");
     if (!operatorOverride && kind !== "gateway") {
       return {};
@@ -1160,7 +1161,10 @@ export class LocalLlmClient {
    */
   async discoverAdvertisement(signal?: AbortSignal): Promise<{ state: "supported" | "unsupported" | "unavailable"; advertised?: Advertisement; detail?: string }> {
     const ep = this.endpoint;
-    const previousKind = LocalLlmClient.serverKindCache.get(ep);
+    const previousKind = LocalLlmClient.serverKindCache.get(this.kindKey(ep));
+    // A catalog that cannot speak for itself (404, model unlisted) keeps a verified server identity, except a gateway:
+    // the gateway-only task-class header must follow positive evidence, not a replaced server's silence (REQ-PRV-109).
+    const retainedKind = previousKind === "gateway" ? undefined : previousKind;
     if (this.conn.protocol !== "openai-chat") return { state: "unsupported", detail: `${this.conn.protocol} connection` };
     const url = `${ep}/models`;
     try {
@@ -1173,7 +1177,8 @@ export class LocalLlmClient {
       });
       if (res.status === 404) {
         // A catalog-less response does not contradict an identity verified earlier on this same endpoint.
-        if (previousKind) LocalLlmClient.serverKindCache.set(ep, previousKind);
+        if (retainedKind) LocalLlmClient.serverKindCache.set(this.kindKey(ep), retainedKind);
+        else LocalLlmClient.serverKindCache.delete(this.kindKey(ep));
         return { state: "unsupported", detail: "no /models catalog" };
       }
       if (!res.ok) {
@@ -1183,7 +1188,8 @@ export class LocalLlmClient {
       const entry = Array.isArray(data?.data) ? data.data.find((e) => e?.id === this.model) : undefined;
       // A catalog that cannot identify this model provides no contradictory identity evidence.
       if (!entry) {
-        if (previousKind) LocalLlmClient.serverKindCache.set(ep, previousKind);
+        if (retainedKind) LocalLlmClient.serverKindCache.set(this.kindKey(ep), retainedKind);
+        else LocalLlmClient.serverKindCache.delete(this.kindKey(ep));
         return { state: "unsupported", detail: `model ${this.model} not listed` };
       }
       let advertised = parseAdvertisement(entry);
@@ -1193,7 +1199,8 @@ export class LocalLlmClient {
         if (entryKind === "llamacpp" && (process.env.NEXUS_SERVER_PROBE === "0" || !(await this.discoverServerContext(entry, signal))) ) {
           entryKind = "unknown";
         } else if (entryKind === "ollama" && (process.env.NEXUS_SERVER_PROBE === "0" || !(await this.discoverOllamaIdentity(signal))) ) {
-          entryKind = "unknown";
+          // A failed identity probe on an endpoint already verified as Ollama is not contradictory evidence.
+          entryKind = previousKind === "ollama" && process.env.NEXUS_SERVER_PROBE !== "0" ? "ollama" : "unknown";
         } else if (vllmCatalogMarker && entryKind === "unknown" && process.env.NEXUS_SERVER_PROBE !== "0") {
           const version = await this.discoverVllmVersion(signal);
           if (version) {
@@ -1202,6 +1209,7 @@ export class LocalLlmClient {
           } else if (previousKind === "vllm") {
             // Keep strict mode and the /tokenize fallback through a transient version-route outage.
             entryKind = "vllm";
+            if (advertised) advertised = { ...advertised, via: "vllm" };
           }
         }
       }
@@ -1212,13 +1220,13 @@ export class LocalLlmClient {
         // Only for a plain endpoint: cloud provider connections have no such endpoints.
         const local = this.conn.providerId || entryKind === "unknown" ? undefined : await this.discoverServerContext(entry, signal);
         if (local) {
-          LocalLlmClient.serverKindCache.set(ep, local.serverKind ?? entryKind);
+          LocalLlmClient.serverKindCache.set(this.kindKey(ep), local.serverKind ?? entryKind);
           return { state: "supported", advertised: local };
         }
-        LocalLlmClient.serverKindCache.set(ep, entryKind);
+        LocalLlmClient.serverKindCache.set(this.kindKey(ep), entryKind);
         return { state: "unsupported", advertised, detail: "catalog lists no limits" };
       }
-      LocalLlmClient.serverKindCache.set(ep, entryKind);
+      LocalLlmClient.serverKindCache.set(this.kindKey(ep), entryKind);
       return { state: "supported", advertised };
     } catch (err: any) {
       if (signal?.aborted) throw abortedError(randomUUID());
@@ -1227,12 +1235,24 @@ export class LocalLlmClient {
   }
 
   private static serverContextCache = new Map<string, Advertisement>();
-  private static serverKindCache = new Map<string, ServerKind>();
+  private static serverKindCache = new ServerKindCache();
+
+  /** Test seam: forget every learned server identity. */
+  static clearServerKindCache(): void {
+    LocalLlmClient.serverKindCache.clear();
+  }
+
+  /** Identity key: provider, endpoint and a digest of the credential, so no switch inherits another server's kind. */
+  private kindKey(ep: string = this.endpoint): string {
+    const credential = this.credentialFor(ep);
+    const account = credential ? createHash("sha256").update(credential).digest("hex").slice(0, 16) : "-";
+    return `${this.conn.providerId ?? ""}\u0000${ep}\u0000${account}`;
+  }
   private static serverShowCache = new Map<string, unknown>();
 
   /** Provider identity detected for the active endpoint after capability discovery; unknown until a positive handshake. */
   getDetectedServerKind(): ServerKind {
-    return LocalLlmClient.serverKindCache.get(this.endpoint) ?? "unknown";
+    return LocalLlmClient.serverKindCache.get(this.kindKey()) ?? "unknown";
   }
 
   private async discoverVllmVersion(signal?: AbortSignal): Promise<string | undefined> {
@@ -1345,7 +1365,7 @@ export class LocalLlmClient {
     const denial = this.disclosureDenial(ep, requestId);
     if (denial) throw new TokenCountError("denied", denial.message);
     if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
-    const kind = LocalLlmClient.serverKindCache.get(ep);
+    const kind = LocalLlmClient.serverKindCache.get(this.kindKey(ep));
     const root = ep.replace(/\/v1\/?$/, "");
     const urls = (kind === "llamacpp" || kind === "vllm") && root !== ep ? [`${ep}/tokenize`, `${root}/tokenize`] : [`${ep}/tokenize`];
     let body: any;
@@ -1495,7 +1515,7 @@ export class LocalLlmClient {
         }
         outboundTools = toolsEgress.sanitizedPayload || tools;
       }
-      outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(currentEp) ?? "unknown", outboundTools);
+      outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown", outboundTools);
 
       const payload: any = {
         model: this.model,
@@ -1651,7 +1671,7 @@ export class LocalLlmClient {
       }
       outboundTools = toolsEgress.sanitizedPayload || tools;
     }
-    outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(currentEp) ?? "unknown", outboundTools);
+    outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown", outboundTools);
 
     const payload: any = {
       model: this.model,
