@@ -6,7 +6,78 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveInstalledEvalRuntime } from "../src/eval_cli.js";
+import { GLOBAL_OPTIONAL_VALUE_OPTIONS, GLOBAL_VALUE_OPTIONS, firstCommandToken, isolateEvalCommandHome, resolveInstalledEvalRuntime } from "../src/eval_cli.js";
+
+test("--isolated-home is applied when global options precede the eval subcommand", () => {
+  const before = process.env.HOME;
+  const restore = isolateEvalCommandHome(["-e", "http://127.0.0.1:1/v1", "--workspace", "/tmp/w", "eval", "--dataset", "d", "--isolated-home"]);
+  try {
+    assert.ok(restore, "isolation must be applied, not silently skipped");
+    assert.notEqual(process.env.HOME, before);
+  } finally {
+    restore?.();
+  }
+  assert.equal(process.env.HOME, before);
+});
+
+test("--isolated-home is rejected when the invocation is not an eval command", () => {
+  assert.throws(() => isolateEvalCommandHome(["run", "--isolated-home"]), /--isolated-home.*eval/);
+  assert.throws(() => isolateEvalCommandHome(["-m", "eval", "run", "--isolated-home"]), /--isolated-home.*eval/);
+  assert.equal(isolateEvalCommandHome(["run", "task"]), undefined);
+});
+
+test("a `--` that is an option's value does not end option parsing for an eval invocation", () => {
+  const cases = [
+    ["eval", "--dataset", "d", "--output", "--", "--isolated-home"],
+    ["eval", "--output", "--", "--isolated-home", "--dataset", "d"],
+    ["-e", "--", "eval", "--dataset", "d", "--isolated-home"],
+    ["-m", "--", "-w", "--", "eval", "--isolated-home"],
+  ];
+  for (const args of cases) {
+    const before = process.env.HOME;
+    const restore = isolateEvalCommandHome(args);
+    try {
+      assert.ok(restore, `isolation must apply for: ${args.join(" ")}`);
+      assert.notEqual(process.env.HOME, before);
+    } finally {
+      restore?.();
+    }
+  }
+});
+
+test("operands after `--` are never read as the --isolated-home option", () => {
+  // `nexus run -- explain --isolated-home` is a prompt about the flag, not a request to use it.
+  assert.equal(isolateEvalCommandHome(["run", "--", "explain", "--isolated-home"]), undefined);
+  assert.equal(isolateEvalCommandHome(["--", "explain", "--isolated-home"]), undefined);
+});
+
+test("--isolated-home after `--` is not an eval invocation, and clustered short flags are read like Commander", () => {
+  assert.equal(isolateEvalCommandHome(["--", "eval", "x", "--isolated-home"]), undefined);
+  // -yw takes /x as the workspace value; the next token is the command.
+  assert.equal(firstCommandToken(["-yw", "/x", "eval"]), "eval");
+  // -ywPATH carries its value attached, so `eval` is the command.
+  assert.equal(firstCommandToken(["-yw/x", "eval"]), "eval");
+  // -yr takes an optional value: `eval` would be consumed as the resume id, exactly as Commander does.
+  assert.equal(firstCommandToken(["-yr", "eval", "run"]), "run");
+  assert.equal(firstCommandToken(["-y", "eval"]), "eval");
+});
+
+test("GLOBAL_VALUE_OPTIONS matches the global option table in index.ts", () => {
+  const source = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/index.ts"), "utf8");
+  const start = source.indexOf('.name("nexus")');
+  const end = source.indexOf(".action(", start);
+  assert.ok(start > 0 && end > start, "global option table not found");
+  const required = new Set<string>();
+  const optional = new Set<string>();
+  for (const match of source.slice(start, end).matchAll(/\.option\("([^"]+)"/g)) {
+    const spec = match[1];
+    const flags = spec.split(/[ ,]+/).filter((token) => token.startsWith("-"));
+    if (spec.includes("<")) flags.forEach((flag) => required.add(flag));
+    else if (spec.includes("[")) flags.forEach((flag) => optional.add(flag));
+  }
+  assert.deepEqual([...GLOBAL_VALUE_OPTIONS].sort(), [...required].sort());
+  assert.deepEqual([...GLOBAL_OPTIONAL_VALUE_OPTIONS].sort(), [...optional].sort());
+});
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
 
