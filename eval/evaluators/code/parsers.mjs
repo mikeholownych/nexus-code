@@ -32,16 +32,34 @@ function parseTypeScript(source) {
   return { parser: "node:module.stripTypeScriptTypes" };
 }
 
+const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
+
+/** The text of a package.json, or null when there is none. It must be a small regular file: a device or FIFO never reads. */
+function readPackageJson(file) {
+  let descriptor;
+  try { descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); }
+  catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+    throw error;
+  }
+  try {
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile()) throw new Error(`${file} is not a regular file`);
+    if (stat.size > MAX_PACKAGE_JSON_BYTES) throw new Error(`${file} is larger than ${MAX_PACKAGE_JSON_BYTES} bytes`);
+    return fs.readFileSync(descriptor, "utf8");
+  } finally { fs.closeSync(descriptor); }
+}
+
 function declaredModuleType(absolutePath) {
   const extension = path.extname(absolutePath).toLowerCase();
   if (extension === ".mjs") return "module";
   if (extension === ".cjs") return "commonjs";
   for (let directory = path.dirname(absolutePath); ; directory = path.dirname(directory)) {
-    try {
-      const type = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"))?.type;
+    const text = readPackageJson(path.join(directory, "package.json"));
+    if (text !== null) {
+      // Malformed metadata propagates: node itself rejects such a file (ERR_INVALID_PACKAGE_CONFIG).
+      const type = JSON.parse(text)?.type;
       return type === "module" || type === "commonjs" ? type : null;
-    } catch (error) {
-      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR" && !(error instanceof SyntaxError)) throw error;
     }
     if (path.dirname(directory) === directory) return null;
   }

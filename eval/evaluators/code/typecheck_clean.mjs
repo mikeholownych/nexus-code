@@ -11,8 +11,9 @@ const CODE_FRAME = /^(?:\d+\s.*|[|\s~^]+)$/;
 const CODED_DIAGNOSTIC = /\berror\s+TS\d+:|\berror\[E\d+\]:/i;
 // Rustc's location and note lines belong to the frame but are not gutters.
 const FRAME_CONTINUATION = /^(?:-->|=)\s/;
-// Summary lines restate the count (and, for tsc, the first location); the diagnostics above them are what is compared.
-const SUMMARY = /^(?:Found \d+ errors?\b.*|Errors\s+Files\b.*|error: aborting due to \d+ previous errors?.*)$/i;
+// Whole-line summaries restate the count (and, for tsc, the first location); the diagnostics above them are what is
+// compared. Coded diagnostics are recognised first, so a file named like a summary cannot hide one.
+const SUMMARY = /^(?:Found \d+ errors? in [^\n]*|Found \d+ errors?\.?|Errors\s+Files|error: aborting due to \d+ previous errors?(?:; [^\n]*)?)$/i;
 // A configuration error means the checker did not check the project, whatever the baseline printed.
 const CHECKER_NOT_RUN = /\berror\s+TS(?:5057|5058|5083|5012|18003|6053):/i;
 
@@ -21,8 +22,9 @@ function diagnosticLines(result, extraDiagnostic = null) {
   let inFrame = false;
   for (const raw of `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.replace(ANSI, "").split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line || SUMMARY.test(line)) continue;
+    if (!line) continue;
     if (CODED_DIAGNOSTIC.test(line) || extraDiagnostic?.test(line)) { kept.push(line); inFrame = true; continue; }
+    if (SUMMARY.test(line)) continue;
     if (inFrame && CODE_FRAME.test(line)) continue;
     kept.push(line);
     if (!FRAME_CONTINUATION.test(line)) inFrame = false;
@@ -30,9 +32,17 @@ function diagnosticLines(result, extraDiagnostic = null) {
   return kept;
 }
 
-/** Compare diagnostics by message: a position that merely moves (an insertion above it) is not a new diagnostic. */
+/**
+ * Compare diagnostics by message: a position that merely moves (an insertion above it) is not a new diagnostic. Only the
+ * location field is normalized (tsc `file(l,c):`, pretty `file:l:c -`, rustc `--> file:l:c`, `file:l:` prefixes); text
+ * inside the message is compared as printed.
+ */
 function diagnosticKey(line) {
-  return line.replace(/\(\d+,\d+\)/g, "(L,C)").replace(/:\d+:\d+\b/g, ":L:C").replace(/:\d+(?=[:\s]|$)/g, ":L");
+  return line
+    .replace(/^([^\s(]+)\(\d+,\d+\):/, "$1(L,C):")
+    .replace(/^([^\s:]+):\d+:\d+ - /, "$1:L:C - ")
+    .replace(/^--> (.+?):\d+:\d+$/, "--> $1:L:C")
+    .replace(/^([^\s:]+):\d+:(?=\s)/, "$1:L:");
 }
 
 function recognizer(diagnosticPattern) {
@@ -46,7 +56,9 @@ function recognizer(diagnosticPattern) {
  * the baseline exited 0 or the candidate printed no diagnostics (a silent failure).
  */
 export async function evaluateTypecheckClean({ baseline, candidate, runner = runArgv, diagnosticPattern }) {
-  const extraDiagnostic = recognizer(diagnosticPattern);
+  let extraDiagnostic;
+  try { extraDiagnostic = recognizer(diagnosticPattern); }
+  catch (error) { return evaluatorResult("typecheck_clean", false, 0, { error: error.message }); }
   for (const revision of [baseline, candidate]) {
     if (!revision || typeof revision.command !== "string" || !revision.command || !Array.isArray(revision.args ?? []) ||
         typeof revision.cwd !== "string" || !path.isAbsolute(revision.cwd)) {
@@ -72,7 +84,7 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
     seenCandidate.set(key, seen);
     return seen > (baselineCounts.get(key) ?? 0);
   });
-  const recognizedDiagnostic = (lines) => lines.some((line) => /\berror\s+TS\d+:|\berror\[E\d+\]:/i.test(line) || extraDiagnostic?.test(line));
+  const recognizedDiagnostic = (lines) => lines.some((line) => CODED_DIAGNOSTIC.test(line) || extraDiagnostic?.test(line));
   const checkerDidNotRun = [...baselineOutput, ...candidateOutput].some((line) => CHECKER_NOT_RUN.test(line));
   const infrastructureFailure = checkerDidNotRun || [baselineResult, candidateResult].some((result) =>
     result?.status == null || result?.signal != null || result?.timedOut === true || result?.error != null) ||

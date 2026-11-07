@@ -1,6 +1,6 @@
 /**
- * WP-1302: typecheck_clean diagnostics handling and the built-in JavaScript syntax parser. Checker output comes from
- * the real TypeScript compiler where one is installed; the comparison runs through the real evaluator.
+ * WP-1302: typecheck_clean diagnostics handling. Checker output comes from the real TypeScript compiler where one is
+ * installed; the comparison runs through the real evaluator. (The JavaScript parser and json_repair_rate have their own files.)
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -95,7 +95,9 @@ test("typecheck_clean accepts a task-supplied diagnostic pattern for checkers wi
   assert.equal(recognised.details.infrastructureFailure, false);
   assert.equal(recognised.passed, false);
   assert.deepEqual(recognised.details.newDiagnostics, ['a.py:9: error: Name "x" is not defined']);
-  await assert.rejects(verdict(byRevision(base, cand), { diagnosticPattern: "(" }), /diagnosticPattern/);
+  const invalid = await verdict(byRevision(base, cand), { diagnosticPattern: "(" });
+  assert.equal(invalid.passed, false, "a bad pattern in task data is a failed result, not an exception that loses the other evaluators");
+  assert.match(String(invalid.details.error), /diagnosticPattern/);
 });
 
 
@@ -113,4 +115,25 @@ test("typecheck_clean still drops code-frame gutters that follow a coded diagnos
   const frame = (line: number) => `error[E0308]: mismatched types\n --> src/main.rs:${line}:5\n  |\n${line} |     let x: u8 = "a";\n  |                 ^^^ expected \`u8\`\n`;
   const result = await verdict(byRevision({ status: 101, stderr: frame(2) }, { status: 101, stderr: frame(9) }));
   assert.equal(result.passed, true, JSON.stringify(result.details));
+});
+
+test("typecheck_clean normalizes only the location, not text inside the message", async () => {
+  const msg = (value: string) => `src/a.ts(3,7): error TS2322: Type '"${value}"' is not assignable to type '"ok"'.\n`;
+  const changed = await verdict(byRevision({ status: 1, stderr: msg("(1,2)") }, { status: 1, stderr: msg("(3,4)") }));
+  assert.equal(changed.passed, false, "a different message must not compare equal");
+  assert.equal(changed.details.newDiagnostics.length, 1);
+  const moved = await verdict(byRevision({ status: 1, stderr: msg("(1,2)") }, { status: 1, stderr: msg("(1,2)").replace("(3,7)", "(9,7)") }));
+  assert.equal(moved.passed, true, JSON.stringify(moved.details));
+});
+
+test("typecheck_clean does not treat a diagnostic in a file named like a summary line as a summary", async () => {
+  const base = { status: 1, stderr: "src/a.ts(1,1): error TS2322: existing\n" };
+  for (const file of ["Found 1 error.ts", "Errors  Files x.ts", "Found 2 errors in the same file.ts"]) {
+    const cand = { status: 1, stderr: base.stderr + `${file}(1,1): error TS2304: Cannot find name 'x'.\n` };
+    const result = await verdict(byRevision(base, cand));
+    assert.equal(result.passed, false, file);
+    assert.equal(result.details.newDiagnostics.length, 1, file);
+  }
+  const summary = await verdict(byRevision({ status: 1, stderr: base.stderr + "Found 1 error in src/a.ts:1\n" }, { status: 1, stderr: base.stderr + "Found 1 error in src/a.ts:9\n" }));
+  assert.equal(summary.passed, true, "real tsc summary lines are still ignored");
 });
