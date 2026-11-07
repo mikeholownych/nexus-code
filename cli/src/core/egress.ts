@@ -424,13 +424,40 @@ function trimTrailingDelimiters(value: string): string {
   return value.slice(0, end);
 }
 
+function isBase64KeyChar(code: number): boolean {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
+    code === 95 || code === 45 || code === 43 || code === 47; // _ - + /
+}
+
 /**
- * A `sk-` match that extends over "/" and "+" is a key only if its body has the digit, capital or "+" a base64 secret
- * has; `sk-learn/linear_model/ridge` is a path. A linear check on a match, instead of lookaheads inside the pattern
- * (three unbounded lookaheads rescan the whole run from every "sk-", which is quadratic on `sk-sk-sk-...`).
+ * `sk-` / `sk-ant-` keys whose body is base64 ("/" and "+" included), found in one left-to-right pass: from each `sk-`
+ * at a word boundary take the maximal run of key characters once, validate it, and resume after it. A run is a key if
+ * its body is at least 20 characters and has a digit, a capital or "+" (`sk-learn/linear_model/ridge` is a path).
+ * Every `sk-` inside a rejected run would be rejected too (its body is a subset), so nothing is rescanned and the cost
+ * is linear however the input is crafted (`sk-sk-sk-...`). Keys without "/" or "+" keep their original patterns.
  */
-function looksLikeBase64Key(match: string): boolean {
-  return /[0-9A-Z+]/.test(match.slice(match.indexOf("-", match.startsWith("sk-ant-") ? 3 : 0) + 1));
+function scanBase64Keys(text: string): Array<{ secret: string; name: string }> {
+  const found: Array<{ secret: string; name: string }> = [];
+  let from = 0;
+  while (from < text.length) {
+    const at = text.indexOf("sk-", from);
+    if (at < 0) break;
+    if (at > 0 && /\w/.test(text[at - 1])) {
+      from = at + 1;
+      continue;
+    }
+    let end = at + 3;
+    while (end < text.length && isBase64KeyChar(text.charCodeAt(end))) end++;
+    const anthropic = text.startsWith("sk-ant-", at);
+    const body = text.slice(at + (anthropic ? 7 : 3), end);
+    if (body.length >= 20 && /[0-9A-Z+]/.test(body)) {
+      let secretEnd = end;
+      while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
+      found.push({ secret: text.slice(at, secretEnd), name: anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY" });
+    }
+    from = Math.max(end, at + 1);
+  }
+  return found;
 }
 
 /**
@@ -471,11 +498,9 @@ export class InformationFlowBoundary {
   private policy: EgressPolicy = {};
 
   // Deterministic secret patterns (DATA-002)
-  private static DETERMINISTIC_PATTERNS: Array<{ name: string; regex: RegExp; accept?: (secret: string) => boolean }> = [
+  private static DETERMINISTIC_PATTERNS: Array<{ name: string; regex: RegExp }> = [
     // OpenAI / LLM API keys
-    { name: "OPENAI_API_KEY", regex: /\bsk-[a-zA-Z0-9_\-+\/]{20,256}={0,2}/g, accept: looksLikeBase64Key },
     { name: "OPENAI_API_KEY", regex: /\bsk-[a-zA-Z0-9_\-]{20,64}\b/g },
-    { name: "ANTHROPIC_API_KEY", regex: /\bsk-ant-[a-zA-Z0-9_\-+\/]{20,256}={0,2}/g, accept: looksLikeBase64Key },
     { name: "ANTHROPIC_API_KEY", regex: /\bsk-ant-[a-zA-Z0-9_\-]{20,64}\b/g },
     // GitHub Tokens (classic, fine-grained, oauth, user, server)
     { name: "GITHUB_TOKEN", regex: /\b(?:ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{50,90}|gho_[a-zA-Z0-9]{36}|ghu_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36})\b/g },
@@ -617,16 +642,23 @@ export class InformationFlowBoundary {
     }
 
     // 2. Deterministic High-Confidence Patterns (DATA-002: Category 2)
-    for (const { name, regex, accept } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
+    for (const { secret, name } of text.includes("sk-") ? scanBase64Keys(text) : []) {
+      if (!seenSecrets.has(secret)) {
+        seenSecrets.add(secret);
+        classified.push({
+          secret,
+          classificationType: "PATTERN_DETERMINISTIC",
+          classifierId: `regex:${name.toLowerCase()}`,
+          confidence: 0.95,
+          patternName: name,
+        });
+      }
+    }
+    for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
       const re = new RegExp(regex.source, regex.flags);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
         const fullMatch = match[0];
-        if (accept && !accept(fullMatch)) {
-          // Rejected as not secret-shaped: resume one character on, so a real key later in the same run is still found.
-          re.lastIndex = match.index + 1;
-          continue;
-        }
         // If capture group exists (e.g. Bearer token), extract captured secret, else fullMatch
         let secretVal = match[1] && typeof match[1] === "string" ? match[1] : fullMatch;
         let trimEnd = secretVal.length;

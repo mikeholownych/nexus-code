@@ -83,6 +83,7 @@ test("pathological 800 KB inputs are redacted in linear time", () => {
     ["sk- repeated", "sk-".repeat(Math.ceil(size / 3))],
     ["sk-ant- repeated", "sk-ant-".repeat(Math.ceil(size / 7))],
     ["sk- with slashes", "sk-a/".repeat(Math.ceil(size / 5))],
+    ["sk- with slashes and capitals", "sk-A1/".repeat(Math.ceil(size / 6))],
     ["Bearer repeated", "Bearer ".repeat(Math.ceil(size / 7))],
     ["Bearer then spaces", `Bearer ${" ".repeat(size)}`],
     ["token soup", "A1/+".repeat(Math.ceil(size / 4))],
@@ -94,7 +95,7 @@ test("pathological 800 KB inputs are redacted in linear time", () => {
       const started = performance.now();
       redactDiagnosticForOutput(input);
       const elapsed = performance.now() - started;
-      assert.ok(elapsed < 4000, `${name}: ${Math.round(elapsed)} ms for ${input.length} chars`);
+      assert.ok(elapsed < 2000, `${name}: ${Math.round(elapsed)} ms for ${input.length} chars`);
     }
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
