@@ -31,7 +31,6 @@ export function redactDiagnosticForOutput(value: string): string {
   }
 }
 
-
 /** Classify individual path components as well as the whole value. The general
  * classifier intentionally does not treat slash-delimited paths as tokens. */
 function classifyPathComponents(value: string): ReturnType<InformationFlowBoundary["classifyText"]> {
