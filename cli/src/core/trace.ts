@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
+import { getBuildIdentity } from "../build_identity.js";
 
 export type TraceAttributeValue = string | number | boolean | string[] | number[] | boolean[];
 export type TraceAttributes = Record<string, TraceAttributeValue>;
@@ -153,7 +154,7 @@ export class LocalTraceRecorder {
         const record = JSON.stringify({
           resourceSpans: [{
             resource: { attributes: [{ key: "service.name", value: { stringValue: this.serviceName } }] },
-            scopeSpans: [{ scope: { name: "nexus-code", version: "1.1.0" }, spans: [span] }],
+            scopeSpans: [{ scope: { name: "nexus-code", version: getBuildIdentity().version }, spans: [span] }],
           }],
         });
         try {
