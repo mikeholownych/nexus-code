@@ -38,19 +38,31 @@ function parseTypeScript(source, { timeoutMs = TIMEOUT_MS } = {}) {
 
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 
-/** The text of a package.json, or null when there is none. It must be a small regular file: a device or FIFO never reads. */
+/**
+ * The text of a package.json, or null when there is none. The file is opened without following a symlink and read in
+ * capped chunks: `fstat().size` is 0 for procfs and similar files, so the size alone cannot bound the read.
+ */
 function readPackageJson(file) {
   let descriptor;
-  try { descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); }
+  try { descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW); }
   catch (error) {
     if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+    if (error?.code === "ELOOP") throw new Error(`${file} is a symlink; package metadata is not read through symlinks`);
     throw error;
   }
   try {
-    const stat = fs.fstatSync(descriptor);
-    if (!stat.isFile()) throw new Error(`${file} is not a regular file`);
-    if (stat.size > MAX_PACKAGE_JSON_BYTES) throw new Error(`${file} is larger than ${MAX_PACKAGE_JSON_BYTES} bytes`);
-    return fs.readFileSync(descriptor, "utf8");
+    if (!fs.fstatSync(descriptor).isFile()) throw new Error(`${file} is not a regular file`);
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const chunk = Buffer.alloc(Math.min(65_536, MAX_PACKAGE_JSON_BYTES + 1 - total));
+      const read = fs.readSync(descriptor, chunk, 0, chunk.length, null);
+      if (read === 0) break;
+      total += read;
+      if (total > MAX_PACKAGE_JSON_BYTES) throw new Error(`${file} is larger than ${MAX_PACKAGE_JSON_BYTES} bytes`);
+      chunks.push(chunk.subarray(0, read));
+    }
+    return Buffer.concat(chunks).toString("utf8");
   } finally { fs.closeSync(descriptor); }
 }
 

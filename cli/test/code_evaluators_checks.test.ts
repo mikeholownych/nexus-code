@@ -137,3 +137,29 @@ test("typecheck_clean does not treat a diagnostic in a file named like a summary
   const summary = await verdict(byRevision({ status: 1, stderr: base.stderr + "Found 1 error in src/a.ts:1\n" }, { status: 1, stderr: base.stderr + "Found 1 error in src/a.ts:9\n" }));
   assert.equal(summary.passed, true, "real tsc summary lines are still ignored");
 });
+
+test("typecheck_clean normalizes Go and flake8 style locations and paths with spaces", async () => {
+  const go = (line: number) => `./my pkg/main.go:${line}:5: undefined: x\n`;
+  const moved = await verdict(byRevision({ status: 1, stderr: go(3) }, { status: 1, stderr: go(40) }), { diagnosticPattern: "undefined:" });
+  assert.equal(moved.passed, true, JSON.stringify(moved.details));
+  const ts = (line: number) => `src/my dir/a b.ts(${line},7): error TS2322: Type 'string' is not assignable to type 'number'.\n`;
+  const spaced = await verdict(byRevision({ status: 1, stderr: ts(3) }, { status: 1, stderr: ts(30) }));
+  assert.equal(spaced.passed, true, JSON.stringify(spaced.details));
+});
+
+test("typecheck_clean rejects a diagnosticPattern that is not a string", async () => {
+  const same = { status: 1, stderr: "src/a.ts(1,1): error TS2322: x\n" };
+  for (const pattern of [42, {}, ["a"], null, true]) {
+    const result = await verdict(byRevision(same, same), { diagnosticPattern: pattern });
+    assert.equal(result.passed, false, JSON.stringify(pattern));
+    assert.match(String(result.details.error), /diagnosticPattern/);
+  }
+});
+
+test("typecheck_clean checks the diagnostic's own code, not text inside its message, for checker configuration errors", async () => {
+  const noisy = { status: 1, stderr: `src/a.ts(1,7): error TS2322: Type '"error TS5057:"' is not assignable to type '"ok"'.\n` };
+  const fixed = { status: 0, stderr: "" };
+  const result = await verdict(byRevision(noisy, fixed));
+  assert.equal(result.passed, true, JSON.stringify(result.details));
+  assert.equal(result.details.infrastructureFailure, false);
+});
