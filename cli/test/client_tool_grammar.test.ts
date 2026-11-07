@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { LocalLlmClient, normalizeNullableOptionalToolArguments } from "../src/client.js";
+import { LocalLlmClient } from "../src/client.js";
+import { normalizeNullableOptionalToolArguments } from "../src/core/tool_arguments.js";
 import { adaptToolDefinitionsForServer } from "../src/core/tool_grammar_provider.js";
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse, body: string) => void;
@@ -235,7 +236,7 @@ test("client preserves vLLM strict schemas in a streaming completion", async () 
   assert.equal("response_format" in sent, false);
 });
 
-test("client returns tool-call arguments verbatim; normalisation happens once, at dispatch (WP-1303)", async () => {
+test("client returns tool-call arguments verbatim; normalisation happens once, where the agent parses a response (WP-1303)", async () => {
   const wireArgs = { path: null, start_line: null, end_line: 0, include_hidden: false, label: "" };
   const expected = wireArgs;
   const observed: unknown[] = [];

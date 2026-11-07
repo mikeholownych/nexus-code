@@ -4,7 +4,8 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import { ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
-import { LocalLlmClient, normalizeNullableOptionalToolArguments } from "./client.js";
+import { LocalLlmClient } from "./client.js";
+import { normalizeNullableOptionalToolArguments } from "./core/tool_arguments.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
 import {
   CanonicalCapability,
