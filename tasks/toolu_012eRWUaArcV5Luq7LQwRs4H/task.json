@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_012eRWUaArcV5Luq7LQwRs4H",
+  "agent_id": "a6c45c95cfd7a1aa9",
+  "subagent_type": "general-purpose",
+  "task_description": "Review PRs 424 426 430",
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 120390,
+    "cache_read_tokens": 3782983,
+    "output_tokens": 29820,
+    "api_call_count": 41
+  },
+  "started_at": "2026-11-07T15:16:34.76458211Z",
+  "completed_at": "2026-11-07T15:25:48.385409245Z"
+}
