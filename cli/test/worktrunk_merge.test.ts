@@ -34,6 +34,8 @@ function fixture(): Fixture {
   return { root, repo, home, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
+/** Merges in these tests are about git behaviour; the receipt gate has its own file. */
+const W = ["--no-verify-receipt", "--reason", "test fixture"];
 const wt = (f: Fixture, cwd: string, args: string[], readOnly = false) => runWorktreeCommand(args, { cwd, home: f.home, readOnly });
 const dirOf = (f: Fixture, slug: string) => path.join(f.repo, ".nexus", "worktrees", slug);
 
@@ -59,7 +61,7 @@ test("merge squashes, rebases, fast-forwards, backs up the swept-in changes, the
     // main moves on meanwhile
     commitFile(f.repo, "main-only.txt", "m\n", "main work");
 
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "rev-list", "--count", "HEAD"), "3", "init + main work + one squashed commit");
     assert.equal(git(f.repo, "rev-list", "--merges", "--count", "HEAD"), "0");
@@ -79,7 +81,7 @@ test("--no-squash keeps the commits; --no-remove keeps the worktree", () => {
     const dir = feature(f, "feat/k");
     commitFile(dir, "b.txt", "b\n", "add b");
     commitFile(dir, "c.txt", "c\n", "add c");
-    const r = wt(f, dir, ["merge", "--no-squash", "--no-remove"]);
+    const r = wt(f, dir, ["merge", ...W, "--no-squash", "--no-remove"]);
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "rev-list", "--count", "HEAD"), "3");
     assert.ok(fs.existsSync(dir));
@@ -94,7 +96,7 @@ test("rebase conflicts stay open in the worktree and the target is untouched", (
     commitFile(dir, "a.txt", "feature\n", "edit a");
     commitFile(f.repo, "a.txt", "main\n", "edit a on main");
     const before = git(f.repo, "rev-parse", "HEAD");
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, false);
     assert.match(r.output, /conflict/i);
     assert.match(r.output, /rebase --continue|rebase --abort/);
@@ -102,7 +104,7 @@ test("rebase conflicts stay open in the worktree and the target is untouched", (
     assert.ok(fs.existsSync(dir));
     assert.match(git(dir, "status"), /rebase in progress|interactive rebase|You are currently/i);
     // a second merge while the rebase is open is refused, not retried
-    assert.equal(wt(f, dir, ["merge"]).success, false);
+    assert.equal(wt(f, dir, ["merge", ...W]).success, false);
   } finally { f.cleanup(); }
 });
 
@@ -112,18 +114,18 @@ test("a dirty target, a diverged --no-rebase merge and merging the main checkout
     const dir = feature(f, "feat/y");
     commitFile(dir, "b.txt", "b\n", "add b");
     fs.writeFileSync(path.join(f.repo, "scratch.txt"), "dirty");
-    const dirty = wt(f, dir, ["merge"]);
+    const dirty = wt(f, dir, ["merge", ...W]);
     assert.equal(dirty.success, false);
     assert.match(dirty.output, /target|dirty|uncommitted/i);
     fs.rmSync(path.join(f.repo, "scratch.txt"));
 
     commitFile(f.repo, "m.txt", "m\n", "main moved");
-    const diverged = wt(f, dir, ["merge", "--no-rebase"]);
+    const diverged = wt(f, dir, ["merge", ...W, "--no-rebase"]);
     assert.equal(diverged.success, false);
     assert.match(diverged.output, /fast-forward|rebase/i);
     assert.equal(fs.existsSync(path.join(f.repo, "b.txt")), false);
 
-    assert.equal(wt(f, f.repo, ["merge"]).success, false);
+    assert.equal(wt(f, f.repo, ["merge", ...W]).success, false);
   } finally { f.cleanup(); }
 });
 
@@ -142,7 +144,7 @@ test("git hooks do not run during merge", () => {
     for (const name of ["pre-commit", "commit-msg", "post-commit", "post-merge", "pre-rebase", "post-rewrite", "reference-transaction"]) {
       fs.writeFileSync(path.join(hooks, name), `#!/bin/sh\necho ${name} >> "${marker}"\n`, { mode: 0o755 });
     }
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, true, r.output);
     assert.equal(fs.existsSync(marker), false, fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "");
   } finally { f.cleanup(); }
@@ -204,7 +206,7 @@ test("merge and prune are mutations: read-only mode refuses them (prune only wit
   try {
     const dir = feature(f, "feat/ro");
     commitFile(dir, "b.txt", "b\n", "add b");
-    assert.equal(wt(f, dir, ["merge"], true).success, false);
+    assert.equal(wt(f, dir, ["merge", ...W], true).success, false);
     assert.equal(wt(f, f.repo, ["prune", "--min-age", "0s"], true).success, false);
     assert.ok(fs.existsSync(dir));
     assert.equal(wt(f, f.repo, ["prune", "--min-age", "0s", "--dry-run"], true).success, true);
@@ -240,7 +242,7 @@ test("acceptance: create, copy-ignored, list, merge, prune, remove against a rea
     assert.equal(item.ahead, 1);
     assert.equal(item.integrated, null);
 
-    const merged = wt(f, one, ["merge"]);
+    const merged = wt(f, one, ["merge", ...W]);
     assert.equal(merged.success, true, merged.output);
     assert.ok(fs.existsSync(path.join(f.repo, "feature.txt")));
     assert.equal(fs.existsSync(one), false);
