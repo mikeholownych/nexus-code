@@ -94,12 +94,17 @@ export function safeClientDiagnostic(message: string, config: HarnessConfig): st
   if (config.model) substitute(config.model, safeModelId(config.model));
   const safeOrigin = safeOriginOf(config.endpoint);
   if (safeOrigin) {
-    substitute(config.endpoint.trim(), safeOrigin);
     try {
       const endpoint = new URL(config.endpoint.trim());
-      substitute(endpoint.href, safeOrigin);
-      substitute(`${endpoint.origin}${endpoint.pathname}${endpoint.search}${endpoint.hash}`, safeOrigin);
-      substitute(`${endpoint.origin}${endpoint.pathname}`, safeOrigin);
+      // An origin-only endpoint has the path "/": replacing "origin/" or "/" would delete the slashes of every
+      // other URL in the message (and split text around them), and there is no path to hide.
+      const originOnly = endpoint.pathname === "/" && !endpoint.search && !endpoint.hash;
+      if (!originOnly || !config.endpoint.trim().endsWith("/")) substitute(config.endpoint.trim(), safeOrigin);
+      if (!originOnly) {
+        substitute(endpoint.href, safeOrigin);
+        substitute(`${endpoint.origin}${endpoint.pathname}${endpoint.search}${endpoint.hash}`, safeOrigin);
+        substitute(`${endpoint.origin}${endpoint.pathname}`, safeOrigin);
+      }
       substitute(endpoint.origin, safeOrigin);
       substitute(endpoint.hostname, new URL(safeOrigin).hostname);
       if (endpoint.pathname.length > 1) substitute(endpoint.pathname, "(path redacted)");

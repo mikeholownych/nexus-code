@@ -38,6 +38,7 @@ test("client diagnostics redact a slash-containing secret whole when the endpoin
     assert.ok(!out.includes("K7MDENG"), out);
     assert.ok(!out.includes("bPxRf"), out);
     assert.ok(!out.includes("EXAMPLEKEY"), out);
+    assert.ok(out.includes("http://llm.example:8080/v1"), `ordinary slashes must survive an origin-only endpoint: ${out}`);
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
   }
