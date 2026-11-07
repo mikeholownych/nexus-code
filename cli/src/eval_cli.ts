@@ -94,10 +94,13 @@ export function firstCommandToken(args: readonly string[]): string | undefined {
 
 /** Isolate startup state before the launcher loads environment or operator configuration. */
 export function isolateEvalCommandHome(args: readonly string[]): (() => void) | undefined {
-  // Tokens after `--` are operands (for example a prompt), never options.
-  const terminator = args.indexOf("--");
-  if (!(terminator < 0 ? args : args.slice(0, terminator)).includes("--isolated-home")) return undefined;
+  if (!args.includes("--isolated-home")) return undefined;
   if (firstCommandToken(args) !== "eval") {
+    // Not an eval invocation. A flag after a literal `--` is an operand (for example a prompt), not a request.
+    // For eval, a `--` can be an option's value (`--output --`), which Commander does not treat as the terminator,
+    // so there the flag is honoured wherever it appears and isolation fails closed.
+    const terminator = args.indexOf("--");
+    if (terminator >= 0 && !args.slice(0, terminator).includes("--isolated-home")) return undefined;
     throw new Error("--isolated-home is available only with the eval command (nexus [options] eval --isolated-home ...)");
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-cli-home-"));

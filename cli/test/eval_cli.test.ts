@@ -26,6 +26,25 @@ test("--isolated-home is rejected when the invocation is not an eval command", (
   assert.equal(isolateEvalCommandHome(["run", "task"]), undefined);
 });
 
+test("a `--` that is an option's value does not end option parsing for an eval invocation", () => {
+  const cases = [
+    ["eval", "--dataset", "d", "--output", "--", "--isolated-home"],
+    ["eval", "--output", "--", "--isolated-home", "--dataset", "d"],
+    ["-e", "--", "eval", "--dataset", "d", "--isolated-home"],
+    ["-m", "--", "-w", "--", "eval", "--isolated-home"],
+  ];
+  for (const args of cases) {
+    const before = process.env.HOME;
+    const restore = isolateEvalCommandHome(args);
+    try {
+      assert.ok(restore, `isolation must apply for: ${args.join(" ")}`);
+      assert.notEqual(process.env.HOME, before);
+    } finally {
+      restore?.();
+    }
+  }
+});
+
 test("operands after `--` are never read as the --isolated-home option", () => {
   // `nexus run -- explain --isolated-home` is a prompt about the flag, not a request to use it.
   assert.equal(isolateEvalCommandHome(["run", "--", "explain", "--isolated-home"]), undefined);
