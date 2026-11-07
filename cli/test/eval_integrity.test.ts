@@ -1240,6 +1240,31 @@ test("resource supervisor preserves SIGTERM grace for descendants after the main
   }
 });
 
+test("resource supervisor stops its payload when the parent's control channel closes before a final report", { timeout: 30_000 }, async () => {
+  const { spawnContained } = await import(path.join(ROOT, "eval/resources.mjs"));
+  const workspaceRoot = process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT ?? "/dev/shm";
+  const tmpfs = fs.statfsSync(workspaceRoot);
+  const resources = { cpuPercent: 20, memoryBytes: 256 * 1024 * 1024, tasks: 16, storageBytes: tmpfs.blocks * tmpfs.bsize, workspaceRoot };
+  const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-orphan-supervisor-test-"));
+  const readyMarker = path.join(markerDir, "payload-ready");
+  let containment: any = null;
+  try {
+    const spawned = spawnContained({ cmd: "/bin/sh", argv: ["-c", `touch '${readyMarker}'; while :; do sleep 0.1; done`] }, resources, { cwd: "/", stdio: ["ignore", "ignore", "ignore"], detached: true });
+    containment = spawned.containment;
+    const closed = new Promise<"closed">((resolve) => spawned.child.on("close", () => resolve("closed")));
+    const deadline = Date.now() + 10_000;
+    while (!fs.existsSync(readyMarker) && Date.now() < deadline) await new Promise((wait) => setTimeout(wait, 20));
+    assert.ok(fs.existsSync(readyMarker), "contained payload did not report ready");
+    // The parent dying (a Ctrl-C that reached only its own process group) closes this end without any stop request.
+    spawned.child.stdio[4]!.destroy();
+    const outcome = await Promise.race([closed, new Promise<"running">((resolve) => setTimeout(() => resolve("running"), 8_000))]);
+    assert.equal(outcome, "closed", "the supervisor and its payload kept running after the control channel closed");
+  } finally {
+    containment?.kill();
+    fs.rmSync(markerDir, { recursive: true, force: true });
+  }
+});
+
 test("candidate sandbox and resource supervisor compose around a staged repository", { timeout: 30_000 }, async () => {
   const { stageRepoWorkspace } = await import(path.join(ROOT, "eval/workspace.mjs"));
   const { agentSandboxArgv } = await import(path.join(ROOT, "eval/isolate.mjs"));
