@@ -223,6 +223,7 @@ async function startRepl(options: any): Promise<void> {
     if (options.model) parts.push("-m", options.model);
     if (options.resume) parts.push("-r", typeof options.resume === "string" ? options.resume : "");
     fs.appendFileSync(log, parts.join(" ").trim() + "\n");
+    if (process.env.NEXUS_TEST_RECORD_REPL_SHELL) fs.appendFileSync(process.env.NEXUS_TEST_RECORD_REPL_SHELL, `${options.shell}\n`);
     return;
   }
   const trustDecision = await promptWorkspaceTrust(options.workspace ? path.resolve(options.workspace) : process.cwd());
@@ -287,6 +288,26 @@ async function runDefault(options: any): Promise<void> {
   }
 
   await startRepl(options);
+}
+
+/**
+ * A command's effective options. An option given on the command line wins, nearest command first
+ * (`nexus -t 0.9 run -t 0.4` is 0.4, `nexus -t 0.9 run` is 0.9). A value a command only holds as its default, or does
+ * not hold at all, never replaces one given elsewhere on the path.
+ */
+function commandOptions(cmd: Command): Record<string, any> {
+  const options = cmd.optsWithGlobals();
+  for (const option of cmd.options) {
+    const name = option.attributeName();
+    for (let c: Command | null = cmd; c; c = c.parent) {
+      const source = c.getOptionValueSource(name);
+      if (source !== undefined && source !== "default") {
+        options[name] = c.opts()[name];
+        break;
+      }
+    }
+  }
+  return options;
 }
 
 const program = new Command();
@@ -377,7 +398,7 @@ program
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
   .action(async (_options: any, cmd: Command) => {
-    const options = cmd.optsWithGlobals();
+    const options = commandOptions(cmd);
     await startRepl(options);
   });
 
@@ -421,13 +442,7 @@ program
   .option("-r, --resume [id]", "Resume previous session or task state")
   .option("--step", "Execute one model/tool cycle and pause deterministically")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
-    // Preserve inherited CLI values when the command-level duplicate only has
-    // its default; explicitly supplied command options still take precedence.
-    const options = cmd.optsWithGlobals();
-    for (const option of cmd.options) {
-      const name = option.attributeName();
-      if (cmd.getOptionValueSource(name) !== "default") options[name] = _options[name];
-    }
+    const options = commandOptions(cmd);
     let prompt = promptParts.join(" ").trim();
     const config = buildConfig(options);
     config.surface = "headless";
@@ -544,7 +559,7 @@ program
   .option("--provider <id>", "Cloud inference provider (openrouter, openai, anthropic, compatible)")
   .option("--base-url <url>", "Override the provider's base URL")
   .action(async (_options: any, cmd: Command) => {
-    const options = cmd.optsWithGlobals();
+    const options = commandOptions(cmd);
     const config = buildConfig(options);
     const client = new LocalLlmClient(config);
     console.log(pc.cyan(`\nQuerying models from ${config.endpoint}...`));
@@ -566,7 +581,7 @@ program
 
 /** Shared by `doctor` and its compatibility alias `check`. */
 async function doctorCommand(_options: any, cmd?: Command): Promise<void> {
-  const options = cmd?.optsWithGlobals ? cmd.optsWithGlobals() : _options;
+  const options = cmd?.optsWithGlobals ? commandOptions(cmd) : _options;
   const controller = new AbortController();
   const onInterrupt = () => controller.abort();
   process.once("SIGINT", onInterrupt);
