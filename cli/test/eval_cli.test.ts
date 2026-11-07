@@ -26,8 +26,14 @@ test("--isolated-home is rejected when the invocation is not an eval command", (
   assert.equal(isolateEvalCommandHome(["run", "task"]), undefined);
 });
 
+test("operands after `--` are never read as the --isolated-home option", () => {
+  // `nexus run -- explain --isolated-home` is a prompt about the flag, not a request to use it.
+  assert.equal(isolateEvalCommandHome(["run", "--", "explain", "--isolated-home"]), undefined);
+  assert.equal(isolateEvalCommandHome(["--", "explain", "--isolated-home"]), undefined);
+});
+
 test("--isolated-home after `--` is not an eval invocation, and clustered short flags are read like Commander", () => {
-  assert.throws(() => isolateEvalCommandHome(["--", "eval", "x", "--isolated-home"]), /--isolated-home.*eval/);
+  assert.equal(isolateEvalCommandHome(["--", "eval", "x", "--isolated-home"]), undefined);
   // -yw takes /x as the workspace value; the next token is the command.
   assert.equal(firstCommandToken(["-yw", "/x", "eval"]), "eval");
   // -ywPATH carries its value attached, so `eval` is the command.

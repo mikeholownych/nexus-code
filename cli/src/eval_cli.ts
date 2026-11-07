@@ -94,7 +94,9 @@ export function firstCommandToken(args: readonly string[]): string | undefined {
 
 /** Isolate startup state before the launcher loads environment or operator configuration. */
 export function isolateEvalCommandHome(args: readonly string[]): (() => void) | undefined {
-  if (!args.includes("--isolated-home")) return undefined;
+  // Tokens after `--` are operands (for example a prompt), never options.
+  const terminator = args.indexOf("--");
+  if (!(terminator < 0 ? args : args.slice(0, terminator)).includes("--isolated-home")) return undefined;
   if (firstCommandToken(args) !== "eval") {
     throw new Error("--isolated-home is available only with the eval command (nexus [options] eval --isolated-home ...)");
   }
