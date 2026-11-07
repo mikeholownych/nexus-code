@@ -366,7 +366,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
           const candSpec = { ...candidateSpec, cwd: pinnedWorkspace ?? candidateWorkspace };
           if (!baseSpec?.command || !candSpec?.command) results.push(evaluatorResult("typecheck_clean", false, 0, { error: explicitBaseline ? "no typecheck command specified" : "no pre-agent typecheck baseline workspace" }));
           else if (!pinnedWorkspace) results.push(evaluatorResult("typecheck_clean", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
-          else results.push(withIgnored(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec, resources })));
+          else results.push(withIgnored(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec, resources, diagnosticPattern: spec.diagnosticPattern ?? task.typecheck?.diagnosticPattern })));
           break;
         }
         default:
