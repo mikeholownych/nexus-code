@@ -10,7 +10,7 @@ function diagnosticLines(result) {
  * Compare baseline and candidate typecheck diagnostics: new diagnostics fail, and so does a non-zero candidate exit when
  * the baseline exited 0 or the candidate printed no diagnostics (a silent failure).
  */
-export async function evaluateTypecheckClean({ baseline, candidate, runner = runArgv }) {
+export async function evaluateTypecheckClean({ baseline, candidate, runner = runArgv, resources = null }) {
   for (const revision of [baseline, candidate]) {
     if (!revision || typeof revision.command !== "string" || !revision.command || !Array.isArray(revision.args ?? []) ||
         typeof revision.cwd !== "string" || !path.isAbsolute(revision.cwd)) {
@@ -21,7 +21,7 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
     throw new TypeError("baseline and candidate typecheck workspaces must be separate");
   }
   const invoke = async (spec) => {
-    try { return await runner(spec.command, spec.args ?? [], { cwd: spec.cwd, timeoutMs: spec.timeoutMs }); }
+    try { return await runner(spec.command, spec.args ?? [], { cwd: spec.cwd, timeoutMs: spec.timeoutMs, resources }); }
     catch (error) { return { status: null, error: String(error?.message ?? error), stdout: "", stderr: "" }; }
   };
   const [baselineResult, candidateResult] = await Promise.all([invoke(baseline), invoke(candidate)]);

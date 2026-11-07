@@ -286,7 +286,7 @@ export function needsEvaluatorConfigurationBaseline(task) {
 }
 
 /** Run the deterministic evaluator set against the actual candidate workspace and pre-agent snapshot. */
-export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorkspace, typecheckBaselineWorkspace, agent, baselineSnapshot }) {
+export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorkspace, typecheckBaselineWorkspace, agent, baselineSnapshot, resources = null }) {
   if (!task.evaluators || !Array.isArray(task.evaluators) || task.evaluators.length === 0) return [];
   const results = [];
   let changedFiles = null;
@@ -352,7 +352,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
           const timeoutMs = spec.timeoutMs ?? task.build?.timeoutMs;
           if (!command) results.push(evaluatorResult("build", false, 0, { error: "no build command specified" }));
           else if (!pinnedWorkspace) results.push(evaluatorResult("build", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
-          else results.push(withIgnored(await evaluateBuild({ command, args, cwd: pinnedWorkspace, timeoutMs })));
+          else results.push(withIgnored(await evaluateBuild({ command, args, cwd: pinnedWorkspace, timeoutMs, resources })));
           break;
         }
         case "typecheck_clean": {
@@ -366,7 +366,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
           const candSpec = { ...candidateSpec, cwd: pinnedWorkspace ?? candidateWorkspace };
           if (!baseSpec?.command || !candSpec?.command) results.push(evaluatorResult("typecheck_clean", false, 0, { error: explicitBaseline ? "no typecheck command specified" : "no pre-agent typecheck baseline workspace" }));
           else if (!pinnedWorkspace) results.push(evaluatorResult("typecheck_clean", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
-          else results.push(withIgnored(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec })));
+          else results.push(withIgnored(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec, resources })));
           break;
         }
         default:

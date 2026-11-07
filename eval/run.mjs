@@ -301,7 +301,7 @@ async function runOnce(task, run) {
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
     }
-    const evaluators = await runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline });
+    const evaluators = await runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline, resources: config.resources ?? null });
     const turn = agent.json?.turn ?? null;
     // Nexus reports a structured outcome; for the other agents a clean exit within the budget is their completion claim.
     const claimedComplete = turn
