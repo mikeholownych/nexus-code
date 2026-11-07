@@ -14,10 +14,12 @@ const SUMMARY = /^(?:Found \d+ errors? in [^\n]*|Found \d+ errors?\.?|Errors\s+F
 // A configuration error means the checker did not check the project, whatever the baseline printed. Only the
 // diagnostic's own (first) code counts: text inside a message can quote any code.
 const CHECKER_NOT_RUN_CODES = new Set(["TS5057", "TS5058", "TS5081", "TS5083", "TS5012", "TS18003", "TS6053"]);
-// A leading location names a file: a path (spaces and parentheses allowed, as in `app/(auth)/page.tsx`, but no colon) that
-// ends in an extension. Requiring that keeps `error[E0080]: ... step:1: failed` and `error: cannot open 'a.ts:12: x'` from
-// being read as locations; the location delimiter after it is what ends the path.
-const PATH = String.raw`[^:\n]+?\.[A-Za-z0-9_+-]+`;
+// A leading location names a file: an optional Windows drive, then a path (spaces and parentheses allowed, as in
+// `app/(auth)/page.tsx`, but no colon) that ends in an extension or is a well-known extension-less build file such as
+// `Makefile`. Requiring that keeps `error[E0080]: ... step:1: failed` and `error: cannot open 'a.ts:12: x'` from being read
+// as locations; the location delimiter after it is what ends the path.
+const BUILD_FILES = "Makefile|makefile|GNUmakefile|Dockerfile|Rakefile|Gemfile|Jenkinsfile|Vagrantfile|justfile|Procfile|BUILD|WORKSPACE";
+const PATH = String.raw`(?:[A-Za-z]:[\\/])?(?:[^:\n]+?\.[A-Za-z0-9_+-]+|(?:[^:\n]*[\\/])?(?:${BUILD_FILES}))`;
 const LOCATION_SHAPES = [
   [new RegExp(String.raw`^(${PATH})\(\d+,\d+\):`), "$1(L,C):"],
   [new RegExp(String.raw`^(${PATH}):\d+:\d+ - `), "$1:L:C - "],

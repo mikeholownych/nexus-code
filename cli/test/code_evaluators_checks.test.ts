@@ -234,3 +234,27 @@ test("typecheck_clean recognises diagnostics whose file path contains parenthese
   const moved = await verdict(byRevision({ status: 1, stderr: line(1) }, { status: 1, stderr: line(9) }));
   assert.equal(moved.passed, true, JSON.stringify(moved.details));
 });
+
+test("typecheck_clean treats Windows-drive paths and extension-less build files as honest relocations", async () => {
+  const win = (n: number) => `C:\\work\\my app\\src\\a.ts(${n},7): error TS2322: Type 'string' is not assignable to type 'number'.\n`;
+  const drive = await verdict(byRevision({ status: 1, stderr: win(3) }, { status: 1, stderr: win(30) }));
+  assert.equal(drive.passed, true, JSON.stringify(drive.details));
+  const slash = (n: number) => `C:/proj/main.go:${n}:5: undefined: x\n`;
+  const go = await verdict(byRevision({ status: 1, stderr: slash(3) }, { status: 1, stderr: slash(40) }), { diagnosticPattern: "undefined:" });
+  assert.equal(go.passed, true, JSON.stringify(go.details));
+  const make = (n: number) => `build/Makefile:${n}: *** missing separator.  Stop.\n`;
+  const makefile = await verdict(byRevision({ status: 2, stderr: make(3) }, { status: 2, stderr: make(9) }), { diagnosticPattern: "\\*\\*\\*" });
+  assert.equal(makefile.passed, true, JSON.stringify(makefile.details));
+  const changed = await verdict(byRevision({ status: 2, stderr: make(3) }, { status: 2, stderr: "build/Makefile:3: *** other problem.  Stop.\n" }), { diagnosticPattern: "\\*\\*\\*" });
+  assert.equal(changed.passed, false, "a different message is still new");
+});
+
+test("typecheck_clean does not read a location out of a file-name lookalike in the message", async () => {
+  for (const pattern of ["^x\\(", undefined]) {
+    const extra = pattern ? { diagnosticPattern: pattern } : {};
+    const first = { status: 1, stderr: "x(1,2): y.ts\n" };
+    const second = { status: 1, stderr: "x(5,6): y.ts\n" };
+    const result = await verdict(byRevision(first, second), extra);
+    assert.equal(result.passed, false, `x(1,2): y.ts and x(5,6): y.ts are different diagnostics (pattern ${pattern})`);
+  }
+});
