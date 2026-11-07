@@ -8,7 +8,8 @@ import { HunkStager } from "../stager.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "../tester.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { PolicyContext } from "../core/approval_policy.js";
-import { runWorktreeCommand, tokenizeWorktreeArgs } from "../worktrunk/command.js";
+import { runWorktreeCommandAsync, tokenizeWorktreeArgs } from "../worktrunk/command.js";
+import { providerCompleter } from "../worktrunk/provider.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 
 function git(cwd: string, args: string[]): string {
@@ -114,14 +115,16 @@ function undo(ctx: SlashContext): SlashOutcome {
   return reply("undo", result.message, result.success);
 }
 
-function worktree(ctx: SlashContext): SlashOutcome {
+async function worktree(ctx: SlashContext): Promise<SlashOutcome> {
   const agent = ctx.host.app.getAgent();
   const active = agent.getActiveWorktree();
   const sub = ctx.args.trim().toLowerCase();
   const first = sub.split(/\s+/)[0] ?? "";
   // Legacy forms act on the speculative worktree of this run; everything else is the named-worktree command set.
   if (first && !["status", "merge", "discard"].includes(first)) {
-    const result = runWorktreeCommand(tokenizeWorktreeArgs(ctx.args), { cwd: workspace(ctx), readOnly: ctx.host.mode() === "read-only" });
+    const result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(ctx.args), { cwd: workspace(ctx), readOnly: ctx.host.mode() === "read-only" }, {
+      completer: providerCompleter(ctx.host.app.getConfig()),
+    });
     return reply("worktree", result.output, result.success);
   }
   if (sub === "merge" || sub === "discard") {

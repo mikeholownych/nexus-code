@@ -6,6 +6,7 @@
 import { redactSecrets } from "../ui.js";
 import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { copyIgnored } from "./copy.js";
+import { generateMergeMessage, DEFAULT_AI_TIMEOUT_MS, type Completer } from "./ai_message.js";
 import { mergeWorktree, parseAge, pruneWorktrees } from "./merge.js";
 import { GitError } from "./git.js";
 import { WorktreePathError } from "./paths.js";
@@ -26,7 +27,7 @@ const SPECS: Record<string, Spec> = {
   list: { booleans: { "--json": "json" }, values: { "--limit": "limit" }, positional: "" },
   remove: { booleans: { "--force": "force", "-f": "force", "--delete-unmerged": "delete-unmerged" }, values: {}, positional: "<branch|path>..." },
   path: { booleans: {}, values: {}, positional: "<branch|path>" },
-  merge: { booleans: { "--no-squash": "no-squash", "--no-rebase": "no-rebase", "--no-remove": "no-remove", "--no-verify-receipt": "no-verify-receipt" }, values: { "--message": "message", "-m": "message", "--reason": "reason" }, positional: "[target]" },
+  merge: { booleans: { "--no-squash": "no-squash", "--no-rebase": "no-rebase", "--no-remove": "no-remove", "--no-verify-receipt": "no-verify-receipt", "--ai-message": "ai-message" }, values: { "--message": "message", "-m": "message", "--reason": "reason" }, positional: "[target]" },
   prune: { booleans: { "--dry-run": "dry-run", "--discard-ignored": "discard-ignored" }, values: { "--min-age": "min-age", "--limit": "limit" }, positional: "" },
 };
 
@@ -37,7 +38,7 @@ const READ_ONLY = new Set(["list", "path"]);
 /** Subcommands that mutate unless `--dry-run` is given. */
 const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored", "prune"]);
 
-export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove] [--no-verify-receipt --reason why]|prune [--dry-run] [--min-age 1d] [--limit N]]";
+export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove] [--no-verify-receipt --reason why] [--ai-message]|prune [--dry-run] [--min-age 1d] [--limit N]]";
 
 function canonical(sub: string): string | undefined {
   const name = ALIASES[sub] ?? sub;
@@ -150,4 +151,24 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
 /** Split the text after the command name into tokens (no quoting: branch names and paths here contain no spaces). */
 export function tokenizeWorktreeArgs(args: string): string[] {
   return args.trim().split(/\s+/).filter(Boolean);
+}
+
+export interface AsyncDeps {
+  /** Asks the configured model; absent when no provider is available. */
+  completer?: Completer;
+  aiTimeoutMs?: number;
+}
+
+/** Like `runWorktreeCommand`, plus the opt-in `merge --ai-message`. Read-only mode never reaches the model. */
+export async function runWorktreeCommandAsync(tokens: string[], run: RunContext, deps: AsyncDeps = {}): Promise<CommandResult> {
+  const name = tokens[0] ? canonical(tokens[0]) : undefined;
+  if (name !== "merge" || run.readOnly || !tokens.includes("--ai-message")) return runWorktreeCommand(tokens, run);
+  let parsed: Parsed;
+  try { parsed = parse(SPECS.merge, tokens.slice(1)); } catch { return runWorktreeCommand(tokens, run); }
+  if (parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
+  const ctx: WorktreeContext = { cwd: run.cwd, home: run.home ?? homeDir(), readOnly: false };
+  const generated = await generateMergeMessage(ctx, parsed.positionals[0], deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS)
+    .catch(() => ({ message: undefined, note: "note: could not prepare the model request; using the deterministic commit message." }));
+  const result = runWorktreeCommand(generated.message ? [...tokens, "-m", generated.message] : tokens, run);
+  return { ...result, output: `${generated.note}\n${result.output}` };
 }

@@ -45,7 +45,10 @@ target (never a merge commit) and removes the worktree and branch (`--no-remove`
 clean. The state being merged (HEAD, plus uncommitted work) needs a recorded passing verification: a Nexus session records one
 when its deliverable-bound verifier passes inside that worktree, keyed by branch, head and tree, so a later edit or commit
 no longer matches. Without one, merge refuses unless you pass `--no-verify-receipt --reason "why"`; the waiver (branch, head,
-reason) is recorded in the registry. Before history is rewritten the branch, including swept-in working-tree changes, is saved to
+reason) is recorded in the registry. `--ai-message` asks your configured model for the commit message instead: it receives the diffstat and a diff of what will be
+committed, capped at 20,000 characters and redacted, labelled as untrusted data; the reply is validated (one conventional
+subject of at most 100 characters, no control characters) and redacted. Any failure or a 30 second timeout silently falls
+back to the deterministic message, and an explicit `-m` always wins. No external command is run. Before history is rewritten the branch, including swept-in working-tree changes, is saved to
 `refs/nexus-backup/<branch>`. A rebase conflict stops the command and leaves the rebase open in the worktree. Ignored
 leftovers (build caches) are deleted with the worktree after a successful merge.
 

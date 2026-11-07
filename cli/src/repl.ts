@@ -1,4 +1,5 @@
-import { isReadOnlyWorktreeArgs, runWorktreeCommand, tokenizeWorktreeArgs } from "./worktrunk/command.js";
+import { isReadOnlyWorktreeArgs, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "./worktrunk/command.js";
+import { providerCompleter } from "./worktrunk/provider.js";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import * as path from "node:path";
@@ -1066,7 +1067,7 @@ export class InteractiveRepl {
             }
             continue;
           } else if (cmd === "worktree" && !["", "status", "merge", "discard"].includes(arg.trim().split(/\s+/)[0]?.toLowerCase() ?? "")) {
-            const result = runWorktreeCommand(tokenizeWorktreeArgs(arg), { cwd: this.config.workspace, readOnly: Boolean(this.config.readOnly) || this.agent.getApprovalMode() === "read-only" });
+            const result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(arg), { cwd: this.config.workspace, readOnly: Boolean(this.config.readOnly) || this.agent.getApprovalMode() === "read-only" }, { completer: providerCompleter(this.config) });
             console.log((result.success ? result.output : pc.red(result.output)) + "\n");
             continue;
           } else if (cmd === "worktree") {
