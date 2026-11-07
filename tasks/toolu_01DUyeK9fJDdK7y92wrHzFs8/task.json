@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DUyeK9fJDdK7y92wrHzFs8",
+  "agent_id": "a715f09211c51f508",
+  "subagent_type": "general-purpose",
+  "task_description": "Review PR 428 specialist contracts",
+  "token_usage": {
+    "input_tokens": 164,
+    "cache_creation_tokens": 296408,
+    "cache_read_tokens": 8573232,
+    "output_tokens": 28588,
+    "api_call_count": 82
+  },
+  "started_at": "2026-11-07T14:58:04.220437067Z",
+  "completed_at": "2026-11-07T16:44:40.462586073Z"
+}
