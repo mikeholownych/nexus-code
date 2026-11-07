@@ -580,7 +580,8 @@ function readOperatorOperationPolicy(file: string): HarnessConfig["operationPoli
   const root = parsed as Record<string, unknown>;
   if (root.version !== 1) throw new Error("Nexus config.json requires version: 1.");
   for (const key of Object.keys(root)) {
-    if (key !== "version" && key !== "operationPolicy") throw new Error(`Unsupported Nexus config.json field '${key}'.`);
+    // `worktree` is validated where it is used (worktrunk/config.ts), so a bad value cannot stop unrelated commands.
+    if (key !== "version" && key !== "operationPolicy" && key !== "worktree") throw new Error(`Unsupported Nexus config.json field '${key}'.`);
   }
   if (root.operationPolicy === undefined) return undefined;
   if (!root.operationPolicy || typeof root.operationPolicy !== "object" || Array.isArray(root.operationPolicy)) {

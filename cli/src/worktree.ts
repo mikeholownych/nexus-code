@@ -47,14 +47,27 @@ export class WorktreeManager {
     this.gitRoot = this.resolveGitRoot();
   }
 
+  /**
+   * The main checkout, found from the git common dir so that a manager created inside a linked worktree (including
+   * one of its own `.nexus/worktrees/<id>` directories) still anchors on the repository that owns them.
+   */
   private resolveGitRoot(): string {
     try {
-      const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
         cwd: this.workspace,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
-      return out;
+      if (path.basename(common) === ".git") return fs.realpathSync(path.dirname(common));
+    } catch {
+      // fall through to the work tree root
+    }
+    try {
+      return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: this.workspace,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
     } catch {
       return this.workspace;
     }

@@ -12,6 +12,8 @@ import { sanitizeBranch, validateBranchName, renderTemplate, resolveWorktreePath
 import { readRegistry, writeRegistry, registryFile } from "../src/worktrunk/registry.js";
 import { runWorktreeCommand, isReadOnlyWorktreeArgs } from "../src/worktrunk/command.js";
 import { WorktreeManager } from "../src/worktree.js";
+import { readOnlySlashAllowed } from "../src/sidecar.js";
+import { replReadOnlyAllowed } from "../src/repl.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -50,7 +52,7 @@ test("branch names are validated and sanitised for paths", () => {
     assert.notEqual(validateBranchName(bad), undefined, JSON.stringify(bad));
   }
   assert.equal(sanitizeBranch("feature/login"), "feature-login");
-  assert.equal(sanitizeBranch("../../etc"), "etc");
+  assert.match(sanitizeBranch("../../etc"), /^etc-[0-9a-f]{8}$/);
   assert.match(sanitizeBranch("a".repeat(150)), /^a{1,60}-[0-9a-f]{8}$/);
   assert.notEqual(sanitizeBranch("é"), "");
 });
@@ -101,8 +103,16 @@ test("registry: strict shape, atomic write, symlinks refused, size capped", () =
 
 test("read-only classification: only inspection subcommands pass", () => {
   for (const ok of ["", "status", "list", "list --json", "path feat"]) assert.equal(isReadOnlyWorktreeArgs(ok), true, ok);
-  for (const no of ["switch x", "switch -c x", "remove x", "rm x", "merge", "prune", "copy-ignored", "bogus", "list --force x"]) {
-    assert.equal(isReadOnlyWorktreeArgs(no), no === "list --force x" ? true : false, no);
+  for (const no of ["switch x", "switch -c x", "remove x", "rm x", "merge", "prune", "copy-ignored", "bogus"]) {
+    assert.equal(isReadOnlyWorktreeArgs(no), false, no);
+  }
+});
+
+test("both slash gates allow only inspection subcommands of /worktree", () => {
+  for (const gate of [readOnlySlashAllowed, replReadOnlyAllowed]) {
+    for (const [args, ok] of [["", true], ["status", true], ["list", true], ["path x", true], ["switch -c x", false], ["remove x", false], ["merge", false], ["discard", false], ["prune", false], ["rm x", false]] as const) {
+      assert.equal(gate("worktree", args), ok, `${gate.name} /worktree ${args}`);
+    }
   }
 });
 
@@ -145,7 +155,8 @@ test("e2e: create, list, path, previous, dirty refusal, remove", () => {
 
     assert.equal(wt(f, f.repo, ["path", "feature/one"]).output.trim(), dir);
     assert.equal(wt(f, f.repo, ["path", "^"]).output.trim(), f.repo);
-    assert.equal(wt(f, dir, ["path", "-"]).success, false); // no previous yet
+    assert.equal(wt(f, dir, ["path", "-"]).output.trim(), f.repo); // switching from main to feature/one recorded main as previous
+    assert.equal(wt(f, dir, ["path", "@"]).output.trim(), dir);
     // accept a path wherever a branch is accepted
     assert.equal(wt(f, f.repo, ["path", dir]).output.trim(), dir);
 

@@ -84,3 +84,12 @@ Every row is reproduced by the audit. Rows A1 to A3 and A5 to A9 restate earlier
 | A7 | P2 | `--isolated-home` applied only when `eval` is `argv[0]` | WP-1304 | FIXED (#422). Duplicates `01M6KXHHJHVE` |
 | A8 | P2 | Fenced native args counted `native`; legacy prose JSON uncounted | WP-1302b | FIXED via the three rows it duplicates (`01M6FBXYBC9A`, `01M6FBXYBPJM`, `01M6FBTFP1AA`: PR #419, merged `0e1f9d6e`) |
 | A9 | P2 | Evaluator commands have no memory, pid or disk budget | WP-1302 | OPEN. Duplicates the section B "No memory/pid/disk limits" row |
+
+## D. Worktrunk work packages (WP-1310 to WP-1312)
+
+| WP | Item | Status |
+|---|---|---|
+| WP-1310 | `WorktreeManager.resolveGitRoot` used `--show-toplevel`, so a manager created inside a linked worktree anchored on that worktree instead of the main checkout (latent bug, PLAN 3.3 item 2) | FIXED in the WP-1310 PR; test `WorktreeManager anchors on the git common dir from inside a linked worktree` in `cli/test/worktrunk_core.test.ts` |
+| WP-1310 | Named worktrees: `switch`, `list`, `remove`, `path`, path template and escape refusal, registry, one pinned Git helper, read-only gating in both slash gates | FIXED in the WP-1310 PR; `cli/test/worktrunk_core.test.ts`. Not done: `nexus run --worktree-branch` (needs a new durable state kind in `persistence_protection.ts`/`state.ts`; owner decision requested) |
+| WP-1311 | `copy-ignored` and the automatic step in `switch -c` | OPEN (next PR in the stack) |
+| WP-1312 | `merge` and `prune` | OPEN (next PR in the stack) |

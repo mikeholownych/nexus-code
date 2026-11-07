@@ -320,6 +320,18 @@ describe("slash router: workspace commands", () => {
     });
   });
 
+  test("worktree runs the named-worktree commands and keeps the legacy forms", async () => {
+    await withRig(async ({ reply, repo }) => {
+      const made = await reply("worktree", "switch -c feature/slash");
+      assert.equal(made.success, true, made.output);
+      assert.ok(fs.existsSync(path.join(repo, ".nexus", "worktrees", "feature-slash")));
+      assert.match((await reply("worktree", "list")).output, /feature\/slash/);
+      assert.equal((await reply("worktree", "bogus")).success, false);
+      assert.equal((await reply("worktree", "remove feature/slash")).success, true);
+      assert.match((await reply("worktree")).output, /^No speculative worktrees/);
+    });
+  });
+
   test("git commands outside a repository say so", async () => {
     await withRig(async ({ reply }) => {
       const plain = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plain-"));
