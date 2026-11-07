@@ -6,14 +6,28 @@ import { evaluatorResult } from "./result.mjs";
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 // Source excerpts and squiggles that --pretty and rustc print under a diagnostic; they carry line numbers, not messages.
 const CODE_FRAME = /^(?:\d+\s.*|[|\s~^]+)$/;
+// A coded diagnostic opens a frame; only gutter lines inside one are dropped, so an unrelated line that merely starts
+// with a number (for example a task-supplied "2 problems: ...") is still compared.
+const CODED_DIAGNOSTIC = /\berror\s+TS\d+:|\berror\[E\d+\]:/i;
+// Rustc's location and note lines belong to the frame but are not gutters.
+const FRAME_CONTINUATION = /^(?:-->|=)\s/;
 // Summary lines restate the count (and, for tsc, the first location); the diagnostics above them are what is compared.
 const SUMMARY = /^(?:Found \d+ errors?\b.*|Errors\s+Files\b.*|error: aborting due to \d+ previous errors?.*)$/i;
 // A configuration error means the checker did not check the project, whatever the baseline printed.
 const CHECKER_NOT_RUN = /\berror\s+TS(?:5057|5058|5083|5012|18003|6053):/i;
 
-function diagnosticLines(result) {
-  return `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.replace(ANSI, "").split(/\r?\n/)
-    .map((line) => line.trim()).filter((line) => line && !CODE_FRAME.test(line) && !SUMMARY.test(line));
+function diagnosticLines(result, extraDiagnostic = null) {
+  const kept = [];
+  let inFrame = false;
+  for (const raw of `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.replace(ANSI, "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || SUMMARY.test(line)) continue;
+    if (CODED_DIAGNOSTIC.test(line) || extraDiagnostic?.test(line)) { kept.push(line); inFrame = true; continue; }
+    if (inFrame && CODE_FRAME.test(line)) continue;
+    kept.push(line);
+    if (!FRAME_CONTINUATION.test(line)) inFrame = false;
+  }
+  return kept;
 }
 
 /** Compare diagnostics by message: a position that merely moves (an insertion above it) is not a new diagnostic. */
@@ -47,8 +61,8 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
     catch (error) { return { status: null, error: String(error?.message ?? error), stdout: "", stderr: "" }; }
   };
   const [baselineResult, candidateResult] = await Promise.all([invoke(baseline), invoke(candidate)]);
-  const baselineOutput = diagnosticLines(baselineResult);
-  const candidateOutput = diagnosticLines(candidateResult);
+  const baselineOutput = diagnosticLines(baselineResult, extraDiagnostic);
+  const candidateOutput = diagnosticLines(candidateResult, extraDiagnostic);
   const baselineCounts = new Map();
   for (const line of baselineOutput) baselineCounts.set(diagnosticKey(line), (baselineCounts.get(diagnosticKey(line)) ?? 0) + 1);
   const seenCandidate = new Map();
