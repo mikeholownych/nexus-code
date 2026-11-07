@@ -400,6 +400,14 @@ function verifyInstalledArchive(installRoot, archiveSha256, sourceCommit, expect
   }
 }
 
+/** Every git call of the matrix runner: replace refs ignored, an explicit large buffer (listings of big repos exceed 1 MiB). */
+function runGit(root, args, options = {}) {
+  return execFileSync("git", ["--no-replace-objects", ...args], {
+    cwd: root, encoding: "utf8", maxBuffer: 1024 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
+    ...options, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+  });
+}
+
 function verifyCandidateCheckout(checkoutRoot, sourceCommit, sourceTree) {
   if (typeof sourceTree !== "string" || !commitPattern.test(sourceTree)) throw new TypeError("pinned candidate source tree id (40 hex) is required");
   if (typeof checkoutRoot !== "string" || !checkoutRoot) throw new TypeError("explicit candidate Git checkout root is required");
@@ -408,7 +416,7 @@ function verifyCandidateCheckout(checkoutRoot, sourceCommit, sourceTree) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(resolvedRoot) !== resolvedRoot) {
     throw new TypeError("candidate checkout root must be a real directory");
   }
-  const git = (args) => execFileSync("git", args, { cwd: resolvedRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const git = (args) => runGit(resolvedRoot, args).trim();
   let gitRoot;
   let head;
   let status;
@@ -432,11 +440,12 @@ function verifyCandidateCheckout(checkoutRoot, sourceCommit, sourceTree) {
  * tracked file's bytes must hash to its recorded blob id, and no untracked or ignored file may exist.
  */
 function verifyCheckoutContent(root, git, sourceTree) {
+  if (git(["for-each-ref", "--count=1", "refs/replace"])) throw new TypeError("candidate checkout has git replace refs, which can make a commit id stand for other content");
   const tree = git(["rev-parse", "HEAD^{tree}"]);
   if (tree.toLowerCase() !== sourceTree.toLowerCase()) throw new TypeError("candidate checkout source tree does not match the pinned tree id");
-  const extra = execFileSync("git", ["ls-files", "-z", "--others"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
+  const extra = runGit(root, ["ls-files", "-z", "--others"]).split("\0").filter(Boolean);
   if (extra.length > 0) throw new TypeError(`candidate checkout has untracked or ignored files (extra content): ${extra[0]}`);
-  const listing = execFileSync("git", ["ls-tree", "-r", "-z", "HEAD"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
+  const listing = runGit(root, ["ls-tree", "-r", "-z", "HEAD"]).split("\0").filter(Boolean);
   const regular = [];
   for (const line of listing) {
     const tab = line.indexOf("\t");
@@ -446,15 +455,17 @@ function verifyCheckoutContent(root, git, sourceTree) {
     const full = path.join(root, relative);
     const stat = fs.lstatSync(full);
     if (mode === "120000") {
-      const target = execFileSync("git", ["hash-object", "--stdin"], { cwd: root, input: fs.readlinkSync(full), encoding: "utf8" }).trim();
+      const target = runGit(root, ["hash-object", "--stdin"], { input: fs.readlinkSync(full) }).trim();
       if (target !== blob) throw new TypeError(`checkout content does not match the pinned tree: ${relative}`);
     } else {
       if (!stat.isFile()) throw new TypeError(`checkout content does not match the pinned tree: ${relative}`);
+      // The recorded mode is authoritative whatever core.fileMode says: an exec bit must match the tree's 100755/100644.
+      if (((stat.mode & 0o100) !== 0) !== (mode === "100755")) throw new TypeError(`checkout file mode does not match the pinned tree (executable bit): ${relative}`);
       regular.push({ relative, blob });
     }
   }
   if (regular.length > 0) {
-    const hashes = execFileSync("git", ["hash-object", "--no-filters", "--stdin-paths"], { cwd: root, input: regular.map(({ relative }) => relative).join("\n") + "\n", encoding: "utf8" }).trim().split("\n");
+    const hashes = runGit(root, ["hash-object", "--no-filters", "--stdin-paths"], { input: regular.map(({ relative }) => relative).join("\n") + "\n" }).trim().split("\n");
     regular.forEach(({ relative, blob }, index) => {
       if (hashes[index] !== blob) throw new TypeError(`checkout content does not match the pinned tree: ${relative}`);
     });

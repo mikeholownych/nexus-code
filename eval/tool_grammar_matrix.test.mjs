@@ -277,6 +277,61 @@ test("matrix rejects tampered checkout content hidden from git status (assume-un
   }
 });
 
+test("matrix rejects an exec-bit change even when core.fileMode=false hides it from git status", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-tree-mode-"));
+  try {
+    const fixture = createCandidateFixture(root, "unused", []);
+    const git = (...args) => execFileSync("git", ["-C", fixture.candidateCheckoutRoot, ...args], { encoding: "utf8" });
+    git("config", "core.fileMode", "false");
+    fs.chmodSync(path.join(fixture.candidateCheckoutRoot, "candidate.txt"), 0o755);
+    assert.equal(git("status", "--porcelain", "--untracked-files=all").trim(), "", "git status is blind to the mode change");
+    await assert.rejects(runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [] }), /mode.*pinned tree|executable/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix rejects a git replace ref that makes HEAD's tree differ from the real commit", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-tree-replace-"));
+  try {
+    const fixture = createCandidateFixture(root, "unused", []);
+    const git = (...args) => execFileSync("git", ["-C", fixture.candidateCheckoutRoot, ...args], { encoding: "utf8" });
+    fs.writeFileSync(path.join(fixture.candidateCheckoutRoot, "candidate.txt"), "attacker content\n");
+    git("commit", "-q", "-am", "alt");
+    const alt = git("rev-parse", "HEAD").trim();
+    const altTree = git("rev-parse", "HEAD^{tree}").trim();
+    git("reset", "-q", "--hard", fixture.sourceCommit);
+    git("replace", fixture.sourceCommit, alt);
+    git("checkout", "-q", "--detach", alt === "" ? fixture.sourceCommit : fixture.sourceCommit);
+    await assert.rejects(runToolGrammarMatrix({ ...candidateOptions(fixture), sourceTree: altTree, providers: [] }), /replace/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix handles a checkout whose git listings exceed the default 1 MiB buffer", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-tree-large-"));
+  try {
+    const fixture = createCandidateFixture(root, "unused", []);
+    const git = (...args) => execFileSync("git", ["-C", fixture.candidateCheckoutRoot, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const dir = path.join(fixture.candidateCheckoutRoot, "big");
+    fs.mkdirSync(dir);
+    for (let i = 0; i < 5500; i += 1) fs.writeFileSync(path.join(dir, `${String(i).padStart(5, "0")}-${"x".repeat(200)}`), "1");
+    git("add", "-A");
+    git("commit", "-q", "-m", "large");
+    const head = git("rev-parse", "HEAD").trim();
+    const tree = git("rev-parse", "HEAD^{tree}").trim();
+    assert.ok(Buffer.byteLength(git("ls-tree", "-r", "-z", "HEAD")) > 1024 * 1024);
+    // Reaches the content check (and fails later, on the archive/provenance binding), never an ENOBUFS from git.
+    await assert.rejects(runToolGrammarMatrix({ ...candidateOptions(fixture), sourceCommit: head, sourceTree: tree, providers: [] }), (error) => {
+      assert.doesNotMatch(String(error.message), /ENOBUFS|maxBuffer/i);
+      return true;
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("matrix rejects ignored or untracked files that git status does not list", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-tree-extra-"));
   try {
