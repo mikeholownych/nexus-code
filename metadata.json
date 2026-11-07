@@ -3,7 +3,7 @@
   "checkpoint_id": "01M6VSGX0ZNCJ29VX7PP3A03CY",
   "strategy": "manual-commit",
   "branch": "v1/v114-slop-review",
-  "checkpoints_count": 12,
+  "checkpoints_count": 13,
   "files_touched": [
     "AGENTS.md",
     "Makefile",
@@ -98,24 +98,38 @@
       "compact_transcript": "/11/transcript.jsonl",
       "content_hash": "/11/content_hash.txt",
       "prompt": "/11/prompt.txt"
+    },
+    {
+      "metadata": "/12/metadata.json",
+      "transcript": "/12/full.jsonl",
+      "compact_transcript": "/12/transcript.jsonl",
+      "content_hash": "/12/content_hash.txt",
+      "prompt": "/12/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 62,
-    "cache_creation_tokens": 442068,
-    "cache_read_tokens": 723882,
-    "output_tokens": 78749,
-    "api_call_count": 31
+    "input_tokens": 66,
+    "cache_creation_tokens": 449838,
+    "cache_read_tokens": 1893082,
+    "output_tokens": 80075,
+    "api_call_count": 33,
+    "subagent_tokens": {
+      "input_tokens": 10,
+      "cache_creation_tokens": 14245,
+      "cache_read_tokens": 933102,
+      "output_tokens": 8316,
+      "api_call_count": 5
+    }
   },
   "redaction": {
-    "replacements": 0,
+    "replacements": 24,
     "layers": {
       "betterleaks": 0,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 0,
       "credentialed_uri": 0,
-      "entropy": 0,
+      "entropy": 24,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
