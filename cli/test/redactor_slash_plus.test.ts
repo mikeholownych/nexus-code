@@ -73,3 +73,64 @@ test("ordinary text around a redacted secret is untouched", () => {
     InformationFlowBoundary.setGlobalInstance(original);
   }
 });
+
+/** Crafted tool output must not freeze the (synchronous) redactor: every pattern is linear in the input. */
+test("pathological 800 KB inputs are redacted in linear time", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  const size = 800_000;
+  const inputs: Array<[string, string]> = [
+    ["sk- repeated", "sk-".repeat(Math.ceil(size / 3))],
+    ["sk-ant- repeated", "sk-ant-".repeat(Math.ceil(size / 7))],
+    ["sk- with slashes", "sk-a/".repeat(Math.ceil(size / 5))],
+    ["Bearer repeated", "Bearer ".repeat(Math.ceil(size / 7))],
+    ["Bearer then spaces", `Bearer ${" ".repeat(size)}`],
+    ["token soup", "A1/+".repeat(Math.ceil(size / 4))],
+    ["delimiter soup", "a<`|&?".repeat(Math.ceil(size / 6))],
+    ["one huge sk- run", `sk-${"aB3".repeat(Math.ceil(size / 3))}`],
+  ];
+  try {
+    for (const [name, input] of inputs) {
+      const started = performance.now();
+      redactDiagnosticForOutput(input);
+      const elapsed = performance.now() - started;
+      assert.ok(elapsed < 4000, `${name}: ${Math.round(elapsed)} ms for ${input.length} chars`);
+    }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
+
+test("identifier-, type- and path-shaped text is not mistaken for a high-entropy secret", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    for (const text of [
+      "returns Promise<UpgradeExecutionResult> when done",
+      "see `docs/reviews/evidence/v1/PLAN-04_SESSION_POWER_RECOVERY` for details",
+      "merge into downstream/branch-specific. Then continue",
+      "call `executeOperationFromCheckpoint` before `restoreWorkspaceState`",
+      "Map<SessionIdentifier, WorkspaceTrustDecision> is cached",
+      "wrote `/tmp/nexus-collab3r-C72e2R` and `/home/mike/nexus-wt/gov-8cf3e82` for the run",
+    ]) {
+      assert.equal(redactDiagnosticForOutput(text), text);
+    }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
+
+test("a key directly followed by / or - is redacted whole, with no tail", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    const key = "sk-ant-api03-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq";
+    for (const suffix of ["/models", "/v1/x", "-suffix", "-", "/", "=", "+extra", ".", ",", ")"]) {
+      const output = redactDiagnosticForOutput(`calling ${key}${suffix} now`);
+      assert.ok(!output.includes("Qx7Km2"), `${JSON.stringify(suffix)}: ${output}`);
+      assert.ok(!output.includes("RtBq"), `${JSON.stringify(suffix)}: ${output}`);
+    }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});

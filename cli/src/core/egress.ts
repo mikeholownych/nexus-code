@@ -425,6 +425,39 @@ function trimTrailingDelimiters(value: string): string {
 }
 
 /**
+ * A `sk-` match that extends over "/" and "+" is a key only if its body has the digit, capital or "+" a base64 secret
+ * has; `sk-learn/linear_model/ridge` is a path. A linear check on a match, instead of lookaheads inside the pattern
+ * (three unbounded lookaheads rescan the whole run from every "sk-", which is quadratic on `sk-sk-sk-...`).
+ */
+function looksLikeBase64Key(match: string): boolean {
+  return /[0-9A-Z+]/.test(match.slice(match.indexOf("-", match.startsWith("sk-ant-") ? 3 : 0) + 1));
+}
+
+/**
+ * A token produced only by the newer delimiters (`<>`, backticks, `|`, `&`, `?`) or by trimming trailing sentence
+ * punctuation must look like a credential, not like an identifier or a path: `UpgradeExecutionResult` from
+ * `Promise<UpgradeExecutionResult>` and `downstream/branch-specific` are made of letters and word separators only.
+ * Random credentials do not split into words (or carry "+"/"="). Tokens the original tokenizer already produced keep its behaviour.
+ */
+function looksLikeCredentialToken(token: string): boolean {
+  if (/[+=]/.test(token)) return true;
+  // A filesystem path (rooted, or with two or more separators) is not a credential even with a generated directory name;
+  // a base64 secret that happens to contain slashes also carries "+" or "=", or has at most one.
+  if (token.startsWith("/") || (token.match(/\//g)?.length ?? 0) >= 2) return false;
+  return !token.split(/[/._-]+/).every(isIdentifierPart);
+}
+
+/** A number, a short tag such as `v1` or `x86`, or letters that split cleanly into words of two or more letters. */
+function isIdentifierPart(part: string): boolean {
+  if (part === "") return true;
+  if (/^\d+$/.test(part) || /^[a-z]{1,3}\d{1,3}$/i.test(part)) return true;
+  if (!/^[A-Za-z]+$/.test(part)) return false;
+  // camelCase, PascalCase, UPPER and lower words. Random base64 splits into one-letter pieces (`wJalrXUtn...`).
+  const words = part.match(/[A-Z]{2,}(?![a-z])|[A-Z][a-z]+|[a-z]{2,}/g);
+  return words !== null && words.join("").length === part.length;
+}
+
+/**
  * InformationFlowBoundary: The authoritative egress interception & secret quarantine layer.
  */
 export class InformationFlowBoundary {
@@ -438,11 +471,12 @@ export class InformationFlowBoundary {
   private policy: EgressPolicy = {};
 
   // Deterministic secret patterns (DATA-002)
-  private static DETERMINISTIC_PATTERNS: Array<{ name: string; regex: RegExp }> = [
+  private static DETERMINISTIC_PATTERNS: Array<{ name: string; regex: RegExp; accept?: (secret: string) => boolean }> = [
     // OpenAI / LLM API keys
-    { name: "OPENAI_API_KEY", regex: /\b(?:sk-(?=[a-zA-Z0-9_\-+\/]*\d)(?=[a-zA-Z0-9_\-+\/]*[A-Z])(?=[a-zA-Z0-9_\-+\/]*[a-z])[a-zA-Z0-9_\-+\/]{20,256}={0,2}(?![a-zA-Z0-9_\-+\/=])|sk-[a-zA-Z0-9_\-]{20,64}\b)/g },
-    // Anthropic API keys
-    { name: "ANTHROPIC_API_KEY", regex: /\b(?:sk-ant-(?=[a-zA-Z0-9_\-+\/]*\d)(?=[a-zA-Z0-9_\-+\/]*[A-Z])(?=[a-zA-Z0-9_\-+\/]*[a-z])[a-zA-Z0-9_\-+\/]{20,256}={0,2}(?![a-zA-Z0-9_\-+\/=])|sk-ant-[a-zA-Z0-9_\-]{20,64}\b)/g },
+    { name: "OPENAI_API_KEY", regex: /\bsk-[a-zA-Z0-9_\-+\/]{20,256}={0,2}/g, accept: looksLikeBase64Key },
+    { name: "OPENAI_API_KEY", regex: /\bsk-[a-zA-Z0-9_\-]{20,64}\b/g },
+    { name: "ANTHROPIC_API_KEY", regex: /\bsk-ant-[a-zA-Z0-9_\-+\/]{20,256}={0,2}/g, accept: looksLikeBase64Key },
+    { name: "ANTHROPIC_API_KEY", regex: /\bsk-ant-[a-zA-Z0-9_\-]{20,64}\b/g },
     // GitHub Tokens (classic, fine-grained, oauth, user, server)
     { name: "GITHUB_TOKEN", regex: /\b(?:ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{50,90}|gho_[a-zA-Z0-9]{36}|ghu_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36})\b/g },
     // Google API Key
@@ -583,11 +617,16 @@ export class InformationFlowBoundary {
     }
 
     // 2. Deterministic High-Confidence Patterns (DATA-002: Category 2)
-    for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
+    for (const { name, regex, accept } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
       const re = new RegExp(regex.source, regex.flags);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
         const fullMatch = match[0];
+        if (accept && !accept(fullMatch)) {
+          // Rejected as not secret-shaped: resume one character on, so a real key later in the same run is still found.
+          re.lastIndex = match.index + 1;
+          continue;
+        }
         // If capture group exists (e.g. Bearer token), extract captured secret, else fullMatch
         let secretVal = match[1] && typeof match[1] === "string" ? match[1] : fullMatch;
         let trimEnd = secretVal.length;
@@ -670,9 +709,12 @@ export class InformationFlowBoundary {
 
     // 4. High-Entropy Token Detection (DATA-002: Category 4 / DATA-004)
     // Check individual non-whitespace tokens length >= 20 with high Shannon entropy
+    const originalTokens = new Set(text.split(/[\s,;'"()\[\]{}=:]+/));
     const tokens = text.split(/[\s,;'"()\[\]{}=:&?<>`|]+/).map((token) => token.replace(/[.!]+$/, ""));
     for (const tok of tokens) {
       if (
+        // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
+        (originalTokens.has(tok) || looksLikeCredentialToken(tok)) &&
         tok.length >= 20 &&
         tok.length <= 128 &&
         !tok.startsWith("[NEXUS_SEC_REF_") &&
