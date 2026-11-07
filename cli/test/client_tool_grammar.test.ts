@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { LocalLlmClient } from "../src/client.js";
+import { LocalLlmClient, normalizeNullableOptionalToolArguments } from "../src/client.js";
 import { adaptToolDefinitionsForServer } from "../src/core/tool_grammar_provider.js";
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse, body: string) => void;
@@ -235,9 +235,9 @@ test("client preserves vLLM strict schemas in a streaming completion", async () 
   assert.equal("response_format" in sent, false);
 });
 
-test("client normalizes nullable optional arguments in streamed and non-streamed calls", async () => {
+test("client returns tool-call arguments verbatim; normalisation happens once, at dispatch (WP-1303)", async () => {
   const wireArgs = { path: null, start_line: null, end_line: 0, include_hidden: false, label: "" };
-  const expected = { path: null, end_line: 0, include_hidden: false, label: "" };
+  const expected = wireArgs;
   const observed: unknown[] = [];
   const run = async (stream: boolean) => withEndpoint((req, res, body) => {
     if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", owned_by: "vllm", max_model_len: 8192 }] });
@@ -456,4 +456,19 @@ test("client omits constrained fields for missing malformed or mismatched provid
       assert.equal(sent.tools[0].function.strict, undefined);
     });
   }
+});
+
+test("normalizer keeps an explicit null where the declared schema allows null (WP-1303)", () => {
+  const tool = { type: "function", function: { name: "t", parameters: { type: "object", required: ["a"], properties: {
+    a: { type: "string" },
+    typeList: { type: ["string", "null"] },
+    anyOfNull: { anyOf: [{ type: "string" }, { type: "null" }] },
+    oneOfNull: { oneOf: [{ type: "number" }, { type: "null" }] },
+    nullableFlag: { type: "string", nullable: true },
+    enumNull: { enum: ["x", null] },
+    plain: { type: "number" },
+  } } } } as any;
+  const out = normalizeNullableOptionalToolArguments("t", { a: "v", typeList: null, anyOfNull: null, oneOfNull: null, nullableFlag: null, enumNull: null, plain: null }, [tool]);
+  assert.deepEqual(out, { a: "v", typeList: null, anyOfNull: null, oneOfNull: null, nullableFlag: null, enumNull: null });
+  assert.deepEqual(normalizeNullableOptionalToolArguments("t", { a: null, plain: null }, [tool]), { a: null }, "a required argument stays null so validation rejects it");
 });

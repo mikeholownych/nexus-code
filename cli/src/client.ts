@@ -39,7 +39,21 @@ import { providerDefinition } from "./providers.js";
 
 type OAuthCredential = Extract<StoredCredential, { type: "oauth" }>;
 
-/** Remove nulls from optional top-level arguments using the tool schema the agent originally declared. */
+/** True when the declared schema accepts an explicit null (type list, nullable, enum, or anyOf/oneOf branch). */
+function schemaAllowsNull(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const s = schema as Record<string, unknown>;
+  if (s.type === "null" || (Array.isArray(s.type) && s.type.includes("null"))) return true;
+  if (s.nullable === true) return true;
+  if (Array.isArray(s.enum) && s.enum.includes(null)) return true;
+  return [s.anyOf, s.oneOf].some((branches) => Array.isArray(branches) && branches.some(schemaAllowsNull));
+}
+
+/**
+ * Remove nulls from optional top-level arguments using the tool schema the agent originally declared. This is the
+ * single normalisation point: the agent applies it at dispatch, after every call (native, repaired, text-mode) is
+ * parsed. An explicit null survives where the declared schema allows it; a required argument is never touched.
+ */
 export function normalizeNullableOptionalToolArguments(toolName: string, rawArgs: unknown, tools: readonly ToolDefinition[]): unknown {
   const tool = tools.find((candidate) => candidate.type === "function" && candidate.function.name === toolName);
   if (!tool || !tool.function.parameters || !rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) return rawArgs;
@@ -48,27 +62,11 @@ export function normalizeNullableOptionalToolArguments(toolName: string, rawArgs
   const properties = tool.function.parameters.properties ?? {};
   let normalized: Record<string, unknown> | undefined;
   for (const name of Object.keys(properties)) {
-    if (required.has(name) || (rawArgs as Record<string, unknown>)[name] !== null) continue;
+    if (required.has(name) || (rawArgs as Record<string, unknown>)[name] !== null || schemaAllowsNull(properties[name])) continue;
     normalized ??= { ...(rawArgs as Record<string, unknown>) };
     delete normalized[name];
   }
   return normalized ?? rawArgs;
-}
-
-function normalizeNullableOptionalArguments(message: ChatMessage, tools: readonly ToolDefinition[]): ChatMessage {
-  if (!message.tool_calls?.length) return message;
-  let changed = false;
-  const toolCalls = message.tool_calls.map((call) => {
-    const rawArgs = call.function.arguments;
-    let parsed: unknown;
-    try { parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs; }
-    catch { return call; }
-    const normalized = normalizeNullableOptionalToolArguments(call.function.name, parsed, tools);
-    if (normalized === parsed) return call;
-    changed = true;
-    return { ...call, function: { ...call.function, arguments: JSON.stringify(normalized) } };
-  });
-  return changed ? { ...message, tool_calls: toolCalls } : message;
 }
 
 function originOf(url: string | undefined): string | undefined {
@@ -1446,7 +1444,7 @@ export class LocalLlmClient {
     const response = await this.withReceipt(requestId, purpose, () =>
       this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
     );
-    return normalizeNullableOptionalArguments(response, tools);
+    return response;
   }
 
   private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal): Promise<ChatMessage> {
@@ -1604,7 +1602,7 @@ export class LocalLlmClient {
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
       ),
     );
-    return normalizeNullableOptionalArguments(response, tools);
+    return response;
   }
 
   /**
