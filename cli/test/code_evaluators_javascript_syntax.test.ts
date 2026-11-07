@@ -47,3 +47,21 @@ test("syntax_ast still accepts valid ESM and CommonJS .js and honours package ty
     assert.equal(typed.passed, false, "a package declaring commonjs makes ESM syntax in .js an error");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("syntax_ast rejects a .js file whose nearest package.json is malformed or not a regular file", async () => {
+  const root = scratch("wp1302-esm-pkg-");
+  try {
+    fs.mkdirSync(path.join(root, "bad"));
+    fs.writeFileSync(path.join(root, "bad/package.json"), "{ not json");
+    fs.writeFileSync(path.join(root, "bad/x.js"), "export const a = 1;\n");
+    const malformed = await ev.evaluateSyntaxAst({ root, files: ["bad/x.js"] });
+    assert.equal(malformed.passed, false, "node itself rejects the file with ERR_INVALID_PACKAGE_CONFIG");
+    fs.mkdirSync(path.join(root, "dev"));
+    fs.symlinkSync("/dev/zero", path.join(root, "dev/package.json"));
+    fs.writeFileSync(path.join(root, "dev/x.js"), "export const a = 1;\n");
+    const started = Date.now();
+    const device = await ev.evaluateSyntaxAst({ root, files: ["dev/x.js"] });
+    assert.equal(device.passed, false);
+    assert.ok(Date.now() - started < 5000, "the metadata read is bounded");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -11,7 +11,8 @@ from what the agent said about its own work.
       mode). Requires Node.js 22.13 or later.
     - **JavaScript** (`.js`, `.mjs`, `.cjs`): `node --check` of the source as a module or as CommonJS, decided by the
       extension and the nearest `package.json` `type`. An undeclared `.js` passes when it parses as either. (`node
-      --check <file>` alone accepts ESM syntax errors in such a file.)
+      --check <file>` alone accepts ESM syntax errors in such a file.) A malformed nearest `package.json`, or one that is not a small
+      regular file, fails the file, as it does in Node.
     - **Python** (`.py`): `ast.parse` in an isolated interpreter.
   - A file over `maxSourceBytes` (default 8 MiB) is refused unparsed; built-in parsers run in a child process stopped after
     `parserTimeoutMs` (default 30 s).
@@ -60,7 +61,7 @@ from what the agent said about its own work.
     same message is still new. Paths that differ between revisions must still be normalized by the caller.
   - Recognised diagnostics are TypeScript (`error TS1234:`) and rustc (`error[E0123]:`). For another checker, set
     `diagnosticPattern` (a regular expression, case-insensitive) on the evaluator spec or `task.typecheck`; without a
-    match a non-zero exit is an infrastructure failure, not a comparison.
+    match a non-zero exit is an infrastructure failure, not a comparison. An invalid pattern is a failed result with `details.error`, not an exception.
   - A configuration error from the checker (`TS5057` missing tsconfig, `TS5058`, `TS5083`, `TS5012`, `TS18003`,
     `TS6053`) on either side fails closed: nothing was type-checked.
 - **`diff_boundary.mjs`**
