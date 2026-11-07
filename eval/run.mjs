@@ -22,6 +22,7 @@ import { observeT4Fixture } from "./t4_fixtures.mjs";
 import { assertDatasetTaskDigest, loadDataset } from "./dataset.mjs";
 import { createAgentLaunchPayload, serializeAgentLaunchPayload } from "./runner_api.mjs";
 import { assertTaskSnapshotDigest } from "./runner_integrity.mjs";
+import { runPostAgentPhase } from "./check_phase.mjs";
 import { captureWorkspaceSnapshot, needsEvaluatorConfigurationBaseline, runCodeEvaluators } from "./evaluators/code/runner.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -296,11 +297,13 @@ async function runOnce(task, run) {
       cloneWorkspace(hiddenWs, regressionWs);
     }
     const refused = (check) => ({ pass: false, status: null, timedOut: false, overflow: false, output: `hardened check refused: ${hardening.configChanges.join("; ")}`, refused: true, resources: null, containmentProblem: null, check });
-    // Before the hidden and regression checks: in a non-hardened run they stage tests and write caches into the candidate
-    // workspace, which diff_boundary and the build/typecheck copy would otherwise count as the agent's own changes.
-    const evaluators = await runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline, resources: config.resources ?? null, scratchRoot: scratch });
-    const hidden = hardening?.configChanges.length ? refused("hidden") : await runCheck(task, hiddenWs, task.hidden, true, { readOnlyHidden: hardened, protectedCorpusPaths: protectedCorpusPathsForRun() });
-    const regression = task.regression ? (hardening?.configChanges.length ? refused("regression") : await runCheck(task, regressionWs, task.regression, false)) : null;
+    // Evaluators first (eval/check_phase.mjs): in a non-hardened run the hidden and regression checks stage tests and write
+    // caches into the candidate workspace, which diff_boundary and the build/typecheck copy would count as the agent's work.
+    const { evaluators, hidden, regression } = await runPostAgentPhase({
+      evaluators: () => runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline, resources: config.resources ?? null, scratchRoot: scratch }),
+      hidden: async () => hardening?.configChanges.length ? refused("hidden") : await runCheck(task, hiddenWs, task.hidden, true, { readOnlyHidden: hardened, protectedCorpusPaths: protectedCorpusPathsForRun() }),
+      regression: async () => task.regression ? (hardening?.configChanges.length ? refused("regression") : await runCheck(task, regressionWs, task.regression, false)) : null,
+    });
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
     }
