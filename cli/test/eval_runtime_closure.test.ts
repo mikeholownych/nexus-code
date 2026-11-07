@@ -1,6 +1,7 @@
 /**
  * The packaged evaluator runtime (scripts/stage_eval_runtime.mjs) must contain every module the staged modules import,
  * or an installed `nexus eval` fails with ERR_MODULE_NOT_FOUND (a new eval/check_phase.mjs import once broke this).
+ * Limit: only static `import ... from "./x"`, `import "./x"` and literal `import("./x")` are scanned; a computed dynamic import is not.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
