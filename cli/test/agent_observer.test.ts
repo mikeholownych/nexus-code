@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AutonomousAgent, AgentObserver, observationKey } from "../src/agent.js";
+import { readRequests } from "../src/core/observation_identity.js";
 import { startGateway, makeRepo } from "./helpers/fixtures.js";
 
 describe("AgentObserver", () => {
@@ -23,6 +24,51 @@ describe("AgentObserver", () => {
     } finally {
       agent.shutdown();
       await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  for (const form of ["native"] as const) {
+    test(`null-padded optional arguments reach the history, read tracking and rerun key normalised (${form}, WP-1303)`, async () => {
+      const padded = { path: "a.txt", start_line: null, offset: null, length: null };
+      const gw = await startGateway((n) => n === 1
+        ? form === "native"
+          ? { kind: "tools", calls: [{ name: "read_file", args: padded }] }
+          : { kind: "text", content: `<tool_call>${JSON.stringify({ name: "read_file", arguments: padded })}</tool_call>` }
+        : { kind: "text", content: "read complete" });
+      const repo = makeRepo({ "a.txt": "alpha\n" });
+      const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash" } as any);
+      try {
+        await agent.runTurn("read the file");
+        const call = (agent as any).messages.flatMap((m: any) => m.tool_calls ?? []).find((c: any) => c.function.name === "read_file");
+        assert.ok(call, "the read_file call is in the history");
+        // Everything that keys on the raw call arguments (loop tracking, read coverage, rerun notes) sees one identity.
+        assert.equal(observationKey("read_file", call.function.arguments), observationKey("read_file", { path: "a.txt" }));
+        assert.ok(readRequests("read_file", call.function.arguments, repo), "a null-padded read stays classifiable");
+        assert.deepEqual(JSON.parse(call.function.arguments), { path: "a.txt" });
+      } finally {
+        agent.shutdown();
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("text-mode and repaired calls are normalised at ingest (WP-1303)", async () => {
+    const repo = makeRepo({ "a.txt": "alpha\n" });
+    const agent = new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash" } as any);
+    try {
+      const padded = { path: "a.txt", start_line: null, offset: null, length: null };
+      const text = (agent as any).parseNormalizedResponse({ role: "assistant", content: `<tool_call>${JSON.stringify({ name: "read_file", arguments: padded })}</tool_call>` }, false);
+      const repaired = (agent as any).parseNormalizedResponse({ role: "assistant", content: `<tool_call>{"name":"read_file","arguments":{"path":"a.txt","start_line":null,},}</tool_call>` }, false);
+      for (const parsed of [text, repaired]) {
+        assert.equal(parsed.toolCalls.length, 1);
+        const args = parsed.toolCalls[0].function.arguments;
+        assert.deepEqual(typeof args === "string" ? JSON.parse(args) : args, { path: "a.txt" });
+        assert.ok(readRequests("read_file", args, repo));
+      }
+    } finally {
+      agent.shutdown();
       fs.rmSync(repo, { recursive: true, force: true });
     }
   });

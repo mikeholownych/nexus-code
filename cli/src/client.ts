@@ -46,6 +46,9 @@ function schemaAllowsNull(schema: unknown): boolean {
   if (s.type === "null" || (Array.isArray(s.type) && s.type.includes("null"))) return true;
   if (s.nullable === true) return true;
   if (Array.isArray(s.enum) && s.enum.includes(null)) return true;
+  // An unresolved reference cannot be judged here: keep the null (fail safe) and let the tool validate it.
+  if (typeof s.$ref === "string") return true;
+  if (Array.isArray(s.allOf) && s.allOf.length > 0) return s.allOf.every(schemaAllowsNull);
   return [s.anyOf, s.oneOf].some((branches) => Array.isArray(branches) && branches.some(schemaAllowsNull));
 }
 

@@ -472,3 +472,16 @@ test("normalizer keeps an explicit null where the declared schema allows null (W
   assert.deepEqual(out, { a: "v", typeList: null, anyOfNull: null, oneOfNull: null, nullableFlag: null, enumNull: null });
   assert.deepEqual(normalizeNullableOptionalToolArguments("t", { a: null, plain: null }, [tool]), { a: null }, "a required argument stays null so validation rejects it");
 });
+
+test("normalizer fails safe on $ref and honours allOf when deciding whether null is allowed (WP-1303)", () => {
+  const tool = { type: "function", function: { name: "t", parameters: { type: "object", required: [], properties: {
+    ref: { $ref: "#/$defs/Maybe" },
+    allBoth: { allOf: [{ type: ["string", "null"] }, { nullable: true }] },
+    allOne: { allOf: [{ type: ["string", "null"] }, { type: "string" }] },
+  } } } } as any;
+  assert.deepEqual(
+    normalizeNullableOptionalToolArguments("t", { ref: null, allBoth: null, allOne: null }, [tool]),
+    { ref: null, allBoth: null },
+    "an unresolvable $ref keeps the null; allOf allows null only when every branch does",
+  );
+});
