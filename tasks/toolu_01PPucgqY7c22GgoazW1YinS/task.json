@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01PPucgqY7c22GgoazW1YinS",
+  "agent_id": "a8d693af30a33e894",
+  "subagent_type": "general-purpose",
+  "task_description": "TUI dogfood audit",
+  "token_usage": {
+    "input_tokens": 232,
+    "cache_creation_tokens": 170850,
+    "cache_read_tokens": 12939041,
+    "output_tokens": 60786,
+    "api_call_count": 116
+  },
+  "started_at": "2026-11-07T19:09:17.281422354Z",
+  "completed_at": "2026-11-07T19:41:59.658532301Z"
+}
