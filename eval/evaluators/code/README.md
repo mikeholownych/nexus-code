@@ -23,13 +23,24 @@ from what the agent said about its own work.
   - Runs in a pinned workspace: the pre-agent tree plus the candidate's changes to source and data files (additions, edits
     and deletions): the source extensions `syntax_ast` knows, plus `.json .css .scss .less .sql .proto .graphql .html .svg
     .txt .csv .yaml .yml .toml .go .c .h .cc .cpp .hpp .java .kt .cs .swift`.
-  - Not carried, and reported in `details.ignoredCandidateChanges` (never silently): any changed path of another type
-    (shell scripts, Gradle/Maven/Ruby/Just files, `.ini`, `.xml`, lockfiles, binaries), any symlink or special file, and
-    build configuration or helpers the build or a checker obeys (`package.json`, `tsconfig*.json`, tool configs such as
-    `.eslintrc*`, `tslint.json`, `.golangci.yml`, `.rubocop.yml`, `angular.json`, `project.json`, any `*.config.*`,
-    `build.rs`, `setup.py`, `conftest.py`, `Makefile`, `Cargo.toml`, `go.mod`, `tools/*.js`, `build.*s`/`gulpfile.*`). These keep their baseline content, so they never change the build. This deviates from the plan
-    wording ("carry every candidate build input or fail closed and report ignored changed paths"): it carries an allowlist
-    of input types, pins and reports the rest, and does not fail closed.
+  - One pinning policy. A file the build or a checker obeys keeps its baseline content, and an edit to it is reported in
+    `details.ignoredCandidateChanges`. Only two kinds of path are pinned:
+    - names that are unambiguous at any depth: `package.json`, lockfiles, `tsconfig*.json`, `jsconfig.json`,
+      `pyrightconfig.json`, `build.rs`, `setup.py`/`setup.cfg`, `pyproject.toml`, `conftest.py`, `noxfile.py`, `tox.ini`,
+      `pytest.ini`, `Makefile`, `CMakeLists.txt`, `Cargo.toml`/`Cargo.lock`, `go.mod`/`go.sum`/`go.work`,
+      `rust-toolchain*`, `.cargo/config*`, `.npmrc`, `.yarnrc*`;
+    - tool configuration and build scripts at the project root, or at a package root one level under `packages/`, `apps/`,
+      `libs/`, `crates/`, `modules/` or `services/`: `.babelrc*`, `.eslintrc*`, `.mocharc.*`, `eslint.config.*`,
+      `<tool>.config.*` for webpack, vite, vitest, rollup, postcss, babel, jest, next, nuxt, tsup, turbo, metro, tailwind,
+      prettier, astro, playwright, cypress, karma, esbuild, gulp, stylelint, commitlint and svelte, `ruff.toml`,
+      `clippy/rustfmt/deny.toml`, `biome.json*`, `deno.json*`, `.swcrc`, `tslint.json`, `.golangci.y*ml`, `.rubocop.yml`,
+      `angular.json`, `project.json`, `nx.json`, `lerna.json`, `build`/`compile`/`typecheck`/`gulpfile`/`Gruntfile`/
+      `Jakefile` `.js/.ts` variants, `scripts/build|compile|typecheck.*s`, and `tools/*.js`.
+    Everything else is carried if it is a source or data type, so ordinary source such as `src/config/database.config.ts`
+    or `src/build.ts` reaches the build. A changed path that is not a source or data type (shell scripts, Gradle/Maven/
+    Ruby/Just files, `.ini`, `.xml`, binaries) and any symlink or special file is not carried either, and is reported.
+    This deviates from the plan wording ("carry every candidate build input or fail closed and report ignored changed
+    paths"): it carries an allowlist of input types, pins and reports the rest, and does not fail closed.
   - Skipped by the snapshot, at any depth, so a large tree does not trip its limits and nothing under them is overlaid
     or deleted: `node_modules/` and `__pycache__/` (never reported); a virtualenv (`.venv/`, `venv/` holding
     `pyvenv.cfg`); `.mypy_cache/` and `.pytest_cache/` holding `CACHEDIR.TAG`; and `target/` only where it is Cargo output
