@@ -2,15 +2,37 @@ import path from "node:path";
 import { runArgv } from "./command.mjs";
 import { evaluatorResult } from "./result.mjs";
 
+// Colored (`--pretty`) output: ANSI escapes would hide the diagnostic code from the recogniser.
+const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+// Source excerpts and squiggles that --pretty and rustc print under a diagnostic; they carry line numbers, not messages.
+const CODE_FRAME = /^(?:\d+\s.*|[|\s~^]+)$/;
+// Summary lines restate the count (and, for tsc, the first location); the diagnostics above them are what is compared.
+const SUMMARY = /^(?:Found \d+ errors?\b.*|Errors\s+Files\b.*|error: aborting due to \d+ previous errors?.*)$/i;
+// A configuration error means the checker did not check the project, whatever the baseline printed.
+const CHECKER_NOT_RUN = /\berror\s+TS(?:5057|5058|5083|5012|18003|6053):/i;
+
 function diagnosticLines(result) {
-  return `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.replace(ANSI, "").split(/\r?\n/)
+    .map((line) => line.trim()).filter((line) => line && !CODE_FRAME.test(line) && !SUMMARY.test(line));
+}
+
+/** Compare diagnostics by message: a position that merely moves (an insertion above it) is not a new diagnostic. */
+function diagnosticKey(line) {
+  return line.replace(/\(\d+,\d+\)/g, "(L,C)").replace(/:\d+:\d+\b/g, ":L:C").replace(/:\d+(?=[:\s]|$)/g, ":L");
+}
+
+function recognizer(diagnosticPattern) {
+  if (diagnosticPattern === undefined) return null;
+  try { return new RegExp(diagnosticPattern, "i"); }
+  catch (error) { throw new TypeError(`diagnosticPattern is not a valid regular expression: ${error.message}`); }
 }
 
 /**
  * Compare baseline and candidate typecheck diagnostics: new diagnostics fail, and so does a non-zero candidate exit when
  * the baseline exited 0 or the candidate printed no diagnostics (a silent failure).
  */
-export async function evaluateTypecheckClean({ baseline, candidate, runner = runArgv }) {
+export async function evaluateTypecheckClean({ baseline, candidate, runner = runArgv, diagnosticPattern }) {
+  const extraDiagnostic = recognizer(diagnosticPattern);
   for (const revision of [baseline, candidate]) {
     if (!revision || typeof revision.command !== "string" || !revision.command || !Array.isArray(revision.args ?? []) ||
         typeof revision.cwd !== "string" || !path.isAbsolute(revision.cwd)) {
@@ -28,15 +50,17 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
   const baselineOutput = diagnosticLines(baselineResult);
   const candidateOutput = diagnosticLines(candidateResult);
   const baselineCounts = new Map();
-  for (const line of baselineOutput) baselineCounts.set(line, (baselineCounts.get(line) ?? 0) + 1);
+  for (const line of baselineOutput) baselineCounts.set(diagnosticKey(line), (baselineCounts.get(diagnosticKey(line)) ?? 0) + 1);
   const seenCandidate = new Map();
   const newDiagnostics = candidateOutput.filter((line) => {
-    const seen = (seenCandidate.get(line) ?? 0) + 1;
-    seenCandidate.set(line, seen);
-    return seen > (baselineCounts.get(line) ?? 0);
+    const key = diagnosticKey(line);
+    const seen = (seenCandidate.get(key) ?? 0) + 1;
+    seenCandidate.set(key, seen);
+    return seen > (baselineCounts.get(key) ?? 0);
   });
-  const recognizedDiagnostic = (lines) => lines.some((line) => /\berror\s+TS\d+:|\berror\[E\d+\]:/i.test(line));
-  const infrastructureFailure = [baselineResult, candidateResult].some((result) =>
+  const recognizedDiagnostic = (lines) => lines.some((line) => /\berror\s+TS\d+:|\berror\[E\d+\]:/i.test(line) || extraDiagnostic?.test(line));
+  const checkerDidNotRun = [...baselineOutput, ...candidateOutput].some((line) => CHECKER_NOT_RUN.test(line));
+  const infrastructureFailure = checkerDidNotRun || [baselineResult, candidateResult].some((result) =>
     result?.status == null || result?.signal != null || result?.timedOut === true || result?.error != null) ||
     (baselineResult.status !== 0 && !recognizedDiagnostic(baselineOutput)) ||
     (candidateResult.status !== 0 && !recognizedDiagnostic(candidateOutput));
