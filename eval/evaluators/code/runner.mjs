@@ -159,8 +159,8 @@ const excludedBuildConfiguration = /(?:^|\/)(?:package\.json|package-lock\.json|
  */
 const pinnedBuildHelpers = /(?:^|\/)(?:build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?|\.babelrc|\.mocharc\.[^/]+|tools\/[^/]+\.[cm]?js)$/i;
 
-/** Directories whose contents are dependencies, never candidate work: skipped by the snapshot and never overlaid. */
-const DEPENDENCY_DIRECTORIES = ["node_modules"];
+/** Dependency and Rust build-output directories (at any depth): skipped by the snapshot, never overlaid, never reported. */
+const DEPENDENCY_DIRECTORIES = ["node_modules", "target"];
 
 function pinnedBuildInput(relative) {
   return excludedBuildConfiguration.test(relative) || pinnedBuildHelpers.test(relative);
