@@ -1,12 +1,15 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import module from "node:module";
+import path from "node:path";
 
 /**
  * Built-in syntax parsers that need nothing beyond the evaluation host's own Node.js and Python:
  * - TypeScript (.ts, .mts, .cts): Node's built-in TypeScript parser (`module.stripTypeScriptTypes`, transform mode),
  *   which parses the whole file and throws on any syntax error. Requires Node.js >= 22.13; older hosts have no default.
- * - JavaScript (.js, .mjs, .cjs): `node --check` on the file itself, so the module type follows the file's extension
- *   and nearest package.json exactly as Node would run it.
+ * - JavaScript (.js, .mjs, .cjs): `node --check` of the source on stdin, as a module or as CommonJS following the file's
+ *   extension and nearest package.json. An undeclared `.js` passes when it parses as either. (`node --check <file>` alone
+ *   is not used: on a `.js` file with no declared type it accepts ESM syntax errors.)
  * - Python (.py): `ast.parse` in an isolated interpreter (`python3 -I`), source on stdin.
  * Rust, TSX and JSX have no built-in parser; callers that need them supply one, and otherwise those files fail closed.
  * Each parser returns a small descriptor object on success and throws with the parser's message on failure.
@@ -29,10 +32,30 @@ function parseTypeScript(source) {
   return { parser: "node:module.stripTypeScriptTypes" };
 }
 
-function parseJavaScript(_source, { absolutePath }) {
-  const result = spawnSync(process.execPath, ["--check", absolutePath], { env: CHILD_ENV(), timeout: TIMEOUT_MS, encoding: "utf8", shell: false });
-  if (result.status !== 0 || result.signal || result.error) throw new Error(childFailure(result, "node --check"));
-  return { parser: "node --check" };
+function declaredModuleType(absolutePath) {
+  const extension = path.extname(absolutePath).toLowerCase();
+  if (extension === ".mjs") return "module";
+  if (extension === ".cjs") return "commonjs";
+  for (let directory = path.dirname(absolutePath); ; directory = path.dirname(directory)) {
+    try {
+      const type = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"))?.type;
+      return type === "module" || type === "commonjs" ? type : null;
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR" && !(error instanceof SyntaxError)) throw error;
+    }
+    if (path.dirname(directory) === directory) return null;
+  }
+}
+
+function parseJavaScript(source, { absolutePath }) {
+  const declared = declaredModuleType(absolutePath);
+  const failures = [];
+  for (const inputType of declared ? [declared] : ["module", "commonjs"]) {
+    const result = spawnSync(process.execPath, ["--check", `--input-type=${inputType}`], { input: source, env: CHILD_ENV(), timeout: TIMEOUT_MS, encoding: "utf8", shell: false });
+    if (result.status === 0 && !result.signal && !result.error) return { parser: `node --check (${inputType})` };
+    failures.push(childFailure(result, "node --check"));
+  }
+  throw new Error(failures[0]);
 }
 
 function parsePython(source, { file }) {
