@@ -47,7 +47,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX } from "./skills.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -3431,7 +3431,9 @@ export class AutonomousAgent {
    */
   private compactionCandidate(source: ChatMessage[], recentToolTurns: number, detailBudgetChars: number, unseenOutputChars?: number): { messages: ChatMessage[]; removedObservations: string[] } {
     const system = source[0];
-    const currentUserIndex = source.map((message, index) => message.role === "user" ? index : -1).filter((index) => index >= 0).at(-1);
+    // The operator's latest request; a skill note written after it is a hint, not the request.
+    const currentUserIndex = source.map((message, index) => message.role === "user" && !isSkillNote(message.content) ? index : -1).filter((index) => index >= 0).at(-1);
+    const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]?.content) ? currentUserIndex + 1 : -1;
     const toolTurnStarts = source
       .map((message, index) => message.role === "assistant" && message.tool_calls?.length ? index : -1)
       .filter((index) => index >= 0);
@@ -3444,10 +3446,10 @@ export class AutonomousAgent {
     });
     const retained = source
       .map((message, index) => ({ message, index }))
-      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && ((message.role !== "system" && index >= recentStart) || retainedOriginalContent.has(index)));
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && index !== noteIndex && ((message.role !== "system" && index >= recentStart) || retainedOriginalContent.has(index)));
     const messagesToSummarize = source
       .map((message, index) => ({ message, index }))
-      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && index !== noteIndex && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
     const summary = this.summarizeDiscardedHistory(messagesToSummarize.map(({ message }) => message), detailBudgetChars, new Set(this.unseenToolResults(source).map((index) => source[index])));
     const compacted: ChatMessage[] = [system];
     if (messagesToSummarize.length) {
@@ -3457,7 +3459,10 @@ export class AutonomousAgent {
     }
     const selected = new Map<number, ChatMessage>();
     for (const item of retained) selected.set(item.index, item.message);
-    if (currentUserIndex !== undefined) selected.set(currentUserIndex, source[currentUserIndex]);
+    if (currentUserIndex !== undefined) {
+      selected.set(currentUserIndex, source[currentUserIndex]);
+      if (noteIndex >= 0) selected.set(noteIndex, source[noteIndex]);
+    }
     if (unseenOutputChars !== undefined) {
       const unseen = this.unseenToolResults(source)
         .filter((index) => selected.has(index) && typeof source[index].content === "string" && !retainedOriginalContent.has(index))
@@ -4780,11 +4785,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // No skill has that name: treat the text as a search. Matching advertises descriptions and activates nothing.
         const matches = this.skillManager.findSkills(String(skillName ?? ""), MAX_SKILL_MATCHES);
         if (!matches.length) {
-          return { success: true, output: `No installed skill matches '${skillName}'. Nothing was activated; try other words describing the task.` };
+          return { success: true, output: `No installed skill matches '${oneLine(String(skillName ?? "").slice(0, 200))}'. Nothing was activated; try other words describing the task.` };
         }
         return {
           success: true,
-          output: `No skill is named '${skillName}'. Nothing was activated. Installed skills that match those words; call activate_skill again with an exact name to load one:\n${matches.map((s) => `- **${s.name}**: ${s.description}`).join("\n")}`,
+          output: `No skill is named '${oneLine(String(skillName))}'. Nothing was activated. Installed skills that match those words; call activate_skill again with an exact name to load one:\n${matches.map((s) => `- **${oneLine(s.name)}**: ${oneLine(s.description)}`).join("\n")}`,
         };
       }
       console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));

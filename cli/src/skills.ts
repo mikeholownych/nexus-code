@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
+import { redactSecrets } from "./ui.js";
 
 /**
  * Share of the context window the skill catalog in the system prompt may take. A user with hundreds of installed
@@ -34,17 +35,46 @@ const MIN_DESCRIPTION_CHARS = 40;
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
 const STOPWORDS = new Set(
-  "the and for with this that from into your you are can will use used using when then than not but any all has have how what why who which where its our out per via too very just also should would could about after before over under only some more most make made need needs want wants like please file files code task work skill skills".split(" "),
+  ("the and for with this that from into your you are can will use used using when then than not but any all has have how what why who which where its our out per via too very just also should would could about after before over under only some more most make made need needs want wants like please file files code task work skill skills " +
+    // common request verbs and fillers: they say what the operator wants done, not which domain it is in
+    "write writes wrote read reads add adds create creates build builds run runs fix fixes update updates change changes check checks help get gets set sets show find list look give take new now see tell explain implement make test tests try let can't dont does did done say hello thanks thank").split(" "),
 );
-/** Lower-case word stems of `text`: letters and digits, short words and stop words dropped, plural/-ing/-ed folded. */
+/** Longest operator text (characters) and number of distinct terms the ranker will look at. */
+export const MAX_QUERY_CHARS = 2_000;
+const MAX_QUERY_TERMS = 200;
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+/**
+ * Lower-case word stems of `text`: Unicode letters and digits (accents folded: u-umlaut to u), short words and stop
+ * words dropped, English plural/-ing/-ed folded. Runs of CJK text, which have no spaces, become character bigrams.
+ */
 function tokenize(text: string): string[] {
   const out: string[] = [];
-  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
+  const folded = text.toLowerCase().normalize("NFKD").replace(/\p{M}+/gu, "");
+  for (const raw of folded.split(/[^\p{L}\p{N}]+/u)) {
+    if (!raw) continue;
+    if (CJK.test(raw)) {
+      const chars = Array.from(raw);
+      if (chars.length === 1) out.push(raw);
+      for (let i = 0; i + 1 < chars.length; i++) out.push(chars[i] + chars[i + 1]);
+      continue;
+    }
     if (raw.length < 3 || STOPWORDS.has(raw)) continue;
-    const stem = raw.length > 5 ? raw.replace(/(?:ing|ed|es|s)$/, "") : raw.replace(/s$/, "");
+    const stem = /^[a-z0-9]+$/.test(raw) ? (raw.length > 5 ? raw.replace(/(?:ing|ed|es|s)$/, "") : raw.replace(/s$/, "")) : raw;
     if (stem.length >= 3) out.push(stem);
   }
   return out;
+}
+
+/** Bracketed markers a description could use to pose as a Nexus, operator or tool message. */
+const CONTROL_MARKER = /\[\s*(?:nexus|operator|system|assistant|user|tool|git status|active plan|work unit)[^\]]*\]?/gi;
+/** A skill's text as one safe line: control markers and secrets removed, whitespace collapsed (a trusted skill is still untrusted text). */
+export function oneLine(text: string): string {
+  return redactSecrets(text.replace(CONTROL_MARKER, " ")).replace(/\s+/g, " ").trim();
+}
+
+/** Whether a user-role message is a per-prompt skill note (never an operator request). */
+export function isSkillNote(content: unknown): boolean {
+  return typeof content === "string" && content.startsWith(SKILL_NOTE_PREFIX);
 }
 
 /**
@@ -53,13 +83,15 @@ function tokenize(text: string): string[] {
  */
 export function formatSkillNote(matches: Skill[], maxChars: number): string {
   const head = `${SKILL_NOTE_PREFIX} Installed skills that may fit this request. Descriptions only; nothing is activated. Call \`activate_skill\` with a name to load one.\n`;
+  const lines = new Map<Skill, string>();
+  const line = (s: Skill): string => lines.get(s) ?? (lines.set(s, oneLine(s.description)), lines.get(s)!);
   const fit = (shown: Skill[], per: number) =>
-    head + shown.map((s) => `- **${s.name}**: ${s.description.length <= per ? s.description : `${s.description.slice(0, Math.max(0, per - 1)).trimEnd()}…`}\n`).join("");
+    head + shown.map((s) => `- **${oneLine(s.name)}**: ${line(s).length <= per ? line(s) : `${line(s).slice(0, Math.max(0, per - 1)).trimEnd()}…`}\n`).join("");
   for (let n = matches.length; n > 0; n--) {
     const shown = matches.slice(0, n);
     // Longest uniform description length that fits, down to the bare name.
     let lo = 0;
-    let hi = Math.max(...shown.map((s) => s.description.length));
+    let hi = Math.max(...shown.map((s) => line(s).length));
     if (fit(shown, 0).length > maxChars) continue;
     while (lo < hi) {
       const mid = Math.ceil((lo + hi) / 2);
@@ -123,6 +155,7 @@ export class SkillManager {
   public refresh(): void {
     this.skills.clear();
     this.untrustedSkills.clear();
+    this.rankCache = undefined;
 
     const isTrusted =
       this.explicitTrusted !== undefined
@@ -309,18 +342,10 @@ export class SkillManager {
    * number of installed skills and that are within reach of the best match; an unrelated text returns nothing.
    */
   public findSkills(text: string, limit: number = MAX_SKILL_MATCHES): Skill[] {
-    const query = new Set(tokenize(text));
-    const skills = this.listSkills();
-    if (query.size === 0 || skills.length === 0) return [];
-    const docs = skills.map((s) => {
-      const tf = new Map<string, number>();
-      for (const t of tokenize(s.name)) tf.set(t, (tf.get(t) ?? 0) + 2);
-      for (const t of tokenize(s.description)) tf.set(t, (tf.get(t) ?? 0) + 1);
-      let len = 0;
-      for (const n of tf.values()) len += n;
-      return { tf, len };
-    });
-    const avg = docs.reduce((n, d) => n + d.len, 0) / docs.length || 1;
+    const query = new Set(tokenize(text.slice(0, MAX_QUERY_CHARS)).slice(0, MAX_QUERY_TERMS));
+    const index = this.rankIndex();
+    if (query.size === 0 || !index) return [];
+    const { skills, docs, df, avg } = index;
     const N = docs.length;
     const scored = skills.map((skill, i) => {
       const { tf, len } = docs[i];
@@ -328,8 +353,8 @@ export class SkillManager {
       for (const term of query) {
         const f = tf.get(term);
         if (!f) continue;
-        const df = docs.reduce((n, d) => n + (d.tf.has(term) ? 1 : 0), 0);
-        const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
+        const d = df.get(term) ?? 1;
+        const idf = Math.log(1 + (N - d + 0.5) / (d + 0.5));
         score += (idf * f * (BM25_K1 + 1)) / (f + BM25_K1 * (1 - BM25_B + (BM25_B * len) / avg));
       }
       return { skill, score };
@@ -342,6 +367,26 @@ export class SkillManager {
       .sort((a, b) => b.score - a.score || a.skill.name.localeCompare(b.skill.name))
       .slice(0, limit)
       .map((m) => m.skill);
+  }
+
+  private rankCache?: { skills: Skill[]; docs: Array<{ tf: Map<string, number>; len: number }>; df: Map<string, number>; avg: number };
+  /** The term statistics of the trusted skills, built once per catalog (`refresh` drops it). */
+  private rankIndex() {
+    if (this.rankCache) return this.rankCache;
+    const skills = this.listSkills();
+    if (skills.length === 0) return undefined;
+    const df = new Map<string, number>();
+    const docs = skills.map((s) => {
+      const tf = new Map<string, number>();
+      for (const t of tokenize(s.name)) tf.set(t, (tf.get(t) ?? 0) + 2);
+      for (const t of tokenize(s.description)) tf.set(t, (tf.get(t) ?? 0) + 1);
+      let len = 0;
+      for (const n of tf.values()) len += n;
+      for (const t of tf.keys()) df.set(t, (df.get(t) ?? 0) + 1);
+      return { tf, len };
+    });
+    const avg = docs.reduce((n, d) => n + d.len, 0) / docs.length || 1;
+    return (this.rankCache = { skills, docs, df, avg });
   }
 
   public getUntrustedSkill(name: string): Skill | null {
