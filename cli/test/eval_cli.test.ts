@@ -67,7 +67,7 @@ test("the first operand after a `--` terminator is still the command Commander d
   assert.equal(isolateEvalCommandHome(["--", "run", "eval", "--isolated-home"]), undefined);
 });
 
-test("built CLI: -- eval is isolated, -- run eval treats the flag as an operand", () => {
+test("built CLI: -- eval is isolated; non-eval --isolated-home is rejected", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-terminator-"));
   const run = (args: string[]) => spawnSync(process.execPath, [CLI, ...args], {
     encoding: "utf8",
