@@ -426,7 +426,8 @@ export class ConvergenceScheduler {
         throw new DecisionRejected(`${action.resourceId} is outside ${u.title}'s trust boundary; that cannot be overridden by a decision.`);
       }
     }
-    const applied: AppliedDecision = { decisionId, optionId, label: option.label, action, ...(text ? { note: text } : {}), at: new Date(this.now()).toISOString() };
+    const scopeChange = action.kind === "replace_task" && u.role === "security_reviewer" ? { from: unitBaseTask(u.prompt), to: text! } : undefined;
+    const applied: AppliedDecision = { decisionId, optionId, label: option.label, action, ...(text ? { note: text } : {}), ...(scopeChange ? { scopeChange } : {}), at: new Date(this.now()).toISOString() };
     (u.decisions ??= []).push(applied);
     delete u.blocked;
     switch (action.kind) {

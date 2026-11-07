@@ -122,6 +122,8 @@ export interface AppliedDecision {
   label: string;
   action: DecisionAction;
   note?: string;
+  /** replace_task on a unit whose scope is derived from its task (security_reviewer): what the scope was and became. */
+  scopeChange?: { from: string; to: string };
   at: string;
 }
 
