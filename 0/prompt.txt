@@ -1,0 +1,879 @@
+I need you to fully audit the entire codebase. Ensure all functionality is complete, working, and frontier coding client ready. Once everything is verified and complete, land and release v1.1.4
+
+---
+
+<task-notification>
+<task-id>a6d6e89b6a176b546</task-id>
+<tool-use-id>toolu_019Tr7hBCVpJ8uawCiariAnt</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/a6d6e89b6a176b546.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 413 config HOME" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: ACCEPT** at head `a1203599b6a933af3c2854e290fb9fb5158dc885`. There are no blockers.
+
+**Checks**
+1. **Diff.** It touches four files: `cli/src/config.ts`, `cli/src/index.ts`, `cli/test/config.test.ts` and `docs/v1.1.4/FINDINGS.md`.
+2. **HOME restore on the throw path.** `config.ts:82-86` compares the resolved `process.env.HOME || os.homedir()` with the resolved `operatorHome`. On a mismatch it restores `shellEnvironment.HOME`, or deletes `HOME` if the shell had none, before throwing.
+   - I ran two variants by hand: `HOME=` (empty) and `export HOME="/tmp/zz"` (exported and quoted). Both threw, and `process.env.HOME` was back to the operator value afterwards.
+   - A `config.env` that repeats the same HOME is accepted. A test covers it.
+3. **Other config.env keys.** `LOCAL_LLM_MODEL=kept` still loads with a same-HOME `config.env`. The diff doesn't touch USERPROFILE or `XDG_*`, so I saw no regression there.
+4. **Cached home.** The throw comes before `setCredentialAuthority` and before `credentialAuthorityRecorded = true`, so `credentialStorageHome()` never sees the rejected path. The first test asserts it still returns the original home.
+5. **CLI startup.** `index.ts:105-110` prints `[config] &lt;message&gt;` and calls `process.exit(2)`.
+   - The message is static and passes through `formatCliDiagnostic`, so it never includes the contents of `config.env`.
+   - The test checks exit code 2, no stack trace, and nothing written under the selected home.
+6. **Tests.** I ran `node scripts/run_tests.mjs test/config.test.ts`, which sets an isolated HOME. All 16 tests pass. With `src/config.ts` and `src/index.ts` reverted to `a872a94d`, the two rejection tests fail and the other 14 pass. That makes them red-first. I restored the files afterwards, and the worktree is clean.
+7. **FINDINGS.md.** The row is marked FIXED and names all three tests. It cites no commit hash, though, and the project convention is "FIXED (commit and test)".
+
+**Suggestions (non-blocking)**
+- `docs/v1.1.4/FINDINGS.md:64`: add the fix commit SHA to the FIXED row, which is only available after merge.
+- `cli/src/config.ts:82-86`: other `config.env` keys already applied to `process.env` stay set after the throw. The CLI exits straight away, so this is harmless there. The other caller, `loadEnvironment()` at `cli/src/sidecar.ts:1188`, now throws on this path. I didn't trace whether its caller catches that. A one-line check would confirm the sidecar fails with a clean diagnostic instead of an unhandled rejection.
+- `cli/src/config.ts:82`: `path.resolve` doesn't resolve symlinks, so a `config.env` HOME that points at the same directory through a symlink is rejected. That is the safer failure, and the error message is clear enough.
+
+**Good**
+- The fix refuses and restores HOME instead of trying to merge two home authorities.
+- The error points the operator at `NEXUS_STATE_DIR`.
+- The tests spawn real subprocesses and cover the library path, the CLI exit path and the allowed case.</result>
+<usage><subagent_tokens>32184</subagent_tokens><tool_uses>7</tool_uses><duration_ms>88575</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af4593b1df7a1313d</task-id>
+<tool-use-id>toolu_01KALQoPFR55kCfhqUgioNjh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/af4593b1df7a1313d.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 412 doctor journal" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: REQUEST CHANGES** at head `77115480dcc0dc9fc51dd9301ef00eefdd3d46e4`.
+
+The fix is sound and the tests pass. Two items don't meet the finding's stated scope: a missing journal is still reported as malformed, and the FINDINGS row has no commit.
+
+I ran `node scripts/run_tests.mjs test/doctor.test.ts` with an isolated HOME after `npm run build`. It reported fail 0, and the new worker test passes. I did not run the mutation check (removing the new code and confirming the tests go red). From reading the tests, the journal tests assert a `warn` and specific explanation text that main never produces, so they should fail without the fix.
+
+### Blockers
+- `cli/src/core/task_message_log.ts:161` with `cli/src/doctor.ts:939-946` — the finding says missing, future-schema and unreadable journals must be distinguished from malformed state. A missing journal is not distinguished.
+  - `readTaskMessages` turns ENOENT into `corrupt("Committed message log is missing")`, so the worker reports `kind: "corrupt"`.
+  - Doctor then counts it under "N saved record(s) are malformed", which is the conflation being fixed.
+  - Test `...reports a missing committed schema-2 message journal...` (`cli/test/doctor.test.ts`) only checks `warn` and that the path is in the evidence. It never checks the wording, so it can't catch this.
+  - Fix:
+    - In the worker, check `fs.lstatSync(file, {throwIfNoEntry:false})` before reading, and post `kind: "missing"` when the file is absent.
+    - Add `missing` to `JournalValidationResult`.
+    - Add a `"N message journal(s) are missing"` issue line in `doctor.ts`.
+    - Assert `doesNotMatch(/malformed/)` and `match(/missing/)` in the test.
+- `docs/v1.1.4/FINDINGS.md:63` — the row says FIXED and lists the tests, but gives no commit, though the table's own rule is "FIXED (commit and test)". Add `77115480`, or its merge SHA after merge.
+
+### Suggestions
+- `cli/src/doctor.ts:877` — a missing or stale `dist/doctor_message_worker.js` is silent.
+  - `new Worker` on an absent file does not throw. It emits `error`, which maps to `io`.
+  - Doctor then says every journal "could not be read", which is misleading.
+  - The same applies when the unit tests run from `src` against a stale or unbuilt `dist`: they exercise whatever was last built.
+  - Fix: check `fs.existsSync(workerModule)` once and return a distinct finding such as "doctor worker missing, reinstall". Have the test script run `tsc` first.
+- `cli/src/doctor.ts:938` — a new worker is spawned per task, up to 5000 in `--deep`. Startup costs roughly tens of milliseconds each. Fix: reuse one worker per scan with a request/response protocol, terminated in a `finally`.
+- `cli/src/doctor.ts:877` — no per-journal timeout or `resourceLimits`. Abort is handled, but a non-interactive caller with no signal can hang on a pathological journal. Fix: pass `resourceLimits: { maxOldGenerationSizeMb }` and optionally a timeout.
+- `cli/test/doctor.test.ts` — the tampered test appends garbage and then also edits a byte. The append is redundant, so keep one.
+
+### Checked and fine
+1. **Shipped:** `cli/src/doctor_message_worker.ts` compiles to `cli/dist/doctor_message_worker.js` through `tsc`, and `scripts/package-linux.sh:64` copies `cli/dist` wholesale. The path `../dist/doctor_message_worker.js` resolves to the same file from both `src/doctor.ts` and `dist/doctor.js`. The brief named `scripts/doctor_message_worker.mjs`, but the actual file is `cli/src/doctor_message_worker.ts`.
+2. **No deletion or quarantine:** the diff only reads. The test asserts the primary file still exists, and the advice text still says doctor never deletes.
+3. **Abort and leaks:**
+   - `finish` is idempotent and removes the abort listener.
+   - It calls `worker.terminate()` and resolves immediately.
+   - An already-aborted signal never spawns a worker.
+   - A hang-worker test covers abort.
+   - The `break` on aborted feeds the existing cancelled path.
+4. **Security:** `openRegular` rejects symlinks and hardlinks (`nlink !== 1`) and uses `O_NOFOLLOW` and a dev/ino check. The worker's `code` and `message` fields are never rendered. Evidence lists only the primary `.json` path under the user's own home. The journal path follows `getMessageLogFilePath`.
+5. **Repairs:** abort is checked before confirm, after confirm (so cancel beats a late yes or no), before the backup manifest, and per plan. A cancelled report is never repaired, and the exit code is `error`. Tests cover all of these.</result>
+<usage><subagent_tokens>34885</subagent_tokens><tool_uses>7</tool_uses><duration_ms>127262</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac727c3858a71e44e</task-id>
+<tool-use-id>toolu_01FKNLgnfSGY2gdeNCW2pA2a</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/ac727c3858a71e44e.output</output-file>
+<status>completed</status>
+<summary>Agent "Re-review PR 412 delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**ACCEPT** at head `302a3b776321a2562f66240ea8115468cf83c0f9`.
+
+The delta is 7dd4234d (code) plus 302a3b77 (a one-row edit to `docs/v1.1.4/FINDINGS.md`). The worktree is clean. `npm run build` succeeded. `HOME=$(mktemp -d) node scripts/run_tests.mjs test/doctor.test.ts` gave 56 pass, 0 fail, 0 cancelled.
+
+What I checked:
+- **Worker (`cli/src/doctor_message_worker.ts`):** it calls `fs.lstatSync(file, { throwIfNoEntry: false })` and posts `{ ok: false, kind: "missing" }` only when that returns nothing. Otherwise it calls `readTaskMessages` as before.
+- **Symlinks:** I ran `lstat` on a dangling symlink, a symlink to a real file, and an absent path. The two symlinks returned an entry and the absent path returned nothing. So symlink and hardlink journals still go through `readTaskMessages`/`openRegular` and are rejected there, not reported as missing.
+- **Other `lstat` errors:** an `EACCES` or `ENOTDIR` throws and lands in the existing catch, so the unreadable (io) path is unchanged. I did not run a test for that case.
+- **`cli/src/doctor.ts`:**
+  - The `kind` union gains `"missing"`.
+  - A new `missingJournals` bucket gets its own branch before `corrupt`.
+  - The issue line reads "message journal(s) are missing, so the saved conversation cannot be loaded". It no longer says "malformed".
+  - The bucket is added to the evidence list, capped at 5.
+  - The final `else` still routes unknown kinds to unreadable.
+- **Tests (`cli/test/doctor.test.ts`):** the integration test now asserts the "are missing" wording and `doesNotMatch(/malformed/)`. The worker unit test (`doctor.test.ts:429`) now expects `"missing"`. The earlier assertions that doctor does not quarantine or delete state, and that `loadTaskState` throws `CorruptStateError`, are unchanged.
+- **Docs row:** it only adds "PR #412" and matches the code.
+
+Findings:
+- No blockers.
+- Suggestion: add a test that a dangling or live symlink at the journal path is not reported as "missing". The `lstat` reasoning above is correct, but nothing in the suite locks it in, so a later change to `lstat` or `stat` could regress it silently. A fixture symlinked to a nonexistent target, asserting `kind !== "missing"`, would cover it.
+
+Worktree: `/home/mike/nexus-wt/v114-wp1306-doctor-journal`</result>
+<usage><subagent_tokens>21626</subagent_tokens><tool_uses>2</tool_uses><duration_ms>68532</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a59f7cdd37ad6159f</task-id>
+<tool-use-id>toolu_01RickJzionnre261w6u3CBq</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/a59f7cdd37ad6159f.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-1307 Harness2 research writeup" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #416 is open against main with `Closes #69`, and I did not merge it. The existing `docs/v1.1.4/HARNESS2-REVIEW.md` already sufficed structurally, so my changes to it are small corrections.
+
+**What the existing doc already covered**
+- It answers all five questions in the plan and in issue #69, each with an adopt/borrow/skip recommendation. Overall it says skip the framework and borrow four ideas.
+- It keeps to the constraints:
+  - It makes no runtime change, adds no dependency, and does not touch `eval/`.
+  - It never uses held-out tasks.
+  - It treats the executor adapter as out of scope.
+  - It reads the paper and repo without executing them.
+- I re-read issue #69 and found no gaps against its five questions or its trial constraints.
+
+**What I verified and fixed**
+I checked the Nexus claims against the code at `a872a94d`. Most held up: the cited files and symbols exist, and the DISPOSITION quote, 351 s and 11.8 requests figures, DEC references, `SPEC-EVALUATION` goals 1 and 5, and memory-safety section 8 all match.
+
+I corrected these:
+- **`buildSystemPrompt` line number:** it is at `agent.ts:4115`, not 4091.
+- **`ROLE_PROFILES` location:** it lives in `cli/src/core/roles.ts` and is only re-exported by `team.ts`.
+- **Skills row:** the catalog is now bounded to a share of the context window since PR #409, and untrusted workspace skills are held back.
+- **Memory row:** I added the `KnowledgeGraph` entry fields (`category`, `key`, `value`, `confidence`, `tags`) and that it is exported into the system prompt.
+- **Tool guidance row:** I noted that few-shots are chosen by `selectRelevantFewShots`.
+
+I added a verification-pass note under "What I could not verify". The paper and repo claims were not re-read in this pass; the doc already flags them as a summariser's extraction.
+
+**FINDINGS.md**
+I marked the WP-1307 row `FIXED (PR #416; documentation only, no test)` in a second commit. That edit says FIXED before the PR has merged, so revert it if you want to wait for the merge. I changed no other files.
+
+**Git in the worktree**
+Plain `git` was refused by the environment's guard, so I used `/usr/bin/git` for add, commit and push.
+
+PR: https://github.com/mikeholownych/nexus-code/pull/416 (branch `v1/v114-wp1307-harness2`)</result>
+<usage><subagent_tokens>72247</subagent_tokens><tool_uses>27</tool_uses><duration_ms>197683</duration_ms></usage>
+<worktree><worktreePath>/home/mike/nexus-code/.claude/worktrees/agent-a59f7cdd37ad6159f</worktreePath><worktreeBranch>worktree-agent-a59f7cdd37ad6159f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<pasted_content id="2765">
+# Nexus Code v1.1.x readiness audit
+
+Date: 2026-11-06. Repository: `mikeholownych/nexus-code`, `/home/mike/nexus-code` on `mike-dev`.
+Reviewed HEAD: `a872a94d25f36b1d7c40767a9e384ba5a2a2bf7d`. Package version: 1.1.3; v1.1.4 planning and some fixes are present.
+
+**Verdict: do not present this revision as a functionally complete, frontier-grade professional coding client.** There is substantial working infrastructure, but reproduced durability and evaluation-integrity defects, incomplete runtime contracts, unfinished v1.1.4 features, and missing current-artifact qualification prevent that claim. Professional acceptance itself requires external user evaluation; it cannot be established by source inspection or unit-test counts.
+
+This is a risk-based source and regression audit, not exhaustive proof of every function, platform, provider, or user workflow. It establishes concrete reasons to withhold acceptance and a practical path to qualification.
+
+## Evidence boundary and source changes during review
+
+The initial checkout contained four modified files (`session.ts`, `core/app.ts`, `repl.ts`, `sidecar.ts`) and an untracked `session_durable_fields.test.ts`. The changes forwarded and persisted recovery fields. They were captured in an isolated snapshot; the owner's source was never edited, built, reset, stashed, or cleaned by this audit.
+
+On the final read the remote checkout was clean, at the same HEAD. Those uncommitted changes and the test had disappeared through an external action whose cause was not established. The audit fetched the final four source files separately and reran the affected checks. All four session regression tests then failed. Initial patched-snapshot passes must therefore not be attributed to the committed baseline.
+
+The five central source files `agent.ts`, `client.ts`, `parser.ts`, `operation_runner_execution.ts` and evaluator `runner.mjs` had identical local-snapshot and final remote SHA-256 hashes. The other reproduced findings concern these stable paths or unchanged source dependencies. `source/` contains selected final-source references and the captured session regression test. The complete initial source snapshot and final four-file overlay are retained under `evidence/`.
+
+## Blocking findings
+
+P1 means fix before professional acceptance. P2 means a concrete correctness or enforcement gap requiring a fix or an explicit, defensible scope decision. These are audit priorities, not CVSS scores.
+
+### A1 — P1: Session saves discard recovery and verification-baseline state
+
+Locations: [session.ts:139](source/cli/src/session.ts#L139), [app.ts:265](source/cli/src/core/app.ts#L265), [repl.ts:281](source/cli/src/repl.ts#L281), [sidecar.ts:908](source/cli/src/sidecar.ts#L908).
+
+`saveSessionLocked` constructs a replacement durable record without `operation`, `providerRecovery`, or `changeBaseline`. Its application and interactive callers also omit those fields. A later session write can erase information the agent persisted through its own durable-task path. An atomic write does not preserve fields excluded from the replacement object.
+
+Evidence: the captured regression file passed 4/4 with the initial uncommitted repairs; the same tests failed 4/4 against the final clean source. Failures cover round-trip recovery state, explicit-null preservation, REPL/sidecar forwarding and ApplicationCore forwarding. These are real save/load probes with controlled caller fixtures, not a live rate-limit/crash campaign.
+
+Fix all writers and the serializer together, preserve absent versus explicit-null semantics, then prove real suspend/restart/resume with provider recovery, an operation, and a failing-test baseline. This confirms a previously tentative WP-1306 finding; it is not a new speculative concern.
+
+### A2 — P1: Build/typecheck can evaluate different inputs from the candidate
+
+Location: [runner.mjs:146](source/eval/evaluators/code/runner.mjs#L146), especially `sourceOverlayPath` and `createPinnedCandidateWorkspace`.
+
+The evaluator copies the baseline and overlays only recognized syntax extensions. Candidate JSON, Go, C, CSS and other build inputs do not reach the evaluated workspace. Probe: candidate `data.json` was `invalid json`, while the evaluated copy remained the valid baseline `{"value":1}`. Conversely, a candidate `build.rs` was copied into the evaluated workspace. This simultaneously ignores genuine build inputs and allows some candidate-controlled build helpers through the supposed configuration boundary.
+
+The probe directly exercised the production workspace constructor, exported only from a temporary audit copy. It demonstrates mismatched input bytes; it is not a claim that an end-to-end benchmark scored that exact fixture as passing.
+
+Define a checker-integrity policy separate from candidate-source coverage. Carry every relevant candidate addition, modification and deletion, or return an explicit unsupported/invalid evaluation. Pin trusted verifier helpers and configuration without silently substituting baseline program inputs. Reproduce false-pass and checker-tampering cases end to end before trusting benchmark scores.
+
+### A3 — P2: An unavailable typecheck configuration can score 1.0
+
+Location: [typecheck_clean.mjs:38](source/eval/evaluators/code/typecheck_clean.mjs#L38).
+
+Identical baseline/candidate results with exit 1 and `error TS5057: Cannot find a tsconfig.json file at the specified directory.` produce `passed: true`, `score: 1`, `infrastructureFailure: false`. The diagnostic recognizer treats configuration failures as legitimate existing code diagnostics. The probe injected checker results into the real evaluator; no actual TypeScript compiler was invoked for this case.
+
+Distinguish a functioning checker with pre-existing code errors from missing or invalid checker configuration. Add real-checker tests as well as the injected regression.
+
+### A4 — P2: Specialist contracts are only partly enforced
+
+Locations: [specialist_profiles.ts:28](source/cli/src/core/specialist_profiles.ts#L28), [roles.ts:83](source/cli/src/core/roles.ts#L83), [operation_runner_execution.ts:188](source/cli/src/core/operation_runner_execution.ts#L188), [operation_runner_execution.ts:656](source/cli/src/core/operation_runner_execution.ts#L656).
+
+Tool allow-lists and read-only roles are connected. However, `maxContextTokens` is never consumed outside the contract module; `validateSpecialistOutput` has no runtime caller. Required inputs become prompt advice. The special independent-review verdict gate covers reviewer/acceptance-reviewer units, not every specialist.
+
+Runtime-method probes configured a `semantic_explorer` with a declared 16,000-token ceiling at 65,536 tokens, then classified unstructured prose with no evidence/schema as a completed unit. The latter injects a successful turn into the real classification method; it is not a live-model trial.
+
+Enforce role ceilings in effective admission, validate required inputs, validate specialist results at completion, and retain raw rejected outputs for diagnosis. Tests must enter through the operation executor rather than test only the standalone validator.
+
+### A5 — P2: Valid nullable arguments lose their meaning
+
+Location: [client.ts:43](source/cli/src/client.ts#L43).
+
+`normalizeNullableOptionalToolArguments` removes every optional top-level null without checking whether the original schema allows null. Probe: a property with `type: ["string", "null"]` receives `{value:null}` and emerges as `{}`. An intentional clear/reset can become an omitted argument. The helper is not restricted to synthetic nullable fields introduced by vLLM strict conversion.
+
+Normalize against the original schema at one canonical parse boundary. Preserve permitted explicit nulls; reject required nulls where forbidden; test native, repaired, legacy and nullable union schemas.
+
+### A6 — P2: Cached gateway identity survives endpoint replacement
+
+Locations: [client.ts:1163](source/cli/src/client.ts#L1163), [client.ts:1230](source/cli/src/client.ts#L1230), [client.ts:841](source/cli/src/client.ts#L841).
+
+A process-wide endpoint-keyed cache has no TTL or provider/account identity binding. A local HTTP probe first advertised a gateway, then returned 404 from `/models`. The client retained `gateway`; routing headers still included `X-Task-Class: engineering`. The helper probe did not send a subsequent inference request, so the observed evidence is retained identity and generated headers, not disclosure of a production request.
+
+Bound cache lifetime and scope, invalidate on connection/account transitions, and distinguish transient unavailability from stale positive identity. Test replacement, missing-model, thrown-error and token-counting paths.
+
+### A7 — P2: `--isolated-home` depends on argument order
+
+Location: [eval_cli.ts:63](source/cli/src/eval_cli.ts#L63), called before configuration loading in `index.ts`.
+
+`isolateEvalCommandHome(['--model','example','eval','--isolated-home'])` returns no cleanup callback and leaves HOME unchanged. Isolation is applied only if `eval` is the first raw argument, even though global options can precede the subcommand. The probe exercised the startup helper; it did not run an evaluator against the operator's actual home.
+
+Resolve the command using the real option grammar before startup state is loaded, or reject unsupported flag placement explicitly. Test both argument orders through the launcher and prove no reads/writes reach the operator state.
+
+### A8 — P2: Tool-call reliability telemetry is biased
+
+Locations: [parser.ts:256](source/cli/src/parser.ts#L256), [parser.ts:758](source/cli/src/parser.ts#L758).
+
+Native arguments wrapped in Markdown fences are repaired into executable JSON but counted as `native:1`, with zero repairs. Legacy prose-embedded JSON produces an executable call without `toolCallSyntax`. Both behaviors were reproduced through `parseModelResponse`.
+
+Consequently JSON-repair scores cannot substantiate the advertised tool-call reliability target across all accepted syntax paths. Count every accepted/rejected call, classify fence removal as repair, and freeze numerator/denominator definitions before the live provider campaign.
+
+### A9 — P2: Evaluator commands lack an explicit resource budget
+
+Locations: [command.mjs:49](source/eval/evaluators/code/command.mjs#L49), [isolate.mjs:841](source/eval/isolate.mjs#L841).
+
+The command helper supplies an output limit but no `resources`; `runIsolatedProcess` defaults it to null. Network/process namespace isolation, wall timeout and process-group cleanup exist, but do not establish per-evaluation memory, PID or workspace-disk caps. Candidate-influenced helpers can exhaust resources before the wall timeout. This finding is source-confirmed; no resource-exhaustion attack was run.
+
+Pass an explicit evaluator resource profile, enforce it, and make availability failures distinguishable from candidate failures. Do not reuse the obsolete ledger claim that this helper still uses an indefinitely waiting synchronous timeout: current code already has asynchronous termination and SIGKILL escalation.
+
+## v1.1.x scope reconciliation
+
+| Area | Current assessment |
+|---|---|
+| Original v1.1 operation schema, scheduling, messages, integration and replay | Substantial connected implementation. Focused operation tests pass. Timeline replay must not be confused with the later deterministic tool/container re-execution proposal. |
+| WP-1101/1102 tracing and redaction | Implementation exists; redaction regression coverage passed in the broader snapshot run. This is not a complete secret-canary campaign across all surfaces or proof about every provider. |
+| WP-1103/1104 datasets and packaged eval | Implemented, with historical installed fixture evidence. That fixture explicitly uses a deterministic fake provider and does not measure coding quality. No current published-artifact qualification was performed here. |
+| WP-1105 deterministic evaluators | Connected, but blocked by A2/A3/A8/A9. Good regression volume does not make the evaluation method trustworthy. |
+| WP-1106 single-step | Current fixes have working focused coverage, including checkpoint/undo, cancellation and stagnation. Final clean-source focused rerun included these checks. |
+| WP-1107 constrained decoding | Reduced scope: runtime vLLM strict-schema adaptation for four tools. GBNF generator functions have no runtime consumer; llama.cpp grammar, Ollama format and hybrid reasoning grammar commitments are not delivered as originally described. G1.1-4 remains explicitly unmeasured. |
+| WP-1108 dependency/release hygiene | No fresh registry audit, CodeQL query, SBOM comparison, dependency lifecycle check or reproducible package build was performed. No current zero-debt claim is established. |
+| Specialist orchestration and independent review | Tool restrictions and reviewer verdict gates exist. Specialist bounds/output enforcement remain incomplete (A4). CERI library/fixture passes do not establish live scheduling or professional coding performance. |
+| WP-1301 | Focused step regressions pass on the final clean source. |
+| WP-1302–1306 | Open work remains, with several findings reproduced here. The ledger has 39 OPEN table rows, including duplicates; this is not 39 independently validated defects. A1 resolves the tentative session-durability question. |
+| WP-1307 research | A Harness² review document exists; issue closure and publication were not checked. Research presence is not runtime functionality. |
+| WP-1308 skills | Bounded catalog exists and its focused tests pass. Per-turn relevance ranking and ranked skill lookup are still planned. Resume retains old system-prompt catalogs; the source explicitly leaves a resumed catalog as saved. |
+| WP-1310–1315 named worktrees/caches/merge/hooks/interop | Planned, not delivered by the existing `worktrees` listing or task worktree isolation. `index.ts` has the old command surface, not the planned named-worktree suite. |
+| Automatic PR publication, multi-agent TUI pane, semantic retrieval | Explicitly deferred scope; do not count as unfinished v1.1 obligations unless the release scope is changed. The original roadmap's WP-12xx and WP-13xx are v1.2/v1.3 proposals; v1.1.4 reuses some IDs and must be read separately. |
+
+## Verification actually performed
+
+| Check | Result and limitation |
+|---|---|
+| TypeScript `tsc --noEmit -p cli`; compilation for probes | Passed on initial snapshot. No release package was built. |
+| Initial focused run, 10 files | 106 passed, 0 failed, 0 skipped under Node 24.11.1. Includes four tests depending on the initial uncommitted session repairs. |
+| Broader initial run, 16 files | 285 passed, 1 failed, 0 skipped. Failure: evaluator fixture's sandboxed `npm` exited 127, so expected compiler diagnostics never ran. Classified as environment-limited, not a demonstrated Nexus defect. |
+| Final clean-source session regression | 0 passed, 4 failed. Uses the regression file captured at audit start. |
+| Final clean-source focused run | 102 passed, 0 failed, 0 skipped under Node 24.11.1. Excludes the four separately recorded session failures. |
+| Adversarial production-helper probes | Reproduced input-overlay mismatch, typecheck false pass, specialist cap/output gaps, null loss, argument-order isolation gap, parser telemetry gaps and stale gateway identity. Raw JSON in `evidence/probes.jsonl`. |
+| Rust suite attempt | Not executed successfully: pinned Rust 1.95 toolchain unavailable locally; rustup attempted a write to its read-only installation. Existing remote Rust executables were copied only as CLI-test fixtures; they were not rebuilt or independently provenance-qualified. |
+
+All test state used an isolated HOME/XDG config and local fixtures. No live model inference, paid provider request, credential extraction, hidden-corpus access, production rollout, publish or GitHub write occurred. The first incomplete test attempts lacked required Rust executables or used Node 20 and are superseded by the supported-runtime runs above. No full clean `make test`, installed-candidate campaign, human terminal matrix or comparative coding benchmark was completed.
+
+## Required acceptance before professional release
+
+1. Fix A1/A2 first, then the remaining demonstrated runtime and evaluation gaps. Add tests through public lifecycle paths, not only helper functions. Reconcile existing ledger rows with actual code; do not merely relabel them fixed.
+2. Freeze one authoritative v1.1.4 scope and feature-to-runtime-to-test-to-evidence matrix. Deliver or explicitly defer every promised feature. Separate implemented source, connected behavior, installed-artifact qualification and external user acceptance.
+3. Run the complete Rust/CLI/security gate once on a clean immutable revision with supported toolchains and the documented evaluator fixtures. Build and install the exact candidate; bind all qualification evidence to its source and artifact digest.
+4. Measure parser correctness, tool schemas, streaming cancellation, retries, endpoint/model changes and recovery against every supported local backend. Establish a statistically defensible sample for the 99.5% target; disclose model/server versions, repairs, unsupported cases, failures and uncertainty. Raw syntactic reliability is not tool semantic correctness.
+5. Run frozen, independently evaluated real engineering tasks across representative repositories: multi-file changes, bug diagnosis, refactoring, test repair, long sessions, resume, worktree integration and provider disruption. Compare the same models/providers/budgets where possible to distinguish client quality from model capability. Score hidden correctness and defect escape, completion without rescue, time, tokens, operator interventions and false VERIFIED/completed states. Fixture-only acceptance is insufficient.
+6. Have experienced coding-agent users evaluate the installed build in normal work with a predefined rubric for trust, reviewability, interruption, recovery, terminal usability and task success. Obtain independent review of the remaining blockers and their evidence.
+
+A realistic near-term claim is a capable local-first coding client undergoing qualification. Frontier-grade positioning becomes defensible only after the missing runtime guarantees, promised scope and real-task acceptance evidence are complete.
+</pasted_content id="2765">
+
+---
+
+<task-notification>
+<task-id>a2df53077708e63f9</task-id>
+<tool-use-id>toolu_01RTdmmudLAb7diLLndNp9uk</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/a2df53077708e63f9.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-1305 release hygiene" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #418 is open against main and not merged: https://github.com/mikeholownych/nexus-code/pull/418 (branch `v1/v114-wp1305-hygiene`).
+
+**What changed**
+- **`make test-ci`** (new) calls `scripts/with-ci-fixtures.sh`, a new script that sets up the CI fixtures and then runs `make test`.
+  - It mounts a 128m tmpfs at `/mnt/nexus-eval-ci` (mode 0711) and creates `/opt/nexus-eval-ci-runtime` (mode 0711), the same as `ci.yml`.
+  - It exports `NEXUS_EVAL_TEST_WORKSPACE_ROOT` and `NEXUS_EVAL_TEST_RUNTIME_ROOT`, and tears down only what it created, on failure or interrupt too.
+  - It refuses to start if either path already exists or the tmpfs is already mounted.
+  - The one-time host setup scripts from CI (toolchains, bubblewrap, user cgroups) are documented as prerequisites, not run automatically.
+- **`make test`** now runs the Rust suite, the CLI suite, the terminal-scope check and the security gates, even if an earlier step fails. It prints which step failed and exits non-zero at the end. Previously the terminal-scope check was chained to the CLI suite with `&amp;&amp;` inside `npm test`, and make aborted on the first failure.
+- **Missing fixtures:** `make test` prints a notice when the two variables are unset. It says `eval_version_probe_storage.test.ts` will fail and `eval_integrity.test.ts` falls back to `/dev/shm`.
+- **`docs/DEVELOPMENT.md`** documents all of this, including exporting the two variables yourself if you already have fixtures mounted.
+- **`cli/test/agent_observer.test.ts`:** the nesting test now asserts that every inference attempt span is parented to the turn, and that exactly 3 requests succeeded. I added a variant that forces a 503 on the first parent request. I did not touch `eval/`.
+- **`docs/v1.1.4/FINDINGS.md`:** the gate-3 row is FIXED with the test name and PR #418.
+
+**Evidence**
+- **Flake proven.** With the old exact-count assertion, the forced-retry variant fails with 4 !== 3. With the fix, both subagent tests pass.
+- **Local failures in that file.** The test file shows 2 other failures locally, including "receives tool start/end". Both come from "Core engine handshake failed" because the Rust core isn't built on this host. They are not related to this change.
+- **Checks.** `make -n test` shows the expected recipe. `node scripts/doc_commands.mjs` reports `DOC_COMMANDS_PASS (28 commands verified)`.
+- **Not exercised.** I did not run the full `make test`. I did not run the `make test-ci` mount path either: this host already has `/mnt/nexus-eval-ci` mounted and `/opt/nexus-eval-ci-runtime` present, so the script refused to start, as designed. That means the mount and teardown code has never actually run.
+- **`make -n test-ci` runs the script.** Because the recipe contains `$(MAKE)`, make executes that line even in dry-run mode.</result>
+<usage><subagent_tokens>90022</subagent_tokens><tool_uses>52</tool_uses><duration_ms>391021</duration_ms></usage>
+<worktree><worktreePath>/home/mike/nexus-code/.claude/worktrees/agent-a2df53077708e63f9</worktreePath><worktreeBranch>worktree-agent-a2df53077708e63f9</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa94aeb91e719009c</task-id>
+<tool-use-id>toolu_018L2mQfXKg8RN2G73hSHxHi</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/aa94aeb91e719009c.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-1302b parser syntax counting" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #419 is open against main and not merged: https://github.com/mikeholownych/nexus-code/pull/419 (branch `v1/v114-wp1302b-parser`). The three parser findings are fixed. I did not update the README mention, because it lives under `eval/`.
+
+**README, for the eval owner:** the mention is `eval/evaluators/code/README.md`, line 40: "cover every tool call it recognizes". It is still stale. I left it alone and noted that in the third FINDINGS row (`01M6FBTFP1AA`).
+
+## Changes in `cli/src/parser.ts`
+- **Legacy calls:** the legacy code-block and balanced-object paths now call `count`. They were not counted before.
+- **Fenced arguments:** `repairJsonWithClass` now treats removing a wrapping Markdown fence as a `trailing` repair. Fenced native arguments therefore score 0.5 instead of 1. Fenced arguments that also need structural repair stay `structural`.
+- **Doc comment:** the `ToolCallSyntaxCounts` comment now lists every counted path and what is not counted.
+- **Other caller:** `agent.ts` also calls `repairJsonWithClass`, but it only checks for the `structural` class, so it is unaffected.
+
+FINDINGS rows `01M6FBXYBC9A`, `01M6FBXYBPJM` and `01M6FBTFP1AA` are marked FIXED with the test names and PR #419. The PR number went in with a second commit.
+
+## Red/green
+The new test file is `cli/test/parser_syntax_counts.test.ts`. It calls `parseModelResponse` (the actual function name; there is no `parseToolCalls`) and asserts `evaluateJsonRepairRate` output imported from `eval/`.
+- **Red on main:** 4 of 6 tests fail. The legacy code-block, legacy repaired-arguments and legacy balanced-object tests got `toolCallSyntax` of `undefined`. The fenced-native test got `{native:1}` where `{trailing:1}` was expected.
+- **Green with the fix:** 6/6 pass.
+- The other two tests pass on both sides. They guard that structural repair and the plain native, tag and sole-fence classifications are unchanged.
+
+## Commands
+- `cd cli &amp;&amp; CI=true node scripts/run_tests.mjs test/parser_syntax_counts.test.ts` gave 6 tests, 6 pass, 0 fail.
+- Running that file plus `test/code_evaluators.test.ts`, `harness.test.ts`, `parser_safety.test.ts`, `parser_single_quote.test.ts` and `tui_surface_e2e.test.ts` gave 148 tests, 126 pass, 22 fail. On base, the same six files gave 148 tests, 122 pass, 26 fail. The failing-name list is identical except for the 4 new red tests. The 22 shared failures are the RustCoreBridge, McpServer, worktree and TUI tests, which need the Rust core that a fresh worktree does not have.
+- `npx tsc --noEmit -p .` reports no errors.
+
+I ran the test commands without the `HOME=$(mktemp -d)` prefix, because the sandbox refused that form. Git commands also had to use `/usr/bin/git`, because the `rtk` rewrite was refused.
+
+One gap is unchanged: the legacy paths still don't apply the "reject structurally repaired write/exec tools" rule. It is outside this work package and is noted in the PR body.</result>
+<usage><subagent_tokens>85807</subagent_tokens><tool_uses>39</tool_uses><duration_ms>598813</duration_ms></usage>
+<worktree><worktreePath>/home/mike/nexus-code/.claude/worktrees/agent-aa94aeb91e719009c</worktreePath><worktreeBranch>worktree-agent-aa94aeb91e719009c</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3c542ecab940e233</task-id>
+<tool-use-id>toolu_01WiNmTufbTYSd8etGtNhzY6</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/a3c542ecab940e233.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-1306 Commander and restore verify" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Ending my turn to wait for the notification.
+
+The related-suite run is still going in the background, so I don't have final results yet. When it finishes I'll compare any failures against base, then commit, push `v1/v114-wp1306-cli-precedence-restore-mode`, and open the PR without merging.
+
+So far:
+- **Commander precedence, red:** 4 of 5 tests in `cli/test/cli_option_precedence.test.ts` failed on main. A command-line option given before `run` and without a `run` default (for example `nexus -e URL run`) was replaced by `undefined`, so the endpoint fell back to `localhost:1234`.
+- **Commander precedence, green:** after the fix (`commandOptions()` in `cli/src/index.ts`, used by `run` and `repl`), all 5 pass.
+- **Restore mode, withdrawn:** both tests in `cli/test/restore_mode_checkpoint_free_turn.test.ts` pass on main with no source change. A mutation that drops the reset in `sidecar.ts` turns the sidecar test red.
+- **Type check:** `npx tsc --noEmit -p .` passes.
+- **Docs:** the FINDINGS and PLAN rows are updated, with `#PRNUM` placeholders to fill in once the PR is open.</result>
+<usage><subagent_tokens>123572</subagent_tokens><tool_uses>73</tool_uses><duration_ms>2006062</duration_ms></usage>
+<worktree><worktreePath>/home/mike/nexus-code/.claude/worktrees/agent-a3c542ecab940e233</worktreePath><worktreeBranch>worktree-agent-a3c542ecab940e233</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae09d4ed82e18d1b2</task-id>
+<tool-use-id>toolu_01AbKuzzNQsrRQtFHj4o87cR</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/ae09d4ed82e18d1b2.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 418 and 419" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #418 (WP-1305): REQUEST CHANGES (minor)
+Head SHA: `9691c347867c0e8e62f6d12b0defc3c82a7217f9`
+
+I would accept this once the signal-handling item is fixed. The other two Suggestions can wait for a follow-up.
+
+### Blockers
+- `scripts/with-ci-fixtures.sh:41-48` — The teardown can run while the test command is still alive, and nothing in the script prevents that. I ran a copy of the script with the paths redirected to my scratchpad and a stub `sudo`, then sent SIGTERM to the script while it ran `bash -c 'sleep 30'`.
+  - The EXIT trap fired: umount, rmdir and `rm -rf` ran, and the script exited with 143.
+  - The child `sleep` kept running.
+  - In real use the umount would hit EBUSY while tests still hold files on the tmpfs. The `|| echo` swallows that, so the tmpfs is leaked. `rm -rf` of the runtime root also runs under live tests.
+  - This contradicts the "including on failure or interrupt" claim in `docs/DEVELOPMENT.md`.
+  - Fix: add `trap 'exit 143' TERM` and `trap 'exit 130' INT HUP`. Run the command in the background and `wait` for it, with the traps killing the child and waiting for it before cleanup. At minimum, have the cleanup retry the umount (`umount -l` as a fallback) and report loudly if the mount survives.
+
+### Suggestions
+- `scripts/with-ci-fixtures.sh:29-33` and `:47-49` — The "refuse if it exists" guard is not atomic.
+  - `[[ -e ]]` is a check, and `sudo install -d` then succeeds even if the directory has appeared since. The script would then claim ownership and later `rm -rf` the directory.
+  - `-e` is also false for a dangling symlink.
+  - Fix: create with `sudo mkdir -m 0711 -- "$dir"` followed by `chown`, since `mkdir` fails if the path exists. Also check `[[ -L ]]`.
+- `Makefile:75` — `make -n test-ci` does execute the script. The recipe line contains `$(MAKE)`, which make runs even under `-n`. On this host it was refused only because the fixtures are already mounted; on a clean host `make -n test-ci` would run `sudo mount`.
+  - Fix: add `ifneq ($(findstring n,$(firstword -$(MAKEFLAGS))),)` to skip the script, or document it.
+
+### Verified
+- **Dry run:** `make -n test` (and `make -n test-fixture-notice`) only prints recipes and runs nothing.
+- **Exit status and reporting:** `test` still exits non-zero if any step fails and names the failing step. The four steps match the old `make test` plus the terminal-scope step that `npm test` runs per `cli/package.json:12`.
+- **Match to CI:** the script matches `ci.yml:29-37` (same paths, size and modes). Pre-flight refusals (root user, existing mount, existing dirs) are sound, and flags are only set after each creation step succeeds.
+- **Unsafe deletion:** `rm -rf` targets a `readonly` constant, so it cannot be empty, and it only runs if the script created that directory. The `--one-file-system` flag and `--` are used.
+- **Test change:** `cli/test/agent_observer.test.ts:322-366` asserts `parentSpanId` and operation/model on every attempt span, and exactly 3 successful (status 1) spans. The forced-503 variant, `parentFailures === 1`, proves the retry path ran. Both variants pass at head. The nesting assertion is not weakened.
+- **Test-count caveat:** I did not run the old exact-count test to confirm it goes red. I checked the 4 !== 3 claim only by reading the diff.
+
+## PR #419 (WP-1302b): ACCEPT
+Head SHA: `dcfbd96feb61c56ae717342e96ca885cb2eb6be5`
+
+No blockers found.
+
+### Suggestions
+- `cli/test/parser_syntax_counts.test.ts:65-69` — The "fenced + structural stays structural" test also passes on base, so it is a guard, not a regression test. This is fine. You could add a test for `&lt;tool_call&gt;` with a fenced body, which now counts as `trailing` (`cli/src/parser.ts:682`), to pin that intended side effect.
+- `cli/src/parser.ts:775-790` — Legacy fenced blocks that fail to parse are silently dropped (`catch {}`), while the `&lt;tool_call&gt;` path counts them as `invalid` (line 716). The doc says `invalid` means "did not parse" but does not list this exclusion.
+  - Counting these would be wrong, because a stray ```json block in prose is not necessarily a call.
+  - Add it to the "Not counted" list in the doc comment at lines 31-41.
+
+### Verified
+- **No double counting:** each path calls `count` once per call it pushes. Every earlier path returns before the legacy block, and the legacy code-block path returns before the balanced-object path.
+- **Regex input:** in the legacy code-block loop the regex has already stripped the fence, so `repairJson` there does not get the new fence-trailing classification.
+- **`repairJsonWithClass` callers:** the `agent.ts:4882` caller only checks `=== "structural"`, and a fence now yields `trailing` at most, so `agent.ts` behaviour is unchanged. `repairJson` only attaches non-enumerable metadata. `mergeRepairClass` keeps structural dominant.
+- **New tests:** 6 of 6 pass at head. With `src/parser.ts` reverted to `origin/main`, 4 of 6 fail: the three legacy tests and the native-fence test.
+- **Evaluator:** `json_repair_rate` scores native as 1, trailing or structural as 0.5, and invalid as 0 (fails the pass bit). Fence removal as `trailing` fits that, and the tests score through the real evaluator.
+
+Both temporary worktrees are removed. I made no repo edits and posted nothing to GitHub.</result>
+<usage><subagent_tokens>48945</subagent_tokens><tool_uses>13</tool_uses><duration_ms>141802</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10680eb2254e1815</task-id>
+<tool-use-id>toolu_01PJo3edxXxUjLYN8Diy6Q3A</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/a10680eb2254e1815.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 414 and 415" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PR #414: ACCEPT (head `921796160163acdb821bfdecd27cc83d82f6cba6`)
+
+No blockers.
+
+The 4 new tests pass at head. With `cli/src` reverted to `origin/main` they all fail (pass 0, fail 4), so they do fail without the fix. I did not run the wider suite.
+
+**Checks**
+- **Absent vs null:** `cli/src/session.ts:142-145` uses the same `!== undefined` conditional spread as `pinned`, `objective` and `findings`. An explicit `null` is persisted and an absent field stays absent. The null-fields test asserts `Object.hasOwn`.
+- **Writers covered:**
+  - `saveSessionLocked` is the only session-record serializer.
+  - The callers of `SessionManager.saveSession` are `core/app.ts:264`, `repl.ts:286` and `sidecar.ts:921`. All three now pass the three fields.
+  - `slash/session_commands.ts:67`, `:74` and `:222` go through `host.saveSession`, which resolves to the REPL or sidecar writer.
+  - `agent.ts:1527`, `agent.ts:1635`, `operation_runner_persistence.ts:80` and `state.ts` call `saveTaskState` directly. They write the full agent or operation envelope, and the operation runner uses its own task id. These are not partial saves.
+- **Stale cached state:** `app.ts:260` takes the fields from the fresh `checkpointDurableState` result, not a cache. REPL and sidecar use `getTaskState()`, which loads the last on-disk record on every call. That is not a long-lived cache, but it can lag the agent's in-memory fields (see Suggestions).
+
+**Suggestions**
+- `cli/src/repl.ts:285` and `cli/src/sidecar.ts:920`
+  - Issue: `getTaskState()` returns the last persisted checkpoint, not live agent state. The agent clears `changeBaseline` to `undefined` at `agent.ts:4453` and `agent.ts:2342`, and sets `activeProviderRecovery = null` at `agent.ts:2345`. None of those checkpoint immediately.
+  - Effect: a progress-listener session save between such a clear and the next checkpoint rewrites the old disk value. The staleness is bounded, because `checkpointDurableState` (`agent.ts:~1618`) already carries forward a stale `changeBaseline` from disk when the in-memory value is `undefined`. It is not a regression.
+  - Fix: if you want exactness, add a read-only agent accessor for these three fields and use it in both writers. Otherwise note the lag in the finding row.
+- `cli/src/sidecar.ts:920`
+  - Issue: the sidecar progress listener calls `saveSession` often, and each call now does an extra `loadTaskState` from disk. If the task state does not exist yet, `getTaskState` falls back to `checkpointDurableState()`, which also writes.
+  - Fix: acceptable at this size. Memoizing on the checkpoint timestamp would remove the extra read.
+- `docs/v1.1.4/FINDINGS.md`: the row says "FIXED", but the original claim was "the live resume path may be unaffected". It would help to state which path actually lost the data (the REPL/sidecar/app session write replacing the task record).
+
+## PR #415: ACCEPT (head `62ac9758213c50d920fb0d9be8733e73888abea7`)
+
+No blockers.
+
+`test/config.test.ts` passes 14/14 at head and fails 1 of 14 on the base `cli/src` (the new test). I did not run the wider suite.
+
+**Checks**
+- **Precedence:** `cli/src/config.ts:381` now has `readOnly || modeOption === "read-only"` as the first branch, and it forces `fullAccess = false`.
+  - The `readOnly` option semantics are unchanged.
+  - `config.readOnly` is still `Boolean(options.readOnly)`, so `--mode read-only` still leaves `readOnly` false. The finding row records that this is intended.
+- **Command line vs environment:** `--yes` still beats `REDACTED`, because the env branch comes after the `yes`/`approve`/mode branches. The test asserts this.
+- **Other derivations:**
+  - `index.ts:242`, the sidecar (`sidecar.ts:114`, `:1197`) and `repl.ts:140-144` all take `config.approvalMode` from `buildConfig`. Their fallbacks only apply when it is unset, and `buildConfig` always sets it.
+  - The TUI path (`index.ts:190`, `spawnTui`) forwards raw argv to the sidecar, which runs the same `buildConfig` from `./config.js` (`sidecar.ts:10`, `:1193`).
+  - `index.ts:585` (`doctor --fix`) reads `options.yes` only for repair confirmation, not for approval. It is separate and fine.
+  - `sidecar.ts:694` and `repl.ts:583` switch to auto only on an interactive "always approve". That is an operator action at runtime, not derived from launch options. In the sidecar, `agent.setApprovalMode("auto")` follows `resolveApproval`.
+  - I found no path that reintroduces auto after `buildConfig`.
+
+**Suggestions**
+- `cli/src/config.ts:~392`
+  - Issue: `--mode auto --approve` yields review (the `approve` branch comes first). This was already the behavior and is out of scope here.
+  - Fix: leave as is, or track it separately.
+- `cli/src/config.ts:375`
+  - Issue: `modeOption` is lowercased but not trimmed, so `--mode " read-only"` silently falls through to the default. `envMode` is trimmed.
+  - Fix: add `.trim()` for symmetry. This is low severity, and it fails closed to review or auto only when combined with `--yes`.
+
+The temporary worktrees in `/tmp` have been removed. I made no edits and posted nothing to GitHub.</result>
+<usage><subagent_tokens>58375</subagent_tokens><tool_uses>19</tool_uses><duration_ms>172035</duration_ms></usage>
+</task-notification>
+
+---
+
+#418
+
+
+<pasted_content id="2765">
+Findings
+Low
+Slop
+·
+2h ago
+·
+The cleanup rmdir condition [[ $created_workspace -eq 1 && $mounted -eq 0 ]] || { [[ $created_workspace -eq 1 ]] && ! mountpoint -q ... ; } has a redundant first clause. If nothing was mounted, mountpoint is already false, so the first clause adds nothing. The whole condition reduces to created_workspace && ! mountpoint -q. Simplify it so the teardown logic is easy to check.
+
+Slop
+·
+3h ago
+·
+The --check dry-run mode is parsed and documented in the header usage line, but neither the Makefile nor docs/DEVELOPMENT.md uses or mentions it. It is an extra code path nobody calls. Drop it, or document and wire it up (for example, from test-fixture-notice).
+
+Slop
+·
+3h ago
+·
+In the failFirstParent variant, assert.ok(requests.length >= 3, "no attempt span is lost") can never fail, because the line above already requires 3 successful spans. So nothing checks that the 503 attempt produced an errored span, and the "every inference attempt, retried or not, is nested" loop may never see a retried span. Assert requests.length === 4 (or one span with error status) when failFirstParent is true.
+
+Slop
+·
+3h ago
+·
+make test now copies the two steps of cli/package.json's test script (node scripts/run_tests.mjs and test-scope-procs.sh) instead of calling it. The comment admits this. If that npm script gains or changes a step, make test will silently stop matching what developers and docs call the CLI test. Either have make test call the npm script and accept the fail-fast inside it, or move the step list into one place that both use.
+</pasted_content id="2765">
+
+#417
+
+
+<pasted_content id="2765">
+Findings
+Medium
+Slop
+·
+3h ago
+·
+The intro says "Rows that restate an earlier finding point to it", but none of A2, A3, A5–A9 cite an earlier row ID. For example, A2 repeats 01M6KXHHGA28/01M6KXTK3FYQ, and A8 repeats 01M6FBXYBC9A/01M6FBXYBPJM. The same issue now appears as separate OPEN rows with no link between them, so closing one leaves the other open. Add the pointers, or merge the duplicate rows into the existing ones.
+
+Slop
+·
+3h ago
+·
+The row now says the original issue is stale: command.mjs already uses runIsolatedProcess with SIGKILL escalation, which is true at the base. The remaining gap is tracked as A9. But the Status column still says OPEN, so the ledger counts a resolved finding against the 0-open acceptance gate. The ledger's rule (line 3) is that a row ends as FIXED, WITHDRAWN or DEFERRED. Mark it WITHDRAWN and give the evidence instead of putting a STALE note in front of the summary.
+
+Low
+Slop
+·
+3h ago
+·
+The full WP-1316 work-package description is copied into the findings ledger, nearly word for word what was added to PLAN.md. That makes two descriptions to keep in sync. The ledger row A4 already points to WP-1316, so drop this subsection and leave the description in PLAN.md only.
+
+Slop
+·
+3h ago
+·
+The WP-1316 section ends with "Also required before release: a real suspend, restart and resume test for A1." A1 belongs to WP-1306 (session persistence), not to specialist contracts, so the requirement sits under the wrong package. Also, WP-1316 isn't added to the Numbering note at line 15, which lists the v1.1.4 packages as WP-1301–1308 and WP-1310–1315. Nor is it added to the §5 acceptance criteria or the §4 ordering. Move the A1 requirement into WP-1306 or its acceptance bullet, and add WP-1316 to those places.
+
+Slop
+·
+3h ago
+·
+A1 is marked FIXED in PR #414 but also lists work that is "Still owed". The ledger requires a FIXED row to name its commit and test. This row names a PR and an unnamed set of "4 red-first tests", and the issue is not actually closed. Keep it OPEN until the suspend/restart/resume test exists, or split the remaining work into its own row.
+
+</pasted_content id="2765">
+
+---
+
+412-416 and 419 are all green
+
+---
+
+<task-notification>
+<task-id>a3c542ecab940e233</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/a3c542ecab940e233.output</output-file>
+<status>completed</status>
+<summary>Agent "WP-1306 Commander and restore verify" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>PR #420 is open against main and not merged: https://github.com/mikeholownych/nexus-code/pull/420, branch `v1/v114-wp1306-cli-precedence-restore-mode`.
+
+**Commander option precedence: defect confirmed, now FIXED**
+- **Cause:** `run` overwrote every option that wasn't at its default with the command-local value. That included options never set locally, which came out as `undefined`. So `nexus -e URL run ...` lost `-e` and used the environment endpoint, or `localhost:1234` when the environment has none.
+- **Red at base:** 4 of 5 tests in `cli/test/cli_option_precedence.test.ts` failed. They spawn the real CLI through tsx against a capturing server.
+- **Fix:** a small `commandOptions()` helper in `cli/src/index.ts` takes each option from the nearest command that set it explicitly. `run` and `repl` both use it.
+- **Green:** 5 of 5 pass.
+
+**Restore mode after a checkpoint-free turn: WITHDRAWN**
+- **Behaviour on main:** the sidecar (the TUI turn and `/mode` path) and the REPL both release the read-only checkpoint fallback on every checkpoint-free turn. `/mode` only accepts auto and review, so a read-only session exists only from launch, where no fallback is ever set.
+- **Evidence:** both tests in `cli/test/restore_mode_checkpoint_free_turn.test.ts` are green at base with no source change. As a mutation check, removing the reset in `sidecar.ts` turned the sidecar test red, so the guard works. I restored the file afterwards.
+
+Both rows in `docs/v1.1.4/FINDINGS.md` are updated with the test names and PR #420, and `docs/v1.1.4/PLAN.md` notes the outcome.
+
+**Commands run (from `cli/`)**
+- `CI=true node scripts/run_tests.mjs test/cli_option_precedence.test.ts`: red at base, 1 pass and 4 fail; green after the fix, 5 pass.
+- `CI=true node scripts/run_tests.mjs test/restore_mode_checkpoint_free_turn.test.ts`: 2 pass.
+- A related set of 10 files (the two new tests, `config`, `operator_config_startup`, `repl_input_loss`, `run_json_output`, `repl_checkpoint_choices`, `readonly_mode_escalation`, `index_error_redaction`, `cli_option_scope`): 45 tests, 43 pass, 0 fail, 2 skipped. `cli_option_scope` is skipped for lack of a built `dist`, and the second skip isn't identified in the output.
+- `npx tsc --noEmit -p .`: clean.
+- `test/sidecar.test.ts`, `test/step_loop.test.ts` and `test/harness_entry.test.ts` failed in this worktree. The run was cut short, so there are no totals. I didn't re-run them at base, so these failures are not confirmed against base. They don't import `src/index.ts`, and the failing tool steps need the Rust core, which isn't built here.
+
+Environment notes:
+- The tests strip `LOCAL_LLM_*`, `LOCAL_HARNESS_*` and `NEXUS_*` from the spawned environment. Otherwise the operator's own endpoint masks the dropped option.
+- The Bash guard blocked plain `git add/commit/push`, so I used `/usr/bin/git` for those.</result>
+<usage><subagent_tokens>131505</subagent_tokens><tool_uses>85</tool_uses><duration_ms>12429191</duration_ms></usage>
+<worktree><worktreePath>/home/mike/nexus-code/.claude/worktrees/agent-a3c542ecab940e233</worktreePath><worktreeBranch>worktree-agent-a3c542ecab940e233</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a46269c05ed1ae843</task-id>
+<tool-use-id>toolu_015NRRkXHHeTpjgG5twHotoy</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/a46269c05ed1ae843.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 416 and 418 delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**PR #416 (WP-1307, docs only): ACCEPT at `66b3060c1d3c8f178af810559b64e7805cf166b0`**
+
+- The PR changes only `docs/v1.1.4/HARNESS2-REVIEW.md` and `docs/v1.1.4/FINDINGS.md`, with no runtime change.
+- I checked the cited Nexus claims against `origin/main` (now `0e1f9d6e`, which is after the `a872a94d` the PR cites). They hold:
+  - `buildSystemPrompt` is at `cli/src/agent.ts:4115`.
+  - `ROLE_PROFILES` is defined at `cli/src/core/roles.ts:96` and re-exported from `team.ts:19`.
+  - `KnowledgeEntry` has `category`, `key`, `value`, `confidence` and `tags`, and `exportPromptSection()` exists at `knowledge.ts:214`.
+  - `selectRelevantFewShots` exists at `fewshots.ts:98`.
+  - The skills catalog bound exists (`SKILL_CATALOG_CONTEXT_SHARE = 0.05`).
+  - The referenced paths exist: `file_guard`, `egress`, `authority`, `cli/src/sandbox.ts`, the `DISPOSITION-2026-10-04.md` doc and the "REJECTED" wording.
+- The document has sections for all five WP-1307 questions: 1 probing, 2 taxonomy, 3 lessons memory, 4 budgets, 5 overall. It also has constraints, "What I could not verify" and follow-up work packages.
+- The FINDINGS row says `FIXED (PR #416; documentation only, no test)`. That is honest and matches the FIXED-with-PR convention.
+- Low: `HARNESS2-REVIEW.md:27` writes `sandbox.ts` bare. The real path is `cli/src/sandbox.ts`, which line 68 spells out. Use the full path on line 27.
+- Low: the line numbers (`agent.ts:4115`) will drift, so the `a872a94d` pin in the verification note is the right mitigation.
+
+**PR #418 delta: REQUEST CHANGES at `b0d38038d77ebaadb8554f11ad4bd3ca023fbc04`**
+
+I simulated the script in a temp dir with the two paths redirected and `sudo` and `mountpoint` stubbed.
+
+Confirmed fixed:
+- **Process group:** the child is its own session and group leader (PID = PGID = SID). Bash does no job control in a script, so the `&amp;` child is not a group leader and `setsid` does not fork. `$child` is therefore the real leader and `kill -TERM -- -$child` is valid.
+- **Fallback:** if `setsid` ever did fork, `kill -0` would fail and the cleanup would skip the kill, so the "group leader" assumption is the only thing the kill depends on.
+- **SIGTERM:** the script exits 143 and the child is killed. The teardown order was `umount`, `rmdir`, then `rm -rf runtime`, and no `sleep` process was left.
+- **Exit status:** a child that exits 7 gives script exit 7, with teardown.
+- **`make -n`:** `make -n test-ci`, `-sn`, `-kn` and `--dry-run` print the dry-run line and do not run the script.
+- **`make test`:** it runs all four steps (cargo, `test:cli`, `test:scope`, `security_gates`) and exits `$rc`, so any failure gives a non-zero exit.
+- **`npm run test`:** it still equals `test:cli` then `test:scope` (`cli/package.json:12-14`).
+
+Findings:
+1. **Medium, `scripts/with-ci-fixtures.sh:36-37`:** cleanup sends SIGTERM and then waits with no deadline or SIGKILL escalation. I tested a child that runs `trap '' TERM`. After SIGTERM to the script, the script and child both stayed alive, the tmpfs stayed mounted and nothing was torn down. I killed them by hand. Real test children (node, bwrap, a hung evaluator) can hang this way. Fix: after TERM, poll `kill -0` for a few seconds, then `kill -KILL -- -$child`, then `wait`.
+2. **Low, `scripts/with-ci-fixtures.sh:33`:** cleanup does `trap - EXIT TERM INT HUP` at the start. A second Ctrl-C during teardown kills the script mid-cleanup and leaves the mount behind. Fix: keep ignoring the signals during cleanup with `trap '' TERM INT HUP` instead of resetting them.
+3. **Low, `scripts/with-ci-fixtures.sh:35`:** the kill only happens if the leader is still alive. If the leader exits normally but leaves group members (a daemonised helper holding files on the tmpfs), they are not signalled, and only the `umount -l` fallback covers it. Fix: always run `kill -TERM -- -$child 2&gt;/dev/null` when `child` is set, regardless of the `kill -0` result.
+4. **Low, `scripts/with-ci-fixtures.sh:59`:** a background `&amp;` job in a non-interactive shell gets stdin from `/dev/null`, and SIGINT is ignored in the child. Stdin is irrelevant for these suites. The SIGINT point is harmless only because cleanup sends TERM, so keep that in mind if finding 1 is fixed with escalation.
+
+Not a finding: the Makefile, package.json, `agent_observer.test.ts` and docs changes look correct. The new retry test asserts exactly 3 successful requests, 4 total with one errored span in the retry case, and it checks that the 503 was served. The FINDINGS row is FIXED with a test named. I did not run the observer test because the task scoped this to the script, the Makefile and the package scripts.
+
+The temp simulation directory is removed. I did not create any `/tmp/rv-*` worktrees and I edited no repository files.</result>
+<usage><subagent_tokens>46259</subagent_tokens><tool_uses>12</tool_uses><duration_ms>236339</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a347fba45de336f6e</task-id>
+<tool-use-id>toolu_01RUkZfiDcusmGYmLs3xSUx7</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/a347fba45de336f6e.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 420 Commander precedence" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: ACCEPT** at head `93598bee017e4ac32c8c87940c1a635171afe8b2`. I found no blockers. One adjacent bug of the same class remains in `doctor` and `check`, which the PR doesn't touch. I'd file it as a follow-up rather than hold this PR.
+
+I ran the tests in a temp worktree at the head SHA and removed it afterwards.
+
+### Blockers
+No blockers found.
+
+### Suggestions
+- `cli/src/index.ts:578` (`doctorCommand`, with `doctorOptions` at ~592–600) — `doctor`/`check` still use bare `cmd.optsWithGlobals()` and have the same class of bug as `run`. `program` defines `--shell` with default `"bash"` (line ~336), and `optsWithGlobals` lets the parent's value overwrite the child's. So `nexus doctor --shell zsh` diagnoses bash.
+  - I reproduced this in isolation with commander 12.1.0:
+    - `doctor --shell zsh` gives `{"shell":"bash"}`.
+    - `-e A doctor -e B` gives `endpoint: A`, so the parent beats the nearer command.
+  - The same applies to `models` at line 556, but there it only affects `-e A models -e B`, because `models` has no `--shell`.
+  - Fix: use `commandOptions(cmd)` in `doctorCommand` and in `models`. Move `commandOptions` above its first use if needed; it is a hoisted function, so this is fine as is. Keep `doctorCommand` working when `cmd` is undefined by falling back to `_options`.
+  - This was a pre-existing bug, but the PR's FINDINGS row says the precedence class is FIXED. Either fix it here, or add an OPEN row for `doctor`/`models`/`check`.
+- `cli/src/index.ts:292–303` — `commandOptions` is typed `Record&lt;string, any&gt;`. This matches the surrounding `options: any` style, so it is only a nit. `Record&lt;string, unknown&gt;` would be stricter but would ripple into `buildConfig`.
+- `cli/test/cli_option_precedence.test.ts` — every test checks only `temperature` or the endpoint.
+  - No test covers a security-relevant option such as `--read-only` or `--mode` given before the subcommand. On `main` those were silently set to `undefined` in `run`, so this is the highest-value regression guard.
+  - Add one case. Run `nexus --read-only run "touch x"` against the capture server and assert the request's tool list or the output shows it is read-only.
+  - The red-at-base runs are also slow, about 110–120 s per test, because the CLI hangs waiting for a model at the fallback endpoint. That is acceptable, but a shorter kill timer than the current 60 s would speed up failures.
+
+### Verification of the five points
+1. **Precedence, all four cases: correct.**
+   - Commander 12.1.0's `optsWithGlobals` lets ancestors overwrite descendants. `commandOptions` re-applies, nearest first, any value whose source is neither `undefined` nor `default`.
+   - **Global only:** the parent's `cli` source is found, and `-t 0.9` survives.
+   - **Local only:** `run`'s own `cli` source is found first.
+   - **Both set:** local wins, and the 0.4 test covers it.
+   - **Neither set:** `optsWithGlobals` supplies the value and `run`'s default applies. The "default applies nowhere" test covers this: temperature 0.2.
+   - **Boolean flags and `--no-continuation`:** `attributeName()` is `continuation`. The implied default has source `default` on both commands, so a parent `cli` source wins correctly.
+   - **`--resume [id]`:** the optional value is read from the same `opts()` key, so it is preserved.
+   - **Name mapping:** `attributeName()` is used for the lookup, which handles `--max-steps` → `maxSteps`.
+   - **Options on both commands with defaults:** only `--shell` and `--deliverable-file`. A parent-only default is not mistaken for an explicit value, and `nearest-wins` for `--deliverable-file` replaces the array rather than merging, which seems fine.
+   - **Positional options:** `enablePositionalOptions()` means the parent never parses options placed after the subcommand.
+2. **Other `optsWithGlobals` callers.** The three callers are `repl` (fixed), `models`, and `doctor`/`check`. `models` and `doctor` are not affected by the `undefined`-clobbering bug, because unset options are absent from `opts()`. They do have the parent-overrides-child problem described above, and `doctor` is affected for `--shell`. Line 293 is the helper itself.
+3. **Security options: no downgrade path.**
+   - `nexus --read-only run`: `readOnly` is taken from the parent `cli` source and stays true.
+   - `nexus --mode read-only run --yes`: `mode` comes from the parent and `yes` from `run`. The combination is the same as before, and `buildConfig` is unchanged.
+   - On `main`, `run` set any option without a local value to `undefined`. That dropped `--mode read-only`, `--read-only`, `--approve`, `--sandbox`, `--workspace`, `--endpoint` and `--api-key` given before `run`. So the PR removes a security downgrade rather than adding one.
+   - No new path drops an option that was set. I did not run an end-to-end test for `--read-only`; see the suggestion above.
+4. **Tests.** They spawn the real CLI through tsx.
+   - **Hermetic:** `LOCAL_LLM_`, `LOCAL_HARNESS_` and `NEXUS_` env vars are stripped, `HOME` and the XDG directories point at temp dirs, and the workspace is a temp dir.
+   - **Red at base:** with `index.ts` reverted to `origin/main`, 4 of 5 fail and "a global option survives..." passes, exactly as the PR claims.
+   - **Green at head:** all 7 tests in both files pass.
+5. **WITHDRAWN claim: confirmed.**
+   - **Sidecar (`cli/src/sidecar.ts`):** `turn()` releases the fallback with `setCheckpointReadOnlyFallback(false)` on the read-only launch (line 562), on a successful checkpoint (572) and on `without_checkpoint` (605). Only the `read_only` choice sets it true (599).
+   - **REPL (`cli/src/repl.ts`):** `prepareTurnCheckpoint` does the same (lines 214, 222, 253).
+   - **Sidecar test:** it forces two checkpoint failures, picks read-only, then picks without-checkpoint. It asserts the mode goes `read-only`, then `review`, then `/mode auto` gives `auto`, so it is meaningful.
+   - **Mutation check:** I did not run a mutation myself. The PR states one; the code path supports it, since removing line 605 would leave the mode at read-only.
+6. **FINDINGS.md and PLAN.md rows.** Both are accurate and consistent with the code and tests above. The 4-of-5 red count matches. Merge conflicts with #413 and #415 are expected on FINDINGS.md only. `index.ts` is not touched by those PRs as described, though if `config.ts` changes how `buildConfig` handles `shell`, re-check `doctor` after merge.
+
+Files:
+- `/home/mike/nexus-code/cli/src/index.ts`
+- `/home/mike/nexus-code/cli/test/cli_option_precedence.test.ts`
+- `/home/mike/nexus-code/cli/test/restore_mode_checkpoint_free_turn.test.ts`
+- `/home/mike/nexus-code/cli/src/sidecar.ts`
+- `/home/mike/nexus-code/cli/src/repl.ts`</result>
+<usage><subagent_tokens>48906</subagent_tokens><tool_uses>13</tool_uses><duration_ms>557787</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa23912fadf8c2d68</task-id>
+<tool-use-id>toolu_01XzRZNxemCbz7PTDQScwKZc</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/aa23912fadf8c2d68.output</output-file>
+<status>completed</status>
+<summary>Agent "Re-review PR 418 teardown fix" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**ACCEPT** for head `c4dfb0e50bcbeebe97ef4be3b72e204bf361ae10`, `scripts/with-ci-fixtures.sh`. I found no blockers.
+
+I read the script with `git show c4dfb0e5:scripts/with-ci-fixtures.sh` and ran it unmodified on bash 5.2.21 as uid 1000. I only substituted the two root paths. `sudo` and `mountpoint` were stubbed (mount and umount are marker files), and the workspace was not switched to `c4dfb0e5`.
+
+| Scenario | Exit status | Time | Result |
+|---|---|---|---|
+| Plain child, SIGTERM to the script | 143 | 1.6 s | Child group gone, one umount, workspace and runtime dirs removed |
+| Child with `trap '' TERM`, SIGTERM | 143 | 6.1 s | Killed by the SIGKILL fallback after the 5 s poll, teardown completed |
+| Same child, three SIGINTs 0.3 s apart | 130 | 6.1 s | Exactly one umount, dirs removed, no leftover processes. The extra signals were ignored, as intended. |
+| Child exits 0 | 0 | 1.6 s | Status propagated, teardown done |
+| Child exits 7 | 7 | 1.6 s | Status propagated, teardown done |
+| Leader exits 3, leaving a background helper that ignores TERM | 3 | 6.6 s | Helper SIGKILLed through the group, teardown done, no `sleep 60` left |
+| Leader exits 0, leaving a plain background `sleep` | 0 | 2.4 s | Helper reaped by the group TERM, teardown done |
+
+Your other two questions:
+- **Status after `trap '' EXIT`:** `status=$?` is captured on the first line of `cleanup`, before the trap reset. Resetting the EXIT trap inside the EXIT handler and then calling `exit "$status"` returns the right status in every row above (143, 130, 0, 7, 3).
+- **`kill -0 -- -$child`:** it is valid on this bash. It correctly reports whether the process group still exists, and it exits the poll loop early. The plain-TERM and helper cases confirm this: plain-TERM returned in 1.6 s instead of waiting out the 5 s poll.
+
+**Harness note:** my first runs gave misleading results. Bash starts background jobs with SIGINT ignored, so the script's INT trap could not be set, and the SIGINT scenario hung. I then ran a rerun while stray processes from that hung run were still alive, which caused a bogus double-umount and rmdir error. I killed the strays by PID. All results above come from a clean harness (`h.py`) that restores default signal dispositions. Real Ctrl-C from a terminal is unaffected.
+
+**Remaining limits (not blockers):**
+- A grandchild that calls `setsid` itself leaves the group and is not signalled. The umount then falls back to `umount -l` plus the warning message.
+- `scripts/with-ci-fixtures.sh:47` runs `sudo umount` and `sudo umount -l` with the stubbed `sudo`, so I did not exercise real kernel busy-mount behaviour.
+
+Temp files are in `/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/scratchpad/sim/`. They contain only my own scripts and the `root/log` file, and I did not run any broad `rm`. No repo files were edited and nothing was posted to GitHub.</result>
+<usage><subagent_tokens>31118</subagent_tokens><tool_uses>12</tool_uses><duration_ms>357865</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzla84u3h</task-id>
+<tool-use-id>toolu_01W7jyHQTvEQ7NpKyaprbR4g</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/65bd4ccb-85f7-49bc-a58e-6fba9f87feb0/tasks/bzla84u3h.output</output-file>
+<status>completed</status>
+<summary>Background command "python3 - &lt;&lt;'EOF'
+p='src/index.ts'
+s=open(p).read()
+s=s.replace("""  .action(async (_options: any, cmd: Command) =&gt; {
+    const options = cmd.optsWithGlobals();
+    const config = buildConfig(options);
+    const client = new LocalLlmClient(config);
+    console.log(pc.cyan(`\\nQuerying models""","""  .action(async (_options: any, cmd: Command) =&gt; {
+    const options = commandOptions(cmd);
+    const config = buildConfig(options);
+    const client = new LocalLlmClient(config);
+    console.log(pc.cyan(`\\nQuerying models""")
+s=s.replace("const options = cmd?.optsWithGlobals ? cmd.optsWithGlobals() : _options;","const options = cmd?.optsWithGlobals ? commandOptions(cmd) : _options;")
+open(p,'w').write(s)
+EOF
+grep -n "commandOptions" src/index.ts | head; (node_modules/.bin/tsx src/index.ts --shell bash doctor --shell zsh --json 2&gt;/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print([ (f['id'],f.get('explanation')[:80]) for f in d['findings'] if 'shell' in f['id']])") 2&gt;&amp;1 | tail -3" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+413, 415-417 green
+
+---
+
+#420
+
+
+<pasted_content id="2765">
+Findings
+Low
+Slop
+·
+14h ago
+·
+The FINDINGS row still says "red at base 4 of 5 tests", lists only five test names and mentions only repl as another user of the helper. The file now has seven tests, and models and doctor also call commandOptions(). Update the row so the record matches the code.
+
+Slop
+·
+14h ago
+·
+models declares no option defaults, so cmd.optsWithGlobals() already let a leaf -e override the root -e. This test passes at the diff base and does not exercise commandOptions(), and the matching models/doctor switch makes no behavioral change. Either test a case that failed at base, or drop the test and present those call-site changes as consistency only.
+
+Slop
+·
+14h ago
+·
+The repl action also changes to commandOptions(cmd). Under the old optsWithGlobals(), nexus --shell zsh repl silently lost to repl's bash default. No test covers the repl path, so the doc claim that it is "also used by repl" has nothing backing it. Add a case where an option given before repl overrides one of repl's defaults.
+
+Slop
+·
+14h ago
+·
+"an endpoint given before the subcommand is the endpoint used" and "the subcommand default applies when the option is given nowhere" pass the same argv (-e <url> run --json -m m hello) and both assert temperature 0.2. That makes them one test under two names, so the FINDINGS row's claim of "5 tests" overstates the coverage. Merge them, or make one of them check something different.
+</pasted_content id="2765">
+
+#418
+
+
+<pasted_content id="2765">
+Findings
+Medium
+Slop
+·
+14h ago
+·
+When failFirstParent is false, assert.equal(requests.length, failFirstParent ? 4 : 3, ...) puts back the exact total-span assertion that caused the flake. The comment just above (lines 322-324) and FINDINGS.md both say a timing-dependent provider retry on the parent step adds an errored attempt span, and that only successful requests get an exact count. With this line, one transient retry in CI fails the no-retry variant again (4 !== 3). Pin the exact total only in the forced-failure variant. For the no-retry variant, keep the check that exactly 3 requests succeeded and every span is nested.
+
+Low
+Slop
+·
+14h ago
+·
+This row marks the flake FIXED because the test "asserts ... exactly 3 successful requests". The head test also asserts exactly 3 total spans in the no-retry variant (agent_observer.test.ts:355), so the documented fix does not match the code. The row overstates how retry-tolerant the test is.
+</pasted_content id="2765">
