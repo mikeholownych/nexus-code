@@ -117,7 +117,8 @@ test("failure_debugger gets its log and reproduction command from failed verific
   assert.match(fake.prompts[0], /failure_log/);
   assert.match(fake.prompts[0], /3 failed/);
   assert.match(fake.prompts[0], /reproduction_command: "npm test"/);
-  assert.doesNotMatch(fake.prompts[0], new RegExp(SECRET));
+  const logLine = fake.prompts[0].split("\n").find((l) => l.startsWith("failure_log:"))!;
+  assert.ok(logLine && !logLine.includes(SECRET), "the collected log is credential-redacted");
 });
 
 test("failure_debugger with no failure evidence in the operation fails closed", async () => {

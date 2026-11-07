@@ -10,6 +10,7 @@ import type { ChatMessage, HarnessConfig } from "../types.js";
 import type { TaskRecoveryResult } from "./state.js";
 import { unitBaseTask, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { messagesBlock } from "./operation_messages.js";
+import { boundedRedactedInput, stripProtectedDiffSections } from "./specialist_inputs.js";
 import { redactForPersistence } from "./persistence_protection.js";
 import { ROLE_PROFILES, SPECIALIST_CONTRACTS, isReadOnlyRole, isSpecialistRole, missingSpecialistInputs, validateSpecialistOutput, type AgentRole, type SpecialistRole } from "./roles.js";
 import { applyProviderCatalog, ResourceRegistry, type ResourceConditionRecord, type ResourceDescriptor } from "./resources.js";
@@ -400,8 +401,11 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           options: [{ label: "retry the review", action: { kind: "retry" } }],
         };
       }
-      const inputFailure = this.specialistInputFailure(unit);
+      const { inputs: effectiveInputs, why: inputWhy } = this.collectSpecialistInputs(unit, ctx, config.workspace, config.authoritativeVerifierCommand?.trim() || undefined);
+      const inputFailure = this.specialistInputFailure(unit, effectiveInputs, inputWhy);
       if (inputFailure) return inputFailure;
+      // Prompts render the effective inputs (collected, then the caller's); the stored unit keeps only the caller's.
+      const promptUnit: WorkUnit = effectiveInputs === unit.inputs ? unit : { ...unit, inputs: effectiveInputs };
       if (unit.agentTaskId) {
         let recovered: TaskRecoveryResult | undefined;
         try {
@@ -432,7 +436,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           // conversation describes discarded files, so never resume that history on the fresh worktree.
           agent.restartConversation(!recovered?.obligationRecordPresent);
           prompt =
-            `${this.initialPrompt(unit, ctx, promptMessages, review)}\n\n${decision}` +
+            `${this.initialPrompt(promptUnit, ctx, promptMessages, review)}\n\n${decision}` +
             "Note: this unit was explicitly restarted after recovery. Its earlier conversation is not being continued. " +
             "Earlier workspace history may be incomplete; inspect any changes that remain, because they remain unverified.";
         } else if (unusable) {
@@ -450,13 +454,13 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           // changes are unknown, so they count as unverified.
           agent.restartConversation(!recovered || !recovered.obligationRecordPresent);
           prompt =
-            `${this.initialPrompt(unit, ctx, promptMessages, review)}\n\n${decision}` +
+            `${this.initialPrompt(promptUnit, ctx, promptMessages, review)}\n\n${decision}` +
             `Note: earlier task history was unusable (${unusable}). Prior workspace changes may be unknown and remain unverified; inspect the workspace before relying on them.`;
         } else if (notStarted) {
           const restartNotice = ctx.operatorDecision?.restart
             ? "\n\nNote: this unit was explicitly restarted after recovery. Earlier workspace history may be incomplete, and any prior changes remain unverified; inspect the workspace before relying on them."
             : "";
-          prompt = `${this.initialPrompt(unit, ctx, promptMessages, review)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
+          prompt = `${this.initialPrompt(promptUnit, ctx, promptMessages, review)}${decision ? `\n\n${decision}` : ""}${restartNotice}`;
         } else {
           const op = recovered?.state.currentOperation;
           const stopped = op?.status === "interrupted"
@@ -469,7 +473,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
             `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
         }
       } else {
-        prompt = this.initialPrompt(unit, ctx, promptMessages, review);
+        prompt = this.initialPrompt(promptUnit, ctx, promptMessages, review);
       }
       ctx.bindAgentTask(agent.getTaskId());
       if (agent.durable && !unit.agentTaskId) {
@@ -610,19 +614,59 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
    * inference rather than left to guess. Review roles are exempt: the runner builds their inputs (requirements,
    * scope, diff, verifier evidence) as the evidence package, and refuses to start when that cannot be collected.
    */
-  private specialistInputFailure(unit: WorkUnit): UnitRunResult | undefined {
+  private specialistInputFailure(unit: WorkUnit, effective: Record<string, string> | undefined, why: Record<string, string>): UnitRunResult | undefined {
     if (!isSpecialistRole(unit.role) || isReviewRole(unit.role)) return undefined;
     // A unit saved before inputs were enforced has no `inputs` field; it is grandfathered rather than blocked on resume.
     if (unit.inputs === undefined) return undefined;
-    const missing = missingSpecialistInputs(unit.role, unit.inputs);
+    const missing = missingSpecialistInputs(unit.role, effective);
     if (!missing.length) return undefined;
+    const because = missing.filter((name) => why[name]).map((name) => `${name}: ${why[name]}`).join("; ");
     return {
       kind: "failed",
       cause: "EXECUTION_FAILED",
-      reason: `missing required input${missing.length > 1 ? "s" : ""} for ${unit.role}: ${missing.join(", ")}`,
+      reason: `missing required input${missing.length > 1 ? "s" : ""} for ${unit.role}: ${missing.join(", ")}${because ? ` (${because})` : ""}`.slice(0, 400),
       question: `${unit.title} (${unit.role}) was not given ${missing.join(", ")}. Supply ${missing.length > 1 ? "them" : "it"} (a JSON object of names to strings), or stop?`,
       options: [{ label: "supply the inputs (note: JSON object, required)", action: { kind: "set_inputs" } }],
     };
+  }
+
+  /**
+   * Inputs the runner can derive from operation and workspace state, so callers need not supply them. The caller's
+   * `inputs` always win. Everything collected is credential-redacted and bounded, and nothing under a protected path
+   * (the read_file policy, or `.nexus`) is read into it. What cannot be derived is left out and reported in `why`.
+   *  - security_reviewer: `unified_diff` (candidate changes against the operation's base) and `authorized_scope`
+   *    (the operation objective and this unit's task: no operation declares a file list).
+   *  - failure_debugger: `failure_log` (dependencies whose verifier did not pass) and `reproduction_command` (that
+   *    verifier's command, else the configured authoritative verifier).
+   */
+  private collectSpecialistInputs(unit: WorkUnit, ctx: UnitRunContext, workspace: string, configuredVerifier: string | undefined): { inputs: Record<string, string> | undefined; why: Record<string, string> } {
+    const why: Record<string, string> = {};
+    if (unit.inputs === undefined || (unit.role !== "security_reviewer" && unit.role !== "failure_debugger")) return { inputs: unit.inputs, why };
+    const collected: Record<string, string> = {};
+    if (unit.role === "security_reviewer") {
+      collected.authorized_scope = boundedRedactedInput(`Operation objective: ${ctx.objective}\nThis unit's task: ${unitBaseTask(unit.prompt)}`);
+      const base = ctx.baseCommit ?? ctx.startCommit;
+      const root = ctx.workspace ?? workspace;
+      const candidate = base === undefined && ctx.dependencies.length > 0
+        ? { error: "no starting commit was recorded for this operation, so earlier (possibly committed) work cannot be shown" }
+        : reviewCandidateDiff(root, base);
+      if ("error" in candidate) why.unified_diff = `candidate diff unavailable: ${candidate.error}`.slice(0, 200);
+      else {
+        const stripped = stripProtectedDiffSections(candidate.diff, root);
+        const diff = stripped.diff.trim() === "" ? "" : stripped.diff;
+        if (!diff) why.unified_diff = stripped.omitted ? "only protected files changed" : "there is no change against the base to review";
+        else collected.unified_diff = boundedRedactedInput(stripped.omitted ? `${diff}\n[${stripped.omitted} protected file section(s) omitted]\n` : diff);
+      }
+    } else {
+      const failed = ctx.dependencies.filter((d) => d.verification && d.verification.status !== "PASSED");
+      if (failed.length) {
+        collected.failure_log = boundedRedactedInput(failed.map((d) => `${d.title}: verifier \`${d.verification!.command}\` status ${d.verification!.status}${d.verification!.hasExecutedTests ? "" : " (no tests executed)"}\n${d.summary}`).join("\n\n"));
+      } else why.failure_log = "no dependency in this operation ran a verifier that did not pass";
+      const command = failed[0]?.verification?.command ?? configuredVerifier;
+      if (command) collected.reproduction_command = boundedRedactedInput(command);
+      else why.reproduction_command = "no verifier command is recorded for this operation";
+    }
+    return { inputs: { ...collected, ...unit.inputs }, why };
   }
 
   /** The objective evidence a review unit is given: requirements, scope, base, candidate diff and verifier receipts. */
