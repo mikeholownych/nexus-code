@@ -3285,3 +3285,7 @@ The review worktrees are still at `~/nexus-wt/rev-434`, `~/nexus-wt/rev-428` and
 ---
 
 I have been VERY CLEAR.. v1.1.4 is supposed to deliver a production ready v1.1.x stream!
+
+---
+
+You have all of the resources you need to get this done! GET IT DONE!
