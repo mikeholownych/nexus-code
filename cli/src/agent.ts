@@ -1914,7 +1914,13 @@ export class AutonomousAgent {
       const raw = call.function.arguments;
       let value: unknown;
       try { value = typeof raw === "string" ? JSON.parse(raw) : raw; } catch { return call; }
-      const normalized = normalizeNullableOptionalToolArguments(call.function.name, value, tools);
+      let normalized = normalizeNullableOptionalToolArguments(call.function.name, value, tools);
+      // Removing a null can leave a lone wrapper key ({input:{...}, start_line:null}); unwrap it as the parser would have.
+      if (normalized && typeof normalized === "object" && !Array.isArray(normalized)) {
+        const keys = Object.keys(normalized);
+        const inner = keys.length === 1 && ["input", "parameters", "args"].includes(keys[0]) ? (normalized as Record<string, unknown>)[keys[0]] : undefined;
+        if (inner && typeof inner === "object" && !Array.isArray(inner)) normalized = normalizeNullableOptionalToolArguments(call.function.name, inner, tools);
+      }
       if (normalized === value) return call;
       return { ...call, function: { ...call.function, arguments: typeof raw === "string" ? JSON.stringify(normalized) : normalized as any } };
     });

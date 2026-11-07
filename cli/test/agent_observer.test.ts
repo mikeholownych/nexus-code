@@ -69,6 +69,23 @@ describe("AgentObserver", () => {
     }
   });
 
+  test("a wrapped call carrying a null optional argument is still unwrapped (WP-1303)", async () => {
+    const repo = makeRepo({ "a.txt": "alpha\n" });
+    const agent = new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash" } as any);
+    try {
+      const wrapped = JSON.stringify({ input: { path: "a.txt" }, start_line: null });
+      const native = (agent as any).parseNormalizedResponse({ role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: wrapped } }] }, true);
+      const text = (agent as any).parseNormalizedResponse({ role: "assistant", content: `<tool_call>{"name":"read_file","arguments":${wrapped}}</tool_call>` }, false);
+      for (const parsed of [native, text]) {
+        assert.equal(parsed.toolCalls.length, 1);
+        assert.deepEqual(JSON.parse(parsed.toolCalls[0].function.arguments), { path: "a.txt" });
+      }
+    } finally {
+      agent.shutdown();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("receives tool start/end and streamed assistant text in order", async () => {
     const gw = await startGateway((n) => n === 1
       ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] }
