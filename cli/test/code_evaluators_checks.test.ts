@@ -180,3 +180,35 @@ test("typecheck_clean never normalizes inside a message, whatever the leading lo
     assert.equal(moved.passed, true, `${name}: a moved location is not new: ${JSON.stringify(moved.details)}`);
   }
 });
+
+test("typecheck_clean does not let a location pattern eat a location-free diagnostic header", async () => {
+  const header = (step: number) => `error[E0080]: evaluation panicked: step:${step}: failed\n`;
+  const changed = await verdict(byRevision({ status: 101, stderr: header(1) }, { status: 101, stderr: header(2) }));
+  assert.equal(changed.passed, false, JSON.stringify(changed.details));
+  assert.equal(changed.details.newDiagnostics.length, 1);
+  const same = await verdict(byRevision({ status: 101, stderr: header(1) }, { status: 101, stderr: header(1) }));
+  assert.equal(same.passed, true);
+});
+
+test("typecheck_clean requires a file-like path before a line number and never spans into the message", async () => {
+  const line = (n: number) => `error: cannot open 'a.ts:${n}: x'\n`;
+  const result = await verdict(byRevision({ status: 1, stderr: line(12) }, { status: 1, stderr: line(13) }), { diagnosticPattern: "^error: cannot open" });
+  assert.equal(result.passed, false, JSON.stringify(result.details));
+  assert.equal(result.details.newDiagnostics.length, 1);
+});
+
+test("typecheck_clean recognises a configuration error only at the diagnostic's leading position, after code frames are filtered", async () => {
+  const pretty = [
+    "src/a.ts:1:20 - error TS2322: Type 'string' is not assignable to type 'number'.",
+    "",
+    '1 const x: number = "error TS5057:";',
+    "                     ~",
+    "",
+  ].join("\n");
+  const result = await verdict(byRevision({ status: 2, stdout: pretty }, { status: 0, stdout: "" }));
+  assert.equal(result.details.infrastructureFailure, false, "the quoted code in the excerpt is not a configuration error");
+  assert.equal(result.passed, true, JSON.stringify(result.details));
+  const real = await verdict(byRevision({ status: 1, stderr: "error TS5057: Cannot find a tsconfig.json file at the specified directory: '.'.\n" }, { status: 1, stderr: "error TS5057: Cannot find a tsconfig.json file at the specified directory: '.'.\n" }));
+  assert.equal(real.passed, false);
+  assert.equal(real.details.infrastructureFailure, true);
+});
