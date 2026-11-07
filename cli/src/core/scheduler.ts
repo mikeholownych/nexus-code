@@ -409,7 +409,8 @@ export class ConvergenceScheduler {
     if (action.kind === "set_inputs") {
       try {
         const parsed = JSON.parse(text ?? "");
-        const problem = specialistInputsProblem(parsed);
+        // The merged map is what gets persisted and reloaded, so that is what must be valid.
+        const problem = specialistInputsProblem(parsed) ?? specialistInputsProblem({ ...(u.inputs ?? {}), ...parsed });
         if (problem) throw new Error(problem);
         suppliedInputs = parsed;
       } catch (error: any) {

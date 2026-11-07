@@ -257,7 +257,13 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over the ${budget}-token ceiling of ` +
           `its ${unit.role} contract (resource limit ${estimate.contextLimit}). No budget lifts a role ceiling: replace the task with a narrower one, or stop?`,
         // Appending a revision only grows the prompt; replacing the task is what can bring it under the ceiling.
-        options: [{ label: "replace the unit's task with a narrower one (note required)", action: { kind: "replace_task" } }],
+        options: [
+          { label: "replace the unit's task with a narrower one (note required)", action: { kind: "replace_task" } },
+          // Supplied inputs are part of the prompt, so a smaller input can be what brings it under the ceiling.
+          ...(unit.inputs && Object.keys(unit.inputs).length
+            ? [{ label: "supply smaller inputs (note: JSON object, required)", action: { kind: "set_inputs" as const } }]
+            : []),
+        ],
       };
     }
     return {
