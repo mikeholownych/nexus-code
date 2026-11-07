@@ -157,7 +157,10 @@ test("a review specialist's required inputs are supplied by the runner's evidenc
   const fake = fakeAgent({ role: "acceptance_reviewer" });
   const work = unit({ role: "acceptance_reviewer" }); delete (work as any).inputs;
   const outcome = await executorFor(fake.agent).run(work, resource, context());
-  if (outcome.kind === "failed") assert.doesNotMatch(outcome.reason, /missing required input/);
+  assert.equal(outcome.kind, "failed");
+  const reason = (outcome as { reason: string }).reason;
+  assert.doesNotMatch(reason, /missing required input/);
+  assert.match(reason, /review rejected/, "it is stopped by the review evidence gate, not the input gate");
 });
 
 test("non-review specialists are told the result contract; acceptance_reviewer keeps the verdict contract", async () => {
@@ -181,5 +184,73 @@ test("acceptance_reviewer prose is rejected by the verdict gate through the exec
   const work = unit({ role: "acceptance_reviewer" }); delete (work as any).inputs;
   const outcome = await executor.run(work, resource, { ...context(), workspace: repo });
   assert.equal(outcome.kind, "failed");
-  if (outcome.kind === "failed") assert.match(outcome.reason, /^review rejected/);
+  assert.match((outcome as { reason: string }).reason, /^review rejected/);
+});
+
+// ---------------------------------------------------------------- Entire review of PR #428
+
+test("a successful specialist result hands its findings and evidence notes downstream, not just the headline", async () => {
+  const output = JSON.stringify({
+    specialistRole: "call_site_analyzer", status: "SUCCESS", summary: "two callers",
+    findings: { callers: ["b.ts:9 handleFoo"] }, evidence: [{ path: "src/b.ts", lineRange: [9, 12], note: "passes null as the second argument" }],
+    escalationRecommended: false,
+  });
+  const fake = fakeAgent({ role: "call_site_analyzer", summary: output });
+  const outcome = await executorFor(fake.agent).run(unit(), resource, context());
+  assert.equal(outcome.kind, "completed");
+  if (outcome.kind !== "completed") return;
+  assert.match(outcome.summary, /handleFoo/);
+  assert.match(outcome.summary, /passes null as the second argument/);
+  assert.match(outcome.summary, /src\/b\.ts:9-12/);
+});
+
+function blockedUnit(result: any, spec: Record<string, unknown> = {}) {
+  const state: DurableOperationState = newOperation("op", "o", [{ id: "u1", role: "call_site_analyzer", prompt: "trace callers of foo", ...spec }], [resource], Date.now());
+  const sched = new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now());
+  state.units[0].status = "RUNNING";
+  sched.apply("u1", result);
+  return { state, sched, u: state.units[0] };
+}
+
+test("a missing-input block offers a decision that can supply the input, and the rerun then runs", async () => {
+  const work = unit(); delete (work as any).inputs;
+  const first = await executorFor(fakeAgent({ role: "call_site_analyzer" }).agent).run(work, resource, context());
+  assert.equal(first.kind, "failed");
+  const { sched, u } = blockedUnit(first);
+  const option = u.blocked!.decision.options.find((o) => o.action.kind === ("set_inputs" as any));
+  assert.ok(option, `offered: ${u.blocked!.decision.options.map((o) => o.action.kind)}`);
+  assert.throws(() => sched.resolve(u.blocked!.decision.id, option!.id, "not json"), /JSON object/);
+  assert.throws(() => sched.resolve(u.blocked!.decision.id, option!.id, JSON.stringify({ symbol_name: 3 })), /string/);
+  sched.resolve(u.blocked!.decision.id, option!.id, JSON.stringify(CALL_INPUTS));
+  assert.deepEqual(u.inputs, CALL_INPUTS);
+  const fake = fakeAgent({ role: "call_site_analyzer" });
+  const second = await executorFor(fake.agent).run(u, resource, context());
+  assert.equal(second.kind, "completed");
+});
+
+test("a role-ceiling block offers a decision that replaces the task, not one that only grows the prompt", async () => {
+  const first = await executorFor(fakeAgent({ role: "call_site_analyzer", prompt: 20_000 }).agent).run(unit(), resource, context());
+  assert.equal(first.kind, "failed");
+  if (first.kind !== "failed") return;
+  assert.ok(!first.options.some((o) => o.action.kind === "revise"), "revise only appends, so it cannot clear a ceiling");
+  const { sched, u } = blockedUnit(first, { prompt: "x".repeat(100) });
+  const option = u.blocked!.decision.options.find((o) => o.action.kind === ("replace_task" as any));
+  assert.ok(option);
+  assert.throws(() => sched.resolve(u.blocked!.decision.id, option!.id), /note/);
+  sched.resolve(u.blocked!.decision.id, option!.id, "trace callers of foo in src/ only");
+  assert.equal(u.prompt, "trace callers of foo in src/ only");
+  assert.equal(u.status, "RUNNABLE");
+});
+
+test("/team accepts quoted and @file values so multi-word inputs can be supplied", async () => {
+  const fs = await import("node:fs");
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-team-inputs-"));
+  fs.writeFileSync(path.join(ws, "fail.log"), "Error: boom\n  at x.ts:1\n");
+  const { TeamOrchestrator } = await import("../src/team.js");
+  const orch = new TeamOrchestrator({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 3, temperature: 0, workspace: ws, shell: "bash" } as any);
+  const op = orch.plan("failure_debugger", `failure_log=@fail.log reproduction_command="npm test -- a.test.ts" find the cause`);
+  assert.equal((op.units[0] as any).inputs.failure_log, "Error: boom\n  at x.ts:1\n");
+  assert.equal((op.units[0] as any).inputs.reproduction_command, "npm test -- a.test.ts");
+  assert.equal(op.units[0].prompt, "find the cause");
+  assert.throws(() => orch.plan("failure_debugger", "failure_log=@../../etc/passwd reproduction_command=x go"), /outside the workspace|not found|cannot read/i);
 });
