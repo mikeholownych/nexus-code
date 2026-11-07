@@ -296,12 +296,14 @@ async function runOnce(task, run) {
       cloneWorkspace(hiddenWs, regressionWs);
     }
     const refused = (check) => ({ pass: false, status: null, timedOut: false, overflow: false, output: `hardened check refused: ${hardening.configChanges.join("; ")}`, refused: true, resources: null, containmentProblem: null, check });
+    // Before the hidden and regression checks: in a non-hardened run they stage tests and write caches into the candidate
+    // workspace, which diff_boundary and the build/typecheck copy would otherwise count as the agent's own changes.
+    const evaluators = await runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline, resources: config.resources ?? null, scratchRoot: scratch });
     const hidden = hardening?.configChanges.length ? refused("hidden") : await runCheck(task, hiddenWs, task.hidden, true, { readOnlyHidden: hardened, protectedCorpusPaths: protectedCorpusPathsForRun() });
     const regression = task.regression ? (hardening?.configChanges.length ? refused("regression") : await runCheck(task, regressionWs, task.regression, false)) : null;
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
     }
-    const evaluators = await runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline, resources: config.resources ?? null, scratchRoot: scratch });
     const turn = agent.json?.turn ?? null;
     // Nexus reports a structured outcome; for the other agents a clean exit within the budget is their completion claim.
     const claimedComplete = turn
