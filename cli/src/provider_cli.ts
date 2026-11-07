@@ -78,7 +78,6 @@ function safeConfigurationError(error: unknown): string {
   return `Configuration error: Unknown provider '(unrecognized provider)'. Known providers: ${Object.keys(PROVIDERS).join(", ")}.`;
 }
 
-
 function safeModelId(value: string): string {
   // Provider/model identifiers may contain routing punctuation, but not whitespace, controls or arbitrary diagnostics.
   if (!/^[A-Za-z0-9._:\/@+-]{1,160}$/.test(value)) return "(unprintable model id)";

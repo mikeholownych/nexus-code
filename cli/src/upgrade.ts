@@ -41,7 +41,6 @@ export const CANONICAL_REPO = "mikeholownych/nexus-code";
 export const DEFAULT_RELEASES_API = `https://api.github.com/repos/${CANONICAL_REPO}/releases`;
 export const DEFAULT_RELEASE_BASE_URL = `https://github.com/${CANONICAL_REPO}/releases`;
 
-
 export type InstallProvenance = "packaged" | "development" | "package-manager" | "unsupported";
 export type UpgradeAction = "upgrade" | "downgrade" | "reinstall" | "none";
 

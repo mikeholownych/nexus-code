@@ -30,7 +30,6 @@ import { isolateEvalCommandHome, runVersionedEvalCommand } from "./eval_cli.js";
 import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 import { formatDiagnosticForOutput } from "./ui.js";
 
-
 function collectDeliverableFile(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }

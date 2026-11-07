@@ -72,7 +72,6 @@ export function formatReplStepError(error: unknown): string {
   return `\nStep error: ${formatDiagnosticForOutput(error)}\n`;
 }
 
-
 /** Return a bounded, credential-safe excerpt when reporting input that arrived outside a prompt. */
 export function formatIgnoredInputExcerpt(line: string): string {
   const safe = formatDiagnosticForOutput(line);
