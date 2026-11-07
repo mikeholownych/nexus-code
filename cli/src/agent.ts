@@ -56,6 +56,7 @@ import { calculateContextBudget, countTokens, isContextAdmissible, isContextPres
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
+import { recordVerification } from "./worktrunk/verification.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
@@ -4446,6 +4447,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // A trusted pre-change baseline must be established by a fresh task or a future authenticated verifier.
         if (this.verificationBaselineInvalidated) this.verificationBaselineInvalidated = false;
         this.setUnverifiedChanges(false);
+      }
+      // A passing deliverable-bound run inside a named (linked) worktree is recorded for `nexus worktree merge`, which
+      // needs a verification for the exact state it merges. Recording never affects the task outcome.
+      if (!this.activeWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound) {
+        recordVerification(this.config.workspace, this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command || "verifier");
       }
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
       if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {

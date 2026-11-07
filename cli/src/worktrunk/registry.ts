@@ -22,11 +22,45 @@ export interface RegistryEntry {
   vars?: Record<string, string>;
 }
 
+/** A passing verification of one exact working state of a branch (head commit and the tree of head plus uncommitted work). */
+export interface VerificationRecord {
+  branch: string;
+  head: string;
+  tree: string;
+  verifier: string;
+  recordedAt: string;
+}
+
+/** An operator's explicit decision to merge without a verification record. */
+export interface WaiverRecord {
+  branch: string;
+  head: string;
+  reason: string;
+  recordedAt: string;
+}
+
 export interface Registry {
   version: 1;
   /** The branch that was active before the last `switch` (the `-` shortcut). */
   previous?: string;
   worktrees: RegistryEntry[];
+  /** Newest last; capped at MAX_RECORDS. */
+  verifications?: VerificationRecord[];
+  waivers?: WaiverRecord[];
+}
+
+export const MAX_RECORDS = 100;
+
+function parseRecords<T extends object>(value: unknown, keys: readonly string[], name: string): T[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_RECORDS) throw new Error(`${name} must be an array of at most ${MAX_RECORDS} records`);
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`${name} record is not an object`);
+    const record = item as Record<string, unknown>;
+    for (const key of Object.keys(record)) if (!keys.includes(key)) throw new Error(`unexpected ${name} field '${key}'`);
+    for (const key of keys) if (typeof record[key] !== "string" || !(record[key] as string) || (record[key] as string).length > 400) throw new Error(`${name}.${key} must be a short non-empty string`);
+    return record as unknown as T;
+  });
 }
 
 export function registryDir(commonDir: string): string {
@@ -45,7 +79,7 @@ function parseRegistry(text: string): Registry {
   const raw = JSON.parse(text) as unknown;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("not an object");
   const root = raw as Record<string, unknown>;
-  for (const key of Object.keys(root)) if (!["version", "previous", "worktrees"].includes(key)) throw new Error(`unexpected field '${key}'`);
+  for (const key of Object.keys(root)) if (!["version", "previous", "worktrees", "verifications", "waivers"].includes(key)) throw new Error(`unexpected field '${key}'`);
   if (root.version !== 1) throw new Error("version must be 1");
   if (root.previous !== undefined && typeof root.previous !== "string") throw new Error("previous must be a string");
   if (!Array.isArray(root.worktrees) || root.worktrees.length > MAX_ENTRIES) throw new Error("worktrees must be an array of at most 500 entries");
@@ -60,7 +94,12 @@ function parseRegistry(text: string): Registry {
     }
     return entry as unknown as RegistryEntry;
   });
-  return { version: 1, ...(root.previous !== undefined ? { previous: root.previous as string } : {}), worktrees };
+  const verifications = parseRecords<VerificationRecord>(root.verifications, ["branch", "head", "tree", "verifier", "recordedAt"], "verifications");
+  const waivers = parseRecords<WaiverRecord>(root.waivers, ["branch", "head", "reason", "recordedAt"], "waivers");
+  return {
+    version: 1, ...(root.previous !== undefined ? { previous: root.previous as string } : {}), worktrees,
+    ...(verifications ? { verifications } : {}), ...(waivers ? { waivers } : {}),
+  };
 }
 
 /** Never throws for a missing, corrupt or linked file: returns an empty registry and a warning instead. */

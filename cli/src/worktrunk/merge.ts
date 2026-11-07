@@ -13,7 +13,8 @@ import { redactSecrets } from "../ui.js";
 import { removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveCommit, type WorktreeEntry } from "./repo.js";
-import { readRegistry } from "./registry.js";
+import { readRegistry, updateRegistry, MAX_RECORDS } from "./registry.js";
+import { hasVerification, workingState } from "./verification.js";
 
 export interface MergeOptions {
   target?: string;
@@ -21,6 +22,9 @@ export interface MergeOptions {
   noRebase?: boolean;
   noRemove?: boolean;
   message?: string;
+  /** Merge without a recorded verification; requires `reason`, which is recorded. */
+  noVerifyReceipt?: boolean;
+  reason?: string;
 }
 
 const NON_INTERACTIVE = { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" };
@@ -63,6 +67,22 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   const targetEntry = repo.entries.find((entry) => entry.branch === targetName);
   if (!targetEntry || targetEntry.prunable) throw new WorktreeError(`target ${shownBranch(targetName)} is not checked out in any worktree; run \`worktree switch ${shownBranch(targetName)}\` first`);
 
+  // Receipt gate (the named-worktree equivalent of CAND-003): the exact state being merged needs a recorded passing
+  // verification, or an explicit operator waiver with a reason. Checked before anything is changed.
+  const gateState = workingState(source.path, statusOf(source.path).total > 0);
+  const registry = readRegistry(repo.commonDir).registry;
+  let waiver: string | undefined;
+  if (!hasVerification(registry, branch, gateState)) {
+    if (!options.noVerifyReceipt) {
+      throw new WorktreeError(
+        `no recorded passing verification for ${shownBranch(branch)} at ${gateState.head.slice(0, 12)}${gateState.dirty ? " plus uncommitted changes" : ""}. ` +
+        "Run your verifier in this worktree through a Nexus session, or merge anyway with --no-verify-receipt --reason \"why\" (the reason is recorded).");
+    }
+    const reason = redactSecrets((options.reason ?? "").trim()).slice(0, 200);
+    if (reason.length < 3) throw new WorktreeError("--no-verify-receipt needs --reason \"why\" (at least 3 characters); it is recorded");
+    waiver = reason;
+  }
+
   // preMerge: WP-1313 attaches the blocking pre-merge hook here, after the checks and before any history is rewritten.
   const gitDir = gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
   const busy = inProgress(gitDir);
@@ -71,6 +91,13 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (targetState.total > 0) throw new WorktreeError(`the target worktree (${shownBranch(targetName)}) has uncommitted changes; commit or stash them first`);
 
   const notes: string[] = [];
+  if (waiver !== undefined) {
+    const reason = waiver;
+    updateRegistry(repo.commonDir, (reg) => {
+      reg.waivers = [...(reg.waivers ?? []), { branch, head: gateState.head, reason, recordedAt: new Date().toISOString() }].slice(-MAX_RECORDS);
+    });
+    notes.push(`Merging without a verification record (waiver recorded: ${reason}).`);
+  }
   const state = statusOf(source.path);
   const targetSha = resolveCommit(repo, targetName);
   if (!targetSha) throw new WorktreeError(`target ${shownBranch(targetName)} does not name a commit`);

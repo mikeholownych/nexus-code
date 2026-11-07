@@ -26,7 +26,7 @@ const SPECS: Record<string, Spec> = {
   list: { booleans: { "--json": "json" }, values: { "--limit": "limit" }, positional: "" },
   remove: { booleans: { "--force": "force", "-f": "force", "--delete-unmerged": "delete-unmerged" }, values: {}, positional: "<branch|path>..." },
   path: { booleans: {}, values: {}, positional: "<branch|path>" },
-  merge: { booleans: { "--no-squash": "no-squash", "--no-rebase": "no-rebase", "--no-remove": "no-remove" }, values: { "--message": "message", "-m": "message" }, positional: "[target]" },
+  merge: { booleans: { "--no-squash": "no-squash", "--no-rebase": "no-rebase", "--no-remove": "no-remove", "--no-verify-receipt": "no-verify-receipt" }, values: { "--message": "message", "-m": "message", "--reason": "reason" }, positional: "[target]" },
   prune: { booleans: { "--dry-run": "dry-run", "--discard-ignored": "discard-ignored" }, values: { "--min-age": "min-age", "--limit": "limit" }, positional: "" },
 };
 
@@ -37,7 +37,7 @@ const READ_ONLY = new Set(["list", "path"]);
 /** Subcommands that mutate unless `--dry-run` is given. */
 const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored", "prune"]);
 
-export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove]|prune [--dry-run] [--min-age 1d] [--limit N]]";
+export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove] [--no-verify-receipt --reason why]|prune [--dry-run] [--min-age 1d] [--limit N]]";
 
 function canonical(sub: string): string | undefined {
   const name = ALIASES[sub] ?? sub;
@@ -124,6 +124,7 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
         return mergeWorktree(ctx, {
           target: parsed.positionals[0], noSquash: parsed.flags.has("no-squash"), noRebase: parsed.flags.has("no-rebase"),
           noRemove: parsed.flags.has("no-remove"), message: parsed.values.get("message"),
+          noVerifyReceipt: parsed.flags.has("no-verify-receipt"), reason: parsed.values.get("reason"),
         });
       }
       case "prune": {

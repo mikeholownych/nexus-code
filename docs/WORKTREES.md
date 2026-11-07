@@ -42,7 +42,10 @@ ignored file and can therefore carry secrets such as `.env` into each worktree; 
 `merge [target]` (default: the default branch) commits uncommitted changes with a deterministic message (or `-m`), squashes
 the branch to one commit (`--no-squash` keeps them), rebases onto the target (`--no-rebase` skips it), fast-forwards the
 target (never a merge commit) and removes the worktree and branch (`--no-remove` keeps them). The target's worktree must be
-clean. Before history is rewritten the branch, including swept-in working-tree changes, is saved to
+clean. The state being merged (HEAD, plus uncommitted work) needs a recorded passing verification: a Nexus session records one
+when its deliverable-bound verifier passes inside that worktree, keyed by branch, head and tree, so a later edit or commit
+no longer matches. Without one, merge refuses unless you pass `--no-verify-receipt --reason "why"`; the waiver (branch, head,
+reason) is recorded in the registry. Before history is rewritten the branch, including swept-in working-tree changes, is saved to
 `refs/nexus-backup/<branch>`. A rebase conflict stops the command and leaves the rebase open in the worktree. Ignored
 leftovers (build caches) are deleted with the worktree after a successful merge.
 
