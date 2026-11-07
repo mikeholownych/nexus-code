@@ -38,7 +38,8 @@ test("client diagnostics redact a slash-containing secret whole when the endpoin
     assert.ok(!out.includes("K7MDENG"), out);
     assert.ok(!out.includes("bPxRf"), out);
     assert.ok(!out.includes("EXAMPLEKEY"), out);
-    assert.ok(out.includes("http://llm.example:8080/v1"), `ordinary slashes must survive an origin-only endpoint: ${out}`);
+    // Ordinary slashes survive an origin-only endpoint: the whole message is intact apart from the redacted secret.
+    assert.match(out, /^request to http:\/\/llm\.example:8080\/v1 failed with key \[REDACTED/, out);
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
   }
