@@ -43,6 +43,8 @@ cleanup() {
     kill -KILL -- "-$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
   fi
+  # We refused a pre-existing mount point above, so a mount point here is ours even if its flag was not yet set.
+  if [[ $created_workspace -eq 1 ]] && mountpoint -q "$WORKSPACE_ROOT" 2>/dev/null; then mounted=1; fi
   if [[ $mounted -eq 1 ]]; then
     sudo umount "$WORKSPACE_ROOT" 2>/dev/null || sudo umount -l "$WORKSPACE_ROOT" || echo "with-ci-fixtures: could not unmount $WORKSPACE_ROOT; unmount it by hand" >&2
   fi
@@ -51,9 +53,13 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
-trap 'exit 143' TERM
-trap 'exit 130' INT
-trap 'exit 129' HUP
+# Bash runs a trap only after the foreground command finishes, so a signal during setup would exit between a
+# successful `sudo mount` and the line that records it. Setup therefore only notes the signal, and the exit happens
+# once every operation's ownership flag is set; cleanup also trusts the mount table, not just the flag.
+pending=0
+trap 'pending=143' TERM
+trap 'pending=130' INT
+trap 'pending=129' HUP
 
 # mkdir fails if the path appeared since the check above, so this script never adopts a directory it did not create.
 sudo mkdir -m 0711 -- "$WORKSPACE_ROOT"; created_workspace=1
@@ -61,6 +67,10 @@ sudo chown "$(id -u):$(id -g)" "$WORKSPACE_ROOT"
 sudo mount -t tmpfs -o "size=128m,mode=0711,uid=$(id -u),gid=$(id -g)" nexus-eval-ci "$WORKSPACE_ROOT"; mounted=1
 sudo mkdir -m 0711 -- "$RUNTIME_ROOT"; created_runtime=1
 sudo chown "$(id -u):$(id -g)" "$RUNTIME_ROOT"
+if [[ $pending -ne 0 ]]; then exit "$pending"; fi
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 
 # Run in its own process group in the background so a signal reaches the trap while the command is alive.
 NEXUS_EVAL_TEST_WORKSPACE_ROOT="$WORKSPACE_ROOT" NEXUS_EVAL_TEST_RUNTIME_ROOT="$RUNTIME_ROOT" setsid "$@" &
