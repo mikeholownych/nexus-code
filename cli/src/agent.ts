@@ -57,6 +57,8 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { recordVerification } from "./worktrunk/verification.js";
+import { ensureWorktree } from "./worktrunk/core.js";
+import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
@@ -999,7 +1001,7 @@ export class AutonomousAgent {
   private activeTraceSpanId?: string;
   private activeCompactionTrace?: { span: SpanHandle; ended: boolean };
   private worktreeManager: WorktreeManager;
-  private activeWorktree?: { taskId: string; worktreePath: string; branch: string };
+  private activeWorktree?: { taskId: string; worktreePath: string; branch: string; kind?: "task" | "named" };
   private originalWorkspace?: string;
   private inheritedWorktreeScope?: { workspace: string; requireSandbox: true };
   private plannerClient: LocalLlmClient;
@@ -1578,6 +1580,8 @@ export class AutonomousAgent {
             worktreePath: this.activeWorktree.worktreePath,
             branch: this.activeWorktree.branch,
             createdAt: new Date().toISOString(),
+            kind: this.activeWorktree.kind ?? "task",
+            bindingVersion: WORKTREE_BINDING_VERSION,
           }
         : null,
       candidateId: this.activeValidationReceipt?.candidateId || null,
@@ -1663,6 +1667,7 @@ export class AutonomousAgent {
         taskId: state.worktreeBinding.taskId,
         worktreePath: state.worktreeBinding.worktreePath,
         branch: state.worktreeBinding.branch,
+        kind: state.worktreeBinding.kind ?? "task",
       };
       // Remember the checkout the task was resumed from so /merge and /discard can return there.
       this.originalWorkspace = this.originalWorkspace ?? this.primaryWorkspacePathIdentity.value;
@@ -1804,7 +1809,7 @@ export class AutonomousAgent {
     return this.worktreeManager;
   }
 
-  public getActiveWorktree(): { taskId: string; worktreePath: string; branch: string } | undefined {
+  public getActiveWorktree(): { taskId: string; worktreePath: string; branch: string; kind?: "task" | "named" } | undefined {
     return this.activeWorktree;
   }
 
@@ -1814,6 +1819,9 @@ export class AutonomousAgent {
   ): { success: boolean; taskId?: string; branch?: string; commitsMerged: number; error?: string } {
     if (!this.activeWorktree) {
       return { success: false, commitsMerged: 0, error: "No active worktree" };
+    }
+    if (this.activeWorktree.kind === "named") {
+      return { success: false, commitsMerged: 0, error: "This is a named worktree: merge it with `nexus worktree merge` (it needs a recorded verification) from inside it." };
     }
     const receiptToUse = receipt || this.activeValidationReceipt;
     const res = this.worktreeManager.mergeWorktree(
@@ -1834,6 +1842,9 @@ export class AutonomousAgent {
   public discardActiveWorktree(): { success: boolean; error?: string } {
     if (!this.activeWorktree) {
       return { success: false, error: "No active worktree" };
+    }
+    if (this.activeWorktree.kind === "named") {
+      return { success: false, error: "This is a named worktree: remove it with `nexus worktree remove <branch>`." };
     }
     const res = this.worktreeManager.discardWorktree(this.activeWorktree.taskId);
     if (res.success && this.originalWorkspace) {
@@ -4205,7 +4216,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
 
       const worktreeHasChanges = this.activeWorktree
-        ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
+        ? (this.activeWorktree.kind === "named"
+          ? this.worktreeManager.hasChangesAt(this.activeWorktree.worktreePath)
+          : this.worktreeManager.hasChanges(this.activeWorktree.taskId))
         : false;
       let verifierSucceeded = false;
       let hasExecuted = false;
@@ -4450,7 +4463,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
       // A passing deliverable-bound run inside a named (linked) worktree is recorded for `nexus worktree merge`, which
       // needs a verification for the exact state it merges. Recording never affects the task outcome.
-      if (!this.activeWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound) {
+      if ((!this.activeWorktree || this.activeWorktree.kind === "named") && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound) {
         recordVerification(this.config.workspace, this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command || "verifier");
       }
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
@@ -6836,11 +6849,22 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (!isSandboxAvailable(configuredSandbox)) {
         throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
       }
-      const wt = this.worktreeManager.createWorktree();
-      this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch };
-      this.originalWorkspace = this.config.workspace;
-      this.switchWorktreeWorkspace(wt.worktreePath);
-      console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
+      if (this.config.worktreeBranch) {
+        if (this.isReadOnly() || this.config.dryRun) {
+          throw new Error("Cannot create or reuse a named worktree in read-only or dry-run mode.");
+        }
+        const named = ensureWorktree({ cwd: this.config.workspace, home: process.env.HOME || os.homedir(), readOnly: false }, this.config.worktreeBranch);
+        this.activeWorktree = { taskId: `task-${randomUUID().slice(0, 8)}`, worktreePath: named.path, branch: named.branch, kind: "named" };
+        this.originalWorkspace = this.config.workspace;
+        this.switchWorktreeWorkspace(named.path);
+        console.log(pc.cyan(`🌲 ${named.created ? "Created" : "Reusing"} named git worktree: ${named.branch} at ${named.path}`));
+      } else {
+        const wt = this.worktreeManager.createWorktree();
+        this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch, kind: "task" };
+        this.originalWorkspace = this.config.workspace;
+        this.switchWorktreeWorkspace(wt.worktreePath);
+        console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
+      }
     }
 
     if (this.flightRecorder && !this.flightRecorder.isSessionActive()) {
@@ -6879,7 +6903,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
     } finally {
       this.worktreeRunTurnAuthorized = false;
-      if (this.activeWorktree && this.config.worktree) {
+      if (this.activeWorktree?.kind === "named") {
+        console.log(pc.cyan(`🌲 Named worktree ${this.activeWorktree.branch} kept at ${this.activeWorktree.worktreePath}. Merge it with \`nexus worktree merge\` from inside it, or remove it with \`nexus worktree remove\`.`));
+      } else if (this.activeWorktree && this.config.worktree) {
         const hasChanges = this.worktreeManager.hasChanges(this.activeWorktree.taskId);
         if (hasChanges) {
           if (

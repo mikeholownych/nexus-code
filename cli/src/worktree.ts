@@ -219,6 +219,21 @@ export class WorktreeManager {
     }
   }
 
+  /** Whether the worktree at an explicit path (a named worktree) has uncommitted or untracked changes. */
+  public hasChangesAt(worktreePath: string): boolean {
+    try {
+      return execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+        cwd: worktreePath,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+        .split("\n")
+        .some((line) => line.trim().length > 0 && !line.startsWith("?? .nexus/") && line.trim() !== "?? .nexus");
+    } catch {
+      return true;
+    }
+  }
+
   /** Ignored task output is still a task effect and must not be silently discarded by merge. */
   public hasIgnoredChanges(taskId: string): boolean {
     const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);

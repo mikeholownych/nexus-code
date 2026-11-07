@@ -5,6 +5,9 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
+import { validateBranchName } from "../worktrunk/paths.js";
+import { readRegistry } from "../worktrunk/registry.js";
+import { openRepo } from "../worktrunk/repo.js";
 import { ensurePrivateDir, writePrivateFile, appendPrivateFile } from "./durable_file.js";
 
 export class SensitivePersistenceError extends Error {
@@ -85,6 +88,30 @@ export function isManagedWorktreePath(
   }
 }
 
+/**
+ * Verify that a named worktree (`--worktree-branch`) is a worktree this repository's registry knows: Git lists it for the
+ * same common directory on the recorded branch, it is a real directory (not a link), and Nexus registered it. A plain
+ * `git worktree add` by someone else, or a path a checkout merely points at, is not accepted. This does not widen
+ * `isManagedWorktreePath`, which still accepts only `nexus/<taskId>` under `.nexus/worktrees`.
+ */
+export function isNamedWorktreePath(
+  workspace: WorkspacePath,
+  worktreePath: string,
+  binding: { kind?: string; bindingVersion?: number; branch?: string }
+): boolean {
+  if (binding.kind !== "named" || binding.bindingVersion !== 1 || typeof binding.branch !== "string" || validateBranchName(binding.branch)) return false;
+  try {
+    const resolved = path.resolve(worktreePath);
+    if (fs.realpathSync(resolved) !== resolved) return false;
+    const repo = openRepo(workspace.value);
+    const entry = repo.entries.find((item) => !item.isMain && item.path === resolved && item.branch === binding.branch);
+    if (!entry) return false;
+    return readRegistry(repo.commonDir).registry.worktrees.some((item) => item.path === resolved && item.branch === binding.branch);
+  } catch {
+    return false;
+  }
+}
+
 /** Provider tool-call ids at least this long are eligible for the high-entropy classifier (see egress.ts). */
 const ENTROPY_CHECKED_LENGTH = 20;
 
@@ -157,7 +184,7 @@ export function redactTaskStateForPersistence<T extends {
   taskId: string;
   workspacePath: string;
   workspace?: string;
-  worktreeBinding?: { worktreePath?: string; taskId?: string; branch?: string } | null;
+  worktreeBinding?: { worktreePath?: string; taskId?: string; branch?: string; kind?: string; bindingVersion?: number } | null;
 }>(original: T, workspacePaths: readonly WorkspacePath[] = []): T {
   const value = withStableToolCallIds(original);
   if (workspacePaths.length === 0) {
@@ -185,7 +212,7 @@ export function redactTaskStateForPersistence<T extends {
     else {
       const findings = classifyPathComponents(worktreePath);
       if (findings.some((finding) => finding.classificationType !== "UNCERTAIN") ||
-          (findings.length > 0 && !isManagedWorktreePath(selectedWorkspace, worktreePath, value.taskId, value.worktreeBinding ?? {}))) {
+          (findings.length > 0 && !(isManagedWorktreePath(selectedWorkspace, worktreePath, value.taskId, value.worktreeBinding ?? {}) || isNamedWorktreePath(selectedWorkspace, worktreePath, value.worktreeBinding ?? {})))) {
         throw new Error("Task state worktree path has no selected workspace identity");
       }
     }

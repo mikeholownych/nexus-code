@@ -234,6 +234,16 @@ function rememberPrevious(repo: Repo, from: string | null | undefined, to: strin
   try { updateRegistry(repo.commonDir, (reg) => { reg.previous = from; }); } catch { /* the shortcut is a convenience */ }
 }
 
+/** The worktree for `branch`, created from the default branch when neither it nor the branch exists (used by `run --worktree-branch`). */
+export function ensureWorktree(ctx: WorktreeContext, branch: string): { branch: string; path: string; created: boolean } {
+  const problem = validateBranchName(branch);
+  if (problem) throw new WorktreeError(`invalid branch name: ${problem}`);
+  const repo = openRepo(ctx.cwd);
+  const exists = repo.entries.some((entry) => entry.branch === branch) || refExists(repo, `refs/heads/${branch}`);
+  const result = switchWorktree(ctx, branch, { create: !exists });
+  return result.data as { branch: string; path: string; created: boolean };
+}
+
 // ---- path -----------------------------------------------------------------------------------------------------
 
 export function pathOf(ctx: WorktreeContext, token: string): CommandResult {

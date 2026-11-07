@@ -27,6 +27,15 @@ branch that was active before the last `switch`. A worktree path is accepted too
 into the default branch (`--delete-unmerged` overrides), the main checkout, the worktree you are standing in, a locked
 worktree and a speculative task worktree (unless `--force`).
 
+## Running a task in a named worktree
+
+`nexus run --worktree-branch feature/login "task"` (also on `nexus repl` and `nexus live`) runs the task inside the named worktree
+for that branch, creating it from the default branch when it does not exist and reusing it when it does. It has the same
+sandbox requirement as `--worktree`. Unlike the ephemeral task worktree, a named worktree is never auto-merged or discarded:
+when the task ends it stays, and a passing verifier run inside it records the verification that `nexus worktree merge` needs. The
+task state records a binding of kind `named` (binding version 1); builds that predate it ignore the kind and cannot merge or discard
+it, because their paths are derived from `nexus/<task-id>`.
+
 ## Shared build caches
 
 `switch -c` copies the files that are both git-ignored and matched by the source checkout's `.worktreeinclude` (gitignore

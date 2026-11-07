@@ -20,7 +20,7 @@ import {
 } from "./candidate.js";
 import { AuthorityAdmissionEngine } from "./authority.js";
 import { WorktreeManager } from "../worktree.js";
-import { isManagedWorktreePath, redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
+import { isManagedWorktreePath, isNamedWorktreePath, redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
 import type { ObjectiveLedger } from "./objective.js";
 import { WorkspacePath } from "./workspace_path.js";
 import { writeFileDurably, writePrivateFile, appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, fsyncDirectoryDurably } from "./durable_file.js";
@@ -29,6 +29,7 @@ import { updateTaskMessages, readTaskMessages, TaskMessageLogError, type TaskMes
 import { withStateStoreGuard } from "./state_store_guard.js";
 
 import { CURRENT_STATE_SCHEMA_VERSION } from "./state_schema.js";
+import { validateBranchName } from "../worktrunk/paths.js";
 export { CURRENT_STATE_SCHEMA_VERSION } from "./state_schema.js";
 
 interface StoredTaskRecord {
@@ -80,11 +81,21 @@ export interface InFlightOperationRecord {
   error?: string;
 }
 
+/** Version of the worktree binding shape itself (independent of the task-state schema version). */
+export const WORKTREE_BINDING_VERSION = 1;
+
 export interface DurableWorktreeBinding {
   taskId: string;
   worktreePath: string;
   branch: string;
   createdAt: string;
+  /**
+   * "task": the ephemeral `nexus/<taskId>` worktree of `--worktree`. "named": a user-named worktree from
+   * `--worktree-branch`, validated against Git's worktree list and the registry. Absent in records written before
+   * this field existed; loading migrates those to "task".
+   */
+  kind?: "task" | "named";
+  bindingVersion?: number;
 }
 
 export interface DurableCognitiveRouting {
@@ -535,6 +546,14 @@ export class DurableStateManager {
       throw new TaskStateWriteError("unknown", "Invalid state schema version");
     }
 
+    if (state.worktreeBinding) {
+      const binding = state.worktreeBinding;
+      binding.kind ??= "task";
+      binding.bindingVersion ??= WORKTREE_BINDING_VERSION;
+      if (binding.kind === "named" && validateBranchName(binding.branch) !== undefined) {
+        throw new TaskStateWriteError(state.taskId, "Named worktree binding has an invalid branch");
+      }
+    }
     state.updatedAt = new Date().toISOString();
     if (state.schemaVersion > CURRENT_STATE_SCHEMA_VERSION) throw new UnsupportedSchemaVersionError(state.schemaVersion);
     state.schemaVersion = CURRENT_STATE_SCHEMA_VERSION;
@@ -620,6 +639,7 @@ export class DurableStateManager {
     // Schema version check (fails closed on unsupported future versions) is performed before reading any messages.
     // Migrate legacy session file if necessary with pre-migration backup; publication below creates the backup first.
     const state: DurableTaskState = this.migrateIfLegacy(record.parsed, taskId);
+    this.normalizeWorktreeBinding(state, taskId, record);
 
     // Verify task identity binding
     if (state.taskId && taskId && state.taskId !== taskId && state.sessionId !== taskId) {
@@ -644,7 +664,7 @@ export class DurableStateManager {
           state.taskId !== taskId ||
           bindingPath !== normActual ||
           !binding ||
-          !isManagedWorktreePath(expectedIdentity, normActual, taskId, binding)
+          !(isManagedWorktreePath(expectedIdentity, normActual, taskId, binding) || isNamedWorktreePath(expectedIdentity, normActual, binding))
         ) {
           throw new WorkspaceIdentityMismatchError(normExpected, normActual);
         }
@@ -1115,6 +1135,27 @@ export class DurableStateManager {
     } catch {
       return filePath;
     }
+  }
+
+  /**
+   * Migrates and validates the worktree binding: records without `kind` are task bindings (version 1); an unknown
+   * kind, a missing or malformed version, or an unusable named branch is corruption; a newer binding version fails
+   * closed rather than being read with today's rules.
+   */
+  private normalizeWorktreeBinding(state: DurableTaskState, taskId: string, record: StoredTaskRecord): void {
+    const binding = state.worktreeBinding;
+    if (!binding) return;
+    const corrupt = (why: string): never => { throw new CorruptStateError(taskId, why, this.quarantineFile(record.filePath)); };
+    if (binding.kind === undefined) {
+      if (binding.bindingVersion !== undefined) corrupt("Worktree binding has a version but no kind");
+      binding.kind = "task";
+      binding.bindingVersion = WORKTREE_BINDING_VERSION;
+      return;
+    }
+    if (binding.kind !== "task" && binding.kind !== "named") corrupt("Worktree binding has an unknown kind");
+    if (!Number.isSafeInteger(binding.bindingVersion) || (binding.bindingVersion as number) < 1) corrupt("Worktree binding has no valid version");
+    if ((binding.bindingVersion as number) > WORKTREE_BINDING_VERSION) throw new UnsupportedSchemaVersionError(binding.bindingVersion as number);
+    if (binding.kind === "named" && (typeof binding.branch !== "string" || validateBranchName(binding.branch) !== undefined)) corrupt("Named worktree binding has an invalid branch");
   }
 
   /**

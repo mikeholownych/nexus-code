@@ -6,6 +6,7 @@ import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, operatorSetting, setCredentialAuthority } from "./client.js";
 import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
+import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
 
@@ -411,7 +412,12 @@ export function buildConfig(options: any): HarnessConfig {
   const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : (effectiveSetting("NEXUS_CONTEXT_LIMIT") ? parseInt(effectiveSetting("NEXUS_CONTEXT_LIMIT")!, 10) : undefined);
   const strictTokenCount = Boolean(options.strictTokenCount) || effectiveSetting("NEXUS_STRICT_TOKEN_COUNT") === "1";
-  const worktree = Boolean(options.worktree);
+  const worktreeBranch = options.worktreeBranch ? String(options.worktreeBranch) : undefined;
+  if (worktreeBranch) {
+    const problem = validateBranchName(worktreeBranch);
+    if (problem) throw new Error(`Invalid --worktree-branch: ${problem}.`);
+  }
+  const worktree = Boolean(options.worktree) || Boolean(worktreeBranch);
   const authoritativeVerifierCommand = options.authoritativeVerifier;
   const trustedDeliverableFiles = normalizeTrustedDeliverableFiles(workspace, options.deliverableFile);
   const recordFlight = Boolean(options.recordFlight || options.flight);
@@ -469,6 +475,7 @@ export function buildConfig(options: any): HarnessConfig {
     contextLimit,
     ...(strictTokenCount ? { strictTokenCount } : {}),
     worktree,
+    ...(worktreeBranch ? { worktreeBranch } : {}),
     authoritativeVerifierCommand,
     trustedDeliverableFiles,
     verifierTimeoutSecs,
