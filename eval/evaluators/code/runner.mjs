@@ -328,7 +328,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
             if (spec.files === undefined && files.length === 0) {
               results.push(evaluatorResult("syntax_ast", true, 1, { files: [], failures: [] }));
             } else {
-              results.push(await evaluateSyntaxAst({ root: candidateWorkspace, files, parsers: spec.parsers }));
+              results.push(await evaluateSyntaxAst({ root: candidateWorkspace, files, parsers: spec.parsers, maxSourceBytes: spec.maxSourceBytes, parserTimeoutMs: spec.parserTimeoutMs }));
             }
           }
           break;

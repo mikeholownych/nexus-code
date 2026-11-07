@@ -18,17 +18,21 @@ import path from "node:path";
 const CHILD_ENV = () => ({ PATH: process.env.PATH ?? "", LANG: "C.UTF-8", LC_ALL: "C.UTF-8" });
 const TIMEOUT_MS = 30_000;
 
-function childFailure(result, what) {
+function childFailure(result, what, timeoutMs) {
+  if (result.error?.code === "ETIMEDOUT") return `${what} timed out after ${timeoutMs} ms`;
   if (result.error) return `${what} could not run: ${result.error.message}`;
   if (result.signal) return `${what} was terminated by ${result.signal}`;
   const text = `${result.stderr ?? ""}${result.stdout ?? ""}`.trim().split(/\r?\n/).filter(Boolean);
   return text.slice(-3).join(" | ") || `${what} exited with status ${result.status}`;
 }
 
-function parseTypeScript(source) {
-  const strip = module.stripTypeScriptTypes;
-  if (typeof strip !== "function") throw new Error("no built-in TypeScript parser on this Node.js (requires >= 22.13)");
-  strip(source, { mode: "transform" });
+// Parsed in a child process: the parser is synchronous, so only a child can be stopped when a file takes too long.
+const TYPESCRIPT_CHILD = 'require("node:module").stripTypeScriptTypes(require("node:fs").readFileSync(0, "utf8"), { mode: "transform" })';
+
+function parseTypeScript(source, { timeoutMs = TIMEOUT_MS } = {}) {
+  if (typeof module.stripTypeScriptTypes !== "function") throw new Error("no built-in TypeScript parser on this Node.js (requires >= 22.13)");
+  const result = spawnSync(process.execPath, ["-e", TYPESCRIPT_CHILD], { input: source, env: CHILD_ENV(), timeout: timeoutMs, encoding: "utf8", shell: false });
+  if (result.status !== 0 || result.signal || result.error) throw new Error(childFailure(result, "TypeScript parser", timeoutMs));
   return { parser: "node:module.stripTypeScriptTypes" };
 }
 
@@ -47,21 +51,21 @@ function declaredModuleType(absolutePath) {
   }
 }
 
-function parseJavaScript(source, { absolutePath }) {
+function parseJavaScript(source, { absolutePath, timeoutMs = TIMEOUT_MS }) {
   const declared = declaredModuleType(absolutePath);
   const failures = [];
   for (const inputType of declared ? [declared] : ["module", "commonjs"]) {
-    const result = spawnSync(process.execPath, ["--check", `--input-type=${inputType}`], { input: source, env: CHILD_ENV(), timeout: TIMEOUT_MS, encoding: "utf8", shell: false });
+    const result = spawnSync(process.execPath, ["--check", `--input-type=${inputType}`], { input: source, env: CHILD_ENV(), timeout: timeoutMs, encoding: "utf8", shell: false });
     if (result.status === 0 && !result.signal && !result.error) return { parser: `node --check (${inputType})` };
-    failures.push(childFailure(result, "node --check"));
+    failures.push(childFailure(result, "node --check", timeoutMs));
   }
   throw new Error(failures[0]);
 }
 
-function parsePython(source, { file }) {
+function parsePython(source, { file, timeoutMs = TIMEOUT_MS }) {
   const program = "import ast, sys\nast.parse(sys.stdin.buffer.read(), filename=sys.argv[1])";
-  const result = spawnSync("python3", ["-I", "-c", program, file], { input: source, env: CHILD_ENV(), timeout: TIMEOUT_MS, encoding: "utf8", shell: false });
-  if (result.status !== 0 || result.signal || result.error) throw new Error(childFailure(result, "python3 ast.parse"));
+  const result = spawnSync("python3", ["-I", "-c", program, file], { input: source, env: CHILD_ENV(), timeout: timeoutMs, encoding: "utf8", shell: false });
+  if (result.status !== 0 || result.signal || result.error) throw new Error(childFailure(result, "python3 ast.parse", timeoutMs));
   return { parser: "python3 ast.parse" };
 }
 
