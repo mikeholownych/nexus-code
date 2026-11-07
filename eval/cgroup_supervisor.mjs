@@ -91,6 +91,10 @@ control.on("data", (chunk) => {
 });
 // A stop can arrive before the shell has joined the leaf; keep emptying it until the child is gone.
 const stop = () => { if (stopRequested) return; stopRequested = true; killPayload(); setInterval(killPayload, 50).unref(); };
+// The parent holds the other end of the control channel until it has read the final report. If it closes first, the
+// parent died (for example a Ctrl-C that reached only its own process group): stop the payload instead of orphaning it.
+control.on("end", () => { if (!finished) stop(); });
+control.on("error", () => { if (!finished) stop(); });
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, stop);
 child.on("error", (error) => finish(null, null, error.message));
 child.on("exit", (code, signal) => finish(code, signal, null));

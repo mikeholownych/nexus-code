@@ -12,7 +12,19 @@ npm --prefix cli test
 bash scripts/security_gates.sh
 ```
 
-`make build` compiles the Rust binaries and builds `cli/dist` (`npm --prefix cli run build`). `make test` runs the Rust and TypeScript suites and the repository security gates. The Cloudflare service has separate setup and tests; see [the contest entry](CLOUDFLARE_CONTEST.md).
+`make build` compiles the Rust binaries and builds `cli/dist` (`npm --prefix cli run build`). `make test` runs the Rust suite, the CLI suite, the terminal-scope check and the repository security gates. It runs all four even when one fails, prints which step failed, and exits non-zero at the end.
+
+### Local gate with the CI evaluator fixtures
+
+CI runs the evaluator tests against a capped tmpfs and a public runtime directory, passed as `NEXUS_EVAL_TEST_WORKSPACE_ROOT` and `NEXUS_EVAL_TEST_RUNTIME_ROOT`. Without them `make test` prints a notice: `cli/test/eval_version_probe_storage.test.ts` fails, and `cli/test/eval_integrity.test.ts` runs its `/dev/shm` fallback branches. To run the same gate as CI locally (Linux, needs `sudo` for the mount):
+
+```sh
+make test-ci
+```
+
+`make test-ci` runs `scripts/with-ci-fixtures.sh`, which mounts a 128 MiB tmpfs at `/mnt/nexus-eval-ci` (mode 0711), creates `/opt/nexus-eval-ci-runtime` (mode 0711), exports both variables, runs `make test`, and unmounts and removes only what it created, including on failure or interrupt. It refuses to start if either path already exists or the tmpfs is already mounted, so it never touches fixtures it did not create. If you already provisioned those paths, export the two variables yourself and run `make test`. The host also needs the one-time CI setup: `scripts/install-evaluator-toolchains.sh`, `scripts/ensure-ci-bubblewrap.sh` and `scripts/ensure-ci-user-cgroups.sh`. Run the suite alone with `bash scripts/with-ci-fixtures.sh -- npm --prefix cli test`.
+
+The Cloudflare service has separate setup and tests; see [the contest entry](CLOUDFLARE_CONTEST.md).
 
 ## Release package
 

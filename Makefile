@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 APPROVED_RUST_BUILD_IMAGE := rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
 
-.PHONY: all setup build build-core build-cli check clean test audit security-scan sbom verify-reproducibility
+.PHONY: all setup build build-core build-cli check clean test test-ci test-fixture-notice audit security-scan sbom verify-reproducibility
 
 all: build
 
@@ -48,7 +48,29 @@ verify-reproducibility:
 	rm -rf "$$TMP1" "$$TMP2"
 	@echo "[+] Reproducible build verification succeeded (byte-identical artifacts)."
 
-test:
-	cargo test --manifest-path core/Cargo.toml
-	npm --prefix cli test
-	bash scripts/security_gates.sh
+# `make test` runs every gate and fails at the end, so a CLI failure does not hide the terminal-scope or
+# security result. It calls the two halves of `npm --prefix cli test` by name (test:cli, test:scope), so the
+# step list lives only in cli/package.json.
+# CI evaluator fixtures (tmpfs workspace and runtime root) come from `make test-ci`; see docs/DEVELOPMENT.md.
+test: test-fixture-notice
+	@rc=0; \
+	cargo test --manifest-path core/Cargo.toml || { echo "[!] FAILED: cargo test"; rc=1; }; \
+	npm --prefix cli run test:cli || { echo "[!] FAILED: CLI suite"; rc=1; }; \
+	npm --prefix cli run test:scope || { echo "[!] FAILED: terminal scope"; rc=1; }; \
+	bash scripts/security_gates.sh || { echo "[!] FAILED: security gates"; rc=1; }; \
+	if [ $$rc -ne 0 ]; then echo "[!] make test: one or more steps failed (all steps ran)"; fi; \
+	exit $$rc
+
+test-fixture-notice:
+	@if [ -z "$$NEXUS_EVAL_TEST_WORKSPACE_ROOT" ] || [ -z "$$NEXUS_EVAL_TEST_RUNTIME_ROOT" ]; then \
+	  echo "[i] NEXUS_EVAL_TEST_WORKSPACE_ROOT / NEXUS_EVAL_TEST_RUNTIME_ROOT are not set."; \
+	  echo "[i] cli/test/eval_version_probe_storage.test.ts will FAIL without them, and cli/test/eval_integrity.test.ts"; \
+	  echo "[i] runs its /dev/shm fallback branches instead of the capped-tmpfs ones. This is not a code defect."; \
+	  echo "[i] Run 'make test-ci' to provision the same fixtures as CI (needs sudo)."; \
+	fi
+
+# Same gates as CI with the CI evaluator fixtures: mounts a capped tmpfs and runtime root, runs `make test`,
+# then unmounts and removes only what it created. One-time host setup (not run here):
+# scripts/install-evaluator-toolchains.sh, scripts/ensure-ci-bubblewrap.sh, scripts/ensure-ci-user-cgroups.sh.
+test-ci:
+	+@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then echo 'dry run: would run scripts/with-ci-fixtures.sh -- make test'; else bash scripts/with-ci-fixtures.sh -- $(MAKE) test; fi

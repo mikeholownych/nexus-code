@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Run a command with the evaluator fixtures that .github/workflows/ci.yml provisions:
+#   NEXUS_EVAL_TEST_WORKSPACE_ROOT  a dedicated 128m tmpfs (mode 0711, owned by the caller)
+#   NEXUS_EVAL_TEST_RUNTIME_ROOT    a public runtime directory (mode 0711, owned by the caller)
+# Same paths, size and modes as CI. The tmpfs and directories are removed when the command ends,
+# but only if this script created them; anything that already exists is refused, never reused or deleted.
+# Usage: scripts/with-ci-fixtures.sh -- <command> [args...]
+set -euo pipefail
+
+readonly WORKSPACE_ROOT=/mnt/nexus-eval-ci
+readonly RUNTIME_ROOT=/opt/nexus-eval-ci-runtime
+
+if [[ "${1:-}" == "--" ]]; then shift; fi
+if [[ $# -eq 0 ]]; then
+  echo "usage: $0 -- <command> [args...]" >&2
+  exit 64
+fi
+
+if [[ "$(uname -s)" != "Linux" ]]; then echo "with-ci-fixtures: Linux only (tmpfs mount)" >&2; exit 2; fi
+if [[ "$(id -u)" -eq 0 ]]; then echo "with-ci-fixtures: run as the unprivileged user that runs the tests" >&2; exit 2; fi
+if mountpoint -q "$WORKSPACE_ROOT" 2>/dev/null; then
+  echo "with-ci-fixtures: $WORKSPACE_ROOT is already a mount point; refusing to reuse or unmount it" >&2; exit 2
+fi
+for dir in "$WORKSPACE_ROOT" "$RUNTIME_ROOT"; do
+  if [[ -e "$dir" || -L "$dir" ]]; then
+    echo "with-ci-fixtures: $dir already exists; remove it (when empty) and retry" >&2; exit 2
+  fi
+done
+
+mounted=0; created_workspace=0; created_runtime=0; child=0
+cleanup() {
+  local status=$?
+  # Ignore further signals while tearing down: a second Ctrl-C must not leave the mount behind.
+  trap '' EXIT TERM INT HUP
+  # Never tear the fixtures down under a live command. Signal the whole process group (also when the leader
+  # already exited and left helpers holding files), give it a few seconds, then SIGKILL and wait.
+  if [[ $child -ne 0 ]]; then
+    kill -TERM -- "-$child" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 -- "-$child" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -KILL -- "-$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+  fi
+  # We refused a pre-existing mount point above, so a mount point here is ours even if its flag was not yet set.
+  if [[ $created_workspace -eq 1 ]] && mountpoint -q "$WORKSPACE_ROOT" 2>/dev/null; then mounted=1; fi
+  if [[ $mounted -eq 1 ]]; then
+    sudo umount "$WORKSPACE_ROOT" 2>/dev/null || sudo umount -l "$WORKSPACE_ROOT" || echo "with-ci-fixtures: could not unmount $WORKSPACE_ROOT; unmount it by hand" >&2
+  fi
+  if [[ $created_workspace -eq 1 ]] && ! mountpoint -q "$WORKSPACE_ROOT" 2>/dev/null; then sudo rmdir "$WORKSPACE_ROOT" || true; fi
+  if [[ $created_runtime -eq 1 ]]; then sudo rm -rf --one-file-system -- "$RUNTIME_ROOT"; fi
+  exit "$status"
+}
+trap cleanup EXIT
+# Bash runs a trap only after the foreground command finishes, so a signal during setup would exit between a
+# successful `sudo mount` and the line that records it. Setup therefore only notes the signal, and the exit happens
+# once every operation's ownership flag is set; cleanup also trusts the mount table, not just the flag.
+pending=0
+trap 'pending=143' TERM
+trap 'pending=130' INT
+trap 'pending=129' HUP
+
+# mkdir fails if the path appeared since the check above, so this script never adopts a directory it did not create.
+sudo mkdir -m 0711 -- "$WORKSPACE_ROOT"; created_workspace=1
+sudo chown "$(id -u):$(id -g)" "$WORKSPACE_ROOT"
+sudo mount -t tmpfs -o "size=128m,mode=0711,uid=$(id -u),gid=$(id -g)" nexus-eval-ci "$WORKSPACE_ROOT"; mounted=1
+sudo mkdir -m 0711 -- "$RUNTIME_ROOT"; created_runtime=1
+sudo chown "$(id -u):$(id -g)" "$RUNTIME_ROOT"
+if [[ $pending -ne 0 ]]; then exit "$pending"; fi
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
+# Run in its own process group in the background so a signal reaches the trap while the command is alive.
+NEXUS_EVAL_TEST_WORKSPACE_ROOT="$WORKSPACE_ROOT" NEXUS_EVAL_TEST_RUNTIME_ROOT="$RUNTIME_ROOT" setsid "$@" &
+child=$!
+wait "$child"
