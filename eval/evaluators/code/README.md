@@ -33,11 +33,11 @@ from what the agent said about its own work.
   - Recognised diagnostics are TypeScript (`error TS1234:`) and rustc (`error[E0123]:`). For another checker, set
     `diagnosticPattern` (a regular expression, case-insensitive) on the evaluator spec or `task.typecheck`; without a
     match a non-zero exit is an infrastructure failure, not a comparison. A pattern that is not a string, or is not a valid regular expression, is a failed result with `details.error`, not an exception.
-  - Locations are normalized in the leading position only: `file(l,c):`, `file:l:c - `, `--> file:l:c`, `file:l:c:` and `file:l:`. The path must end in a file extension and may contain spaces but no colon or parenthesis, so a
+  - Locations are normalized in the leading position only: `file(l,c):`, `file:l:c - `, `--> file:l:c`, `file:l:c:` and `file:l:`. The path must end in a file extension and may contain spaces and parentheses (`app/(auth)/page.tsx`) but no colon, so a
     location-free header such as `error[E0080]: ... step:1: failed` is compared as printed. A diagnostic's code (used for
     the configuration-error check and to open a code frame) is read only at its leading position, after any location;
     a code quoted in a message or a source excerpt does not count.
-  - A configuration error from the checker (`TS5057` missing tsconfig, `TS5058`, `TS5083`, `TS5012`, `TS18003`,
+  - A configuration error from the checker (`TS5057` or `TS5081` missing tsconfig (the code depends on the compiler version), `TS5058`, `TS5083`, `TS5012`, `TS18003`,
     `TS6053`) on either side fails closed: nothing was type-checked.
 - **`diff_boundary.mjs`**
   - Checks Git-style relative paths against exact allowed paths and directory prefixes ending in `/`.

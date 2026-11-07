@@ -34,7 +34,8 @@ test("typecheck_clean fails when both revisions report a missing tsconfig (real 
   const empty = scratch("wp1302-notsconfig-");
   try {
     const real = realTsc(empty, ["-p", "."]);
-    assert.match(real.stdout + real.stderr, /TS5057/);
+    // Newer compilers colour even piped output and report TS5081 ("at the current directory") instead of TS5057.
+    assert.match((real.stdout + real.stderr).replace(/\u001b\[[0-9;]*m/g, ""), /TS50(?:57|81)/);
     const result = await verdict(byRevision(real, real));
     assert.equal(result.passed, false, "nothing was type-checked, so an identical config error is not a clean comparison");
     assert.equal(result.details.infrastructureFailure, true);
@@ -211,4 +212,25 @@ test("typecheck_clean recognises a configuration error only at the diagnostic's 
   const real = await verdict(byRevision({ status: 1, stderr: "error TS5057: Cannot find a tsconfig.json file at the specified directory: '.'.\n" }, { status: 1, stderr: "error TS5057: Cannot find a tsconfig.json file at the specified directory: '.'.\n" }));
   assert.equal(real.passed, false);
   assert.equal(real.details.infrastructureFailure, true);
+});
+
+test("typecheck_clean treats every missing-tsconfig code the compiler has used as a configuration error", async () => {
+  const lines = [
+    "error TS5057: Cannot find a tsconfig.json file at the specified directory: '.'.\n",
+    "\u001b[91merror\u001b[0m\u001b[90m TS5081: \u001b[0mCannot find a tsconfig.json file at the current directory: /tmp/x/tsconfig.json.\n",
+  ];
+  for (const stderr of lines) {
+    const result = await verdict(byRevision({ status: 1, stderr }, { status: 1, stderr }));
+    assert.equal(result.passed, false, stderr);
+    assert.equal(result.details.infrastructureFailure, true, stderr);
+  }
+});
+
+test("typecheck_clean recognises diagnostics whose file path contains parentheses (route groups)", async () => {
+  const line = (n: number) => `app/(auth)/page.tsx(${n},1): error TS2322: Type 'string' is not assignable to type 'number'.\n`;
+  const fixed = await verdict(byRevision({ status: 1, stderr: line(1) }, { status: 0, stderr: "" }));
+  assert.equal(fixed.details.infrastructureFailure, false, JSON.stringify(fixed.details));
+  assert.equal(fixed.passed, true);
+  const moved = await verdict(byRevision({ status: 1, stderr: line(1) }, { status: 1, stderr: line(9) }));
+  assert.equal(moved.passed, true, JSON.stringify(moved.details));
 });
