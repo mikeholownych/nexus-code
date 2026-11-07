@@ -44,7 +44,7 @@ Every row ends as FIXED (commit and test), WITHDRAWN (evidence) or DEFERRED (own
 | WP-1107 | serverKindCache: no TTL/invalidation; process-wide, keyed only by endpoint; gateway kept on 404/missing model sends X-Task-Class to a replaced non-gateway server (REQ-PRV-109) | WP-1303 | OPEN |
 | WP-1107 | Null normalisation misses repaired and text-mode calls; strips explicit null from nullable properties for all providers; done twice | WP-1303 | OPEN |
 | WP-1107 | Retained vLLM kind loses advertised.via so request counting probably turns off; transient /version and Ollama /api/version failures downgrade a known kind | WP-1303 | OPEN |
-| WP-1107 | Matrix provenance not bound to checkout content; archiveSha256 pin optional | WP-1303 | OPEN |
+| WP-1107 | Matrix provenance not bound to checkout content; archiveSha256 pin optional | WP-1303 | DEFERRED (WP-1303): eval/tool_grammar_matrix.mjs is in the WP-1302/1304 lane, out of scope here. At base the archive pin is already mandatory (options.archiveSha256 is validated and compared); binding to verified checkout content, not just the commit id, remains to do there |
 | WP-1107 | Test gaps: 404 retention, thrown-exception retention, agent_observer isolation of the two normaliser layers, required-null rejection | WP-1303 | OPEN |
 | WP-1107 | G1.1-4 (99.5% valid tool calls across supported providers) never measured against live providers; roadmap hybrid reasoning grammars and llama.cpp/Ollama constraints not implemented | WP-1303 | OPEN |
 | Redaction | Secret-shaped directory names appear verbatim in workspace and workspace_name; P3 nits from earlier reviews (typecheck regex fixed in 2dbe565b) | WP-1304 | OPEN |
