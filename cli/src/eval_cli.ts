@@ -58,9 +58,51 @@ export function resolveInstalledEvalRuntime(env: NodeJS.ProcessEnv = process.env
   return { packageRoot, nexusExecutable, runnerApiPath };
 }
 
+/** Global options that consume the next token (`<value>`); the program enables positional options, so these can only precede the subcommand. */
+export const GLOBAL_VALUE_OPTIONS = new Set([
+  "-e", "--endpoint", "-m", "--model", "-w", "--workspace", "-s", "--max-steps", "--max-total-steps", "--max-turn-minutes",
+  "--stagnation-steps", "-t", "--temperature", "--mode", "--shell", "--fallback", "--context-limit", "--authoritative-verifier",
+  "--deliverable-file", "--planner-model", "--planner-endpoint", "--coder-model", "--coder-endpoint", "--provider", "--base-url",
+  "--planner-provider", "--coder-provider",
+]);
+/** Global options whose value is optional: Commander takes the next token as the value unless it starts with `-`. */
+export const GLOBAL_OPTIONAL_VALUE_OPTIONS = new Set(["-r", "--resume", "--sandbox"]);
+
+/** The subcommand token: the first argument that is neither a global option nor that option's value. */
+export function firstCommandToken(args: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    // After `--` every token is an operand of the default command, never a subcommand.
+    if (arg === "--") return undefined;
+    if (!arg.startsWith("-")) return arg;
+    if (arg.includes("=")) continue;
+    const takesNext = (flag: string) => args[i + 1] !== undefined && (GLOBAL_VALUE_OPTIONS.has(flag) || (GLOBAL_OPTIONAL_VALUE_OPTIONS.has(flag) && !args[i + 1].startsWith("-")));
+    if (/^-[^-]{2,}$/.test(arg)) {
+      // Clustered short flags (-yw /x): the first flag that takes a value ends the cluster, attached text being its value.
+      for (let c = 1; c < arg.length; c++) {
+        const flag = `-${arg[c]}`;
+        if (!GLOBAL_VALUE_OPTIONS.has(flag) && !GLOBAL_OPTIONAL_VALUE_OPTIONS.has(flag)) continue;
+        if (c === arg.length - 1 && takesNext(flag)) i++;
+        break;
+      }
+      continue;
+    }
+    if (takesNext(arg)) i++;
+  }
+  return undefined;
+}
+
 /** Isolate startup state before the launcher loads environment or operator configuration. */
 export function isolateEvalCommandHome(args: readonly string[]): (() => void) | undefined {
-  if (args[0] !== "eval" || !args.includes("--isolated-home")) return undefined;
+  if (!args.includes("--isolated-home")) return undefined;
+  if (firstCommandToken(args) !== "eval") {
+    // Not an eval invocation. A flag after a literal `--` is an operand (for example a prompt), not a request.
+    // For eval, a `--` can be an option's value (`--output --`), which Commander does not treat as the terminator,
+    // so there the flag is honoured wherever it appears and isolation fails closed.
+    const terminator = args.indexOf("--");
+    if (terminator >= 0 && !args.slice(0, terminator).includes("--isolated-home")) return undefined;
+    throw new Error("--isolated-home is available only with the eval command (nexus [options] eval --isolated-home ...)");
+  }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-cli-home-"));
   fs.chmodSync(home, 0o700);
   const isolatedEnvironment: Record<string, string> = {
