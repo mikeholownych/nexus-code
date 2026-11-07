@@ -158,13 +158,20 @@ function changedWorkspacePaths(baseline, candidate) {
   return changed;
 }
 
-const excludedBuildConfiguration = /(?:^|\/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]+)?\.json|(?:webpack|vite|rollup|postcss|babel|jest|vitest|eslint|next|nuxt|tsup|turbo|metro)\.config\.[^/]+|scripts\/(?:build|compile|typecheck)\.[cm]?[jt]s)$/i;
-
 /**
- * Files the build itself executes or resolves through, rather than inputs it reads: a candidate that edits one could
- * make its own build pass. They keep their pre-agent content, and an edit is reported, not applied.
+ * Pinning policy, one rule: a file the build or a checker obeys keeps its pre-agent content and an edit to it is reported in
+ * `ignoredCandidateChanges`. Two kinds of path are pinned, and nothing else is:
+ *  - files whose name is unambiguous at any depth (package manifests, lockfiles, `tsconfig*.json`, `Cargo.toml`, `go.mod`,
+ *    `build.rs`, `setup.py`, `conftest.py`, `Makefile`, ...);
+ *  - tool configuration and build scripts at the project root, or at a package root one level under `packages/`, `apps/`,
+ *    `libs/`, `crates/`, `modules/` or `services/` (`.babelrc*`, `.eslintrc*`, `.mocharc.*`, `<tool>.config.*` for a named list
+ *    of tools, `build.*s`, `gulpfile.*`, `scripts/build.*s`, `tools/*.js`, ...).
+ * Everything else is carried if it is a source or data type and reported if it is not, so ordinary source such as
+ * `src/config/database.config.ts` or `src/build.ts` reaches the build.
  */
-const pinnedBuildHelpers = /(?:^|\/)(?:build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?|\.babelrc|\.mocharc\.[^/]+|tools\/[^/]+\.[cm]?js|(?:pyright|js)config\.json|\.?ruff\.toml|(?:clippy|rustfmt|deny)\.toml|\.eslintrc(?:\.[^/]+)?|eslint\.config\.[^/]+|biome\.jsonc?|deno\.jsonc?|\.swcrc|tslint\.json|\.golangci\.ya?ml|\.rubocop\.yml|angular\.json|project\.json|nx\.json|lerna\.json|[^/]+\.config\.[^/]+|(?:build|compile|typecheck|gulpfile|Gruntfile|Jakefile)\.[cm]?[jt]s)$/i;
+const PACKAGE_ROOT = String.raw`(?:(?:packages|apps|libs|crates|modules|services)\/[^/]+\/)?`;
+const pinnedAnyDepth = new RegExp(String.raw`(?:^|\/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]+)?\.json|(?:pyright|js)config\.json|build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?)$`, "i");
+const pinnedAtPackageRoot = new RegExp(String.raw`^${PACKAGE_ROOT}(?:\.babelrc(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.mocharc\.[^/]+|eslint\.config\.[^/]+|(?:webpack|vite|vitest|rollup|postcss|babel|jest|next|nuxt|tsup|turbo|metro|tailwind|prettier|astro|playwright|cypress|karma|esbuild|gulp|stylelint|commitlint|svelte)\.config\.[^/]+|\.?ruff\.toml|(?:clippy|rustfmt|deny)\.toml|biome\.jsonc?|deno\.jsonc?|\.swcrc|tslint\.json|\.golangci\.ya?ml|\.rubocop\.yml|angular\.json|project\.json|nx\.json|lerna\.json|(?:build|compile|typecheck|gulpfile|Gruntfile|Jakefile)\.[cm]?[jt]s|scripts\/(?:build|compile|typecheck)\.[cm]?[jt]s|tools\/[^/]+\.[cm]?js)$`, "i");
 
 /**
  * Candidate file types carried into the pinned workspace: source code and data a build reads. Anything else the agent
@@ -192,7 +199,7 @@ const DEPENDENCY_DIRECTORIES = [
 ];
 
 function pinnedBuildInput(relative) {
-  return excludedBuildConfiguration.test(relative) || pinnedBuildHelpers.test(relative);
+  return pinnedAnyDepth.test(relative) || pinnedAtPackageRoot.test(relative);
 }
 
 /** Remove one entry without following it. `fs.rmSync` leaves a dangling symlink in place on current Node. */

@@ -113,7 +113,8 @@ test("a candidate virtualenv or cache is skipped without failing the build", asy
 
 test("scripts and build or checker configuration the build runs are pinned to the baseline and reported", async () => {
   const pinned = ["scripts/check.sh", "build.gradle", "pom.xml", "justfile", "Rakefile", "mypy.ini", "pyrightconfig.json", "ruff.toml", ".eslintrc.json", "jsconfig.json",
-    "tslint.json", ".golangci.yml", ".rubocop.yml", "angular.json", "project.json", "tailwind.config.js", "build.mjs", "scripts/build.js", "lint.config.json"];
+    "tslint.json", ".golangci.yml", ".rubocop.yml", "angular.json", "project.json", "tailwind.config.js", "build.mjs", "scripts/build.js",
+    ".babelrc.js", ".babelrc.json", ".eslintrc.cjs", ".mocharc.yml", "webpack.config.js", "packages/app/.eslintrc.cjs", "packages/app/webpack.config.js", "packages/app/build.ts", "crates/core/Cargo.toml"];
   const files: Record<string, string> = {};
   for (const rel of pinned) files[rel] = "good\n";
   const { root, baseline, candidate } = pair(files, (c) => { for (const rel of pinned) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
@@ -184,5 +185,18 @@ test("a forged CACHEDIR.TAG plus a candidate-added Cargo.toml cannot make target
     const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
     assert.equal(result.passed, true, JSON.stringify(result.details));
     assert.ok(result.details.ignoredCandidateChanges.includes("target/"), JSON.stringify(result.details.ignoredCandidateChanges));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("ordinary source that only looks like configuration is carried: policy pins build files at the project or package root", async () => {
+  const carried = ["src/config/database.config.ts", "src/build.ts", "src/tools/format.js", "lib/gulpfile.ts", "src/app/webpack.config.js", "docs/lint.config.json"];
+  const files: Record<string, string> = {};
+  for (const rel of carried) files[rel] = "good\n";
+  const { root, baseline, candidate } = pair(files, (c) => { for (const rel of carried) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
+  try {
+    const script = `const fs=require("fs"); process.exit(${JSON.stringify(carried)}.every((f)=>fs.readFileSync(f,"utf8").includes("BAD"))?1:0)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    assert.equal(result.details.status, 1, `every one of these must reach the build: ${JSON.stringify(result.details)}`);
+    assert.deepEqual(result.details.ignoredCandidateChanges, []);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
