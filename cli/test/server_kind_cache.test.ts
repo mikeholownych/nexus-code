@@ -112,7 +112,7 @@ test("a transient Ollama /api/version failure does not downgrade a known Ollama 
   }, async (endpoint) => {
     const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
     await client.discoverAdvertisement();
-    if (client.getDetectedServerKind() !== "ollama") return; // catalog shape not recognised as Ollama here
+    assert.equal(client.getDetectedServerKind(), "ollama", "the mock must be detected as Ollama or this test proves nothing");
     versionOk = false;
     await client.discoverAdvertisement();
     assert.equal(client.getDetectedServerKind(), "ollama");
@@ -137,3 +137,74 @@ test("a switch of endpoint, provider or credential does not inherit another serv
     assert.equal(a.getDetectedServerKind(), "gateway");
   });
 });
+
+test("the cache sweeps expired entries on write and stays bounded", () => {
+  let t = 0;
+  const cache = new ServerKindCache(100, () => t, 3);
+  cache.set("a", "vllm"); cache.set("b", "vllm");
+  t = 100; cache.set("c", "gateway");
+  assert.equal(cache.size, 1, "a and b expired and were swept by the write of c");
+  cache.set("d", "vllm"); cache.set("e", "vllm"); cache.set("f", "vllm");
+  assert.equal(cache.size, 3);
+  assert.equal(cache.get("c"), undefined, "the oldest entry was evicted");
+});
+
+test("an identity expires through the client after the TTL", async () => {
+  await withEndpoint((req, res) => {
+    if (req.url === "/v1/models") return json(res, { data: [gatewayEntry] });
+    res.statusCode = 404; res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    await client.discoverAdvertisement();
+    assert.equal(client.getDetectedServerKind(), "gateway");
+    const realNow = Date.now;
+    Date.now = () => realNow() + 11 * 60_000;
+    try { assert.equal(client.getDetectedServerKind(), "unknown"); } finally { Date.now = realNow; }
+  });
+});
+
+test("a gateway identity is kept through a 5xx or dropped catalog read until the TTL (documented policy)", async () => {
+  let mode: "ok" | "503" | "drop" = "ok";
+  await withEndpoint((req, res) => {
+    if (req.url === "/v1/models") {
+      if (mode === "503") { res.statusCode = 503; return res.end(); }
+      if (mode === "drop") return res.destroy();
+      return json(res, { data: [gatewayEntry] });
+    }
+    res.statusCode = 404; res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    await client.discoverAdvertisement();
+    mode = "503"; assert.equal((await client.discoverAdvertisement()).state, "unavailable");
+    assert.equal(client.getDetectedServerKind(), "gateway");
+    mode = "drop"; assert.equal((await client.discoverAdvertisement()).state, "unavailable");
+    assert.equal(client.getDetectedServerKind(), "gateway");
+  });
+});
+
+for (const stream of [false, true]) {
+  test(`X-Task-Class follows the endpoint a request is sent to, not the active one, on failover (${stream ? "streaming" : "non-streaming"})`, async () => {
+    const seen: Array<{ who: string; header: string | undefined }> = [];
+    const sse = (res: http.ServerResponse) => { res.setHeader("Content-Type", "text/event-stream"); res.end('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'); };
+    const handler = (who: string, healthy: boolean): Handler => (req, res) => {
+      if (req.url === "/v1/models") return json(res, { data: [who === "gw" ? gatewayEntry : { id: "model-a" }] });
+      if (req.url === "/v1/chat/completions") {
+        seen.push({ who, header: req.headers["x-task-class"] as string | undefined });
+        if (!healthy) { res.statusCode = 503; return res.end("down"); }
+        return stream ? sse(res) : ok(res);
+      }
+      res.statusCode = 404; res.end();
+    };
+    await withEndpoint(handler("gw", false), async (gw) => withEndpoint(handler("plain", true), async (plain) => {
+      const client = new LocalLlmClient({ endpoint: `${gw}/v1`, model: "model-a", taskClass: "subagent" } as any);
+      client.addFallbackEndpoint(plain);
+      await client.discoverAdvertisement();
+      assert.equal(client.getDetectedServerKind(), "gateway");
+      if (stream) await client.chatCompletionStream(msg, []); else await client.chatCompletion(msg, []);
+    }));
+    const plainHits = seen.filter((s) => s.who === "plain");
+    assert.ok(plainHits.length >= 1, "the request must have failed over to the plain server");
+    assert.ok(plainHits.every((s) => s.header === undefined), "the plain fallback must not receive X-Task-Class");
+    assert.equal(seen.find((s) => s.who === "gw")?.header, "subagent");
+  });
+}

@@ -839,9 +839,10 @@ export class LocalLlmClient {
     return changed ? out : messages;
   }
 
-  private routingHeaders(): Record<string, string> {
+  /** Headers for a request sent to `ep` (the endpoint actually used, which differs from the active one during failover). */
+  private routingHeaders(ep: string = this.endpoint): Record<string, string> {
     if (!this.conn.sendTaskClass) return {};
-    const kind = LocalLlmClient.serverKindCache.get(this.kindKey());
+    const kind = LocalLlmClient.serverKindCache.get(this.kindKey(ep));
     const operatorOverride = operatorSetting("NEXUS_TASK_CLASS") || operatorSetting("LOCAL_LLM_TASK_CLASS");
     if (!operatorOverride && kind !== "gateway") {
       return {};
@@ -1386,7 +1387,7 @@ export class LocalLlmClient {
       try {
         res = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders() },
+          headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders(ep) },
           body: JSON.stringify(reqBody),
           signal: metadataSignal(signal),
           ...this.fetchPolicy(),
@@ -1549,7 +1550,7 @@ export class LocalLlmClient {
             ...this.authorization(url),
             ...this.providerHeaders(messages),
             "X-Request-ID": requestId,
-            ...this.routingHeaders(),
+            ...this.routingHeaders(currentEp),
           },
           body: JSON.stringify(payload),
           signal: watchdog.signal,
@@ -1725,7 +1726,7 @@ export class LocalLlmClient {
             ...this.authorization(url),
             ...this.providerHeaders(messages),
             "X-Request-ID": requestId,
-            ...this.routingHeaders(),
+            ...this.routingHeaders(currentEp),
           },
           body: JSON.stringify(payload),
           signal: watchdog.signal,
