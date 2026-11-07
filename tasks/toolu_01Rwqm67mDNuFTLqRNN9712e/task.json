@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01Rwqm67mDNuFTLqRNN9712e",
+  "agent_id": "a3044ffa39681cce4",
+  "subagent_type": "general-purpose",
+  "task_description": "Review PRs 421 423 432",
+  "started_at": "2026-11-07T16:50:56.028021706Z"
+}
