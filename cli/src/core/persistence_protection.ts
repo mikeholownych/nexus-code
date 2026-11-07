@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
+import { safeTerminal } from "../ui.js";
 import { ensurePrivateDir, writePrivateFile, appendPrivateFile } from "./durable_file.js";
 
 export class SensitivePersistenceError extends Error {
@@ -29,6 +30,12 @@ export function redactDiagnosticForOutput(value: string): string {
   } catch {
     return "[diagnostic suppressed: credential sanitization failed]";
   }
+}
+
+/** The one operator-facing diagnostic formatter: an Error or any value, redacted (fail-closed) and made terminal-safe. */
+export function formatDiagnosticForOutput(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return safeTerminal(redactDiagnosticForOutput(message));
 }
 
 /** Classify individual path components as well as the whole value. The general

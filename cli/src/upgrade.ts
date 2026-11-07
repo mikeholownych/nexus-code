@@ -22,8 +22,7 @@ import {
 } from "./compatibility.js";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "./core/state.js";
-import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
-import { safeTerminal } from "./ui.js";
+import { formatDiagnosticForOutput } from "./core/persistence_protection.js";
 import {
   UpgradeJournalEntry,
   readJournal,
@@ -42,11 +41,6 @@ export const CANONICAL_REPO = "mikeholownych/nexus-code";
 export const DEFAULT_RELEASES_API = `https://api.github.com/repos/${CANONICAL_REPO}/releases`;
 export const DEFAULT_RELEASE_BASE_URL = `https://github.com/${CANONICAL_REPO}/releases`;
 
-/** Redact secrets from upgrade errors while preserving ordinary diagnostics verbatim. */
-export function formatUpgradeDiagnostic(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return safeTerminal(redactDiagnosticForOutput(message));
-}
 
 export type InstallProvenance = "packaged" | "development" | "package-manager" | "unsupported";
 export type UpgradeAction = "upgrade" | "downgrade" | "reinstall" | "none";
@@ -1366,7 +1360,7 @@ export async function upgradeCommand(options: any): Promise<void> {
             tool: "nexus upgrade",
             status: outcome.success ? "reverted" : "error",
             ...outcome,
-            ...(outcome.error ? { error: formatUpgradeDiagnostic(outcome.error) } : {}),
+            ...(outcome.error ? { error: formatDiagnosticForOutput(outcome.error) } : {}),
           },
           null,
           2
@@ -1377,7 +1371,7 @@ export async function upgradeCommand(options: any): Promise<void> {
         console.log(`✔ Executable launcher reverted to ${outcome.revertedTo}.`);
         console.log(`Note: Run with --restore-backup <path> if state restoration is also required.`);
       } else {
-        console.error(`Rollback failed: ${formatUpgradeDiagnostic(outcome.error)}`);
+        console.error(`Rollback failed: ${formatDiagnosticForOutput(outcome.error)}`);
       }
     }
     process.exit(outcome.success ? UPGRADE_EXIT.ok : UPGRADE_EXIT.error);
@@ -1388,7 +1382,7 @@ export async function upgradeCommand(options: any): Promise<void> {
     const backupPath = String(options.restoreBackup);
     let restoreFailure: string | undefined;
     const restored = restoreConfigBackup(backupPath, undefined, (error) => {
-      restoreFailure = formatUpgradeDiagnostic(error);
+      restoreFailure = formatDiagnosticForOutput(error);
     });
     if (isJson) {
       console.log(
@@ -1397,7 +1391,7 @@ export async function upgradeCommand(options: any): Promise<void> {
             schemaVersion: 1,
             tool: "nexus upgrade",
             status: restored ? "restored" : "error",
-            backupPath: restored ? backupPath : formatUpgradeDiagnostic(backupPath),
+            backupPath: restored ? backupPath : formatDiagnosticForOutput(backupPath),
             ...(restored ? {} : {
               error: restoreFailure ?? "Backup path was not accepted or is unavailable.",
             }),
@@ -1412,7 +1406,7 @@ export async function upgradeCommand(options: any): Promise<void> {
       } else {
         console.error(restoreFailure
           ? `Restore failed: ${restoreFailure}`
-          : `Restore failed: backup path ${formatUpgradeDiagnostic(backupPath)} was not accepted or is unavailable.`);
+          : `Restore failed: backup path ${formatDiagnosticForOutput(backupPath)} was not accepted or is unavailable.`);
       }
     }
     process.exit(restored ? UPGRADE_EXIT.ok : UPGRADE_EXIT.error);
@@ -1433,7 +1427,7 @@ export async function upgradeCommand(options: any): Promise<void> {
             tool: "nexus upgrade",
             status: outcome.recovered ? "recovered" : outcome.action === "none" ? "no_action" : "error",
             ...outcome,
-            details: formatUpgradeDiagnostic(outcome.details),
+            details: formatDiagnosticForOutput(outcome.details),
           },
           null,
           2
@@ -1441,9 +1435,9 @@ export async function upgradeCommand(options: any): Promise<void> {
       );
     } else {
       if (outcome.recovered) {
-        console.log(`✔ Recovery completed (${outcome.action}): ${formatUpgradeDiagnostic(outcome.details)}`);
+        console.log(`✔ Recovery completed (${outcome.action}): ${formatDiagnosticForOutput(outcome.details)}`);
       } else {
-        console.log(`Recovery check: ${formatUpgradeDiagnostic(outcome.details)}`);
+        console.log(`Recovery check: ${formatDiagnosticForOutput(outcome.details)}`);
       }
     }
     process.exit(outcome.recovered || outcome.action === "none" ? UPGRADE_EXIT.ok : UPGRADE_EXIT.error);
@@ -1457,10 +1451,10 @@ export async function upgradeCommand(options: any): Promise<void> {
     }
     const recoveryOutcome = recoverUpgrade(prefix);
     if (!isJson) {
-      console.warn(`[upgrade] Recovery: ${formatUpgradeDiagnostic(recoveryOutcome.details)}`);
+      console.warn(`[upgrade] Recovery: ${formatDiagnosticForOutput(recoveryOutcome.details)}`);
     }
     if (!recoveryOutcome.recovered && recoveryOutcome.action !== "none") {
-      if (isJson) console.log(JSON.stringify({ schemaVersion:1, tool:"nexus upgrade", status:"error", error:formatUpgradeDiagnostic(recoveryOutcome.details) }));
+      if (isJson) console.log(JSON.stringify({ schemaVersion:1, tool:"nexus upgrade", status:"error", error:formatDiagnosticForOutput(recoveryOutcome.details) }));
       process.exit(UPGRADE_EXIT.error);
     }
   }
@@ -1479,14 +1473,14 @@ export async function upgradeCommand(options: any): Promise<void> {
               tool: "nexus upgrade",
               status: "error",
               installedVersion: installed.version,
-              error: formatUpgradeDiagnostic(err),
+              error: formatDiagnosticForOutput(err),
             },
             null,
             2
           )
         );
       } else {
-        console.error(`nexus upgrade: ${formatUpgradeDiagnostic(err)}`);
+        console.error(`nexus upgrade: ${formatDiagnosticForOutput(err)}`);
       }
       process.exit(UPGRADE_EXIT.error);
     }
@@ -1512,7 +1506,7 @@ export async function upgradeCommand(options: any): Promise<void> {
               installPrefix: installed.prefix,
               installProvenance: installed.provenance,
               canUpgrade: comparison.canUpgrade,
-              reasons: comparison.reasons.map(formatUpgradeDiagnostic),
+              reasons: comparison.reasons.map(formatDiagnosticForOutput),
               release: {
                 tag: targetRelease.tag_name,
                 name: targetRelease.name,
@@ -1534,7 +1528,7 @@ export async function upgradeCommand(options: any): Promise<void> {
         );
         if (installed.prefix) console.log(`Install prefix:  ${installed.prefix}`);
         if (comparison.reasons.length > 0) {
-          for (const reason of comparison.reasons) console.log(`Note:            ${formatUpgradeDiagnostic(reason)}`);
+          for (const reason of comparison.reasons) console.log(`Note:            ${formatDiagnosticForOutput(reason)}`);
         }
         if (comparison.action === "upgrade") {
           console.log(`\nAn update is available: ${installed.version} -> ${comparison.targetVersion}.`);
@@ -1553,7 +1547,7 @@ export async function upgradeCommand(options: any): Promise<void> {
 
     // Modify / installation mode:
     if (!comparison.canUpgrade) {
-      const errorMsg = formatUpgradeDiagnostic(comparison.reasons.join("\n"));
+      const errorMsg = formatDiagnosticForOutput(comparison.reasons.join("\n"));
       if (isJson) {
         console.log(
           JSON.stringify(
@@ -1601,9 +1595,9 @@ export async function upgradeCommand(options: any): Promise<void> {
       if (!process.stdin.isTTY) {
         const msg = `Target version ${comparison.targetVersion} is a downgrade from ${installed.version}. Non-interactive downgrade requires --allow-downgrade and --yes.`;
         if (isJson) {
-          console.log(JSON.stringify({ schemaVersion: 1, tool: "nexus upgrade", status: "declined", error: formatUpgradeDiagnostic(msg) }, null, 2));
+          console.log(JSON.stringify({ schemaVersion: 1, tool: "nexus upgrade", status: "declined", error: formatDiagnosticForOutput(msg) }, null, 2));
         } else {
-          console.error(`nexus upgrade: ${formatUpgradeDiagnostic(msg)}`);
+          console.error(`nexus upgrade: ${formatDiagnosticForOutput(msg)}`);
         }
         process.exit(UPGRADE_EXIT.updateAvailableOrDeclined);
       }
@@ -1615,9 +1609,9 @@ export async function upgradeCommand(options: any): Promise<void> {
       if (!isInteractive) {
         const msg = `nexus upgrade: ${comparison.action} from ${installed.version} to ${comparison.targetVersion} requires confirmation. Re-run with --yes in non-interactive scripts.`;
         if (isJson) {
-          console.log(JSON.stringify({ schemaVersion: 1, tool: "nexus upgrade", status: "declined", error: formatUpgradeDiagnostic(msg) }, null, 2));
+          console.log(JSON.stringify({ schemaVersion: 1, tool: "nexus upgrade", status: "declined", error: formatDiagnosticForOutput(msg) }, null, 2));
         } else {
-          console.error(formatUpgradeDiagnostic(msg));
+          console.error(formatDiagnosticForOutput(msg));
         }
         process.exit(UPGRADE_EXIT.updateAvailableOrDeclined);
       }
@@ -1656,7 +1650,7 @@ export async function upgradeCommand(options: any): Promise<void> {
       timeoutMs,
       onProgress: (_stage, detail) => {
         if (!isJson && detail) {
-          console.log(`  • ${formatUpgradeDiagnostic(detail)}`);
+          console.log(`  • ${formatDiagnosticForOutput(detail)}`);
         }
       },
     });
@@ -1694,14 +1688,14 @@ export async function upgradeCommand(options: any): Promise<void> {
             schemaVersion: 1,
             tool: "nexus upgrade",
             status: "error",
-            error: formatUpgradeDiagnostic(err),
+            error: formatDiagnosticForOutput(err),
           },
           null,
           2
         )
       );
     } else {
-      console.error(`nexus upgrade failed: ${formatUpgradeDiagnostic(err)}`);
+      console.error(`nexus upgrade failed: ${formatDiagnosticForOutput(err)}`);
     }
     process.exit(UPGRADE_EXIT.error);
   }

@@ -12,8 +12,7 @@ import type { ChatMessage, HarnessConfig, ToolDefinition } from "./types.js";
 import { UsageLedger } from "./usage.js";
 import { resolveCredential } from "./credentials.js";
 import { connectLocalEndpoint, connectWithKey, disconnect, startSignIn } from "./provider_connect.js";
-import { safeTerminal } from "./ui.js";
-import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
+import { formatDiagnosticForOutput } from "./core/persistence_protection.js";
 
 /** One line naming each role's selected destination and its disclosure class. */
 export function describeTarget(config: HarnessConfig): string {
@@ -79,10 +78,6 @@ function safeConfigurationError(error: unknown): string {
   return `Configuration error: Unknown provider '(unrecognized provider)'. Known providers: ${Object.keys(PROVIDERS).join(", ")}.`;
 }
 
-/** Sanitize provider-facing diagnostics with the canonical fail-closed boundary before terminal escaping. */
-export function formatProviderDiagnostic(message: string): string {
-  return safeTerminal(redactDiagnosticForOutput(message));
-}
 
 function safeModelId(value: string): string {
   // Provider/model identifiers may contain routing punctuation, but not whitespace, controls or arbitrary diagnostics.
@@ -91,7 +86,8 @@ function safeModelId(value: string): string {
 }
 
 function safeClientDiagnostic(message: string, config: HarnessConfig): string {
-  let safe = formatProviderDiagnostic(message);
+  // Substitute the configured endpoint and model first, then sanitize once: the final pass covers the substituted text too.
+  let safe = message;
   const substitute = (raw: string | undefined, replacement: string | undefined) => {
     if (raw && replacement && raw !== replacement) safe = safe.replaceAll(raw, () => replacement);
   };
@@ -113,7 +109,7 @@ function safeClientDiagnostic(message: string, config: HarnessConfig): string {
       // Invalid endpoints are rejected by config validation before the live check starts.
     }
   }
-  return formatProviderDiagnostic(safe);
+  return formatDiagnosticForOutput(safe);
 }
 
 const SAFE_FAILURE_KINDS = new Set([
@@ -309,7 +305,7 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
         const key = await askSecret("Optional endpoint API key (press Enter for none): ");
         const discovered = await connectLocalEndpoint(base, endpoint, undefined, key);
         if (discovered.models.length === 0) {
-          console.error(pc.red(formatProviderDiagnostic(discovered.message)));
+          console.error(pc.red(formatDiagnosticForOutput(discovered.message)));
           process.exitCode = 1;
           return;
         }
@@ -323,14 +319,14 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
           return;
         }
         const result = await connectLocalEndpoint(base, endpoint, model, key);
-        const resultMessage = formatProviderDiagnostic(result.message);
+        const resultMessage = formatDiagnosticForOutput(result.message);
         console.log(result.ok ? pc.green(resultMessage) : pc.red(resultMessage));
         process.exitCode = result.ok ? 0 : 1;
         return;
       }
       const def = PROVIDERS[providerId];
       if (!def) {
-        console.error(pc.red(`Unknown provider '${formatProviderDiagnostic(providerId)}'. Known: ${Object.keys(PROVIDERS).join(", ")}`));
+        console.error(pc.red(`Unknown provider '${formatDiagnosticForOutput(providerId)}'. Known: ${Object.keys(PROVIDERS).join(", ")}`));
         process.exit(2);
       }
       const method = def.methods.find((m) => m.id === (options.method ?? def.methods[0].id));
@@ -344,7 +340,7 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
       if (method.unofficial) console.log(pc.yellow(`${method.label}: unofficial — it signs in as another vendor's client, which the provider's terms may not permit.`));
       if (method.kind === "key") {
         const r = await connectWithKey(base, def.id, await askSecret(`${def.label} API key: `));
-        const resultMessage = formatProviderDiagnostic(r.message);
+        const resultMessage = formatDiagnosticForOutput(r.message);
         console.log(r.ok ? pc.green(resultMessage) : pc.red(resultMessage));
         process.exitCode = r.ok ? 0 : 1;
         return;
@@ -353,7 +349,7 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
       process.once("SIGINT", () => signIn.cancel());
       console.log(`\n${signIn.prompt.instructions}\n  ${pc.bold(signIn.prompt.url)}${signIn.prompt.userCode ? `\n  code: ${pc.bold(signIn.prompt.userCode)}` : ""}\n`);
       const r = await signIn.done;
-      const resultMessage = formatProviderDiagnostic(r.message);
+      const resultMessage = formatDiagnosticForOutput(r.message);
       console.log(r.ok ? pc.green(resultMessage) : pc.red(resultMessage));
       process.exitCode = r.ok ? 0 : 1;
     });
@@ -364,7 +360,7 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
     .argument("<provider>")
     .action((providerId: string) => {
       const r = disconnect(providerId);
-      const resultMessage = formatProviderDiagnostic(r.message);
+      const resultMessage = formatDiagnosticForOutput(r.message);
       console.log(r.ok ? pc.green(resultMessage) : pc.yellow(resultMessage));
     });
 
