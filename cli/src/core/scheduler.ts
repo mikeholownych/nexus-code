@@ -18,6 +18,7 @@ import type {
   WorkUnitStatus,
 } from "./operation.js";
 import { MAX_REJECTED_OUTPUT_CHARS, MAX_REJECTED_OUTPUTS } from "./operation.js";
+import { specialistInputsProblem } from "./specialist_profiles.js";
 import type { ResourceDescriptor, ResourceRegistry, Selection } from "./resources.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 import { effectiveConcurrency } from "./operation_schema.js";
@@ -403,6 +404,18 @@ export class ConvergenceScheduler {
     const action = option.action;
     const text = note?.trim();
     if (action.kind === "revise" && !text) throw new DecisionRejected("Revising a unit requires a note describing the revision.");
+    if (action.kind === "replace_task" && !text) throw new DecisionRejected("Replacing a unit's task requires a note holding the new task.");
+    let suppliedInputs: Record<string, string> | undefined;
+    if (action.kind === "set_inputs") {
+      try {
+        const parsed = JSON.parse(text ?? "");
+        const problem = specialistInputsProblem(parsed);
+        if (problem) throw new Error(problem);
+        suppliedInputs = parsed;
+      } catch (error: any) {
+        throw new DecisionRejected(`Supplying inputs requires a note holding a JSON object of named strings (${String(error?.message ?? error).slice(0, 160)}).`);
+      }
+    }
     if (action.kind === "drop" && isRequired(u)) throw new DecisionRejected(`${u.title} is required; dropping it would leave the objective unmet.`);
     if (action.kind === "assign") {
       const r = this.registry.get(action.resourceId);
@@ -435,6 +448,17 @@ export class ConvergenceScheduler {
         break;
       case "revise":
         u.prompt = `${u.prompt}${REVISION_MARKER}${text}`;
+        u.runsBase = u.runs;
+        u.status = "RUNNABLE";
+        break;
+      case "replace_task":
+        u.prompt = text!;
+        delete u.context;
+        u.runsBase = u.runs;
+        u.status = "RUNNABLE";
+        break;
+      case "set_inputs":
+        u.inputs = { ...(u.inputs ?? {}), ...suppliedInputs };
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;

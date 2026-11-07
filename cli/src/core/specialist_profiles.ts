@@ -198,17 +198,18 @@ export function missingSpecialistInputs(role: SpecialistRole, inputs: Record<str
 }
 
 /**
- * Splits leading `name=value` words (names from the role's contract; values without whitespace) off a one-line task,
- * for callers such as `/team` that have no structured input channel. The rest is the task.
+ * Splits leading `name=value` words (names from the role's contract; a value is one word or a quoted string; an
+ * `@path` value is a workspace file the caller resolves) off a one-line task, for callers such as `/team` that have
+ * no structured input channel. The rest is the task.
  */
 export function parseLeadingSpecialistInputs(role: SpecialistRole, text: string): { inputs: Record<string, string>; task: string } {
   const names = new Set<string>(SPECIALIST_CONTRACTS[role].inputRequirements);
   const inputs: Record<string, string> = {};
   let rest = text.trimStart();
   for (;;) {
-    const m = /^([a-z_]+)=(\S+)\s*/.exec(rest);
+    const m = /^([a-z_]+)=(?:"([^"]*)"|'([^']*)'|(\S+))\s*/.exec(rest);
     if (!m || !names.has(m[1]) || Object.hasOwn(inputs, m[1])) break;
-    inputs[m[1]] = m[2];
+    inputs[m[1]] = m[2] ?? m[3] ?? m[4];
     rest = rest.slice(m[0].length);
   }
   return { inputs, task: rest.trim() };

@@ -70,7 +70,7 @@ test("the role's maxContextTokens ceiling blocks admission even when the operato
     if (outcome.kind !== "failed") return;
     assert.equal(outcome.cause, "CONTEXT_BUDGET");
     assert.match(outcome.reason, /call_site_analyzer.*24000/);
-    assert.deepEqual(outcome.options.map((o) => o.action.kind), ["revise"], "lifting the operator budget cannot clear a role ceiling");
+    assert.deepEqual(outcome.options.map((o) => o.action.kind), ["replace_task"], "lifting the operator budget cannot clear a role ceiling");
     assert.equal(fake.prompts.length, 0, "no inference may run over the role ceiling");
     assert.equal(work.context?.budgetTokens, 24_000);
     assert.equal(work.context?.source, "role-ceiling");

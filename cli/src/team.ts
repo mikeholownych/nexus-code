@@ -8,11 +8,13 @@
  * BLOCKED on a decision, never reported as done.
  */
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { isRequired, newOperation, type DurableOperationState, type OperationEvent, type WorkUnit, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, driveOperation, OperationStore, resourcesFromConfig, type WorkUnitExecutor } from "./core/operation_runner.js";
 import type { RecoveryClock } from "./core/provider_recovery.js";
 import type { ResourceDescriptor } from "./core/resources.js";
-import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, SPECIALIST_CONTRACTS, isSpecialistRole, parseLeadingSpecialistInputs, type AgentRole } from "./core/roles.js";
+import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, SPECIALIST_CONTRACTS, isSpecialistRole, parseLeadingSpecialistInputs, MAX_SPECIALIST_INPUT_CHARS, type AgentRole } from "./core/roles.js";
 import { mergeOperationPolicy } from "./config.js";
 import type { HarnessConfig } from "./types.js";
 
@@ -56,6 +58,30 @@ export function teamUnits(target: TeamTarget, objective: string, opts: { indepen
   return units;
 }
 
+/** Replaces each unquoted-`@path` input value with that workspace file's text (regular file, inside the workspace). */
+function resolveFileInputs(workspace: string, inputs: Record<string, string>): Record<string, string> {
+  const root = fs.realpathSync(workspace);
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(inputs)) {
+    if (!value.startsWith("@") || value.length < 2) {
+      out[name] = value;
+      continue;
+    }
+    const file = path.resolve(root, value.slice(1));
+    let real: string;
+    try {
+      real = fs.realpathSync(file);
+    } catch {
+      throw new Error(`Input '${name}': file '${value.slice(1)}' not found`);
+    }
+    if (real !== root && !real.startsWith(root + path.sep)) throw new Error(`Input '${name}': '${value.slice(1)}' is outside the workspace`);
+    const stat = fs.statSync(real);
+    if (!stat.isFile() || stat.size > MAX_SPECIALIST_INPUT_CHARS) throw new Error(`Input '${name}': '${value.slice(1)}' is not a regular file of at most ${MAX_SPECIALIST_INPUT_CHARS} bytes`);
+    out[name] = fs.readFileSync(real, "utf8");
+  }
+  return out;
+}
+
 export interface TeamRunOptions {
   signal?: AbortSignal;
   onEvent?: (e: OperationEvent) => void;
@@ -88,7 +114,8 @@ export class TeamOrchestrator {
     const now = this.opts.clock?.now() ?? Date.now();
     const resources = this.opts.resources ?? resourcesFromConfig(this.config);
     const policy = mergeOperationPolicy(this.config.operationPolicy, undefined);
-    return newOperation(this.opts.id ?? `team-${randomUUID().slice(0, 8)}`, objective, teamUnits(target, objective, this.opts), resources, now, policy);
+    const units = teamUnits(target, objective, this.opts).map((u) => (u.inputs ? { ...u, inputs: resolveFileInputs(this.config.workspace, u.inputs) } : u));
+    return newOperation(this.opts.id ?? `team-${randomUUID().slice(0, 8)}`, objective, units, resources, now, policy);
   }
 
   async run(target: TeamTarget, objective: string): Promise<TeamOutcome> {

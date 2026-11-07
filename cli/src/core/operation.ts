@@ -76,6 +76,10 @@ export type DecisionAction =
   | { kind: "assign"; resourceId: string; overriding: string[] }
   /** Append the operator's note to the unit's task and run it again. */
   | { kind: "revise" }
+  /** Replace the unit's task with the operator's note (the only way to shrink a prompt) and run it again. */
+  | { kind: "replace_task" }
+  /** Merge the operator's note, a JSON object of named strings, into the unit's `inputs` and run it again. */
+  | { kind: "set_inputs" }
   /** Remove this unit's context budget and run it again (the resource limit still applies). */
   | { kind: "lift_context_budget" }
   /** Drop an advisory unit (required units cannot be dropped: the objective would be unmet). */
@@ -168,7 +172,7 @@ export interface WorkUnit {
   /** Named inputs the unit's role contract requires (specialists); enforced before the unit starts. */
   inputs?: Record<string, string>;
   /** Results the executor refused (for example a specialist output that failed its contract), most recent last. */
-  rejectedOutputs?: Array<{ at: string; reason: string; raw: string; truncated?: boolean }>;
+  rejectedOutputs?: StoredRejectedOutput[];
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
   context?: {
     estimatedPromptTokens: number;
@@ -363,6 +367,12 @@ export interface OptionSpec {
 export interface RejectedOutput {
   raw: string;
   reason: string;
+}
+
+/** A rejected output as the unit stores it. */
+export interface StoredRejectedOutput extends RejectedOutput {
+  at: string;
+  truncated?: boolean;
 }
 
 /** The longest rejected output kept on a unit; the rest is cut and the record says so. */

@@ -32,6 +32,9 @@ export function isReviewRole(role: AgentRole | undefined): boolean {
   return role === "reviewer" || role === "acceptance_reviewer";
 }
 
+/** Longest specialist report carried into a unit result (and so to dependent units). */
+const SPECIALIST_SUMMARY_MAX = 12_000;
+
 const REVIEW_DIFF_MAX_BYTES = 4 * 1024 * 1024;
 
 /**
@@ -252,8 +255,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         question:
           `${unit.title} needs about ${total} tokens (prompt ${estimate.estimatedPromptTokens}, completion ` +
           `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over the ${budget}-token ceiling of ` +
-          `its ${unit.role} contract (resource limit ${estimate.contextLimit}). No budget lifts a role ceiling: narrow the task, or stop?`,
-        options: [{ label: "revise the unit (note required)", action: { kind: "revise" } }],
+          `its ${unit.role} contract (resource limit ${estimate.contextLimit}). No budget lifts a role ceiling: replace the task with a narrower one, or stop?`,
+        // Appending a revision only grows the prompt; replacing the task is what can bring it under the ceiling.
+        options: [{ label: "replace the unit's task with a narrower one (note required)", action: { kind: "replace_task" } }],
       };
     }
     return {
@@ -605,8 +609,8 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       kind: "failed",
       cause: "EXECUTION_FAILED",
       reason: `missing required input${missing.length > 1 ? "s" : ""} for ${unit.role}: ${missing.join(", ")}`,
-      question: `${unit.title} (${unit.role}) was not given ${missing.join(", ")}. Revise the unit to supply ${missing.length > 1 ? "them" : "it"} in 'inputs', or stop?`,
-      options: [{ label: "revise the unit (note required)", action: { kind: "revise" } }],
+      question: `${unit.title} (${unit.role}) was not given ${missing.join(", ")}. Supply ${missing.length > 1 ? "them" : "it"} (a JSON object of names to strings), or stop?`,
+      options: [{ label: "supply the inputs (note: JSON object, required)", action: { kind: "set_inputs" } }],
     };
   }
 
@@ -711,8 +715,11 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         ],
       };
     }
-    const paths = result.evidence.map((item) => item.path).slice(0, 20).join(", ");
-    return { kind: "completed", summary: `${result.summary}${paths ? ` [evidence: ${paths}]` : ""}`.slice(0, 2000), outcome };
+    // Dependents receive only this summary, so it carries the whole validated report, bounded.
+    const evidence = result.evidence.slice(0, 40).map((item) => `- ${item.path}${item.lineRange ? `:${item.lineRange[0]}-${item.lineRange[1]}` : ""} ${item.note ?? ""}`.trimEnd());
+    const findings = result.findings === undefined || result.findings === null ? "" : `\nFindings: ${JSON.stringify(result.findings)}`;
+    const report = `${result.summary}${findings}${evidence.length ? `\nEvidence:\n${evidence.join("\n")}` : ""}`;
+    return { kind: "completed", summary: report.length > SPECIALIST_SUMMARY_MAX ? `${report.slice(0, SPECIALIST_SUMMARY_MAX)}\n[report truncated]` : report, outcome };
   }
 
   private classify(
