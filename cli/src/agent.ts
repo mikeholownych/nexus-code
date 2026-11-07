@@ -47,7 +47,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget } from "./skills.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -4095,21 +4095,37 @@ export class AutonomousAgent {
    * setting or the client default. Re-size it once when the provider's window is first known, and after that only
    * when the window shrinks: planner and coder clients can report different windows, and every change to
    * `messages[0]` rewrites the message journal and drops the provider's prefix cache. Only the catalog text is
-   * replaced; the rest of the prompt stays as built. A resumed conversation, whose catalog text is not known, is left
-   * as saved.
+   * replaced; the rest of the prompt stays as built. A resumed conversation, whose catalog text is not known, has its
+   * catalog recognised by heading and is cut to the window only when it is larger than the window allows.
    */
   private resizeSkillCatalog(): void {
     const sized = this.skillCatalog;
     const first = this.messages[0];
     if (!sized || !this.skillManager || first?.role !== "system" || typeof first.content !== "string") return;
     const limit = this.contextLimit();
+    const budget = skillCatalogBudget(limit);
+    // A conversation saved by an earlier release carries a catalog this process never recorded (before PR #409 the
+    // full, unbounded one). Recognise it by its heading and cut it to the window; one that already fits stays as saved.
+    if (!first.content.includes(sized.text) || !sized.text) {
+      const span = findCatalogSpan(first.content);
+      if (!span || span.end - span.start <= budget) return;
+      const text = this.skillManager.getPromptSection(budget);
+      this.messages[0] = { ...first, content: first.content.slice(0, span.start) + text + first.content.slice(span.end) };
+      this.skillCatalog = { text, limit, discovered: Boolean(this.capabilities) };
+      return;
+    }
     const discovered = Boolean(this.capabilities);
     if (!(discovered && !sized.discovered) && limit >= sized.limit) return;
-    const text = this.skillManager.getPromptSection(skillCatalogBudget(limit));
-    const at = sized.text ? first.content.indexOf(sized.text) : -1;
-    this.skillCatalog = { text, limit, discovered };
-    if (at < 0 || text === sized.text) return;
+    const text = this.skillManager.getPromptSection(budget);
+    if (text === sized.text) {
+      this.skillCatalog = { text, limit, discovered };
+      return;
+    }
+    // A catalog that shrank to nothing (windows under about 3K tokens) is not put back: the per-prompt skill notes
+    // and the `activate_skill` lookup reach the skills without it, and rewriting `messages[0]` drops the prefix cache.
+    const at = first.content.indexOf(sized.text);
     this.messages[0] = { ...first, content: first.content.slice(0, at) + text + first.content.slice(at + sized.text.length) };
+    this.skillCatalog = { text, limit, discovered };
   }
 
   private buildSystemPrompt(): string {

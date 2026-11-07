@@ -389,9 +389,10 @@ export class SkillManager {
     const listing = (shown: number) =>
       head + note + [...names.slice(0, shown), ...(shown < names.length ? [`…and ${names.length - shown} more (pass words describing the task to \`activate_skill\` to search them)`] : [])].join(", ") + "\n";
     let shown = names.length;
-    while (shown > 0 && listing(shown).length > maxChars) shown--;
+    let result = listing(shown);
+    while (shown > 0 && result.length > maxChars) result = listing(--shown);
     // A window too small for even the heading gets no catalog; `activate_skill` still works by name.
-    return listing(shown).length <= maxChars ? listing(shown) : "";
+    return result.length <= maxChars ? result : "";
   }
 
   private watchers: fs.FSWatcher[] = [];
