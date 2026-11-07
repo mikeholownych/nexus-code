@@ -38,14 +38,15 @@ import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
 import { providerDefinition } from "./providers.js";
 import { ServerKindCache } from "./core/server_kind_cache.js";
 
-/**
- * Opaque per-process account markers for the server-kind cache key. No hash of the credential is computed: the
- * credential is compared by equality here and only a small integer enters the cache key (never logged or persisted).
- */
 /** Longest a request waits for an expired server identity to be re-read before proceeding without it. */
 const REVERIFY_WAIT_MS = 1000;
 /** How long an endpoint that rejected the tool-call grammar is sent requests without it. */
 const GRAMMAR_REJECTION_TTL_MS = 10 * 60_000;
+
+/**
+ * Opaque per-process account markers for the server-kind cache key. No hash of the credential is computed: the
+ * credential is compared by equality here and only a small integer enters the cache key (never logged or persisted).
+ */
 const accountMarkers = new Map<string, number>();
 let nextAccountMarker = 1;
 function accountMarker(credential: string): number {
@@ -1442,6 +1443,9 @@ export class LocalLlmClient {
     if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
     await this.reverifyExpiredKind(signal);
     const kind = LocalLlmClient.serverKindCache.get(this.kindKey(ep));
+    // An identity this client had, now unresolved: counting would try the wrong routes and report "unsupported", which
+    // the agent latches for good. Say "unavailable" so the next step retries once discovery has recovered.
+    if (kind === undefined && this.everDiscovered) throw new TokenCountError("unavailable", "server identity is being re-verified");
     const root = ep.replace(/\/v1\/?$/, "");
     const urls = (kind === "llamacpp" || kind === "vllm") && root !== ep ? [`${ep}/tokenize`, `${root}/tokenize`] : [`${ep}/tokenize`];
     let body: any;
