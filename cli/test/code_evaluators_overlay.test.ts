@@ -99,6 +99,7 @@ test("a candidate symlink is not carried but is reported, and does not fail the 
 test("a candidate virtualenv or cache is skipped without failing the build", async () => {
   const { root, baseline, candidate } = pair({ "keep.txt": "good\n" }, (c) => {
     fs.mkdirSync(path.join(c, ".venv/bin"), { recursive: true });
+    fs.writeFileSync(path.join(c, ".venv/pyvenv.cfg"), "home = /usr/bin\n");
     fs.symlinkSync("/usr/bin/python3", path.join(c, ".venv/bin/python"));
     fs.mkdirSync(path.join(c, "pkg/__pycache__"), { recursive: true });
     fs.writeFileSync(path.join(c, "pkg/__pycache__/m.cpython-312.pyc"), "x");
@@ -106,11 +107,13 @@ test("a candidate virtualenv or cache is skipped without failing the build", asy
   try {
     const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", "process.exit(0)"] });
     assert.equal(result.passed, true, JSON.stringify(result.details));
+    assert.deepEqual(result.details.ignoredCandidateChanges, [".venv/"], "a skipped virtualenv is reported once; __pycache__ is never source");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("scripts and build or checker configuration the build runs are pinned to the baseline and reported", async () => {
-  const pinned = ["scripts/check.sh", "build.gradle", "pom.xml", "justfile", "Rakefile", "mypy.ini", "pyrightconfig.json", "ruff.toml", ".eslintrc.json", "jsconfig.json"];
+  const pinned = ["scripts/check.sh", "build.gradle", "pom.xml", "justfile", "Rakefile", "mypy.ini", "pyrightconfig.json", "ruff.toml", ".eslintrc.json", "jsconfig.json",
+    "tslint.json", ".golangci.yml", ".rubocop.yml", "angular.json", "project.json", "tailwind.config.js", "build.mjs", "scripts/build.js", "lint.config.json"];
   const files: Record<string, string> = {};
   for (const rel of pinned) files[rel] = "good\n";
   const { root, baseline, candidate } = pair(files, (c) => { for (const rel of pinned) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
@@ -151,3 +154,35 @@ for (const directory of ["node_modules", "target"]) {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 }
+
+test("a directory named venv without pyvenv.cfg is carried like any other", async () => {
+  const { root, baseline, candidate } = pair({ "src/venv/x.json": "good\n" }, (c) => fs.writeFileSync(path.join(c, "src/venv/x.json"), "BAD\n"));
+  try {
+    const result = await runBuild(baseline, candidate, buildReading("src/venv/x.json"));
+    assert.equal(result.passed, false, `an edit under src/venv/ must reach the build: ${JSON.stringify(result.details)}`);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a candidate-added CACHEDIR.TAG does not delete the baseline's target/ inputs from the build tree", async () => {
+  const { root, baseline, candidate } = pair({ "Cargo.toml": "good\n", "target/input.rs": "good\n" }, (c) => fs.writeFileSync(path.join(c, "target/CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55\n"));
+  try {
+    const script = `process.exit(require("fs").existsSync("target/input.rs") ? 0 : 1)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+    assert.ok(result.details.ignoredCandidateChanges.includes("target/"), "the differing skip decision is reported");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a forged CACHEDIR.TAG plus a candidate-added Cargo.toml cannot make target/ edits vanish unreported", async () => {
+  const { root, baseline, candidate } = pair({ "target/lib.txt": "good\n" }, (c) => {
+    fs.writeFileSync(path.join(c, "Cargo.toml"), "x\n");
+    fs.writeFileSync(path.join(c, "target/CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55\n");
+    fs.writeFileSync(path.join(c, "target/lib.txt"), "BAD\n");
+  });
+  try {
+    const script = `process.exit(require("fs").readFileSync("target/lib.txt","utf8").includes("good") ? 0 : 1)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+    assert.ok(result.details.ignoredCandidateChanges.includes("target/"), JSON.stringify(result.details.ignoredCandidateChanges));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

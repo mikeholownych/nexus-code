@@ -23,8 +23,10 @@ function snapshotError(message) {
 export function captureWorkspaceSnapshot(root, options = {}) {
   const limits = { ...DEFAULT_SNAPSHOT_LIMITS, ...options };
   const now = options.now ?? (() => performance.now());
-  // Each rule is a directory name, or { name, sibling, child }: skipped only where that sibling file exists beside it and
-  // that child file exists inside it (Cargo writes CACHEDIR.TAG into every target/ it creates).
+  // Each rule is a directory name, or { name, sibling, child, quiet }: skipped only where that sibling file exists beside it
+  // and that child file exists inside it (Cargo writes CACHEDIR.TAG into every target/ it creates). The skipped directories
+  // are listed on the returned map (`skippedDirectories`) so a caller can tell a skipped path from a deleted one.
+  const skippedDirectories = [];
   const skipRules = new Map((options.skipDirectories ?? []).map((rule) => (typeof rule === "string" ? { name: rule } : rule)).map((rule) => [rule.name, rule]));
   for (const key of ["maxDepth", "maxEntries", "maxBytes", "timeoutMs"]) {
     if (!Number.isSafeInteger(limits[key]) || limits[key] < 1) throw new RangeError(`${key} must be a positive integer`);
@@ -83,7 +85,7 @@ export function captureWorkspaceSnapshot(root, options = {}) {
             let skipped;
             try { skipped = fs.lstatSync(absolute); }
             catch (error) { snapshotError(`cannot inspect ${relative}: ${error?.message ?? error}`); }
-            if (skipped.isDirectory()) continue;
+            if (skipped.isDirectory()) { skippedDirectories.push({ path: relative, quiet: skipRule.quiet === true }); continue; }
           }
           let stat;
           try { stat = fs.lstatSync(absolute); }
@@ -139,6 +141,7 @@ export function captureWorkspaceSnapshot(root, options = {}) {
   visit(workspace, "", 0, rootStat);
   checkDeadline();
   if (!entries.size) snapshotError("workspace contains no regular files or symlinks");
+  entries.skippedDirectories = skippedDirectories;
   return entries;
 }
 
@@ -161,7 +164,7 @@ const excludedBuildConfiguration = /(?:^|\/)(?:package\.json|package-lock\.json|
  * Files the build itself executes or resolves through, rather than inputs it reads: a candidate that edits one could
  * make its own build pass. They keep their pre-agent content, and an edit is reported, not applied.
  */
-const pinnedBuildHelpers = /(?:^|\/)(?:build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?|\.babelrc|\.mocharc\.[^/]+|tools\/[^/]+\.[cm]?js|(?:pyright|js)config\.json|\.?ruff\.toml|(?:clippy|rustfmt|deny)\.toml|\.eslintrc(?:\.[^/]+)?|eslint\.config\.[^/]+|biome\.jsonc?|deno\.jsonc?|\.swcrc)$/i;
+const pinnedBuildHelpers = /(?:^|\/)(?:build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?|\.babelrc|\.mocharc\.[^/]+|tools\/[^/]+\.[cm]?js|(?:pyright|js)config\.json|\.?ruff\.toml|(?:clippy|rustfmt|deny)\.toml|\.eslintrc(?:\.[^/]+)?|eslint\.config\.[^/]+|biome\.jsonc?|deno\.jsonc?|\.swcrc|tslint\.json|\.golangci\.ya?ml|\.rubocop\.yml|angular\.json|project\.json|nx\.json|lerna\.json|[^/]+\.config\.[^/]+|(?:build|compile|typecheck|gulpfile|Gruntfile|Jakefile)\.[cm]?[jt]s)$/i;
 
 /**
  * Candidate file types carried into the pinned workspace: source code and data a build reads. Anything else the agent
@@ -176,11 +179,17 @@ function carriedInputPath(relative) {
 }
 
 /**
- * Dependency, cache and build-output directories (at any depth): skipped by the snapshot, so never overlaid and never
- * reported. `target` is skipped only where it is Cargo output: beside a `Cargo.toml` and holding Cargo's `CACHEDIR.TAG`;
+ * Dependency, cache and build-output directories (at any depth): skipped by the snapshot, so never overlaid. A virtualenv
+ * or cache directory is recognised by its marker file and, like `target/`, is reported in `ignoredCandidateChanges` when
+ * the baseline and the candidate disagree about skipping it. `node_modules/` and `__pycache__/` are never reported. `target` is skipped only where it is Cargo output: beside a `Cargo.toml` and holding Cargo's `CACHEDIR.TAG`;
  * elsewhere it is an ordinary directory and is carried or reported like any other.
  */
-const DEPENDENCY_DIRECTORIES = ["node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".tox", { name: "target", sibling: "Cargo.toml", child: "CACHEDIR.TAG" }];
+const DEPENDENCY_DIRECTORIES = [
+  { name: "node_modules", quiet: true }, { name: "__pycache__", quiet: true },
+  { name: ".venv", child: "pyvenv.cfg" }, { name: "venv", child: "pyvenv.cfg" },
+  { name: ".mypy_cache", child: "CACHEDIR.TAG" }, { name: ".pytest_cache", child: "CACHEDIR.TAG" },
+  { name: "target", sibling: "Cargo.toml", child: "CACHEDIR.TAG" },
+];
 
 function pinnedBuildInput(relative) {
   return excludedBuildConfiguration.test(relative) || pinnedBuildHelpers.test(relative);
@@ -251,8 +260,15 @@ export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorks
   const pinnedWorkspace = path.join(tempRoot, "workspace");
   try {
     fs.cpSync(baselineWorkspace, pinnedWorkspace, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
+    // One skip decision for both trees: a path under a directory either snapshot skipped is neither overlaid nor deleted.
+    const skipped = new Map();
+    for (const side of [baseline, candidate]) for (const item of side.skippedDirectories) skipped.set(item.path, (skipped.get(item.path) ?? 0) + 1);
+    const quiet = new Set([...baseline.skippedDirectories, ...candidate.skippedDirectories].filter((item) => item.quiet).map((item) => item.path));
+    for (const [directory, sides] of skipped) if (sides === 1 && !quiet.has(directory)) ignored.push(`${directory}/`);
+    const underSkipped = (relative) => { for (const directory of skipped.keys()) if (relative.startsWith(`${directory}/`)) return true; return false; };
     const paths = new Set([...baseline.keys(), ...candidate.keys()]);
     for (const relative of paths) {
+      if (underSkipped(relative)) continue;
       const before = baseline.get(relative);
       const after = candidate.get(relative);
       if (before && after && sameEntry(before, after)) continue;

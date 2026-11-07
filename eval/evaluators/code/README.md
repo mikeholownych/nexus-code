@@ -30,14 +30,18 @@ from what the agent said about its own work.
   - Not carried, and reported in `details.ignoredCandidateChanges` (never silently): any changed path of another type
     (shell scripts, Gradle/Maven/Ruby/Just files, `.ini`, `.xml`, lockfiles, binaries), any symlink or special file, and
     build configuration or helpers the build or a checker obeys (`package.json`, `tsconfig*.json`, tool configs such as
-    `.eslintrc*`, `pyrightconfig.json`, `ruff.toml`, `build.rs`, `setup.py`, `conftest.py`, `Makefile`, `Cargo.toml`,
-    `go.mod`, `tools/*.js`). These keep their baseline content, so they never change the build. This deviates from the plan
+    `.eslintrc*`, `tslint.json`, `.golangci.yml`, `.rubocop.yml`, `angular.json`, `project.json`, any `*.config.*`,
+    `build.rs`, `setup.py`, `conftest.py`, `Makefile`, `Cargo.toml`, `go.mod`, `tools/*.js`, `build.*s`/`gulpfile.*`). These keep their baseline content, so they never change the build. This deviates from the plan
     wording ("carry every candidate build input or fail closed and report ignored changed paths"): it carries an allowlist
     of input types, pins and reports the rest, and does not fail closed.
-  - Skipped by the snapshot and not reported, at any depth: `node_modules/`, `__pycache__/`, `.venv/`, `venv/`,
-    `.mypy_cache/`, `.pytest_cache/`, `.tox/`, and `target/` only where it is Cargo output (beside a `Cargo.toml` and
-    holding Cargo's `CACHEDIR.TAG`). Any other `target/` is an ordinary directory. Skipping keeps a large dependency tree
-    from tripping the snapshot limits.
+  - Skipped by the snapshot, at any depth, so a large tree does not trip its limits and nothing under them is overlaid
+    or deleted: `node_modules/` and `__pycache__/` (never reported); a virtualenv (`.venv/`, `venv/` holding
+    `pyvenv.cfg`); `.mypy_cache/` and `.pytest_cache/` holding `CACHEDIR.TAG`; and `target/` only where it is Cargo output
+    (beside a `Cargo.toml` and holding Cargo's `CACHEDIR.TAG`). The marker-recognised directories are reported
+    (`target/`) in `details.ignoredCandidateChanges` whenever the baseline and the candidate disagree about skipping them,
+    so a candidate cannot make edits vanish by adding a marker. A directory with such a name but no marker is ordinary.
+    A skipped directory that is present in both trees is not compared: edits inside a real Cargo `target/` or virtualenv
+    are not seen.
   - Known limits:
     - A script in a carried language that the build invokes (for example `scripts/check.js` run by `npm run build`, or
       `jest.setup.js`) is carried like any other source file, so a candidate can edit it. The pinned list is a denylist
