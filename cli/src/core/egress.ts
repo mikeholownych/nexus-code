@@ -440,9 +440,9 @@ export class InformationFlowBoundary {
   // Deterministic secret patterns (DATA-002)
   private static DETERMINISTIC_PATTERNS: Array<{ name: string; regex: RegExp }> = [
     // OpenAI / LLM API keys
-    { name: "OPENAI_API_KEY", regex: /\b(?:sk-[a-zA-Z0-9_\-]{20,64})\b/g },
+    { name: "OPENAI_API_KEY", regex: /\b(?:sk-(?=[a-zA-Z0-9_\-+\/]*\d)(?=[a-zA-Z0-9_\-+\/]*[A-Z])(?=[a-zA-Z0-9_\-+\/]*[a-z])[a-zA-Z0-9_\-+\/]{20,256}={0,2}(?![a-zA-Z0-9_\-+\/=])|sk-[a-zA-Z0-9_\-]{20,64}\b)/g },
     // Anthropic API keys
-    { name: "ANTHROPIC_API_KEY", regex: /\b(?:sk-ant-[a-zA-Z0-9_\-]{20,64})\b/g },
+    { name: "ANTHROPIC_API_KEY", regex: /\b(?:sk-ant-(?=[a-zA-Z0-9_\-+\/]*\d)(?=[a-zA-Z0-9_\-+\/]*[A-Z])(?=[a-zA-Z0-9_\-+\/]*[a-z])[a-zA-Z0-9_\-+\/]{20,256}={0,2}(?![a-zA-Z0-9_\-+\/=])|sk-ant-[a-zA-Z0-9_\-]{20,64}\b)/g },
     // GitHub Tokens (classic, fine-grained, oauth, user, server)
     { name: "GITHUB_TOKEN", regex: /\b(?:ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{50,90}|gho_[a-zA-Z0-9]{36}|ghu_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36})\b/g },
     // Google API Key
@@ -454,7 +454,7 @@ export class InformationFlowBoundary {
     // Slack Tokens
     { name: "SLACK_TOKEN", regex: /\b(?:xox[baprs]-[0-9a-zA-Z]{10,48})\b/g },
     // Bearer / Authorization tokens
-    { name: "BEARER_AUTH_HEADER", regex: /\bBearer\s+([a-zA-Z0-9_\-\.]{16,})/g },
+    { name: "BEARER_AUTH_HEADER", regex: /\bBearer\s+([a-zA-Z0-9_\-\.+\/]{16,}={0,2})/g },
     // Authorization header values, including Basic (base64 user:password) and provider Token schemes.
     { name: "AUTHORIZATION_HEADER", regex: /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?([A-Za-z0-9._~+/=-]{8,})/gi },
     // JWT Tokens (3 base64url segments separated by dots)
@@ -670,7 +670,7 @@ export class InformationFlowBoundary {
 
     // 4. High-Entropy Token Detection (DATA-002: Category 4 / DATA-004)
     // Check individual non-whitespace tokens length >= 20 with high Shannon entropy
-    const tokens = text.split(/[\s,;'"()\[\]{}=:]+/);
+    const tokens = text.split(/[\s,;'"()\[\]{}=:&?<>`|]+/).map((token) => token.replace(/[.!]+$/, ""));
     for (const tok of tokens) {
       if (
         tok.length >= 20 &&
