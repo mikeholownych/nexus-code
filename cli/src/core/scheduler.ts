@@ -17,7 +17,7 @@ import type {
   WorkUnit,
   WorkUnitStatus,
 } from "./operation.js";
-import { MAX_REJECTED_OUTPUT_CHARS, MAX_REJECTED_OUTPUTS } from "./operation.js";
+import { MAX_REJECTED_OUTPUT_CHARS, MAX_REJECTED_OUTPUTS, unitBaseTask } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
 import type { ResourceDescriptor, ResourceRegistry, Selection } from "./resources.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
@@ -453,7 +453,8 @@ export class ConvergenceScheduler {
         u.status = "RUNNABLE";
         break;
       case "replace_task":
-        u.prompt = text!;
+        // The earlier operator revisions stay: only the base task is replaced.
+        u.prompt = `${text}${u.prompt.slice(unitBaseTask(u.prompt).length)}`;
         delete u.context;
         u.runsBase = u.runs;
         u.status = "RUNNABLE";

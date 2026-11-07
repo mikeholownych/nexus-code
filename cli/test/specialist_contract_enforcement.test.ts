@@ -201,7 +201,7 @@ test("a successful specialist result hands its findings and evidence notes downs
   if (outcome.kind !== "completed") return;
   assert.match(outcome.summary, /handleFoo/);
   assert.match(outcome.summary, /passes null as the second argument/);
-  assert.match(outcome.summary, /src\/b\.ts:9-12/);
+  assert.match(outcome.summary, /"src\/b\.ts" lines 9-12/);
 });
 
 function blockedUnit(result: any, spec: Record<string, unknown> = {}) {

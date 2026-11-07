@@ -36,7 +36,7 @@
  * spawn_subagent is in-turn delegation: its result is a tool result of the parent's (durable) turn.
  */
 import type { AgentRole } from "./roles.js";
-import { specialistInputsProblem } from "./specialist_profiles.js";
+import { isSpecialistRole, specialistInputsProblem } from "./specialist_profiles.js";
 import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, WorkRequirements } from "./resources.js";
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
@@ -485,7 +485,9 @@ export function newOperation(
       ...(u.required === false ? { required: false } : {}),
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
       ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
-      ...(u.inputs !== undefined ? { inputs: { ...u.inputs } } : {}),
+      // A specialist unit always records its inputs (possibly none): a unit with no `inputs` field predates input
+      // enforcement and is grandfathered by the executor.
+      ...(u.inputs !== undefined || isSpecialistRole(u.role) ? { inputs: { ...(u.inputs ?? {}) } } : {}),
       status: "WAITING_ON_DEPENDENCY",
       reroutes: [],
       runs: 0,
