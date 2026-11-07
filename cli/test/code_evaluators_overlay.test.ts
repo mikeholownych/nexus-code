@@ -211,6 +211,8 @@ const layouts: Array<[string, Record<string, string>]> = [
   ["go.work single use", { "go.work": "go 1.22\n\nuse ./plugins/a\n" }],
   ["pnpm-workspace.yaml flow list", { "pnpm-workspace.yaml": "packages: ['plugins/*', \"tools/*\"]\n" }],
   ["pnpm-workspace.yaml multi-line flow list", { "pnpm-workspace.yaml": "packages: [\n  'tools/*',\n  \"plugins/*\"\n]\n" }],
+  ["pnpm-workspace.yaml with trailing comments", { "pnpm-workspace.yaml": "packages:   # the plugin packages\n  - 'plugins/*'   # all of them\n" }],
+  ["pnpm-workspace.yaml with an anchor on the key", { "pnpm-workspace.yaml": "packages: &pk\n  - \"plugins/*\"\n" }],
   ["lerna.json packages", { "lerna.json": JSON.stringify({ packages: ["plugins/*"] }) }],
   ["rush.json projects", { "rush.json": JSON.stringify({ projects: [{ packageName: "a", projectFolder: "plugins/a" }] }) }],
   ["nx.json workspaceLayout", { "nx.json": JSON.stringify({ workspaceLayout: { appsDir: "plugins" } }) }],
@@ -262,5 +264,16 @@ test("workspace manifests are pinned, so a candidate cannot change the package r
     const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
     assert.equal(result.passed, true, JSON.stringify(result.details));
     assert.deepEqual([...result.details.ignoredCandidateChanges].sort(), [...manifests].sort());
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a pnpm-workspace.yaml alias the parser cannot resolve is reported, and the union still applies", async () => {
+  const pinned = ["packages/a/.eslintrc.cjs"];
+  const { root, baseline, candidate } = pair({ "pnpm-workspace.yaml": "packages:\n  - *shared\n", "packages/a/.eslintrc.cjs": "good\n" }, (c) => fs.writeFileSync(path.join(c, "packages/a/.eslintrc.cjs"), "BAD\n"));
+  try {
+    const result = await runBuild(baseline, candidate, buildReading("packages/a/.eslintrc.cjs"));
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+    assert.deepEqual(result.details.ignoredCandidateChanges, pinned);
+    assert.ok((result.details.workspaceNotes ?? []).some((note: string) => /pnpm-workspace\.yaml.*(anchor|alias)/i.test(note)), JSON.stringify(result.details));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
