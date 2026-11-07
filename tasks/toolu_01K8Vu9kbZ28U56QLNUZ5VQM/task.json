@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01K8Vu9kbZ28U56QLNUZ5VQM",
+  "agent_id": "a04b70bafb9fcb90a",
+  "subagent_type": "general-purpose",
+  "task_description": "Review PR 421 and 425",
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 71556,
+    "cache_read_tokens": 1614402,
+    "output_tokens": 12349,
+    "api_call_count": 26
+  },
+  "started_at": "2026-11-07T14:50:58.792480636Z",
+  "completed_at": "2026-11-07T14:59:26.593305676Z"
+}
