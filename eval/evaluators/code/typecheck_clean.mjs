@@ -8,7 +8,6 @@ const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const CODE_FRAME = /^(?:\d+\s.*|[|\s~^]+)$/;
 // A coded diagnostic opens a frame; only gutter lines inside one are dropped, so an unrelated line that merely starts
 // with a number (for example a task-supplied "2 problems: ...") is still compared.
-const CODED_DIAGNOSTIC = /\berror\s+TS\d+:|\berror\[E\d+\]:/i;
 // Rustc's location and note lines belong to the frame but are not gutters.
 const FRAME_CONTINUATION = /^(?:-->|=)\s/;
 // Whole-line summaries restate the count (and, for tsc, the first location); the diagnostics above them are what is
@@ -17,14 +16,36 @@ const SUMMARY = /^(?:Found \d+ errors? in [^\n]*|Found \d+ errors?\.?|Errors\s+F
 // A configuration error means the checker did not check the project, whatever the baseline printed. Only the
 // diagnostic's own (first) code counts: text inside a message can quote any code.
 const CHECKER_NOT_RUN_CODES = new Set(["TS5057", "TS5058", "TS5083", "TS5012", "TS18003", "TS6053"]);
+// A leading location names a file: a path (spaces allowed, no colon or parenthesis) that ends in an extension. Requiring
+// that keeps `error[E0080]: ... step:1: failed` and `error: cannot open 'a.ts:12: x'` from being read as locations.
+const PATH = String.raw`[^:()\n]+?\.[A-Za-z0-9_+-]+`;
 const LOCATION_SHAPES = [
-  [/^(.+?)\(\d+,\d+\):/, "$1(L,C):"],
-  [/^(.+?):\d+:\d+ - /, "$1:L:C - "],
-  [/^--> (.+?):\d+:\d+$/, "--> $1:L:C"],
-  [/^(.+?):\d+:\d+:(?=\s)/, "$1:L:C:"],
-  [/^(.+?):\d+:(?=\s)/, "$1:L:"],
+  [new RegExp(String.raw`^(${PATH})\(\d+,\d+\):`), "$1(L,C):"],
+  [new RegExp(String.raw`^(${PATH}):\d+:\d+ - `), "$1:L:C - "],
+  [new RegExp(String.raw`^--> (${PATH}):\d+:\d+$`), "--> $1:L:C"],
+  [new RegExp(String.raw`^(${PATH}):\d+:\d+:(?=\s)`), "$1:L:C:"],
+  [new RegExp(String.raw`^(${PATH}):\d+:(?=\s)`), "$1:L:"],
 ];
-const isCheckerNotRun = (line) => CHECKER_NOT_RUN_CODES.has(/\berror\s+(TS\d+):/i.exec(line)?.[1]?.toUpperCase());
+
+/** The leading location of a line (the shape whose match ends first), or null. */
+function leadingLocation(line) {
+  let best = null;
+  for (const [shape, replacement] of LOCATION_SHAPES) {
+    const match = shape.exec(line);
+    if (match && (best === null || match[0].length < best.match[0].length)) best = { shape, replacement, match };
+  }
+  return best;
+}
+
+/**
+ * The code of a coded diagnostic (`TS2322`, `E0308`), read only at the diagnostic's leading position: after an optional
+ * leading location. Text further along (a quoted `error TS5057:` in a message or a source excerpt) is not a code.
+ */
+function diagnosticCode(line) {
+  const rest = line.slice(leadingLocation(line)?.match[0].length ?? 0).trimStart();
+  return /^(?:error|warning)\s+(TS\d+):/i.exec(rest)?.[1].toUpperCase() ?? /^error\[(E\d+)\]:/i.exec(rest)?.[1].toUpperCase() ?? null;
+}
+const isCheckerNotRun = (line) => CHECKER_NOT_RUN_CODES.has(diagnosticCode(line));
 
 function diagnosticLines(result, extraDiagnostic = null) {
   const kept = [];
@@ -32,7 +53,7 @@ function diagnosticLines(result, extraDiagnostic = null) {
   for (const raw of `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.replace(ANSI, "").split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
-    if (CODED_DIAGNOSTIC.test(line) || extraDiagnostic?.test(line)) { kept.push(line); inFrame = true; continue; }
+    if (diagnosticCode(line) !== null || extraDiagnostic?.test(line)) { kept.push(line); inFrame = true; continue; }
     if (SUMMARY.test(line)) continue;
     if (inFrame && CODE_FRAME.test(line)) continue;
     kept.push(line);
@@ -47,14 +68,9 @@ function diagnosticLines(result, extraDiagnostic = null) {
  * inside the message is compared as printed.
  */
 function diagnosticKey(line) {
-  // Only the leading location field is rewritten. Every shape is anchored at the line start, and the one whose match ends
-  // first is the real location: a lookalike such as "f(1,2):" quoted inside the message always ends later.
-  let best = null;
-  for (const [shape, replacement] of LOCATION_SHAPES) {
-    const match = shape.exec(line);
-    if (match && (best === null || match[0].length < best.match[0].length)) best = { shape, replacement, match };
-  }
-  return best ? line.replace(best.shape, best.replacement) : line;
+  // Only the leading location field is rewritten (see leadingLocation); the message is compared as printed.
+  const location = leadingLocation(line);
+  return location ? line.replace(location.shape, location.replacement) : line;
 }
 
 function recognizer(diagnosticPattern) {
@@ -97,7 +113,7 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
     seenCandidate.set(key, seen);
     return seen > (baselineCounts.get(key) ?? 0);
   });
-  const recognizedDiagnostic = (lines) => lines.some((line) => CODED_DIAGNOSTIC.test(line) || extraDiagnostic?.test(line));
+  const recognizedDiagnostic = (lines) => lines.some((line) => diagnosticCode(line) !== null || extraDiagnostic?.test(line));
   const checkerDidNotRun = [...baselineOutput, ...candidateOutput].some(isCheckerNotRun);
   const infrastructureFailure = checkerDidNotRun || [baselineResult, candidateResult].some((result) =>
     result?.status == null || result?.signal != null || result?.timedOut === true || result?.error != null) ||
