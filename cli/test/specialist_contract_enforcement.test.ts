@@ -187,7 +187,7 @@ test("acceptance_reviewer prose is rejected by the verdict gate through the exec
   assert.match((outcome as { reason: string }).reason, /^review rejected/);
 });
 
-// ---------------------------------------------------------------- Entire review of PR #428
+// ---------------------------------------------------------------- handoff, decision remedies and /team inputs
 
 test("a successful specialist result hands its findings and evidence notes downstream, not just the headline", async () => {
   const output = JSON.stringify({
@@ -253,4 +253,24 @@ test("/team accepts quoted and @file values so multi-word inputs can be supplied
   assert.equal((op.units[0] as any).inputs.reproduction_command, "npm test -- a.test.ts");
   assert.equal(op.units[0].prompt, "find the cause");
   assert.throws(() => orch.plan("failure_debugger", "failure_log=@../../etc/passwd reproduction_command=x go"), /outside the workspace|not found|cannot read/i);
+});
+
+test("set_inputs refuses a note whose merge would exceed the input bounds, leaving the decision pending and the unit loadable", () => {
+  const sixteen = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`k${i}`, "v"]));
+  const first = { kind: "failed" as const, cause: "EXECUTION_FAILED" as const, reason: "missing", question: "q", options: [{ label: "supply", action: { kind: "set_inputs" as const } }] };
+  const { sched, u } = blockedUnit(first, { inputs: sixteen });
+  const id = u.blocked!.decision.id;
+  const option = u.blocked!.decision.options.find((o) => o.action.kind === "set_inputs")!;
+  assert.throws(() => sched.resolve(id, option.id, JSON.stringify({ defining_path: "src/a.ts" })), /more than 16/);
+  assert.equal(u.status, "BLOCKED", "the decision stays pending");
+  assert.equal(u.decisions?.length ?? 0, 0, "nothing was recorded");
+  assert.equal(Object.keys(u.inputs!).length, 16);
+});
+
+test("an oversized input blocked by the role ceiling can be cleared by supplying a smaller one", async () => {
+  const work = unit({ inputs: { ...CALL_INPUTS, symbol_name: "x" } });
+  const first = await executorFor(fakeAgent({ role: "call_site_analyzer", prompt: 20_000 }).agent).run(work, resource, context());
+  assert.equal(first.kind, "failed");
+  if (first.kind !== "failed") return;
+  assert.deepEqual(first.options.map((o) => o.action.kind).sort(), ["replace_task", "set_inputs"]);
 });
