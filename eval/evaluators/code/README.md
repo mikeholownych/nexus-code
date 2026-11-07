@@ -11,7 +11,7 @@ from what the agent said about its own work.
       mode). Requires Node.js 22.13 or later.
     - **JavaScript** (`.js`, `.mjs`, `.cjs`): `node --check` of the source as a module or as CommonJS, decided by the
       extension and the nearest `package.json` `type`. An undeclared `.js` passes when it parses as either. (`node
-      --check <file>` alone accepts ESM syntax errors in such a file.) A malformed nearest `package.json` fails the file, as it does in Node. So does one that is a symlink,
+      --check <file>` alone accepts ESM syntax errors in such a file.) A malformed nearest `package.json` fails the file, as it does in Node. So does one that is a symlink (which makes every `.js` file below it fail),
       not a regular file, or over 1 MiB: it is opened without following links and read in capped chunks.
     - **Python** (`.py`): `ast.parse` in an isolated interpreter.
   - A file over `maxSourceBytes` (default 8 MiB) is refused unparsed; built-in parsers run in a child process stopped after

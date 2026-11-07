@@ -163,3 +163,20 @@ test("typecheck_clean checks the diagnostic's own code, not text inside its mess
   assert.equal(result.passed, true, JSON.stringify(result.details));
   assert.equal(result.details.infrastructureFailure, false);
 });
+
+test("typecheck_clean never normalizes inside a message, whatever the leading location shape", async () => {
+  const shapes: Array<[string, (loc: number, text: string) => string, string?]> = [
+    ["tsc --pretty", (loc, text) => `src/a.ts:${loc}:7 - error TS2322: Type '"${text}"' is not assignable to type '"ok"'.\n`],
+    ["tsc plain", (loc, text) => `src/a.ts(${loc},7): error TS2322: Type '"${text}"' is not assignable to type '"ok"'.\n`],
+    ["mypy style", (loc, text) => `a.py:${loc}: error: Incompatible "${text}"\n`, "^\\S+:\\d+: error:"],
+    ["go style", (loc, text) => `./my pkg/main.go:${loc}:5: undefined: ${text}\n`, "undefined:"],
+  ];
+  for (const [name, line, pattern] of shapes) {
+    const extra = pattern ? { diagnosticPattern: pattern } : {};
+    const different = await verdict(byRevision({ status: 1, stderr: line(3, "f(1,2): x") }, { status: 1, stderr: line(3, "f(3,4): x") }), extra);
+    assert.equal(different.passed, false, `${name}: a different message must be a new diagnostic`);
+    assert.equal(different.details.newDiagnostics.length, 1, name);
+    const moved = await verdict(byRevision({ status: 1, stderr: line(3, "f(1,2): x") }, { status: 1, stderr: line(30, "f(1,2): x") }), extra);
+    assert.equal(moved.passed, true, `${name}: a moved location is not new: ${JSON.stringify(moved.details)}`);
+  }
+});

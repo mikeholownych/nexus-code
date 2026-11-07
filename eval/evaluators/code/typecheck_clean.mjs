@@ -47,9 +47,14 @@ function diagnosticLines(result, extraDiagnostic = null) {
  * inside the message is compared as printed.
  */
 function diagnosticKey(line) {
-  // Exactly one location shape applies, so a "file:1:" lookalike inside a message is never rewritten.
-  for (const [shape, replacement] of LOCATION_SHAPES) if (shape.test(line)) return line.replace(shape, replacement);
-  return line;
+  // Only the leading location field is rewritten. Every shape is anchored at the line start, and the one whose match ends
+  // first is the real location: a lookalike such as "f(1,2):" quoted inside the message always ends later.
+  let best = null;
+  for (const [shape, replacement] of LOCATION_SHAPES) {
+    const match = shape.exec(line);
+    if (match && (best === null || match[0].length < best.match[0].length)) best = { shape, replacement, match };
+  }
+  return best ? line.replace(best.shape, best.replacement) : line;
 }
 
 function recognizer(diagnosticPattern) {
