@@ -15,6 +15,7 @@ nexus worktree switch feature/login             # print/refresh the worktree of 
 nexus worktree list --json                      # dirty, ahead/behind, integrated, age (schema 1)
 nexus worktree path feature/login
 nexus worktree remove feature/login
+nexus worktree copy-ignored --to feature/login --dry-run
 ```
 
 Shortcuts work wherever a branch is accepted: `^` the default branch, `@` the branch of the current worktree, `-` the
@@ -23,6 +24,16 @@ branch that was active before the last `switch`. A worktree path is accepted too
 `remove` refuses a worktree with changes, untracked or ignored files (`--force` overrides), a branch that is not merged
 into the default branch (`--delete-unmerged` overrides), the main checkout, the worktree you are standing in, a locked
 worktree and a speculative task worktree (unless `--force`).
+
+## Shared build caches
+
+`switch -c` copies the files that are both git-ignored and matched by the source checkout's `.worktreeinclude` (gitignore
+syntax, for example `target/` or `node_modules/`) into the new worktree; `--no-copy` skips it. `copy-ignored` does the same on
+demand (`--from`/`--to` default to the main checkout and the current worktree). Existing files are kept unless `--force`.
+Copies use a reflink where the file system has one, keep modification times so incremental builds do not restart, and
+stop with an error beyond 50,000 files or 4 GiB. `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
+(absolute paths) are never copied, and a symbolic link that leaves the tree is skipped. `--all-ignored` copies every
+ignored file and can therefore carry secrets such as `.env` into each worktree; it is never the default.
 
 ## Where worktrees go
 

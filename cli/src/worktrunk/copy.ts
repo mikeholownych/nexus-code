@@ -1,0 +1,185 @@
+/**
+ * `nexus worktree copy-ignored` (WP-1311): share build caches between worktrees.
+ *
+ * Default source set: files that are both git-ignored and matched by the source checkout's `.worktreeinclude`
+ * (gitignore syntax). `--all-ignored` copies every ignored file instead and says so, because that can carry secrets
+ * such as `.env` into each worktree. Copies use `COPYFILE_FICLONE` (reflink where the file system has it, a plain copy
+ * otherwise), keep modification times so incremental builds do not start over, never overwrite without `--force`, and
+ * never follow or create a link that leaves the tree.
+ *
+ * Residual race: a source file replaced by a link between the planning walk and its copy would be read through the
+ * link. The source is the operator's own checkout, not a path an untrusted party can race; destinations are checked
+ * component by component and files are created exclusively.
+ */
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { redactSecrets } from "../ui.js";
+import { ancestryProblem, mkdirVerified } from "../safe_fs.js";
+import { findEntry, shownPath, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
+import { git } from "./git.js";
+import { currentEntry, openRepo } from "./repo.js";
+
+export interface CopyLimits { maxFiles: number; maxBytes: number }
+
+export const DEFAULT_COPY_LIMITS: CopyLimits = { maxFiles: 50_000, maxBytes: 4 * 1024 ** 3 };
+
+export interface CopyOptions {
+  from?: string;
+  to?: string;
+  force?: boolean;
+  dryRun?: boolean;
+  allIgnored?: boolean;
+  limits?: CopyLimits;
+}
+
+const NEVER_COPY = new Set([".git", ".nexus", ".entire"]);
+const INCLUDE_FILE = ".worktreeinclude";
+const REPORT_LINES = 20;
+
+type Op =
+  | { kind: "dir"; rel: string }
+  | { kind: "file"; rel: string; size: number; atimeMs: number; mtimeMs: number }
+  | { kind: "symlink"; rel: string; target: string };
+
+function insideOrEqual(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+class CopyLimitError extends Error {}
+
+export function copyIgnored(ctx: WorktreeContext, options: CopyOptions = {}): CommandResult {
+  try {
+    return copyIgnoredUnchecked(ctx, options);
+  } catch (err) {
+    if (err instanceof CopyLimitError) return { success: false, output: err.message };
+    throw err;
+  }
+}
+
+function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): CommandResult {
+  const limits = options.limits ?? DEFAULT_COPY_LIMITS;
+  const repo = openRepo(ctx.cwd);
+  const source = options.from ? findEntry(repo, options.from, ctx.home) : repo.entries[0];
+  const dest = options.to ? findEntry(repo, options.to, ctx.home) : currentEntry(repo);
+  if (!dest) throw new WorktreeError("no destination worktree: run from inside one or pass --to <branch|path>");
+  const sourceRoot = fs.realpathSync(source.path);
+  const destRoot = fs.realpathSync(dest.path);
+  if (sourceRoot === destRoot) throw new WorktreeError("source and destination are the same worktree; pass --from and/or --to");
+
+  const roots = listRoots(sourceRoot, options.allIgnored === true);
+  if (roots === "no-include") {
+    return { success: true, output: `Nothing to copy: ${INCLUDE_FILE} is missing in the source worktree (add it, or pass --all-ignored).`, data: { copied: 0 } };
+  }
+
+  // Nested worktrees of this repository must never be walked into.
+  const nested = repo.entries.map((entry) => { try { return fs.realpathSync(entry.path); } catch { return ""; } }).filter((p) => p && p !== sourceRoot && insideOrEqual(sourceRoot, p));
+
+  const ops: Op[] = [];
+  const skipped: string[] = [];
+  let files = 0;
+  let bytes = 0;
+  const perRoot = new Map<string, number>();
+
+  const walk = (rel: string, root: string): void => {
+    const abs = path.join(sourceRoot, rel);
+    if (nested.some((n) => insideOrEqual(n, abs))) { skipped.push(`${rel}: nested worktree`); return; }
+    const stat = fs.lstatSync(abs);
+    if (stat.isSymbolicLink()) {
+      const target = fs.readlinkSync(abs);
+      const resolved = path.resolve(path.dirname(abs), target);
+      if (path.isAbsolute(target) || !insideOrEqual(sourceRoot, resolved)) { skipped.push(`${rel}: symbolic link leaves the tree`); return; }
+      count(root, 0);
+      ops.push({ kind: "symlink", rel, target });
+      return;
+    }
+    if (stat.isDirectory()) {
+      if (fs.existsSync(path.join(abs, "pyvenv.cfg"))) { skipped.push(`${rel}: virtualenv (absolute paths; recreate it in the worktree)`); return; }
+      ops.push({ kind: "dir", rel });
+      for (const child of fs.readdirSync(abs)) walk(path.join(rel, child), root);
+      return;
+    }
+    if (!stat.isFile()) { skipped.push(`${rel}: not a regular file`); return; }
+    count(root, stat.size);
+    ops.push({ kind: "file", rel, size: stat.size, atimeMs: stat.atimeMs, mtimeMs: stat.mtimeMs });
+  };
+  const count = (root: string, size: number): void => {
+    files++;
+    bytes += size;
+    perRoot.set(root, (perRoot.get(root) ?? 0) + 1);
+    if (files > limits.maxFiles) throw new CopyLimitError(`refusing to copy: more than ${limits.maxFiles} files match (file limit); narrow ${INCLUDE_FILE}`);
+    if (bytes > limits.maxBytes) throw new CopyLimitError(`refusing to copy: the files exceed the ${limits.maxBytes} byte limit; narrow ${INCLUDE_FILE}`);
+  };
+
+  for (const entry of roots) {
+    const rel = entry.replace(/\/$/, "");
+    if (!rel || path.isAbsolute(rel) || rel.split("/").includes("..") || NEVER_COPY.has(rel.split("/")[0])) continue;
+    walk(rel, rel);
+  }
+
+  const lines: string[] = [];
+  let copied = 0;
+  let existing = 0;
+  if (options.dryRun) {
+    for (const [root, n] of perRoot) lines.push(`would copy ${shownPath(ctx.home, root)} (${n} file${n === 1 ? "" : "s"})`);
+    copied = files;
+  } else {
+    const blocked = new Set<string>();
+    for (const op of ops) {
+      if ([...blocked].some((b) => op.rel === b || op.rel.startsWith(b + path.sep))) continue;
+      const dst = path.join(destRoot, op.rel);
+      const problem = ancestryProblem(destRoot, dst);
+      if (problem) {
+        skipped.push(`${op.rel}: destination is not safe (${problem.includes("symbolic link") ? "a symbolic link in the way" : problem.replace(destRoot, "")})`);
+        if (op.kind === "dir") blocked.add(op.rel);
+        continue;
+      }
+      if (op.kind === "dir") {
+        mkdirVerified(destRoot, dst);
+        continue;
+      }
+      const present = fs.lstatSync(dst, { throwIfNoEntry: false });
+      if (present) {
+        if (!options.force) { existing++; continue; }
+        if (!present.isFile() && !present.isSymbolicLink()) { skipped.push(`${op.rel}: a directory is in the way`); continue; }
+        fs.unlinkSync(dst);
+      }
+      if (op.kind === "symlink") {
+        fs.symlinkSync(op.target, dst);
+      } else {
+        fs.copyFileSync(path.join(sourceRoot, op.rel), dst, fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL);
+        fs.utimesSync(dst, op.atimeMs / 1000, op.mtimeMs / 1000);
+      }
+      copied++;
+    }
+  }
+
+  const head = options.dryRun
+    ? `Dry run: ${files} file(s), ${bytes} byte(s) would be copied from ${shownPath(ctx.home, sourceRoot)} to ${shownPath(ctx.home, destRoot)}`
+    : `Copied ${copied} file(s) (${bytes} byte(s) planned) from ${shownPath(ctx.home, sourceRoot)} to ${shownPath(ctx.home, destRoot)}`;
+  const out = [head, ...lines];
+  if (existing) out.push(`kept ${existing} existing file(s) (use --force to overwrite)`);
+  for (const note of skipped.slice(0, REPORT_LINES)) out.push(`skipped ${redactSecrets(note)}`);
+  if (skipped.length > REPORT_LINES) out.push(`... ${skipped.length - REPORT_LINES} more skipped`);
+  if (options.allIgnored) out.push("warning: --all-ignored copies every ignored file, including secrets such as .env, into the destination");
+  return { success: true, output: out.join("\n"), data: { copied, planned: files, bytes, skipped: skipped.length, existing } };
+}
+
+/** Top-level entries (files, or directories with a trailing slash) to copy, from Git's own ignore evaluation. */
+function listRoots(sourceRoot: string, all: boolean): string[] | "no-include" {
+  const base = ["ls-files", "-z", "--others", "--ignored", "--directory"];
+  if (all) return nul(git(sourceRoot, [...base, "--exclude-standard"]).stdout);
+  const file = path.join(sourceRoot, INCLUDE_FILE);
+  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!stat) return "no-include";
+  if (!stat.isFile() || stat.size > 64 * 1024) throw new WorktreeError(`${INCLUDE_FILE} must be a regular file of at most 64 KiB`);
+  const included = nul(git(sourceRoot, [...base, `--exclude-from=${file}`]).stdout);
+  if (included.length === 0) return [];
+  // Keep only what the repository's own ignore rules also cover.
+  const ignored = git(sourceRoot, ["check-ignore", "-z", "--stdin"], { input: included.join("\0") + "\0", allowFailure: true });
+  return nul(ignored.stdout);
+}
+
+function nul(text: string): string[] {
+  return text.split("\0").filter(Boolean);
+}

@@ -5,6 +5,7 @@
  */
 import { redactSecrets } from "../ui.js";
 import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
+import { copyIgnored } from "./copy.js";
 import { GitError } from "./git.js";
 import { WorktreePathError } from "./paths.js";
 
@@ -19,18 +20,21 @@ interface Parsed { positionals: string[]; flags: Set<string>; values: Map<string
 interface Spec { booleans: Record<string, string>; values: Record<string, string>; positional: string }
 
 const SPECS: Record<string, Spec> = {
-  switch: { booleans: { "-c": "create", "--create": "create" }, values: { "--base": "base" }, positional: "<branch>" },
+  switch: { booleans: { "-c": "create", "--create": "create", "--no-copy": "no-copy" }, values: { "--base": "base" }, positional: "<branch>" },
+  "copy-ignored": { booleans: { "--force": "force", "-f": "force", "--dry-run": "dry-run", "--all-ignored": "all-ignored" }, values: { "--from": "from", "--to": "to" }, positional: "" },
   list: { booleans: { "--json": "json" }, values: { "--limit": "limit" }, positional: "" },
   remove: { booleans: { "--force": "force", "-f": "force", "--delete-unmerged": "delete-unmerged" }, values: {}, positional: "<branch|path>..." },
   path: { booleans: {}, values: {}, positional: "<branch|path>" },
 };
 
-const ALIASES: Record<string, string> = { ls: "list", status: "list", rm: "remove", sw: "switch" };
+const ALIASES: Record<string, string> = { copy: "copy-ignored", ls: "list", status: "list", rm: "remove", sw: "switch" };
 
 /** Subcommands that only read. Used by the slash gates and by `runWorktreeCommand`. */
 const READ_ONLY = new Set(["list", "path"]);
+/** Subcommands that mutate unless `--dry-run` is given. */
+const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored"]);
 
-export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B]|remove <branch>... [--force] [--delete-unmerged]]";
+export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]]";
 
 function canonical(sub: string): string | undefined {
   const name = ALIASES[sub] ?? sub;
@@ -42,7 +46,9 @@ export function isReadOnlyWorktreeArgs(args: string): boolean {
   const sub = args.trim().split(/\s+/)[0] ?? "";
   if (!sub) return true;
   const name = canonical(sub);
-  return name !== undefined && READ_ONLY.has(name);
+  if (name === undefined) return false;
+  if (READ_ONLY.has(name)) return true;
+  return READ_ONLY_WITH_DRY_RUN.has(name) && args.trim().split(/\s+/).includes("--dry-run");
 }
 
 function parse(spec: Spec, tokens: string[]): Parsed {
@@ -72,12 +78,33 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
     const rest = first === tokens[0] ? tokens.slice(1) : tokens;
     const name = canonical(first);
     if (!name) throw new WorktreeError(`unknown subcommand '${redactSecrets(first).slice(0, 40)}'. Usage: ${WORKTREE_USAGE}`);
-    if (ctx.readOnly && !READ_ONLY.has(name)) throw new WorktreeError(`read-only mode: 'worktree ${name}' changes the repository and is refused`);
     const parsed = parse(SPECS[name], rest);
+    if (ctx.readOnly && !READ_ONLY.has(name) && !(READ_ONLY_WITH_DRY_RUN.has(name) && parsed.flags.has("dry-run"))) {
+      throw new WorktreeError(`read-only mode: 'worktree ${name}' changes the repository and is refused`);
+    }
     switch (name) {
       case "switch": {
         if (parsed.positionals.length !== 1) throw new WorktreeError("usage: worktree switch [-c] <branch> [--base B]");
-        return switchWorktree(ctx, parsed.positionals[0], { create: parsed.flags.has("create"), base: parsed.values.get("base") });
+        const switched = switchWorktree(ctx, parsed.positionals[0], { create: parsed.flags.has("create"), base: parsed.values.get("base") });
+        const made = switched.data as { created?: boolean; path?: string } | undefined;
+        if (switched.success && made?.created && !parsed.flags.has("no-copy") && made.path) {
+          // Sharing build caches is a convenience: a failure here never undoes or fails the switch.
+          try {
+            const copied = copyIgnored(ctx, { to: made.path });
+            const data = copied.data as { copied?: number } | undefined;
+            if (data?.copied) switched.output += `\n${copied.output}`;
+          } catch (err) {
+            switched.output += `\nwarning: copying ignored files failed: ${redactSecrets((err as Error).message).slice(0, 200)}`;
+          }
+        }
+        return switched;
+      }
+      case "copy-ignored": {
+        if (parsed.positionals.length) throw new WorktreeError("usage: worktree copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]");
+        return copyIgnored(ctx, {
+          from: parsed.values.get("from"), to: parsed.values.get("to"), force: parsed.flags.has("force"),
+          dryRun: parsed.flags.has("dry-run"), allIgnored: parsed.flags.has("all-ignored"),
+        });
       }
       case "list": {
         if (parsed.positionals.length) throw new WorktreeError("usage: worktree list [--json] [--limit N]");
