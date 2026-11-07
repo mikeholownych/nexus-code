@@ -86,6 +86,20 @@ describe("AgentObserver", () => {
     }
   });
 
+  test("a lone wrapper key is not unwrapped when the tool declares a property of that name (WP-1303)", async () => {
+    const repo = makeRepo({ "a.txt": "alpha\n" });
+    const agent = new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash" } as any);
+    try {
+      (agent as any).getEffectiveTools = () => [{ type: "function", function: { name: "read_file", description: "x", parameters: { type: "object", properties: { input: { type: "object" }, start_line: { type: "number" } }, required: [] } } }];
+      const args = JSON.stringify({ input: { path: "a.txt" }, start_line: null });
+      const parsed = (agent as any).parseNormalizedResponse({ role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: args } }] }, true);
+      assert.deepEqual(JSON.parse(parsed.toolCalls[0].function.arguments), { input: { path: "a.txt" } }, "input is a declared property here, so it stays");
+    } finally {
+      agent.shutdown();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("receives tool start/end and streamed assistant text in order", async () => {
     const gw = await startGateway((n) => n === 1
       ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] }

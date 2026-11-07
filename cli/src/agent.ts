@@ -1918,7 +1918,10 @@ export class AutonomousAgent {
       // Removing a null can leave a lone wrapper key ({input:{...}, start_line:null}); unwrap it as the parser would have.
       if (normalized && typeof normalized === "object" && !Array.isArray(normalized)) {
         const keys = Object.keys(normalized);
-        const inner = keys.length === 1 && ["input", "parameters", "args"].includes(keys[0]) ? (normalized as Record<string, unknown>)[keys[0]] : undefined;
+        const declared = tools.find((t) => t.type === "function" && t.function.name === call.function.name)?.function.parameters?.properties ?? {};
+        // A key the tool itself declares is a real argument, not a wrapper.
+        const inner = keys.length === 1 && ["input", "parameters", "args"].includes(keys[0]) && !Object.hasOwn(declared, keys[0])
+          ? (normalized as Record<string, unknown>)[keys[0]] : undefined;
         if (inner && typeof inner === "object" && !Array.isArray(inner)) normalized = normalizeNullableOptionalToolArguments(call.function.name, inner, tools);
       }
       if (normalized === value) return call;
