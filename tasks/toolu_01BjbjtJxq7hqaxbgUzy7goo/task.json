@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BjbjtJxq7hqaxbgUzy7goo",
+  "agent_id": "a22063445c10fc2a0",
+  "subagent_type": "general-purpose",
+  "task_description": "WP-1304 eval CLI hygiene",
+  "token_usage": {
+    "input_tokens": 154,
+    "cache_creation_tokens": 114106,
+    "cache_read_tokens": 6385274,
+    "output_tokens": 30437,
+    "api_call_count": 76
+  },
+  "started_at": "2026-11-07T14:39:38.800661425Z",
+  "completed_at": "2026-11-07T14:58:45.240726201Z"
+}
