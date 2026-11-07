@@ -16,8 +16,74 @@ export function skillCatalogBudget(contextLimit: number): number {
 }
 /** The budget when no window is known: the client default context of 65,536 tokens. */
 export const SKILL_CATALOG_MAX_CHARS = skillCatalogBudget(65_536);
+/** Share of the context window one per-prompt skill note may take (see `formatSkillNote`). */
+export const SKILL_NOTE_CONTEXT_SHARE = 0.02;
+/** Character budget for one skill note in a window of `contextLimit` tokens. */
+export function skillNoteBudget(contextLimit: number): number {
+  return Math.floor(Math.max(0, contextLimit) * SKILL_NOTE_CONTEXT_SHARE * CHARS_PER_TOKEN);
+}
+/** Most skills a note or a lookup lists. */
+export const MAX_SKILL_MATCHES = 5;
+/** Heading of the catalog section in the system prompt. */
+export const SKILL_CATALOG_HEADING = "### Specialized Agent Skills Available:";
+/** Prefix of the per-prompt skill note; `[Nexus ` marks it as a harness note, never an operator request. */
+export const SKILL_NOTE_PREFIX = "[Nexus skill note]";
 /** Descriptions shorter than this stop helping the model pick a skill; below it the catalog lists names only. */
 const MIN_DESCRIPTION_CHARS = 40;
+
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
+const STOPWORDS = new Set(
+  "the and for with this that from into your you are can will use used using when then than not but any all has have how what why who which where its our out per via too very just also should would could about after before over under only some more most make made need needs want wants like please file files code task work skill skills".split(" "),
+);
+/** Lower-case word stems of `text`: letters and digits, short words and stop words dropped, plural/-ing/-ed folded. */
+function tokenize(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length < 3 || STOPWORDS.has(raw)) continue;
+    const stem = raw.length > 5 ? raw.replace(/(?:ing|ed|es|s)$/, "") : raw.replace(/s$/, "");
+    if (stem.length >= 3) out.push(stem);
+  }
+  return out;
+}
+
+/**
+ * The per-prompt note naming skills whose descriptions fit the operator's message, at most `maxChars` long (""
+ * when nothing fits). It advertises descriptions only; it never activates a skill or loads a body.
+ */
+export function formatSkillNote(matches: Skill[], maxChars: number): string {
+  const head = `${SKILL_NOTE_PREFIX} Installed skills that may fit this request. Descriptions only; nothing is activated. Call \`activate_skill\` with a name to load one.\n`;
+  const fit = (shown: Skill[], per: number) =>
+    head + shown.map((s) => `- **${s.name}**: ${s.description.length <= per ? s.description : `${s.description.slice(0, Math.max(0, per - 1)).trimEnd()}…`}\n`).join("");
+  for (let n = matches.length; n > 0; n--) {
+    const shown = matches.slice(0, n);
+    // Longest uniform description length that fits, down to the bare name.
+    let lo = 0;
+    let hi = Math.max(...shown.map((s) => s.description.length));
+    if (fit(shown, 0).length > maxChars) continue;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (fit(shown, mid).length <= maxChars) lo = mid;
+      else hi = mid - 1;
+    }
+    return fit(shown, lo);
+  }
+  return "";
+}
+
+/**
+ * The catalog section of a system prompt written by any release: from its heading to the next `###` section or the
+ * end, ending after the catalog's own final newline (the blank lines that separate sections are not part of it).
+ */
+export function findCatalogSpan(content: string): { start: number; end: number } | null {
+  const start = content.indexOf(SKILL_CATALOG_HEADING);
+  if (start < 0) return null;
+  const next = content.indexOf("\n### ", start + 1);
+  const stop = next < 0 ? content.length : next;
+  let end = stop;
+  while (end > start && content[end - 1] === "\n") end--;
+  return { start, end: Math.min(end + 1, stop) };
+}
 
 export interface Skill {
   name: string;
@@ -236,6 +302,48 @@ export class SkillManager {
     return this.skills.get(name) || null;
   }
 
+  /**
+   * Trusted skills ranked against free text by a local lexical scorer (BM25 over name and description, the name
+   * counted double; no model call, no dependency). Only trusted skills are ever scored: matching advertises a
+   * description and nothing else. Returns at most `limit` skills whose score clears a threshold that grows with the
+   * number of installed skills and that are within reach of the best match; an unrelated text returns nothing.
+   */
+  public findSkills(text: string, limit: number = MAX_SKILL_MATCHES): Skill[] {
+    const query = new Set(tokenize(text));
+    const skills = this.listSkills();
+    if (query.size === 0 || skills.length === 0) return [];
+    const docs = skills.map((s) => {
+      const tf = new Map<string, number>();
+      for (const t of tokenize(s.name)) tf.set(t, (tf.get(t) ?? 0) + 2);
+      for (const t of tokenize(s.description)) tf.set(t, (tf.get(t) ?? 0) + 1);
+      let len = 0;
+      for (const n of tf.values()) len += n;
+      return { tf, len };
+    });
+    const avg = docs.reduce((n, d) => n + d.len, 0) / docs.length || 1;
+    const N = docs.length;
+    const scored = skills.map((skill, i) => {
+      const { tf, len } = docs[i];
+      let score = 0;
+      for (const term of query) {
+        const f = tf.get(term);
+        if (!f) continue;
+        const df = docs.reduce((n, d) => n + (d.tf.has(term) ? 1 : 0), 0);
+        const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
+        score += (idf * f * (BM25_K1 + 1)) / (f + BM25_K1 * (1 - BM25_B + (BM25_B * len) / avg));
+      }
+      return { skill, score };
+    });
+    const threshold = Math.max(0.5, Math.min(2, 0.35 * Math.log(N + 1)));
+    const best = Math.max(...scored.map((m) => m.score));
+    if (best < threshold) return [];
+    return scored
+      .filter((m) => m.score >= threshold && m.score >= 0.4 * best)
+      .sort((a, b) => b.score - a.score || a.skill.name.localeCompare(b.skill.name))
+      .slice(0, limit)
+      .map((m) => m.skill);
+  }
+
   public getUntrustedSkill(name: string): Skill | null {
     return this.untrustedSkills.get(name) || null;
   }
@@ -254,7 +362,7 @@ export class SkillManager {
     }
 
     const head =
-      "### Specialized Agent Skills Available:\n" +
+      `${SKILL_CATALOG_HEADING}\n` +
       "You have access to specialized skills. If a user task matches a skill's description, call the `activate_skill` tool with the skill's name to load its specialized workflows and guidelines into context.\n";
 
     const full = head + "\n" + skills.map((s) => `- **${s.name}** [source: ${s.path}] [trust: ${s.trusted ? "trusted" : "untrusted"}]: ${s.description}\n`).join("");
@@ -279,7 +387,7 @@ export class SkillManager {
     // Names only, then as many names as fit with a count of the rest.
     const names = skills.map((s) => s.name);
     const listing = (shown: number) =>
-      head + note + [...names.slice(0, shown), ...(shown < names.length ? [`…and ${names.length - shown} more (an unknown name passed to \`activate_skill\` lists them all)`] : [])].join(", ") + "\n";
+      head + note + [...names.slice(0, shown), ...(shown < names.length ? [`…and ${names.length - shown} more (pass words describing the task to \`activate_skill\` to search them)`] : [])].join(", ") + "\n";
     let shown = names.length;
     while (shown > 0 && listing(shown).length > maxChars) shown--;
     // A window too small for even the heading gets no catalog; `activate_skill` still works by name.
