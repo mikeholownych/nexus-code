@@ -26,7 +26,7 @@ test("core-v1 drift is detected, and the generator repairs it", async () => {
     fs.cpSync(path.join(ROOT, "eval/tasks"), tasksDir, { recursive: true });
     fs.cpSync(path.join(ROOT, "eval/datasets/core-v1"), datasetDir, { recursive: true });
     assert.deepEqual(checkCoreV1({ tasksDir, datasetDir }), []);
-    fs.appendFileSync(path.join(tasksDir, "t2-bugfix-csv/csv.js"), "// drift\n");
+    fs.appendFileSync(path.join(tasksDir, "t2-bugfix-csv/repo/csv.js"), "// drift\n");
     const drift = checkCoreV1({ tasksDir, datasetDir });
     assert.ok(drift.some((problem: string) => /t2-bugfix-csv/.test(problem)), JSON.stringify(drift));
     fs.writeFileSync(path.join(tasksDir, "t2-bugfix-csv/task.json"), fs.readFileSync(path.join(tasksDir, "t2-bugfix-csv/task.json"), "utf8").replace('"steps": 60', '"steps": 61'));
@@ -34,6 +34,53 @@ test("core-v1 drift is detected, and the generator repairs it", async () => {
     const after = checkCoreV1({ tasksDir, datasetDir });
     assert.deepEqual(after.filter((problem: string) => !/examples\.jsonl/.test(problem)), [], "files and the manifest digest are regenerated");
     assert.ok(after.some((problem: string) => /examples\.jsonl.*steps/.test(problem)), "a changed step budget must also be changed in examples.jsonl, which is not generated");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+function copies() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1302-core-v1-"));
+  const tasksDir = path.join(root, "tasks");
+  const datasetDir = path.join(root, "core-v1");
+  fs.cpSync(path.join(ROOT, "eval/tasks"), tasksDir, { recursive: true });
+  fs.cpSync(path.join(ROOT, "eval/datasets/core-v1"), datasetDir, { recursive: true });
+  return { root, tasksDir, datasetDir };
+}
+
+test("a source task.json key that core-v1 would silently drop fails the check", async () => {
+  const { checkCoreV1 } = await load("eval/datasets/sync_core_v1.mjs");
+  const { root, tasksDir, datasetDir } = copies();
+  try {
+    const file = path.join(tasksDir, "t2-bugfix-csv/task.json");
+    const task = JSON.parse(fs.readFileSync(file, "utf8"));
+    for (const key of ["evaluators", "build", "t4Fixture", "class"]) {
+      fs.writeFileSync(file, JSON.stringify({ ...task, [key]: key === "evaluators" ? ["build"] : {} }, null, 2));
+      const problems = checkCoreV1({ tasksDir, datasetDir });
+      assert.ok(problems.some((problem: string) => new RegExp(`t2-bugfix-csv.*"${key}"`).test(problem)), `${key}: ${JSON.stringify(problems)}`);
+    }
+    fs.writeFileSync(file, JSON.stringify({ ...task, description: "reworded" }, null, 2));
+    assert.ok(!checkCoreV1({ tasksDir, datasetDir }).some((problem: string) => /"description"/.test(problem)), "description is intentionally dropped");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("task ids must agree across eval/tasks, the manifest, examples and oracles", async () => {
+  const { checkCoreV1 } = await load("eval/datasets/sync_core_v1.mjs");
+  const { root, tasksDir, datasetDir } = copies();
+  try {
+    fs.cpSync(path.join(tasksDir, "t2-bugfix-csv"), path.join(tasksDir, "t9-new-task"), { recursive: true });
+    assert.ok(checkCoreV1({ tasksDir, datasetDir }).some((problem: string) => /t9-new-task.*not in core-v1/.test(problem)));
+    assert.deepEqual(checkCoreV1({ tasksDir, datasetDir, excluded: ["t9-new-task"] }), [], "an explicit exclusion is allowed");
+    fs.appendFileSync(path.join(datasetDir, "examples.jsonl"), JSON.stringify({ id: "t8-ghost", split: "benchmark", domain: "coding-task", objective: "x", taskDir: "tasks/t8-ghost", tier: "T2", steps: 1, minutes: 1 }) + "\n");
+    assert.ok(checkCoreV1({ tasksDir, datasetDir, excluded: ["t9-new-task"] }).some((problem: string) => /t8-ghost.*examples\.jsonl.*not in the manifest/.test(problem)));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an executable bit that differs between eval/tasks and core-v1 fails the check", async () => {
+  const { checkCoreV1 } = await load("eval/datasets/sync_core_v1.mjs");
+  const { root, tasksDir, datasetDir } = copies();
+  try {
+    const file = path.join(tasksDir, "t2-bugfix-csv/repo/csv.js");
+    fs.chmodSync(file, 0o755);
+    assert.ok(checkCoreV1({ tasksDir, datasetDir }).some((problem: string) => /t2-bugfix-csv.*csv\.js.*mode/.test(problem)));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

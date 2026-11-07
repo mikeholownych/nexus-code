@@ -13,7 +13,13 @@ import { datasetTaskTreeDigest } from "../dataset.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULTS = { tasksDir: path.join(HERE, "../tasks"), datasetDir: path.join(HERE, "core-v1") };
+// Every key of a source task.json must be accounted for, or the check fails: a key added to eval/tasks that core-v1 does
+// not carry (evaluators, build, t4Fixture, class, ...) would otherwise run in one place and not in the other.
 const KEPT_KEYS = ["id", "tier", "fixture", "steps", "minutes"];
+const MOVED_KEYS = ["objective", "hidden", "regression"]; // examples.jsonl and oracles.jsonl, compared by the check
+const DROPPED_KEYS = ["description"]; // prose for readers of eval/tasks; the dataset does not run on it
+// Source tasks deliberately not in core-v1 (none today). Listing one here is the only way to leave it out.
+const EXCLUDED_FROM_CORE_V1 = [];
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const readJsonl = (file) => fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -36,11 +42,17 @@ export function projectTaskJson(source) {
 }
 
 /** Every way core-v1 differs from eval/tasks; an empty list means they agree. */
-export function checkCoreV1({ tasksDir = DEFAULTS.tasksDir, datasetDir = DEFAULTS.datasetDir } = {}) {
+export function checkCoreV1({ tasksDir = DEFAULTS.tasksDir, datasetDir = DEFAULTS.datasetDir, excluded = EXCLUDED_FROM_CORE_V1 } = {}) {
   const problems = [];
   const manifest = readJson(path.join(datasetDir, "manifest.json"));
   const examples = new Map(readJsonl(path.join(datasetDir, "examples.jsonl")).map((row) => [row.id, row]));
   const oracles = new Map(readJsonl(path.join(datasetDir, "oracles.jsonl")).map((row) => [row.id, row]));
+  for (const entry of fs.readdirSync(tasksDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && !(entry.name in manifest.tasks) && !excluded.includes(entry.name)) problems.push(`${entry.name}: eval/tasks/${entry.name} is not in core-v1 (add it, or list it in EXCLUDED_FROM_CORE_V1)`);
+  }
+  for (const [file, rows] of [["examples.jsonl", examples], ["oracles.jsonl", oracles]]) {
+    for (const id of rows.keys()) if (!(id in manifest.tasks)) problems.push(`${id}: ${file} has it but the manifest does not (not in the manifest)`);
+  }
   for (const id of Object.keys(manifest.tasks)) {
     const source = path.join(tasksDir, id);
     const copy = path.join(datasetDir, "tasks", id);
@@ -53,8 +65,12 @@ export function checkCoreV1({ tasksDir = DEFAULTS.tasksDir, datasetDir = DEFAULT
       if (!sourceFiles.includes(file)) problems.push(`${id}: ${file} exists only in core-v1`);
       else if (!copyFiles.includes(file)) problems.push(`${id}: ${file} is missing from core-v1`);
       else if (!fs.readFileSync(path.join(source, file)).equals(fs.readFileSync(path.join(copy, file)))) problems.push(`${id}: ${file} differs from eval/tasks`);
+      else if ((fs.statSync(path.join(source, file)).mode & 0o111) !== (fs.statSync(path.join(copy, file)).mode & 0o111)) problems.push(`${id}: ${file} mode (executable bits) differs from eval/tasks`);
     }
     const sourceTask = readJson(path.join(source, "task.json"));
+    for (const key of Object.keys(sourceTask)) {
+      if (![...KEPT_KEYS, ...MOVED_KEYS, ...DROPPED_KEYS].includes(key)) problems.push(`${id}: task.json key "${key}" has no core-v1 mapping (map it in sync_core_v1.mjs or list it as intentionally dropped)`);
+    }
     const copyTask = readJson(path.join(copy, "task.json"));
     if (JSON.stringify(projectTaskJson(sourceTask)) !== JSON.stringify(copyTask)) problems.push(`${id}: task.json is not the projection of eval/tasks/${id}/task.json`);
     const example = examples.get(id);
