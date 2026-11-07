@@ -22,11 +22,20 @@ from what the agent said about its own work.
   - Passes only on exit status 0 with no timeout, signal or spawn error.
   - Runs in a pinned workspace: the pre-agent tree plus every change the candidate made (additions, edits and deletions
     of any file type, so `.json`, `.go`, `.c` and `.css` inputs are included).
-  - Not carried: `node_modules/` (dependencies, never candidate work; also skipped by the snapshot, so a large one is
-    not refused) and build configuration or helpers the build executes (`package.json`, lockfiles, `tsconfig*.json`,
+  - Not carried: `node_modules/` and `target/` (dependencies and Rust build output, at any depth; also skipped by the
+    snapshot, so a large one is not refused, and a source directory that happens to be named `target` is not carried
+    either) and build configuration or helpers the build executes (`package.json`, lockfiles, `tsconfig*.json`,
     tool configs, `build.rs`, `setup.py`, `conftest.py`, `Makefile`, `Cargo.toml`, `go.mod`, `tools/*.js` and similar).
     A candidate edit to one is reported in `details.ignoredCandidateChanges`; it never changes the build.
   - A candidate change that cannot be reproduced safely (a symlink) fails the evaluator closed, naming the path.
+  - Known limits of this design, which pins and reports rather than carrying every input or failing closed (the plan
+    wording for WP-1302):
+    - Pinning is a denylist. A script the build invokes that is not in the list above (for example `scripts/check.js`
+      run by `npm run build`) is carried like any other candidate file, so a candidate can edit it.
+    - Files the candidate produced are carried too (`dist/`, `*.tsbuildinfo`, generated sources). A build that only checks
+      that an output exists can pass on the candidate's own output.
+    - Only `node_modules/` and `target/` are excluded from the snapshot. Another very large directory (over 50,000
+      entries or 5 s to scan) still makes the evaluator fail closed.
 - **`typecheck_clean.mjs`**
   - Runs the baseline and candidate typecheck commands in separate Bubblewrap workspaces under the same filesystem, network, environment, output and process limits as `build.mjs`.
   - Fails on any diagnostic line the candidate adds; existing diagnostics may remain. Duplicate lines are counted.
