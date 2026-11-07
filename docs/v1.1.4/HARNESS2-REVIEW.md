@@ -1,6 +1,6 @@
 # Harness² review (WP-1307, issue #69)
 
-Date: 2026-11-05. Status: research write-up. No runtime change, no dependency, nothing executed, `eval/` untouched.
+Date: 2026-11-05 (verification pass 2026-11-06). Status: research write-up. No runtime change, no dependency, nothing executed, `eval/` untouched.
 
 Sources: the paper (arXiv 2610.14224v1, submitted 2026-10-09, cs.AI) and the Apache-2.0 repository `google-research/harness2` (README, `docs/EXPERIMENTS.md`, and the code in `harness2/core/recursion.py`, `library.py`, `prompts.py`, `context.py`, `selection.py`), read over the web and never cloned or run. Every gain quoted below is the paper's own, produced on its benchmarks with its executors, and is **unverified by us**. Paper figures were taken from a summariser's extraction of the arXiv HTML (see the last section), not read verbatim.
 
@@ -12,7 +12,7 @@ It leaves model weights fixed and edits the harness through eight mounted files:
 
 **Recommendation: borrow, offline only. Skip as an online per-turn mechanism.**
 
-- The method rests on re-running the same task under matched conditions and comparing trajectories. In a live operator turn the rerun has side effects and costs the operator time; Nexus's own context research already rejected a per-turn context planner for the current architecture (`docs/research/context-engineering/DISPOSITION-2026-10-04.md`: "REJECTED for the current architecture / evidence envelope"), and prefix stability is recorded there as an inference-cost property. A per-task harness would also give every task a different prompt prefix, defeating the cache that `buildSystemPrompt()` (`cli/src/agent.ts:4091`) is written to keep byte-stable.
+- The method rests on re-running the same task under matched conditions and comparing trajectories. In a live operator turn the rerun has side effects and costs the operator time; Nexus's own context research already rejected a per-turn context planner for the current architecture (`docs/research/context-engineering/DISPOSITION-2026-10-04.md`: "REJECTED for the current architecture / evidence envelope"), and prefix stability is recorded there as an inference-cost property. A per-task harness would also give every task a different prompt prefix, defeating the cache that `buildSystemPrompt()` (`cli/src/agent.ts:4115`) is written to keep byte-stable.
 - Ground truth is the wrong constraint for us. Our dev and dogfood tasks have verifiers and hidden tests (DEC-05, `docs/v1.0.0/DECISIONS.md`), so on the tuned set a plain pass-rate A/B is stronger evidence than a behavioural contrast. The method's value to us is diagnosis: where two trajectories diverge, and which prompt or tool-guidance line explains it.
 - Signals Nexus already records and could contrast, with no new instrumentation: repetition, stagnation and progress records (`cli/src/core/execution_tracking.ts`, thresholds in `docs/COMPACTION_AND_CONTINUITY.md`); step and request counts; compaction and admission events, including compaction thrash; malformed tool-call recovery; approval refusals; `VerificationEvidence` and receipts (`cli/src/core/turn.ts`, `candidate.ts`); and OTLP spans in `trace.jsonl` (`cli/src/core/trace.ts`). Harness² itself reads whole trajectories, not metrics, and instructs its composer that a defect in 1 of k base runs is noise and an edit must name "a SPECIFIC MOMENT in a trajectory" (`prompts.py`).
 - Caveat the paper concedes: one rollout per candidate, shared model bias, and stochastic execution make contrasts weak evidence. DEC-05 requires 5 runs per configuration for exactly this reason.
@@ -23,12 +23,12 @@ It leaves model weights fixed and edits the harness through eight mounted files:
 
 | Harness² component | Nexus counterpart | Editable by a model today? | Verdict |
 |---|---|---|---|
-| System prompt | Operating rules in `buildSystemPrompt()` (`agent.ts:4091`), plus trusted `AGENTS.md`/`CLAUDE.md` rules | Compiled TypeScript; only the project rules file is data | Borrow idea; would need an overlay layer |
-| Guardrails | Code, not text: approval policy, `cli/src/core/file_guard.ts`, `cli/src/core/egress.ts`, `sandbox.ts`, `cli/src/core/authority.ts`, workspace trust | No, deliberately | Skip. Must never be model-editable |
-| Memory | `KnowledgeGraph` (`.nexus/knowledge.json`, auto-extract off by default, DEC-15); compaction's durable task state | knowledge.json is data | See question 3 |
-| Tool guidance | Tool schemas in `cli/src/tools.ts`, canonical few-shots (`cli/src/fewshots.ts`), on-demand groups (`core/tool_groups.ts`, `enable_tools`) | Compiled | Best-fit target for a future contrast study |
-| Subagents | `ROLE_PROFILES` in `team.ts`; bounded contracts in `core/specialist_profiles.ts` (read-only, tool whitelists, budgets) | Compiled | Skip. Contracts are safety properties |
-| Skills | `SkillManager` (`cli/src/skills.ts`, `docs/SKILLS_AND_PLUGINS.md`): name and description in the prompt, body loaded by `activate_skill`, trust-gated | Yes, files | Closest 1:1 match; the one surface already shaped for this |
+| System prompt | Operating rules in `buildSystemPrompt()` (`agent.ts:4115`), plus trusted `AGENTS.md`/`CLAUDE.md` rules | Compiled TypeScript; only the project rules file is data | Borrow idea; would need an overlay layer |
+| Guardrails | Code, not text: approval policy, `cli/src/core/file_guard.ts`, `cli/src/core/egress.ts`, `cli/src/sandbox.ts`, `cli/src/core/authority.ts`, workspace trust | No, deliberately | Skip. Must never be model-editable |
+| Memory | `KnowledgeGraph` (`cli/src/knowledge.ts`; `.nexus/knowledge.json`; entries carry `category`, `key`, `value`, `confidence`, `tags`; exported into the system prompt by `exportPromptSection()`; auto-extract off by default, DEC-15); compaction's durable task state | knowledge.json is data | See question 3 |
+| Tool guidance | Tool schemas in `cli/src/tools.ts`, canonical few-shots (`cli/src/fewshots.ts`, picked per workspace by `selectRelevantFewShots`), on-demand groups (`core/tool_groups.ts`, `enable_tools`) | Compiled | Best-fit target for a future contrast study |
+| Subagents | `ROLE_PROFILES` in `cli/src/core/roles.ts` (re-exported by `team.ts`); bounded contracts in `core/specialist_profiles.ts` (read-only, tool whitelists, budgets) | Compiled | Skip. Contracts are safety properties |
+| Skills | `SkillManager` (`cli/src/skills.ts`, `docs/SKILLS_AND_PLUGINS.md`): a catalog in the prompt bounded to a share of the context window (PR #409: shorter descriptions, then names only), body loaded by `activate_skill`, untrusted workspace skills held back | Yes, files | Closest 1:1 match; the one surface already shaped for this |
 | Scripts | No first-class equivalent; the model uses `run_command` | n/a | Skip |
 | Plugin | JavaScript plugins (`cli/src/plugins.ts`) that run in-process | Files, but executable | Skip. Model-authored executable code conflicts with the trust model |
 
@@ -76,6 +76,7 @@ Borrow: (a) behavioural trajectory contrast as an offline diagnostic; (b) the `c
 - No reported gain, cost ratio or ablation was reproduced; I did not run Harness² or Nexus. Claims about absent decay or pruning mean "not found in `library.py`", not "proved absent".
 - Nexus architecture facts come from `docs/research/context-engineering/CURRENT-NEXUS-CONTEXT-ARCHITECTURE.md` (baseline `731f5d4`, October) and spot checks of current source; I re-confirmed `buildSystemPrompt` and `SkillManager.getPromptSection` only. Line numbers may have drifted. `graphify-out/` does not exist in this worktree.
 - The 25-minute figure in section 4 is my estimate.
+- Verification pass 2026-11-06 against `main` at `a872a94d`: cited Nexus paths, symbols and doc references were checked against the tree, and the issue #69 questions and constraints were re-read. Corrected: `buildSystemPrompt` is at `agent.ts:4115` (was 4091); `ROLE_PROFILES` lives in `cli/src/core/roles.ts`; the skill catalog is bounded since PR #409; knowledge entry shape and few-shot selection added to the taxonomy table. Paper and repository claims were not re-read in this pass.
 
 ## Follow-up work packages (proposals only, for a later release, each needs owner approval)
 

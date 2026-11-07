@@ -77,6 +77,13 @@ export function loadEnvironment(): void {
     loadDotenv({ path: globalConfig, override: true, quiet: true });
     userConfigFile = parseDotenv(fs.readFileSync(globalConfig));
   }
+  // config.env is applied with override, so a HOME= line would move os.homedir() for the rest of the run while state,
+  // restore and credentials stay located by the operator home captured above. Refuse rather than split the authorities.
+  if (path.resolve(process.env.HOME || os.homedir()) !== path.resolve(operatorHome)) {
+    // Leave nothing half-applied: put the operator's HOME back before refusing.
+    if (shellEnvironment.HOME === undefined) delete process.env.HOME; else process.env.HOME = shellEnvironment.HOME;
+    throw new Error("config.env may not change HOME; use NEXUS_STATE_DIR to relocate task and session state, and restart Nexus from the home you want");
+  }
   // Structured operator settings are separate from the legacy dotenv file. They are read only from the
   // operator's home; a project nexus.config.json is never trusted as operator policy.
   operatorJsonOperationPolicy = undefined;
@@ -372,14 +379,16 @@ export function buildConfig(options: any): HarnessConfig {
   const readOnly = Boolean(options.readOnly);
   const yes = Boolean(options.yes);
   const approve = Boolean(options.approve);
-  const modeOption = options.mode ? String(options.mode).toLowerCase() : undefined;
+  const modeOption = options.mode ? String(options.mode).trim().toLowerCase() : undefined;
   const envMode = (operatorSetting("NEXUS_APPROVAL_MODE") || process.env.NEXUS_APPROVAL_MODE)?.trim().toLowerCase();
 
   let approvalMode: ApprovalMode;
   let fullAccess = Boolean(options.fullAccess);
 
-  if (readOnly) {
+  if (readOnly || modeOption === "read-only") {
+    // An explicit read-only request wins over --yes, --approve and --full-access on the same command line.
     approvalMode = "read-only";
+    fullAccess = false;
   } else if (yes) {
     approvalMode = "auto";
     fullAccess = true;
