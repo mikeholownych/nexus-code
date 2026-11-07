@@ -72,17 +72,12 @@ test("a global option survives the subcommand's default when the subcommand sets
   assert.equal(r.temperature, 0.9, r.out);
 });
 
-test("an endpoint given before the subcommand is the endpoint used", async () => {
-  const r = await requestTemperature((e) => ["-e", e, "run", "--json", "-m", "m", "hello"]);
-  assert.equal(r.temperature, 0.2, r.out);
-});
-
 test("an option after the subcommand wins over the one before it", async () => {
   const r = await requestTemperature((e) => ["-t", "0.9", "-e", e, "run", "--json", "-m", "m", "-t", "0.4", "hello"]);
   assert.equal(r.temperature, 0.4, r.out);
 });
 
-test("the subcommand default applies when the option is given nowhere", async () => {
+test("an endpoint given before the subcommand is used, and the subcommand default applies when the option is given nowhere", async () => {
   const r = await requestTemperature((e) => ["-e", e, "run", "--json", "-m", "m", "hello"]);
   assert.equal(r.temperature, 0.2, r.out);
 });
@@ -155,6 +150,27 @@ test("nexus models: an endpoint after the subcommand wins over the one before it
   } finally {
     server.closeAllConnections?.();
     server.close();
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("nexus --shell zsh repl: an option before repl overrides repl's own default", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-optprec-repl-"));
+  const log = path.join(home, "repl.log");
+  const shellLog = path.join(home, "shell.log");
+  try {
+    const run = async (args: string[]) => {
+      await new Promise<void>((resolve) => {
+        const child = spawn(TSX, ["src/index.ts", ...args], { cwd: CLI_DIR, env: { ...hostNeutralEnv(), NEXUS_TEST_RECORD_REPL: log, NEXUS_TEST_RECORD_REPL_SHELL: shellLog, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache") } });
+        const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+        child.on("close", () => { clearTimeout(timer); resolve(); });
+      });
+    };
+    await run(["--shell", "zsh", "repl"]);
+    await run(["repl"]);
+    await run(["--shell", "zsh", "repl", "--shell", "sh"]);
+    assert.deepEqual(fs.readFileSync(shellLog, "utf8").trim().split("\n"), ["zsh", "bash", "sh"]);
+  } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });

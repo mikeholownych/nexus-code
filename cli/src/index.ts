@@ -218,6 +218,7 @@ async function startRepl(options: any): Promise<void> {
     if (options.model) parts.push("-m", options.model);
     if (options.resume) parts.push("-r", typeof options.resume === "string" ? options.resume : "");
     fs.appendFileSync(log, parts.join(" ").trim() + "\n");
+    if (process.env.NEXUS_TEST_RECORD_REPL_SHELL) fs.appendFileSync(process.env.NEXUS_TEST_RECORD_REPL_SHELL, `${options.shell}\n`);
     return;
   }
   const trustDecision = await promptWorkspaceTrust(options.workspace ? path.resolve(options.workspace) : process.cwd());
