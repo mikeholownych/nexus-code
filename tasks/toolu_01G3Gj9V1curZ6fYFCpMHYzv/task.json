@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01G3Gj9V1curZ6fYFCpMHYzv",
+  "agent_id": "a84bcc906fee8f490",
+  "subagent_type": "general-purpose",
+  "task_description": "WP-1303 provider handling (retry)",
+  "token_usage": {
+    "input_tokens": 62,
+    "cache_creation_tokens": 83682,
+    "cache_read_tokens": 2198617,
+    "output_tokens": 22755,
+    "api_call_count": 31
+  },
+  "started_at": "2026-11-07T14:41:36.796166203Z",
+  "completed_at": "2026-11-07T14:50:37.954777417Z"
+}
