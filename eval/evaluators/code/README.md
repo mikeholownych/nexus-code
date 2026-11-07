@@ -13,6 +13,8 @@ from what the agent said about its own work.
       extension and the nearest `package.json` `type`. An undeclared `.js` passes when it parses as either. (`node
       --check <file>` alone accepts ESM syntax errors in such a file.)
     - **Python** (`.py`): `ast.parse` in an isolated interpreter.
+  - A file over `maxSourceBytes` (default 8 MiB) is refused unparsed; built-in parsers run in a child process stopped after
+    `parserTimeoutMs` (default 30 s).
   - Rust, TSX and JSX have no built-in parser. A caller can supply one for any language, or replace a built-in one.
   - Fails closed on: a language with no parser, an unsupported extension, an unreadable file, a path that is
     absolute, contains traversal, or escapes the workspace through a symlink, and an empty file list.
@@ -28,6 +30,11 @@ from what the agent said about its own work.
     tool configs, `build.rs`, `setup.py`, `conftest.py`, `Makefile`, `Cargo.toml`, `go.mod`, `tools/*.js` and similar).
     A candidate edit to one is reported in `details.ignoredCandidateChanges`; it never changes the build.
   - A candidate change that cannot be reproduced safely (a symlink) fails the evaluator closed, naming the path.
+  - The pinned copy is created under the run's scratch root (the size-capped tmpfs under the resource contract), and an
+    explicit candidate typecheck `cwd` inside the workspace maps to the same directory in the copy; one outside it fails.
+  - Budgets: the run's resource contract (`config.resources`: cgroup CPU, memory and process limits) applies to these
+    commands; independently, a single file write is capped (`maxFileBytes`, default 1 GiB, via `prlimit`) and core dumps
+    are off. A relative command must stay inside the workspace after `..` and symlinks resolve.
 - **`typecheck_clean.mjs`**
   - Runs the baseline and candidate typecheck commands in separate Bubblewrap workspaces under the same filesystem, network, environment, output and process limits as `build.mjs`.
   - Fails on any diagnostic line the candidate adds; existing diagnostics may remain. Duplicate lines are counted.
