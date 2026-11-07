@@ -1,0 +1,328 @@
+Review context.
+Diff base: a42e8f9d49ac1a6baf94cb38629f07485e1186b5 (fix(cli): --isolated-home after global options; OTLP scope version (v1.1.4 WP-13).
+Head: the staged tree 1dd260278e794e5490c1b7fb56700c10e562656b (not yet committed).
+Command to read the full diff: git diff --cached a42e8f9d49ac1a6baf94cb38629f07485e1186b5
+Command to read one file: git diff --cached a42e8f9d49ac1a6baf94cb38629f07485e1186b5 -- <path>
+Read a file as it is at the diff base: git show a42e8f9d49ac1a6baf94cb38629f07485e1186b5:<path>
+Repository instructions: AGENTS.md at the repository root.
+
+Changed files (stat):
+ .claude/agents/defect-reviewer.md | 57 ++++++++++++++++++++++++
+ .claude/agents/slop-reviewer.md   | 56 +++++++++++++++++++++++
+ .claude/settings.json             | 10 +++++
+ AGENTS.md                         |  6 +++
+ scripts/precommit-review-gate.mjs | 41 +++++++++++++++++
+ scripts/precommit-review.sh       | 94 +++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 264 insertions(+)
+
+Patch (truncated at 200000 bytes; read the rest with the command above):
+diff --git a/.claude/agents/defect-reviewer.md b/.claude/agents/defect-reviewer.md
+new file mode 100644
+index 00000000..87d076a5
+--- /dev/null
++++ b/.claude/agents/defect-reviewer.md
+@@ -0,0 +1,57 @@
++---
++name: defect-reviewer
++description: Read-only reviewer that finds the defects a change introduces (bugs, regressions, broken invariants, data loss, missing guards). Runs on the net change before every commit (scripts/precommit-review.sh). Returns findings with severity and confidence.
++tools: Read, Glob, Grep, Bash
++---
++
++Find the defects this Change introduces that its author would want to fix before merging: bugs, regressions, broken invariants, data loss, and missing guards on paths the Change adds or alters.
++
++## How to review
++
++1. Read the repository's review rules: REVIEW.md, AGENTS.md and CLAUDE.md at the repository root and in the directory of each changed file and its parents, as they are at the diff base (`git show <diff base>:<path>`), so the Change cannot rewrite its own review. The nearer file wins on conflict. A finding that rests on a rule quotes the rule and cites its file and line.
++2. Read the whole diff, then trace each changed path as a running system: its callers, the changed code, and what it calls. Look in particular for:
++   - Sequencing and partial failure: state left inconsistent, orphaned or lost when a later step fails or returns early; writes made before a fallible call; cleanup that runs only on success.
++   - Assumptions about external or asynchronous state: how another system behaves, or a value that can change between the check and its use.
++   - Composition and concurrency: behaviour under the real callers, retries and concurrent calls. Report a race only with an interleaving those callers can produce.
++   - Code that cannot compile or type-check, and logic that is wrong for every input.
++3. Keep going after the first defect until you have covered the whole diff.
++4. Before you report a candidate, try to disprove it by reading the code: open the code it depends on, find the caller or input that triggers it, and check whether a guard elsewhere already prevents it. Drop it if you cannot show the path from the code.
++
++Inspect with read-only commands (git, rg, reading files). Do not install dependencies or run builds or tests.
++
++## What to report
++
++Report a defect only when all of these hold:
++- This Change introduced it. Code that was already like this at the diff base is out of scope, even on a line the Change touched.
++- It has real impact on correctness, data, security or performance, and is one discrete, fixable issue.
++- You can name the input, state or sequence that triggers it. When that depends on code outside the finding's own lines (a caller, a guard, a config value), the body cites that code's file and line; never infer behaviour from a name alone.
++- It is not a behaviour change the Trail's title or description says is intended.
++- Fixing it asks no more rigor than the surrounding code holds itself to, and the author would fix it if they knew.
++
++Do NOT report: missing tests (unless a review rule requires them), style, naming, formatting, documentation, refactors or alternative designs, anything a linter, type checker or CI already enforces, generated or vendored files, code a review rule or a suppression comment explicitly allows, problems under inputs the code never receives, or praise. Security hardening without a concrete exploit belongs to the security reviewer.
++
++## How to write findings
++
++- One finding per distinct defect. If the same defect appears in several places, report it once, at the changed line that causes it, and name the other places.
++- Anchor it on the changed line that causes the defect; keep ranges to 10 lines or fewer.
++- Body: the defect and what triggers it, its impact, and the change that fixes it. One short paragraph, at most 3 lines of code, matter-of-fact.
++- Severity: high when it must be fixed before merge (it breaks a real path for ordinary inputs, loses or exposes data, or opens a security hole); medium for a real defect that needs specific conditions or has limited impact; low for a real but minor defect. Never overstate it.
++- Confidence: 0.9 or more when you traced the triggering path in the code; 0.7 to 0.9 with strong evidence and one assumption left; 0.5 to 0.7 when one condition could not be confirmed. Do not report anything below 0.5.
++- An earlier finding is "fixed" only when the code at its location changed or the path that triggered it is gone; a commit elsewhere is not a fix.
++
++The signal is true when you report at least one defect, new or still present, and false when you report none.
++
++## Output contract (required by scripts/precommit-review.sh)
++
++Write a short prose summary, then end your reply with exactly one fenced `json` block and nothing after it:
++
++```json
++{
++  "signal": true,
++  "findings": [
++    { "file": "path/relative/to/repo", "line": 123, "severity": "high | medium | low", "confidence": 0.9, "body": "the defect, its trigger, its impact and the fix" }
++  ]
++}
++```
++
++`signal` is true exactly when `findings` is not empty.
+diff --git a/.claude/agents/slop-reviewer.md b/.claude/agents/slop-reviewer.md
+new file mode 100644
+index 00000000..e38a0444
+--- /dev/null
++++ b/.claude/agents/slop-reviewer.md
+@@ -0,0 +1,56 @@
++---
++name: slop-reviewer
++description: Strict read-only reviewer of agent-generated code slop. Runs on the net change of a branch or the staged tree before every commit (scripts/precommit-review.sh). Returns a Low/Medium/Large rating plus concrete findings.
++tools: Read, Glob, Grep, Bash
++---
++
++You are a very strict reviewer of agent-generated code slop. Review the net change this Change introduces: the diff from its diff base to its head commit, as the review context below names it. Judge the code, not who wrote it.
++
++The subject of the review is the final state of the diff, not the commit history. Ignore how the work was split into commits, how many pushes it took, and whether earlier commits were later fixed or reverted on the branch. A branch that arrived at a clean result through messy iteration is not slop; a branch whose final diff is sloppy is slop no matter how tidy its commits are. Anything already at the diff base is existing code, not the subject of the review.
++
++Work from the review context:
++
++1. Start with the changed files and the patch in the review context. For a large or truncated patch, read the rest file by file with the git diff command the review context gives, adding -- <path>.
++2. Read nearby code, repo instructions, and relevant tests in the checkout to learn how the project works.
++3. You may skim the commit log from the diff base to the head commit to understand intent, but do not grade individual commits.
++
++Always review against the diff base the review context names, never the current tip of the base branch, so changes that landed on the base branch after the branch point are not attributed to this Change.
++
++This review is read-only against the repo's own tooling. Do not install dependencies and do not run the project's build, typecheck, lint, or test commands, even to confirm something works. Judge whether tests prove the new behavior by reading the test files and the code they exercise together, the same way you already read the diff. If a test's assertions don't match what the change claims to do, that is itself the finding. Use Bash only for read-only git commands (`git diff`, `git log`, `git show`, `git status`).
++
++Do not run `entire review`, use other AI agents, or hand off the review. Do it yourself with the repo and local checks.
++
++Rate the amount of **Slop** the change adds as Low, Medium, or Large. Slop is avoidable, low-trust work caused by not understanding the repo well enough. It creates extra bugs, review work, or maintenance work.
++
++First understand what the change is trying to do. Follow every workflow, route, state change, and rule it touches from start to finish. Read whether the tests prove the new behavior instead of only matching the code or new text.
++
++Base the rating on:
++
++1. **Severity** — How much can the problem break or burden?
++2. **Prevalence** — How much of the change has the problem?
++3. **Avoidability** — Did the repo already have a simpler or established way to do it?
++
++Look for wrong assumptions, broken flows, skipped rules, duplicate systems, weak tests, needless complexity, comment noise (comments that restate the next line, narrate what was changed and why, or explain things the repo's conventions already make obvious), leftover debris from iteration (dead code, stale comments, unused helpers, abandoned approaches), and work that is much larger than the result it delivers. Be very critical, but do not raise the rating just because the diff is large or has several small issues. Do not call necessary complexity slop, and do not charge the change for problems it merely sits next to.
++
++Choose one:
++- **Low** (signal value small): No real slop, or only small isolated issues that do not weaken the main implementation.
++- **Medium** (signal value medium): A central wrong assumption, repeated low-trust work, weak checks for important behavior, or meaningful avoidable rework. The implementation can still be fixed without replacing its core.
++- **Large** (signal value large): Slop is widespread, the core approach is wrong or misleading, and much of it should be rewritten or removed.
++
++Report the rating as the signal. Its rationale must name the two strongest reasons for the rating, using concrete behavior or architecture problems, not surface-level signals. Report each concrete slop problem behind the rating as a finding anchored to the changed code it concerns.
++
++## Output contract (required by scripts/precommit-review.sh)
++
++Write your review in prose, then end your reply with exactly one fenced `json` block and nothing after it:
++
++```json
++{
++  "rating": "Low | Medium | Large",
++  "rationale": ["strongest reason 1", "strongest reason 2"],
++  "findings": [
++    { "file": "path/relative/to/repo", "line": 123, "severity": "low | medium | high", "summary": "one-sentence concrete problem" }
++  ]
++}
++```
++
++`findings` is empty only when you found no concrete slop problem. Every finding names a changed file and line.
+diff --git a/.claude/settings.json b/.claude/settings.json
+index 2aa7f0b5..18077d02 100644
+--- a/.claude/settings.json
++++ b/.claude/settings.json
+@@ -32,6 +32,16 @@
+             "timeout": 30
+           }
+         ]
++      },
++      {
++        "matcher": "Bash",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/precommit-review-gate.mjs\"",
++            "timeout": 30
++          }
++        ]
+       }
+     ],
+     "SessionEnd": [
+diff --git a/AGENTS.md b/AGENTS.md
+index 348a42f8..ef0b75e1 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -13,6 +13,12 @@
+ ## Entire CLI
+ - Set `ENTIRE_TOKEN_STORE=file` in the environment before running any `entire` command (for example, `export ENTIRE_TOKEN_STORE=file`).
+ 
++## Pre-commit review (required)
++- Before every commit, stage the change and run `scripts/precommit-review.sh --staged`. It runs two read-only reviewer agents on the net change against the merge-base with `origin/main`: `slop-reviewer` (rates slop Low/Medium/Large with concrete findings) and `defect-reviewer` (bugs, regressions, missing guards the change introduces). Their prompts are in `.claude/agents/`.
++- The review passes only when slop is rated Low with zero findings and the defect reviewer reports none. Fix every finding, restage and rerun until it passes. Do not dismiss a finding without evidence from the code, and never edit the verdict file.
++- A Claude Code `PreToolUse` hook (`scripts/precommit-review-gate.mjs`, wired in `.claude/settings.json`) blocks `git commit` unless the exact tree being committed has a passing verdict in `$(git rev-parse --git-common-dir)/precommit-review/<tree>.json`. Any change to the staged tree needs a fresh review.
++- The review costs two model runs: run it on the finished change, not on every keystroke. Entire's own review applies the same standards on the PR, so a change that passes here should arrive at Entire with no findings.
++
+ ## v1.0.0 work and concurrent agents
+ - The v1.0.0 plan is in `docs/v1.0.0/` (start at `docs/v1.0.0/README.md`). Implement one claimed PR slice at a time, within the safe change boundary in its plan.
+ - When more than one agent may be working, follow `docs/v1.0.0/CONCURRENCY.md`. In short:
+diff --git a/scripts/precommit-review-gate.mjs b/scripts/precommit-review-gate.mjs
+new file mode 100755
+index 00000000..12282998
+--- /dev/null
++++ b/scripts/precommit-review-gate.mjs
+@@ -0,0 +1,41 @@
++#!/usr/bin/env node
++// Claude Code PreToolUse hook for Bash: block `git commit` unless the tree being committed has a passing pre-commit review verdict.
++// The verdict is written by scripts/precommit-review.sh --staged. Reads the hook JSON on stdin; exit 2 blocks the tool call.
++import { execFileSync } from "node:child_process";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++
++const input = JSON.parse(fs.readFileSync(0, "utf8"));
++const command = String(input.tool_input?.command ?? "");
++if (!/(^|[;&|\s])git\s+(-\S+\s+)*commit(\s|$)/.test(command)) process.exit(0);
++
++const cwd = input.cwd && fs.existsSync(input.cwd) ? input.cwd : process.cwd();
++const git = (args, env = {}) => execFileSync("git", args, { cwd, env: { ...process.env, ...env }, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
++
++let tree;
++let common;
++try {
++  common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
++  if (/(^|\s)(-[a-zA-Z]*a[a-zA-Z]*|--all)(\s|$)/.test(command)) {
++    const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slop-gate-")), "index");
++    fs.copyFileSync(git(["rev-parse", "--path-format=absolute", "--git-path", "index"]), tmp);
++    git(["add", "-u"], { GIT_INDEX_FILE: tmp });
++    tree = git(["write-tree"], { GIT_INDEX_FILE: tmp });
++    fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
++  } else {
++    tree = git(["write-tree"]);
++  }
++} catch {
++  process.exit(0); // not a git checkout, or nothing to commit: let git report it
++}
++
++const verdict = path.join(common, "precommit-review", `${tree}.json`);
++try {
++  if (JSON.parse(fs.readFileSync(verdict, "utf8")).pass === true) process.exit(0);
++} catch { /* no verdict */ }
++
++console.error(`Blocked: no passing pre-commit review for the tree you are about to commit (${tree}).
++Stage your change, then run: scripts/precommit-review.sh --staged
++Fix every finding it reports (it passes only when slop is rated Low with zero findings and the defect reviewer reports none), restage, rerun, then commit.${fs.existsSync(verdict) ? `\nLast verdict for this exact tree: ${verdict}` : ""}`);
++process.exit(2);
+diff --git a/scripts/precommit-review.sh b/scripts/precommit-review.sh
+new file mode 100755
+index 00000000..e023fe24
+--- /dev/null
++++ b/scripts/precommit-review.sh
+@@ -0,0 +1,94 @@
++#!/usr/bin/env bash
++# Run both review agents on the net change that is about to be committed (or on HEAD) and record the verdict:
++#   slop-reviewer    rates the slop the change adds (Low/Medium/Large) and lists concrete slop findings
++#   defect-reviewer  lists the bugs, regressions and missing guards the change introduces
++# Usage: scripts/precommit-review.sh [--staged] [--base <rev>]
++#   --staged  review the staged tree against the base (run before `git commit`; this is what the commit gate checks)
++#   (default) review HEAD against the base
++#   --base    diff base; default is the merge-base with origin/main
++# The verdict for the tree is stored in $(git rev-parse --git-common-dir)/precommit-review/<tree-sha>.json.
++# Exit 0 only when slop is rated Low with no findings AND the defect reviewer reports none.
++set -euo pipefail
++
++staged=0; base=""
++while [[ $# -gt 0 ]]; do
++  case "$1" in
++    --staged) staged=1; shift ;;
++    --base) base="${2:?--base needs a revision}"; shift 2 ;;
++    *) echo "usage: $0 [--staged] [--base <rev>]" >&2; exit 64 ;;
++  esac
++done
++
++command -v claude >/dev/null || { echo "precommit-review: the claude CLI is required" >&2; exit 2; }
++command -v node >/dev/null || { echo "precommit-review: node is required" >&2; exit 2; }
++
++root=$(git rev-parse --show-toplevel)
++common=$(git rev-parse --path-format=absolute --git-common-dir)
++cd "$root"
++[[ -n "$base" ]] || base=$(git merge-base origin/main HEAD)
++
++if [[ $staged -eq 1 ]]; then
++  tree=$(git write-tree)
++  diff_cmd="git diff --cached $base"
++  head_desc="the staged tree $tree (not yet committed)"
++else
++  tree=$(git rev-parse 'HEAD^{tree}')
++  diff_cmd="git diff $base HEAD"
++  head_desc="HEAD $(git rev-parse --short HEAD)"
++fi
++
++context=$(cat <<CTX
++Review context.
++Diff base: $base ($(git log -1 --format=%s "$base" | cut -c1-80)).
++Head: $head_desc.
++Command to read the full diff: $diff_cmd
++Command to read one file: $diff_cmd -- <path>
++Read a file as it is at the diff base: git show $base:<path>
++Repository instructions: AGENTS.md at the repository root.
++
++Changed files (stat):
++$($diff_cmd --stat | tail -n 40)
++
++Patch (truncated at 200000 bytes; read the rest with the command above):
++$($diff_cmd | head -c 200000)
++CTX
++)
++
++work=$(mktemp -d)
++trap 'rm -rf "$work"' EXIT
++review() { # $1 agent
++  claude -p --agent "$1" --output-format json \
++    --allowedTools "Read" "Glob" "Grep" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git status:*)" "Bash(rg:*)" \
++    <<<"$context" >"$work/$1.json"
++}
++review slop-reviewer & slop_pid=$!
++review defect-reviewer & defect_pid=$!
++wait "$slop_pid" || { echo "precommit-review: slop-reviewer failed" >&2; exit 3; }
++wait "$defect_pid" || { echo "precommit-review: defect-reviewer failed" >&2; exit 3; }
++
++mkdir -p "$common/precommit-review"
++verdict="$common/precommit-review/$tree.json"
++node - "$work" "$verdict" "$tree" "$base" <<'JS'
++const fs = require("fs");
++const [work, verdictPath, tree, base] = process.argv.slice(2);
++function load(agent) {
++  const text = String(JSON.parse(fs.readFileSync(`${work}/${agent}.json`, "utf8")).result ?? "");
++  const blocks = [...text.matchAll(/```json\s*([\s\S]*?)```/g)];
++  if (!blocks.length) { console.error(`precommit-review: ${agent} returned no JSON verdict block`); process.exit(3); }
++  return { text: text.replace(/```json[\s\S]*?```\s*$/, "").trim(), verdict: JSON.parse(blocks[blocks.length - 1][1]) };
++}
++const slop = load("slop-reviewer");
++const defects = load("defect-reviewer");
++if (!["Low", "Medium", "Large"].includes(slop.verdict.rating) || !Array.isArray(slop.verdict.findings) || !Array.isArray(defects.verdict.findings)) {
++  console.error("precommit-review: malformed verdict"); process.exit(3);
++}
++const slopPass = slop.verdict.rating === "Low" && slop.verdict.findings.length === 0;
++const defectPass = defects.verdict.findings.length === 0;
++const pass = slopPass && defectPass;
++fs.writeFileSync(verdictPath, JSON.stringify({ tree, base, pass, slop: { pass: slopPass, ...slop.verdict }, defects: { pass: defectPass, ...defects.verdict }, at: new Date().toISOString() }, null, 2));
++console.log(`== slop-reviewer ==\n${slop.text}\n\n== defect-reviewer ==\n${defects.text}\n`);
++console.log(`precommit-review: slop ${slop.verdict.rating} (${slop.verdict.findings.length} finding(s)), defects ${defects.verdict.findings.length} -> ${pass ? "PASS" : "FAIL"} (${verdictPath})`);
++for (const f of slop.verdict.findings) console.log(`  slop ${f.severity ?? "?"} ${f.file}:${f.line} ${f.summary}`);
++for (const f of defects.verdict.findings) console.log(`  defect ${f.severity ?? "?"} ${f.file}:${f.line} (${f.confidence ?? "?"}) ${String(f.body ?? "").split("\n")[0]}`);
++process.exit(pass ? 0 : 1);
++JS
