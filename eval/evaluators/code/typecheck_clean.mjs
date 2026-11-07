@@ -14,8 +14,17 @@ const FRAME_CONTINUATION = /^(?:-->|=)\s/;
 // Whole-line summaries restate the count (and, for tsc, the first location); the diagnostics above them are what is
 // compared. Coded diagnostics are recognised first, so a file named like a summary cannot hide one.
 const SUMMARY = /^(?:Found \d+ errors? in [^\n]*|Found \d+ errors?\.?|Errors\s+Files|error: aborting due to \d+ previous errors?(?:; [^\n]*)?)$/i;
-// A configuration error means the checker did not check the project, whatever the baseline printed.
-const CHECKER_NOT_RUN = /\berror\s+TS(?:5057|5058|5083|5012|18003|6053):/i;
+// A configuration error means the checker did not check the project, whatever the baseline printed. Only the
+// diagnostic's own (first) code counts: text inside a message can quote any code.
+const CHECKER_NOT_RUN_CODES = new Set(["TS5057", "TS5058", "TS5083", "TS5012", "TS18003", "TS6053"]);
+const LOCATION_SHAPES = [
+  [/^(.+?)\(\d+,\d+\):/, "$1(L,C):"],
+  [/^(.+?):\d+:\d+ - /, "$1:L:C - "],
+  [/^--> (.+?):\d+:\d+$/, "--> $1:L:C"],
+  [/^(.+?):\d+:\d+:(?=\s)/, "$1:L:C:"],
+  [/^(.+?):\d+:(?=\s)/, "$1:L:"],
+];
+const isCheckerNotRun = (line) => CHECKER_NOT_RUN_CODES.has(/\berror\s+(TS\d+):/i.exec(line)?.[1]?.toUpperCase());
 
 function diagnosticLines(result, extraDiagnostic = null) {
   const kept = [];
@@ -38,15 +47,14 @@ function diagnosticLines(result, extraDiagnostic = null) {
  * inside the message is compared as printed.
  */
 function diagnosticKey(line) {
-  return line
-    .replace(/^([^\s(]+)\(\d+,\d+\):/, "$1(L,C):")
-    .replace(/^([^\s:]+):\d+:\d+ - /, "$1:L:C - ")
-    .replace(/^--> (.+?):\d+:\d+$/, "--> $1:L:C")
-    .replace(/^([^\s:]+):\d+:(?=\s)/, "$1:L:");
+  // Exactly one location shape applies, so a "file:1:" lookalike inside a message is never rewritten.
+  for (const [shape, replacement] of LOCATION_SHAPES) if (shape.test(line)) return line.replace(shape, replacement);
+  return line;
 }
 
 function recognizer(diagnosticPattern) {
   if (diagnosticPattern === undefined) return null;
+  if (typeof diagnosticPattern !== "string") throw new TypeError("diagnosticPattern must be a string");
   try { return new RegExp(diagnosticPattern, "i"); }
   catch (error) { throw new TypeError(`diagnosticPattern is not a valid regular expression: ${error.message}`); }
 }
@@ -85,7 +93,7 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
     return seen > (baselineCounts.get(key) ?? 0);
   });
   const recognizedDiagnostic = (lines) => lines.some((line) => CODED_DIAGNOSTIC.test(line) || extraDiagnostic?.test(line));
-  const checkerDidNotRun = [...baselineOutput, ...candidateOutput].some((line) => CHECKER_NOT_RUN.test(line));
+  const checkerDidNotRun = [...baselineOutput, ...candidateOutput].some(isCheckerNotRun);
   const infrastructureFailure = checkerDidNotRun || [baselineResult, candidateResult].some((result) =>
     result?.status == null || result?.signal != null || result?.timedOut === true || result?.error != null) ||
     (baselineResult.status !== 0 && !recognizedDiagnostic(baselineOutput)) ||

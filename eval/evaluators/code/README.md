@@ -11,8 +11,8 @@ from what the agent said about its own work.
       mode). Requires Node.js 22.13 or later.
     - **JavaScript** (`.js`, `.mjs`, `.cjs`): `node --check` of the source as a module or as CommonJS, decided by the
       extension and the nearest `package.json` `type`. An undeclared `.js` passes when it parses as either. (`node
-      --check <file>` alone accepts ESM syntax errors in such a file.) A malformed nearest `package.json`, or one that is not a small
-      regular file, fails the file, as it does in Node.
+      --check <file>` alone accepts ESM syntax errors in such a file.) A malformed nearest `package.json` fails the file, as it does in Node. So does one that is a symlink,
+      not a regular file, or over 1 MiB: it is opened without following links and read in capped chunks.
     - **Python** (`.py`): `ast.parse` in an isolated interpreter.
   - Rust, TSX and JSX have no built-in parser. A caller can supply one for any language, or replace a built-in one.
   - Fails closed on: a language with no parser, an unsupported extension, an unreadable file, a path that is
@@ -32,7 +32,8 @@ from what the agent said about its own work.
     same message is still new. Paths that differ between revisions must still be normalized by the caller.
   - Recognised diagnostics are TypeScript (`error TS1234:`) and rustc (`error[E0123]:`). For another checker, set
     `diagnosticPattern` (a regular expression, case-insensitive) on the evaluator spec or `task.typecheck`; without a
-    match a non-zero exit is an infrastructure failure, not a comparison. An invalid pattern is a failed result with `details.error`, not an exception.
+    match a non-zero exit is an infrastructure failure, not a comparison. A pattern that is not a string, or is not a valid regular expression, is a failed result with `details.error`, not an exception.
+  - Locations are normalized in the leading position only: `file(l,c):`, `file:l:c - `, `--> file:l:c`, `file:l:c:` and `file:l:` (paths may contain spaces).
   - A configuration error from the checker (`TS5057` missing tsconfig, `TS5058`, `TS5083`, `TS5012`, `TS18003`,
     `TS6053`) on either side fails closed: nothing was type-checked.
 - **`diff_boundary.mjs`**

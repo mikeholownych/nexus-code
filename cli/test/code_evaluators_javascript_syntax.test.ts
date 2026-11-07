@@ -65,3 +65,27 @@ test("syntax_ast rejects a .js file whose nearest package.json is malformed or n
     assert.ok(Date.now() - started < 5000, "the metadata read is bounded");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("syntax_ast refuses a .js file whose nearest package.json is a symlink", async () => {
+  const root = scratch("wp1302-esm-pkg-link-");
+  try {
+    fs.writeFileSync(path.join(root, "real.json"), JSON.stringify({ type: "module" }));
+    fs.symlinkSync("real.json", path.join(root, "package.json"));
+    fs.writeFileSync(path.join(root, "x.js"), "export const a = 1;\n");
+    const result = await ev.evaluateSyntaxAst({ root, files: ["x.js"] });
+    assert.equal(result.passed, false, "package metadata is read without following symlinks");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("syntax_ast does not read an unbounded procfs file through package.json", async () => {
+  // fstat().size is 0 for /proc files, so a size check alone would let this be read without bound.
+  const root = scratch("wp1302-esm-pkg-proc-");
+  try {
+    fs.symlinkSync("/proc/self/pagemap", path.join(root, "package.json"));
+    fs.writeFileSync(path.join(root, "x.js"), "export const a = 1;\n");
+    const started = Date.now();
+    const result = await ev.evaluateSyntaxAst({ root, files: ["x.js"] });
+    assert.equal(result.passed, false);
+    assert.ok(Date.now() - started < 5000);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
