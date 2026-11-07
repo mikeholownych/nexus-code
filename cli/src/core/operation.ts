@@ -37,6 +37,7 @@
  */
 import type { AgentRole } from "./roles.js";
 import { isSpecialistRole, specialistInputsProblem } from "./specialist_profiles.js";
+import { redactForPersistence } from "./persistence_protection.js";
 import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, WorkRequirements } from "./resources.js";
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
@@ -487,7 +488,7 @@ export function newOperation(
       ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
       // A specialist unit always records its inputs (possibly none): a unit with no `inputs` field predates input
       // enforcement and is grandfathered by the executor.
-      ...(u.inputs !== undefined || isSpecialistRole(u.role) ? { inputs: { ...(u.inputs ?? {}) } } : {}),
+      ...(u.inputs !== undefined || isSpecialistRole(u.role) ? { inputs: redactForPersistence({ ...(u.inputs ?? {}) }) } : {}),
       status: "WAITING_ON_DEPENDENCY",
       reroutes: [],
       runs: 0,

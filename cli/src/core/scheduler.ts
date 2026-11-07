@@ -19,6 +19,7 @@ import type {
 } from "./operation.js";
 import { MAX_REJECTED_OUTPUT_CHARS, MAX_REJECTED_OUTPUTS, unitBaseTask } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
+import { redactForPersistence } from "./persistence_protection.js";
 import type { ResourceDescriptor, ResourceRegistry, Selection } from "./resources.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 import { effectiveConcurrency } from "./operation_schema.js";
@@ -460,7 +461,7 @@ export class ConvergenceScheduler {
         u.status = "RUNNABLE";
         break;
       case "set_inputs":
-        u.inputs = { ...(u.inputs ?? {}), ...suppliedInputs };
+        u.inputs = redactForPersistence({ ...(u.inputs ?? {}), ...suppliedInputs });
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;

@@ -91,6 +91,8 @@ function readTeamFileInputs(workspace: string, files: Record<string, string>): R
     if (real !== root && !real.startsWith(root + path.sep)) throw new Error(`Input '${name}': '${written}' is outside the workspace`);
     for (const candidate of [path.relative(root, file), path.relative(root, real)]) {
       const check = security.isPathProtected(candidate);
+      // Nexus's own state directory is never an input, whatever the workspace policy lists.
+      if (candidate.split(path.sep).includes(".nexus")) throw new Error(`Input '${name}': '${written}' is inside .nexus and is protected`);
       if (check.protected) throw new Error(`Input '${name}': '${written}' is protected (${check.reason})`);
     }
     const stat = fs.statSync(real);
