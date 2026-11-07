@@ -77,3 +77,18 @@ test("a command cannot write a file larger than the evaluator's file-size budget
     assert.equal(generous.status, 0, JSON.stringify(generous));
   } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
 });
+
+test("a build spec can set the file-size budget", async () => {
+  const runner: any = await import(pathToFileURL(path.join(ROOT, "eval/evaluators/code/runner.mjs")).href);
+  const root = scratch("wp1302-spec-fsize-");
+  const baseline = path.join(root, "baseline");
+  const candidate = path.join(root, "candidate");
+  try {
+    for (const dir of [baseline, candidate]) { fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "a.txt"), "x\n"); }
+    fs.writeFileSync(path.join(candidate, "a.txt"), "y\n");
+    const script = `require("fs").writeFileSync("out.bin", Buffer.alloc(2*1024*1024));`;
+    const run = (maxFileBytes: number) => runner.runCodeEvaluators({ task: { evaluators: [{ type: "build", command: process.execPath, args: ["-e", script], maxFileBytes }] }, candidateWorkspace: candidate, typecheckBaselineWorkspace: baseline });
+    assert.equal((await run(1024 * 1024))[0].passed, false);
+    assert.equal((await run(64 * 1024 * 1024))[0].passed, true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -43,7 +43,7 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
     throw new TypeError("baseline and candidate typecheck workspaces must be separate");
   }
   const invoke = async (spec) => {
-    try { return await runner(spec.command, spec.args ?? [], { cwd: spec.cwd, timeoutMs: spec.timeoutMs, resources }); }
+    try { return await runner(spec.command, spec.args ?? [], { cwd: spec.cwd, timeoutMs: spec.timeoutMs, resources, maxFileBytes: spec.maxFileBytes }); }
     catch (error) { return { status: null, error: String(error?.message ?? error), stdout: "", stderr: "" }; }
   };
   const [baselineResult, candidateResult] = await Promise.all([invoke(baseline), invoke(candidate)]);

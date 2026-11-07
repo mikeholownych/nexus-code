@@ -363,7 +363,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
           const timeoutMs = spec.timeoutMs ?? task.build?.timeoutMs;
           if (!command) results.push(evaluatorResult("build", false, 0, { error: "no build command specified" }));
           else if (!pinnedWorkspace) results.push(evaluatorResult("build", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
-          else results.push(withIgnored(await evaluateBuild({ command, args, cwd: pinnedWorkspace, timeoutMs, resources })));
+          else results.push(withIgnored(await evaluateBuild({ command, args, cwd: pinnedWorkspace, timeoutMs, resources, maxFileBytes: spec.maxFileBytes ?? task.build?.maxFileBytes })));
           break;
         }
         case "typecheck_clean": {
