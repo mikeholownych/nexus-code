@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GuanNVsWSAHPW6oXkaekgV",
+  "agent_id": "a0acb5b46cb4d6efc",
+  "subagent_type": "general-purpose",
+  "task_description": "WP-1303 provider handling",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 31724,
+    "cache_read_tokens": 312188,
+    "output_tokens": 1964,
+    "api_call_count": 8
+  },
+  "started_at": "2026-11-07T14:39:33.771768378Z",
+  "completed_at": "2026-11-07T14:40:42.216092417Z"
+}
