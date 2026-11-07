@@ -34,17 +34,21 @@ from what the agent said about its own work.
       `pytest.ini`, `Makefile`, `CMakeLists.txt`, `Cargo.toml`/`Cargo.lock`, `go.mod`/`go.sum`/`go.work`,
       `rust-toolchain*`, `.cargo/config*`, `.npmrc`, `.yarnrc*`;
     - tool configuration and build scripts at the project root, or at a package root that the baseline's own workspace
-      manifests name: `package.json` `workspaces` (array or `{ packages }`), `pnpm-workspace.yaml` `packages`, a Cargo
+      manifests name: `package.json` `workspaces` (array or `{ packages }`), `pnpm-workspace.yaml` `packages` (block or flow
+      style), `lerna.json` `packages`, `rush.json` project folders, `nx.json` `workspaceLayout`, a Cargo
       `[workspace]` `members` list, and `go.work` `use` entries (`*` is one directory level, `**` any depth; `!` entries are
-      ignored). The manifests are read from the pre-agent tree, so a candidate cannot add or remove a package root. The pinned
+      ignored). The conventional folders `packages/`, `apps/`, `libs/`, `crates/`, `modules/` and `services/` (one level) are package
+      roots too, as a union, so a layout whose manifest the parser does not understand keeps its pins. The manifests
+      themselves (`pnpm-workspace.yaml`, `lerna.json`, `nx.json`, `rush.json`, `package.json`, `go.work`, `Cargo.toml`) are
+      pinned at any depth, and the roots are read from the pre-agent tree, so a candidate cannot add or remove a package root. The pinned
       names are `.babelrc*`, `.eslintrc*`, `.mocharc.*`, `eslint.config.*`, `<tool>.config.*` for webpack, vite, vitest,
       rollup, postcss, babel, jest, next, nuxt, tsup, turbo, metro, tailwind, prettier, astro, playwright, cypress, karma,
       esbuild, gulp, stylelint, commitlint and svelte, `ruff.toml`, `clippy/rustfmt/deny.toml`, `biome.json*`, `deno.json*`,
       `.swcrc`, `tslint.json`, `.golangci.y*ml`, `.rubocop.yml`, `angular.json`, `project.json`, `nx.json`, `lerna.json`,
       `build`/`compile`/`typecheck`/`gulpfile`/`Gruntfile`/`Jakefile` `.js/.ts` variants, `scripts/build|compile|typecheck.*s`,
       and `tools/*.js`.
-    A workspace layout that no manifest declares (a directory of plugins with no `workspaces` entry) has no package roots below
-    the project root, and its nested tool configs are carried like ordinary source.
+    A layout that neither a manifest nor the conventional folders declare (a directory of plugins with no `workspaces` entry)
+    has no package roots below the project root, and its nested tool configs are carried like ordinary source.
     Everything else is carried if it is a source or data type, so ordinary source such as `src/config/database.config.ts`
     or `src/build.ts` reaches the build. A changed path that is not a source or data type (shell scripts, Gradle/Maven/
     Ruby/Just files, `.ini`, `.xml`, binaries) and any symlink or special file is not carried either, and is reported.

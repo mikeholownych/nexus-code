@@ -169,7 +169,7 @@ function changedWorkspacePaths(baseline, candidate) {
  * Everything else is carried if it is a source or data type and reported if it is not, so ordinary source such as
  * `src/config/database.config.ts` or `src/build.ts` reaches the build.
  */
-const pinnedAnyDepth = new RegExp(String.raw`(?:^|\/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]+)?\.json|(?:pyright|js)config\.json|build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?)$`, "i");
+const pinnedAnyDepth = new RegExp(String.raw`(?:^|\/)(?:pnpm-workspace\.yaml|lerna\.json|nx\.json|rush\.json|package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]+)?\.json|(?:pyright|js)config\.json|build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?)$`, "i");
 const pinnedAtPackageRoot = new RegExp(String.raw`^(?:\.babelrc(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.mocharc\.[^/]+|eslint\.config\.[^/]+|(?:webpack|vite|vitest|rollup|postcss|babel|jest|next|nuxt|tsup|turbo|metro|tailwind|prettier|astro|playwright|cypress|karma|esbuild|gulp|stylelint|commitlint|svelte)\.config\.[^/]+|\.?ruff\.toml|(?:clippy|rustfmt|deny)\.toml|biome\.jsonc?|deno\.jsonc?|\.swcrc|tslint\.json|\.golangci\.ya?ml|\.rubocop\.yml|angular\.json|project\.json|nx\.json|lerna\.json|(?:build|compile|typecheck|gulpfile|Gruntfile|Jakefile)\.[cm]?[jt]s|scripts\/(?:build|compile|typecheck)\.[cm]?[jt]s|tools\/[^/]+\.[cm]?js)$`, "i");
 
 /**
@@ -216,7 +216,8 @@ function tomlStringArray(text, key) {
 
 /**
  * The directories the baseline's own workspace manifests name as packages: `package.json` `workspaces`,
- * `pnpm-workspace.yaml` `packages`, a Cargo `[workspace]` `members` list and `go.work` `use` entries. The manifests come
+ * `pnpm-workspace.yaml` `packages` (block or flow style), `lerna.json` `packages`, `rush.json` project folders, `nx.json`
+ * `workspaceLayout`, a Cargo `[workspace]` `members` list and `go.work` `use` entries. The manifests come
  * from the pre-agent tree, so the candidate cannot name a directory into or out of the set. The project root is always one.
  */
 export function workspacePackagePatterns(baselineWorkspace) {
@@ -230,13 +231,30 @@ export function workspacePackagePatterns(baselineWorkspace) {
   }
   const pnpm = readManifest(baselineWorkspace, "pnpm-workspace.yaml");
   if (pnpm) {
+    const flow = /(?:^|\n)packages\s*:\s*\[([^\]]*)\]/.exec(pnpm);
+    if (flow) for (const item of flow[1].matchAll(/["']([^"']+)["']/g)) patterns.push(item[1]);
     let inPackages = false;
     for (const line of pnpm.split("\n")) {
-      if (/^packages\s*:/.test(line)) { inPackages = true; continue; }
+      if (/^packages\s*:\s*$/.test(line)) { inPackages = true; continue; }
       if (inPackages && /^\S/.test(line) && !/^\s*#/.test(line)) inPackages = false;
       const item = inPackages ? /^\s*-\s*["']?([^"'#\s]+)["']?/.exec(line) : null;
       if (item) patterns.push(item[1]);
     }
+  }
+  const lerna = readManifest(baselineWorkspace, "lerna.json");
+  if (lerna) {
+    try { for (const entry of JSON.parse(lerna)?.packages ?? []) if (typeof entry === "string") patterns.push(entry); } catch {}
+  }
+  const rush = readManifest(baselineWorkspace, "rush.json");
+  if (rush) {
+    try { for (const project of JSON.parse(rush)?.projects ?? []) if (typeof project?.projectFolder === "string") patterns.push(project.projectFolder); } catch {}
+  }
+  const nx = readManifest(baselineWorkspace, "nx.json");
+  if (nx) {
+    try {
+      const layout = JSON.parse(nx)?.workspaceLayout;
+      for (const dir of [layout?.appsDir, layout?.libsDir]) if (typeof dir === "string") patterns.push(`${dir.replace(/\/+$/, "")}/*`);
+    } catch {}
   }
   const cargo = readManifest(baselineWorkspace, "Cargo.toml");
   if (cargo && cargo.includes("[workspace]")) patterns.push(...tomlStringArray(cargo.slice(cargo.indexOf("[workspace]")), "members"));
@@ -255,7 +273,10 @@ function packageRootMatcher(patterns) {
     const body = segments.map((segment) => (segment === "**" ? ".+" : segment.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]+"))).join("/");
     return new RegExp(`^${body}$`);
   });
-  return (directory) => expressions.some((expression) => expression.test(directory));
+  // The conventional workspace folders stay package roots even when no manifest the parser understands names them
+  // (lerna, nx and rush layouts, other manifest styles): it is a union with the manifest-derived roots.
+  const conventional = /^(?:packages|apps|libs|crates|modules|services)\/[^/]+$/;
+  return (directory) => conventional.test(directory) || expressions.some((expression) => expression.test(directory));
 }
 
 /**

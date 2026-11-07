@@ -208,6 +208,12 @@ const layouts: Array<[string, Record<string, string>]> = [
   ["pnpm-workspace.yaml", { "pnpm-workspace.yaml": "packages:\n  - 'plugins/*'\n  - \"tools/*\"\n" }],
   ["Cargo workspace members", { "Cargo.toml": '[workspace]\nmembers = ["plugins/*"]\n' }],
   ["go.work use", { "go.work": "go 1.22\n\nuse (\n\t./plugins/a\n\t./plugins/b\n)\n" }],
+  ["go.work single use", { "go.work": "go 1.22\n\nuse ./plugins/a\n" }],
+  ["pnpm-workspace.yaml flow list", { "pnpm-workspace.yaml": "packages: ['plugins/*', \"tools/*\"]\n" }],
+  ["pnpm-workspace.yaml multi-line flow list", { "pnpm-workspace.yaml": "packages: [\n  'tools/*',\n  \"plugins/*\"\n]\n" }],
+  ["lerna.json packages", { "lerna.json": JSON.stringify({ packages: ["plugins/*"] }) }],
+  ["rush.json projects", { "rush.json": JSON.stringify({ projects: [{ packageName: "a", projectFolder: "plugins/a" }] }) }],
+  ["nx.json workspaceLayout", { "nx.json": JSON.stringify({ workspaceLayout: { appsDir: "plugins" } }) }],
 ];
 for (const [name, manifest] of layouts) {
   test(`tool configs under a plugins/<name>/ package root are pinned when the baseline's ${name} names it`, async () => {
@@ -230,5 +236,31 @@ test("without a workspace manifest only the project root is a package root", asy
   try {
     const result = await runBuild(baseline, candidate, buildReading("plugins/a/.eslintrc.cjs"));
     assert.equal(result.passed, false, "no manifest names plugins/a, so its config is ordinary carried source");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the conventional workspace folders stay package roots without any recognised manifest (union with the manifest roots)", async () => {
+  const pinned = ["packages/a/webpack.config.js", "apps/b/.eslintrc.cjs", "libs/c/build.mjs", "crates/d/rustfmt.toml", "modules/e/.babelrc.js", "services/f/tailwind.config.js"];
+  const files: Record<string, string> = { "lerna.json": "{}\n" };
+  for (const rel of pinned) files[rel] = "good\n";
+  const { root, baseline, candidate } = pair(files, (c) => { for (const rel of pinned) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
+  try {
+    const script = `process.exit(${JSON.stringify(pinned)}.some((f)=>require("fs").readFileSync(f,"utf8").includes("BAD"))?1:0)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+    assert.deepEqual([...result.details.ignoredCandidateChanges].sort(), [...pinned].sort());
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("workspace manifests are pinned, so a candidate cannot change the package roots", async () => {
+  const manifests = ["pnpm-workspace.yaml", "lerna.json", "nx.json", "rush.json", "go.work", "Cargo.toml", "package.json", "sub/pnpm-workspace.yaml"];
+  const files: Record<string, string> = {};
+  for (const rel of manifests) files[rel] = "good\n";
+  const { root, baseline, candidate } = pair(files, (c) => { for (const rel of manifests) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
+  try {
+    const script = `process.exit(${JSON.stringify(manifests)}.some((f)=>require("fs").readFileSync(f,"utf8").includes("BAD"))?1:0)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+    assert.deepEqual([...result.details.ignoredCandidateChanges].sort(), [...manifests].sort());
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
