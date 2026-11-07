@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Ez3Cb8mJ8vVwV2KvQ2miLD",
+  "agent_id": "ab4bc15bdaa29b943",
+  "subagent_type": "general-purpose",
+  "task_description": "Worktrunk core WP-1310..1312",
+  "token_usage": {
+    "input_tokens": 174,
+    "cache_creation_tokens": 237131,
+    "cache_read_tokens": 13643423,
+    "output_tokens": 127425,
+    "api_call_count": 87
+  },
+  "started_at": "2026-11-07T19:12:15.746115505Z",
+  "completed_at": "2026-11-07T19:52:56.891039588Z"
+}
