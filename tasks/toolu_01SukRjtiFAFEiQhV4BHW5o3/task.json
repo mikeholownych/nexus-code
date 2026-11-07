@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SukRjtiFAFEiQhV4BHW5o3",
+  "agent_id": "a085b3109948745e8",
+  "subagent_type": "general-purpose",
+  "task_description": "WP-1316 specialist contracts",
+  "token_usage": {
+    "input_tokens": 140,
+    "cache_creation_tokens": 122071,
+    "cache_read_tokens": 6925885,
+    "output_tokens": 38951,
+    "api_call_count": 70
+  },
+  "started_at": "2026-11-07T14:39:45.782054298Z",
+  "completed_at": "2026-11-07T14:57:45.937922589Z"
+}
