@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { LocalLlmClient } from "../src/client.js";
-import { normalizeNullableOptionalToolArguments } from "../src/core/tool_arguments.js";
+import { normalizeNullableOptionalToolArguments, normalizeToolArguments, unwrapSingleKeyWrapper } from "../src/core/tool_arguments.js";
 import { adaptToolDefinitionsForServer } from "../src/core/tool_grammar_provider.js";
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse, body: string) => void;
@@ -485,4 +485,15 @@ test("normalizer fails safe on $ref and honours allOf when deciding whether null
     { ref: null, allBoth: null },
     "an unresolvable $ref keeps the null; allOf allows null only when every branch does",
   );
+});
+
+test("one shared wrapper rule: the parser and the agent unwrap alike, and a declared property keeps its name (WP-1303)", () => {
+  assert.deepEqual(unwrapSingleKeyWrapper({ input: { a: 1 } }), { a: 1 });
+  assert.deepEqual(unwrapSingleKeyWrapper({ parameters: { a: 1 } }), { a: 1 });
+  assert.deepEqual(unwrapSingleKeyWrapper({ args: { a: 1 } }), { a: 1 });
+  assert.deepEqual(unwrapSingleKeyWrapper({ input: { a: 1 }, other: 2 }), { input: { a: 1 }, other: 2 }, "more than one key is not a wrapper");
+  assert.deepEqual(unwrapSingleKeyWrapper({ input: [1] }), { input: [1] }, "only a plain object is unwrapped");
+  assert.deepEqual(unwrapSingleKeyWrapper({ input: { a: 1 } }, new Set(["input"])), { input: { a: 1 } }, "a declared property is not a wrapper");
+  const tool = { type: "function", function: { name: "t", parameters: { type: "object", properties: { path: { type: "string" }, start_line: { type: "number" } }, required: ["path"] } } } as any;
+  assert.deepEqual(normalizeToolArguments("t", { input: { path: "a" }, start_line: null }, [tool]), { path: "a" });
 });

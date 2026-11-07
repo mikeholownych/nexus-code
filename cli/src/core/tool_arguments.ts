@@ -33,3 +33,30 @@ export function normalizeNullableOptionalToolArguments(toolName: string, rawArgs
   }
   return normalized ?? rawArgs;
 }
+
+/** The keys a model may wrap a call's real arguments in: {"input": {...}}, {"parameters": {...}}, {"args": {...}}. */
+const WRAPPER_KEYS = ["input", "parameters", "args"] as const;
+
+/**
+ * The single shared wrapper rule (the parser and the agent both use it): an object with exactly one key, a wrapper key
+ * holding a plain object, is replaced by that object. `declared` lists argument names the tool itself declares; a
+ * wrapper key the tool declares as a real property is kept (a tool with an `input` parameter owns that name).
+ */
+export function unwrapSingleKeyWrapper(args: unknown, declared: ReadonlySet<string> = new Set()): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const keys = Object.keys(args);
+  if (keys.length !== 1 || !(WRAPPER_KEYS as readonly string[]).includes(keys[0]) || declared.has(keys[0])) return args;
+  const inner = (args as Record<string, unknown>)[keys[0]];
+  return inner && typeof inner === "object" && !Array.isArray(inner) ? inner : args;
+}
+
+/**
+ * Null removal followed by wrapper unwrapping, as one pass: removing a null can leave a lone wrapper key
+ * ({input:{...}, start_line:null}), which is then unwrapped and normalised again.
+ */
+export function normalizeToolArguments(toolName: string, rawArgs: unknown, tools: readonly ToolDefinition[]): unknown {
+  const first = normalizeNullableOptionalToolArguments(toolName, rawArgs, tools);
+  const declared = new Set(Object.keys(tools.find((t) => t.type === "function" && t.function.name === toolName)?.function.parameters?.properties ?? {}));
+  const unwrapped = unwrapSingleKeyWrapper(first, declared);
+  return unwrapped === first ? first : normalizeNullableOptionalToolArguments(toolName, unwrapped, tools);
+}

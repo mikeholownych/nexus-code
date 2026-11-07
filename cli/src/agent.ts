@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import { ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
-import { normalizeNullableOptionalToolArguments } from "./core/tool_arguments.js";
+import { normalizeToolArguments } from "./core/tool_arguments.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
 import {
   CanonicalCapability,
@@ -1914,16 +1914,7 @@ export class AutonomousAgent {
       const raw = call.function.arguments;
       let value: unknown;
       try { value = typeof raw === "string" ? JSON.parse(raw) : raw; } catch { return call; }
-      let normalized = normalizeNullableOptionalToolArguments(call.function.name, value, tools);
-      // Removing a null can leave a lone wrapper key ({input:{...}, start_line:null}); unwrap it as the parser would have.
-      if (normalized && typeof normalized === "object" && !Array.isArray(normalized)) {
-        const keys = Object.keys(normalized);
-        const declared = tools.find((t) => t.type === "function" && t.function.name === call.function.name)?.function.parameters?.properties ?? {};
-        // A key the tool itself declares is a real argument, not a wrapper.
-        const inner = keys.length === 1 && ["input", "parameters", "args"].includes(keys[0]) && !Object.hasOwn(declared, keys[0])
-          ? (normalized as Record<string, unknown>)[keys[0]] : undefined;
-        if (inner && typeof inner === "object" && !Array.isArray(inner)) normalized = normalizeNullableOptionalToolArguments(call.function.name, inner, tools);
-      }
+      const normalized = normalizeToolArguments(call.function.name, value, tools);
       if (normalized === value) return call;
       return { ...call, function: { ...call.function, arguments: typeof raw === "string" ? JSON.stringify(normalized) : normalized as any } };
     });
@@ -4942,7 +4933,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       };
     }
 
-    args = normalizeNullableOptionalToolArguments(toolName, args, this.getEffectiveTools());
+    args = normalizeToolArguments(toolName, args, this.getEffectiveTools());
 
     // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
     // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
