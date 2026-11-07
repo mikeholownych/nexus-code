@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FY3WbumFf8ZyfTheeMfFfi",
+  "agent_id": "a9e3ddcb37a83ec8f",
+  "subagent_type": "general-purpose",
+  "task_description": "Review PR 443 WP-1308",
+  "token_usage": {
+    "input_tokens": 70,
+    "cache_creation_tokens": 77002,
+    "cache_read_tokens": 2559623,
+    "output_tokens": 12138,
+    "api_call_count": 35
+  },
+  "started_at": "2026-11-07T19:44:10.544375285Z",
+  "completed_at": "2026-11-07T19:58:09.193732635Z"
+}
