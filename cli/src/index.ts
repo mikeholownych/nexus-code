@@ -54,7 +54,13 @@ const __dirname = path.dirname(__filename);
 // Keep the lease for the full frontend/sidecar lifetime, including synchronous
 // TUI dispatch. Maintenance recovery acquires its own exclusive lease instead.
 const startupArgs = process.argv.slice(2);
-const restoreEvalStartupHome = isolateEvalCommandHome(startupArgs);
+let restoreEvalStartupHome: (() => void) | undefined;
+try {
+  restoreEvalStartupHome = isolateEvalCommandHome(startupArgs);
+} catch (error) {
+  console.error(`nexus: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}
 const { acquireClientLease, releaseClientLease, clientInvocationKind } = await import("./core/client_lease.js");
 const invocationKind = clientInvocationKind(startupArgs);
 const startupReadOnly = invocationKind === "metadata" || (startupArgs[0] === "upgrade" && startupArgs.includes("--check"));

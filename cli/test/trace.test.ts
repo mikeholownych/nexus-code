@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { InformationFlowBoundary } from "../src/core/egress.js";
 import { LocalTraceRecorder } from "../src/core/trace.js";
+import { getBuildIdentity } from "../src/build_identity.js";
 
 function home(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "nexus-trace-test-"));
@@ -43,6 +44,13 @@ test("writes nested spans as OTLP/JSON under the per-session traces directory", 
   assert.equal(attrs["gen_ai.request.model"].stringValue, "test-model");
   assert.equal(attrs["gen_ai.usage.input_tokens"].intValue, "12");
   assert.equal(fs.statSync(recorder.filePath).mode & 0o777, 0o600);
+});
+
+test("the OTLP scope version is the running build's version", () => {
+  const recorder = new LocalTraceRecorder({ sessionId: "session_scope_version", homeDir: home() });
+  assert.equal(recorder.startSpan({ name: "nexus.agent.turn" }).end(), true);
+  const record = JSON.parse(fs.readFileSync(recorder.filePath, "utf8").trim());
+  assert.equal(record.resourceSpans[0].scopeSpans[0].scope.version, getBuildIdentity().version);
 });
 
 test("redacts synthetic credentials before writing and refuses deprecated provider attribute", () => {
