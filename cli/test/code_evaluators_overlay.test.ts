@@ -115,7 +115,7 @@ test("scripts and build or checker configuration the build runs are pinned to th
   const pinned = ["scripts/check.sh", "build.gradle", "pom.xml", "justfile", "Rakefile", "mypy.ini", "pyrightconfig.json", "ruff.toml", ".eslintrc.json", "jsconfig.json",
     "tslint.json", ".golangci.yml", ".rubocop.yml", "angular.json", "project.json", "tailwind.config.js", "build.mjs", "scripts/build.js",
     ".babelrc.js", ".babelrc.json", ".eslintrc.cjs", ".mocharc.yml", "webpack.config.js", "packages/app/.eslintrc.cjs", "packages/app/webpack.config.js", "packages/app/build.ts", "crates/core/Cargo.toml"];
-  const files: Record<string, string> = {};
+  const files: Record<string, string> = { "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n" };
   for (const rel of pinned) files[rel] = "good\n";
   const { root, baseline, candidate } = pair(files, (c) => { for (const rel of pinned) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
   try {
@@ -198,5 +198,37 @@ test("ordinary source that only looks like configuration is carried: policy pins
     const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
     assert.equal(result.details.status, 1, `every one of these must reach the build: ${JSON.stringify(result.details)}`);
     assert.deepEqual(result.details.ignoredCandidateChanges, []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+/** Pin tool configs and build scripts below a package root named by the baseline's own workspace manifest. */
+const layouts: Array<[string, Record<string, string>]> = [
+  ["package.json workspaces (array)", { "package.json": JSON.stringify({ workspaces: ["plugins/*"] }) }],
+  ["package.json workspaces (object)", { "package.json": JSON.stringify({ workspaces: { packages: ["plugins/*"] } }) }],
+  ["pnpm-workspace.yaml", { "pnpm-workspace.yaml": "packages:\n  - 'plugins/*'\n  - \"tools/*\"\n" }],
+  ["Cargo workspace members", { "Cargo.toml": '[workspace]\nmembers = ["plugins/*"]\n' }],
+  ["go.work use", { "go.work": "go 1.22\n\nuse (\n\t./plugins/a\n\t./plugins/b\n)\n" }],
+];
+for (const [name, manifest] of layouts) {
+  test(`tool configs under a plugins/<name>/ package root are pinned when the baseline's ${name} names it`, async () => {
+    const pinned = ["plugins/a/.eslintrc.cjs", "plugins/a/webpack.config.js", "plugins/a/build.mjs"];
+    const carried = ["plugins/a/src/build.ts", "plugins/a/src/config/db.config.ts", "other/b/.eslintrc.cjs", "other/b/build.mjs"];
+    const files: Record<string, string> = { ...manifest };
+    for (const rel of [...pinned, ...carried]) files[rel] = "good\n";
+    const { root, baseline, candidate } = pair(files, (c) => { for (const rel of [...pinned, ...carried]) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
+    try {
+      const script = `const fs=require("fs"); const bad=(f)=>fs.readFileSync(f,"utf8").includes("BAD"); process.exit(${JSON.stringify(pinned)}.some(bad) || !${JSON.stringify(carried)}.every(bad) ? 1 : 0)`;
+      const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+      assert.equal(result.passed, true, JSON.stringify(result.details));
+      assert.deepEqual([...result.details.ignoredCandidateChanges].filter((p: string) => p.startsWith("plugins/")).sort(), [...pinned].sort());
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test("without a workspace manifest only the project root is a package root", async () => {
+  const { root, baseline, candidate } = pair({ "plugins/a/.eslintrc.cjs": "good\n" }, (c) => fs.writeFileSync(path.join(c, "plugins/a/.eslintrc.cjs"), "BAD\n"));
+  try {
+    const result = await runBuild(baseline, candidate, buildReading("plugins/a/.eslintrc.cjs"));
+    assert.equal(result.passed, false, "no manifest names plugins/a, so its config is ordinary carried source");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
