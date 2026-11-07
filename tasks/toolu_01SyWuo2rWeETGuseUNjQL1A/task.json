@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SyWuo2rWeETGuseUNjQL1A",
+  "agent_id": "acb92340979dce9f3",
+  "subagent_type": "general-purpose",
+  "task_description": "Re-review PRs 432 and 421",
+  "token_usage": {
+    "input_tokens": 62,
+    "cache_creation_tokens": 84805,
+    "cache_read_tokens": 2113971,
+    "output_tokens": 19262,
+    "api_call_count": 31
+  },
+  "started_at": "2026-11-07T17:25:54.981974788Z",
+  "completed_at": "2026-11-07T17:41:34.748992568Z"
+}
