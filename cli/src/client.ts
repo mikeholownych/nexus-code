@@ -1182,6 +1182,12 @@ export class LocalLlmClient {
     // A catalog that cannot speak for itself (404, model unlisted) keeps a verified server identity, except a gateway:
     // the gateway-only task-class header must follow positive evidence, not a replaced server's silence (REQ-PRV-109).
     const retainedKind = previousKind === "gateway" ? undefined : previousKind;
+    this.discoveredKeys.add(this.kindKey(ep));
+    let retained = false;
+    const remember = (kind: ServerKind): void => {
+      if (retained && kind === previousKind) return; // retained without new evidence: do not extend the TTL
+      LocalLlmClient.serverKindCache.set(this.kindKey(ep), kind);
+    };
     if (this.conn.protocol !== "openai-chat") return { state: "unsupported", detail: `${this.conn.protocol} connection` };
     const url = `${ep}/models`;
     try {
@@ -1194,8 +1200,8 @@ export class LocalLlmClient {
       });
       if (res.status === 404) {
         // A catalog-less response does not contradict an identity verified earlier on this same endpoint.
-        if (retainedKind) LocalLlmClient.serverKindCache.set(this.kindKey(ep), retainedKind);
-        else LocalLlmClient.serverKindCache.delete(this.kindKey(ep));
+        // A retained identity keeps its original expiry: silence is not re-verification.
+        if (!retainedKind) LocalLlmClient.serverKindCache.delete(this.kindKey(ep));
         return { state: "unsupported", detail: "no /models catalog" };
       }
       if (!res.ok) {
@@ -1205,8 +1211,8 @@ export class LocalLlmClient {
       const entry = Array.isArray(data?.data) ? data.data.find((e) => e?.id === this.model) : undefined;
       // A catalog that cannot identify this model provides no contradictory identity evidence.
       if (!entry) {
-        if (retainedKind) LocalLlmClient.serverKindCache.set(this.kindKey(ep), retainedKind);
-        else LocalLlmClient.serverKindCache.delete(this.kindKey(ep));
+        // A retained identity keeps its original expiry: silence is not re-verification.
+        if (!retainedKind) LocalLlmClient.serverKindCache.delete(this.kindKey(ep));
         return { state: "unsupported", detail: `model ${this.model} not listed` };
       }
       let advertised = parseAdvertisement(entry);
@@ -1217,7 +1223,8 @@ export class LocalLlmClient {
           entryKind = "unknown";
         } else if (entryKind === "ollama" && (process.env.NEXUS_SERVER_PROBE === "0" || !(await this.discoverOllamaIdentity(signal))) ) {
           // A failed identity probe on an endpoint already verified as Ollama is not contradictory evidence.
-          entryKind = previousKind === "ollama" && process.env.NEXUS_SERVER_PROBE !== "0" ? "ollama" : "unknown";
+          retained = previousKind === "ollama" && process.env.NEXUS_SERVER_PROBE !== "0";
+          entryKind = retained ? "ollama" : "unknown";
         } else if (vllmCatalogMarker && entryKind === "unknown" && process.env.NEXUS_SERVER_PROBE !== "0") {
           const version = await this.discoverVllmVersion(signal);
           if (version) {
@@ -1226,6 +1233,7 @@ export class LocalLlmClient {
           } else if (previousKind === "vllm") {
             // Keep strict mode and the /tokenize fallback through a transient version-route outage.
             entryKind = "vllm";
+            retained = true;
             if (advertised) advertised = { ...advertised, via: "vllm" };
           }
         }
@@ -1237,13 +1245,13 @@ export class LocalLlmClient {
         // Only for a plain endpoint: cloud provider connections have no such endpoints.
         const local = this.conn.providerId || entryKind === "unknown" ? undefined : await this.discoverServerContext(entry, signal);
         if (local) {
-          LocalLlmClient.serverKindCache.set(this.kindKey(ep), local.serverKind ?? entryKind);
+          remember(local.serverKind ?? entryKind);
           return { state: "supported", advertised: local };
         }
-        LocalLlmClient.serverKindCache.set(this.kindKey(ep), entryKind);
+        remember(entryKind);
         return { state: "unsupported", advertised, detail: "catalog lists no limits" };
       }
-      LocalLlmClient.serverKindCache.set(this.kindKey(ep), entryKind);
+      remember(entryKind);
       return { state: "supported", advertised };
     } catch (err: any) {
       if (signal?.aborted) throw abortedError(randomUUID());
@@ -1254,9 +1262,22 @@ export class LocalLlmClient {
   private static serverContextCache = new Map<string, Advertisement>();
   private static serverKindCache = new ServerKindCache();
 
-  /** Test seam: forget every learned server identity. */
-  static clearServerKindCache(): void {
-    LocalLlmClient.serverKindCache.clear();
+  private readonly discoveredKeys = new Set<string>();
+  private lastReverifyAt = 0;
+
+  /**
+   * An identity this client verified earlier has expired: re-read the catalog once (at most every 60 s) before the
+   * request, so a long-running agent that never refreshes discovery keeps the gateway routing hint and the /tokenize
+   * fallback instead of silently losing them at the TTL.
+   */
+  private async reverifyExpiredKind(signal?: AbortSignal): Promise<void> {
+    if (this.conn.providerId || this.conn.protocol !== "openai-chat") return;
+    const key = this.kindKey();
+    if (!this.discoveredKeys.has(key) || LocalLlmClient.serverKindCache.get(key) !== undefined) return;
+    const now = Date.now();
+    if (now - this.lastReverifyAt < 60_000) return;
+    this.lastReverifyAt = now;
+    await this.discoverAdvertisement(signal).catch(() => undefined);
   }
 
   /** Identity key: provider, endpoint and an opaque per-process account marker, so no switch inherits another server's kind. */
@@ -1382,6 +1403,7 @@ export class LocalLlmClient {
     const denial = this.disclosureDenial(ep, requestId);
     if (denial) throw new TokenCountError("denied", denial.message);
     if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
+    await this.reverifyExpiredKind(signal);
     const kind = LocalLlmClient.serverKindCache.get(this.kindKey(ep));
     const root = ep.replace(/\/v1\/?$/, "");
     const urls = (kind === "llamacpp" || kind === "vllm") && root !== ep ? [`${ep}/tokenize`, `${root}/tokenize`] : [`${ep}/tokenize`];
@@ -1480,6 +1502,7 @@ export class LocalLlmClient {
     /** Receipt role override for auxiliary calls (e.g. "compaction"). */
     purpose?: string,
   ): Promise<ChatMessage> {
+    await this.reverifyExpiredKind(signal);
     const response = await this.withReceipt(requestId, purpose, () =>
       this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
     );
@@ -1636,6 +1659,7 @@ export class LocalLlmClient {
     requestId: string = randomUUID(),
     signal?: AbortSignal,
   ): Promise<ChatMessage> {
+    await this.reverifyExpiredKind(signal);
     const response = await this.withReceipt(requestId, undefined, () =>
       this.withOAuthRetry(this.endpoint, requestId, () =>
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),

@@ -224,3 +224,72 @@ test("request token counting sends X-Task-Class only to a verified gateway", asy
   }
   assert.deepEqual(seen, ["subagent", undefined]);
 });
+
+async function withClock<T>(run: (advance: (ms: number) => void) => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try { return await run((ms) => { offset += ms; }); } finally { Date.now = realNow; }
+}
+
+test("retaining a kind through a 404 catalog does not extend its TTL", async () => {
+  let mode: "ok" | "404" = "ok";
+  await withClock((advance) => withEndpoint((req, res) => {
+    if (req.url === "/v1/models") {
+      if (mode === "404") { res.statusCode = 404; return res.end(); }
+      return json(res, { data: [{ id: "model-a", owned_by: "vllm", max_model_len: 8192 }] });
+    }
+    if (req.url === "/version") return json(res, { version: "0.10.0" });
+    res.statusCode = 404; res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    await client.discoverAdvertisement();
+    mode = "404";
+    advance(6 * 60_000);
+    await client.discoverAdvertisement();
+    assert.equal(client.getDetectedServerKind(), "vllm", "retained while still within the original TTL");
+    advance(5 * 60_000);
+    assert.equal(client.getDetectedServerKind(), "unknown", "the retained identity expires with its original entry");
+  }));
+});
+
+test("a failed Ollama probe retains the kind without extending its TTL", async () => {
+  let versionOk = true;
+  await withClock((advance) => withEndpoint((req, res) => {
+    if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", owned_by: "library" }] });
+    if (req.url === "/api/version") { if (versionOk) return json(res, { version: "0.5.0" }); res.statusCode = 503; return res.end(); }
+    if (req.url === "/api/show") return json(res, { model: "model-a", model_info: { "llama.context_length": 4096 } });
+    res.statusCode = 404; res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    await client.discoverAdvertisement();
+    assert.equal(client.getDetectedServerKind(), "ollama");
+    versionOk = false;
+    advance(6 * 60_000);
+    await client.discoverAdvertisement();
+    assert.equal(client.getDetectedServerKind(), "ollama");
+    advance(5 * 60_000);
+    assert.equal(client.getDetectedServerKind(), "unknown");
+  }));
+});
+
+test("an expired identity is re-verified before the next request, so the gateway hint and /tokenize fallback survive", async () => {
+  const headers: Array<string | undefined> = [];
+  let modelReads = 0;
+  await withClock((advance) => withEndpoint((req, res) => {
+    if (req.url === "/v1/models") { modelReads++; return json(res, { data: [gatewayEntry] }); }
+    if (req.url === "/v1/chat/completions") { headers.push(req.headers["x-task-class"] as string | undefined); return ok(res); }
+    res.statusCode = 404; res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a", taskClass: "subagent" } as any);
+    await client.discoverAdvertisement();
+    await client.chatCompletion(msg, []);
+    advance(11 * 60_000);
+    await client.chatCompletion(msg, []);
+    assert.equal(client.getDetectedServerKind(), "gateway");
+    assert.equal(modelReads, 2, "one re-verification, not one per request");
+    await client.chatCompletion(msg, []);
+    assert.equal(modelReads, 2);
+  }));
+  assert.deepEqual(headers, ["subagent", "subagent", "subagent"]);
+});

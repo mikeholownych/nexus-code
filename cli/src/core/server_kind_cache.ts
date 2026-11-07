@@ -11,8 +11,9 @@ export const SERVER_KIND_MAX_ENTRIES = 256;
  * (REQ-PRV-109: the gateway-only task-class header must not follow a replaced server).
  *
  * Expired entries are swept on every write and the map is bounded, so a long session that rotates credentials does not
- * accumulate stale keys. A refreshed OAuth token changes the credential digest and therefore the key: the identity is
- * simply re-discovered at the next capability read.
+ * accumulate stale keys. A refreshed OAuth token yields a new account marker and therefore a new key: the identity is
+ * simply re-discovered at the next capability read. A client re-reads an expired identity it verified earlier before
+ * its next request (LocalLlmClient.reverifyExpiredKind), and retaining an identity never extends its expiry.
  *
  * Policy: an identity (including a gateway's) is kept through an unreadable catalog (5xx, dropped connection) until
  * its TTL ends, because an outage is not evidence the server was replaced; a 404 or unlisted model drops a gateway.
