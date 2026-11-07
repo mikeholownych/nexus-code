@@ -11,7 +11,7 @@ import type { TaskRecoveryResult } from "./state.js";
 import { unitBaseTask, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { messagesBlock } from "./operation_messages.js";
 import { redactForPersistence } from "./persistence_protection.js";
-import { ROLE_PROFILES, isReadOnlyRole, type AgentRole } from "./roles.js";
+import { ROLE_PROFILES, SPECIALIST_CONTRACTS, isReadOnlyRole, isSpecialistRole, type AgentRole } from "./roles.js";
 import { applyProviderCatalog, ResourceRegistry, type ResourceConditionRecord, type ResourceDescriptor } from "./resources.js";
 import { turnSucceeded, type InferenceFailure, type TurnResult } from "./turn.js";
 import type { UnitRunContext, WorkUnitExecutor } from "./operation_runner.js";
@@ -217,39 +217,55 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
    * cap, fail before inference; resource-limit pressure stays with the agent's admission/compaction path.
    */
   private contextBudgetFailure(agent: AutonomousAgent, unit: WorkUnit, prompt: string): UnitRunResult | undefined {
-    if (!unit.contextBudget || unit.contextBudget <= 0) return undefined;
+    // A specialist's contract ceiling (maxContextTokens) binds like an operator cap, and no operator budget lifts it.
+    const ceiling = isSpecialistRole(unit.role) ? SPECIALIST_CONTRACTS[unit.role].maxContextTokens : undefined;
+    const operatorBudget = unit.contextBudget && unit.contextBudget > 0 ? unit.contextBudget : undefined;
+    if (operatorBudget === undefined && ceiling === undefined) return undefined;
+    const roleBinds = ceiling !== undefined && (operatorBudget === undefined || ceiling <= operatorBudget);
+    const budget = roleBinds ? ceiling! : operatorBudget!;
     const estimate = agent.estimateTurnAdmission(prompt);
     unit.context = {
       estimatedPromptTokens: estimate.estimatedPromptTokens,
-      budgetTokens: unit.contextBudget,
+      budgetTokens: budget,
       contextLimit: estimate.contextLimit,
       at: new Date().toISOString(),
-      source: unit.contextBudget < estimate.contextLimit ? "operator-budget" : "agent-estimate",
+      source: budget < estimate.contextLimit ? (roleBinds ? "role-ceiling" : "operator-budget") : "agent-estimate",
     };
     // If the prompt does not fit the resource, admission/compaction owns it (it may compact and continue): the
-    // operator's cap is only the binding constraint when the prompt would otherwise be admitted.
+    // cap is only the binding constraint when the prompt would otherwise be admitted.
     if (!estimate.admissible) return undefined;
-    if (unit.contextBudget >= estimate.contextLimit) return undefined;
+    if (budget >= estimate.contextLimit) return undefined;
     const fitsBudget = isContextAdmissible(
       estimate.estimatedPromptTokens,
-      Math.min(unit.contextBudget, estimate.contextLimit),
+      Math.min(budget, estimate.contextLimit),
       estimate.completionReserve,
       estimate.toolResponseReserve,
     );
     if (fitsBudget) return undefined;
     const total = estimate.estimatedPromptTokens + estimate.completionReserve + estimate.toolResponseReserve;
+    const detail = `estimated ${estimate.estimatedPromptTokens} prompt tokens + ${estimate.completionReserve} completion + ${estimate.toolResponseReserve} tool-response reserves`;
+    if (roleBinds) {
+      return {
+        kind: "failed",
+        cause: "CONTEXT_BUDGET",
+        reason: `${detail} exceed the ${unit.role} role ceiling of ${budget}`,
+        question:
+          `${unit.title} needs about ${total} tokens (prompt ${estimate.estimatedPromptTokens}, completion ` +
+          `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over the ${budget}-token ceiling of ` +
+          `its ${unit.role} contract (resource limit ${estimate.contextLimit}). No budget lifts a role ceiling: narrow the task, or stop?`,
+        options: [{ label: "revise the unit (note required)", action: { kind: "revise" } }],
+      };
+    }
     return {
       kind: "failed",
       cause: "CONTEXT_BUDGET",
-      reason:
-        `estimated ${estimate.estimatedPromptTokens} prompt tokens + ${estimate.completionReserve} completion + ` +
-        `${estimate.toolResponseReserve} tool-response reserves exceed the unit budget of ${unit.contextBudget}`,
+      reason: `${detail} exceed the unit budget of ${budget}`,
       question:
         `${unit.title} needs about ${total} tokens (prompt ${estimate.estimatedPromptTokens}, completion ` +
-        `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over its ${unit.contextBudget}-token ` +
+        `${estimate.completionReserve}, tool response ${estimate.toolResponseReserve}), over its ${budget}-token ` +
         `operator budget (resource limit ${estimate.contextLimit}; the binding bound is ` +
-        `${unit.contextBudget < estimate.contextLimit ? "the operator cap" : "the resource limit"}, ` +
-        `source ${unit.contextBudget < estimate.contextLimit ? "operator-budget" : "agent-estimate"}). ` +
+        `${budget < estimate.contextLimit ? "the operator cap" : "the resource limit"}, ` +
+        `source ${budget < estimate.contextLimit ? "operator-budget" : "agent-estimate"}). ` +
         `Lift the budget, or stop?`,
       // Reassigning cannot clear a cap (the cap travels with the unit) and revise only grows the prompt, so the offered
       // remedy changes the thing that blocks: the budget itself.

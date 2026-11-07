@@ -171,7 +171,7 @@ export interface WorkUnit {
     contextLimit: number;
     at: string;
     /** Which bound decided the check. Absent on records written before v1.1. */
-    source?: "agent-estimate" | "operator-budget";
+    source?: "agent-estimate" | "operator-budget" | "role-ceiling";
   };
 }
 
