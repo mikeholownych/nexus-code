@@ -96,15 +96,17 @@ test("a candidate symlink that cannot be carried fails closed instead of being d
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a large node_modules does not make the pinned snapshot refuse the workspace", { timeout: 120_000 }, async () => {
-  const { root, baseline, candidate } = pair({ "src/a.json": "good\n" }, (c) => fs.writeFileSync(path.join(c, "src/a.json"), "BAD\n"));
-  try {
-    for (const side of [baseline, candidate]) {
-      const dir = path.join(side, "node_modules/big");
-      fs.mkdirSync(dir, { recursive: true });
-      for (let i = 0; i < 50_100; i += 1) fs.writeFileSync(path.join(dir, `f${i}`), "");
-    }
-    const result = await runBuild(baseline, candidate, buildReading("src/a.json"));
-    assert.equal(result.details.status, 1, `snapshot must skip node_modules: ${JSON.stringify(result.details)}`);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
+for (const directory of ["node_modules", "target"]) {
+  test(`a large ${directory}/ does not make the pinned snapshot refuse the workspace`, { timeout: 120_000 }, async () => {
+    const { root, baseline, candidate } = pair({ "src/a.json": "good\n" }, (c) => fs.writeFileSync(path.join(c, "src/a.json"), "BAD\n"));
+    try {
+      for (const side of [baseline, candidate]) {
+        const dir = path.join(side, directory, "big");
+        fs.mkdirSync(dir, { recursive: true });
+        for (let i = 0; i < 50_100; i += 1) fs.writeFileSync(path.join(dir, `f${i}`), "");
+      }
+      const result = await runBuild(baseline, candidate, buildReading("src/a.json"));
+      assert.equal(result.details.status, 1, `snapshot must skip ${directory}: ${JSON.stringify(result.details)}`);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
