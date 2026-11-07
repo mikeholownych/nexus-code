@@ -40,6 +40,8 @@ from what the agent said about its own work.
       `clippy/rustfmt/deny.toml`, `biome.json*`, `deno.json*`, `.swcrc`, `tslint.json`, `.golangci.y*ml`, `.rubocop.yml`,
       `angular.json`, `project.json`, `nx.json`, `lerna.json`, `build`/`compile`/`typecheck`/`gulpfile`/`Gruntfile`/
       `Jakefile` `.js/.ts` variants, `scripts/build|compile|typecheck.*s`, and `tools/*.js`.
+    The package root is this fixed list of workspace folders, not read from the manifests: in a monorepo with another layout
+    (for example `plugins/<name>/`), a nested tool config is carried like ordinary source.
     Everything else is carried if it is a source or data type, so ordinary source such as `src/config/database.config.ts`
     or `src/build.ts` reaches the build. A changed path that is not a source or data type (shell scripts, Gradle/Maven/
     Ruby/Just files, `.ini`, `.xml`, binaries) and any symlink or special file is not carried either, and is reported.
