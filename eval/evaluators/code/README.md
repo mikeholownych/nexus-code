@@ -9,8 +9,9 @@ from what the agent said about its own work.
   - The built-in parsers in `parsers.mjs` need nothing beyond the host's Node.js and Python:
     - **TypeScript** (`.ts`, `.mts`, `.cts`): Node's own TypeScript parser (`module.stripTypeScriptTypes`, transform
       mode). Requires Node.js 22.13 or later.
-    - **JavaScript** (`.js`, `.mjs`, `.cjs`): `node --check` on the file, so the module type is decided exactly as
-      Node would decide it.
+    - **JavaScript** (`.js`, `.mjs`, `.cjs`): `node --check` of the source as a module or as CommonJS, decided by the
+      extension and the nearest `package.json` `type`. An undeclared `.js` passes when it parses as either. (`node
+      --check <file>` alone accepts ESM syntax errors in such a file.)
     - **Python** (`.py`): `ast.parse` in an isolated interpreter.
   - Rust, TSX and JSX have no built-in parser. A caller can supply one for any language, or replace a built-in one.
   - Fails closed on: a language with no parser, an unsupported extension, an unreadable file, a path that is
@@ -25,7 +26,14 @@ from what the agent said about its own work.
   - Fails on any diagnostic line the candidate adds; existing diagnostics may remain. Duplicate lines are counted.
   - Also fails when the candidate exits non-zero and either the baseline exited 0 or the candidate printed nothing.
   - A containment failure, timeout, output overflow or signal on either side fails closed.
-  - The comparison is exact, so callers should normalize paths that differ between revisions.
+  - Diagnostics are compared by message: ANSI colour (`--pretty`), source excerpts, summary counts, and line and
+    column numbers are ignored, so an insertion above an existing error does not make it new. A second copy of the
+    same message is still new. Paths that differ between revisions must still be normalized by the caller.
+  - Recognised diagnostics are TypeScript (`error TS1234:`) and rustc (`error[E0123]:`). For another checker, set
+    `diagnosticPattern` (a regular expression, case-insensitive) on the evaluator spec or `task.typecheck`; without a
+    match a non-zero exit is an infrastructure failure, not a comparison.
+  - A configuration error from the checker (`TS5057` missing tsconfig, `TS5058`, `TS5083`, `TS5012`, `TS18003`,
+    `TS6053`) on either side fails closed: nothing was type-checked.
 - **`diff_boundary.mjs`**
   - Checks Git-style relative paths against exact allowed paths and directory prefixes ending in `/`.
   - Absolute paths, traversal, empty or `.` segments, NUL bytes and backslashes fail closed.
@@ -37,8 +45,12 @@ from what the agent said about its own work.
   - Scoring: native JSON is 1, JSON recovered by a trailing or structural repair is 0.5, and arguments that did not
     parse are 0.
   - Any invalid call fails the result. So does having no tool calls recorded, since there is nothing to score.
-  - The counts come from the parser and cover every tool call it recognizes, including structurally repaired write
-    calls that are rejected.
+  - The counts come from the parser and cover every tool call it recognizes: native `tool_calls`, `<tool_call>` tags, a
+    reply that is solely one fenced JSON call, and, under `NEXUS_TEXT_TOOL_PARSING=legacy`, fenced code blocks and
+    balanced JSON objects in prose. Structurally repaired write calls that are rejected are counted too. Native
+    arguments wrapped in a Markdown fence count as repaired, not native.
+  - The function takes the `toolCallSyntax` counts object (or an array of them), not a turn result; any other shape
+    throws.
   - Tool calls made by a delegated subagent (`spawn_subagent`) are added to the parent turn's counts.
   - Not counted: calls in a response cut off at the output-token limit. Those are dropped and requested again before
     parsing, under the output-truncation recovery.
