@@ -84,6 +84,42 @@ test("an executable bit that differs between eval/tasks and core-v1 fails the ch
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("keys in examples.jsonl and oracles.jsonl are checked against an allowlist and against the source task", async () => {
+  const { checkCoreV1 } = await load("eval/datasets/sync_core_v1.mjs");
+  const rewrite = (file: string, edit: (row: any) => any) => {
+    const rows = fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    fs.writeFileSync(file, rows.map((row) => JSON.stringify(row.id === "t2-bugfix-csv" ? edit(row) : row)).join("\n") + "\n");
+  };
+  for (const [file, edit, expected] of [
+    ["oracles.jsonl", (row: any) => ({ ...row, evaluators: ["build"] }), /oracles\.jsonl key "evaluators"/],
+    ["examples.jsonl", (row: any) => ({ ...row, class: "slow" }), /examples\.jsonl key "class"/],
+    ["examples.jsonl", (row: any) => ({ ...row, taskDir: "tasks/elsewhere" }), /examples\.jsonl taskDir/],
+  ] as Array<[string, (row: any) => any, RegExp]>) {
+    const { root, tasksDir, datasetDir } = copies();
+    try {
+      rewrite(path.join(datasetDir, file), edit);
+      const problems = checkCoreV1({ tasksDir, datasetDir });
+      assert.ok(problems.some((problem: string) => expected.test(problem)), `${file}: ${JSON.stringify(problems)}`);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+test("a task named like an Object.prototype member is not treated as present, and a symlinked task directory fails", async () => {
+  const { checkCoreV1 } = await load("eval/datasets/sync_core_v1.mjs");
+  const { root, tasksDir, datasetDir } = copies();
+  try {
+    fs.cpSync(path.join(tasksDir, "t2-bugfix-csv"), path.join(tasksDir, "constructor"), { recursive: true });
+    assert.ok(checkCoreV1({ tasksDir, datasetDir }).some((problem: string) => /constructor.*not in core-v1/.test(problem)));
+    fs.rmSync(path.join(tasksDir, "constructor"), { recursive: true });
+    fs.symlinkSync(path.join(tasksDir, "t2-bugfix-csv"), path.join(tasksDir, "t9-linked"));
+    assert.ok(checkCoreV1({ tasksDir, datasetDir, excluded: ["t9-linked"] }).some((problem: string) => /t9-linked.*symlink/.test(problem)));
+    fs.unlinkSync(path.join(tasksDir, "t9-linked"));
+    fs.rmSync(path.join(datasetDir, "tasks/t2-debug-logs"), { recursive: true, force: true });
+    fs.symlinkSync(path.join(datasetDir, "tasks/t2-bugfix-csv"), path.join(datasetDir, "tasks/t2-debug-logs"));
+    assert.ok(checkCoreV1({ tasksDir, datasetDir }).some((problem: string) => /t2-debug-logs.*symlink/.test(problem)));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("one evaluator runtime file list feeds both the packaging stage and the harness identity", async () => {
   const shared = await load("eval/runtime_files.mjs");
   const staged = await load("scripts/stage_eval_runtime.mjs");

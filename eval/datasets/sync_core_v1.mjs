@@ -18,6 +18,9 @@ const DEFAULTS = { tasksDir: path.join(HERE, "../tasks"), datasetDir: path.join(
 const KEPT_KEYS = ["id", "tier", "fixture", "steps", "minutes"];
 const MOVED_KEYS = ["objective", "hidden", "regression"]; // examples.jsonl and oracles.jsonl, compared by the check
 const DROPPED_KEYS = ["description"]; // prose for readers of eval/tasks; the dataset does not run on it
+// The keys a record in the hand-written files may carry; any other key is a field core-v1 would run on that eval/tasks lacks.
+const EXAMPLE_KEYS = ["id", "split", "domain", "objective", "taskDir", "tier", "steps", "minutes"];
+const ORACLE_KEYS = ["id", "hidden", "regression"];
 // Source tasks deliberately not in core-v1 (none today). Listing one here is the only way to leave it out.
 const EXCLUDED_FROM_CORE_V1 = [];
 
@@ -48,14 +51,17 @@ export function checkCoreV1({ tasksDir = DEFAULTS.tasksDir, datasetDir = DEFAULT
   const examples = new Map(readJsonl(path.join(datasetDir, "examples.jsonl")).map((row) => [row.id, row]));
   const oracles = new Map(readJsonl(path.join(datasetDir, "oracles.jsonl")).map((row) => [row.id, row]));
   for (const entry of fs.readdirSync(tasksDir, { withFileTypes: true })) {
-    if (entry.isDirectory() && !(entry.name in manifest.tasks) && !excluded.includes(entry.name)) problems.push(`${entry.name}: eval/tasks/${entry.name} is not in core-v1 (add it, or list it in EXCLUDED_FROM_CORE_V1)`);
+    if (entry.isSymbolicLink()) { problems.push(`${entry.name}: eval/tasks/${entry.name} is a symlink; task directories must be real directories`); continue; }
+    if (entry.isDirectory() && !Object.hasOwn(manifest.tasks, entry.name) && !excluded.includes(entry.name)) problems.push(`${entry.name}: eval/tasks/${entry.name} is not in core-v1 (add it, or list it in EXCLUDED_FROM_CORE_V1)`);
   }
   for (const [file, rows] of [["examples.jsonl", examples], ["oracles.jsonl", oracles]]) {
-    for (const id of rows.keys()) if (!(id in manifest.tasks)) problems.push(`${id}: ${file} has it but the manifest does not (not in the manifest)`);
+    for (const id of rows.keys()) if (!Object.hasOwn(manifest.tasks, id)) problems.push(`${id}: ${file} has it but the manifest does not (not in the manifest)`);
   }
   for (const id of Object.keys(manifest.tasks)) {
     const source = path.join(tasksDir, id);
     const copy = path.join(datasetDir, "tasks", id);
+    if (fs.lstatSync(source, { throwIfNoEntry: false })?.isSymbolicLink()) { problems.push(`${id}: eval/tasks/${id} is a symlink; task directories must be real directories`); continue; }
+    if (fs.lstatSync(copy, { throwIfNoEntry: false })?.isSymbolicLink()) { problems.push(`${id}: core-v1/tasks/${id} is a symlink; task directories must be real directories`); continue; }
     if (!fs.existsSync(source)) { problems.push(`${id}: eval/tasks/${id} is missing`); continue; }
     if (!fs.existsSync(copy)) { problems.push(`${id}: core-v1/tasks/${id} is missing`); continue; }
     const sourceFiles = listFiles(source);
@@ -75,13 +81,20 @@ export function checkCoreV1({ tasksDir = DEFAULTS.tasksDir, datasetDir = DEFAULT
     if (JSON.stringify(projectTaskJson(sourceTask)) !== JSON.stringify(copyTask)) problems.push(`${id}: task.json is not the projection of eval/tasks/${id}/task.json`);
     const example = examples.get(id);
     if (!example) problems.push(`${id}: missing from examples.jsonl`);
-    else for (const key of ["objective", "tier", "steps", "minutes"]) {
-      if (sourceTask[key] !== example[key]) problems.push(`${id}: examples.jsonl ${key} differs from eval/tasks`);
+    else {
+      for (const key of Object.keys(example)) if (!EXAMPLE_KEYS.includes(key)) problems.push(`${id}: examples.jsonl key "${key}" is not an allowed example field`);
+      for (const key of ["objective", "tier", "steps", "minutes"]) {
+        if (sourceTask[key] !== example[key]) problems.push(`${id}: examples.jsonl ${key} differs from eval/tasks`);
+      }
+      if (example.taskDir !== `tasks/${id}`) problems.push(`${id}: examples.jsonl taskDir is ${JSON.stringify(example.taskDir)}, expected "tasks/${id}"`);
     }
     const oracle = oracles.get(id);
     if (!oracle) problems.push(`${id}: missing from oracles.jsonl`);
-    else for (const key of ["hidden", "regression"]) {
-      if (JSON.stringify(sourceTask[key] ?? null) !== JSON.stringify(oracle[key] ?? null)) problems.push(`${id}: oracles.jsonl ${key} differs from eval/tasks`);
+    else {
+      for (const key of Object.keys(oracle)) if (!ORACLE_KEYS.includes(key)) problems.push(`${id}: oracles.jsonl key "${key}" is not an allowed oracle field`);
+      for (const key of ["hidden", "regression"]) {
+        if (JSON.stringify(sourceTask[key] ?? null) !== JSON.stringify(oracle[key] ?? null)) problems.push(`${id}: oracles.jsonl ${key} differs from eval/tasks`);
+      }
     }
     if (datasetTaskTreeDigest(copy) !== manifest.tasks[id]) problems.push(`${id}: manifest tree digest does not match core-v1/tasks/${id}`);
   }
