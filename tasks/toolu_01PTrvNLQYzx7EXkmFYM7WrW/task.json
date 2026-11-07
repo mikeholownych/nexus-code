@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01PTrvNLQYzx7EXkmFYM7WrW",
+  "agent_id": "a746e341a08337606",
+  "subagent_type": "general-purpose",
+  "task_description": "Delta review PRs 421 423 425",
+  "started_at": "2026-11-07T15:59:28.778365154Z"
+}
