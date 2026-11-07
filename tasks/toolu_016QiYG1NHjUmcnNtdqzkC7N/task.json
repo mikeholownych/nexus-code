@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_016QiYG1NHjUmcnNtdqzkC7N",
+  "agent_id": "ac29f064aa8c6e01c",
+  "subagent_type": "general-purpose",
+  "task_description": "Delta review PR 423 credential interning",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 30891,
+    "cache_read_tokens": 136355,
+    "output_tokens": 1967,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-07T15:37:31.102216024Z",
+  "completed_at": "2026-11-07T15:39:16.451754756Z"
+}
