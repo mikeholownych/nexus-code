@@ -342,3 +342,42 @@ test("a credential that changed after discovery is re-verified before the next r
     assert.equal(client.getDetectedServerKind(), "gateway");
   });
 });
+
+test("token counting is retryable (unavailable), not unsupported, while an expired identity is unresolved", async () => {
+  let slow = false;
+  const { TokenCountError } = await import("../src/client.js");
+  await withClock((advance) => withEndpoint((req, res) => {
+    if (req.url === "/v1/models") { if (slow) return void setTimeout(() => json(res, { data: [{ id: "model-a", owned_by: "llamacpp" }] }), 3000); return json(res, { data: [{ id: "model-a", owned_by: "llamacpp" }] }); }
+    if (req.url === "/props") return json(res, { default_generation_settings: { n_ctx: 8192 } });
+    if (req.url === "/tokenize") return json(res, { tokens: [1, 2, 3] });
+    res.statusCode = 404; res.end(); // /v1/tokenize does not exist on llama.cpp: only the root route answers
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    await client.discoverAdvertisement();
+    assert.equal(client.getDetectedServerKind(), "llamacpp");
+    advance(11 * 60_000);
+    slow = true;
+    const err = await client.countRequestTokens(msg, [], "req-count").then(() => undefined, (e) => e);
+    assert.ok(err instanceof TokenCountError, String(err));
+    assert.equal(err.kind, "unavailable", "an unsupported answer would be latched permanently by the agent");
+  }));
+});
+
+test("a rotated credential on a 401 retry is re-verified before the retried request", async () => {
+  let modelReads = 0;
+  let chats = 0;
+  const taskClass: Array<string | undefined> = [];
+  await withEndpoint((req, res) => {
+    if (req.url === "/v1/models") { modelReads++; return json(res, { data: [gatewayEntry] }); }
+    if (req.url === "/v1/chat/completions") { taskClass.push(req.headers["x-task-class"] as string | undefined); if (++chats === 1) { res.statusCode = 401; return res.end("expired"); } return ok(res); }
+    res.statusCode = 404; res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a", taskClass: "subagent" } as any);
+    client.setApiKey("old-token");
+    await client.discoverAdvertisement();
+    (client as any).reloadAuthToken = () => { client.setApiKey("rotated-token"); return true; };
+    await client.chatCompletion(msg, []);
+    assert.equal(modelReads, 2, "the replacement credential's identity was read before the retry");
+  });
+  assert.deepEqual(taskClass, ["subagent", "subagent"]);
+});
