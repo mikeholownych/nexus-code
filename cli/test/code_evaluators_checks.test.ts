@@ -98,3 +98,19 @@ test("typecheck_clean accepts a task-supplied diagnostic pattern for checkers wi
   await assert.rejects(verdict(byRevision(base, cand), { diagnosticPattern: "(" }), /diagnosticPattern/);
 });
 
+
+test("typecheck_clean does not drop a task-recognised diagnostic that starts with a number", async () => {
+  const pattern = "^\\d+ problems?:";
+  const base = { status: 1, stdout: "1 problem: old thing\n" };
+  const cand = { status: 1, stdout: "1 problem: old thing\n2 problems: brand new thing\n" };
+  const result = await verdict(byRevision(base, cand), { diagnosticPattern: pattern });
+  assert.equal(result.details.infrastructureFailure, false);
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.details.newDiagnostics, ["2 problems: brand new thing"]);
+});
+
+test("typecheck_clean still drops code-frame gutters that follow a coded diagnostic, including rustc's", async () => {
+  const frame = (line: number) => `error[E0308]: mismatched types\n --> src/main.rs:${line}:5\n  |\n${line} |     let x: u8 = "a";\n  |                 ^^^ expected \`u8\`\n`;
+  const result = await verdict(byRevision({ status: 101, stderr: frame(2) }, { status: 101, stderr: frame(9) }));
+  assert.equal(result.passed, true, JSON.stringify(result.details));
+});
