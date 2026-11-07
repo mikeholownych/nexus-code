@@ -62,7 +62,7 @@ export function toolGrammarEnabled(setting: string | undefined, fallback: boolea
 
 /** Whether a 400 body says the server could not take the grammar (as opposed to, say, a context overflow). */
 export function isGrammarRejection(message: string): boolean {
-  return /grammar|trigger|gbnf|parse error|failed to parse/i.test(message);
+  return /grammar|gbnf/i.test(message);
 }
 
 /**

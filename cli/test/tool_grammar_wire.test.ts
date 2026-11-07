@@ -33,10 +33,15 @@ function llamaHandler(onChat: (body: any, res: http.ServerResponse) => void): Ha
     res.statusCode = 404; res.end();
   };
 }
+/** A text-mode connection the production way: the operator turns native tools off (NEXUS_NATIVE_TOOLS=off). */
 async function textModeClient(endpoint: string): Promise<LocalLlmClient> {
-  const client = new LocalLlmClient({ model: "m", endpoint, apiKey: "test" } as any);
+  const previous = process.env.NEXUS_NATIVE_TOOLS;
+  process.env.NEXUS_NATIVE_TOOLS = "off";
+  let client: LocalLlmClient;
+  try { client = new LocalLlmClient({ model: "m", endpoint, apiKey: "test" } as any); } finally {
+    if (previous === undefined) delete process.env.NEXUS_NATIVE_TOOLS; else process.env.NEXUS_NATIVE_TOOLS = previous;
+  }
   await client.discoverAdvertisement();
-  (client as any).unsupportedParams.add("tools"); // a text-mode connection: the server does not take native tools
   return client;
 }
 async function withEnv<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
@@ -64,13 +69,6 @@ test("the text-mode tool-call grammar is closed and admits every offered tool", 
   assert.match(grammar, /\\"custom_tool\\"/);
   assert.match(grammar, /^any-object ::=/m, "a non-allow-listed tool gets generic object arguments rather than being forbidden");
   assert.equal(generateToolCallBlockGbnf([]), undefined);
-});
-
-test("grammar-conforming output cannot contain explicit nulls and keeps required arguments (normaliser compatibility)", () => {
-  const grammar = generateToolCallBlockGbnf([readFile])!;
-  assert.doesNotMatch(grammar.split("\n").filter((l) => /^t0-member-/.test(l)).join("\n"), /null/);
-  const path = readFile.function.parameters.required!;
-  assert.deepEqual(path, ["path"]);
 });
 
 test("NEXUS_TOOL_GRAMMAR parses on/off and otherwise follows the single default, which ships OFF", () => {
@@ -230,21 +228,12 @@ test("an unrelated 400 (context overflow) does not disable the grammar", async (
 test("the kind lookup uses the credential-scoped key, not the raw endpoint", async () => {
   let sent: any;
   await withEnv("on", () => withEndpoint(llamaHandler((b, res) => { sent = b; done(res); }), async (endpoint) => {
-    const client = new LocalLlmClient({ model: "m", endpoint, apiKey: "scoped-credential" } as any);
+    const client = await textModeClient(endpoint);
     client.setApiKey("scoped-credential");
     await client.discoverAdvertisement();
-    (client as any).unsupportedParams.add("tools");
     await client.chatCompletion(msg, [readFile]);
   }));
   assert.ok(sent.grammar, "a lookup by the raw endpoint would miss the identity cached under the credential-scoped key");
-});
-
-test("reasoning then a call parses with the unchanged text-mode parser", async () => {
-  const { parseModelResponse } = await import("../src/parser.js");
-  const text = '<think>I should read the file first.</think>\n<tool_call>{"name":"read_file","arguments":{"path":"a.txt"}}</tool_call>';
-  const parsed = parseModelResponse({ role: "assistant", content: text }, { nativeTools: false });
-  assert.equal(parsed.toolCalls.length, 1);
-  assert.deepEqual(JSON.parse(parsed.toolCalls[0].function.arguments), { path: "a.txt" });
 });
 
 test("the grammar is correct even when a server applies it eagerly: free text, <think> and tool calls all parse (structural proof)", async () => {
@@ -268,6 +257,7 @@ test("the grammar is correct even when a server applies it eagerly: free text, <
   const rejected = [
     '<tool_call>{"name":"read_file","arguments":{}}</tool_call>', // required argument missing
     '<tool_call>{"name":"read_file","arguments":{"path":null}}</tool_call>',
+    '<tool_call>{"name":"read_file","arguments":{"path":"a","start_line":null}}</tool_call>', // optional arguments cannot be explicit null
     '<tool_call>{"name":"nope","arguments":{}}</tool_call>',
     "<tool_call>not json</tool_call>",
   ];
@@ -280,4 +270,33 @@ test("every rule name is valid GBNF (lowercase letters, digits and dashes)", () 
   assert.ok(names.length > 10);
   for (const name of names) assert.match(name, /^[a-z][a-z0-9-]*$/, name);
   for (const name of [...generateToolArgumentsGbnf("read_file").matchAll(/^(\S+) ::=/gm)].map((m) => m[1])) assert.match(name, /^[a-z][a-z0-9-]*$/, name);
+});
+
+test("NEXUS_NATIVE_TOOLS=off is the production switch into text mode: no native tools are sent", async () => {
+  let sent: any;
+  await withEndpoint(llamaHandler((b, res) => { sent = b; done(res); }), async (endpoint) => {
+    await (await textModeClient(endpoint)).chatCompletion(msg, [readFile]);
+  });
+  assert.equal("tools" in sent, false);
+  assert.equal("tool_choice" in sent, false);
+  await withEndpoint(llamaHandler((b, res) => { sent = b; done(res); }), async (endpoint) => {
+    const client = new LocalLlmClient({ model: "m", endpoint, apiKey: "test" } as any);
+    assert.equal(client.supportsNativeTools(), true, "native tools stay the default");
+    await client.chatCompletion(msg, [readFile]);
+  });
+  assert.ok(sent.tools);
+});
+
+test("a grammar rejection is attributed per request: concurrent requests do not blame each other's endpoint", async () => {
+  const bodies: any[] = [];
+  await withEnv("on", () => withEndpoint(llamaHandler((b, res) => {
+    bodies.push(b);
+    if ("grammar" in b) { res.statusCode = 400; return res.end(JSON.stringify({ error: { message: "failed to parse grammar" } })); }
+    done(res);
+  }), async (endpoint) => {
+    const client = await textModeClient(endpoint);
+    await Promise.all([client.chatCompletion(msg, [readFile]), client.chatCompletion(msg, [readFile])]);
+    await client.chatCompletion(msg, [readFile]);
+  }));
+  assert.equal(bodies.filter((b) => !("grammar" in b)).length, 3, "both concurrent requests were resent without the grammar, and later ones stay unconstrained");
 });
