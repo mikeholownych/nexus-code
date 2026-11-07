@@ -151,3 +151,96 @@ test("the .nexus check is case-insensitive for /team @file: inputs", () => {
   const orch = new TeamOrchestrator({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash" } as any);
   assert.throws(() => orch.plan("failure_debugger", "failure_log=@file:.Nexus/state.json reproduction_command=x go"), /protected/i);
 });
+
+// ---------------------------------------------------------------- review of #434: the diff is built from paths, never parsed
+
+function trickyRepo(): string {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-auto-tricky-"));
+  const run = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
+  const put = (rel: string, text: string) => { fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true }); fs.writeFileSync(path.join(repo, rel), text); };
+  run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t");
+  put("keep.txt", "keep1\n"); put(".env.local", "LOCAL_SECRET=1\n"); put(".env.old", "OLD_SECRET_BODY\n"); put("plain.txt", "plain body line\nsecond\n");
+  put("secrets/é/.env", "UNICODE_SECRET=1\n"); put("sp ace/.env", "SPACE_SECRET=1\n"); put("sp ace/ok.txt", "ok1\n");
+  run("add", "-A"); run("commit", "-q", "-m", "base");
+  // Repo-set options that change how git renders a diff.
+  run("config", "diff.noprefix", "true"); run("config", "diff.mnemonicPrefix", "true"); run("config", "core.quotepath", "true");
+  put("keep.txt", "keep2 VISIBLE_CHANGE\n"); put(".env.local", "LOCAL_SECRET=2\n"); put("secrets/é/.env", "UNICODE_SECRET=2\n"); put("sp ace/.env", "SPACE_SECRET=2\n"); put("sp ace/ok.txt", "ok2 SPACE_OK\n");
+  put("nl\nname.txt", "NEWLINE_NAME_OK\n"); put("untracked secrets/é/.env.new", "UNTRACKED_UNICODE_SECRET\n");
+  run("mv", "plain.txt", ".env.prod"); // rename INTO a protected path
+  run("mv", ".env.old", "public.txt"); // rename OUT of a protected path: the new name is innocent, the body is not
+  return repo;
+}
+
+test("the security_reviewer diff is built from paths: no protected content leaks whatever git config renders", async () => {
+  const repo = trickyRepo();
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  const prompt = fake.prompts[0];
+  assert.match(prompt, /VISIBLE_CHANGE/);
+  assert.match(prompt, /SPACE_OK/);
+  assert.match(prompt, /NEWLINE_NAME_OK/);
+  for (const secret of ["LOCAL_SECRET", "UNICODE_SECRET", "SPACE_SECRET", "OLD_SECRET_BODY", "plain body line", "UNTRACKED_UNICODE_SECRET"]) {
+    assert.ok(!prompt.includes(secret), `${secret} must not reach the prompt`);
+  }
+  assert.match(prompt, /protected file section\(s\) omitted/);
+});
+
+test("a git failure while collecting the diff fails closed rather than keeping anything", async () => {
+  const repo = trickyRepo();
+  fs.writeFileSync(path.join(repo, ".git", "index"), "garbage");
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
+  assert.equal(outcome.kind, "failed");
+  assert.match((outcome as { reason: string }).reason, /missing required input.*unified_diff/);
+  assert.equal(fake.prompts.length, 0);
+});
+
+test("an auto-collected diff over the role ceiling can be cleared with set_inputs", async () => {
+  const { ConvergenceScheduler } = await import("../src/core/scheduler.js");
+  const { ResourceRegistry } = await import("../src/core/resources.js");
+  const { newOperation } = await import("../src/core/operation.js");
+  const repo = repoWithChange();
+  fs.writeFileSync(path.join(repo, "a.txt"), `${"line of changed text\n".repeat(8_000)}`); // ~40k tokens of diff
+  const sized = () => { const f = fakeAgent("security_reviewer"); f.agent.estimateTurnAdmission = (p: string) => ({ estimatedPromptTokens: Math.ceil(p.length / 4), contextLimit: 100_000, completionReserve: 8_192, toolResponseReserve: 4_096, admissible: true }); return f; };
+  const state = newOperation("op", "Harden the parser", [{ id: "u1", role: "security_reviewer", prompt: "do the review" }], [resource], Date.now());
+  const sched = new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now());
+  const u = state.units[0];
+  u.status = "RUNNING";
+  const first = await exec(sized().agent, repo).run(u, resource, ctx(repo));
+  assert.equal(first.kind, "failed");
+  assert.equal((first as { cause: string }).cause, "CONTEXT_BUDGET");
+  sched.apply("u1", first);
+  const option = u.blocked!.decision.options.find((o) => o.action.kind === "set_inputs");
+  assert.ok(option, "an auto-collecting unit must be offered set_inputs");
+  sched.resolve(u.blocked!.decision.id, option!.id, JSON.stringify({ unified_diff: "diff --git a/a.txt b/a.txt\n+one small hunk" }));
+  const second = await exec(sized().agent, repo).run(u, resource, ctx(repo));
+  assert.equal(second.kind, "completed");
+});
+
+test("replace_task on a security_reviewer records the scope change in the decision", async () => {
+  const { ConvergenceScheduler } = await import("../src/core/scheduler.js");
+  const { ResourceRegistry } = await import("../src/core/resources.js");
+  const { newOperation } = await import("../src/core/operation.js");
+  const state = newOperation("op", "o", [{ id: "u1", role: "security_reviewer", prompt: "review src/auth only" }], [resource], Date.now());
+  const sched = new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now());
+  const u = state.units[0];
+  u.status = "RUNNING";
+  sched.apply("u1", { kind: "failed", cause: "CONTEXT_BUDGET", reason: "r", question: "q", options: [{ label: "replace", action: { kind: "replace_task" } }] });
+  sched.resolve(u.blocked!.decision.id, u.blocked!.decision.options.find((o) => o.action.kind === "replace_task")!.id, "review everything");
+  const change = (u.decisions![0] as any).scopeChange;
+  assert.deepEqual(change, { from: "review src/auth only", to: "review everything" });
+});
+
+test("the reproduction command is trusted only when the operator configured it; a previous unit's command is labelled untrusted", async () => {
+  const repo = repoWithChange();
+  const deps = [{ id: "t", title: "Tests", summary: "1 failed", verification: { command: "npm test", status: "FAILED", hasExecutedTests: true } }];
+  const configured = fakeAgent("failure_debugger");
+  await new AgentWorkUnitExecutor({ baseConfig: { endpoint: "https://api.test/v1", model: "m", workspace: repo, authoritativeVerifierCommand: "make verify" } as any, createAgent: () => configured.agent }).run(unit("failure_debugger", {}), resource, ctx(repo, { dependencies: deps }));
+  assert.match(configured.prompts[0], /reproduction_command: "make verify"/);
+  assert.match(configured.prompts[0], /reproduction_command_source: "operator-configured verifier"/);
+  const recorded = fakeAgent("failure_debugger");
+  await exec(recorded.agent, repo).run(unit("failure_debugger", {}), resource, ctx(repo, { dependencies: deps }));
+  assert.match(recorded.prompts[0], /reproduction_command: "npm test"/);
+  assert.match(recorded.prompts[0], /reproduction_command_source: "untrusted: recorded by an earlier unit's run, not declared by the operator/);
+});
