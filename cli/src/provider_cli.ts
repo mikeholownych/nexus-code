@@ -12,7 +12,7 @@ import type { ChatMessage, HarnessConfig, ToolDefinition } from "./types.js";
 import { UsageLedger } from "./usage.js";
 import { resolveCredential } from "./credentials.js";
 import { connectLocalEndpoint, connectWithKey, disconnect, startSignIn } from "./provider_connect.js";
-import { formatDiagnosticForOutput } from "./core/persistence_protection.js";
+import { formatDiagnosticForOutput } from "./ui.js";
 
 /** One line naming each role's selected destination and its disclosure class. */
 export function describeTarget(config: HarnessConfig): string {
@@ -85,9 +85,10 @@ function safeModelId(value: string): string {
   return credentialShaped(value) ? "(unprintable model id)" : value;
 }
 
-function safeClientDiagnostic(message: string, config: HarnessConfig): string {
-  // Substitute the configured endpoint and model first, then sanitize once: the final pass covers the substituted text too.
-  let safe = message;
+export function safeClientDiagnostic(message: string, config: HarnessConfig): string {
+  // Redact secrets in the unmodified text first (substituting first can split a secret that contains the replaced text),
+  // then replace the configured endpoint/model, then sanitize again for the substituted text.
+  let safe = formatDiagnosticForOutput(message);
   const substitute = (raw: string | undefined, replacement: string | undefined) => {
     if (raw && replacement && raw !== replacement) safe = safe.replaceAll(raw, () => replacement);
   };
@@ -102,7 +103,7 @@ function safeClientDiagnostic(message: string, config: HarnessConfig): string {
       substitute(`${endpoint.origin}${endpoint.pathname}`, safeOrigin);
       substitute(endpoint.origin, safeOrigin);
       substitute(endpoint.hostname, new URL(safeOrigin).hostname);
-      substitute(endpoint.pathname, "(path redacted)");
+      if (endpoint.pathname.length > 1) substitute(endpoint.pathname, "(path redacted)");
       substitute(endpoint.search, "");
       substitute(endpoint.hash, "");
     } catch {

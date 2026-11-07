@@ -1,11 +1,8 @@
 import { test } from "node:test";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
-import { formatIgnoredInputExcerpt } from "../src/repl.js";
-import { formatDiagnosticForOutput } from "../src/core/persistence_protection.js";
+import { formatIgnoredInputExcerpt, formatReplStepError } from "../src/repl.js";
+import { formatDiagnosticForOutput } from "../src/ui.js";
 
 test("redacts and terminal-escapes REPL turn error output", () => {
   const original = InformationFlowBoundary.getGlobalInstance();
@@ -21,14 +18,18 @@ test("redacts and terminal-escapes REPL turn error output", () => {
   }
 });
 
-test("operator-facing diagnostics share one formatter and the REPL step error path uses it", () => {
-  const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src");
-  const sources = fs.readdirSync(srcDir).filter((f) => f.endsWith(".ts")).map((f) => [f, fs.readFileSync(path.join(srcDir, f), "utf8")] as const);
-  const duplicates = sources.filter(([, text]) => /safeTerminal\(\s*redactDiagnosticForOutput\(/.test(text)).map(([f]) => f);
-  assert.deepEqual(duplicates, [], "every wrapper around safeTerminal(redactDiagnosticForOutput(..)) must be formatDiagnosticForOutput");
-  const repl = sources.find(([f]) => f === "repl.ts")![1];
-  const stepError = repl.split("\n").find((line) => line.includes("Step error"))!;
-  assert.match(stepError, /formatDiagnosticForOutput\(err\)/, "the REPL step error path must redact the error text");
+test("the REPL step error message redacts credentials and terminal controls", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  const secret = "synthetic_step_error_secret_91bc";
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary({ explicitSecrets: [secret] }));
+  try {
+    const output = formatReplStepError(new Error(`checkpoint failed ${secret}\u001b[31m`));
+    assert.match(output, /Step error:/);
+    assert.equal(output.includes(secret), false);
+    assert.equal(output.includes("\u001b"), false);
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
 });
 
 test("suppresses REPL turn errors when credential classification fails", () => {

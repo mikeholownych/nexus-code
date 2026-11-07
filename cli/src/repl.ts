@@ -14,9 +14,9 @@ import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { isNexusDirPermissive } from "./doctor.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
+import { formatDiagnosticForOutput } from "./ui.js";
 import {
   appendProtectedHistoryLine,
-  formatDiagnosticForOutput,
   redactForPersistence,
   writeProtectedTextFile,
 } from "./core/persistence_protection.js";
@@ -66,6 +66,11 @@ function parsePatchHunks(patch: string): { fileHeader: string; hunks: PatchHunk[
 }
 
 export const REPL_APPROVAL_GRACE_MS = 400;
+
+/** The /step failure line: the error text is redacted and made terminal-safe like every other REPL diagnostic. */
+export function formatReplStepError(error: unknown): string {
+  return `\nStep error: ${formatDiagnosticForOutput(error)}\n`;
+}
 
 
 /** Return a bounded, credential-safe excerpt when reporting input that arrived outside a prompt. */
@@ -874,7 +879,7 @@ export class InteractiveRepl {
                 await this.runInteractiveTurn("", undefined, { step: true, resume: true });
               }
             } catch (err: any) {
-              console.error(pc.red(`\nStep error: ${formatDiagnosticForOutput(err)}\n`));
+              console.error(pc.red(formatReplStepError(err)));
             }
             continue;
           } else if (cmd === "doctor") {

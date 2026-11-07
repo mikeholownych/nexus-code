@@ -22,7 +22,7 @@ import {
 } from "./compatibility.js";
 import { verifyInstalledRuntime } from "./upgrade_health.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "./core/state.js";
-import { formatDiagnosticForOutput } from "./core/persistence_protection.js";
+import { formatDiagnosticForOutput } from "./ui.js";
 import {
   UpgradeJournalEntry,
   readJournal,

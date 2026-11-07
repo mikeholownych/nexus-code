@@ -27,7 +27,8 @@ import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
 import { isolateEvalCommandHome, runVersionedEvalCommand } from "./eval_cli.js";
-import { formatDiagnosticForOutput, redactDiagnosticForOutput } from "./core/persistence_protection.js";
+import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
+import { formatDiagnosticForOutput } from "./ui.js";
 
 
 function collectDeliverableFile(value: string, previous: string[] = []): string[] {

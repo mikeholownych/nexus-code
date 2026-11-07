@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
-import { formatDiagnosticForOutput } from "../src/core/persistence_protection.js";
+import { formatDiagnosticForOutput } from "../src/ui.js";
 
 test("redacts a synthetic credential from URL-bearing upgrade errors and preserves ordinary diagnostics", () => {
   const original = InformationFlowBoundary.getGlobalInstance();

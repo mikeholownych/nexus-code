@@ -5,6 +5,7 @@ import { highlightDiff, highlightCode } from "./syntax.js";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { visibleControls } from "./file_diff.js";
 import { isNexusDirPermissive } from "./core/durable_file.js";
+import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 
 export function redactSecrets(text: string): string {
   if (!text) return text;
@@ -27,6 +28,12 @@ export function redactSecrets(text: string): string {
 /** Text safe to write to a terminal: secrets redacted, then every terminal control/bidi character made visible. */
 export function safeTerminal(text: string): string {
   return visibleControls(redactSecrets(text));
+}
+
+/** The one operator-facing diagnostic formatter: an Error or any value, redacted (fail-closed) and made terminal-safe. */
+export function formatDiagnosticForOutput(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return safeTerminal(redactDiagnosticForOutput(message));
 }
 
 export class TerminalUI {
