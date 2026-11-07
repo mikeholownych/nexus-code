@@ -36,6 +36,7 @@
  * spawn_subagent is in-turn delegation: its result is a tool result of the parent's (durable) turn.
  */
 import type { AgentRole } from "./roles.js";
+import { specialistInputsProblem } from "./specialist_profiles.js";
 import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, WorkRequirements } from "./resources.js";
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
@@ -164,6 +165,8 @@ export interface WorkUnit {
    * whose start prompt cannot fit this budget is blocked before any inference.
    */
   contextBudget?: number;
+  /** Named inputs the unit's role contract requires (specialists); enforced before the unit starts. */
+  inputs?: Record<string, string>;
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
   context?: {
     estimatedPromptTokens: number;
@@ -403,6 +406,8 @@ export interface WorkUnitSpec {
   taskClass?: string;
   /** Operator cap on this unit's prompt context, in tokens. */
   contextBudget?: number;
+  /** Named inputs for a specialist role's contract (see SPECIALIST_CONTRACTS[role].inputRequirements). */
+  inputs?: Record<string, string>;
 }
 
 export function newOperation(
@@ -422,6 +427,10 @@ export function newOperation(
   for (const u of units) {
     if (u.contextBudget !== undefined && (!Number.isInteger(u.contextBudget) || u.contextBudget <= 0)) {
       throw new Error(`Work unit '${u.id}': contextBudget must be a positive integer number of tokens`);
+    }
+    if (u.inputs !== undefined) {
+      const problem = specialistInputsProblem(u.inputs);
+      if (problem) throw new Error(`Work unit '${u.id}': ${problem}`);
     }
     for (const d of u.dependsOn ?? []) {
       if (!ids.has(d)) throw new Error(`Work unit '${u.id}' depends on unknown unit '${d}'`);
@@ -453,6 +462,7 @@ export function newOperation(
       ...(u.required === false ? { required: false } : {}),
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
       ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
+      ...(u.inputs !== undefined ? { inputs: { ...u.inputs } } : {}),
       status: "WAITING_ON_DEPENDENCY",
       reroutes: [],
       runs: 0,

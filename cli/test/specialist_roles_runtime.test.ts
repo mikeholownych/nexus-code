@@ -103,7 +103,7 @@ test("/team plans and runs a specialist role as a single-role target, through th
   try {
     const config = { endpoint: gw.url, model: "m", maxSteps: 3, temperature: 0, workspace, shell: "bash" } as any;
     const host = { app: { getConfig: () => config } } as any;
-    const out = (await EXTENSION_HANDLERS.team({ host, args: "call_site_analyzer trace callers of foo", signal: new AbortController().signal } as any)) as { success: boolean; output: string };
+    const out = (await EXTENSION_HANDLERS.team({ host, args: "call_site_analyzer symbol_name=foo defining_path=src/a.ts trace callers of foo", signal: new AbortController().signal } as any)) as { success: boolean; output: string };
     assert.doesNotMatch(out.output, /Unknown role/);
     assert.equal(out.success, true, out.output);
     assert.match(out.output, /\[CALL_SITE_ANALYZER\] COMPLETE/);

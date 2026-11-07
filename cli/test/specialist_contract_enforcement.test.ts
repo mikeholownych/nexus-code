@@ -145,7 +145,7 @@ test("the scheduler keeps a rejected specialist result on the unit, bounded", ()
 
 test("operation specs and team targets carry inputs", () => {
   assert.doesNotThrow(() => validateOperationSpec({ objective: "o", units: [{ id: "a", prompt: "p", role: "call_site_analyzer", inputs: CALL_INPUTS }] }));
-  assert.throws(() => validateOperationSpec({ objective: "o", units: [{ id: "a", prompt: "p", inputs: { x: 1 } }] }), /inputs/);
+  assert.throws(() => validateOperationSpec({ objective: "o", units: [{ id: "a", prompt: "p", inputs: { x: 1 } }] }), /input 'x' must be a string/);
   const [u] = teamUnits("call_site_analyzer", "symbol_name=foo defining_path=src/a.ts trace callers");
   assert.deepEqual((u as any).inputs, CALL_INPUTS);
   assert.equal(u.prompt, "trace callers");

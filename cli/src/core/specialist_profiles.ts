@@ -176,6 +176,44 @@ export function isSpecialistRole(role: string | undefined): role is SpecialistRo
   return role !== undefined && typeof role === "string" && Object.hasOwn(SPECIALIST_CONTRACTS, role);
 }
 
+/** Largest accepted value for one named input, and the most inputs one unit may carry. */
+export const MAX_SPECIALIST_INPUT_CHARS = 200_000;
+export const MAX_SPECIALIST_INPUTS = 16;
+
+/** Why `inputs` is not a valid named-input map, or undefined when it is. Shared by specs, new operations and loads. */
+export function specialistInputsProblem(inputs: unknown): string | undefined {
+  if (!inputs || typeof inputs !== "object" || Array.isArray(inputs)) return "'inputs' must be an object of named strings";
+  const entries = Object.entries(inputs as Record<string, unknown>);
+  if (entries.length > MAX_SPECIALIST_INPUTS) return `'inputs' has more than ${MAX_SPECIALIST_INPUTS} entries`;
+  for (const [name, value] of entries) {
+    if (typeof value !== "string") return `input '${name}' must be a string`;
+    if (value.length > MAX_SPECIALIST_INPUT_CHARS) return `input '${name}' is longer than ${MAX_SPECIALIST_INPUT_CHARS} characters`;
+  }
+  return undefined;
+}
+
+/** The contract's required inputs that are absent or blank in `inputs`. */
+export function missingSpecialistInputs(role: SpecialistRole, inputs: Record<string, string> | undefined): string[] {
+  return SPECIALIST_CONTRACTS[role].inputRequirements.filter((name) => !inputs || typeof inputs[name] !== "string" || inputs[name].trim() === "");
+}
+
+/**
+ * Splits leading `name=value` words (names from the role's contract; values without whitespace) off a one-line task,
+ * for callers such as `/team` that have no structured input channel. The rest is the task.
+ */
+export function parseLeadingSpecialistInputs(role: SpecialistRole, text: string): { inputs: Record<string, string>; task: string } {
+  const names = new Set<string>(SPECIALIST_CONTRACTS[role].inputRequirements);
+  const inputs: Record<string, string> = {};
+  let rest = text.trimStart();
+  for (;;) {
+    const m = /^([a-z_]+)=(\S+)\s*/.exec(rest);
+    if (!m || !names.has(m[1]) || Object.hasOwn(inputs, m[1])) break;
+    inputs[m[1]] = m[2];
+    rest = rest.slice(m[0].length);
+  }
+  return { inputs, task: rest.trim() };
+}
+
 export interface SpecialistEvidenceItem {
   path: string;
   lineRange?: [number, number];

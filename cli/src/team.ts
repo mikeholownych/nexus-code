@@ -12,7 +12,7 @@ import { isRequired, newOperation, type DurableOperationState, type OperationEve
 import { AgentWorkUnitExecutor, driveOperation, OperationStore, resourcesFromConfig, type WorkUnitExecutor } from "./core/operation_runner.js";
 import type { RecoveryClock } from "./core/provider_recovery.js";
 import type { ResourceDescriptor } from "./core/resources.js";
-import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, SPECIALIST_CONTRACTS, type AgentRole } from "./core/roles.js";
+import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, SPECIALIST_CONTRACTS, isSpecialistRole, parseLeadingSpecialistInputs, type AgentRole } from "./core/roles.js";
 import { mergeOperationPolicy } from "./config.js";
 import type { HarnessConfig } from "./types.js";
 
@@ -36,15 +36,20 @@ const ROLE_MAX_STEPS = 15;
  * the implementation, so it runs alongside verification, and must use a model the implementation did not use.
  */
 export function teamUnits(target: TeamTarget, objective: string, opts: { independentReview?: boolean } = {}): WorkUnitSpec[] {
-  const unit = (role: AgentRole, dependsOn: string[], independentOf?: string[]): WorkUnitSpec => ({
+  const unit = (role: AgentRole, dependsOn: string[], independentOf?: string[]): WorkUnitSpec => {
+    // A specialist target takes its contract inputs as leading name=value words; they are enforced at admission.
+    const parsed = isSpecialistRole(role) ? parseLeadingSpecialistInputs(role, objective) : undefined;
+    return {
     id: UNIT_ID[role] ?? role,
     title: ROLE_PROFILES[role].title,
     role,
-    prompt: objective,
+    prompt: parsed ? parsed.task : objective,
+    ...(parsed && Object.keys(parsed.inputs).length ? { inputs: parsed.inputs } : {}),
     dependsOn,
     requires: roleRequirements(role, independentOf ? { independentOf } : {}),
     ...(ROLE_REQUIREMENTS[role].taskClass ? { taskClass: ROLE_REQUIREMENTS[role].taskClass } : {}),
-  });
+    };
+  };
   if (target !== "full") return [unit(target, [])];
   const units = [unit("researcher", []), unit("architect", ["research"]), unit("implementer", ["design"]), unit("tester", ["implement"])];
   if (opts.independentReview) units.push(unit("reviewer", ["implement"], ["implement"]));
