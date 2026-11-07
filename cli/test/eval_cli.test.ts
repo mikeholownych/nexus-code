@@ -6,7 +6,25 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveInstalledEvalRuntime } from "../src/eval_cli.js";
+import { isolateEvalCommandHome, resolveInstalledEvalRuntime } from "../src/eval_cli.js";
+
+test("--isolated-home is applied when global options precede the eval subcommand", () => {
+  const before = process.env.HOME;
+  const restore = isolateEvalCommandHome(["-e", "http://127.0.0.1:1/v1", "--workspace", "/tmp/w", "eval", "--dataset", "d", "--isolated-home"]);
+  try {
+    assert.ok(restore, "isolation must be applied, not silently skipped");
+    assert.notEqual(process.env.HOME, before);
+  } finally {
+    restore?.();
+  }
+  assert.equal(process.env.HOME, before);
+});
+
+test("--isolated-home is rejected when the invocation is not an eval command", () => {
+  assert.throws(() => isolateEvalCommandHome(["run", "--isolated-home"]), /--isolated-home.*eval/);
+  assert.throws(() => isolateEvalCommandHome(["-m", "eval", "run", "--isolated-home"]), /--isolated-home.*eval/);
+  assert.equal(isolateEvalCommandHome(["run", "task"]), undefined);
+});
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
 
