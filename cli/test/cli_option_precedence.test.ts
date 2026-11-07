@@ -154,7 +154,7 @@ test("nexus models: an endpoint after the subcommand wins over the one before it
   }
 });
 
-test("nexus --shell zsh repl: an option before repl overrides repl's own default", async () => {
+test("nexus repl: an option given after repl wins over the root's value, and the root's value or repl's default applies otherwise", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-optprec-repl-"));
   const log = path.join(home, "repl.log");
   const shellLog = path.join(home, "shell.log");
@@ -168,6 +168,7 @@ test("nexus --shell zsh repl: an option before repl overrides repl's own default
     };
     await run(["--shell", "zsh", "repl"]);
     await run(["repl"]);
+    // The case that fails under optsWithGlobals() (the root's zsh overwrote the subcommand's explicit sh):
     await run(["--shell", "zsh", "repl", "--shell", "sh"]);
     assert.deepEqual(fs.readFileSync(shellLog, "utf8").trim().split("\n"), ["zsh", "bash", "sh"]);
   } finally {
