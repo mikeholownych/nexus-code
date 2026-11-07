@@ -131,16 +131,17 @@ test("git hooks do not run during merge", () => {
   const f = fixture();
   try {
     const marker = path.join(f.root, "hook-ran");
-    const hooks = path.join(f.repo, ".git", "hooks");
-    fs.mkdirSync(hooks, { recursive: true });
-    for (const name of ["pre-commit", "commit-msg", "post-commit", "post-merge", "pre-rebase", "post-rewrite", "reference-transaction"]) {
-      fs.writeFileSync(path.join(hooks, name), `#!/bin/sh\necho ${name} >> "${marker}"\n`, { mode: 0o755 });
-    }
     const dir = feature(f, "feat/h");
     commitFile(dir, "b.txt", "b\n", "add b");
     commitFile(dir, "c.txt", "c\n", "add c");
     fs.writeFileSync(path.join(dir, "d.txt"), "d");
     commitFile(f.repo, "m.txt", "m\n", "main moved");
+    // hooks are installed only now, so the commits above (made by this test with plain git) do not count
+    const hooks = path.join(f.repo, ".git", "hooks");
+    fs.mkdirSync(hooks, { recursive: true });
+    for (const name of ["pre-commit", "commit-msg", "post-commit", "post-merge", "pre-rebase", "post-rewrite", "reference-transaction"]) {
+      fs.writeFileSync(path.join(hooks, name), `#!/bin/sh\necho ${name} >> "${marker}"\n`, { mode: 0o755 });
+    }
     const r = wt(f, dir, ["merge"]);
     assert.equal(r.success, true, r.output);
     assert.equal(fs.existsSync(marker), false, fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "");

@@ -6,6 +6,7 @@
 import { redactSecrets } from "../ui.js";
 import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { copyIgnored } from "./copy.js";
+import { mergeWorktree, parseAge, pruneWorktrees } from "./merge.js";
 import { GitError } from "./git.js";
 import { WorktreePathError } from "./paths.js";
 
@@ -25,6 +26,8 @@ const SPECS: Record<string, Spec> = {
   list: { booleans: { "--json": "json" }, values: { "--limit": "limit" }, positional: "" },
   remove: { booleans: { "--force": "force", "-f": "force", "--delete-unmerged": "delete-unmerged" }, values: {}, positional: "<branch|path>..." },
   path: { booleans: {}, values: {}, positional: "<branch|path>" },
+  merge: { booleans: { "--no-squash": "no-squash", "--no-rebase": "no-rebase", "--no-remove": "no-remove" }, values: { "--message": "message", "-m": "message" }, positional: "[target]" },
+  prune: { booleans: { "--dry-run": "dry-run", "--discard-ignored": "discard-ignored" }, values: { "--min-age": "min-age", "--limit": "limit" }, positional: "" },
 };
 
 const ALIASES: Record<string, string> = { copy: "copy-ignored", ls: "list", status: "list", rm: "remove", sw: "switch" };
@@ -32,9 +35,9 @@ const ALIASES: Record<string, string> = { copy: "copy-ignored", ls: "list", stat
 /** Subcommands that only read. Used by the slash gates and by `runWorktreeCommand`. */
 const READ_ONLY = new Set(["list", "path"]);
 /** Subcommands that mutate unless `--dry-run` is given. */
-const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored"]);
+const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored", "prune"]);
 
-export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]]";
+export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove]|prune [--dry-run] [--min-age 1d] [--limit N]]";
 
 function canonical(sub: string): string | undefined {
   const name = ALIASES[sub] ?? sub;
@@ -115,6 +118,23 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
       case "path": {
         if (parsed.positionals.length !== 1) throw new WorktreeError("usage: worktree path <branch|path>");
         return pathOf(ctx, parsed.positionals[0]);
+      }
+      case "merge": {
+        if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]");
+        return mergeWorktree(ctx, {
+          target: parsed.positionals[0], noSquash: parsed.flags.has("no-squash"), noRebase: parsed.flags.has("no-rebase"),
+          noRemove: parsed.flags.has("no-remove"), message: parsed.values.get("message"),
+        });
+      }
+      case "prune": {
+        if (parsed.positionals.length) throw new WorktreeError("usage: worktree prune [--dry-run] [--min-age 1d] [--limit N] [--discard-ignored]");
+        const limit = parsed.values.get("limit");
+        if (limit !== undefined && !/^[1-9]\d{0,5}$/.test(limit)) throw new WorktreeError("--limit must be a positive integer");
+        const age = parsed.values.get("min-age");
+        return pruneWorktrees(ctx, {
+          dryRun: parsed.flags.has("dry-run"), discardIgnored: parsed.flags.has("discard-ignored"),
+          minAgeMs: age === undefined ? undefined : parseAge(age), limit: limit ? Number(limit) : undefined,
+        });
       }
       case "remove":
         return removeWorktrees(ctx, parsed.positionals, { force: parsed.flags.has("force"), deleteUnmerged: parsed.flags.has("delete-unmerged") });

@@ -16,6 +16,8 @@ nexus worktree list --json                      # dirty, ahead/behind, integrate
 nexus worktree path feature/login
 nexus worktree remove feature/login
 nexus worktree copy-ignored --to feature/login --dry-run
+nexus worktree merge                            # from inside the worktree: squash, rebase, fast-forward, clean up
+nexus worktree prune --dry-run --min-age 1d
 ```
 
 Shortcuts work wherever a branch is accepted: `^` the default branch, `@` the branch of the current worktree, `-` the
@@ -34,6 +36,20 @@ Copies use a reflink where the file system has one, keep modification times so i
 stop with an error beyond 50,000 files or 4 GiB. `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
 (absolute paths) are never copied, and a symbolic link that leaves the tree is skipped. `--all-ignored` copies every
 ignored file and can therefore carry secrets such as `.env` into each worktree; it is never the default.
+
+## Merge and prune
+
+`merge [target]` (default: the default branch) commits uncommitted changes with a deterministic message (or `-m`), squashes
+the branch to one commit (`--no-squash` keeps them), rebases onto the target (`--no-rebase` skips it), fast-forwards the
+target (never a merge commit) and removes the worktree and branch (`--no-remove` keeps them). The target's worktree must be
+clean. Before history is rewritten the branch, including swept-in working-tree changes, is saved to
+`refs/nexus-backup/<branch>`. A rebase conflict stops the command and leaves the rebase open in the worktree. Ignored
+leftovers (build caches) are deleted with the worktree after a successful merge.
+
+`prune` removes worktrees whose HEAD is already integrated into the default branch (same commit, ancestor, empty diff,
+same tree or patch-id equivalent), that have no changes or untracked files, and that were last touched longer ago than
+`--min-age` (default `1d`). It never touches the main checkout, the worktree you are in, locked worktrees or speculative
+task worktrees; worktrees holding ignored files are kept unless `--discard-ignored`; `--limit` bounds one run (default 100).
 
 ## Where worktrees go
 

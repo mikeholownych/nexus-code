@@ -351,7 +351,8 @@ export function removeWorktrees(ctx: WorktreeContext, tokens: string[], options:
   return { success, output: lines.join("\n") };
 }
 
-function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions): string {
+/** Removes one worktree (and its branch) after the safety checks; returns a one-line report or throws. */
+export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions): string {
   const repo = openRepo(ctx.cwd);
   const registry = loadRegistry(repo);
   const entry = findEntry(repo, token, ctx.home);
