@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01G3Gj9V1curZ6fYFCpMHYzv",
+  "agent_id": "a84bcc906fee8f490",
+  "subagent_type": "general-purpose",
+  "task_description": "WP-1303 provider handling (retry)",
+  "started_at": "2026-11-07T14:41:36.796166203Z"
+}
