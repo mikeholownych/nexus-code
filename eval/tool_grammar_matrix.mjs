@@ -180,8 +180,8 @@ function validateEndpoint(endpoint) {
 /** Validate final matrix evidence; partial endpoint results are not release evidence. */
 export function validateMatrixEvidence(evidence) {
   if (!isRecord(evidence) || evidence.schemaVersion !== 1) throw new TypeError("unsupported evidence schema version");
-  if (!isRecord(evidence.candidate) || !sha256Pattern.test(evidence.candidate.archiveSha256) || !commitPattern.test(evidence.candidate.sourceCommit)) {
-    throw new TypeError("candidate identity requires archive SHA-256 and full source commit");
+  if (!isRecord(evidence.candidate) || !sha256Pattern.test(evidence.candidate.archiveSha256) || !commitPattern.test(evidence.candidate.sourceCommit) || !commitPattern.test(evidence.candidate.sourceTree)) {
+    throw new TypeError("candidate identity requires archive SHA-256, full source commit and source tree id");
   }
   if (!Array.isArray(evidence.endpoints) || evidence.endpoints.length !== Object.keys(PROVIDER_KIND).length) throw new TypeError("matrix evidence must contain llama.cpp, vLLM, and Ollama endpoints");
   const kinds = new Set();
@@ -400,7 +400,8 @@ function verifyInstalledArchive(installRoot, archiveSha256, sourceCommit, expect
   }
 }
 
-function verifyCandidateCheckout(checkoutRoot, sourceCommit) {
+function verifyCandidateCheckout(checkoutRoot, sourceCommit, sourceTree) {
+  if (typeof sourceTree !== "string" || !commitPattern.test(sourceTree)) throw new TypeError("pinned candidate source tree id (40 hex) is required");
   if (typeof checkoutRoot !== "string" || !checkoutRoot) throw new TypeError("explicit candidate Git checkout root is required");
   const resolvedRoot = path.resolve(checkoutRoot);
   const stat = fs.lstatSync(resolvedRoot);
@@ -421,7 +422,43 @@ function verifyCandidateCheckout(checkoutRoot, sourceCommit) {
   if (path.resolve(gitRoot) !== resolvedRoot) throw new TypeError("candidate checkout root must be the Git worktree root");
   if (head !== sourceCommit) throw new TypeError("candidate source commit does not match Git HEAD");
   if (status) throw new TypeError("candidate checkout must be clean before matrix qualification");
+  verifyCheckoutContent(resolvedRoot, git, sourceTree);
   return head;
+}
+
+/**
+ * Bind the measured candidate to checkout CONTENT, not only the commit id. `git status` can be blind (assume-unchanged,
+ * skip-worktree) and ignores ignored files, so the worktree is re-read: the tree id must equal the pinned one, every
+ * tracked file's bytes must hash to its recorded blob id, and no untracked or ignored file may exist.
+ */
+function verifyCheckoutContent(root, git, sourceTree) {
+  const tree = git(["rev-parse", "HEAD^{tree}"]);
+  if (tree.toLowerCase() !== sourceTree.toLowerCase()) throw new TypeError("candidate checkout source tree does not match the pinned tree id");
+  const extra = execFileSync("git", ["ls-files", "-z", "--others"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
+  if (extra.length > 0) throw new TypeError(`candidate checkout has untracked or ignored files (extra content): ${extra[0]}`);
+  const listing = execFileSync("git", ["ls-tree", "-r", "-z", "HEAD"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
+  const regular = [];
+  for (const line of listing) {
+    const tab = line.indexOf("\t");
+    const [mode, type, blob] = line.slice(0, tab).split(" ");
+    const relative = line.slice(tab + 1);
+    if (type !== "blob" || mode === "160000") throw new TypeError(`candidate checkout contains an unsupported entry: ${relative}`);
+    const full = path.join(root, relative);
+    const stat = fs.lstatSync(full);
+    if (mode === "120000") {
+      const target = execFileSync("git", ["hash-object", "--stdin"], { cwd: root, input: fs.readlinkSync(full), encoding: "utf8" }).trim();
+      if (target !== blob) throw new TypeError(`checkout content does not match the pinned tree: ${relative}`);
+    } else {
+      if (!stat.isFile()) throw new TypeError(`checkout content does not match the pinned tree: ${relative}`);
+      regular.push({ relative, blob });
+    }
+  }
+  if (regular.length > 0) {
+    const hashes = execFileSync("git", ["hash-object", "--no-filters", "--stdin-paths"], { cwd: root, input: regular.map(({ relative }) => relative).join("\n") + "\n", encoding: "utf8" }).trim().split("\n");
+    regular.forEach(({ relative, blob }, index) => {
+      if (hashes[index] !== blob) throw new TypeError(`checkout content does not match the pinned tree: ${relative}`);
+    });
+  }
 }
 
 /** Invoke the exact installed candidate client for 50 attempts/tool and retain only non-secret aggregate evidence. */
@@ -430,7 +467,7 @@ export async function runToolGrammarMatrix(options) {
   if (Object.hasOwn(options, "runtime")) throw new TypeError("caller-supplied runtime is not accepted; runtime must be loaded from the installed candidate");
   if (Object.hasOwn(options, "tools")) throw new TypeError("tool schemas must be loaded from the exact installed candidate");
   if (!commitPattern.test(options.sourceCommit)) throw new TypeError("full candidate source commit is required");
-  verifyCandidateCheckout(options.candidateCheckoutRoot, options.sourceCommit);
+  verifyCandidateCheckout(options.candidateCheckoutRoot, options.sourceCommit, options.sourceTree);
   if (typeof options.archiveSha256 !== "string" || !sha256Pattern.test(options.archiveSha256)) {
     throw new TypeError("pinned candidate archive SHA-256 is required");
   }
@@ -451,7 +488,7 @@ export async function runToolGrammarMatrix(options) {
   const repairJsonWithClass = runtime.repairJsonWithClass;
   const adaptToolsForServer = runtime.adaptToolsForServer;
   if (typeof clientFactory !== "function" || typeof repairJsonWithClass !== "function" || typeof adaptToolsForServer !== "function") throw new TypeError("installed candidate runtime is incomplete");
-  const digests = { archiveSha256, sourceCommit: options.sourceCommit };
+  const digests = { archiveSha256, sourceCommit: options.sourceCommit, sourceTree: options.sourceTree.toLowerCase() };
   const endpoints = [];
   for (const provider of configuredProviders) {
     const expectedKind = validProviderIdentity(provider);

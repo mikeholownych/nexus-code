@@ -94,7 +94,8 @@ function createCandidateFixture(root, _sourceCommit, tools, afterManifest = () =
     archiveSha256: createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex"),
     revision: gitSourceCommit,
   }));
-  return { archivePath, installRoot, candidateCheckoutRoot, sourceCommit: gitSourceCommit };
+  const gitSourceTree = execFileSync("git", ["-C", candidateCheckoutRoot, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
+  return { archivePath, installRoot, candidateCheckoutRoot, sourceCommit: gitSourceCommit, sourceTree: gitSourceTree };
 }
 
 function candidateOptions(fixture) {
@@ -103,6 +104,7 @@ function candidateOptions(fixture) {
     installRoot: fixture.installRoot,
     candidateCheckoutRoot: fixture.candidateCheckoutRoot,
     sourceCommit: fixture.sourceCommit,
+    sourceTree: fixture.sourceTree,
     archiveSha256: createHash("sha256").update(fs.readFileSync(fixture.archivePath)).digest("hex"),
   };
 }
@@ -147,7 +149,7 @@ function identifiedEndpoint(provider, result = endpointResult(50)) {
 }
 
 function evidenceWith(endpoints = ["llamacpp", "vllm", "ollama"].map((provider) => identifiedEndpoint(provider))) {
-  return { schemaVersion: 1, candidate: { archiveSha256: "a".repeat(64), sourceCommit: "b".repeat(40) }, endpoints };
+  return { schemaVersion: 1, candidate: { archiveSha256: "a".repeat(64), sourceCommit: "b".repeat(40), sourceTree: "c".repeat(40) }, endpoints };
 }
 
 test("tool grammar matrix evidence schema rejects invalid counts and identity omissions", () => {
@@ -232,6 +234,56 @@ test("matrix requires a pinned archive SHA-256", async () => {
     const options = candidateOptions(fixture);
     delete options.archiveSha256;
     await assert.rejects(runToolGrammarMatrix({ ...options, providers: [] }), /archive SHA-256.*required|pinned archive digest/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix requires a pinned source tree id", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-tree-pin-"));
+  try {
+    const fixture = createCandidateFixture(root, "unused", []);
+    const options = candidateOptions(fixture);
+    delete options.sourceTree;
+    await assert.rejects(runToolGrammarMatrix({ ...options, providers: [] }), /source tree.*required|pinned.*source tree/i);
+    await assert.rejects(runToolGrammarMatrix({ ...options, sourceTree: "not-a-tree", providers: [] }), /source tree.*required|pinned.*source tree/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix rejects a checkout whose tree differs from the pinned tree even at the same commit id", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-tree-mismatch-"));
+  try {
+    const fixture = createCandidateFixture(root, "unused", []);
+    await assert.rejects(runToolGrammarMatrix({ ...candidateOptions(fixture), sourceTree: "d".repeat(40), providers: [] }), /source tree.*does not match|tree.*pinned/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix rejects tampered checkout content hidden from git status (assume-unchanged) at the same commit id", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-tree-tamper-"));
+  try {
+    const fixture = createCandidateFixture(root, "unused", []);
+    const git = (...args) => execFileSync("git", ["-C", fixture.candidateCheckoutRoot, ...args], { encoding: "utf8" });
+    git("update-index", "--assume-unchanged", "candidate.txt");
+    fs.writeFileSync(path.join(fixture.candidateCheckoutRoot, "candidate.txt"), "TAMPERED source with the same commit id\n");
+    assert.equal(git("status", "--porcelain", "--untracked-files=all").trim(), "", "git status is blind to the tamper");
+    assert.equal(git("rev-parse", "HEAD").trim(), fixture.sourceCommit);
+    await assert.rejects(runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [] }), /checkout content.*pinned tree|tampered|does not match.*tree/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix rejects ignored or untracked files that git status does not list", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-tree-extra-"));
+  try {
+    const fixture = createCandidateFixture(root, "unused", []);
+    fs.writeFileSync(path.join(fixture.candidateCheckoutRoot, ".git", "info", "exclude"), "hidden.txt\n");
+    fs.writeFileSync(path.join(fixture.candidateCheckoutRoot, "hidden.txt"), "ignored but present\n");
+    await assert.rejects(runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [] }), /untracked|ignored|extra/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
