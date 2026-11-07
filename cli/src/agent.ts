@@ -47,7 +47,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES } from "./skills.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -4128,6 +4128,24 @@ export class AutonomousAgent {
     this.skillCatalog = { text, limit, discovered };
   }
 
+  /** The system note advertising skills that fit an operator message ("" when none do). It activates nothing. */
+  private skillNoteFor(prompt: string | any[]): string {
+    if (!this.skillManager) return "";
+    const asked = typeof prompt === "string" ? prompt : prompt.map((part) => (part?.type === "text" && typeof part.text === "string" ? part.text : "")).join(" ");
+    if (!asked.trim()) return "";
+    // A hint is never worth the task: a message that takes a quarter of the window gets no note, because a note after
+    // it would turn it into an earlier request that compaction may condense instead of refusing the turn.
+    const limit = this.contextLimit();
+    if (asked.length / 3 > limit * 0.25) return "";
+    return formatSkillNote(this.skillManager.findSkills(asked, MAX_SKILL_MATCHES), skillNoteBudget(limit));
+  }
+
+  /** Whether everything after `from` is the operator's submission: the message, then at most its skill note. */
+  private isSubmissionTail(from: number): boolean {
+    const tail = this.messages.slice(from);
+    return tail.length === 1 || (tail.length === 2 && typeof tail[1].content === "string" && tail[1].content.startsWith(SKILL_NOTE_PREFIX));
+  }
+
   private buildSystemPrompt(): string {
     const projectRules = trustedProjectRules(this.config.workspace);
     const rulesSection = projectRules ? `\n${projectRules}\n` : "";
@@ -5675,6 +5693,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           role: "user",
           content: effectiveUserContent,
         });
+        // Skills whose descriptions fit this message, written once right after it and never moved: every later
+        // request extends the earlier ones, so the provider's prefix cache survives each new prompt.
+        const skillNote = this.skillNoteFor(taskPrompt);
+        if (skillNote) this.messages.push({ role: "user", content: skillNote });
         // The objective is durable before anything acts on it.
         this.persistProgress({ messages: true });
       }
@@ -5983,7 +6005,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           // the conversation and tool evidence are kept untouched.
           const modelCalled = stepsUsed > 0;
           let retained = true;
-          if (!modelCalled && this.messages.length === historyBeforeSubmission + 1) {
+          if (!modelCalled && this.isSubmissionTail(historyBeforeSubmission)) {
             this.messages.length = historyBeforeSubmission;
             retained = false;
             // The withdrawn submission is not the objective either.
