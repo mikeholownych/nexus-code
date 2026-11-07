@@ -17,6 +17,7 @@ import type {
   WorkUnit,
   WorkUnitStatus,
 } from "./operation.js";
+import { MAX_REJECTED_OUTPUT_CHARS, MAX_REJECTED_OUTPUTS } from "./operation.js";
 import type { ResourceDescriptor, ResourceRegistry, Selection } from "./resources.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 import { effectiveConcurrency } from "./operation_schema.js";
@@ -550,6 +551,14 @@ export class ConvergenceScheduler {
         });
         return;
       case "failed":
+        if (result.rejectedOutput) {
+          const { raw, reason } = result.rejectedOutput;
+          const kept = raw.length > MAX_REJECTED_OUTPUT_CHARS;
+          u.rejectedOutputs = [
+            ...(u.rejectedOutputs ?? []),
+            { at, reason, raw: kept ? raw.slice(0, MAX_REJECTED_OUTPUT_CHARS) : raw, ...(kept ? { truncated: true } : {}) },
+          ].slice(-MAX_REJECTED_OUTPUTS);
+        }
         this.block(u, { ...result, options: [...result.options, ...(result.offerReassign ? this.assignable(u, [resourceId]) : [])] });
         return;
       case "cancelled":

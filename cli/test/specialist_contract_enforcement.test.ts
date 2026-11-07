@@ -159,3 +159,27 @@ test("a review specialist's required inputs are supplied by the runner's evidenc
   const outcome = await executorFor(fake.agent).run(work, resource, context());
   if (outcome.kind === "failed") assert.doesNotMatch(outcome.reason, /missing required input/);
 });
+
+test("non-review specialists are told the result contract; acceptance_reviewer keeps the verdict contract", async () => {
+  const { ROLE_PROFILES } = await import("../src/core/roles.js");
+  for (const role of ["semantic_explorer", "call_site_analyzer", "failure_debugger", "security_reviewer"] as const) {
+    assert.match(ROLE_PROFILES[role].systemPromptAddendum, new RegExp(`"specialistRole":"${role}"`));
+  }
+  assert.doesNotMatch(ROLE_PROFILES.acceptance_reviewer.systemPromptAddendum, /specialistRole/);
+});
+
+test("acceptance_reviewer prose is rejected by the verdict gate through the executor (it is a review role, not only 'reviewer')", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const fs = await import("node:fs");
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-spec-accept-"));
+  const run = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
+  run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t");
+  fs.writeFileSync(path.join(repo, "a.txt"), "1\n"); run("add", "."); run("commit", "-q", "-m", "base");
+  fs.writeFileSync(path.join(repo, "a.txt"), "2\n");
+  const fake = fakeAgent({ role: "acceptance_reviewer", summary: "looks fine to me" });
+  const executor = new AgentWorkUnitExecutor({ baseConfig: { endpoint: "https://api.test/v1", model: "m", workspace: repo } as any, createAgent: () => fake.agent });
+  const work = unit({ role: "acceptance_reviewer" }); delete (work as any).inputs;
+  const outcome = await executor.run(work, resource, { ...context(), workspace: repo });
+  assert.equal(outcome.kind, "failed");
+  if (outcome.kind === "failed") assert.match(outcome.reason, /^review rejected/);
+});

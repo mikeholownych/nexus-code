@@ -167,6 +167,8 @@ export interface WorkUnit {
   contextBudget?: number;
   /** Named inputs the unit's role contract requires (specialists); enforced before the unit starts. */
   inputs?: Record<string, string>;
+  /** Results the executor refused (for example a specialist output that failed its contract), most recent last. */
+  rejectedOutputs?: Array<{ at: string; reason: string; raw: string; truncated?: boolean }>;
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
   context?: {
     estimatedPromptTokens: number;
@@ -357,6 +359,17 @@ export interface OptionSpec {
   action: DecisionAction;
 }
 
+/** A unit result the executor refused, kept verbatim (bounded) so the operator can see what the model said. */
+export interface RejectedOutput {
+  raw: string;
+  reason: string;
+}
+
+/** The longest rejected output kept on a unit; the rest is cut and the record says so. */
+export const MAX_REJECTED_OUTPUT_CHARS = 65_536;
+/** How many rejected outputs a unit keeps (the most recent). */
+export const MAX_REJECTED_OUTPUTS = 5;
+
 export interface BlockSpec {
   cause: BlockCause;
   reason: string;
@@ -378,7 +391,7 @@ export type UnitRunResult =
   | { kind: "resource_unavailable"; failure: InferenceFailure; condition: ResourceConditionRecord }
   /** Inference may have executed and its bounded replays are spent: never resubmitted elsewhere automatically. */
   | { kind: "execution_unknown"; failure: InferenceFailure }
-  | ({ kind: "failed" } & BlockSpec)
+  | ({ kind: "failed" } & BlockSpec & { rejectedOutput?: RejectedOutput })
   | { kind: "cancelled" };
 
 export type Decision =

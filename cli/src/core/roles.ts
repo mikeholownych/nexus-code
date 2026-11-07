@@ -89,6 +89,11 @@ function specialistProfile(role: SpecialistRole): RoleProfile {
     c.readOnly ? "- Do not modify files." : "- Change files only as far as reproducing and diagnosing the failure requires.",
     `- Required inputs: ${c.inputRequirements.join(", ")}. If any is missing from the task, say so in task_completed rather than guessing.`,
     `- Escalate (report and stop) when: ${c.escalationCriteria.join("; ")}.`,
+    ...(c.outputSchemaName === "IndependentReviewVerdict"
+      ? []
+      : [
+          `- Finish by calling task_completed with ONLY a JSON object as its summary: {"specialistRole":"${role}","status":"SUCCESS"|"FAILED"|"INCONCLUSIVE","summary":"...","findings":{...},"evidence":[{"path":"...","note":"..."}],"escalationRecommended":false}. Any other result is rejected.`,
+        ]),
   ];
   return { role, title: c.title, description: c.description, systemPromptAddendum: lines.join("\n"), recommendedTools: [...c.permittedTools] };
 }

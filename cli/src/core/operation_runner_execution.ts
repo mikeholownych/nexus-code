@@ -11,7 +11,7 @@ import type { TaskRecoveryResult } from "./state.js";
 import { unitBaseTask, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { messagesBlock } from "./operation_messages.js";
 import { redactForPersistence } from "./persistence_protection.js";
-import { ROLE_PROFILES, SPECIALIST_CONTRACTS, isReadOnlyRole, isSpecialistRole, missingSpecialistInputs, type AgentRole } from "./roles.js";
+import { ROLE_PROFILES, SPECIALIST_CONTRACTS, isReadOnlyRole, isSpecialistRole, missingSpecialistInputs, validateSpecialistOutput, type AgentRole, type SpecialistRole } from "./roles.js";
 import { applyProviderCatalog, ResourceRegistry, type ResourceConditionRecord, type ResourceDescriptor } from "./resources.js";
 import { turnSucceeded, type InferenceFailure, type TurnResult } from "./turn.js";
 import type { UnitRunContext, WorkUnitExecutor } from "./operation_runner.js";
@@ -668,6 +668,53 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     );
   }
 
+  /**
+   * A specialist completes only with a structured result that validates against its contract. Anything else (prose,
+   * a malformed or wrong-role object) is rejected, and the raw text is kept with the unit rather than discarded.
+   */
+  private classifySpecialist(unit: WorkUnit, role: SpecialistRole, raw: string, outcome: string): UnitRunResult {
+    const reject = (why: string): UnitRunResult => {
+      const reason = `specialist result rejected: ${why}`.slice(0, 300);
+      return {
+        kind: "failed",
+        cause: "EXECUTION_FAILED",
+        reason,
+        question: `${unit.title} (${role}) returned a result that does not meet its contract (${why.slice(0, 200)}). Retry it, or revise the unit?`,
+        options: [
+          { label: "retry", action: { kind: "retry" } },
+          { label: "revise the unit (note required)", action: { kind: "revise" } },
+        ],
+        rejectedOutput: { raw, reason: why },
+      };
+    };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, "$1"));
+    } catch {
+      return reject("the result is not valid JSON");
+    }
+    let result;
+    try {
+      result = validateSpecialistOutput(role, parsed);
+    } catch (error: any) {
+      return reject(String(error?.message ?? error));
+    }
+    if (result.status !== "SUCCESS") {
+      return {
+        kind: "failed",
+        cause: "EXECUTION_FAILED",
+        reason: `${role} reported ${result.status}: ${result.summary}`.slice(0, 300),
+        question: `${unit.title} (${role}) reported ${result.status}: ${result.summary.slice(0, 200)}${result.escalationReason ? ` Escalation: ${result.escalationReason.slice(0, 200)}` : ""} Retry it, or revise the unit?`,
+        options: [
+          { label: "retry", action: { kind: "retry" } },
+          { label: "revise the unit (note required)", action: { kind: "revise" } },
+        ],
+      };
+    }
+    const paths = result.evidence.map((item) => item.path).slice(0, 20).join(", ");
+    return { kind: "completed", summary: `${result.summary}${paths ? ` [evidence: ${paths}]` : ""}`.slice(0, 2000), outcome };
+  }
+
   private classify(
     unit: WorkUnit,
     resource: ResourceDescriptor,
@@ -732,6 +779,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         }
         return { kind: "completed", summary: `ACCEPT: ${verdict.verifiedObservations.join("; ") || verdict.reviewerConfidenceNote}`.slice(0, 2000), outcome: turn.outcome };
       }
+      if (isSpecialistRole(unit.role)) return this.classifySpecialist(unit, unit.role, summary ?? turn.detail ?? "", turn.outcome);
       return {
         kind: "completed",
         summary: summary ?? turn.detail ?? "completed",
