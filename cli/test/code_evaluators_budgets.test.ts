@@ -92,3 +92,55 @@ test("a build spec can set the file-size budget", async () => {
     assert.equal((await run(64 * 1024 * 1024))[0].passed, true);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("a typecheck_clean spec can set the file-size budget for both revisions", async () => {
+  const runner: any = await import(pathToFileURL(path.join(ROOT, "eval/evaluators/code/runner.mjs")).href);
+  const root = scratch("wp1302-tc-fsize-");
+  const baseline = path.join(root, "baseline");
+  const candidate = path.join(root, "candidate");
+  try {
+    for (const dir of [baseline, candidate]) { fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "a.txt"), "x\n"); }
+    fs.writeFileSync(path.join(candidate, "a.txt"), "y\n");
+    const script = `require("fs").writeFileSync("out.bin", Buffer.alloc(2*1024*1024));`;
+    const run = (maxFileBytes: number) => runner.runCodeEvaluators({ task: { evaluators: [{ type: "typecheck_clean", command: process.execPath, args: ["-e", script], maxFileBytes }] }, candidateWorkspace: candidate, typecheckBaselineWorkspace: baseline });
+    assert.equal((await run(1024 * 1024))[0].passed, false);
+    assert.equal((await run(64 * 1024 * 1024))[0].passed, true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an in-workspace relative command runs from /workspace without a host-path runtime mount", async () => {
+  const captured: any[] = [];
+  const runner = createContainedRunner({
+    sandboxAvailable: () => true,
+    isolatedProcessArgv: (spec: any) => { captured.push(spec); return { cmd: "/usr/bin/true", argv: [], timeoutMs: spec.timeoutMs }; },
+    runIsolatedProcess: async () => ({ status: 0, stdout: "", stderr: "" }),
+  });
+  const cwd = scratch("wp1302-cmd-mount-");
+  try {
+    fs.mkdirSync(path.join(cwd, "scripts"));
+    fs.copyFileSync("/usr/bin/true", path.join(cwd, "scripts/build"));
+    fs.chmodSync(path.join(cwd, "scripts/build"), 0o755);
+    await runner("./scripts/build", ["--x"], { cwd });
+    const spec = captured.at(-1);
+    assert.ok(spec.argv.includes("/workspace/scripts/build"), JSON.stringify(spec.argv));
+    assert.deepEqual(spec.readOnlyPaths, [], "a scratch root outside /tmp (e.g. /srv) must not need a runtime allowlist entry");
+    assert.deepEqual(spec.allowedFiles, []);
+  } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("a checker killed by the memory limit is a failure even if it printed only old diagnostics", async () => {
+  const runner = createContainedRunner({
+    sandboxAvailable: () => true,
+    isolatedProcessArgv: (spec: any) => ({ cmd: "/usr/bin/true", argv: [], timeoutMs: spec.timeoutMs }),
+    runIsolatedProcess: async () => ({ status: 1, signal: null, stdout: "", stderr: "src/a.ts(1,1): error TS2322: old\n", resources: { oomKills: 1, exitCode: 137, signal: "SIGKILL", cleaned: true } }),
+  });
+  const cwd = scratch("wp1302-oom-");
+  try {
+    const run = await runner(process.execPath, [], { cwd });
+    assert.match(String(run.error), /memory limit/);
+    const spec = (name: string) => ({ command: "tsc", args: [], cwd: `/tmp/wp1302-${name}` });
+    const verdict = await ev.evaluateTypecheckClean({ baseline: spec("baseline"), candidate: spec("candidate"), runner: async (_c: string, _a: string[], o: { cwd: string }) => (o.cwd.endsWith("candidate") ? run : { status: 1, stderr: "src/a.ts(1,1): error TS2322: old\n" }) });
+    assert.equal(verdict.passed, false);
+    assert.equal(verdict.details.infrastructureFailure, true);
+  } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+});

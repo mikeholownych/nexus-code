@@ -108,8 +108,8 @@ fi
 
 # 1b. prlimit (util-linux), which the code evaluators put in front of every build/typecheck command. Not installed here:
 #     it ships with util-linux on every supported host, and a host without it must be fixed deliberately.
-if ! command -v prlimit >/dev/null; then
-  echo "prlimit (util-linux) is required by the code evaluators and is missing" >&2
+if [[ ! -x /usr/bin/prlimit ]]; then
+  echo "/usr/bin/prlimit (util-linux) is required by the code evaluators and is missing" >&2
   exit 1
 fi
 

@@ -27,6 +27,8 @@ test("the real host's prlimit passes the preflight, and validate and provision b
   const { prlimitProblem } = await load();
   assert.equal(prlimitProblem(), null);
   assert.match(fs.readFileSync(path.join(ROOT, "eval/host/validate.mjs"), "utf8"), /prlimitProblem/);
-  assert.match(fs.readFileSync(path.join(ROOT, "eval/host/provision.sh"), "utf8"), /prlimit/);
+  const provision = fs.readFileSync(path.join(ROOT, "eval/host/provision.sh"), "utf8");
+  assert.match(provision, /\/usr\/bin\/prlimit/, "provisioning checks the same absolute path as validate.mjs and the evaluator");
+  assert.doesNotMatch(provision, /command -v prlimit/);
   assert.match(fs.readFileSync(path.join(ROOT, "eval/README.md"), "utf8"), /prlimit/);
 });

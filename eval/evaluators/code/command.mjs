@@ -10,18 +10,20 @@ const PRLIMIT = "/usr/bin/prlimit";
 const DEFAULT_MAX_FILE_BYTES = 1024 ** 3;
 
 function resolveCommand(command, cwd) {
-  if (path.isAbsolute(command)) return fs.realpathSync(command);
+  if (path.isAbsolute(command)) return { hostPath: fs.realpathSync(command) };
   if (command.includes(path.sep)) {
     // A relative command is part of the candidate tree: it must stay there after `..` and symlinks resolve.
     const resolved = fs.realpathSync(path.resolve(cwd, command));
-    if (resolved !== cwd && !resolved.startsWith(`${cwd}${path.sep}`)) throw new Error(`command resolves outside the workspace: ${command}`);
-    return resolved;
+    if (!resolved.startsWith(`${cwd}${path.sep}`)) throw new Error(`command resolves outside the workspace: ${command}`);
+    // Run it where the sandbox mounts the workspace. A host path would need a runtime allowlist entry, which a scratch
+    // root outside /tmp (the shipped /srv/nexus-qual/ws) does not get.
+    return { sandboxPath: path.posix.join("/workspace", ...path.relative(cwd, resolved).split(path.sep)) };
   }
   for (const directory of SYSTEM_COMMAND_DIRS) {
     const candidate = path.join(directory, command);
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
-      return fs.realpathSync(candidate);
+      return { hostPath: fs.realpathSync(candidate) };
     } catch (error) {
       if (error?.code !== "ENOENT" && error?.code !== "EACCES") throw error;
     }
@@ -46,7 +48,8 @@ export function createContainedRunner(dependencies = {}) {
     try {
       const workingDirectory = cwd ? fs.realpathSync(cwd) : (temporaryCwd = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-evaluator-command-")));
       if (!hasSandbox()) throw new Error("Bubblewrap is unavailable; refusing to execute candidate commands");
-      const runtimeCommand = resolveCommand(command, workingDirectory);
+      const { hostPath, sandboxPath } = resolveCommand(command, workingDirectory);
+      const runtimeCommand = sandboxPath ?? hostPath;
       // Per-file write budget (and no core dumps) for the command and everything it starts. Memory, process count, CPU and
       // total disk are the resource contract's (cgroup) job: pass it through when the run has one.
       if (!hasPrlimit()) throw new Error("prlimit is unavailable; refusing to execute candidate commands without a file-size budget");
@@ -54,15 +57,18 @@ export function createContainedRunner(dependencies = {}) {
         cwd: workingDirectory,
         command: PRLIMIT,
         argv: [`--fsize=${maxFileBytes}`, "--core=0", "--", runtimeCommand, ...args],
-        readOnlyPaths: [runtimeCommand],
-        allowedFiles: [runtimeCommand],
+        readOnlyPaths: hostPath ? [hostPath] : [],
+        allowedFiles: hostPath ? [hostPath] : [],
         timeoutMs,
       });
       const result = await runProcess(spec, { outputLimit: OUTPUT_LIMIT, resources });
-      const error = result.error ?? (result.overflow ? "candidate command exceeded the output limit" : result.containmentProblem ?? null);
+      // The supervisor turns a killed payload into an exit code and keeps the evidence in its report; do not lose it.
+      const killedByMemory = (result.resources?.oomKills ?? 0) > 0;
+      const error = result.error ?? (result.overflow ? "candidate command exceeded the output limit" : result.containmentProblem
+        ?? (killedByMemory ? "candidate command was killed by the memory limit" : null));
       return {
         status: Number.isInteger(result.status) ? result.status : null,
-        signal: result.signal ?? null,
+        signal: result.signal ?? result.resources?.signal ?? null,
         timedOut: result.timedOut === true,
         error,
         stdout: result.stdout ?? "",

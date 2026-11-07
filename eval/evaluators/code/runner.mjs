@@ -392,12 +392,14 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
           } : null);
           const candidateSpec = spec.candidate ?? task.typecheck?.candidate ?? { command: spec.command ?? task.typecheck?.command, args: spec.args ?? task.typecheck?.args ?? [], cwd: candidateWorkspace };
           // An explicit candidate working directory (a package inside a monorepo) maps to the same place in the pinned copy.
-          const candidateCwd = pinnedWorkspace ? pinnedWorkingDirectory(candidateWorkspace, pinnedWorkspace, spec.candidate?.cwd ?? task.typecheck?.candidate?.cwd) : candidateWorkspace;
-          const candSpec = { ...candidateSpec, cwd: candidateCwd };
+          const candidateCwd = pinnedWorkspace ? pinnedWorkingDirectory(candidateWorkspace, pinnedWorkspace, candidateSpec.cwd) : candidateWorkspace;
+          // maxFileBytes on the evaluator spec applies to both revisions unless a revision's own spec sets it.
+          const fileBudget = spec.maxFileBytes ?? task.typecheck?.maxFileBytes;
+          const candSpec = { ...candidateSpec, cwd: candidateCwd, maxFileBytes: candidateSpec.maxFileBytes ?? fileBudget };
           if (candidateCwd === null) results.push(evaluatorResult("typecheck_clean", false, 0, { error: "candidate typecheck cwd is outside the candidate workspace" }));
           else if (!baseSpec?.command || !candSpec?.command) results.push(evaluatorResult("typecheck_clean", false, 0, { error: explicitBaseline ? "no typecheck command specified" : "no pre-agent typecheck baseline workspace" }));
           else if (!pinnedWorkspace) results.push(evaluatorResult("typecheck_clean", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
-          else results.push(withIgnored(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec, resources, diagnosticPattern: spec.diagnosticPattern ?? task.typecheck?.diagnosticPattern })));
+          else results.push(withIgnored(await evaluateTypecheckClean({ baseline: { ...baseSpec, maxFileBytes: baseSpec?.maxFileBytes ?? fileBudget }, candidate: candSpec, resources, diagnosticPattern: spec.diagnosticPattern ?? task.typecheck?.diagnosticPattern })));
           break;
         }
         default:

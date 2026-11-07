@@ -57,3 +57,27 @@ test("typecheck_clean honours an explicit candidate working directory inside the
     assert.match(String(escaping.details.error), /outside the candidate workspace/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("the candidate working directory comes from the same spec object as the candidate command", async () => {
+  const root = scratch("wp1302-candidate-cwd-source-");
+  const baseline = path.join(root, "baseline");
+  const candidate = path.join(root, "candidate");
+  try {
+    for (const dir of [baseline, candidate]) {
+      fs.mkdirSync(path.join(dir, "packages/app"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "rootmarker.txt"), "x\n");
+    }
+    fs.writeFileSync(path.join(candidate, "rootmarker.txt"), "y\n");
+    const command = "/usr/bin/node";
+    const args = ["-e", `if(!require("fs").existsSync("rootmarker.txt")){console.error("error TS9999: wrong working directory");process.exit(1)}`];
+    const [result] = await runner.runCodeEvaluators({
+      task: {
+        typecheck: { candidate: { command, args, cwd: path.join(candidate, "packages/app") } },
+        evaluators: [{ type: "typecheck_clean", baseline: { command, args, cwd: baseline }, candidate: { command, args } }],
+      },
+      candidateWorkspace: candidate,
+      typecheckBaselineWorkspace: baseline,
+    });
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
