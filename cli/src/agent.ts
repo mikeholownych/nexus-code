@@ -4777,11 +4777,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             error: `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
           };
         }
-        const avail = this.skillManager.listSkills().map((s) => s.name).join(", ");
+        // No skill has that name: treat the text as a search. Matching advertises descriptions and activates nothing.
+        const matches = this.skillManager.findSkills(String(skillName ?? ""), MAX_SKILL_MATCHES);
+        if (!matches.length) {
+          return { success: true, output: `No installed skill matches '${skillName}'. Nothing was activated; try other words describing the task.` };
+        }
         return {
-          success: false,
-          output: "",
-          error: `Error: Skill '${skillName}' not found. Available skills: ${avail || "none"}`,
+          success: true,
+          output: `No skill is named '${skillName}'. Nothing was activated. Installed skills that match those words; call activate_skill again with an exact name to load one:\n${matches.map((s) => `- **${s.name}**: ${s.description}`).join("\n")}`,
         };
       }
       console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
