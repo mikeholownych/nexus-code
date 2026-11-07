@@ -51,8 +51,51 @@ test("operands after `--` are never read as the --isolated-home option", () => {
   assert.equal(isolateEvalCommandHome(["--", "explain", "--isolated-home"]), undefined);
 });
 
-test("--isolated-home after `--` is not an eval invocation, and clustered short flags are read like Commander", () => {
-  assert.equal(isolateEvalCommandHome(["--", "eval", "x", "--isolated-home"]), undefined);
+test("the first operand after a `--` terminator is still the command Commander dispatches", () => {
+  // Commander dispatches `eval` after a bare `--`, so isolation must apply (fail closed); `run` treats the rest as operands.
+  for (const args of [["--", "eval", "x", "--isolated-home"], ["-m", "model", "--", "eval", "x", "--isolated-home"]]) {
+    const before = process.env.HOME;
+    const restore = isolateEvalCommandHome(args);
+    try {
+      assert.ok(restore, `isolation must apply for: ${args.join(" ")}`);
+      assert.notEqual(process.env.HOME, before);
+    } finally {
+      restore?.();
+    }
+  }
+  assert.equal(firstCommandToken(["--", "eval", "x"]), "eval");
+  assert.equal(isolateEvalCommandHome(["--", "run", "eval", "--isolated-home"]), undefined);
+});
+
+test("built CLI: -- eval is isolated, -- run eval treats the flag as an operand", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-eval-terminator-"));
+  const run = (args: string[]) => spawnSync(process.execPath, [CLI, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") },
+    timeout: 30_000,
+  });
+  try {
+    // Canary: this HOME's config.env makes startup fail ("config.env may not change HOME"). An isolated run never reads
+    // it and reaches the evaluator (dataset not found); a run that reads the operator HOME stops on the canary.
+    fs.mkdirSync(path.join(home, ".config", "nexus"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".config", "nexus", "config.env"), "HOME=/nonexistent-canary-home\n");
+    const isolated = run(["--", "eval", "missing-dataset.jsonl", "--isolated-home"]);
+    assert.notEqual(isolated.status, 0);
+    assert.doesNotMatch(`${isolated.stdout}${isolated.stderr}`, /may not change HOME/, "the operator config must not be read");
+    assert.match(`${isolated.stdout}${isolated.stderr}`, /Dataset file not found/);
+    const withTerminatorAndOption = run(["-m", "model", "--", "eval", "missing-dataset.jsonl", "--isolated-home"]);
+    assert.doesNotMatch(`${withTerminatorAndOption.stdout}${withTerminatorAndOption.stderr}`, /may not change HOME/);
+    const rejected = run(["run", "--isolated-home"]);
+    assert.equal(rejected.status, 2);
+    assert.match(rejected.stderr, /--isolated-home is available only with the eval command/);
+    // `run -- explain --isolated-home` would start an agent task (an operand, not a rejected option); the unit tests
+    // above cover it without launching one.
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("clustered short flags are read like Commander", () => {
   // -yw takes /x as the workspace value; the next token is the command.
   assert.equal(firstCommandToken(["-yw", "/x", "eval"]), "eval");
   // -ywPATH carries its value attached, so `eval` is the command.
