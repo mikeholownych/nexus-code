@@ -89,3 +89,10 @@ If a request exceeds the server's loaded context window (including llama.cpp `ex
 - **Streaming timeouts:** Local endpoints use a 120-second first-byte timeout (`LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS=120000`) and a 120-second inter-chunk idle timeout (`LOCAL_LLM_IDLE_TIMEOUT_MS=120000`), with the whole-request total timeout disabled by default (`LOCAL_LLM_TIMEOUT_MS=0`) so long local generations are never cut off while tokens continue arriving.
 - **Custom Certificate Authorities (`NODE_EXTRA_CA_CERTS`):** If your local server or LAN gateway uses HTTPS with a private CA, set `NODE_EXTRA_CA_CERTS=/path/to/root-ca.pem` in `~/.config/nexus/config.env`. The `nexus` launcher exports `NODE_EXTRA_CA_CERTS` before Node starts, and `nexus doctor` verifies that the file exists and contains valid X.509 PEM certificates. Never use `NODE_TLS_REJECT_UNAUTHORIZED=0`.
 - **Local inference receipts:** Every local and cloud inference request writes a receipt to `<workspace>/.nexus/inference_receipts.jsonl` with `origin_class: "local"` or `"cloud"`. Set `NEXUS_RECEIPTS=0` in `~/.config/nexus/config.env` to opt out.
+
+
+## Tool-call grammar (llama.cpp)
+
+When a verified llama.cpp server is used in text-mode tool calling (the request carries no native `tools`), Nexus sends a lazy GBNF grammar built from the offered tools (`grammar`, `grammar_lazy`, `grammar_triggers` on `<tool_call>`). Text answers and `<think>…</think>` reasoning stay unconstrained; only the `<tool_call>{…}</tool_call>` block is. Native-tool requests are left to llama-server, which builds its own grammar from the tool schemas. Ollama, vLLM (which keeps strict function schemas) and every unknown server are never sent a grammar. A server that rejects the grammar is resent the request without it and stays unconstrained for the session.
+
+Kill switch: set `NEXUS_TOOL_GRAMMAR=off` in `~/.config/nexus/config.env` (or the environment).

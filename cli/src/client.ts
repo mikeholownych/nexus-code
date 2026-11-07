@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { parse as parseDotenv } from "dotenv";
 import { parseAdmissionHeaders, parseAdvertisement, parseOllamaVersion, parseServerContext, parseTokenizeResponse, parseVllmVersion, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
-import { adaptToolDefinitionsForServer } from "./core/tool_grammar_provider.js";
+import { adaptToolDefinitionsForServer, constrainTextModeToolCall, toolGrammarEnabled } from "./core/tool_grammar_provider.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
@@ -858,6 +858,20 @@ export class LocalLlmClient {
   }
 
   /** Removes parameters this connection was found not to accept. */
+  /** Whether the most recent outbound body carried a Nexus tool-call grammar; set when a server rejects one. */
+  private grammarInLastBody = false;
+  private grammarRejected = false;
+
+  /** Adds the lazy text-mode tool-call grammar for the endpoint this body is sent to (see constrainTextModeToolCall). */
+  private applyToolGrammar(currentEp: string, payload: Record<string, unknown>, tools: ToolDefinition[]): void {
+    this.grammarInLastBody = !this.grammarRejected && !this.conn.providerId && constrainTextModeToolCall(
+      LocalLlmClient.serverKindCache.get(currentEp) ?? "unknown",
+      payload,
+      tools,
+      toolGrammarEnabled(operatorSetting("NEXUS_TOOL_GRAMMAR")),
+    );
+  }
+
   private omitUnsupported(body: Record<string, unknown>): void {
     for (const p of this.unsupportedParams) delete body[p];
   }
@@ -872,6 +886,12 @@ export class LocalLlmClient {
         return await run();
       } catch (err) {
         if (!(err instanceof InferenceError) || err.httpStatus !== 400) throw err;
+        // A server that refused our constrained request stays unconstrained for this connection (fail closed).
+        if (this.grammarInLastBody && !this.grammarRejected) {
+          this.grammarRejected = true;
+          this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} rejected the tool-call grammar; resending without it.`));
+          continue;
+        }
         const param = unsupportedParameter(err.message);
         const droppable = this.conn.providerId ? DROPPABLE_PARAMS : LOCAL_DROPPABLE_PARAMS;
         if (!param || !droppable.has(param) || this.unsupportedParams.has(param)) throw err;
@@ -1517,6 +1537,7 @@ export class LocalLlmClient {
       }
       if (this.conn.usage === "openrouter") payload.usage = { include: true };
       this.omitUnsupported(payload);
+      this.applyToolGrammar(currentEp, payload, tools);
 
       const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
@@ -1676,6 +1697,7 @@ export class LocalLlmClient {
     if (this.conn.usage === "openrouter") payload.usage = { include: true };
     if (this.conn.usage === "openrouter" || this.conn.usage === "stream-options") payload.stream_options = { include_usage: true };
     this.omitUnsupported(payload);
+    this.applyToolGrammar(currentEp, payload, tools);
     return payload;
   }
 
