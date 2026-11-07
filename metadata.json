@@ -3,7 +3,7 @@
   "checkpoint_id": "01M6VSGX0ZNCJ29VX7PP3A03CY",
   "strategy": "manual-commit",
   "branch": "v1/v114-slop-review",
-  "checkpoints_count": 5,
+  "checkpoints_count": 6,
   "files_touched": [
     "AGENTS.md",
     "Makefile",
@@ -49,14 +49,21 @@
       "compact_transcript": "/4/transcript.jsonl",
       "content_hash": "/4/content_hash.txt",
       "prompt": "/4/prompt.txt"
+    },
+    {
+      "metadata": "/5/metadata.json",
+      "transcript": "/5/full.jsonl",
+      "compact_transcript": "/5/transcript.jsonl",
+      "content_hash": "/5/content_hash.txt",
+      "prompt": "/5/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 30,
-    "cache_creation_tokens": 173238,
-    "cache_read_tokens": 384958,
-    "output_tokens": 27989,
-    "api_call_count": 15
+    "input_tokens": 34,
+    "cache_creation_tokens": 212656,
+    "cache_read_tokens": 428781,
+    "output_tokens": 33942,
+    "api_call_count": 17
   },
   "redaction": {
     "replacements": 0,
