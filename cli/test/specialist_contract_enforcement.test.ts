@@ -36,7 +36,7 @@ function context(): UnitRunContext {
   return { objective: "Trace", dependencies: [], bindAgentTask: () => {}, observeFailure: () => null, observeSuccess: () => {}, shouldYield: () => false };
 }
 
-function fakeAgent(opts: { role: string; summary?: string; prompt?: number }) {
+function fakeAgent(opts: { role: string; summary?: string; prompt?: number; perPrompt?: boolean }) {
   const messages: ChatMessage[] = [{ role: "system", content: "system" }];
   const prompts: string[] = [];
   const estimate = { estimatedPromptTokens: opts.prompt ?? 2_000, contextLimit: 100_000, completionReserve: 8_192, toolResponseReserve: 4_096, admissible: true };
@@ -47,7 +47,7 @@ function fakeAgent(opts: { role: string; summary?: string; prompt?: number }) {
     getStateManager: () => ({ getBaseDir: () => path.join(os.tmpdir(), "nexus-spec-contract-state") }),
     getCandidateTracker: () => ({ computeCandidateIdentitySync: () => ({ trackedChanges: [], untrackedFiles: [] }) }),
     getChangeBaseline: () => undefined, rebaseVerifierBaselineAfterTddRed: () => ({ ok: true }),
-    estimateTurnAdmission: () => estimate,
+    estimateTurnAdmission: (p: string) => (opts.perPrompt ? { ...estimate, estimatedPromptTokens: Math.ceil(p.length / 4) } : estimate),
     runTurn: async (p: string) => { prompts.push(p); return {
       execution: "COMPLETED", outcome: "NOT_REQUIRED", acceptance: "NOT_REQUESTED", modelStop: "TASK_COMPLETED", finalOutputComplete: true,
       verification: null, interruption: null, inferenceFailure: null, steps: { used: 1, max: 5, limitReached: false },
@@ -267,12 +267,46 @@ test("set_inputs refuses a note whose merge would exceed the input bounds, leavi
   assert.equal(Object.keys(u.inputs!).length, 16);
 });
 
-test("an oversized input blocked by the role ceiling can be cleared by supplying a smaller one", async () => {
-  const work = unit({ inputs: { ...CALL_INPUTS, symbol_name: "x" } });
-  const first = await executorFor(fakeAgent({ role: "call_site_analyzer", prompt: 20_000 }).agent).run(work, resource, context());
+test("an oversized input blocked by the role ceiling is cleared by a smaller one, and stays blocked while still oversized", async () => {
+  const big = "x".repeat(100_000); // about 25,000 tokens: over the 24,000 ceiling on its own
+  const work = unit({ inputs: { ...CALL_INPUTS, symbol_name: big } } as any);
+  const first = await executorFor(fakeAgent({ role: "call_site_analyzer", perPrompt: true }).agent).run(work, resource, context());
   assert.equal(first.kind, "failed");
   if (first.kind !== "failed") return;
+  assert.equal(first.cause, "CONTEXT_BUDGET");
   assert.deepEqual(first.options.map((o) => o.action.kind).sort(), ["replace_task", "set_inputs"]);
+  const { sched, u } = blockedUnit(first, { inputs: { ...CALL_INPUTS, symbol_name: big } });
+  const pick = () => u.blocked!.decision.options.find((o) => o.action.kind === "set_inputs")!;
+  // Still oversized: the rerun is refused again.
+  sched.resolve(u.blocked!.decision.id, pick().id, JSON.stringify({ symbol_name: "y".repeat(100_000) }));
+  const again = await executorFor(fakeAgent({ role: "call_site_analyzer", perPrompt: true }).agent).run(u, resource, context());
+  assert.equal(again.kind, "failed");
+  assert.equal((again as { cause: string }).cause, "CONTEXT_BUDGET");
+  sched.apply("u1", again);
+  // A genuinely smaller input is admitted.
+  sched.resolve(u.blocked!.decision.id, pick().id, JSON.stringify({ symbol_name: "foo" }));
+  const admitted = await executorFor(fakeAgent({ role: "call_site_analyzer", perPrompt: true }).agent).run(u, resource, context());
+  assert.equal(admitted.kind, "completed");
+});
+
+test("inputs typed into a spec or a set_inputs note are credential-redacted before they are persisted", () => {
+  const secret = "AKIAIOSFODNN7EXAMPLE";
+  const state = newOperation("op", "o", [{ id: "u1", role: "call_site_analyzer", prompt: "p", inputs: { symbol_name: `key ${secret}`, defining_path: "a.ts" } }], [resource], Date.now());
+  assert.doesNotMatch(JSON.stringify(state.units[0].inputs), new RegExp(secret));
+  const first = { kind: "failed" as const, cause: "EXECUTION_FAILED" as const, reason: "r", question: "q", options: [{ label: "s", action: { kind: "set_inputs" as const } }] };
+  const { sched, u } = blockedUnit(first);
+  sched.resolve(u.blocked!.decision.id, u.blocked!.decision.options.find((o) => o.action.kind === "set_inputs")!.id, JSON.stringify({ symbol_name: secret, defining_path: "a.ts" }));
+  assert.doesNotMatch(JSON.stringify(u.inputs), new RegExp(secret));
+});
+
+test("/team @file: refuses files under .nexus", async () => {
+  const fs = await import("node:fs");
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-team-dotnexus-"));
+  fs.mkdirSync(path.join(ws, ".nexus"));
+  fs.writeFileSync(path.join(ws, ".nexus", "state.json"), "{}");
+  const { TeamOrchestrator } = await import("../src/team.js");
+  const orch = new TeamOrchestrator({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 3, temperature: 0, workspace: ws, shell: "bash" } as any);
+  assert.throws(() => orch.plan("failure_debugger", "failure_log=@file:.nexus/state.json reproduction_command=x go"), /protected/i);
 });
 
 // ---------------------------------------------------------------- round 3: untrusted data, file inputs, legacy units
