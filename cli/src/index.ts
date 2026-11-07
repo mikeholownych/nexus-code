@@ -102,7 +102,12 @@ if (invocationKind === "client") {
     console.error(`[maintenance] ${formatCliDiagnostic(error)}`);
     process.exit(2);
   }
-  loadEnvironment();
+  try {
+    loadEnvironment();
+  } catch (error: any) {
+    console.error(`[config] ${formatCliDiagnostic(error)}`);
+    process.exit(2);
+  }
   operatorConfigStartupError = operatorConfigLoadError();
 }
 // Release the HOME-scoped client lease before deleting the temporary HOME.

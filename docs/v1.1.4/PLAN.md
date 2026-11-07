@@ -12,7 +12,7 @@
 
 ## 2. Findings ledger
 
-**Numbering.** `WP-1301` to `WP-1308` and `WP-1310` to `WP-1315` below are the v1.1.4 work packages. They supersede the same IDs in `docs/v1.1.0/ROADMAP.md` (OTLP exporter, provenance graph, macOS builds, knowledge freshness, cgroup limits, Composio mesh), which were never scheduled. Those roadmap items keep their own IDs only inside that document; in commits, claims and findings, `WP-13xx` means this plan. If one of them is scheduled later, give it a new ID.
+**Numbering.** `WP-1301` to `WP-1308`, `WP-1310` to `WP-1316` below are the v1.1.4 work packages. They supersede the same IDs in `docs/v1.1.0/ROADMAP.md` (OTLP exporter, provenance graph, macOS builds, knowledge freshness, cgroup limits, Composio mesh), which were never scheduled. Those roadmap items keep their own IDs only inside that document; in commits, claims and findings, `WP-13xx` means this plan. If one of them is scheduled later, give it a new ID.
 
 Sources: my independent reviews on PR #402 (WP-1105 evaluators, WP-1107 provider work), Entire trail 145 (15 open findings after the `--step` HIGH was fixed in v1.1.2), Entire trail 140, Entire trail 146, the gate-3 flake recorded in the findings ledger, and the known limitations in `docs/releases/v1.1.2.md` and `docs/releases/v1.1.3.md`. Every item below must end as FIXED (with a test), WITHDRAWN (with evidence it is not a defect) or DEFERRED (owner decision, with a reason). Work packages are ordered by risk.
 
@@ -70,6 +70,7 @@ Found in the post-v1.1.3 housekeeping (2026-11-05): detached worktrees held 122 
   - Read-only admission and explicit approval-mode precedence: `--read-only`, `--mode read-only` and `NEXUS_APPROVAL_MODE=read-only` (`cli/src/config.ts:372-393`) all end in read-only approval, but only `--read-only` sets the `readOnly` flag. `agent.ts:1445` and `types.ts:73` treat a mode-selected read-only (`readOnlyModeSelected`) as a deliberate, changeable posture, so the difference may be intended. Decide with a red test (`b733f069`, `eed469dd`).
   - Commander option precedence: a global-only or REPL option set on the command line must survive a default from the subcommand (`845cd1b6`, `244c97cc`, `7df4aea5`; `cli/src/index.ts:424` handles only part of it).
   - Restore mode after a checkpoint-free turn (`cac400ea`; `repl.ts` already resets the fallback, check the sidecar and TUI paths).
+- **Acceptance (audit A1):** a real suspend, restart and resume test with provider recovery, an operation and a failing-test baseline, in addition to the red-first unit tests.
 - Everything else in the orphan set is evidence-doc commits, six 2026-10-05 `wip` commits from the dogfood experiments, and repeated rebases of fixes already on `main`; nothing to port.
 
 ### WP-1307 Research: review Harness² (issue #69)
@@ -96,6 +97,9 @@ Source: owner report 2026-11-05. On v1.1.3 a single prompt in a repository on a 
   - `getPromptSection` builds the final listing twice; keep it in a variable.
   - Test the first-discovery condition and the resume path directly, not only through a full turn.
   - The `activate_skill` not-found error lists every skill name; replace it with the ranked lookup above, and update the names-only catalog's "an unknown name passed to `activate_skill` lists them all" hint (`cli/src/skills.ts`) to describe the lookup.
+
+### WP-1316 Specialist contract enforcement
+From the 2026-11-06 readiness audit (FINDINGS section D, A4). `maxContextTokens` is never consumed, `validateSpecialistOutput` has no runtime caller, required inputs are prompt advice only, and the independent-review verdict gate covers reviewer units only. Enforce ceilings at admission, validate inputs and results through the operation executor, retain raw rejected output, add tests through the executor.
 
 ## 3. Worktrunk integration
 
@@ -166,7 +170,7 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 ## 4. Sequencing
 
 1. **Week 0 (day 1):** branch `v1/v113-plan` from `main`, this plan and the findings ledger committed; claims taken per work package.
-2. **Findings first, in parallel with the Worktrunk core:** WP-1301 and WP-1303 (they touch `agent.ts`, `client.ts`, `slash/*`), WP-1302 (`eval/` only, codex-root per decision 3), WP-1302b (`cli/src/parser.ts`, claude-code), WP-1304, WP-1305, WP-1306 (doctor journal first, then the `HOME` override: both are confirmed by reading the code; the rest need a red test first), WP-1308 (touches `cli/src/skills.ts`, `cli/src/agent.ts` request assembly and the `activate_skill` handler; its prerequisites are met: PR #409 merged as `8e1bd7d4` and WP-1301 merged as #411) and WP-1307 (documentation only, no claim needed). Worktrunk WP-1310 starts with the git-common-dir anchor and the registry because WP-1311 to WP-1314 depend on them.
+2. **Findings first, in parallel with the Worktrunk core:** WP-1301 and WP-1303 (they touch `agent.ts`, `client.ts`, `slash/*`), WP-1302 (`eval/` only, codex-root per decision 3), WP-1302b (`cli/src/parser.ts`, claude-code), WP-1304, WP-1305, WP-1306 (doctor journal first, then the `HOME` override: both are confirmed by reading the code; the rest need a red test first), WP-1308 (touches `cli/src/skills.ts`, `cli/src/agent.ts` request assembly and the `activate_skill` handler; its prerequisites are met: PR #409 merged as `8e1bd7d4` and WP-1301 merged as #411) and WP-1307 (documentation only, no claim needed) and WP-1316 (specialist contract enforcement, `cli/src/core/*`, after WP-1303 since both touch the operation executor path). Worktrunk WP-1310 starts with the git-common-dir anchor and the registry because WP-1311 to WP-1314 depend on them.
 3. WP-1311 and WP-1312 after WP-1310. WP-1313 after WP-1312 (merge needs `pre-merge`). WP-1314 and WP-1315 last.
 4. Each work package: red test, fix, focused tests (SUITE claim for any run), independent reviewer on the diff with the findings text in the brief, then the exact-head gate on the integration branch. Release candidate only after every finding in `FINDINGS.md` is FIXED, WITHDRAWN or DEFERRED with an owner decision.
 
@@ -177,6 +181,7 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 - `nexus worktree` commands pass an end-to-end test against a real temporary repository (create, copy-ignored, list, merge, prune, remove), including: a dirty worktree refuses removal, a path template that escapes `.nexus/worktrees/` (or, with the sibling layout enabled, the repository's parent directory) is refused, a project hook without approval does not run, a hook template change re-prompts, Git hooks do not run during creation, read-only mode refuses every mutating subcommand.
 - WP-1306: every recovered item is FIXED with a red-first test or WITHDRAWN with evidence, and the `recovery/orphan-*` branches and the bundle are removed only after that.
 - WP-1308: the citable prompt on the 305-skill host starts without a capacity block; per-turn skill notes and the lookup pass the tests listed under WP-1308; the system prompt is byte-identical across turns.
+- WP-1316: role ceilings, required inputs and specialist results are enforced through the operation executor, with executor-level tests.
 - WP-1307: `docs/v1.1.4/HARNESS2-REVIEW.md` is merged and issue #69 is closed with a link to it.
 - G1.1-4 measured or still explicitly "not met".
 - No new runtime dependency, no SBOM component change, `cargo deny` and `npm audit` clean.

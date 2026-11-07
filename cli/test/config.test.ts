@@ -72,6 +72,92 @@ describe("config", () => {
     }
   });
 
+  test("an explicit --mode read-only is not weakened by --yes, --approve or --full-access", () => {
+    const previousApprovalMode = process.env.NEXUS_APPROVAL_MODE;
+    delete process.env.NEXUS_APPROVAL_MODE;
+    try {
+      for (const extra of [{ yes: true }, { approve: true }, { fullAccess: true }, { yes: true, approve: true, fullAccess: true }]) {
+        const config = buildConfig({ endpoint: "e", model: "x", mode: "read-only", ...extra });
+        assert.equal(config.approvalMode, "read-only", `--mode read-only with ${JSON.stringify(extra)}`);
+        assert.equal(config.fullAccess, false, "read-only never carries full access");
+      }
+      // The explicit launch flag already won; an env-selected read-only still yields to an explicit --yes on the command line.
+      assert.equal(buildConfig({ endpoint: "e", model: "x", readOnly: true, yes: true }).approvalMode, "read-only");
+      process.env.NEXUS_APPROVAL_MODE = "read-only";
+      assert.equal(buildConfig({ endpoint: "e", model: "x" }).approvalMode, "read-only");
+      assert.equal(buildConfig({ endpoint: "e", model: "x", yes: true }).approvalMode, "auto");
+    } finally {
+      if (previousApprovalMode === undefined) delete process.env.NEXUS_APPROVAL_MODE;
+      else process.env.NEXUS_APPROVAL_MODE = previousApprovalMode;
+    }
+  });
+
+  test("config.env cannot re-home state or split credential and restore authority", () => {
+    const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-config-reload-"));
+    const original = path.join(root, "original"), selected = path.join(root, "selected");
+    try {
+      fs.mkdirSync(path.join(original, ".config/nexus"), { recursive: true });
+      fs.mkdirSync(path.join(selected, ".config/nexus"), { recursive: true });
+      fs.writeFileSync(path.join(original, ".config/nexus/config.env"), `HOME=${selected}\nLOCAL_LLM_MODEL=original\n`);
+      const run = spawnSync(process.execPath, [
+        "--import", "tsx", "--input-type=module", "-e",
+        `const { credentialStorageHome } = await import("./src/client.ts");
+         const { loadEnvironment } = await import("./src/config.ts");
+         try { loadEnvironment(); }
+         catch (error) { console.error(error.message); process.stdout.write(credentialStorageHome()); process.exit(7); }
+         process.stdout.write("HOME=" + process.env.HOME + " os=" + (await import("node:os")).homedir());`,
+      ], { cwd: cliDir, env: { PATH: process.env.PATH, HOME: original, XDG_CONFIG_HOME: path.join(original, ".config") }, encoding: "utf8" });
+      assert.equal(run.status, 7, `loadEnvironment accepted a HOME override: ${run.stdout} ${run.stderr}`);
+      assert.match(run.stderr, /may not change HOME/);
+      assert.match(run.stderr, /NEXUS_STATE_DIR/);
+      assert.equal(run.stdout, original, "credential authority stays on the operator home");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the CLI refuses a config.env HOME override at startup with a diagnostic and no stack trace", () => {
+    const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-config-home-cli-"));
+    const original = path.join(root, "original"), selected = path.join(root, "selected");
+    try {
+      fs.mkdirSync(path.join(original, ".config/nexus"), { recursive: true });
+      fs.mkdirSync(selected, { recursive: true });
+      fs.writeFileSync(path.join(original, ".config/nexus/config.env"), `HOME=${selected}\n`);
+      const run = spawnSync(process.execPath, ["--import", "tsx", "src/index.ts", "repl"], {
+        cwd: cliDir, encoding: "utf8", timeout: 20000,
+        env: { PATH: process.env.PATH, HOME: original, XDG_CONFIG_HOME: path.join(original, ".config") },
+      });
+      assert.equal(run.status, 2, `${run.stdout}\n${run.stderr}`);
+      assert.match(run.stderr, /\[config\] .*may not change HOME.*NEXUS_STATE_DIR/);
+      assert.doesNotMatch(run.stderr, /\n\s+at /, "a diagnostic, not a stack trace");
+      assert.deepEqual(fs.readdirSync(selected), [], "nothing was written under the selected home");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("config.env that repeats the operator HOME, or sets other keys, is accepted", () => {
+    const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-config-samehome-"));
+    const home = path.join(root, "home");
+    try {
+      fs.mkdirSync(path.join(home, ".config/nexus"), { recursive: true });
+      fs.writeFileSync(path.join(home, ".config/nexus/config.env"), `HOME=${home}\nLOCAL_LLM_MODEL=kept\n`);
+      const run = spawnSync(process.execPath, [
+        "--import", "tsx", "--input-type=module", "-e",
+        `const { loadEnvironment } = await import("./src/config.ts");
+         loadEnvironment();
+         process.stdout.write(process.env.LOCAL_LLM_MODEL ?? "");`,
+      ], { cwd: cliDir, env: { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") }, encoding: "utf8" });
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(run.stdout, "kept");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("workspace trust does not select the tool approval mode", () => {
     const previousTrustOverride = process.env.NEXUS_TRUST_WORKSPACE;
     const previousApprovalMode = process.env.NEXUS_APPROVAL_MODE;
