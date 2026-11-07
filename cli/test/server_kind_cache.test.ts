@@ -208,3 +208,19 @@ for (const stream of [false, true]) {
     assert.equal(seen.find((s) => s.who === "gw")?.header, "subagent");
   });
 }
+
+test("request token counting sends X-Task-Class only to a verified gateway", async () => {
+  const seen: Array<string | undefined> = [];
+  for (const gateway of [true, false]) {
+    await withEndpoint((req, res) => {
+      if (req.url === "/v1/models") return json(res, { data: [gateway ? gatewayEntry : { id: "model-a" }] });
+      if (req.url?.endsWith("/tokenize")) { seen.push(req.headers["x-task-class"] as string | undefined); return json(res, { count: 3 }); }
+      res.statusCode = 404; res.end();
+    }, async (endpoint) => {
+      const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a", taskClass: "subagent" } as any);
+      await client.discoverAdvertisement();
+      await client.countRequestTokens(msg, [], "req-count").catch(() => undefined);
+    });
+  }
+  assert.deepEqual(seen, ["subagent", undefined]);
+});

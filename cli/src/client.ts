@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { createHash, randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { parse as parseDotenv } from "dotenv";
 import { parseAdmissionHeaders, parseAdvertisement, parseOllamaVersion, parseServerContext, parseTokenizeResponse, parseVllmVersion, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
 import { adaptToolDefinitionsForServer } from "./core/tool_grammar_provider.js";
@@ -37,6 +37,9 @@ import { localEndpointCredential, localEndpointCredentials, resolveCredential, s
 import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
 import { providerDefinition } from "./providers.js";
 import { ServerKindCache } from "./core/server_kind_cache.js";
+
+/** Per-process random key: the account marker in a cache key is an HMAC (not a password hash), unlinkable outside this process. */
+const KIND_KEY_SECRET = randomBytes(32);
 
 type OAuthCredential = Extract<StoredCredential, { type: "oauth" }>;
 
@@ -1243,10 +1246,10 @@ export class LocalLlmClient {
     LocalLlmClient.serverKindCache.clear();
   }
 
-  /** Identity key: provider, endpoint and a digest of the credential, so no switch inherits another server's kind. */
+  /** Identity key: provider, endpoint and a keyed HMAC of the credential, so no switch inherits another server's kind. */
   private kindKey(ep: string = this.endpoint): string {
     const credential = this.credentialFor(ep);
-    const account = credential ? createHash("sha256").update(credential).digest("hex").slice(0, 16) : "-";
+    const account = credential ? createHmac("sha256", KIND_KEY_SECRET).update(credential).digest("hex").slice(0, 16) : "-";
     return `${this.conn.providerId ?? ""}\u0000${ep}\u0000${account}`;
   }
   private static serverShowCache = new Map<string, unknown>();
