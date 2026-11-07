@@ -16,6 +16,11 @@ export function redactSecrets(text: string): string {
       result = redacted;
     }
   } catch {}
+  return redactSecretPatterns(result);
+}
+
+/** The literal-pattern half of redactSecrets (no classifier call): for text the classifier has already been run over. */
+export function redactSecretPatterns(result: string): string {
   return result
     .replace(/Bearer\s+[A-Za-z0-9_\-\.]{15,}/gi, "Bearer [REDACTED_TOKEN]")
     .replace(/((?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[REDACTED]")
