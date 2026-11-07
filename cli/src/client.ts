@@ -42,6 +42,8 @@ import { ServerKindCache } from "./core/server_kind_cache.js";
  * Opaque per-process account markers for the server-kind cache key. No hash of the credential is computed: the
  * credential is compared by equality here and only a small integer enters the cache key (never logged or persisted).
  */
+/** Longest a request waits for an expired server identity to be re-read before proceeding without it. */
+const REVERIFY_WAIT_MS = 1000;
 const accountMarkers = new Map<string, number>();
 let nextAccountMarker = 1;
 function accountMarker(credential: string): number {
@@ -1182,7 +1184,7 @@ export class LocalLlmClient {
     // A catalog that cannot speak for itself (404, model unlisted) keeps a verified server identity, except a gateway:
     // the gateway-only task-class header must follow positive evidence, not a replaced server's silence (REQ-PRV-109).
     const retainedKind = previousKind === "gateway" ? undefined : previousKind;
-    this.discoveredKeys.add(this.kindKey(ep));
+    this.everDiscovered = true;
     let retained = false;
     const remember = (kind: ServerKind): void => {
       if (retained && kind === previousKind) return; // retained without new evidence: do not extend the TTL
@@ -1201,7 +1203,7 @@ export class LocalLlmClient {
       if (res.status === 404) {
         // A catalog-less response does not contradict an identity verified earlier on this same endpoint.
         // A retained identity keeps its original expiry: silence is not re-verification.
-        if (!retainedKind) LocalLlmClient.serverKindCache.delete(this.kindKey(ep));
+        if (!retainedKind) LocalLlmClient.serverKindCache.set(this.kindKey(ep), "unknown"); // negative result, kept for the TTL
         return { state: "unsupported", detail: "no /models catalog" };
       }
       if (!res.ok) {
@@ -1212,7 +1214,7 @@ export class LocalLlmClient {
       // A catalog that cannot identify this model provides no contradictory identity evidence.
       if (!entry) {
         // A retained identity keeps its original expiry: silence is not re-verification.
-        if (!retainedKind) LocalLlmClient.serverKindCache.delete(this.kindKey(ep));
+        if (!retainedKind) LocalLlmClient.serverKindCache.set(this.kindKey(ep), "unknown"); // negative result, kept for the TTL
         return { state: "unsupported", detail: `model ${this.model} not listed` };
       }
       let advertised = parseAdvertisement(entry);
@@ -1262,22 +1264,30 @@ export class LocalLlmClient {
   private static serverContextCache = new Map<string, Advertisement>();
   private static serverKindCache = new ServerKindCache();
 
-  private readonly discoveredKeys = new Set<string>();
+  private everDiscovered = false;
+  private reverifying: Promise<void> | undefined;
   private lastReverifyAt = 0;
 
   /**
-   * An identity this client verified earlier has expired: re-read the catalog once (at most every 60 s) before the
-   * request, so a long-running agent that never refreshes discovery keeps the gateway routing hint and the /tokenize
-   * fallback instead of silently losing them at the TTL.
+   * An identity this client discovered earlier (or one under a credential that changed since) has no live entry: re-read
+   * the catalog (at most once a minute) so a long-running agent keeps the gateway routing hint and the /tokenize
+   * fallback instead of losing them at the TTL or after a credential rotation. The request waits at most
+   * REVERIFY_WAIT_MS for it; a slower probe finishes in the background and the request proceeds with the unknown kind
+   * (no gateway hint, no strict adaptation: fail closed). Only the active endpoint is re-verified; a failover endpoint
+   * keeps whatever identity it was discovered with, or none.
    */
   private async reverifyExpiredKind(signal?: AbortSignal): Promise<void> {
-    if (this.conn.providerId || this.conn.protocol !== "openai-chat") return;
-    const key = this.kindKey();
-    if (!this.discoveredKeys.has(key) || LocalLlmClient.serverKindCache.get(key) !== undefined) return;
+    if (this.conn.providerId || this.conn.protocol !== "openai-chat" || !this.everDiscovered) return;
+    if (LocalLlmClient.serverKindCache.get(this.kindKey()) !== undefined) return;
     const now = Date.now();
-    if (now - this.lastReverifyAt < 60_000) return;
-    this.lastReverifyAt = now;
-    await this.discoverAdvertisement(signal).catch(() => undefined);
+    if (!this.reverifying && now - this.lastReverifyAt >= 60_000) {
+      this.lastReverifyAt = now;
+      this.reverifying = this.discoverAdvertisement(signal).then(() => undefined, () => undefined).finally(() => { this.reverifying = undefined; });
+    }
+    if (!this.reverifying) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([this.reverifying, new Promise<void>((resolve) => { timer = setTimeout(resolve, REVERIFY_WAIT_MS); })]);
+    clearTimeout(timer);
   }
 
   /** Identity key: provider, endpoint and an opaque per-process account marker, so no switch inherits another server's kind. */

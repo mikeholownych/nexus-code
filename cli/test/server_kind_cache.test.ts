@@ -293,3 +293,52 @@ test("an expired identity is re-verified before the next request, so the gateway
   }));
   assert.deepEqual(headers, ["subagent", "subagent", "subagent"]);
 });
+
+test("a catalog-less endpoint is probed once per TTL, not every minute", async () => {
+  let modelReads = 0;
+  await withClock((advance) => withEndpoint((req, res) => {
+    if (req.url === "/v1/models") { modelReads++; res.statusCode = 404; return res.end(); }
+    if (req.url === "/v1/chat/completions") return ok(res);
+    res.statusCode = 404; res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    await client.discoverAdvertisement();
+    for (let i = 0; i < 5; i++) { advance(61_000); await client.chatCompletion(msg, []); }
+    assert.equal(modelReads, 1, "the negative result is remembered for the TTL");
+  }));
+});
+
+test("re-verification never delays a request beyond a short bound", async () => {
+  let slow = false;
+  await withClock((advance) => withEndpoint((req, res) => {
+    if (req.url === "/v1/models") { if (slow) return void setTimeout(() => json(res, { data: [gatewayEntry] }), 3000); return json(res, { data: [gatewayEntry] }); }
+    if (req.url === "/v1/chat/completions") return ok(res);
+    res.statusCode = 404; res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    await client.discoverAdvertisement();
+    advance(11 * 60_000);
+    slow = true;
+    const started = performance.now();
+    await client.chatCompletion(msg, []);
+    assert.ok(performance.now() - started < 2000, `request took ${Math.round(performance.now() - started)} ms`);
+  }));
+});
+
+test("a credential that changed after discovery is re-verified before the next request", async () => {
+  let modelReads = 0;
+  await withEndpoint((req, res) => {
+    if (req.url === "/v1/models") { modelReads++; return json(res, { data: [gatewayEntry] }); }
+    if (req.url === "/v1/chat/completions") return ok(res);
+    res.statusCode = 404; res.end();
+  }, async (endpoint) => {
+    const client = new LocalLlmClient({ endpoint: `${endpoint}/v1`, model: "model-a" } as any);
+    client.setApiKey("old-token");
+    await client.discoverAdvertisement();
+    client.setApiKey("rotated-token");
+    assert.equal(client.getDetectedServerKind(), "unknown");
+    await client.chatCompletion(msg, []);
+    assert.equal(modelReads, 2);
+    assert.equal(client.getDetectedServerKind(), "gateway");
+  });
+});
