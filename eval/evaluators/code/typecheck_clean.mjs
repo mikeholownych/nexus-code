@@ -6,8 +6,6 @@ import { evaluatorResult } from "./result.mjs";
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 // Source excerpts and squiggles that --pretty and rustc print under a diagnostic; they carry line numbers, not messages.
 const CODE_FRAME = /^(?:\d+\s.*|[|\s~^]+)$/;
-// A coded diagnostic opens a frame; only gutter lines inside one are dropped, so an unrelated line that merely starts
-// with a number (for example a task-supplied "2 problems: ...") is still compared.
 // Rustc's location and note lines belong to the frame but are not gutters.
 const FRAME_CONTINUATION = /^(?:-->|=)\s/;
 // Whole-line summaries restate the count (and, for tsc, the first location); the diagnostics above them are what is
@@ -15,10 +13,11 @@ const FRAME_CONTINUATION = /^(?:-->|=)\s/;
 const SUMMARY = /^(?:Found \d+ errors? in [^\n]*|Found \d+ errors?\.?|Errors\s+Files|error: aborting due to \d+ previous errors?(?:; [^\n]*)?)$/i;
 // A configuration error means the checker did not check the project, whatever the baseline printed. Only the
 // diagnostic's own (first) code counts: text inside a message can quote any code.
-const CHECKER_NOT_RUN_CODES = new Set(["TS5057", "TS5058", "TS5083", "TS5012", "TS18003", "TS6053"]);
-// A leading location names a file: a path (spaces allowed, no colon or parenthesis) that ends in an extension. Requiring
-// that keeps `error[E0080]: ... step:1: failed` and `error: cannot open 'a.ts:12: x'` from being read as locations.
-const PATH = String.raw`[^:()\n]+?\.[A-Za-z0-9_+-]+`;
+const CHECKER_NOT_RUN_CODES = new Set(["TS5057", "TS5058", "TS5081", "TS5083", "TS5012", "TS18003", "TS6053"]);
+// A leading location names a file: a path (spaces and parentheses allowed, as in `app/(auth)/page.tsx`, but no colon) that
+// ends in an extension. Requiring that keeps `error[E0080]: ... step:1: failed` and `error: cannot open 'a.ts:12: x'` from
+// being read as locations; the location delimiter after it is what ends the path.
+const PATH = String.raw`[^:\n]+?\.[A-Za-z0-9_+-]+`;
 const LOCATION_SHAPES = [
   [new RegExp(String.raw`^(${PATH})\(\d+,\d+\):`), "$1(L,C):"],
   [new RegExp(String.raw`^(${PATH}):\d+:\d+ - `), "$1:L:C - "],
