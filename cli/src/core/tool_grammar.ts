@@ -84,20 +84,20 @@ export function generateToolArgumentsGbnf(
   const rules = [
     `${p}root ::= ws "{" ws ${p}object-fields ws "}" ws`,
     ...(embedPrefix === undefined ? SHARED_RULES : []),
-    ...properties.map(({ name, index, valueRule }) => `${p}member_${index} ::= ${JSON.stringify(name)} ws ":" ws ${valueRule}`),
+    ...properties.map(({ name, index, valueRule }) => `${p}member-${index} ::= ${JSON.stringify(JSON.stringify(name))} ws ":" ws ${valueRule}`),
   ];
 
-  const firstChoices = properties.map(({ index }) => `${p}member_${index} ${p}fields_tail_${1 << index}`);
+  const firstChoices = properties.map(({ index }) => `${p}member-${index} ${p}fields-tail-${1 << index}`);
   rules.push(`${p}object-fields ::= ${requiredMask === 0 ? '"" | ' : ""}${firstChoices.length ? firstChoices.join(" | ") : '""'}`);
   for (let mask = 0; mask < stateCount; mask++) {
     const choices: string[] = [];
     if ((mask & requiredMask) === requiredMask) choices.push('""');
     for (const { index } of properties) {
       const bit = 1 << index;
-      if ((mask & bit) === 0) choices.push(`"," ws ${p}member_${index} ${p}fields_tail_${mask | bit}`);
+      if ((mask & bit) === 0) choices.push(`"," ws ${p}member-${index} ${p}fields-tail-${mask | bit}`);
     }
     // Only reachable states need a rule, but emitting all bounded masks keeps output deterministic and simple.
-    rules.push(`${p}fields_tail_${mask} ::= ${choices.join(" | ") || '""'}`);
+    rules.push(`${p}fields-tail-${mask} ::= ${choices.join(" | ") || '""'}`);
   }
   return rules.join("\n");
 }
@@ -125,10 +125,33 @@ const GENERIC_OBJECT_RULES = [
 ];
 
 /**
- * The `<tool_call>` text-mode block as one grammar, for a server that applies it lazily from the opening tag. Every
- * offered tool is admitted: allow-listed tools with their exact argument schema, any other with a generic JSON object,
- * so constraining never forbids a call the model may legitimately make. Returns undefined when nothing is offered.
- * Text, reasoning (`<think>…</think>`) and a plain answer before the tag are outside the grammar by construction.
+ * Free text that never contains the literal `<tool_call>` tag, as a deterministic automaton: state `text-k` has read the
+ * first k characters of the tag. Reading the whole tag leaves the text and enters the call body (`call-body`).
+ */
+const TAG = "<tool_call>";
+function textRules(): string[] {
+  const rules: string[] = [];
+  for (let k = 0; k < TAG.length; k++) {
+    // k characters of the tag are matched; `<` always restarts a partial match, any other non-matching character resets.
+    const next = TAG[k];
+    const alternatives = ['""'];
+    const avoid = k === 0 ? "<" : `${next === "<" ? "" : "<"}${next}`;
+    alternatives.push(`[^${avoid.replace(/[\\\]^-]/g, (c) => `\\${c}`)}] text-0`);
+    if (k > 0) alternatives.push('"<" text-1');
+    alternatives.push(k === TAG.length - 1 ? `${JSON.stringify(next)} call-body` : `${JSON.stringify(next)} text-${k + 1}`);
+    if (k === 0) alternatives.splice(1, 1, "[^<] text-0");
+    rules.push(`text-${k} ::= ${alternatives.join(" | ")}`);
+  }
+  return rules;
+}
+
+/**
+ * The text-mode tool-call format as ONE grammar that is correct however a server applies it: `root ::= text-0`, i.e.
+ * free text (plain answers, `<think>…</think>` reasoning) with any number of well-formed `<tool_call>{…}</tool_call>`
+ * blocks, and text allowed after a block. Applied from the first token it never forbids a plain-text turn, and a literal
+ * tag inside reasoning is followed by a valid call, after which the model continues freely. Every offered tool is
+ * admitted: allow-listed tools with their exact argument schema, any other with a generic JSON object. Returns undefined
+ * when nothing is offered.
  */
 export function generateToolCallBlockGbnf(offered: readonly ToolDefinition[]): string | undefined {
   const names = [...new Set(offered.filter((tool) => tool?.type === "function" && tool.function?.name).map((tool) => tool.function.name))];
@@ -151,8 +174,9 @@ export function generateToolCallBlockGbnf(offered: readonly ToolDefinition[]): s
     rules.push(`call-${i} ::= ${JSON.stringify('"name"')} ws ":" ws ${JSON.stringify(JSON.stringify(name))} ws "," ws ${JSON.stringify('"arguments"')} ws ":" ws ${argsRule}`);
   });
   return [
-    'root ::= tool-call (ws tool-call)* ws',
-    `tool-call ::= "<tool_call>" ws "{" ws (${alternatives.join(" | ")}) ws "}" ws "</tool_call>"`,
+    "root ::= text-0",
+    ...textRules(),
+    `call-body ::= ws "{" ws (${alternatives.join(" | ")}) ws "}" ws "</tool_call>" text-0`,
     ...SHARED_RULES,
     ...(generic ? GENERIC_OBJECT_RULES : []),
     ...rules,

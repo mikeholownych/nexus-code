@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { parse as parseDotenv } from "dotenv";
 import { parseAdmissionHeaders, parseAdvertisement, parseOllamaVersion, parseServerContext, parseTokenizeResponse, parseVllmVersion, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
-import { adaptToolDefinitionsForServer, constrainTextModeToolCall, toolGrammarEnabled } from "./core/tool_grammar_provider.js";
+import { adaptToolDefinitionsForServer, constrainTextModeToolCall, isGrammarRejection, toolGrammarEnabled } from "./core/tool_grammar_provider.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
@@ -44,6 +44,8 @@ import { ServerKindCache } from "./core/server_kind_cache.js";
  */
 /** Longest a request waits for an expired server identity to be re-read before proceeding without it. */
 const REVERIFY_WAIT_MS = 1000;
+/** How long an endpoint that rejected the tool-call grammar is sent requests without it. */
+const GRAMMAR_REJECTION_TTL_MS = 10 * 60_000;
 const accountMarkers = new Map<string, number>();
 let nextAccountMarker = 1;
 function accountMarker(credential: string): number {
@@ -879,17 +881,21 @@ export class LocalLlmClient {
 
   /** Removes parameters this connection was found not to accept. */
   /** Whether the most recent outbound body carried a Nexus tool-call grammar; set when a server rejects one. */
-  private grammarInLastBody = false;
-  private grammarRejected = false;
+  private grammarEndpointInLastBody: string | undefined;
+  private readonly grammarRejectedUntil = new Map<string, number>();
+  private grammarRejected(endpoint: string): boolean {
+    return (this.grammarRejectedUntil.get(endpoint) ?? 0) > Date.now();
+  }
 
   /** Adds the lazy text-mode tool-call grammar for the endpoint this body is sent to (see constrainTextModeToolCall). */
   private applyToolGrammar(currentEp: string, payload: Record<string, unknown>, tools: ToolDefinition[]): void {
-    this.grammarInLastBody = !this.grammarRejected && !this.conn.providerId && constrainTextModeToolCall(
+    const applied = !this.grammarRejected(currentEp) && !this.conn.providerId && constrainTextModeToolCall(
       LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown",
       payload,
       tools,
       toolGrammarEnabled(operatorSetting("NEXUS_TOOL_GRAMMAR")),
     );
+    this.grammarEndpointInLastBody = applied ? currentEp : undefined;
   }
 
   private omitUnsupported(body: Record<string, unknown>): void {
@@ -906,9 +912,10 @@ export class LocalLlmClient {
         return await run();
       } catch (err) {
         if (!(err instanceof InferenceError) || err.httpStatus !== 400) throw err;
-        // A server that refused our constrained request stays unconstrained for this connection (fail closed).
-        if (this.grammarInLastBody && !this.grammarRejected) {
-          this.grammarRejected = true;
+        // A server that refused our grammar (the error says so) stays unconstrained for a while; any other 400 is not
+        // evidence about the grammar.
+        if (this.grammarEndpointInLastBody && isGrammarRejection(err.message) && !this.grammarRejected(this.grammarEndpointInLastBody)) {
+          this.grammarRejectedUntil.set(this.grammarEndpointInLastBody, Date.now() + GRAMMAR_REJECTION_TTL_MS);
           this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} rejected the tool-call grammar; resending without it.`));
           continue;
         }

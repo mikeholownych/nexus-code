@@ -42,17 +42,37 @@ function strictCompatibleParameters(parameters: ToolDefinition["function"]["para
   };
 }
 
-/** NEXUS_TOOL_GRAMMAR=off|0|false|no|disabled is the kill switch for every server-side tool-call constraint added by Nexus. */
-export function toolGrammarEnabled(setting: string | undefined): boolean {
-  return !/^(off|0|false|no|disabled)$/i.test((setting ?? "").trim());
+/**
+ * Default for the llama.cpp text-mode tool-call grammar. OFF until a live llama.cpp matrix has passed (G1.1-4); flipping
+ * this one constant to true turns the feature on by default. NEXUS_TOOL_GRAMMAR=on|off overrides it either way.
+ */
+export const toolGrammarDefault = false;
+
+/**
+ * NEXUS_TOOL_GRAMMAR=on|off for the llama.cpp text-mode tool-call grammar added here (it does not govern the separate
+ * vLLM strict-schema adaptation). on/1/true/yes/enabled enables it, off/0/false/no/disabled disables it, anything else
+ * (including unset) uses `toolGrammarDefault`.
+ */
+export function toolGrammarEnabled(setting: string | undefined, fallback: boolean = toolGrammarDefault): boolean {
+  const value = (setting ?? "").trim();
+  if (/^(off|0|false|no|disabled)$/i.test(value)) return false;
+  if (/^(on|1|true|yes|enabled)$/i.test(value)) return true;
+  return fallback;
+}
+
+/** Whether a 400 body says the server could not take the grammar (as opposed to, say, a context overflow). */
+export function isGrammarRejection(message: string): boolean {
+  return /grammar|trigger|gbnf|parse error|failed to parse/i.test(message);
 }
 
 /**
  * Constrain a TEXT-MODE tool call on a verified llama.cpp server. llama-server rejects a caller `grammar` beside native
- * `tools` (it builds the tool grammar itself from their schemas, reasoning included), so this applies only to a request
- * that carries no `tools` field and still offers tools. The grammar is LAZY: it starts at the `<tool_call>` trigger, so
- * a plain-text answer and `<think>…</think>` reasoning stay unconstrained and a turn that wants text is never broken.
- * Any other server kind (including every unknown or unverified one) is left untouched. Returns whether it applied.
+ * `tools` (it builds the tool grammar itself from their schemas), so this applies only to a request that carries no
+ * `tools` field and still offers tools. The grammar is the whole-reply grammar of generateToolCallBlockGbnf: free text,
+ * `<think>…</think>` reasoning and well-formed `<tool_call>` blocks all parse, so it is correct when applied from the
+ * first token. No lazy-trigger fields are sent: llama.cpp's chat endpoint discards `grammar_lazy` and `grammar_triggers`,
+ * so correctness must not depend on them. Any other server kind (every unknown or unverified one) is left untouched.
+ * Returns whether it applied.
  */
 export function constrainTextModeToolCall(
   serverKind: ServerKind,
@@ -66,7 +86,5 @@ export function constrainTextModeToolCall(
   try { grammar = generateToolCallBlockGbnf(offeredTools); } catch { return false; }
   if (!grammar) return false;
   body.grammar = grammar;
-  body.grammar_lazy = true;
-  body.grammar_triggers = [{ type: 1, value: "<tool_call>" }]; // COMMON_GRAMMAR_TRIGGER_TYPE_WORD
   return true;
 }
