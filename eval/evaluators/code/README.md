@@ -23,29 +23,35 @@ from what the agent said about its own work.
   - The sandbox unshares networking, exposes the candidate workspace plus the exact runtime executable and system runtime mounts, and clears the inherited environment.
   - Wall time, captured output and process cleanup are bounded. If the sandbox or an allowlisted runtime is unavailable, the evaluator fails closed without a host fallback.
   - Passes only on exit status 0 with no timeout, signal or spawn error.
-  - Runs in a pinned workspace: the pre-agent tree plus every change the candidate made (additions, edits and deletions
-    of any file type, so `.json`, `.go`, `.c` and `.css` inputs are included).
-  - Not carried: `node_modules/` and `target/` (dependencies and Rust build output, at any depth; also skipped by the
-    snapshot, so a large one is not refused, and a source directory that happens to be named `target` is not carried
-    either) and build configuration or helpers the build executes (`package.json`, lockfiles, `tsconfig*.json`,
-    tool configs, `build.rs`, `setup.py`, `conftest.py`, `Makefile`, `Cargo.toml`, `go.mod`, `tools/*.js` and similar).
-    A candidate edit to one is reported in `details.ignoredCandidateChanges`; it never changes the build.
-  - A candidate change that cannot be reproduced safely (a symlink) fails the evaluator closed, naming the path.
+  - Runs in a pinned workspace: the pre-agent tree plus the candidate's changes to source and data files (additions, edits
+    and deletions): the source extensions `syntax_ast` knows, plus `.json .css .scss .less .sql .proto .graphql .html .svg
+    .txt .csv .yaml .yml .toml .go .c .h .cc .cpp .hpp .java .kt .cs .swift`.
+  - Not carried, and reported in `details.ignoredCandidateChanges` (never silently): any changed path of another type
+    (shell scripts, Gradle/Maven/Ruby/Just files, `.ini`, `.xml`, lockfiles, binaries), any symlink or special file, and
+    build configuration or helpers the build or a checker obeys (`package.json`, `tsconfig*.json`, tool configs such as
+    `.eslintrc*`, `pyrightconfig.json`, `ruff.toml`, `build.rs`, `setup.py`, `conftest.py`, `Makefile`, `Cargo.toml`,
+    `go.mod`, `tools/*.js`). These keep their baseline content, so they never change the build. This deviates from the plan
+    wording ("carry every candidate build input or fail closed and report ignored changed paths"): it carries an allowlist
+    of input types, pins and reports the rest, and does not fail closed.
+  - Skipped by the snapshot and not reported, at any depth: `node_modules/`, `__pycache__/`, `.venv/`, `venv/`,
+    `.mypy_cache/`, `.pytest_cache/`, `.tox/`, and `target/` only where it is Cargo output (beside a `Cargo.toml` and
+    holding Cargo's `CACHEDIR.TAG`). Any other `target/` is an ordinary directory. Skipping keeps a large dependency tree
+    from tripping the snapshot limits.
+  - Known limits:
+    - A script in a carried language that the build invokes (for example `scripts/check.js` run by `npm run build`, or
+      `jest.setup.js`) is carried like any other source file, so a candidate can edit it. The pinned list is a denylist
+      for those; a `tsconfig` `extends` target with another name is carried.
+    - Files the candidate produced in carried types are carried too (`dist/*.js`, generated sources). A build that only
+      checks that an output exists can pass on the candidate's own output.
+    - A very large directory that is not in the skip list (over 50,000 entries or 5 s to scan) still makes the evaluator
+      fail closed.
   - The pinned copy is created under the run's scratch root (the size-capped tmpfs under the resource contract), and an
     explicit candidate typecheck `cwd` inside the workspace maps to the same directory in the copy; one outside it fails.
   - Budgets: the run's resource contract (`config.resources`: cgroup CPU, memory and process limits) applies to these
     commands; independently, a single file write is capped (`maxFileBytes`, default 1 GiB, via `prlimit`) and core dumps
     are off. A relative command must stay inside the workspace after `..` and symlinks resolve.
-  - Known limits of this design, which pins and reports rather than carrying every input or failing closed (the plan
-    wording for WP-1302):
-    - Pinning is a denylist. A script the build invokes that is not in the list above (for example `scripts/check.js`
-      run by `npm run build`) is carried like any other candidate file, so a candidate can edit it.
-    - Files the candidate produced are carried too (`dist/`, `*.tsbuildinfo`, generated sources). A build that only checks
-      that an output exists can pass on the candidate's own output.
-    - Only `node_modules/` and `target/` are excluded from the snapshot. Another very large directory (over 50,000
-      entries or 5 s to scan) still makes the evaluator fail closed.
 - **`typecheck_clean.mjs`**
-  - Runs the baseline and candidate typecheck commands in separate Bubblewrap workspaces under the same filesystem, network, environment, output and process limits as `build.mjs`.
+  - The candidate side runs in the same pinned workspace as `build.mjs` (so the carrying rules above apply, and `details.ignoredCandidateChanges` lists what was not carried). Runs the baseline and candidate typecheck commands in separate Bubblewrap workspaces under the same filesystem, network, environment, output and process limits as `build.mjs`.
   - Fails on any diagnostic line the candidate adds; existing diagnostics may remain. Duplicate lines are counted.
   - Also fails when the candidate exits non-zero and either the baseline exited 0 or the candidate printed nothing.
   - A containment failure, timeout, output overflow or signal on either side fails closed.

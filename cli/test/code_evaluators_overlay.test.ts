@@ -35,7 +35,7 @@ async function runBuild(baseline: string, candidate: string, build: { command: s
   return result;
 }
 
-for (const file of ["data/table.json", "pkg/main.go", "src/native.c", "styles/app.css", "assets/schema.sql", "Dockerfile.test"]) {
+for (const file of ["data/table.json", "pkg/main.go", "src/native.c", "styles/app.css", "assets/schema.sql", "data/values.yaml"]) {
   test(`build sees a candidate edit to ${file}, not the baseline copy`, async () => {
     const { root, baseline, candidate } = pair({ [file]: "good\n" }, (c) => fs.writeFileSync(path.join(c, file), "BAD\n"));
     try {
@@ -87,22 +87,63 @@ test("a dangling baseline symlink replaced by a candidate file does not break th
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a candidate symlink that cannot be carried fails closed instead of being dropped", async () => {
+test("a candidate symlink is not carried but is reported, and does not fail the evaluator", async () => {
   const { root, baseline, candidate } = pair({ "keep.txt": "good\n" }, (c) => fs.symlinkSync("keep.txt", path.join(c, "link.json")));
   try {
     const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", "process.exit(0)"] });
-    assert.equal(result.passed, false);
-    assert.match(String(result.details.error), /link\.json/);
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+    assert.deepEqual(result.details.ignoredCandidateChanges, ["link.json"]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a candidate virtualenv or cache is skipped without failing the build", async () => {
+  const { root, baseline, candidate } = pair({ "keep.txt": "good\n" }, (c) => {
+    fs.mkdirSync(path.join(c, ".venv/bin"), { recursive: true });
+    fs.symlinkSync("/usr/bin/python3", path.join(c, ".venv/bin/python"));
+    fs.mkdirSync(path.join(c, "pkg/__pycache__"), { recursive: true });
+    fs.writeFileSync(path.join(c, "pkg/__pycache__/m.cpython-312.pyc"), "x");
+  });
+  try {
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", "process.exit(0)"] });
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("scripts and build or checker configuration the build runs are pinned to the baseline and reported", async () => {
+  const pinned = ["scripts/check.sh", "build.gradle", "pom.xml", "justfile", "Rakefile", "mypy.ini", "pyrightconfig.json", "ruff.toml", ".eslintrc.json", "jsconfig.json"];
+  const files: Record<string, string> = {};
+  for (const rel of pinned) files[rel] = "good\n";
+  const { root, baseline, candidate } = pair(files, (c) => { for (const rel of pinned) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
+  try {
+    const script = `const fs=require("fs"); process.exit(${JSON.stringify(pinned)}.some((f)=>fs.readFileSync(f,"utf8").includes("BAD"))?1:0)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    assert.equal(result.passed, true, JSON.stringify(result.details));
+    assert.deepEqual([...result.details.ignoredCandidateChanges].sort(), [...pinned].sort());
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const [name, files] of [
+  ["a nested package named target", { "pkg/target/lib.txt": "good\n" }],
+  ["a target directory beside a Cargo.toml that is not Cargo output", { "Cargo.toml": "good\n", "target/lib.txt": "good\n" }],
+] as const) {
+  test(`${name} is carried like any other directory`, async () => {
+    const rel = Object.keys(files).find((file) => file.endsWith("lib.txt"))!;
+    const { root, baseline, candidate } = pair({ ...files }, (c) => fs.writeFileSync(path.join(c, rel), "BAD\n"));
+    try {
+      const result = await runBuild(baseline, candidate, buildReading(rel));
+      assert.equal(result.passed, false, `an edit to ${rel} must reach the build: ${JSON.stringify(result.details)}`);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
 for (const directory of ["node_modules", "target"]) {
   test(`a large ${directory}/ does not make the pinned snapshot refuse the workspace`, { timeout: 120_000 }, async () => {
-    const { root, baseline, candidate } = pair({ "src/a.json": "good\n" }, (c) => fs.writeFileSync(path.join(c, "src/a.json"), "BAD\n"));
+    const { root, baseline, candidate } = pair({ "src/a.json": "good\n", "Cargo.toml": "good\n" }, (c) => fs.writeFileSync(path.join(c, "src/a.json"), "BAD\n"));
     try {
       for (const side of [baseline, candidate]) {
         const dir = path.join(side, directory, "big");
         fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(side, directory, "CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55\n");
         for (let i = 0; i < 50_100; i += 1) fs.writeFileSync(path.join(dir, `f${i}`), "");
       }
       const result = await runBuild(baseline, candidate, buildReading("src/a.json"));

@@ -23,7 +23,9 @@ function snapshotError(message) {
 export function captureWorkspaceSnapshot(root, options = {}) {
   const limits = { ...DEFAULT_SNAPSHOT_LIMITS, ...options };
   const now = options.now ?? (() => performance.now());
-  const skipDirectories = new Set(options.skipDirectories ?? []);
+  // Each rule is a directory name, or { name, sibling, child }: skipped only where that sibling file exists beside it and
+  // that child file exists inside it (Cargo writes CACHEDIR.TAG into every target/ it creates).
+  const skipRules = new Map((options.skipDirectories ?? []).map((rule) => (typeof rule === "string" ? { name: rule } : rule)).map((rule) => [rule.name, rule]));
   for (const key of ["maxDepth", "maxEntries", "maxBytes", "timeoutMs"]) {
     if (!Number.isSafeInteger(limits[key]) || limits[key] < 1) throw new RangeError(`${key} must be a positive integer`);
   }
@@ -74,7 +76,9 @@ export function captureWorkspaceSnapshot(root, options = {}) {
           const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
           const absolute = path.join(`/proc/self/fd/${descriptor}`, name);
           checkEntry(relative, depth + 1);
-          if (skipDirectories.has(name)) {
+          const skipRule = skipRules.get(name);
+          if (skipRule && (!skipRule.sibling || fs.existsSync(path.join(`/proc/self/fd/${descriptor}`, skipRule.sibling))) &&
+              (!skipRule.child || fs.existsSync(path.join(absolute, skipRule.child)))) {
             // Counted as one entry; the directory's contents are never listed.
             let skipped;
             try { skipped = fs.lstatSync(absolute); }
@@ -157,10 +161,26 @@ const excludedBuildConfiguration = /(?:^|\/)(?:package\.json|package-lock\.json|
  * Files the build itself executes or resolves through, rather than inputs it reads: a candidate that edits one could
  * make its own build pass. They keep their pre-agent content, and an edit is reported, not applied.
  */
-const pinnedBuildHelpers = /(?:^|\/)(?:build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?|\.babelrc|\.mocharc\.[^/]+|tools\/[^/]+\.[cm]?js)$/i;
+const pinnedBuildHelpers = /(?:^|\/)(?:build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?|\.babelrc|\.mocharc\.[^/]+|tools\/[^/]+\.[cm]?js|(?:pyright|js)config\.json|\.?ruff\.toml|(?:clippy|rustfmt|deny)\.toml|\.eslintrc(?:\.[^/]+)?|eslint\.config\.[^/]+|biome\.jsonc?|deno\.jsonc?|\.swcrc)$/i;
 
-/** Dependency and Rust build-output directories (at any depth): skipped by the snapshot, never overlaid, never reported. */
-const DEPENDENCY_DIRECTORIES = ["node_modules", "target"];
+/**
+ * Candidate file types carried into the pinned workspace: source code and data a build reads. Anything else the agent
+ * changed (shell scripts, Gradle/Maven/Ruby/Just build files, INI configuration, lockfiles, binaries, symlinks) keeps its
+ * baseline content and is reported in `details.ignoredCandidateChanges`, because a build can run or obey it.
+ */
+const INPUT_EXTENSIONS = new Set([".json", ".css", ".scss", ".less", ".sql", ".proto", ".graphql", ".html", ".svg", ".txt", ".csv", ".yaml", ".yml", ".toml",
+  ".go", ".c", ".h", ".cc", ".cpp", ".hpp", ".java", ".kt", ".cs", ".swift"]);
+
+function carriedInputPath(relative) {
+  return isSupportedSyntaxPath(relative) || INPUT_EXTENSIONS.has(path.extname(relative).toLowerCase());
+}
+
+/**
+ * Dependency, cache and build-output directories (at any depth): skipped by the snapshot, so never overlaid and never
+ * reported. `target` is skipped only where it is Cargo output: beside a `Cargo.toml` and holding Cargo's `CACHEDIR.TAG`;
+ * elsewhere it is an ordinary directory and is carried or reported like any other.
+ */
+const DEPENDENCY_DIRECTORIES = ["node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".tox", { name: "target", sibling: "Cargo.toml", child: "CACHEDIR.TAG" }];
 
 function pinnedBuildInput(relative) {
   return excludedBuildConfiguration.test(relative) || pinnedBuildHelpers.test(relative);
@@ -227,7 +247,6 @@ export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorks
   const baseline = captureWorkspaceSnapshot(baselineWorkspace, snapshotOptions);
   const candidate = captureWorkspaceSnapshot(candidateWorkspace, snapshotOptions);
   const ignored = [];
-  const uncarriable = [];
   const tempRoot = fs.mkdtempSync(path.join(scratchRoot, "nexus-evaluator-pinned-config-"));
   const pinnedWorkspace = path.join(tempRoot, "workspace");
   try {
@@ -237,13 +256,13 @@ export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorks
       const before = baseline.get(relative);
       const after = candidate.get(relative);
       if (before && after && sameEntry(before, after)) continue;
-      if (pinnedBuildInput(relative)) { ignored.push(relative); continue; }
+      if (pinnedBuildInput(relative) || !carriedInputPath(relative)) { ignored.push(relative); continue; }
       const target = path.join(pinnedWorkspace, ...relative.split("/"));
       if (!after) {
         removeEntry(target);
         continue;
       }
-      if (after.kind !== "file") { uncarriable.push(relative); continue; }
+      if (after.kind !== "file") { ignored.push(relative); continue; }
       const { bytes, mode } = readVerifiedCandidateFile(candidateWorkspace, relative, after);
       const targetParent = path.dirname(target);
       const parents = [];
@@ -280,8 +299,6 @@ export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorks
         fs.closeSync(descriptor);
       }
     }
-    // A candidate symlink cannot be reproduced safely. Dropping it would score a tree the candidate did not produce.
-    if (uncarriable.length) throw new Error(`candidate changes that cannot be carried into the build workspace: ${uncarriable.join(", ")}`);
     return { tempRoot, workspace: pinnedWorkspace, ignored: ignored.sort() };
   } catch (error) {
     fs.rmSync(tempRoot, { recursive: true, force: true });
