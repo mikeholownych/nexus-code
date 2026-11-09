@@ -286,7 +286,7 @@ export function listWorktrees(ctx: WorktreeContext, options: { limit?: number; j
   const now = Date.now() / 1000;
   const items: ListItem[] = shown.map((entry) => {
     const item: ListItem = {
-      branch: entry.branch ? shownBranch(entry.branch) : null, path: entry.path, head: entry.head, main: entry.isMain, current: entry === here,
+      branch: entry.branch, path: entry.path, head: entry.head, main: entry.isMain, current: entry === here,
       detached: entry.detached, locked: entry.locked, prunable: entry.prunable, kind: kindOf(repo, entry, registry),
       registered: registry.worktrees.some((r) => r.path === entry.path), dirty: null, ahead: null, behind: null,
       integrated: null, ageSeconds: null, agent: null,
@@ -308,10 +308,12 @@ export function listWorktrees(ctx: WorktreeContext, options: { limit?: number; j
     return item;
   });
 
+  // Machine output (`--json`, like `path`) carries branch names and paths as they are; only the human-readable
+  // rendering below redacts them (docs/WORKTREES.md, "Safety").
   const data = {
     schema: LIST_SCHEMA,
     repo: { name: repo.repoName, path: repo.repoPath },
-    defaultBranch: target ? shownBranch(target) : null,
+    defaultBranch: target ?? null,
     total: repo.entries.length,
     truncated: repo.entries.length > shown.length,
     ...(warning ? { warning } : {}),
@@ -325,7 +327,7 @@ export function listWorktrees(ctx: WorktreeContext, options: { limit?: number; j
     const track = item.ahead === null ? "" : `↑${item.ahead}↓${item.behind}`;
     const state = item.integrated ? `integrated(${item.integrated})` : "";
     const age = item.ageSeconds === null ? "" : humanAge(item.ageSeconds);
-    return [mark, item.branch ?? "(detached)", item.kind, dirty, track, state, age, shownPath(ctx.home, item.path), item.error ? `[${item.error}]` : ""].filter((part, i) => i < 2 || part !== "").join("  ");
+    return [mark, item.branch ? shownBranch(item.branch) : "(detached)", item.kind, dirty, track, state, age, shownPath(ctx.home, item.path), item.error ? `[${item.error}]` : ""].filter((part, i) => i < 2 || part !== "").join("  ");
   });
   if (data.truncated) lines.push(`... ${repo.entries.length - shown.length} more worktrees not shown (--limit ${repo.entries.length} to show all)`);
   if (warning) lines.push(`warning: ${warning}`);
