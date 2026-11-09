@@ -43,6 +43,15 @@ type Op =
   | { kind: "file"; rel: string; size: number; atimeMs: number; mtimeMs: number }
   | { kind: "symlink"; rel: string; target: string };
 
+const virtualenv = (rel: string) => `${rel}: virtualenv (absolute paths; recreate it in the worktree)`;
+
+/** The directories above `rel` (relative, nearest last), excluding the tree root. */
+function ancestors(rel: string): string[] {
+  const out: string[] = [];
+  for (let dir = path.dirname(rel); dir !== "." && dir !== "/"; dir = path.dirname(dir)) out.unshift(dir);
+  return out;
+}
+
 function insideOrEqual(parent: string, child: string): boolean {
   const rel = path.relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
@@ -98,7 +107,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
       return;
     }
     if (stat.isDirectory()) {
-      if (fs.existsSync(path.join(abs, "pyvenv.cfg"))) { skipped.push(`${rel}: virtualenv (absolute paths; recreate it in the worktree)`); return; }
+      if (fs.existsSync(path.join(abs, "pyvenv.cfg"))) { skipped.push(virtualenv(rel)); return; }
       ops.push({ kind: "dir", rel });
       for (const child of fs.readdirSync(abs)) walk(path.join(rel, child), root);
       return;
@@ -118,6 +127,10 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   for (const entry of roots) {
     const rel = entry.replace(/\/$/, "");
     if (!rel || path.isAbsolute(rel) || rel.split("/").includes("..") || NEVER_COPY.has(rel.split("/")[0])) continue;
+    // A root can be a single file deep inside a directory the walk never visits (`.venv/bin/activate`): the
+    // virtualenv exclusion must hold for its ancestors too.
+    const env = ancestors(rel).find((dir) => fs.existsSync(path.join(sourceRoot, dir, "pyvenv.cfg")));
+    if (env !== undefined) { if (!skipped.includes(virtualenv(env))) skipped.push(virtualenv(env)); continue; }
     walk(rel, rel);
   }
 
@@ -226,7 +239,7 @@ function listRoots(sourceRoot: string, all: boolean): Selection | "no-include" {
   const included = nul(git(sourceRoot, [...base, `--exclude-from=${file}`]).stdout);
   const files = new Set(included.length === 0 ? [] : nul(git(sourceRoot, ["check-ignore", "-z", "--stdin"], { input: included.join("\0") + "\0", allowFailure: true }).stdout));
   const dirs = new Set<string>();
-  for (const rel of files) for (let dir = path.dirname(rel); dir !== "."; dir = path.dirname(dir)) dirs.add(dir);
+  for (const rel of files) for (const dir of ancestors(rel)) dirs.add(dir);
   if (files.size === 0) return { roots: [], only: { files, dirs } };
   // Collapsed entries group the report; keep those that are selected or have a selected file beneath them.
   const collapsed = nul(git(sourceRoot, [...base, "--directory", `--exclude-from=${file}`]).stdout);
