@@ -6677,13 +6677,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       : undefined;
     const workspaceChanged = this.turnWorkspaceChanged();
     // Running a command latches the verification obligation, because a command can change files. When the turn ended
-    // normally, nothing was pending before it, no worktree holds its work, and the workspace is exactly as the turn
-    // found it, the latch caught nothing: there is no change to verify (TUI-AUDIT D-04). A command that changed any
-    // file leaves the identity different and the obligation stands.
+    // normally, nothing was pending before it, no worktree holds its work, no verifier result is held (a verifier that
+    // ran is the evidence), and the workspace is exactly as the turn found it, the latch caught nothing: there is no
+    // change to verify (TUI-AUDIT D-04). A command that changed any file leaves the identity different.
     const endedNormally = !input.interruption && !input.unhandledError && !input.persistenceFailure && !input.inferenceFailure &&
       !input.capacityBlock && !input.limitReached;
     const latchCaughtNothing = endedNormally && this.hasPendingModifications && !this.turnCarriedChanges &&
-      !this.activeWorktree && workspaceChanged === "no";
+      !this.activeWorktree && !evidence && workspaceChanged === "no";
     if (latchCaughtNothing) {
       this.setUnverifiedChanges(false);
       // A later change takes a fresh pre-change baseline: the workspace may change between turns.
