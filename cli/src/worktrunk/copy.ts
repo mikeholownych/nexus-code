@@ -24,6 +24,7 @@ import { currentEntry, openRepo } from "./repo.js";
 export interface CopyLimits { maxFiles: number; maxBytes: number }
 
 export const DEFAULT_COPY_LIMITS: CopyLimits = { maxFiles: 50_000, maxBytes: 4 * 1024 ** 3 };
+export const defaultCopyLimits: { current: CopyLimits } = { current: { ...DEFAULT_COPY_LIMITS } };
 
 export interface CopyOptions {
   from?: string;
@@ -69,7 +70,7 @@ export function copyIgnored(ctx: WorktreeContext, options: CopyOptions = {}): Co
 }
 
 function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): CommandResult {
-  const limits = options.limits ?? DEFAULT_COPY_LIMITS;
+  const limits = options.limits ?? defaultCopyLimits.current;
   const repo = openRepo(ctx.cwd);
   const source = options.from ? findEntry(repo, options.from, ctx.home) : repo.entries[0];
   const dest = options.to ? findEntry(repo, options.to, ctx.home) : currentEntry(repo);
