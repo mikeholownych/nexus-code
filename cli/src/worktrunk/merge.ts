@@ -3,18 +3,17 @@
  *
  * merge: commit what is dirty, squash, rebase onto the target, fast-forward only, then remove the worktree and its
  * branch. Nothing here runs a hook or an external command (commit messages are deterministic unless `--message` is
- * given). The pre-merge hook (WP-1313) will attach at `preMerge` below.
+ * given). The pre-merge hook (WP-1313) will attach at `mergeSeams.preMerge` below, after every refusal.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { generateConventionalCommit } from "../git.js";
+import { conventionalCommitMessage } from "../git.js";
 import { redactSecrets } from "../ui.js";
 import { removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type WorktreeEntry } from "./repo.js";
-import { readRegistry } from "./registry.js";
 
 export interface MergeOptions {
   target?: string;
@@ -25,6 +24,25 @@ export interface MergeOptions {
 }
 
 const NON_INTERACTIVE = { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" };
+
+/**
+ * Where WP-1313's blocking pre-merge hook attaches: called once, after every refusal (main checkout, detached HEAD,
+ * target not checked out, operation in progress, dirty target, unresolved conflicts) and before anything is backed up,
+ * committed, squashed or rebased. Exposed as an object so tests can observe it; not an extension point for callers.
+ */
+export const mergeSeams: { preMerge?: (info: { branch: string; target: string }) => void } = {};
+
+/** Paths `git status` reports for the worktree, read through the pinned helper (no shell, no fsmonitor, no hooks). */
+function changedFiles(dir: string): string[] {
+  const records = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]).stdout.split("\0").filter(Boolean);
+  const files: string[] = [];
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    files.push(record.slice(3));
+    if (record[0] === "R" || record[0] === "C") i++; // the rename source follows as its own record
+  }
+  return files;
+}
 
 function inProgress(gitDir: string): string | undefined {
   for (const name of ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD"]) {
@@ -74,7 +92,6 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   const targetEntry = repo.entries.find((entry) => entry.branch === targetName);
   if (!targetEntry || targetEntry.prunable) throw new WorktreeError(`target ${shownBranch(targetName)} is not checked out in any worktree; run \`worktree switch ${shownBranch(targetName)}\` first`);
 
-  // preMerge: WP-1313 attaches the blocking pre-merge hook here, after the checks and before any history is rewritten.
   const gitDir = gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
   const busy = inProgress(gitDir);
   if (busy) throw new WorktreeError(`a ${busy.replace("-merge", "").replace("-apply", "")} is already in progress in this worktree; finish it (git rebase --continue / --abort) and run merge again`);
@@ -83,11 +100,17 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
 
   const notes: string[] = [];
   const state = statusOf(source.path);
+  // A conflicted `git stash pop` leaves unmerged index entries with no operation marker; staging them would
+  // clear the conflict and commit the markers.
+  if (state.conflicted > 0) throw new WorktreeError(`the worktree has ${state.conflicted} path(s) with unresolved conflicts; resolve them (or \`git restore\` them) in ${shownPath(ctx.home, source.path)} and run merge again. Nothing was changed`);
   const targetSha = resolveBranchCommit(repo, targetName);
   if (!targetSha) throw new WorktreeError(`target ${shownBranch(targetName)} does not name a commit`);
   const dirty = state.total > 0;
   const mergeBase = gitOut(source.path, ["merge-base", targetSha, "HEAD"], { allowFailure: false });
   const ahead = Number(gitOut(source.path, ["rev-list", "--count", `${mergeBase}..HEAD`]));
+
+  mergeSeams.preMerge?.({ branch, target: targetName });
+
   if (!dirty && ahead === 0) {
     notes.push(`Nothing to merge: ${shownBranch(branch)} has no commits beyond ${shownBranch(targetName)}.`);
   } else {
@@ -96,14 +119,23 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   }
 
   if (dirty) {
-    const message = options.message ?? generateConventionalCommit(source.path).message;
+    const message = options.message ?? conventionalCommitMessage(changedFiles(source.path));
     git(source.path, ["add", "-A"]);
-    git(source.path, ["commit", "-m", message], { env: NON_INTERACTIVE });
-    notes.push("Committed the uncommitted changes.");
+    if (git(source.path, ["diff", "--cached", "--quiet"], { allowFailure: true }).status === 0) {
+      notes.push("Nothing the superproject can commit was changed (for example only edits inside a submodule).");
+    } else {
+      git(source.path, ["commit", "-m", message], { env: NON_INTERACTIVE });
+      notes.push("Committed the uncommitted changes.");
+    }
   }
 
   const count = Number(gitOut(source.path, ["rev-list", "--count", `${mergeBase}..HEAD`]));
-  if (count > 1 && !options.noSquash) {
+  const treeOf = (rev: string) => gitOut(source.path, ["rev-parse", "--verify", "--end-of-options", `${rev}^{tree}`]);
+  // Commits that cancel each other (a change and its revert) add nothing: squashing them would leave an empty commit
+  // and rewriting them onto the target would only add noise, so they are left where they are and not merged.
+  const cancelled = count > 0 && treeOf("HEAD") === treeOf(mergeBase);
+  if (cancelled) notes.push(`The ${count} commit(s) on ${shownBranch(branch)} cancel each other out: nothing to merge into ${shownBranch(targetName)}.`);
+  if (!cancelled && count > 1 && !options.noSquash) {
     const subjects = gitOut(source.path, ["log", "--reverse", "--format=%s", `${mergeBase}..HEAD`]).split("\n").filter(Boolean);
     const message = options.message ?? `${subjects[0]}\n\nSquashed ${count} commits from ${branch}:\n${subjects.map((s) => `- ${s}`).join("\n")}`;
     git(source.path, ["reset", "--soft", mergeBase]);
@@ -111,7 +143,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     notes.push(`Squashed ${count} commits.`);
   }
 
-  if (!options.noRebase && mergeBase !== targetSha) {
+  if (!cancelled && !options.noRebase && mergeBase !== targetSha) {
     const rebase = git(source.path, ["rebase", targetSha], { allowFailure: true, env: NON_INTERACTIVE });
     if (rebase.status !== 0) {
       const open = inProgress(gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]));
@@ -126,15 +158,23 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     notes.push(`Rebased onto ${shownBranch(targetName)}.`);
   }
 
-  const ff = git(targetEntry.path, ["merge", "--ff-only", "--no-edit", "--end-of-options", branch], { allowFailure: true, env: NON_INTERACTIVE });
-  if (ff.status !== 0) {
-    throw new WorktreeError(`could not fast-forward ${shownBranch(targetName)} to ${shownBranch(branch)}: ${options.noRebase ? "the branch is not a descendant of the target (merge without --no-rebase)" : "the target moved while merging; run merge again"}`);
+  if (!cancelled) {
+    const ff = git(targetEntry.path, ["merge", "--ff-only", "--no-edit", "--end-of-options", branch], { allowFailure: true, env: NON_INTERACTIVE });
+    if (ff.status !== 0) {
+      throw new WorktreeError(`could not fast-forward ${shownBranch(targetName)} to ${shownBranch(branch)}: ${options.noRebase ? "the branch is not a descendant of the target (merge without --no-rebase)" : "the target moved while merging; run merge again"}`);
+    }
+    notes.push(`Fast-forwarded ${shownBranch(targetName)}.`);
   }
-  notes.push(`Fast-forwarded ${shownBranch(targetName)}.`);
 
   if (!options.noRemove) {
-    // The merged work is on the target. What is left in the worktree is ignored output (build caches), which goes with it.
-    notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { force: true, target: targetName }));
+    // The merged work is on the target. Only ignored output (build caches) may still be in the worktree; it goes with
+    // it. Anything else left (edits inside a submodule cannot be committed from here, for one) is never forced away.
+    const left = statusOf(source.path);
+    if (left.total > 0) {
+      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: ${left.total} uncommitted change(s) remain that the merge could not carry (check \`git status\` there, submodules included). Nothing was deleted.`);
+    } else {
+      notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { force: true, target: targetName }));
+    }
   }
   return { success: true, output: notes.join("\n"), data: { branch, target: targetName } };
 }
@@ -158,7 +198,6 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
   const limit = Math.max(1, options.limit ?? 100);
   const repo = openRepo(ctx.cwd);
   const here = currentEntry(repo);
-  const registry = readRegistry(repo.commonDir).registry;
   const target = defaultBranch(repo);
   const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
   if (!targetSha) throw new WorktreeError("this repository has no default branch to compare against");
@@ -199,7 +238,7 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
   }
 
   if (counts.stale > 0 && !options.dryRun) git(repo.cwd, ["worktree", "prune"]);
-  const summary = `${options.dryRun ? "Would remove" : "Removed"} ${counts.removed}, kept ${counts.kept}, ${counts.young} younger than the minimum age${counts.stale ? `, ${counts.stale} stale registration(s) ${options.dryRun ? "would be" : ""} pruned` : ""}.`;
+  const summary = `${options.dryRun ? "Would remove" : "Removed"} ${counts.removed}, kept ${counts.kept}, ${counts.young} younger than the minimum age${counts.stale ? `, ${counts.stale} stale registration(s) ${options.dryRun ? "would be pruned" : "pruned"}` : ""}.`;
   const shown = lines.slice(0, REPORT_LINES);
   if (lines.length > REPORT_LINES) shown.push(`... ${lines.length - REPORT_LINES} more lines`);
   if (limited) shown.push(`stopped at the limit of ${limit} removals; run prune again for more`);

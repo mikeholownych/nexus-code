@@ -106,7 +106,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "checkpoint", usage: "/checkpoint [name|diff <id> [base]|prune [n]]", summary: "Save, compare or prune workspace snapshots" },
   { name: "checkpoints", usage: "/checkpoints", summary: "List workspace snapshots" },
   { name: "undo", usage: "/undo", summary: "Roll the workspace back to the last snapshot" },
-  { name: "worktree", usage: "/worktree [status|merge|discard|list|path <branch>|switch [-c] <branch>|remove <branch>|copy-ignored|merge|prune]", summary: "Manage the speculative git worktree and named worktrees" },
+  { name: "worktree", usage: "/worktree [status|discard|list|path <branch>|switch [-c] <branch>|remove <branch>|copy-ignored|prune|merge [<target>|<flags>]]", summary: "Manage the speculative git worktree and named worktrees (a bare merge is the speculative one; merge ^ merges this named worktree into the default branch)" },
   { name: "audit", usage: "/audit [count]", summary: "Recent tool executions" },
   { name: "receipt", usage: "/receipt", summary: "Turn outcome, verifier evidence and validation receipt" },
   { name: "test", usage: "/test [pattern]", summary: "Run the project's test suite", cancellable: true },

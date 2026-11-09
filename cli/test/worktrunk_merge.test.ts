@@ -319,7 +319,7 @@ test("merge refuses when the worktree has unresolved conflicts", () => {
 
     const merged = wt(f, dir, ["merge"]);
     assert.equal(merged.success, false);
-    assert.match(merged.output, /unresolved conflict/i);
+    assert.match(merged.output, /in progress|unresolved conflict/i); // a half-finished `git merge` is refused by the in-progress check; a conflicted stash pop by the conflict check (worktrunk_merge_review.test.ts)
   } finally { f.cleanup(); }
 });
 

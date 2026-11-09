@@ -39,8 +39,9 @@ const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored", "prune"]);
 
 /**
  * The pre-WP-1310 `/worktree` forms, which act on the speculative worktree of the running session (`nexus run
- * --worktree`): no argument or `status` shows it, `merge` and `discard` resolve it. They are never named-worktree
- * subcommands (`status` is not an alias of `list`), so the CLI and both slash entry points agree.
+ * --worktree`): no argument or `status` shows it, a bare `merge` and `discard` resolve it. `status` is never a
+ * named-worktree subcommand (it is not an alias of `list`), and `merge` with arguments is the named merge, so the CLI
+ * and both slash entry points agree.
  */
 const LEGACY = new Set(["", "status", "merge", "discard"]);
 
@@ -59,7 +60,11 @@ function firstWord(args: string): string {
 
 /** True when `args` (the text after `/worktree`) is one of the legacy speculative-worktree forms. */
 export function isLegacyWorktreeArgs(args: string): boolean {
-  return LEGACY.has(firstWord(args));
+  const first = firstWord(args);
+  // A bare `merge` resolves the speculative worktree. `merge <target>` or `merge <flags>` is the named-worktree merge
+  // (`/worktree merge ^` merges into the default branch), so both stay reachable from the slash commands.
+  if (first === "merge") return args.trim().split(/\s+/).length === 1;
+  return LEGACY.has(first);
 }
 
 /** True when `args` (the text after `/worktree` or `nexus worktree`) only inspects. Empty means list. */
