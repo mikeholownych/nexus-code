@@ -589,3 +589,15 @@ test("a failed attempt whose verifier passed is not failure evidence", async () 
   assert.equal(outcome.kind, "failed");
   assert.equal((outcome as { failedRun?: unknown }).failedRun, undefined);
 });
+
+test("a file committed after the base and then deleted from disk does not break collection", async () => {
+  const { repo, run } = protectedRepo();
+  const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  fs.writeFileSync(path.join(repo, "later.txt"), "later\n");
+  run("add", "later.txt"); run("commit", "-q", "-m", "later");
+  fs.rmSync(path.join(repo, "later.txt"));
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo, { startCommit: base }));
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  assert.match(fake.prompts[0], /VISIBLE_CHANGE/);
+});
