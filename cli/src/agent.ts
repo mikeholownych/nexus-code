@@ -959,6 +959,12 @@ export class AutonomousAgent {
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
+  /**
+   * A turn that ended while waiting out a provider failure, restored by a resume: when the provider may be asked
+   * again, and the recovery record of that wait (its real submissions, for the status shown while waiting). Consumed
+   * by the first inference step of the next turn.
+   */
+  private resumedProviderWait?: { eligibleAt: string; record?: ProviderRecoveryRecord };
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
@@ -1677,6 +1683,7 @@ export class AutonomousAgent {
     if (this.objective?.execution) this.objective.execution = normalizeTracking(this.objective.execution);
     this.activeProviderRecovery = state.providerRecovery ?? null;
     this.recoveredOperation = state.operation;
+    this.rememberResumedProviderWait(state.lastTurn);
     // Durable task state is writable by the same local user who can run candidate
     // commands. Never trust a saved baseline, nor capture a new one over a
     // resumed workspace with pending changes: an attacker could delete the field
@@ -2344,6 +2351,7 @@ export class AutonomousAgent {
   }
 
   public resetConversation(): void {
+    this.resumedProviderWait = undefined;
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
     // A conversation reset in this process is not a durable recovery boundary. Keep
@@ -2595,10 +2603,12 @@ export class AutonomousAgent {
       providerRecovery?: DurableTaskState["providerRecovery"];
       operation?: DurableTaskState["operation"];
       changeBaseline?: DurableTaskState["changeBaseline"];
+      lastTurn?: TurnResult | null;
     },
     readArchive: (committed?: ReadonlySet<string>) => ArchiveRead<ChatMessage>,
   ): string | undefined {
     this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
+    this.rememberResumedProviderWait(session.lastTurn);
     this.restoreHistory(session.history);
     const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
     const read = readArchive(committed);
@@ -5485,6 +5495,65 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return this.lastTurnResult;
   }
 
+  /** Records the provider window a restored turn was waiting out when it ended, if any (see resumedProviderWait). */
+  private rememberResumedProviderWait(lastTurn: TurnResult | null | undefined): void {
+    const interruption = lastTurn?.execution === "INTERRUPTED" ? lastTurn.interruption : null;
+    const eligibleAt = interruption?.phase === "provider_wait" ? interruption.providerEligibleAt : undefined;
+    // Durable records are same-user writable: an unparseable time is ignored, and the wait is capped where it is used.
+    if (!eligibleAt || !Number.isFinite(Date.parse(eligibleAt))) {
+      this.resumedProviderWait = undefined;
+      return;
+    }
+    const recoveries = lastTurn?.providerRecovery ?? [];
+    this.resumedProviderWait = { eligibleAt, record: recoveries[recoveries.length - 1] };
+  }
+
+  /**
+   * Before the first request of a resumed turn: wait until the provider's recorded eligible time, capped by the
+   * recovery policy's maxDelayMs, shown as the ordinary provider-wait status. Cancellation throws RecoveryCancelled
+   * (the caller records the interruption with the same eligible time). Returns the record of the wait, or undefined.
+   */
+  private async waitOutResumedProviderWindow(
+    policy: RecoveryPolicy,
+    step: number,
+    turn: NonNullable<AutonomousAgent["activeTurn"]>,
+    signal: AbortSignal | undefined,
+  ): Promise<ProviderRecoveryRecord | undefined> {
+    const pending = this.resumedProviderWait;
+    this.resumedProviderWait = undefined;
+    if (!pending) return undefined;
+    const now = this.recoveryClock.now();
+    const remaining = Date.parse(pending.eligibleAt) - now;
+    if (!(remaining > 0)) return undefined;
+    const delay = Math.min(remaining, policy.maxDelayMs);
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const prior = pending.record;
+    const record: ProviderRecoveryRecord = {
+      state: "WAITING",
+      step,
+      startedAt: iso(now),
+      updatedAt: iso(now),
+      nextAttemptAt: iso(now + delay),
+      condition: prior?.condition ?? "TEMPORARILY_UNAVAILABLE",
+      reason: `resumed inside the provider's recorded window (eligible at ${pending.eligibleAt})`,
+      submissions: prior ? [...prior.submissions] : [],
+      probes: 0,
+      waitedMs: 0,
+      unknownReplays: 0,
+      ...(prior?.endpoint ? { endpoint: prior.endpoint } : {}),
+      policy: { deadlineMs: policy.deadlineMs, maxDelayMs: policy.maxDelayMs, maxUnknownReplays: policy.maxUnknownReplays },
+    };
+    this.onProviderRecoveryState(record, turn, false);
+    try {
+      await this.recoveryClock.sleep(delay, signal);
+    } catch (err) {
+      // Still inside the provider's window: a later resume waits for the rest of it.
+      this.resumedProviderWait = pending;
+      throw err instanceof RecoveryCancelled ? err : new RecoveryCancelled();
+    }
+    return { ...record, state: "RESUMED", updatedAt: iso(this.recoveryClock.now()), resumedAt: iso(this.recoveryClock.now()), waitedMs: delay };
+  }
+
   /** Recovery of the current inference step; null when no provider failure is being waited out. */
   public getProviderRecovery(): ProviderRecoveryRecord | null {
     return this.activeProviderRecovery;
@@ -6067,12 +6136,17 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Temporary provider failures are waited out here, at the inference boundary: history and tool state
         // are untouched while waiting, and a submission's output is used only once it is complete.
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+        // When the provider may be asked again, while this step waits for it (kept if the wait is interrupted).
+        let providerEligibleAt: string | undefined = this.resumedProviderWait?.eligibleAt;
+        let resumedWait: ProviderRecoveryRecord | undefined;
         const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep, {
           everSucceeded: typeof activeClient.hasEverSucceeded === "function" ? activeClient.hasEverSucceeded() : true,
           endpoint: activeClient.endpoint,
         });
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         try {
+          resumedWait = await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal);
+          providerEligibleAt = undefined;
           assistantMessage = await recovery.run(requestId, {
             submit: (s) => this.submitGenAiRequest(activeClient, () =>
               this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request) =>
@@ -6109,6 +6183,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 process.stdout.write(pc.dim("\n[partial response discarded: the provider failed before completing it]\n"));
                 streamedTokens = false;
               }
+              if (record.state === "WAITING" && record.nextAttemptAt) providerEligibleAt = record.nextAttemptAt;
               this.onProviderRecoveryState(record, turn, discarded);
             },
           }, signal);
@@ -6125,7 +6200,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (streamedTokens) process.stdout.write("\n");
           if (err instanceof RecoveryCancelled) {
             this.ui.stopSpinner(false, "Stopped while waiting for the inference provider");
-            markInterrupted("provider_wait");
+            markInterrupted("provider_wait", providerEligibleAt ? { providerEligibleAt } : {});
             break;
           }
           if (err instanceof InferenceError && err.kind === "aborted") {
@@ -6190,6 +6265,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           }
           break;
         } finally {
+          if (resumedWait) providerRecoveries.push(resumedWait);
           if (recovery.record) providerRecoveries.push(recovery.record);
           turn.phase = "inference";
           this.activeProviderRecovery = null;

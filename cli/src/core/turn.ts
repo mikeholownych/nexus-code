@@ -214,6 +214,11 @@ export interface InterruptionRecord {
   outstandingToolSettled?: boolean;
   /** Tool calls the model asked for that were never dispatched. */
   undispatchedToolCalls: number;
+  /**
+   * phase `provider_wait` only: when the provider may be asked again (the planned next attempt, which honours its
+   * Retry-After). A resumed turn waits until then before its first request (capped by the recovery policy).
+   */
+  providerEligibleAt?: string;
 }
 
 /**
