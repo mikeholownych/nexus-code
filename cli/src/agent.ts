@@ -48,7 +48,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, isSkillNote, oneLine } from "./skills.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -2734,11 +2734,13 @@ export class AutonomousAgent {
   }
 
   /**
-   * Whether a user-role message is Nexus's own note (continuation, recovery, step and empty-reply notes are sent in
-   * the user role, prefixed `[Nexus …]`), not something the operator asked for.
+   * Whether a user-role message is Nexus's own note, not something the operator asked for. The skill note is
+   * recognised by its provenance marker only, so operator text that begins with its prefix stays a request.
+   * Continuation, recovery, step and empty-reply notes are still recognised by their `[Nexus …]` text prefix
+   * (FINDINGS section E: moving them to provenance needs a migration for sessions saved by v1.1.3).
    */
-  private harnessNote(text: string): boolean {
-    return /^\[Nexus[ :]/.test(text);
+  private harnessNote(message: ChatMessage, text: string): boolean {
+    return isSkillNote(message) || (/^\[Nexus[ :]/.test(text) && !text.startsWith(SKILL_NOTE_PREFIX));
   }
 
   /** User messages the pinned ledger already carries (the objective and steering); compaction does not repeat them. */
@@ -3173,7 +3175,7 @@ export class AutonomousAgent {
         }
       }
       // Earlier requests are the operator's: Nexus's own notes are not tasks (CTX-06).
-      if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !this.harnessNote(contentText)) {
+      if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !this.harnessNote(message, contentText)) {
         if (!priorTasks.includes(contentText)) priorTasks.push(contentText);
       }
       if (message.role === "assistant" && message.tool_calls) {
@@ -3579,7 +3581,7 @@ export class AutonomousAgent {
     let recorded = false;
 
     // The request the findings serve is the operator's latest, not a note Nexus added (CTX-06).
-    const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(normalizeMessageContent(message.content ?? "").text.join("")));
+    const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(message, normalizeMessageContent(message.content ?? "").text.join("")));
     const request = normalizeMessageContent(lastUser?.content ?? "").text.join("").slice(0, 8_000);
     const contextLimit = this.contextLimit();
     const inputBudget = contextLimit - this.getContextReserves().completion - countTokens(FINDINGS_INSTRUCTIONS) - countTokens(request) - 1_000;
