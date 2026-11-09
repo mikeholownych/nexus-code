@@ -48,7 +48,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine } from "./skills.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine, withSkillNoteProvenance } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -1669,7 +1669,7 @@ export class AutonomousAgent {
       this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
     }
     this.activePlan = state.activePlan || [];
-    this.messages = state.messages || [];
+    this.messages = withSkillNoteProvenance(state.messages || []);
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
     // A ledger written by an earlier version lacks newer tracking fields (recovery, coverage): complete it now, before
@@ -1997,7 +1997,7 @@ export class AutonomousAgent {
   }
 
   public setMessages(msgs: ChatMessage[]): void {
-    this.messages = [...msgs];
+    this.messages = withSkillNoteProvenance(msgs);
   }
 
   /**
@@ -2037,7 +2037,7 @@ export class AutonomousAgent {
   ): void {
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
-    this.messages = [...msgs];
+    this.messages = withSkillNoteProvenance(msgs);
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
     if (this.objective) {

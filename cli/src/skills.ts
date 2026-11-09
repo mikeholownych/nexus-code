@@ -90,6 +90,27 @@ export function oneLine(text: string): string {
   return redactSecrets(text.replace(TEMPLATE_TOKEN, " ").replace(CONTROL_MARKER, " ")).replace(/\s+/g, " ").trim();
 }
 
+/** First line of every per-prompt skill note Nexus writes. */
+const SKILL_NOTE_HEAD = `${SKILL_NOTE_PREFIX} Installed skills that may fit this request. Descriptions only; nothing is activated. Call \`activate_skill\` with a name to load one.\n`;
+
+/**
+ * A saved conversation with its skill notes marked. Sessions saved before the `harness` marker existed hold notes
+ * recognisable only by their text; on restore, a user message without a marker is marked only when it starts with the
+ * exact note header and directly follows another user message (the operator's request), which is where Nexus writes
+ * the note. An operator message that copies a note follows the model's reply and stays the operator's.
+ */
+export function withSkillNoteProvenance<T extends { role: string; content?: unknown; harness?: string }>(messages: readonly T[]): T[] {
+  return messages.map((message, i) =>
+    message.role === "user" &&
+    message.harness === undefined &&
+    typeof message.content === "string" &&
+    message.content.startsWith(SKILL_NOTE_HEAD) &&
+    messages[i - 1]?.role === "user"
+      ? { ...message, harness: "skill-note" }
+      : message,
+  );
+}
+
 /**
  * Whether a message is a per-prompt skill note (never an operator request). Recognised by provenance (the `harness`
  * marker Nexus sets when it writes the note), so an operator message that begins with the note's text stays a request.
@@ -103,7 +124,7 @@ export function isSkillNote(message: unknown): boolean {
  * when nothing fits). It advertises descriptions only; it never activates a skill or loads a body.
  */
 export function formatSkillNote(matches: Skill[], maxChars: number): string {
-  const head = `${SKILL_NOTE_PREFIX} Installed skills that may fit this request. Descriptions only; nothing is activated. Call \`activate_skill\` with a name to load one.\n`;
+  const head = SKILL_NOTE_HEAD;
   const lines = new Map<Skill, string>();
   const line = (s: Skill): string => lines.get(s) ?? (lines.set(s, oneLine(s.description)), lines.get(s)!);
   const fit = (shown: Skill[], per: number) =>

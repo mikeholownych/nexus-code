@@ -219,6 +219,26 @@ describe("note with compaction, the TUI, resume and redaction", () => {
     });
   });
 
+  test("a session saved before the provenance marker has its notes recognised on restore; operator text is never migrated", { timeout: 60_000 }, async () => {
+    await withNote(async (agent) => {
+      await agent.runTurn("Say hello.");
+      const legacy = JSON.parse(JSON.stringify(agent.getMessages())).map(({ harness, ...m }: any) => m);
+      const noteText = text(legacy.find((m: any) => m.role === "user" && text(m).startsWith(SKILL_NOTE_PREFIX)));
+      // An operator message after the model's reply that copies a whole note is still the operator's.
+      legacy.push({ role: "user", content: noteText });
+      for (const load of ["restoreSession", "setMessages"] as const) {
+        const second = quiet(new AutonomousAgent((agent as any).config));
+        (second as any)[load](legacy);
+        const msgs = second.getMessages();
+        const marked = msgs.map((m: any, i: number) => (isSkillNote(m) ? i : -1)).filter((i: number) => i >= 0);
+        assert.equal(marked.length, 1, `${load}: the one legacy note is marked`);
+        assert.ok(msgs[marked[0] - 1].role === "user" && text(msgs[marked[0] - 1]).startsWith(prompt), `${load}: it follows the operator's message`);
+        assert.ok(!isSkillNote(msgs[msgs.length - 1]), `${load}: the operator's copy is not migrated`);
+        second.shutdown();
+      }
+    });
+  });
+
   test("a resumed conversation keeps its note, re-sends it unchanged and adds no second one", { timeout: 60_000 }, async () => {
     await withNote(async (agent, gw) => {
       const saved = JSON.parse(JSON.stringify(agent.getMessages()));
