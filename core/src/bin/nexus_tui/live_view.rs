@@ -3910,7 +3910,7 @@ mod surface_tests {
         assert_eq!(state.composer, "steer test");
         assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
         assert_eq!(
-            state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), ms(1600)),
+            state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), ms(1900)),
             Some(Action::Send(Command::Approve { id: "a1".into(), always: false }))
         );
         assert_eq!(state.composer, "steer test", "the draft is kept");

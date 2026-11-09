@@ -261,6 +261,9 @@ pub struct Approval {
     pub guard_until: Option<Instant>,
     /// "Approve all later actions" was chosen once (Enter on it, or `a`); Enter or `a` again confirms it.
     pub confirming: bool,
+    /// When the last key that was text, not an answer, went to the draft from this panel: while the operator is in a
+    /// run of typing, a `y`, `n`, `a` or Enter is part of it (the letter goes to the draft) and does not answer.
+    pub last_text: Option<Instant>,
     /// Why the last key did not answer, shown on the panel until the next key (a narrow panel shows the part before
     /// " — ").
     pub notice: Option<&'static str>,
@@ -363,7 +366,12 @@ pub struct DiffReview {
 /// (the Enter that sent the prompt pressed twice, the next letter of a word, a repeated `y` meant for the previous
 /// request). Nobody reads a new panel and decides faster than this.
 pub const APPROVAL_GUARD: Duration = Duration::from_millis(250);
+/// A decision key this soon after text typed into the draft from the open panel is part of that typing (people type
+/// several keys a second), not an answer: its letter goes to the draft and the panel says so. A deliberate answer
+/// after a pause is not affected.
+pub const APPROVAL_TYPING_RUN: Duration = Duration::from_millis(300);
 /// What the panel says when it ignores a key typed before the operator could see it.
+const APPROVAL_TYPING: &str = "ignored: you were typing — letters went to your draft; pause, then press the key to answer";
 const APPROVAL_IGNORED: &str = "ignored: panel just opened — that key was typed before you could see it; press it again";
 /// Typing is in flight when the panel appears if the last key (typed, or answering the previous approval) came this
 /// soon before it.
@@ -925,6 +933,7 @@ impl LiveState {
                     // Set when the panel is first drawn.
                     guard_until: None,
                     confirming: false,
+                    last_text: None,
                     notice: None,
                 };
                 // Another panel is open: the approval waits behind it (a key meant for that panel must never answer
@@ -1209,6 +1218,8 @@ impl LiveState {
             // A paste never answers an approval: its text goes to the draft, as typing does, and the panel says so.
             Some(Overlay::Approval(approval)) => {
                 approval.notice = Some("text went to your draft — pasted or typed too fast to be an answer");
+                approval.confirming = false;
+                approval.last_text = Some(Instant::now());
                 if !text.is_empty() {
                     self.composer.paste(text);
                 }
@@ -1367,16 +1378,29 @@ impl LiveState {
             // steering); it cancels a pending confirmation.
             KeyCode::Char(c) if letter => {
                 approval.confirming = false;
+                approval.last_text = Some(now);
                 self.composer.insert(c.encode_utf8(&mut [0; 4]));
                 return None;
             }
             KeyCode::Backspace if bare => {
                 approval.confirming = false;
+                approval.last_text = Some(now);
                 self.composer.backspace();
                 return None;
             }
             _ => return None,
         };
+        // In a run of typing a `y`, `n` or `a` is a letter of the text (kept in the draft) and Enter is ignored: only
+        // a key after a pause answers.
+        if approval.last_text.is_some_and(|at| now.saturating_duration_since(at) < APPROVAL_TYPING_RUN) {
+            approval.confirming = false;
+            if let KeyCode::Char(c) = key.code {
+                approval.last_text = Some(now);
+                self.composer.insert(c.encode_utf8(&mut [0; 4]));
+            }
+            approval.notice = Some(APPROVAL_TYPING);
+            return None;
+        }
         // Not on screen (too small a terminal): nothing is decided that the operator cannot see.
         if !approval.shown {
             return None;
@@ -3036,6 +3060,7 @@ mod tests {
                 // Shown a while after the last key: no guard.
                 guard_until: None,
                 confirming: false,
+                last_text: None,
                 notice: None,
             }))
         );
@@ -3156,9 +3181,10 @@ mod tests {
         assert_eq!(state.composer, "x");
         assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming && a.focus == Verdict::ApprovedForSession));
         // Enter on it asks again; `a` confirms.
-        assert_eq!(state.on_key_at(key(KeyCode::Enter), opened), None);
+        let later = opened + Duration::from_secs(1);
+        assert_eq!(state.on_key_at(key(KeyCode::Enter), later), None);
         assert_eq!(
-            state.on_key_at(key(KeyCode::Char('a')), opened),
+            state.on_key_at(key(KeyCode::Char('a')), later),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: true
@@ -3217,7 +3243,7 @@ mod tests {
         assert_eq!(state.on_key_at(key(KeyCode::Backspace), opened + Duration::from_millis(200)), None);
         assert_eq!(state.composer, "", "and so does Backspace");
         assert_eq!(
-            state.on_key_at(key(KeyCode::Char('y')), opened + Duration::from_millis(300)),
+            state.on_key_at(key(KeyCode::Char('y')), opened + Duration::from_millis(700)),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: false
@@ -4201,8 +4227,42 @@ mod tests {
             assert_eq!(state.composer, "use test");
             assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
             // And the letters still answer the panel.
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 2400)), approve("approval-1", false));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 2500)), approve("approval-1", false));
             assert_eq!(state.composer, "use test", "the draft is kept for after the decision");
+        }
+
+        #[test]
+        fn answer_letters_and_enter_inside_a_run_of_typing_are_text_not_answers() {
+            // "try it" + Enter at ~120 ms per key while the panel is open: the `y`, and the Enter, do not answer.
+            let (mut state, t0) = panel(1000);
+            let mut now = 5000;
+            for c in "try it".chars() {
+                assert_eq!(state.on_key_at(key(KeyCode::Char(c)), at(t0, now)), None, "{c:?}");
+                now += 120;
+            }
+            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, now)), None, "the Enter ending the sentence does not approve");
+            assert_eq!(state.composer, "try it", "every letter, the `y` included, is in the draft");
+            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("you were typing"))));
+            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
+            // The same with `n` and `a` inside words, and `a` does not even ask for the confirmation.
+            for c in "an".chars() {
+                now += 120;
+                assert_eq!(state.on_key_at(key(KeyCode::Char(c)), at(t0, now)), None);
+            }
+            assert_eq!(state.composer, "try itan");
+            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming));
+            // After a pause the same key answers.
+            assert_eq!(state.on_key_at(key(KeyCode::Char('n')), at(t0, now + 400)), deny("approval-1"));
+        }
+
+        #[test]
+        fn a_paste_or_burst_cancels_the_approve_all_question() {
+            let (mut state, t0) = panel(5000);
+            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5100)), None);
+            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.confirming));
+            state.on_paste("some text");
+            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming), "the question is gone");
+            assert_eq!(state.composer.text().is_empty(), false);
         }
 
         #[test]

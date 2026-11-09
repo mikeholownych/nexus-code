@@ -407,6 +407,19 @@ fn pasteable(key: &KeyEvent) -> bool {
         && matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Tab)
 }
 
+/// What a burst of keys that did not answer an approval puts in the draft: its characters, with Enter and Tab kept as
+/// the line break and tab they stand for, as a paste would carry them.
+fn burst_draft_text(keys: &[KeyEvent]) -> String {
+    keys.iter()
+        .filter_map(|key| match key.code {
+            KeyCode::Char(c) => Some(c),
+            KeyCode::Enter => Some('\n'),
+            KeyCode::Tab => Some('\t'),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Text of a burst of keys that arrived together. Without bracketed paste a paste is typed at machine speed, so its
 /// keys are already queued when the first is read. A line break inside the burst (with more text after it) means
 /// pasted lines, which must not send at the first newline; a trailing Enter is always a key, so a line typed or
@@ -496,8 +509,7 @@ fn event_loop(
                 match burst_text(&keys) {
                     // Several keys at once never answer an approval: their text goes to the draft, as a paste does.
                     _ if !burst_may_answer(app.state.approval_id().is_some(), keys.len()) => {
-                        let text: String = keys.iter().filter_map(|key| if let KeyCode::Char(c) = key.code { Some(c) } else { None }).collect();
-                        app.state.on_paste(&text);
+                        app.state.on_paste(&burst_draft_text(&keys));
                         None
                     }
                     Some(text) => {
@@ -555,6 +567,8 @@ mod tests {
         let with_resize = vec![TermEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)), TermEvent::Resize(80, 24)];
         assert_eq!(discard_queued_input(with_resize.into_iter()), (true, true), "a queued resize still redraws");
         assert_eq!(discard_queued_input(std::iter::once(TermEvent::Resize(80, 24))), (true, false), "a resize alone is not typing");
+        let keys: Vec<KeyEvent> = [KeyCode::Char('a'), KeyCode::Enter, KeyCode::Char('b'), KeyCode::Tab, KeyCode::Char('c')].map(|code| KeyEvent::new(code, KeyModifiers::NONE)).to_vec();
+        assert_eq!(burst_draft_text(&keys), "a\nb\tc", "line breaks and tabs of a burst are kept");
         assert!(!burst_may_answer(true, 3), "a burst never answers an approval");
         assert!(burst_may_answer(true, 1), "a single deliberate key may");
         assert!(burst_may_answer(false, 5), "bursts outside approvals are typing or paste as before");
