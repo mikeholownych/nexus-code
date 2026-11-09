@@ -8,6 +8,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { acquireFileGuard, releaseFileGuard, type FileGuard } from "../core/file_guard.js";
 import { mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, SafePathError } from "../safe_fs.js";
 
 export const REGISTRY_LIMIT_BYTES = 64 * 1024;
@@ -129,14 +130,33 @@ function staleLockIdentity(lock: string): fs.BigIntStats | undefined {
   return Date.now() - Number(stat.mtimeMs) > lockSettings.staleMs ? stat : undefined;
 }
 
-/** Unlink the lock only if it is still the file that was judged stale (same device, inode, birth and change time). */
+class LockTakeoverError extends Error {}
+
+/**
+ * Take over a stale lock. Reclaiming is serialised through a kernel-owned guard (`worktrees.lock.reclaim`, an flock
+ * that is never unlinked, so a reclaimer killed mid-way cannot wedge it): two waiters that both found the lock stale
+ * cannot both unlink, so one can never delete the live lock the other just created. Under the guard the lock is
+ * judged again and unlinked only if it is still the file that was judged (device, inode, change and modification
+ * time). Without the `flock` utility a stale lock is reported, not taken.
+ */
 function takeOverStaleLock(lock: string): void {
-  const judged = staleLockIdentity(lock);
-  if (!judged) return;
-  lockSeams.afterStaleCheck?.();
-  const now = fs.lstatSync(lock, { bigint: true });
-  if (now.dev !== judged.dev || now.ino !== judged.ino || now.ctimeNs !== judged.ctimeNs || now.mtimeNs !== judged.mtimeNs) return;
-  fs.unlinkSync(lock);
+  let guard: FileGuard | null;
+  try {
+    guard = acquireFileGuard(`${lock}.reclaim`, { label: "Worktree lock reclaim guard" });
+  } catch (err) {
+    throw new LockTakeoverError(`a stale worktree lock exists at ${lock} but cannot be taken over safely here (${(err as Error).message}); remove it by hand once no nexus command is using this repository`);
+  }
+  if (!guard) return; // another process is reclaiming right now; look again on the next turn
+  try {
+    const judged = staleLockIdentity(lock);
+    if (!judged) return;
+    lockSeams.afterStaleCheck?.();
+    const now = fs.lstatSync(lock, { bigint: true });
+    if (now.dev !== judged.dev || now.ino !== judged.ino || now.ctimeNs !== judged.ctimeNs || now.mtimeNs !== judged.mtimeNs) return;
+    fs.unlinkSync(lock);
+  } finally {
+    releaseFileGuard(guard);
+  }
 }
 
 /** Run an action under an exclusive lock file (taken over only from a dead holder or after lockSettings.staleMs), reentrant for the same process. */
@@ -161,7 +181,10 @@ export function withWorktreeLock<T>(commonDir: string, fn: () => T): T {
       if (err?.code !== "EEXIST") throw err;
       try {
         takeOverStaleLock(lock);
-      } catch { /* raced with the holder */ }
+      } catch (takeoverError) {
+        if (takeoverError instanceof LockTakeoverError) throw takeoverError;
+        /* raced with the holder */
+      }
       Atomics.wait(sleeper, 0, 0, 50);
     }
   }

@@ -4,6 +4,7 @@
  * Git's worktree list is the truth about what exists; the registry (registry.ts) records what Nexus created. Nothing
  * here runs a hook, a project-supplied command or a shell. Every Git call goes through git.ts.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { operatorConfigHome } from "../config.js";
@@ -366,7 +367,12 @@ function humanAge(seconds: number): string {
 export interface RemoveOptions { force?: boolean; deleteUnmerged?: boolean }
 
 /** Test seam: runs after every refusal check and immediately before the worktree is removed. Not a hook point. */
-export const removeSeams: { beforeRemove?: (entry: WorktreeEntry) => void; beforeBranchDeletion?: (entry: WorktreeEntry) => void } = {};
+export const removeSeams: {
+  beforeLock?: (entry: WorktreeEntry) => void;
+  beforeRemove?: (entry: WorktreeEntry) => void;
+  beforeGitRemove?: (entry: WorktreeEntry) => void;
+  beforeBranchDeletion?: (entry: WorktreeEntry) => void;
+} = {};
 
 export function removeWorktrees(ctx: WorktreeContext, tokens: string[], options: RemoveOptions = {}): CommandResult {
   if (tokens.length === 0) throw new WorktreeError("usage: worktree remove <branch|path>... [--force] [--delete-unmerged]");
@@ -407,7 +413,21 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
   // concurrent `switch` (which holds it across its checkout) either finishes first or waits; a lock that cannot be
   // had fails here with the worktree, branch and registry untouched.
   let branchNote = "";
+  let guardBranch = "";
+  let guardHead = "";
+  removeSeams.beforeLock?.(entry);
   withWorktreeLock(repo.commonDir, () => {
+    // What was read before waiting for the lock may be out of date: another remover can have dropped this stale
+    // registration and a `switch` recreated the path. Anything that differs from what was checked is not removed.
+    const fresh = openRepo(repo.cwd).entries.find((candidate) => candidate.path === entry.path);
+    if (!fresh) {
+      dropFromRegistry();
+      branchNote = " (it was already gone)";
+      return;
+    }
+    if (fresh.prunable !== entry.prunable || fresh.head !== entry.head || fresh.branch !== entry.branch || fresh.locked) {
+      throw new WorktreeError("the worktree changed while this command waited for the lock; nothing was removed. Run the command again");
+    }
     if (entry.prunable) {
       // Only this registration goes: a bare `worktree prune` would drop every stale worktree and leave their
       // registry entries behind. `remove --force` accepts a missing directory and touches one admin entry.
@@ -420,7 +440,7 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
           throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
         }
       }
-        removeSeams.beforeRemove?.(entry);
+      removeSeams.beforeRemove?.(entry);
       // A commit made here since the integration check (another session's `/commit`, an editor) must not be lost with
       // the directory: on a detached HEAD nothing else would keep it. A moved HEAD is checked again, or nothing is removed.
       const headNow = git(entry.path, ["rev-parse", "--verify", "HEAD"], { allowFailure: true }).stdout.trim();
@@ -433,9 +453,26 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
       // The directory must still be the one that was inspected: a swap for a link or another tree is refused.
       const after = identityOf(entry.path);
       if (!after || after.dev !== before.dev || after.ino !== before.ino) throw new WorktreeError("the worktree directory changed while it was being checked; nothing was removed");
+      // A detached HEAD keeps a commit only in this worktree's own administrative state, which the removal deletes, and
+      // commit writers never take this lock. Putting the worktree on a temporary branch first means a commit that lands
+      // from here on advances that branch instead; it is deleted below only if it still points at the checked commit.
+      if (!entry.branch) {
+        guardBranch = `nexus-removed/${createHash("sha1").update(entry.path).digest("hex").slice(0, 10)}-${entry.head.slice(0, 8)}`;
+        if (git(entry.path, ["switch", "-c", guardBranch, "--end-of-options"], { allowFailure: true }).status !== 0) {
+          guardBranch = "";
+          throw new WorktreeError("could not protect the detached HEAD before removing it; nothing was removed");
+        }
+        guardHead = git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim();
+      }
+      removeSeams.beforeGitRemove?.(entry);
       git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
     }
 
+    if (guardBranch) {
+      branchNote = deleteBranchAt(repo, guardBranch, guardHead)
+        ? ""
+        : `; a commit landed after the last check and is kept on the branch ${guardBranch}`;
+    }
     if (entry.branch && entry.branch !== target) {
       removeSeams.beforeBranchDeletion?.(entry);
       const stillCheckedOut = listAfter(repo).some((other) => other.branch === entry.branch);
