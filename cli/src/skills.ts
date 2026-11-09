@@ -268,7 +268,10 @@ export class SkillManager {
       const content = fs.readFileSync(filePath, "utf-8");
       const { metadata, body } = this.parseFrontmatter(content);
 
-      const name = metadata.name || fallbackName;
+      // The name is sanitised once, here, so the catalog, the note, the ranker and `activate_skill` all use the same
+      // key; a name that is nothing but template tokens or control markers falls back to its directory, else is skipped.
+      const name = oneLine(metadata.name || "") || oneLine(fallbackName);
+      if (!name) return;
       const description = metadata.description || "Specialized skill instructions";
 
       const skillItem: Skill = {
@@ -428,7 +431,7 @@ export class SkillManager {
     // per-prompt note: a description is untrusted text whether or not its skill is trusted.
     const skills = this.listSkills()
       .sort((a, b) => Number(Boolean(b.isWorkspaceSkill)) - Number(Boolean(a.isWorkspaceSkill)))
-      .map((s) => ({ ...s, name: oneLine(s.name), description: oneLine(s.description) }));
+      .map((s) => ({ ...s, name: oneLine(s.name), description: oneLine(s.description), path: oneLine(s.path) }));
     if (skills.length === 0) {
       return "";
     }
