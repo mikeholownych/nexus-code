@@ -121,7 +121,7 @@ describe("WP-1308 review fixes", () => {
     assert.doesNotMatch(note.slice(note.indexOf("\n")), /\[Nexus|\[Operator/);
     assert.doesNotMatch(note, /sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD/);
     assert.equal(oneLine("a\n\n  b\t[system: x] c"), "a b c");
-    assert.ok(isSkillNote(note) && !isSkillNote("[Nexus recovery]"));
+    assert.ok(isSkillNote({ role: "user", content: note, harness: "skill-note" }) && !isSkillNote({ role: "user", content: note }) && !isSkillNote(note));
   });
 
   test("ranking is indexed once and a 1 MB query is capped", () => {

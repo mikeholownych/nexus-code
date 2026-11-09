@@ -29,7 +29,7 @@ export const MAX_SKILL_MATCHES = 5;
 export const SKILL_CATALOG_HEADING = "### Specialized Agent Skills Available:";
 /** First line under the heading, unchanged since v1.0: with the heading it marks the catalog (rules may quote the heading). */
 const SKILL_CATALOG_INTRO = "You have access to specialized skills.";
-/** Prefix of the per-prompt skill note; `[Nexus ` marks it as a harness note, never an operator request. */
+/** Prefix of the per-prompt skill note's text, for the model; the note is recognised by its `harness` marker, not by this. */
 export const SKILL_NOTE_PREFIX = "[Nexus skill note]";
 /** Descriptions shorter than this stop helping the model pick a skill; below it the catalog lists names only. */
 const MIN_DESCRIPTION_CHARS = 40;
@@ -88,9 +88,12 @@ export function oneLine(text: string): string {
   return redactSecrets(text.replace(TEMPLATE_TOKEN, " ").replace(CONTROL_MARKER, " ")).replace(/\s+/g, " ").trim();
 }
 
-/** Whether a user-role message is a per-prompt skill note (never an operator request). */
-export function isSkillNote(content: unknown): boolean {
-  return typeof content === "string" && content.startsWith(SKILL_NOTE_PREFIX);
+/**
+ * Whether a message is a per-prompt skill note (never an operator request). Recognised by provenance (the `harness`
+ * marker Nexus sets when it writes the note), so an operator message that begins with the note's text stays a request.
+ */
+export function isSkillNote(message: unknown): boolean {
+  return Boolean(message) && typeof message === "object" && (message as { harness?: unknown }).harness === "skill-note";
 }
 
 /**

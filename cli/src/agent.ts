@@ -48,7 +48,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine } from "./skills.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, isSkillNote, oneLine } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -3452,8 +3452,8 @@ export class AutonomousAgent {
   private compactionCandidate(source: ChatMessage[], recentToolTurns: number, detailBudgetChars: number, unseenOutputChars?: number): { messages: ChatMessage[]; removedObservations: string[] } {
     const system = source[0];
     // The operator's latest request; a skill note written after it is a hint, not the request.
-    const currentUserIndex = source.map((message, index) => message.role === "user" && !isSkillNote(message.content) ? index : -1).filter((index) => index >= 0).at(-1);
-    const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]?.content) ? currentUserIndex + 1 : -1;
+    const currentUserIndex = source.map((message, index) => message.role === "user" && !isSkillNote(message) ? index : -1).filter((index) => index >= 0).at(-1);
+    const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]) ? currentUserIndex + 1 : -1;
     const toolTurnStarts = source
       .map((message, index) => message.role === "assistant" && message.tool_calls?.length ? index : -1)
       .filter((index) => index >= 0);
@@ -4168,7 +4168,7 @@ export class AutonomousAgent {
   /** Whether everything after `from` is the operator's submission: the message, then at most its skill note. */
   private isSubmissionTail(from: number): boolean {
     const tail = this.messages.slice(from);
-    return tail.length === 1 || (tail.length === 2 && typeof tail[1].content === "string" && tail[1].content.startsWith(SKILL_NOTE_PREFIX));
+    return tail.length === 1 || (tail.length === 2 && isSkillNote(tail[1]));
   }
 
   private buildSystemPrompt(): string {
@@ -5724,7 +5724,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Skills whose descriptions fit this message, written once right after it and never moved: every later
         // request extends the earlier ones, so the provider's prefix cache survives each new prompt.
         const skillNote = this.skillNoteFor(taskPrompt);
-        if (skillNote) this.messages.push({ role: "user", content: skillNote });
+        if (skillNote) this.messages.push({ role: "user", content: skillNote, harness: "skill-note" });
         // The objective is durable before anything acts on it.
         this.persistProgress({ messages: true });
       }
