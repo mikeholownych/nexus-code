@@ -9,8 +9,8 @@ sidecar's command log.
 3. A bracketed paste of `y⏎` must not decide.
 4. One deliberate `n` then denies that panel (typing into it did not disarm its letters). The next approval is
    answered by one `y` shortly after it appears (no lock-out after a decision).
-5. Text without an approval key typed across the third panel's appearance goes to the draft and decides nothing;
-   `n` then denies.
+5. Text containing answer letters (y, a, n), typed across the third panel's appearance, goes to the draft and
+   decides nothing; `n` after a pause then denies.
 
 Usage: tui_approval_driver.py PLAN.json
 """
@@ -77,7 +77,7 @@ def main():
     result["after_approve"] = decisions(commands)
 
     # 5. Text with no approval key, typed across the third approval panel's appearance, goes to the draft.
-    typed = "check the tests"
+    typed = "try any test now then"  # contains y, a and n: inside a run of typing they are text
     seen_while_typing = False
     for ch in typed:
         s.send(ch, settle=0.1)
