@@ -43,8 +43,13 @@ ignored file and can therefore carry secrets such as `.env` into each worktree; 
 the branch to one commit (`--no-squash` keeps them), rebases onto the target (`--no-rebase` skips it), fast-forwards the
 target (never a merge commit) and removes the worktree and branch (`--no-remove` keeps them). The target's worktree must be
 clean. Before history is rewritten the branch, including swept-in working-tree changes, is saved to
-`refs/nexus-backup/<branch>`. A rebase conflict stops the command and leaves the rebase open in the worktree. Ignored
-leftovers (build caches) are deleted with the worktree after a successful merge.
+`refs/nexus-backup/<name>-<hash>`: one flat ref per branch, where `<name>` is the branch name with every character outside
+`A-Za-z0-9._-` turned into `-` (at most 40 characters) and `<hash>` is the first 12 hex digits of the SHA-1 of the
+branch name, so `foo` and `foo/bar` never collide (Git cannot hold both as refs). Find yours with
+`git for-each-ref refs/nexus-backup`. A submodule is backed up as its recorded commit only. A rebase conflict stops the
+command and leaves the rebase open in the worktree. Ignored leftovers (build caches) are deleted with the worktree after
+a successful merge, but never while tracked, staged, untracked or submodule changes remain: then the worktree is kept
+and the command says so.
 
 `prune` removes worktrees whose HEAD is already integrated into the default branch (same commit, ancestor, empty diff,
 same tree or patch-id equivalent), that have no changes or untracked files, and that were last touched longer ago than

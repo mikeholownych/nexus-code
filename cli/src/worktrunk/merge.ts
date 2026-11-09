@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { generateConventionalCommit } from "../git.js";
 import { redactSecrets } from "../ui.js";
 import { removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
@@ -32,7 +33,17 @@ function inProgress(gitDir: string): string | undefined {
   return undefined;
 }
 
-/** A commit holding the worktree exactly as `git add -A` would see it, stored under refs/nexus-backup/<branch>. */
+/**
+ * The backup ref of a branch: `refs/nexus-backup/<readable name>-<12 hex of sha1(branch)>`. One flat component, so
+ * `foo` and `foo/bar` (which Git cannot hold as refs side by side) never collide, and the hash keeps names that
+ * sanitise alike apart. List them with `git for-each-ref refs/nexus-backup`.
+ */
+export function backupRef(branch: string): string {
+  const readable = branch.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[.-]+/, "").slice(0, 40) || "branch";
+  return `refs/nexus-backup/${readable}-${createHash("sha1").update(branch).digest("hex").slice(0, 12)}`;
+}
+
+/** A commit holding the worktree exactly as `git add -A` would see it, stored at backupRef(branch). */
 function backup(dir: string, branch: string, dirty: boolean): string {
   let sha = gitOut(dir, ["rev-parse", "--verify", "HEAD"]);
   if (dirty) {
@@ -47,7 +58,7 @@ function backup(dir: string, branch: string, dirty: boolean): string {
       fs.rmSync(scratch, { recursive: true, force: true });
     }
   }
-  git(dir, ["update-ref", "-m", "nexus: backup before merge", `refs/nexus-backup/${branch}`, sha]);
+  git(dir, ["update-ref", "-m", "nexus: backup before merge", backupRef(branch), sha]);
   return sha;
 }
 
@@ -81,7 +92,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     notes.push(`Nothing to merge: ${shownBranch(branch)} has no commits beyond ${shownBranch(targetName)}.`);
   } else {
     backup(source.path, branch, dirty);
-    notes.push(`Backed up ${shownBranch(branch)} to refs/nexus-backup/${shownBranch(branch)}.`);
+    notes.push(`Backed up ${shownBranch(branch)} to ${backupRef(branch)}.`);
   }
 
   if (dirty) {

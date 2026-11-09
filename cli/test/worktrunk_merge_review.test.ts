@@ -97,7 +97,7 @@ test("01M6VSGQ16S78J9ZS0W4E7A2MD: backup refs of foo and foo/bar do not collide,
     for (const names of [["foo", "foo/bar"], ["foo/baz", "foo"]]) {
       for (const name of names) {
         const dir = feature(f, name);
-        commitFile(dir, `${name.replace(/\//g, "_")}.txt`, "x\n", `work on ${name}`);
+        commitFile(dir, `${names.join("+").replace(/\//g, "_")}-${name.replace(/\//g, "_")}.txt`, "x\n", `work on ${name}`);
         fs.writeFileSync(path.join(dir, "late.txt"), "late\n");
         const r = wt(f, dir, ["merge", "--no-remove"]);
         assert.equal(r.success, true, `${name}: ${r.output}`);
@@ -105,7 +105,7 @@ test("01M6VSGQ16S78J9ZS0W4E7A2MD: backup refs of foo and foo/bar do not collide,
       }
     }
     const refs = git(f.repo, "for-each-ref", "--format=%(refname)", "refs/nexus-backup").split("\n").filter(Boolean);
-    assert.equal(refs.length, 4, refs.join("\n"));
+    assert.equal(refs.length, 3, refs.join("\n")); // foo (reused, so overwritten), foo/bar, foo/baz
   } finally { f.cleanup(); }
 });
 

@@ -7,6 +7,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runWorktreeCommand, isReadOnlyWorktreeArgs } from "../src/worktrunk/command.js";
 import { readRegistry } from "../src/worktrunk/registry.js";
+import { backupRef } from "../src/worktrunk/merge.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
 import { replReadOnlyAllowed } from "../src/repl.js";
 
@@ -67,8 +68,8 @@ test("merge squashes, rebases, fast-forwards, backs up the swept-in changes, the
     assert.equal(fs.existsSync(dir), false, "worktree removed");
     assert.equal(git(f.repo, "branch", "--list", "feat/m"), "", "branch removed");
     // the backup ref holds the pre-squash state including the uncommitted file
-    assert.equal(git(f.repo, "show", "refs/nexus-backup/feat/m:d.txt"), "uncommitted");
-    assert.equal(git(f.repo, "show", "refs/nexus-backup/feat/m:c.txt"), "c");
+    assert.equal(git(f.repo, "show", `${backupRef("feat/m")}:d.txt`), "uncommitted");
+    assert.equal(git(f.repo, "show", `${backupRef("feat/m")}:c.txt`), "c");
     assert.deepEqual(readRegistry(path.join(f.repo, ".git")).registry.worktrees, []);
   } finally { f.cleanup(); }
 });
@@ -312,7 +313,9 @@ test("merge refuses when the worktree has unresolved conflicts", () => {
     git(dir, "checkout", "-q", "-b", "other");
     commitFile(dir, "file.txt", "conflict 2\n", "c2");
     git(dir, "checkout", "-q", "feat/conflict");
-    git(dir, "merge", "--no-commit", "--no-ff", "other", { allowFailure: true });
+    try {
+      execFileSync("git", ["merge", "--no-commit", "--no-ff", "other"], { cwd: dir, stdio: "ignore" });
+    } catch {}
 
     const merged = wt(f, dir, ["merge"]);
     assert.equal(merged.success, false);
