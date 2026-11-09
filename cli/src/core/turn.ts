@@ -308,6 +308,11 @@ export interface TurnResult {
   toolCallSyntax?: ToolCallSyntaxCounts;
   /** True when the turn paused deterministically after one model/tool cycle under step mode. */
   stepPaused?: boolean;
+  /**
+   * What this turn itself did, so a verdict never reports earlier turns' changes or a pre-change verifier run as this
+   * turn's (TUI-AUDIT D-04). Absent on results built outside a turn.
+   */
+  turnEvidence?: TurnEvidence;
   /** Where the operator's objective stands: open requirements, the failed check and the next action. */
   objective?: {
     status: "completed" | "incomplete" | "blocked";
@@ -317,6 +322,17 @@ export interface TurnResult {
     failedCheck?: string;
     nextAction?: string;
   };
+}
+
+export interface TurnEvidence {
+  /** Whether workspace content differs from how this turn found it; "unknown" when the state could not be established. */
+  workspaceChanged: "yes" | "no" | "unknown";
+  /** Unverified changes from earlier turns were pending when this turn began. */
+  carriedChanges: boolean;
+  /** Tool calls the operator denied during this turn. */
+  denied: number;
+  /** Verifier runs during this turn, in order: the pre-change baseline or the completion check. */
+  verifierRuns: Array<{ command: string; phase: "before_change" | "completion"; passed: boolean }>;
 }
 
 export class TurnResultInvariantError extends Error {
@@ -395,6 +411,18 @@ function contextTail(t: TurnResult): string {
   return n ? `; ${n} tool output${n === 1 ? "" : "s"} it may rest on left context and ${n === 1 ? "was" : "were"} not read again` : "";
 }
 
+/** What this turn did when it differs from what an UNVERIFIED outcome suggests (D-04); the TUI words the same facts. */
+function evidenceTail(t: TurnResult): string {
+  const e = t.turnEvidence;
+  if (!e) return "";
+  if (e.workspaceChanged === "no" && e.carriedChanges) {
+    return `; no files changed this turn${e.denied ? ` (${e.denied} action${e.denied === 1 ? "" : "s"} denied)` : ""}, changes from an earlier turn are still unverified`;
+  }
+  const last = e.verifierRuns.at(-1);
+  if (t.reason === "VERIFICATION_NOT_RUN" && last?.phase === "before_change") return `; ${last.command} ran before the change only`;
+  return "";
+}
+
 export function summarizeTurn(t: TurnResult): { heading: string; line: string } {
   const exec = t.execution;
   const tail = t.reason ? ` (${t.reason}${t.detail ? `: ${t.detail}` : ""})` : "";
@@ -446,7 +474,7 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     case "NOT_REQUIRED":
       return { heading: "TURN ENDED - NO CHANGES TO VERIFY", line: `execution=COMPLETED outcome=NOT_REQUIRED modelStop=${t.modelStop}` };
     case "UNVERIFIED":
-      return { heading: "TURN ENDED - UNVERIFIED", line: `execution=COMPLETED outcome=UNVERIFIED${tail}` };
+      return { heading: "TURN ENDED - UNVERIFIED", line: `execution=COMPLETED outcome=UNVERIFIED${tail}${evidenceTail(t)}` };
     default:
       if (t.reason === "REQUIREMENTS_INCOMPLETE") {
         return { heading: "TURN ENDED - REQUIREMENTS OPEN", line: `execution=COMPLETED outcome=NOT_ESTABLISHED${tail}` };

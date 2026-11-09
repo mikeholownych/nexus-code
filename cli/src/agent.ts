@@ -156,7 +156,7 @@ import {
   readFindings,
 } from "./core/findings.js";
 import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
-import type { TurnReason } from "./core/turn.js";
+import type { TurnEvidence, TurnReason } from "./core/turn.js";
 import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
@@ -921,6 +921,11 @@ export class AutonomousAgent {
   }
   /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
   private turnCarriedChanges = false;
+  /** Evidence about this turn alone for its verdict (TUI-AUDIT D-04): operator denials and verifier runs. */
+  private turnDenials = 0;
+  private turnVerifierRuns: TurnEvidence["verifierRuns"] = [];
+  /** Workspace state identity when this turn began ("unknown" when it could not be established). */
+  private turnStartState: string | undefined;
   /** The operator-configured verifier's latest result in this turn (FAILED: it refused a completion and has not passed since). */
   private turnConfiguredVerifier: "NOT_RUN" | "PASSED" | "FAILED" = "NOT_RUN";
   /** Key for the durable operation record of each tool call (provider call ids may be redacted on disk). */
@@ -2181,6 +2186,7 @@ export class AutonomousAgent {
       const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
       const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
       this.changeBaseline = { command, failed: !run.success, tests, verifier, trustedDeliverables, at: new Date().toISOString() };
+      this.turnVerifierRuns.push({ command, phase: "before_change", passed: run.success });
       if (this.durable) {
         try {
           this.checkpointDurableState("baseline captured");
@@ -4430,6 +4436,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             };
             this.verificationEvidence = evidence;
             this.verificationEvidenceRawOutput = testRes.rawOutput || "";
+            this.turnVerifierRuns.push({ command: verifierCommand, phase: "completion", passed: testRes.success });
             if (configured) this.turnConfiguredVerifier = testRes.success ? "PASSED" : "FAILED";
             if (this.objective && candidateId) {
               recordAttempt(this.objective, {
@@ -5173,6 +5180,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (approved && egressOrigin) this.approvedEgressOrigins.add(egressOrigin);
       if (approved) this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
       if (!approved) {
+        this.turnDenials++;
         console.log(`⚠️ Tool execution cancelled by user.`);
         const cancelMsg =
           "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.";
@@ -5637,6 +5645,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0 };
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnCarriedChanges = this.hasPendingModifications;
+    this.turnDenials = 0;
+    this.turnVerifierRuns = [];
+    this.turnStartState = undefined;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
     this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
     this.findingsOutgrown = false;
@@ -5779,6 +5790,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
       }
       let stateNow = this.workspaceStateIdentity();
+      this.turnStartState = stateNow;
       tracker.noteState(stateNow);
       tracker.noteLedgerState(this.ledgerProgressIdentity());
       const noticedPolls = new Set<string>();
@@ -6618,6 +6630,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return !this.runningAsSubagent && !nonMutatingTeamRole && Boolean(this.config.authoritativeVerifierCommand?.trim());
   }
 
+  /** Whether workspace content differs from how this turn found it (D-04); "unknown" when either state is unknown. */
+  private turnWorkspaceChanged(): TurnEvidence["workspaceChanged"] {
+    if (!this.turnStartState || this.turnStartState === "unknown") return "unknown";
+    const now = this.workspaceStateIdentity();
+    if (now === "unknown") return "unknown";
+    return now === this.turnStartState ? "no" : "yes";
+  }
+
   /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
   private buildTurnResult(input: {
     /** A compaction the next action depended on could not be committed: the turn stopped (PERSISTENCE_FAILED). */
@@ -6655,6 +6675,26 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           ...(ledger?.nextAction ? { nextAction: ledger.nextAction } : {}),
         }
       : undefined;
+    const workspaceChanged = this.turnWorkspaceChanged();
+    // Running a command latches the verification obligation, because a command can change files. When the turn ended
+    // normally, nothing was pending before it, no worktree holds its work, and the workspace is exactly as the turn
+    // found it, the latch caught nothing: there is no change to verify (TUI-AUDIT D-04). A command that changed any
+    // file leaves the identity different and the obligation stands.
+    const endedNormally = !input.interruption && !input.unhandledError && !input.persistenceFailure && !input.inferenceFailure &&
+      !input.capacityBlock && !input.limitReached;
+    const latchCaughtNothing = endedNormally && this.hasPendingModifications && !this.turnCarriedChanges &&
+      !this.activeWorktree && workspaceChanged === "no";
+    if (latchCaughtNothing) {
+      this.setUnverifiedChanges(false);
+      // A later change takes a fresh pre-change baseline: the workspace may change between turns.
+      this.changeBaseline = undefined;
+    }
+    const turnEvidence: TurnEvidence = {
+      workspaceChanged,
+      carriedChanges: this.turnCarriedChanges,
+      denied: this.turnDenials,
+      verifierRuns: [...this.turnVerifierRuns],
+    };
     const base = {
       ...(recoveries.length ? { providerRecovery: recoveries } : {}),
       acceptance: "NOT_REQUESTED" as const,
@@ -6671,6 +6711,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       ...(this.turnPersistenceFailures.length ? { persistence: { durable: false as const, failures: [...new Set(this.turnPersistenceFailures)].slice(0, 8) } } : {}),
       ...(this.durable ? { tokenAccounting: this.tokenAccounting() } : {}),
       ...(Object.values(this.turnToolCallSyntax).some((n) => n > 0) ? { toolCallSyntax: { ...this.turnToolCallSyntax } } : {}),
+      turnEvidence,
     };
 
     if (input.interruption) {
@@ -6787,7 +6828,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (requirementsIncomplete) {
       return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "REQUIREMENTS_INCOMPLETE", detail: incompleteDetail() }));
     }
-    if (this.turnMutations > 0 || this.turnCarriedChanges) {
+    if ((this.turnMutations > 0 && !latchCaughtNothing) || this.turnCarriedChanges) {
       if (evidence?.status === "PASSED") {
         if (evidence.hasExecutedTests === false) {
           return deepFreezeTurn(assertTurnResultInvariants({
