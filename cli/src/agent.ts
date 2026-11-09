@@ -4509,8 +4509,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
       // A passing deliverable-bound run inside a named (linked) worktree is recorded for `nexus worktree merge`, which
       // needs a verification for the exact state it merges. Recording never affects the task outcome.
-      if (!this.activeWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound) {
-        recordVerification(this.config.workspace, this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command || "verifier");
+      const isVerified = this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true;
+      if (!this.activeWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound && isVerified) {
+        recordVerification(this.config.workspace, this.verificationEvidence?.command || this.config.authoritativeVerifierCommand?.trim() || "verifier");
       }
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
       if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {

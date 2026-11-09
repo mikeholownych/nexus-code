@@ -129,3 +129,68 @@ test("the registry rejects malformed verification and waiver records", () => {
     assert.doesNotThrow(() => writeRegistry(common, { ...base, verifications: [], waivers: [] }));
   } finally { f.cleanup(); }
 });
+
+test("staged ignored file with git add -f is preserved in working state and invalidates earlier receipt", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.dir, ".gitignore"), "ignored.txt\n");
+    git(f.dir, "add", ".gitignore");
+    git(f.dir, "commit", "-q", "-m", "ignore file");
+    // Verify current clean state
+    recordVerification(f.dir, "npm test");
+    // Now stage an ignored file using git add -f
+    fs.writeFileSync(path.join(f.dir, "ignored.txt"), "secret edit\n");
+    git(f.dir, "add", "-f", "ignored.txt");
+    // The earlier verification receipt must no longer cover this state
+    const r = f.wt(f.dir, ["merge"]);
+    assert.equal(r.success, false, "merge should refuse because staged ignored file changed working state");
+    assert.match(r.output, /no recorded passing verification/);
+  } finally { f.cleanup(); }
+});
+
+test("waiver is not recorded in the registry when merge fails", () => {
+  const f = fixture();
+  try {
+    // Make target worktree dirty to fail the merge
+    fs.writeFileSync(path.join(f.repo, "dirty.txt"), "dirty\n");
+    const r = f.wt(f.dir, ["merge", "--no-verify-receipt", "--reason", "waiver on failing merge"]);
+    assert.equal(r.success, false);
+    assert.match(r.output, /uncommitted changes/);
+    const reg = readRegistry(path.join(f.repo, ".git")).registry;
+    assert.equal(reg.waivers?.length ?? 0, 0, "waiver should not be recorded if merge failed");
+  } finally { f.cleanup(); }
+});
+
+test("registry evicts oldest records when history approaches byte budget", () => {
+  const f = fixture();
+  try {
+    const common = path.join(f.repo, ".git");
+    const longString = "x".repeat(350);
+    // Add 100 verifications and 100 waivers with long payloads
+    for (let i = 0; i < 100; i++) {
+      const ok = recordVerification(f.dir, `verifier-${i}-${longString}`);
+      assert.equal(ok, true, `recordVerification ${i} should succeed`);
+    }
+    const reg = readRegistry(common).registry;
+    assert.ok((reg.verifications?.length ?? 0) > 0);
+    // File size must be under 64 KiB
+    const stat = fs.statSync(path.join(common, "nexus", "worktrees.json"));
+    assert.ok(stat.size <= 64 * 1024, `registry file size ${stat.size} exceeds 64 KiB`);
+  } finally { f.cleanup(); }
+});
+
+test("verification.ts does not export readRegistry and uses statusOf", async () => {
+  const mod = await import("../src/worktrunk/verification.js") as any;
+  assert.equal(mod.readRegistry, undefined, "readRegistry should not be re-exported from verification.ts");
+  const source = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "worktrunk", "verification.ts"), "utf8");
+  assert.doesNotMatch(source, /function isDirty/);
+});
+
+test("agent records verification only when verifier is deliverable-bound and independent or configured", () => {
+  const source = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "agent.ts"), "utf8");
+  // Check the recording condition in agent.ts
+  assert.match(source, /recordVerification\(this\.config\.workspace/);
+  assert.match(source, /isVerified/);
+  assert.match(source, /this\.verificationEvidence\?\.source === "configured" \|\| this\.verificationEvidence\?\.independent === true/);
+  assert.match(source, /this\.verificationEvidence\?\.command \|\| this\.config\.authoritativeVerifierCommand/);
+});

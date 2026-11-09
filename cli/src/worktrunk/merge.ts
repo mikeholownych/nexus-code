@@ -81,7 +81,13 @@ function backup(dir: string, branch: string, dirty: boolean): string {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-backup-"));
     try {
       const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
-      git(dir, ["read-tree", "HEAD"], { env });
+      const gitDir = gitOut(dir, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+      const realIndex = path.join(gitDir, "index");
+      if (fs.existsSync(realIndex)) {
+        fs.copyFileSync(realIndex, path.join(scratch, "index"));
+      } else {
+        git(dir, ["read-tree", "HEAD"], { env });
+      }
       git(dir, ["add", "-A"], { env });
       const tree = gitOut(dir, ["write-tree"], { env });
       sha = gitOut(dir, ["commit-tree", tree, "-p", sha, "-m", `nexus backup of ${branch} before merge`], { env });

@@ -121,8 +121,28 @@ export function readRegistry(commonDir: string): { registry: Registry; warning?:
   }
 }
 
+/** Evicts the oldest verification and waiver records until the registry fits within REGISTRY_LIMIT_BYTES. */
+export function trimHistoryToFit(registry: Registry): void {
+  const verifications = registry.verifications ? [...registry.verifications] : [];
+  const waivers = registry.waivers ? [...registry.waivers] : [];
+
+  while ((verifications.length > 0 || waivers.length > 0) && Buffer.byteLength(`${JSON.stringify({ ...registry, verifications, waivers }, null, 1)}\n`) > REGISTRY_LIMIT_BYTES) {
+    const vOldest = verifications[0]?.recordedAt ?? "";
+    const wOldest = waivers[0]?.recordedAt ?? "";
+    if (verifications.length > 0 && (waivers.length === 0 || vOldest <= wOldest)) {
+      verifications.shift();
+    } else if (waivers.length > 0) {
+      waivers.shift();
+    }
+  }
+
+  if (registry.verifications) registry.verifications = verifications;
+  if (registry.waivers) registry.waivers = waivers;
+}
+
 /** Atomically replaces the registry. Throws on a linked target or when the result would exceed 64 KiB. */
 export function writeRegistry(commonDir: string, registry: Registry): void {
+  trimHistoryToFit(registry);
   const text = `${JSON.stringify(registry, null, 1)}\n`;
   if (Buffer.byteLength(text) > REGISTRY_LIMIT_BYTES) throw new Error("worktree registry would exceed 64 KiB (too large); remove finished worktrees first");
   const file = registryFile(commonDir);

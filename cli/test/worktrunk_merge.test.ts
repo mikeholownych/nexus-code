@@ -271,7 +271,7 @@ test("backup refs of foo and foo/bar do not collide, in either order", () => {
         const dir = feature(f, name);
         commitFile(dir, `${names.join("+").replace(/\//g, "_")}-${name.replace(/\//g, "_")}.txt`, "x\n", `work on ${name}`);
         fs.writeFileSync(path.join(dir, "late.txt"), "late\n");
-        const r = wt(f, dir, ["merge", "--no-remove"]);
+        const r = wt(f, dir, ["merge", "--no-remove", ...W]);
         assert.equal(r.success, true, `${name}: ${r.output}`);
         assert.equal(wt(f, f.repo, ["remove", name]).success, true); // branch gone, backup ref stays
       }
@@ -289,7 +289,7 @@ test("commits that cancel each other merge as a no-op instead of failing mid-rew
     commitFile(dir, "a.txt", "changed\n", "change a");
     commitFile(dir, "a.txt", "one\n", "revert a");
     const mainBefore = git(f.repo, "rev-parse", "refs/heads/main");
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore, "nothing to merge: main is unchanged");
     assert.equal(git(f.repo, "rev-parse", base), base);
@@ -306,7 +306,7 @@ test("merging into an explicit non-default target cleans up and leaves main unto
     commitFile(dir, "b.txt", "b\n", "add b");
     const mainBefore = git(f.repo, "rev-parse", "refs/heads/main");
 
-    const r = wt(f, dir, ["merge", "develop"]);
+    const r = wt(f, dir, ["merge", "develop", ...W]);
     assert.equal(r.success, true, r.output);
     assert.ok(fs.existsSync(path.join(develop, "b.txt")), "develop received the work");
     assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore, "main is untouched");
@@ -327,7 +327,7 @@ test("a conflicted stash pop is refused before anything is staged or committed",
     assert.match(git(dir, "status", "--porcelain"), /^UU a\.txt/m);
     const head = git(dir, "rev-parse", "HEAD");
 
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, false, r.output);
     assert.match(r.output, /conflict/i);
     assert.equal(git(dir, "rev-parse", "HEAD"), head, "no commit with conflict markers");
@@ -354,7 +354,7 @@ test("uncommitted submodule edits keep the worktree (cleanup is not forced over 
     fs.writeFileSync(path.join(dir, "sub", "s.txt"), "edited inside the submodule\n"); // not committable from here
     fs.writeFileSync(path.join(dir, "a.txt"), "superproject change\n");
 
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.ok(fs.existsSync(dir), `worktree must be kept: ${r.output}`);
     assert.equal(fs.readFileSync(path.join(dir, "sub", "s.txt"), "utf8"), "edited inside the submodule\n");
     assert.match(r.output, /uncommitted|submodule|kept/i);
@@ -370,7 +370,7 @@ test("the generated commit message does not run a repository-configured fsmonito
     const script = path.join(f.root, "fsmonitor.sh");
     fs.writeFileSync(script, `#!/bin/sh\necho ran >> "${marker}"\nprintf '\\0'\n`, { mode: 0o755 });
     git(f.repo, "config", "core.fsmonitor", script);
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     const ran = fs.existsSync(marker);
     git(f.repo, "config", "--unset", "core.fsmonitor");
     assert.equal(r.success, true, r.output);
@@ -412,16 +412,16 @@ test("the preMerge seam runs after every refusal and before history is rewritten
       commitFile(dir, "b.txt", "b\n", "add b");
       // refusal 1: the target worktree is dirty
       fs.writeFileSync(path.join(f.repo, "scratch.txt"), "dirty");
-      assert.equal(wt(f, dir, ["merge"]).success, false);
+      assert.equal(wt(f, dir, ["merge", ...W]).success, false);
       assert.deepEqual(calls, [], "a dirty target is refused before the hook");
       fs.rmSync(path.join(f.repo, "scratch.txt"));
       // refusal 2: an operation is already in progress in the worktree
       fs.writeFileSync(path.join(git(dir, "rev-parse", "--path-format=absolute", "--git-dir"), "MERGE_HEAD"), git(dir, "rev-parse", "HEAD") + "\n");
-      assert.equal(wt(f, dir, ["merge"]).success, false);
+      assert.equal(wt(f, dir, ["merge", ...W]).success, false);
       assert.deepEqual(calls, [], "an operation in progress is refused before the hook");
       fs.rmSync(path.join(git(dir, "rev-parse", "--path-format=absolute", "--git-dir"), "MERGE_HEAD"));
       // success: the hook runs once
-      assert.equal(wt(f, dir, ["merge"]).success, true);
+      assert.equal(wt(f, dir, ["merge", ...W]).success, true);
       assert.deepEqual(calls, ["feat/seam->main"]);
     } finally {
       delete mod.mergeSeams.preMerge;
@@ -431,7 +431,8 @@ test("the preMerge seam runs after every refusal and before history is rewritten
 
 test("pruneWorktrees reads no registry it does not use", () => {
   const source = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "worktrunk", "merge.ts"), "utf8");
-  assert.doesNotMatch(source, /readRegistry/);
+  const pruneFunction = source.slice(source.indexOf("export function pruneWorktrees"));
+  assert.doesNotMatch(pruneFunction, /readRegistry/);
 });
 
 test("a tag named like the target never stands in for the target branch in merge or prune", () => {
@@ -443,7 +444,7 @@ test("a tag named like the target never stands in for the target branch in merge
     const pruned = wt(f, f.repo, ["prune", "--min-age", "0s"]);
     assert.equal(pruned.success, true, pruned.output);
     assert.ok(fs.existsSync(dir), "the feature is not integrated into the branch main, only into the tag");
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "show", "refs/heads/main:b.txt"), "b");
   } finally { f.cleanup(); }
