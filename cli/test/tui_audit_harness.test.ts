@@ -126,3 +126,24 @@ test("t.sh drives the checkout it lives in unless WT is set", () => {
   const override = withHarness('printf "%s" "$WT"', { WT: "/elsewhere/nexus" });
   assert.equal(override.stdout, "/elsewhere/nexus");
 });
+
+test("start passes only the extra arguments it was given, with every path quoted", () => {
+  const s = "/tmp/nexus audit";
+  // Fewer than three arguments: nothing leaks into the CLI's argument list.
+  const bare = withHarness("start foo", { S: s, WT: "/wt dir" });
+  assert.equal(bare.status, 0, bare.stderr);
+  const session = bare.tmux.find((call) => call[0] === "new-session");
+  assert.ok(session, `tmux new-session was called: ${JSON.stringify(bare.tmux)}`);
+  assert.deepEqual(session.slice(0, 7), ["new-session", "-d", "-s", "foo", "-x", "120", "-y"]);
+  assert.equal(session[7], "40");
+  const words = commandWords(session);
+  assert.equal(words.at(-1), "fake-model", `no argument follows the model: ${JSON.stringify(words)}`);
+  assert.ok(!words.includes("foo"), `the session name is not an argument: ${JSON.stringify(words)}`);
+  assert.ok(words.includes("HOME=/tmp/nexus audit/home") && words.includes("/tmp/nexus audit/ws") && words.includes("/wt dir/cli/dist/index.js"), JSON.stringify(words));
+
+  // All three plus extras: the extras reach the CLI as the words they were, spaces included.
+  const extras = withHarness('start bar 100 30 --mode review -p "two words"', { S: s, WT: "/wt" });
+  const call = extras.tmux.find((c) => c[0] === "new-session")!;
+  assert.deepEqual(call.slice(3, 8), ["bar", "-x", "100", "-y", "30"]);
+  assert.deepEqual(commandWords(call).slice(-6), ["-m", "fake-model", "--mode", "review", "-p", "two words"]);
+});
