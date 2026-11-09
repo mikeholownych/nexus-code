@@ -165,7 +165,10 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
     Esc) still answer.
   - Esc denies. Keys with Ctrl, Alt, Super or Meta never answer, nor do bursts of keys or pastes (their text goes to
     your draft).
-  - Other typing goes to your draft (steering), so nothing you type is lost; it does not switch the letters off.
+  - Other typing goes to your draft (steering), so nothing you type is lost; it does not switch the letters off. While
+    you are in a run of typing (a key within about 0.3 seconds of the previous one), a `y`, `n` or `a` is a letter of
+    your text and goes to the draft, Enter is ignored, and the panel says `ignored: you were typing`; after a pause the
+    same key answers. A paste or burst of keys also goes to the draft and cancels the approve-all question.
   - One guard against accidents: a key that was already on its way when the panel appeared (pressed within a quarter of
     a second of it, while you were typing or had just answered another request) is ignored, and the panel says
     `ignored: panel just opened`. Press it again.
