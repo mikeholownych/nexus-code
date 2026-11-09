@@ -104,6 +104,26 @@ describe("named worktree binding", () => {
     } finally { f.cleanup(); }
   });
 
+  test("a validated named branch that merely looks high-entropy survives persistence and loads again", () => {
+    const f = fixture();
+    try {
+      // Valid branch names are often long and varied; the persistence classifier flags this one as UNCERTAIN.
+      const branch = "feature-async-job-12345";
+      const made = runWorktreeCommand(["switch", "-c", branch, "--no-copy"], { cwd: f.repo, home: f.home });
+      assert.equal(made.success, true, made.output);
+      const dir = path.join(f.repo, ".nexus", "worktrees", branch);
+      const manager = new DurableStateManager({ baseDir: f.tasks, workspacePaths: [WorkspacePath.fromSelectedWorkspace(f.repo), WorkspacePath.fromSelectedWorkspace(dir)] });
+      manager.saveTaskState(stateFor(f, "task-entropy", { ...namedBinding(f), worktreePath: dir, branch }));
+      const file = fs.readdirSync(f.tasks).map((n) => path.join(f.tasks, n)).find((n) => n.endsWith("task-entropy.json"))!;
+      assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).worktreeBinding.branch, branch, "persisted verbatim");
+      const loaded = manager.loadTaskState("task-entropy");
+      assert.equal(loaded.worktreeBinding?.branch, branch);
+      assert.equal(manager.recoverTaskState("task-entropy", { expectedWorkspace: f.repo }).worktreeStatus, "consistent");
+      // The same branch on a path Git does not list for it is not validated and must not be preserved.
+      assert.throws(() => manager.saveTaskState(stateFor(f, "task-entropy-stray", { ...namedBinding(f), worktreePath: f.dir, branch })), TaskStateWriteError);
+    } finally { f.cleanup(); }
+  });
+
   test("save applies the same binding rules as load: a version without a kind is refused, not defaulted", () => {
     const f = fixture();
     try {

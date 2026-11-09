@@ -113,6 +113,9 @@ export function isNamedWorktreePath(
   }
 }
 
+/** Stands in for a repository-validated branch name while the rest of the record is classified. */
+const WORKTREE_BRANCH_PLACEHOLDER = "[NEXUS_TYPED_WORKTREE_BRANCH]";
+
 /** Provider tool-call ids at least this long are eligible for the high-entropy classifier (see egress.ts). */
 const ENTROPY_CHECKED_LENGTH = 20;
 
@@ -207,15 +210,37 @@ export function redactTaskStateForPersistence<T extends {
   const boundary = InformationFlowBoundary.getGlobalInstance();
   const typedPaths = [selectedWorkspace];
   const worktreePath = value.worktreeBinding?.worktreePath;
+  // A binding Git lists on the recorded branch and Nexus manages (task) or registered (named). Computed once, lazily.
+  let validatedBinding: boolean | undefined;
+  const bindingValidated = (): boolean => {
+    validatedBinding ??= worktreePath !== undefined && (
+      isManagedWorktreePath(selectedWorkspace, worktreePath, value.taskId, value.worktreeBinding ?? {}) ||
+      isNamedWorktreePath(selectedWorkspace, worktreePath, value.worktreeBinding ?? {}));
+    return validatedBinding;
+  };
   if (worktreePath) {
     const typedWorktree = workspacePaths.find((identity) => identity.matches(worktreePath));
     if (typedWorktree) typedPaths.push(typedWorktree);
     else {
       const findings = classifyPathComponents(worktreePath);
-      if (findings.some((finding) => finding.classificationType !== "UNCERTAIN") ||
-          (findings.length > 0 && !(isManagedWorktreePath(selectedWorkspace, worktreePath, value.taskId, value.worktreeBinding ?? {}) || isNamedWorktreePath(selectedWorkspace, worktreePath, value.worktreeBinding ?? {})))) {
+      if (findings.some((finding) => finding.classificationType !== "UNCERTAIN") || (findings.length > 0 && !bindingValidated())) {
         throw new Error("Task state worktree path has no selected workspace identity");
       }
+    }
+  }
+  // A valid branch name is often long and varied enough to look high-entropy. One the repository confirms (Git lists
+  // the worktree on it, and the registry or the task layout knows it) is an identity the next load needs verbatim:
+  // redacting it would quarantine the record. Only uncertain findings qualify; a positive match is never preserved.
+  const branch = value.worktreeBinding?.branch;
+  let preserveBranch = false;
+  if (typeof branch === "string") {
+    const branchFindings = boundary.classifyText(branch);
+    if (branchFindings.some((finding) => finding.classificationType !== "UNCERTAIN")) {
+      throw new Error("Task state worktree branch contains positively classified sensitive material");
+    }
+    if (branchFindings.length > 0) {
+      if (!bindingValidated()) throw new Error("Task state worktree branch has no validated worktree identity");
+      preserveBranch = true;
     }
   }
   for (const identity of typedPaths) {
@@ -227,13 +252,20 @@ export function redactTaskStateForPersistence<T extends {
 
   const preserveOperationGitPaths = hasValidatedOperationGitPaths(value as any, selectedWorkspace);
   const operationGit = (value as any).operation?.git;
+  const maskWorktreePath = Boolean(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0));
   // Mask validated path fields before classification, then restore their exact values.
   const masked = {
     ...value,
     workspacePath: "[NEXUS_TYPED_WORKSPACE_PATH]",
     ...(value.workspace === undefined ? {} : { workspace: "[NEXUS_TYPED_WORKSPACE_PATH]" }),
-    ...(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0)
-      ? { worktreeBinding: { ...value.worktreeBinding, worktreePath: "[NEXUS_TYPED_WORKSPACE_PATH]" } }
+    ...(maskWorktreePath || preserveBranch
+      ? {
+          worktreeBinding: {
+            ...value.worktreeBinding,
+            ...(maskWorktreePath ? { worktreePath: "[NEXUS_TYPED_WORKSPACE_PATH]" } : {}),
+            ...(preserveBranch ? { branch: WORKTREE_BRANCH_PLACEHOLDER } : {}),
+          },
+        }
       : {}),
     ...(preserveOperationGitPaths ? {
       operation: {
@@ -260,8 +292,14 @@ export function redactTaskStateForPersistence<T extends {
     ...protectedValue,
     workspacePath: selectedWorkspace.value,
     ...(value.workspace === undefined ? {} : { workspace: selectedWorkspace.value }),
-    ...(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0)
-      ? { worktreeBinding: { ...protectedValue.worktreeBinding, worktreePath } }
+    ...(maskWorktreePath || preserveBranch
+      ? {
+          worktreeBinding: {
+            ...protectedValue.worktreeBinding,
+            ...(maskWorktreePath ? { worktreePath } : {}),
+            ...(preserveBranch ? { branch } : {}),
+          },
+        }
       : {}),
     ...(preserveOperationGitPaths ? {
       operation: {
