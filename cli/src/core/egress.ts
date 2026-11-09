@@ -487,11 +487,13 @@ interface PositionedMatch {
  * stops at "~" where the Authorization pattern takes the whole token68 value; the Bearer capture keeps a sentence's
  * full stop where the entropy tokenizer trims it; an entropy token spans `sk-…/models` where the key pattern stops at
  * the "/". Redaction replaces by value, so the shorter value replaced first would leave the rest of the credential in
- * the text, and one credential would be vaulted twice. Resolution: a match that starts where a more confident match
- * starts and extends past it is dropped (the token `sk-…/models` loses to the key at its start, keeping the path); then
- * a match inside another is dropped, so the longest wins and, among equals, the first classifier. A key start inside a
- * longer credential (`AbCd…+sk-A/…`) is such an inner match: the enclosing credential is redacted whole. Matches that only partly overlap are both kept. The result keeps classifier
- * order, one entry per distinct value.
+ * the text, and one credential would be vaulted twice. Resolution: an uncertain (entropy) token that starts where a
+ * more confident match starts and extends past it is dropped (the token `sk-…/models` loses to the key at its start,
+ * keeping the path); no other longer match is ever dropped for a shorter one it contains, so an operator secret that
+ * is a prefix or a middle part of a key does not shorten the key. Then a match inside another is dropped, so the
+ * longest wins and, among equals, the first classifier. A key start inside a longer credential (`AbCd…+sk-A/…`) is
+ * such an inner match: the enclosing credential is redacted whole. Matches that only partly overlap are both kept.
+ * The result has one entry per distinct value, longest first.
  */
 function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
   const order = matches.map((_, i) => i).sort(
@@ -503,7 +505,13 @@ function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
     const { start, end, item } = matches[i];
     open = open.filter((j) => matches[j].end >= start);
     for (const j of open) {
-      if (matches[j].start === start && matches[j].end >= end && matches[j].item.confidence < item.confidence) dropped.add(j);
+      const enclosing = matches[j];
+      if (
+        enclosing.item.classificationType === "UNCERTAIN" && enclosing.start === start && enclosing.end >= end &&
+        enclosing.item.confidence < item.confidence
+      ) {
+        dropped.add(j);
+      }
     }
     open.push(i);
   }
@@ -523,7 +531,8 @@ function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
       classified.push(match.item);
     }
   });
-  return classified;
+  // Longest value first: a value that also occurs inside a longer one elsewhere is replaced after it, not through it.
+  return classified.sort((a, b) => b.secret.length - a.secret.length);
 }
 
 /**

@@ -221,3 +221,16 @@ test("a credential with an embedded sk- is redacted whole, prefix included", () 
     InformationFlowBoundary.setGlobalInstance(original);
   }
 });
+
+/** An operator-declared secret that is part of a key does not shorten the key's redaction, wherever it sits in it. */
+test("an operator secret inside a key does not shorten the key's redaction", () => {
+  const key = "sk-ant-api03-Qx7Km2+Vb9Lr/Tz4Wd8Ns3Hc6Yp1Jf5Ge0Ua+Xo2Rt/Bq";
+  for (const explicit of ["sk-ant-api03-", "Hc6Yp1Jf5Ge0Ua"]) {
+    const boundary = new InformationFlowBoundary({ explicitSecrets: [explicit] });
+    for (const text of [`key ${key} end`, `key ${key} end; also ${explicit} alone`]) {
+      assert.ok(boundary.classifyText(text, []).some((f) => f.secret === key), `${explicit}: the key is classified whole`);
+      const output = boundary.redactForTelemetry(text);
+      assert.ok(!output.includes("Qx7Km2") && !output.includes("Xo2Rt") && !output.includes(explicit), `${explicit}: ${output}`);
+    }
+  }
+});
