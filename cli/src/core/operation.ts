@@ -21,7 +21,9 @@
  *                              failure itself: a dependency BLOCKED on a run whose verifier did not pass (its
  *                              `failedRun`) counts as satisfied for that role only. A debugger that has COMPLETED
  *                              is not run again if that dependency is later retried and fails a second time; the
- *                              operator adds or retries a debugger unit for the new failure.
+ *                              operator adds or retries a debugger unit for the new failure. A debugger works on
+ *                              exactly one failed candidate: with two or more failed dependencies it is BLOCKED
+ *                              before any checkout is made.
  *   unit BLOCKED               no safe autonomous transition: terminal execution failure, unknown execution with
  *                              its replay budget spent, an interrupted tool, or no qualified resource. Carries one
  *                              structured decision; only an applied operator decision moves it on.

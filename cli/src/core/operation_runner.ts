@@ -304,9 +304,22 @@ export class OperationRunner {
         try {
           // A failure_debugger admitted on a dependency BLOCKED on a failed verifier run reproduces on that
           // dependency's candidate, which was never integrated.
-          const snapshotOf = unit.role === "failure_debugger"
-            ? unit.dependsOn.find((id) => { const dep = this.scheduler.unit(id); return dep.status === "BLOCKED" && dep.failedRun !== undefined; })
-            : undefined;
+          // Exactly one failed candidate per debugger keeps its input unambiguous: with two, either snapshot would
+          // silently hide the other failure, so the unit is blocked for the operator to split it instead.
+          const failedDeps = unit.role === "failure_debugger"
+            ? unit.dependsOn.filter((id) => { const dep = this.scheduler.unit(id); return dep.status === "BLOCKED" && dep.failedRun !== undefined; })
+            : [];
+          if (failedDeps.length > 1) {
+            const reason = `a failure_debugger reproduces one failed candidate, but ${failedDeps.join(", ")} all failed`;
+            return {
+              kind: "failed",
+              cause: "EXECUTION_FAILED",
+              reason,
+              question: `${unit.title}: ${reason}. Give each failed unit its own failure_debugger, or stop?`,
+              options: [],
+            };
+          }
+          const snapshotOf = failedDeps[0];
           workspace = this.git.prepareUnit(unit, { restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf } : {}) }).workspace;
           this.save();
         } catch (err: any) {
