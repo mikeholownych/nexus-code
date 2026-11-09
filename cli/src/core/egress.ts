@@ -429,20 +429,24 @@ function isBase64KeyChar(code: number): boolean {
     code === 95 || code === 45 || code === 43 || code === 47; // _ - + /
 }
 
-/** A URL path segment after a key (`sk-…/v1/models`, `/gpt-4o`): lower-case words. Base64 segments are mixed case. */
-function isPathSegment(segment: string): boolean {
-  return /^(?:[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*)?$/.test(segment);
+/**
+ * The rest of a run after a plain key is a URL path (`/models`, `/v1/messages`) when it carries no base64-only "+"
+ * and every segment is empty or made of words, numbers and short tags, as `isIdentifierPart` defines them. Random
+ * base64 segments carry digits or split into one-letter pieces, so they are not taken for a path.
+ */
+function isPathTail(tail: string): boolean {
+  return !tail.includes("+") && tail.split("/").every((segment) => segment.split(/[._-]+/).every(isIdentifierPart));
 }
 
 /**
  * `sk-` / `sk-ant-` keys whose body is base64 ("/" and "+" included), found in one left-to-right pass: from each `sk-`
- * at a word boundary take the maximal run of key characters once, validate it, and resume after it. Trailing path
- * segments (`/models`) are not key material and are trimmed while the body stays at least 20 characters. A run is a
- * key if its body is then at least 20 characters, contains "/" or "+", and has a digit, a capital or "+"
- * (`sk-learn/linear_model/ridge` is a path). Keys without "/" or "+" are left to the bounded `sk-` patterns.
- * Every `sk-` inside a rejected run is skipped: its body is a suffix of the rejected body, so it could only be accepted
- * through digits in a trimmed path segment, never as a key, and a plain key inside the run is still found by the
- * bounded patterns. Nothing is rescanned, so the cost is linear however the input is crafted (`sk-sk-sk-...`).
+ * at a word boundary take the maximal run of key characters once, validate it, and resume after it. Nothing of the run
+ * is trimmed: its last segment is key material whatever its letter case. A run is a key if its body is at least 20
+ * characters, contains "/" or "+", and has a digit, a capital or "+" (`sk-learn/linear_model/ridge` is a path).
+ * A plain key followed by a URL path (`sk-…RtBq/models`: the body before its first "/" is a 20-64 character plain key
+ * and the rest is a path, see `isPathTail`) is left to the bounded `sk-` patterns, which stop at the "/".
+ * Every `sk-` inside a run is skipped: a key inside it is found by the bounded patterns. Nothing is rescanned and
+ * nothing is searched backwards, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
  */
 function scanBase64Keys(text: string): Array<{ start: number; end: number; name: string }> {
   const found: Array<{ start: number; end: number; name: string }> = [];
@@ -454,22 +458,19 @@ function scanBase64Keys(text: string): Array<{ start: number; end: number; name:
       from = at + 1;
       continue;
     }
-    let runEnd = at + 3;
-    while (runEnd < text.length && isBase64KeyChar(text.charCodeAt(runEnd))) runEnd++;
+    let end = at + 3;
+    while (end < text.length && isBase64KeyChar(text.charCodeAt(end))) end++;
     const anthropic = text.startsWith("sk-ant-", at);
-    const bodyStart = at + (anthropic ? 7 : 3);
-    let end = runEnd;
-    for (let slash = text.lastIndexOf("/", end - 1); slash - bodyStart >= 20; slash = text.lastIndexOf("/", end - 1)) {
-      if (!isPathSegment(text.slice(slash + 1, end))) break;
-      end = slash;
-    }
-    const body = text.slice(bodyStart, end);
-    if (body.length >= 20 && /[/+]/.test(body) && /[0-9A-Z+]/.test(body)) {
+    const body = text.slice(at + (anthropic ? 7 : 3), end);
+    const separator = body.search(/[/+]/);
+    const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
+      isPathTail(body.slice(separator + 1));
+    if (!plainKeyThenPath && body.length >= 20 && separator >= 0 && /[0-9A-Z+]/.test(body)) {
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
       found.push({ start: at, end: secretEnd, name: anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY" });
     }
-    from = Math.max(runEnd, at + 1);
+    from = Math.max(end, at + 1);
   }
   return found;
 }

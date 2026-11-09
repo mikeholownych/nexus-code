@@ -97,6 +97,8 @@ test("pathological 800 KB inputs are redacted in linear time", () => {
     // A checkpointed file is scanned whole; `/[.!]+$/` on this was quadratic (01M6VSBN5H912QJ5KTPF5CAEKR).
     ["trailing punctuation run", `${".".repeat(size)}x`],
     ["exclamation run", `${"!".repeat(size)}x`],
+    // Many short `sk-` runs with no "/": a backward search for a path separator must not reach into earlier text.
+    ["short sk- runs", "sk-a ".repeat(Math.ceil(size / 5))],
   ];
   try {
     for (const [name, input] of inputs) {
@@ -174,7 +176,7 @@ test("a credential matched at the same place by two classifiers is classified on
 test("a plain key followed by a URL path is redacted once and the path is kept", () => {
   const boundary = new InformationFlowBoundary();
   const key = "sk-ant-api03-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq";
-  for (const suffix of ["/models", "/v1/x", "/v1/messages?beta=true"]) {
+  for (const suffix of ["/models", "/v1/models", "/v1/messages?beta=true", "/"]) {
     const text = `calling ${key}${suffix} now`;
     const found = boundary.classifyText(text, []);
     assert.equal(found.length, 1, `${suffix}: ${JSON.stringify(found)}`);
@@ -186,5 +188,23 @@ test("a plain key followed by a URL path is redacted once and the path is kept",
     } finally {
       InformationFlowBoundary.setGlobalInstance(original);
     }
+  }
+});
+
+/** A base64 key's final segment is key material whatever its letter case: nothing of the run is taken for a URL path. */
+test("a base64 key ending in a lower-case segment is redacted whole", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    for (const key of [
+      "sk-AbCd/EfGhIjKlMnOpQrStUvWxYz0123456789/abcdef",
+      "sk-ant-api03-Qx7Km2+Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0Ua/models",
+      "sk-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1/Jf5Ge0UaXo2RtBq",
+    ]) {
+      const output = redactDiagnosticForOutput(`calling ${key} now`);
+      assert.match(output, /^calling \[REDACTED:[A-Z_]+\] now$/, `${key}: ${output}`);
+    }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
   }
 });
