@@ -35,7 +35,8 @@ export interface UnitRunContext {
   objective: string;
   /** The durable operation this unit belongs to. */
   operationId?: string;
-  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean } }>;
+  /** Each dependency's result; `failed` marks one that is BLOCKED on a failed verifier run (failure_debugger units only). */
+  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean }; failed?: true }>;
   /** Isolated operations: the commit the operation started from, which a review unit diffs against. */
   baseCommit?: string;
   /** Non-isolated operations: HEAD when the operation first ran (absent outside Git, or for older operations). */
@@ -321,10 +322,13 @@ export class OperationRunner {
       dependencies: unit.dependsOn.map((id) => {
         const dep = this.scheduler.unit(id);
         // The verifier a dependency ran: its integration receipt (isolated operations) or, where nothing was
-        // integrated, the verification its own completed result recorded.
+        // integrated, the verification its own completed result recorded. A dependency that has not completed can
+        // only be one BLOCKED on a failed verifier run (the scheduler admits a failure_debugger on that), so its
+        // evidence is that run's.
         const receipt = [...(this.state.integrations ?? [])].reverse().find((entry) => entry.unitId === id);
-        const verification = receipt?.tests ?? dep.result?.verification;
-        return { id, title: dep.title, summary: dep.result?.summary ?? "", ...(verification ? { verification } : {}) };
+        const failedRun = dep.result ? undefined : dep.failedRun;
+        const verification = receipt?.tests ?? dep.result?.verification ?? failedRun?.verification;
+        return { id, title: dep.title, summary: dep.result?.summary ?? failedRun?.summary ?? "", ...(verification ? { verification } : {}), ...(failedRun ? { failed: true as const } : {}) };
       }),
       ...(this.state.git?.baseCommit ? { baseCommit: this.state.git.baseCommit } : {}),
       ...(!this.state.git && this.state.startCommit ? { startCommit: this.state.startCommit } : {}),

@@ -38,6 +38,16 @@ export class DecisionRejected extends Error {}
 
 export const isRequired = (u: Pick<WorkUnit, "required">): boolean => u.required !== false;
 
+/**
+ * Whether `dependency` is finished input for `u`: COMPLETE, or, for a failure_debugger only, BLOCKED on a run whose
+ * verifier did not pass. The failure is that role's input, so waiting for the dependency to complete would wait for
+ * the evidence to disappear; a retried dependency is unfinished input again.
+ */
+function dependencySatisfied(u: WorkUnit, dependency: WorkUnit): boolean {
+  if (dependency.status === "COMPLETE") return true;
+  return u.role === "failure_debugger" && dependency.status === "BLOCKED" && dependency.failedRun !== undefined;
+}
+
 export class ConvergenceScheduler {
   constructor(
     readonly state: DurableOperationState,
@@ -87,7 +97,7 @@ export class ConvergenceScheduler {
     for (const u of this.state.units) {
       if (TERMINAL.includes(u.status) || u.status === "RUNNING") continue;
       const deps = u.dependsOn.map((d) => this.unit(d));
-      if (deps.some((d) => d.status !== "COMPLETE")) {
+      if (deps.some((d) => !dependencySatisfied(u, d))) {
         u.status = "WAITING_ON_DEPENDENCY";
         delete u.parked;
         continue;
@@ -545,6 +555,9 @@ export class ConvergenceScheduler {
     const at = new Date(this.now()).toISOString();
     const resourceId = u.assignment?.resourceId ?? "unknown";
     if (result.kind !== "cancelled") delete u.pendingDecision;
+    // Failed-run evidence describes the latest outcome only; any newer outcome replaces or clears it.
+    if (result.kind !== "cancelled") delete u.failedRun;
+    if (result.kind === "failed" && result.failedRun) u.failedRun = { at, reason: result.reason, ...result.failedRun };
     switch (result.kind) {
       case "completed":
         u.status = "COMPLETE";

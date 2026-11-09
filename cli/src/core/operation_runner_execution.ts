@@ -590,17 +590,18 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       } catch {
         reportOperationDiagnostic(this.opts.onDiagnostic, "executor", "turn_checkpoint_failed");
       }
-      const outcome = this.classify(unit, resource, turn, agent.getCompletionSummary()?.summary, lastCondition, ctx, testerVerifiedThisTurn, review);
-      if (outcome.kind === "completed" && turn.verification?.command) {
-        return {
-          ...outcome,
-          verification: {
-            command: turn.verification.command,
-            status: turn.verification.status,
-            hasExecutedTests: turn.verification.hasExecutedTests === true,
-          },
-        };
-      }
+      const summary = agent.getCompletionSummary()?.summary;
+      const outcome = this.classify(unit, resource, turn, summary, lastCondition, ctx, testerVerifiedThisTurn, review);
+      if (!turn.verification?.command) return outcome;
+      const verification = {
+        command: turn.verification.command,
+        status: turn.verification.status,
+        hasExecutedTests: turn.verification.hasExecutedTests === true,
+      };
+      if (outcome.kind === "completed") return { ...outcome, verification };
+      // A failed attempt that ran a verifier is evidence too: a dependent failure_debugger works from it while the
+      // unit waits on the operator (the scheduler lets that role run on such a dependency).
+      if (outcome.kind === "failed") return { ...outcome, failedRun: { summary: (summary ?? turn.detail ?? outcome.reason).slice(0, SPECIALIST_SUMMARY_MAX), verification } };
       return outcome;
     } finally {
       agent.setProviderRecoveryHooks(undefined);
@@ -719,7 +720,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       );
     }
     const deps = ctx.dependencies.length
-      ? `\nCompleted prerequisite work:\n${ctx.dependencies.map((d) => `- ${d.title}: ${d.summary}`).join("\n")}\n`
+      ? `\n${ctx.dependencies.some((d) => d.failed) ? "Prerequisite work" : "Completed prerequisite work"}:\n${ctx.dependencies.map((d) => `- ${d.title}${d.failed ? " (failed; its verifier evidence is in the inputs)" : ""}: ${d.summary}`).join("\n")}\n`
       : "";
     return (
       `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${inputsBlock(unit, "supplied")}${deps}${messagesBlock(messages)}\n` +
