@@ -3,6 +3,8 @@
  * command (REPL and sidecar) and the tests. Mutating subcommands are refused in read-only mode here as well as at the
  * two slash gates, so no entry point can reach them.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { redactSecrets } from "../ui.js";
 import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { copyIgnored } from "./copy.js";
@@ -146,11 +148,7 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
       }
       case "merge": {
         if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]");
-        return mergeWorktree(ctx, {
-          target: parsed.positionals[0], noSquash: parsed.flags.has("no-squash"), noRebase: parsed.flags.has("no-rebase"),
-          noRemove: parsed.flags.has("no-remove"), message: parsed.values.get("message"),
-          noVerifyReceipt: parsed.flags.has("no-verify-receipt"), reason: parsed.values.get("reason"),
-        });
+        return mergeWorktree(ctx, mergeOptionsFrom(parsed));
       }
       case "prune": {
         if (parsed.positionals.length) throw new WorktreeError("usage: worktree prune [--dry-run] [--min-age 1d] [--limit N] [--discard-ignored]");
@@ -167,14 +165,57 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
     }
     throw new WorktreeError("unreachable");
   } catch (err) {
-    if (err instanceof WorktreeError || err instanceof WorktreePathError || err instanceof GitError) return { success: false, output: redactSecrets(err.message) };
-    return { success: false, output: redactSecrets((err as Error)?.message ?? String(err)).slice(0, 400) };
+    return formatCommandError(err);
   }
 }
 
-/** Split the text after the command name into tokens (no quoting: branch names and paths here contain no spaces). */
+function mergeOptionsFrom(parsed: Parsed): MergeOptions {
+  return {
+    target: parsed.positionals[0],
+    noSquash: parsed.flags.has("no-squash"),
+    noRebase: parsed.flags.has("no-rebase"),
+    noRemove: parsed.flags.has("no-remove"),
+    message: parsed.values.get("message"),
+    noVerifyReceipt: parsed.flags.has("no-verify-receipt"),
+    reason: parsed.values.get("reason"),
+  };
+}
+
+function formatCommandError(err: unknown): CommandResult {
+  if (err instanceof WorktreeError || err instanceof WorktreePathError || err instanceof GitError) {
+    return { success: false, output: redactSecrets(err.message) };
+  }
+  return { success: false, output: redactSecrets((err as Error)?.message ?? String(err)).slice(0, 400) };
+}
+
+/** Split the text after the command name into tokens, preserving single- and double-quoted strings. */
 export function tokenizeWorktreeArgs(args: string): string[] {
-  return args.trim().split(/\s+/).filter(Boolean);
+  const tokens: string[] = [];
+  const regex = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(args)) !== null) {
+    if (match[1] !== undefined) {
+      tokens.push(match[1].replace(/\\(["\\])/g, "$1"));
+    } else if (match[2] !== undefined) {
+      tokens.push(match[2].replace(/\\(['\\])/g, "$1"));
+    } else if (match[3] !== undefined) {
+      tokens.push(match[3]);
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Where an interactive session standing in a worktree that a command just removed should move to: the worktree of the
+ * branch the work was merged into. Undefined when nothing was removed or the session is elsewhere.
+ */
+export function relocationAfter(result: CommandResult, cwd: string): string | undefined {
+  const data = result.data as { removedPath?: string; targetPath?: string } | undefined;
+  if (!result.success || !data?.removedPath || !data.targetPath) return undefined;
+  let here = cwd;
+  try { here = fs.realpathSync(cwd); } catch { /* the directory is already gone: compare as given */ }
+  const removed = data.removedPath;
+  return here === removed || here.startsWith(removed + path.sep) || cwd === removed || cwd.startsWith(removed + path.sep) ? data.targetPath : undefined;
 }
 
 export interface AsyncDeps {
@@ -192,25 +233,23 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
   if (parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
   const ctx: WorktreeContext = { cwd: run.cwd, home: run.home ?? homeDir(), readOnly: false };
 
+  const mergeOptions = mergeOptionsFrom(parsed);
   let mctx: MergeContextInfo;
   try {
-    mctx = resolveMergeContext(ctx, {
-      target: parsed.positionals[0],
-      noSquash: parsed.flags.has("no-squash"),
-      noRebase: parsed.flags.has("no-rebase"),
-      noRemove: parsed.flags.has("no-remove"),
-      noVerifyReceipt: parsed.flags.has("no-verify-receipt"),
-      reason: parsed.values.get("reason"),
-    });
+    mctx = resolveMergeContext(ctx, mergeOptions);
   } catch (err) {
-    if (err instanceof WorktreeError || err instanceof WorktreePathError || err instanceof GitError) {
-      return { success: false, output: redactSecrets(err.message) };
-    }
-    return { success: false, output: redactSecrets((err as Error)?.message ?? String(err)).slice(0, 400) };
+    return formatCommandError(err);
   }
 
   const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS)
     .catch(() => ({ message: undefined, note: "note: could not prepare the model request; using the deterministic commit message." }));
-  const result = runWorktreeCommand(generated.message ? [...tokens, "-m", generated.message] : tokens, run);
-  return { ...result, output: `${generated.note}\n${result.output}` };
+
+  try {
+    if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]");
+    const options: MergeOptions = { ...mergeOptions, ...(generated.message ? { message: generated.message } : {}) };
+    const result = mergeWorktree(ctx, options);
+    return { ...result, output: `${generated.note}\n${result.output}` };
+  } catch (err) {
+    return formatCommandError(err);
+  }
 }

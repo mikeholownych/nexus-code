@@ -1,4 +1,4 @@
-import { isLegacyWorktreeArgs, isReadOnlyWorktreeArgs, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "./worktrunk/command.js";
+import { isLegacyWorktreeArgs, isReadOnlyWorktreeArgs, relocationAfter, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "./worktrunk/command.js";
 import { providerCompleter } from "./worktrunk/provider.js";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -384,7 +384,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/mode [auto|review]"))} Toggle autonomous execution vs human review approval`);
     console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
     console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
-    console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard|list|path|switch|remove]"))} Manage isolated ephemeral and named git worktrees`);
+    console.log(`  ${pc.bold(pc.yellow("/worktree [status|discard|list|path|switch|remove|copy-ignored|prune|merge [<target>]]"))} Manage isolated ephemeral and named git worktrees (a bare merge is the speculative one)`);
     console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         [experimental] Execute strict RED-GREEN-REFACTOR TDD cycle`);
     console.log(`  ${pc.bold(pc.yellow("/knowledge [set|del]"))} Manage persistent project knowledge graph`);
     console.log(`  ${pc.bold(pc.yellow("/browse <url>"))}        Verify URL in headless browser driver`);
@@ -1067,6 +1067,14 @@ export class InteractiveRepl {
           } else if (cmd === "worktree" && !isLegacyWorktreeArgs(arg)) {
             const result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(arg), { cwd: this.config.workspace, readOnly: Boolean(this.config.readOnly) || this.agent.getApprovalMode() === "read-only" }, { completer: providerCompleter(this.config) });
             console.log((result.success ? result.output : pc.red(result.output)) + "\n");
+            // A merge removes the worktree the session may be standing in: move it to the branch it was merged into.
+            const moveTo = relocationAfter(result, this.config.workspace);
+            if (moveTo) {
+              this.config.workspace = moveTo;
+              this.agent.setWorkspace(moveTo);
+              this.checkpointManager = new CheckpointManager(moveTo);
+              console.log(pc.green(`✔ Workspace changed to ${moveTo}\n`));
+            }
             continue;
           } else if (cmd === "worktree") {
             const mgr = this.agent.getWorktreeManager();

@@ -74,6 +74,11 @@ export class WorktreeManager {
    * The main checkout, found from the git common dir so that a manager created inside a linked worktree (including
    * one of its own `.nexus/worktrees/<id>` directories) still stores its worktrees with the repository that owns them.
    * Git operations that depend on "the current branch" use checkoutRoot instead.
+   *
+   * Known limit: this needs the common dir to be `<main checkout>/.git`. With `git init --separate-git-dir` (or any
+   * other layout) Git records no way back from the git directory to the main checkout, and `git worktree list` itself
+   * names the git directory, so the manager anchors on the checkout it runs in. `nexus worktree` refuses such
+   * repositories (docs/WORKTREES.md).
    */
   private resolveGitRoot(): string {
     try {

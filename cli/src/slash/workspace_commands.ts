@@ -8,7 +8,7 @@ import { HunkStager } from "../stager.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "../tester.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { PolicyContext } from "../core/approval_policy.js";
-import { isLegacyWorktreeArgs, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "../worktrunk/command.js";
+import { isLegacyWorktreeArgs, relocationAfter, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "../worktrunk/command.js";
 import { providerCompleter } from "../worktrunk/provider.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 
@@ -121,10 +121,14 @@ async function worktree(ctx: SlashContext): Promise<SlashOutcome> {
   const sub = ctx.args.trim().toLowerCase();
   // Legacy forms act on the speculative worktree of this run; everything else is the named-worktree command set.
   if (!isLegacyWorktreeArgs(sub)) {
-    const result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(ctx.args), { cwd: workspace(ctx), readOnly: ctx.host.mode() === "read-only" }, {
+    const cwd = workspace(ctx);
+    const result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(ctx.args), { cwd, readOnly: ctx.host.mode() === "read-only" }, {
       completer: providerCompleter(ctx.host.app.getConfig()),
     });
-    return reply("worktree", result.output, result.success);
+    // A merge removes the worktree this session may be standing in: move it to the branch it was merged into.
+    const moveTo = relocationAfter(result, cwd);
+    if (moveTo) ctx.host.setWorkspace(moveTo);
+    return reply("worktree", moveTo ? `${result.output}\nWorkspace changed to ${moveTo}` : result.output, result.success);
   }
   if (sub === "merge" || sub === "discard") {
     if (!active) return reply("worktree", `No active speculative worktree to ${sub}.`, false);

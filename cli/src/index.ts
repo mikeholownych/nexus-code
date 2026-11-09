@@ -1032,7 +1032,7 @@ program
     const result = await runWorktreeCommandAsync(args, { cwd, readOnly: Boolean(options.readOnly) }, {
       completer: async (prompt, opts) => {
         try {
-          const cfg = buildConfigOrThrow({ workspace: cwd });
+          const cfg = buildConfigOrThrow({ ...options, workspace: cwd });
           const comp = providerCompleter(cfg);
           if (!comp) return undefined;
           return await comp(prompt, opts);
