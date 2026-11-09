@@ -32,8 +32,10 @@ const READ_ONLY = new Set(["list", "path"]);
 
 export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B]|remove <branch>... [--force] [--delete-unmerged]]";
 
+/** The subcommand a token names, matched case-insensitively (the slash gates lowercase their input; the CLI does not). */
 function canonical(sub: string): string | undefined {
-  const name = ALIASES[sub] ?? sub;
+  const key = sub.toLowerCase();
+  const name = ALIASES[key] ?? key;
   return SPECS[name] ? name : undefined;
 }
 
