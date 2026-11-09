@@ -464,3 +464,67 @@ test("in-progress operations report readable operation names and matching contin
   } finally { f.cleanup(); }
 });
 
+
+test("a submodule with a commit that exists nowhere else keeps the worktree after the merge", () => {
+  const f = fixture();
+  try {
+    const subrepo = path.join(f.root, "subrepo");
+    fs.mkdirSync(subrepo);
+    git(subrepo, "init", "-q", "-b", "main");
+    git(subrepo, "config", "user.email", "t@example.com");
+    git(subrepo, "config", "user.name", "T");
+    git(subrepo, "config", "commit.gpgsign", "false");
+    commitFile(subrepo, "s.txt", "sub\n", "sub init");
+    git(f.repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subrepo, "sub");
+    git(f.repo, "commit", "-q", "-m", "add submodule");
+
+    const dir = feature(f, "feat/sub-commit");
+    git(dir, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
+    git(path.join(dir, "sub"), "config", "user.email", "t@example.com");
+    git(path.join(dir, "sub"), "config", "user.name", "T");
+    git(path.join(dir, "sub"), "config", "commit.gpgsign", "false");
+    commitFile(path.join(dir, "sub"), "s.txt", "local only\n", "unpublished submodule commit");
+    git(dir, "add", "sub");
+    git(dir, "commit", "-q", "-m", "bump submodule"); // the worktree is clean now; the only copy of the commit is inside it
+
+    const r = wt(f, dir, ["merge"]);
+    assert.ok(fs.existsSync(dir), `the worktree holding the only copy of a submodule commit must be kept: ${r.output}`);
+    assert.match(r.output, /submodule/i);
+  } finally { f.cleanup(); }
+});
+
+test("--no-squash refuses to rebase away a merge commit's own edits", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/with-merge");
+    commitFile(dir, "topic.txt", "topic\n", "topic work");
+    commitFile(f.repo, "x.txt", "x\n", "main moves");
+    git(dir, "merge", "-q", "--no-ff", "--no-edit", "main");
+    fs.writeFileSync(path.join(dir, "resolution.txt"), "only in the merge commit\n");
+    git(dir, "add", "resolution.txt");
+    git(dir, "commit", "-q", "--amend", "--no-edit");
+    commitFile(f.repo, "y.txt", "y\n", "main moves again"); // the target diverges, so a rebase would be needed
+    const mainBefore = git(f.repo, "rev-parse", "refs/heads/main");
+
+    const r = wt(f, dir, ["merge", "--no-squash"]);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /merge commit/i);
+    assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore, "the target is untouched");
+    assert.ok(fs.existsSync(dir));
+    assert.equal(fs.readFileSync(path.join(dir, "resolution.txt"), "utf8"), "only in the merge commit\n");
+  } finally { f.cleanup(); }
+});
+
+test("a tag named like the source branch never stands in for the branch being merged", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/tagsrc");
+    commitFile(dir, "b.txt", "b\n", "add b");
+    const featureHead = git(dir, "rev-parse", "HEAD");
+    const later = git(dir, "commit-tree", "-p", featureHead, "-m", "unrelated descendant", `${featureHead}^{tree}`);
+    git(f.repo, "tag", "feat/tagsrc", later); // refs/tags/feat/tagsrc is a descendant of the branch
+    const r = wt(f, dir, ["merge"]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), featureHead, "main received the branch, not the tag's commit");
+  } finally { f.cleanup(); }
+});
