@@ -85,7 +85,7 @@ test("a tag named like the default branch never stands in for the branch", () =>
   } finally { f.cleanup(); }
 });
 
-test("a branch that moved after the integration check is kept, not force-deleted", async () => {
+test("a commit that lands on a branch worktree between the check and the removal stops the removal", async () => {
   const f = fixture();
   try {
     const core = await import("../src/worktrunk/core.js") as any;
@@ -104,8 +104,27 @@ test("a branch that moved after the integration check is kept, not force-deleted
       delete core.removeSeams.beforeRemove;
     }
     assert.ok(newSha, "the seam must have run");
-    assert.equal(fs.existsSync(dir), false, "the clean worktree directory is removed");
-    assert.equal(git(f.repo, "rev-parse", "--verify", "--quiet", "refs/heads/racy"), newSha, "the moved branch must survive");
+    assert.equal(result.success, false, result.output);
+    assert.equal(fs.existsSync(dir), true, "nothing is removed");
+    assert.equal(git(f.repo, "rev-parse", "--verify", "--quiet", "refs/heads/racy"), newSha);
+  } finally { f.cleanup(); }
+});
+
+test("a branch that moved after its worktree was removed is kept, not force-deleted", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    assert.equal(wt(f, f.repo, ["switch", "-c", "racy2"]).success, true);
+    let newSha = "";
+    core.removeSeams.beforeBranchDeletion = () => {
+      // the branch is advanced by plain ref plumbing after the worktree is gone
+      newSha = git(f.repo, "commit-tree", "-p", "refs/heads/racy2", "-m", "late", "refs/heads/racy2^{tree}");
+      git(f.repo, "update-ref", "refs/heads/racy2", newSha);
+    };
+    let result;
+    try { result = wt(f, f.repo, ["remove", "racy2"]); } finally { delete core.removeSeams.beforeBranchDeletion; }
+    assert.equal(result.success, true, result.output);
+    assert.equal(git(f.repo, "rev-parse", "--verify", "--quiet", "refs/heads/racy2"), newSha, "the moved branch must survive");
     assert.match(result.output, /kept|moved/i);
   } finally { f.cleanup(); }
 });
@@ -529,7 +548,7 @@ test("a worktree whose .git points at a sibling worktree's admin directory is no
   } finally { f.cleanup(); }
 });
 
-test("WorktreeManager finds the main checkout of a repository whose git directory is not called .git", () => {
+test("a repository whose git directory is not <checkout>/.git is refused by `nexus worktree`, and WorktreeManager anchors on the checkout it runs in", () => {
   const f = fixture();
   try {
     const main = path.join(f.root, "sep");
@@ -539,8 +558,12 @@ test("WorktreeManager finds the main checkout of a repository whose git director
     git(main, "config", "user.name", "T");
     git(main, "config", "commit.gpgsign", "false");
     commitFile(main, "a.txt", "one\n", "init");
+    const refused = wt(f, main, ["list"]);
+    assert.equal(refused.success, false);
+    assert.match(refused.output, /not supported/);
     const linked = path.join(f.root, "linked");
     git(main, "worktree", "add", "-q", "-b", "side", linked);
-    assert.equal(new WorktreeManager(linked).getWorktreesBaseDir(), path.join(main, ".nexus", "worktrees"));
+    // Git records no way back to the main checkout, so the documented limit is the checkout itself, never the git directory
+    assert.equal(new WorktreeManager(linked).getWorktreesBaseDir(), path.join(linked, ".nexus", "worktrees"));
   } finally { f.cleanup(); }
 });
