@@ -1116,3 +1116,47 @@ test("a retried debugger takes a fresh snapshot when its dependency failed again
   assert.equal(fs.existsSync(path.join(second.workspace, "notes.txt")), false, "scratch from the stale snapshot is discarded");
   assert.equal(state.units.debug.snapshotRun, "2026-11-09T11:00:00.000Z");
 });
+
+test("a debugger retried after its dependency failed again starts a new conversation on the fresh snapshot (01M70XYXN7)", async () => {
+  const root = repo();
+  const state = newOperation("op-dbg3", "fix it", [
+    { id: "verify", title: "verify", role: "tester", prompt: "test" },
+    { id: "debug", title: "debug", role: "failure_debugger", prompt: "find the cause", dependsOn: ["verify"] },
+  ], [resource()], Date.now());
+  const p = plan(root, state.id);
+  state.git = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state.git);
+  let verifyRuns = 0;
+  const debuggerSaw: Array<{ resumeReason?: string; boundTask?: string; file?: string }> = [];
+  const executor: WorkUnitExecutor = {
+    async run(u, _resource, ctx) {
+      if (u.id === "verify") {
+        verifyRuns++;
+        fs.writeFileSync(path.join(ctx.workspace!, "file.txt"), `candidate ${verifyRuns}\n`);
+        return {
+          kind: "failed", cause: "EXECUTION_FAILED", reason: "verifier failed", question: "q",
+          options: [{ label: "retry", action: { kind: "retry" } }],
+          failedRun: { summary: `failed ${verifyRuns}`, verification: { command: "false", status: "FAILED", hasExecutedTests: true } },
+        };
+      }
+      debuggerSaw.push({ resumeReason: ctx.resumeReason, boundTask: u.agentTaskId, file: fs.readFileSync(path.join(ctx.workspace!, "file.txt"), "utf8") });
+      ctx.bindAgentTask?.(`task-${debuggerSaw.length}`);
+      return {
+        kind: "failed", cause: "EXECUTION_FAILED", reason: "debugger stopped", question: "q",
+        options: [{ label: "retry", action: { kind: "retry" } }],
+      };
+    },
+  };
+  const runner = new OperationRunner(state, { executor, clock: clock(), persist: () => {} });
+  await runner.run();
+  assert.equal(debuggerSaw.length, 1);
+  for (const id of ["verify", "debug"]) {
+    const decision = state.units.find((u) => u.id === id)!.blocked!.decision;
+    runner.scheduler.resolve(decision.id, decision.options.find((o) => o.label === "retry")!.id);
+  }
+  await runner.run();
+  assert.equal(debuggerSaw.length, 2, JSON.stringify(state.units.map((u) => [u.id, u.status])));
+  assert.equal(debuggerSaw[1].file, "candidate 2\n", "the retry works on the new candidate");
+  assert.equal(debuggerSaw[1].boundTask, undefined, "the old conversation, from the discarded candidate, is not resumed");
+  assert.equal(debuggerSaw[1].resumeReason, undefined);
+});

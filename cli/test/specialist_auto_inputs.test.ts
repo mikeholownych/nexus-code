@@ -17,6 +17,7 @@ import type { ResourceDescriptor } from "../src/core/resources.js";
 import type { TurnResult } from "../src/core/turn.js";
 import type { ChatMessage } from "../src/types.js";
 import { TeamOrchestrator } from "../src/team.js";
+import { candidateDiff } from "../src/core/specialist_inputs.js";
 
 const resource: ResourceDescriptor = {
   id: "primary", endpoint: "https://api.test/v1", provider: "https://api.test", model: "m",
@@ -644,4 +645,20 @@ test("a tracked file removed from the index but kept on disk and ignored shows a
   const prompt = fake.prompts[0];
   assert.match(prompt, /VISIBLE_EDIT/);
   assert.match(prompt, /deleted file mode[\s\S]*generated\.txt|generated\.txt[\s\S]*deleted file mode/, "the staged removal is part of the candidate");
+});
+
+test("a file committed after the base and then removed from the index but kept on disk shows as a deletion (01M70XYXKN)", () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-auto-committed-rm-"));
+  const run = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
+  run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t");
+  fs.writeFileSync(path.join(repo, "generated.txt"), "BASE_BODY\n"); fs.writeFileSync(path.join(repo, "a.txt"), "one\n");
+  run("add", "."); run("commit", "-q", "-m", "base");
+  const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  fs.writeFileSync(path.join(repo, "generated.txt"), "EDITED_BODY\n");
+  run("commit", "-qam", "earlier work edits it");
+  run("rm", "--cached", "-q", "generated.txt");
+  fs.writeFileSync(path.join(repo, ".gitignore"), "generated.txt\n");
+  const out = candidateDiff(repo, base);
+  assert.ok(!("error" in out), JSON.stringify(out));
+  assert.match((out as { diff: string }).diff, /deleted file mode/);
 });
