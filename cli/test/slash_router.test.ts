@@ -348,6 +348,7 @@ describe("slash router: workspace commands", () => {
       assert.match(merged.output, /Fast-forwarded/);
       assert.ok(fs.existsSync(path.join(repo, "named.txt")));
       assert.equal(fs.existsSync(dir), false);
+      assert.equal(fs.realpathSync(host.app.getConfig().workspace), fs.realpathSync(repo), "the session is moved out of the removed worktree");
     });
   });
 

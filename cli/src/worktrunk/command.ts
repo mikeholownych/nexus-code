@@ -174,3 +174,8 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
 export function tokenizeWorktreeArgs(args: string): string[] {
   return args.trim().split(/\s+/).filter(Boolean);
 }
+
+/** Where an interactive session standing in a worktree that a command just removed should move to. */
+export function relocationAfter(_result: CommandResult, _cwd: string): string | undefined {
+  return undefined;
+}

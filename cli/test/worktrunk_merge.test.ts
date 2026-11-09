@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs } from "../src/worktrunk/command.js";
+import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter } from "../src/worktrunk/command.js";
 import { readRegistry } from "../src/worktrunk/registry.js";
 import { backupRef } from "../src/worktrunk/merge.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
@@ -526,5 +526,24 @@ test("a tag named like the source branch never stands in for the branch being me
     const r = wt(f, dir, ["merge"]);
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), featureHead, "main received the branch, not the tag's commit");
+  } finally { f.cleanup(); }
+});
+
+test("a merge that removes the worktree the caller stands in says where to move the session", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/relocate");
+    commitFile(dir, "b.txt", "b\n", "add b");
+    const merged = wt(f, dir, ["merge"]);
+    assert.equal(merged.success, true, merged.output);
+    assert.equal(fs.existsSync(dir), false);
+    assert.equal(relocationAfter(merged, dir), f.repo, "the session moves to the target's worktree");
+    assert.equal(relocationAfter(merged, path.join(dir, "sub", "dir")), f.repo, "also from a directory inside the removed worktree");
+    assert.equal(relocationAfter(merged, f.repo), undefined, "a session elsewhere stays where it is");
+
+    const kept = feature(f, "feat/relocate-kept");
+    commitFile(kept, "c.txt", "c\n", "add c");
+    const keptRun = wt(f, kept, ["merge", "--no-remove"]);
+    assert.equal(relocationAfter(keptRun, kept), undefined, "a kept worktree needs no move");
   } finally { f.cleanup(); }
 });
