@@ -719,11 +719,16 @@ function findOccurrences(text: string, values: string[], budget: number): Array<
  * Values that overlap themselves on a repetitive text (secrets that are suffixes of one another over a run of one
  * letter) can occur far more often than the text is long. Past one occurrence per character the replacement falls
  * back to a linear pass that replaces the union of all occurrences instead: each region where occurrences overlap is
- * replaced whole, by the replacement of the longest value in it. Nothing that matches a value is left in clear; a
- * reversible token for such a region restores only that value.
- * `replacement(index)` is called once for each value that is replaced, in text order; returns the new text.
+ * replaced whole. Nothing that matches a value is left in clear.
+ * `replacement(index, matched)` is called once for each distinct replaced text, in text order: `matched` is the exact
+ * original text being replaced (the value itself, or a whole region in the fallback, where `index` is the longest value
+ * in the region), so a reversible token keyed to `matched` restores the text exactly. Returns the new text.
  */
-export function replaceValues(text: string, values: string[], replacement: (index: number) => string): string {
+export function replaceValues(
+  text: string,
+  values: string[],
+  replacement: (index: number, matched: string) => string
+): string {
   if (values.length === 0 || text.length === 0) return text;
   const occurrences = findOccurrences(text, values, text.length + 1024);
   if (occurrences === null) return replaceUnion(text, values, replacement);
@@ -748,8 +753,12 @@ export function replaceValues(text: string, values: string[], replacement: (inde
   return buildReplaced(text, accepted, replacement);
 }
 
-/** The linear fallback of replaceValues: the union of all occurrences, each region by its longest value. */
-function replaceUnion(text: string, values: string[], replacement: (index: number) => string): string {
+/** The linear fallback of replaceValues: the union of all occurrences, each region replaced whole. */
+function replaceUnion(
+  text: string,
+  values: string[],
+  replacement: (index: number, matched: string) => string
+): string {
   const automaton = buildAutomaton(values);
   // The longest value ending at each position covers every shorter one ending there (they are its suffixes).
   const spans: Array<[start: number, end: number, index: number]> = [];
@@ -770,22 +779,23 @@ function replaceUnion(text: string, values: string[], replacement: (index: numbe
   return buildReplaced(text, regions, replacement);
 }
 
-/** Builds the text with the given non-overlapping spans replaced; `replacement(index)` is called once per value. */
+/** Builds the text with the given non-overlapping spans replaced; `replacement` is called once per distinct text. */
 function buildReplaced(
   text: string,
   spans: Array<[start: number, end: number, index: number]>,
-  replacement: (index: number) => string
+  replacement: (index: number, matched: string) => string
 ): string {
   if (spans.length === 0) return text;
   spans.sort((a, b) => a[0] - b[0]);
-  const replacements = new Map<number, string>();
+  const replacements = new Map<string, string>();
   const parts: string[] = [];
   let from = 0;
   for (const [start, end, index] of spans) {
-    let replaced = replacements.get(index);
+    const matched = text.slice(start, end);
+    let replaced = replacements.get(matched);
     if (replaced === undefined) {
-      replaced = replacement(index);
-      replacements.set(index, replaced);
+      replaced = replacement(index, matched);
+      replacements.set(matched, replaced);
     }
     parts.push(text.slice(from, start), replaced);
     from = end;
@@ -1285,8 +1295,12 @@ export class InformationFlowBoundary {
       const sessionId = context?.sessionId || "default_session";
 
       const quarantinedSecrets: ClassifiedSecret[] = [];
-      const sanitizedText = replaceValues(rawText, classifiedSecrets.map((item) => item.secret), (index) => {
-        const item = classifiedSecrets[index];
+      const sanitizedText = replaceValues(rawText, classifiedSecrets.map((item) => item.secret), (index, matched) => {
+        // `matched` is the exact text replaced: the secret itself, or a whole region of self-overlapping secrets, so
+        // the token restores exactly what it replaced.
+        const item = matched === classifiedSecrets[index].secret
+          ? classifiedSecrets[index]
+          : { ...classifiedSecrets[index], secret: matched };
         quarantinedSecrets.push(item);
         if (mode === "IRREVERSIBLE_REDACTION") return `[REDACTED:${item.patternName || "SECRET"}]`;
         // ENCRYPTION (reversible encrypted token simulation) and REVERSIBLE_TOKENIZATION (the default) both tokenize.

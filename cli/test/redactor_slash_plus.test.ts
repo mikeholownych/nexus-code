@@ -461,3 +461,26 @@ test("nested secrets over a repetitive text are redacted in bounded time", () =>
     assert.ok(output.startsWith("st") && output.endsWith("end"), `${count} secrets: ${output.slice(0, 40)}`);
   }
 });
+
+/** Reversible quarantine is lossless even when the redactor's occurrence budget is exceeded: restore gives the input. */
+test("quarantine of self-overlapping secrets restores the exact text", () => {
+  const vault = new SecretsVault(new InformationFlowBoundary({ explicitSecrets: ["a".repeat(20), "a".repeat(21)] }));
+  const text = `x ${"a".repeat(2000)} y`;
+  const { sanitized } = vault.quarantine(text);
+  assert.ok(!sanitized.includes("a".repeat(20)), sanitized.slice(0, 80));
+  assert.equal(vault.restore(sanitized, { isAuthorizedSink: true }), text);
+});
+
+test("egress tokens for self-overlapping secrets rehydrate to the exact text, in linear time", () => {
+  const boundary = new InformationFlowBoundary({ explicitSecrets: ["a".repeat(20), "a".repeat(21)] });
+  const text = `x ${"a".repeat(2000)} y ${"a".repeat(25)} z ${"a".repeat(800_000)} w`;
+  const started = performance.now();
+  const result = boundary.evaluateEgress(text, "EXTERNAL_PUBLIC", { taskId: "t1" });
+  assert.ok(performance.now() - started < 3000, "over budget fallback stays linear");
+  assert.ok(!result.sanitizedText!.includes("a".repeat(20)), result.sanitizedText!.slice(0, 80));
+  assert.equal(result.quarantinedCount, 3);
+  assert.deepEqual(result.quarantinedSecrets!.map((item) => item.secret.length), [2000, 25, 800_000]);
+  const rehydrated = boundary.rehydrate(result.sanitizedText, { taskId: "t1", isAuthorizedSink: true });
+  assert.equal(rehydrated.rehydrated, text);
+  assert.equal(rehydrated.rehydratedCount, 3);
+});
