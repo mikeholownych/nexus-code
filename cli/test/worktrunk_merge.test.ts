@@ -630,7 +630,7 @@ test("a quoted merge message survives the interactive tokenizer and becomes the 
   try {
     const dir = feature(f, "feat/quoted");
     fs.writeFileSync(path.join(dir, "d.txt"), "uncommitted\n");
-    const r = wt(f, dir, tokenizeWorktreeArgs('merge ^ -m "feat: add login" --no-remove'));
+    const r = wt(f, dir, tokenizeWorktreeArgs('merge ^ -m "feat: add login" --no-remove --no-verify-receipt --reason fixture'));
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat: add login");
   } finally { f.cleanup(); }
