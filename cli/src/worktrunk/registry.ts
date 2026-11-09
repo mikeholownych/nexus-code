@@ -106,19 +106,37 @@ let lockDepth = 0;
 /** How long a caller waits for the lock and when an old lock may be taken over. Mutable so tests can shorten the wait. */
 export const lockSettings = { waitMs: 120_000, staleMs: 600_000 };
 
-/** A checkout holds the lock for as long as it takes, so a lock is taken over only when its holder is gone (a dead pid) or it is far older than any checkout. */
-function lockIsStale(lock: string): boolean {
-  const stat = fs.lstatSync(lock);
+/** Test seam: runs between judging a lock stale and taking it over. Not an extension point. */
+export const lockSeams: { afterStaleCheck?: () => void } = {};
+
+/**
+ * The identity of the lock file when it is stale, else undefined. A checkout holds the lock for as long as it takes,
+ * so a lock is stale only when its holder is gone (a dead pid on this host) or it is far older than any checkout.
+ * A pid from another PID namespace (a container, `unshare`) reads as gone here, so the age rule is the only guard
+ * against a holder in another namespace; see docs/WORKTREES.md.
+ */
+function staleLockIdentity(lock: string): fs.BigIntStats | undefined {
+  const stat = fs.lstatSync(lock, { bigint: true });
   let pid = NaN;
   try { pid = Number.parseInt(fs.readFileSync(lock, "utf8").trim(), 10); } catch { /* unreadable: judge by age */ }
   if (Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid) {
     try {
       process.kill(pid, 0);
     } catch (err: any) {
-      if (err?.code === "ESRCH") return true; // the holder is gone
+      if (err?.code === "ESRCH") return stat; // the holder is gone
     }
   }
-  return Date.now() - stat.mtimeMs > lockSettings.staleMs;
+  return Date.now() - Number(stat.mtimeMs) > lockSettings.staleMs ? stat : undefined;
+}
+
+/** Unlink the lock only if it is still the file that was judged stale (same device, inode, birth and change time). */
+function takeOverStaleLock(lock: string): void {
+  const judged = staleLockIdentity(lock);
+  if (!judged) return;
+  lockSeams.afterStaleCheck?.();
+  const now = fs.lstatSync(lock, { bigint: true });
+  if (now.dev !== judged.dev || now.ino !== judged.ino || now.ctimeNs !== judged.ctimeNs || now.mtimeNs !== judged.mtimeNs) return;
+  fs.unlinkSync(lock);
 }
 
 /** Run an action under an exclusive lock file (taken over only from a dead holder or after lockSettings.staleMs), reentrant for the same process. */
@@ -142,7 +160,7 @@ export function withWorktreeLock<T>(commonDir: string, fn: () => T): T {
     } catch (err: any) {
       if (err?.code !== "EEXIST") throw err;
       try {
-        if (lockIsStale(lock)) fs.unlinkSync(lock);
+        takeOverStaleLock(lock);
       } catch { /* raced with the holder */ }
       Atomics.wait(sleeper, 0, 0, 50);
     }
@@ -157,9 +175,25 @@ export function withWorktreeLock<T>(commonDir: string, fn: () => T): T {
   }
 }
 
+/**
+ * A registry that exists but does not parse reads as empty; writing the next change over it would silently drop the
+ * `previous` branch and reserved per-branch variables. It is renamed to `worktrees.json.corrupt-<time>` first (kept for
+ * inspection, never deleted by Nexus). A symbolic link or non-regular file is left for writeRegistry to refuse.
+ */
+function setAsideCorruptRegistry(commonDir: string): void {
+  const { warning } = readRegistry(commonDir);
+  if (!warning) return;
+  const file = registryFile(commonDir);
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(file); } catch { return; }
+  if (!stat.isFile()) return;
+  fs.renameSync(file, `${file}.corrupt-${Date.now()}`);
+}
+
 /** Read, change and write the registry under an exclusive lock file (see withWorktreeLock for when it is taken over). */
 export function updateRegistry<T>(commonDir: string, change: (registry: Registry) => T): T {
   return withWorktreeLock(commonDir, () => {
+    setAsideCorruptRegistry(commonDir);
     const { registry } = readRegistry(commonDir);
     const result = change(registry);
     writeRegistry(commonDir, registry);

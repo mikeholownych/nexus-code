@@ -19,7 +19,7 @@ import { readWorktreeSettings } from "../src/worktrunk/config.js";
 import { WorktreeManager } from "../src/worktree.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { lockSettings, withWorktreeLock } from "../src/worktrunk/registry.js";
+import { lockSeams, lockSettings, withWorktreeLock } from "../src/worktrunk/registry.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -85,7 +85,7 @@ test("a tag named like the default branch never stands in for the branch", () =>
   } finally { f.cleanup(); }
 });
 
-test("a branch that moved after the integration check is kept, not force-deleted", async () => {
+test("a commit that lands on a branch worktree between the check and the removal stops the removal", async () => {
   const f = fixture();
   try {
     const core = await import("../src/worktrunk/core.js") as any;
@@ -104,8 +104,27 @@ test("a branch that moved after the integration check is kept, not force-deleted
       delete core.removeSeams.beforeRemove;
     }
     assert.ok(newSha, "the seam must have run");
-    assert.equal(fs.existsSync(dir), false, "the clean worktree directory is removed");
-    assert.equal(git(f.repo, "rev-parse", "--verify", "--quiet", "refs/heads/racy"), newSha, "the moved branch must survive");
+    assert.equal(result.success, false, result.output);
+    assert.equal(fs.existsSync(dir), true, "nothing is removed");
+    assert.equal(git(f.repo, "rev-parse", "--verify", "--quiet", "refs/heads/racy"), newSha);
+  } finally { f.cleanup(); }
+});
+
+test("a branch that moved after its worktree was removed is kept, not force-deleted", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    assert.equal(wt(f, f.repo, ["switch", "-c", "racy2"]).success, true);
+    let newSha = "";
+    core.removeSeams.beforeBranchDeletion = () => {
+      // the branch is advanced by plain ref plumbing after the worktree is gone
+      newSha = git(f.repo, "commit-tree", "-p", "refs/heads/racy2", "-m", "late", "refs/heads/racy2^{tree}");
+      git(f.repo, "update-ref", "refs/heads/racy2", newSha);
+    };
+    let result;
+    try { result = wt(f, f.repo, ["remove", "racy2"]); } finally { delete core.removeSeams.beforeBranchDeletion; }
+    assert.equal(result.success, true, result.output);
+    assert.equal(git(f.repo, "rev-parse", "--verify", "--quiet", "refs/heads/racy2"), newSha, "the moved branch must survive");
     assert.match(result.output, /kept|moved/i);
   } finally { f.cleanup(); }
 });
@@ -411,5 +430,140 @@ withWorktreeLock(process.argv[2], () => { console.log("held"); Atomics.wait(new 
     } finally { lockSettings.waitMs = before; }
     await exited;
     assert.equal(withWorktreeLock(common, () => "ran"), "ran", "after the holder finished the lock is free");
+  } finally { f.cleanup(); }
+});
+
+test("a waiter that judged a lock stale does not delete a live lock another process took in the meantime", () => {
+  const f = fixture();
+  try {
+    const common = path.join(f.repo, ".git");
+    fs.mkdirSync(path.join(common, "nexus"), { recursive: true });
+    const lock = path.join(common, "nexus", "worktrees.lock");
+    const gone = 2_147_483_000; // not a live pid
+    fs.writeFileSync(lock, String(gone)); // stale: its holder is gone
+    const before = lockSettings.waitMs;
+    lockSettings.waitMs = 300;
+    lockSeams.afterStaleCheck = () => {
+      // another process takes the stale lock over first and is now a live holder
+      fs.rmSync(lock, { force: true });
+      fs.writeFileSync(lock, String(process.pid));
+      lockSeams.afterStaleCheck = undefined;
+    };
+    try {
+      assert.throws(() => withWorktreeLock(common, () => "ran"), /locked by another process/);
+      assert.equal(fs.readFileSync(lock, "utf8"), String(process.pid), "the live lock must not be deleted by the late waiter");
+    } finally { lockSeams.afterStaleCheck = undefined; lockSettings.waitMs = before; fs.rmSync(lock, { force: true }); }
+  } finally { f.cleanup(); }
+});
+
+test("a live holder's lock is kept for ten minutes and taken over after that", () => {
+  const f = fixture();
+  try {
+    const common = path.join(f.repo, ".git");
+    fs.mkdirSync(path.join(common, "nexus"), { recursive: true });
+    const lock = path.join(common, "nexus", "worktrees.lock");
+    const before = lockSettings.waitMs;
+    lockSettings.waitMs = 300;
+    try {
+      for (const [ageMs, takenOver] of [[9 * 60_000, false], [11 * 60_000, true]] as const) {
+        fs.writeFileSync(lock, String(process.ppid)); // a live process that is not this one
+        const old = new Date(Date.now() - ageMs);
+        fs.utimesSync(lock, old, old);
+        if (takenOver) assert.equal(withWorktreeLock(common, () => "ran"), "ran", "older than ten minutes: taken over");
+        else assert.throws(() => withWorktreeLock(common, () => "ran"), /locked by another process/, "younger than ten minutes: kept");
+        fs.rmSync(lock, { force: true });
+      }
+    } finally { lockSettings.waitMs = before; fs.rmSync(lock, { force: true }); }
+  } finally { f.cleanup(); }
+});
+
+test("a commit that lands on a detached worktree between the check and the removal is not lost", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-race");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    let landed = "";
+    core.removeSeams.beforeRemove = () => { landed = commitFile(dir, "late.txt", "late\n", "late commit"); };
+    let result;
+    try { result = wt(f, f.repo, ["remove", dir]); } finally { delete core.removeSeams.beforeRemove; }
+    assert.ok(landed, "the seam must have run");
+    assert.equal(result.success, false, result.output);
+    assert.match(result.output, /changed|moved/i);
+    assert.equal(fs.existsSync(dir), true, "the worktree with the new commit must be kept");
+    assert.equal(git(dir, "rev-parse", "HEAD"), landed);
+  } finally { f.cleanup(); }
+});
+
+test("a corrupt registry is set aside, not overwritten, by the next switch", () => {
+  const f = fixture();
+  try {
+    const file = path.join(f.repo, ".git", "nexus", "worktrees.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const damaged = '{"version":1,"previous":"keep-me","worktrees":[{"branch":"x"';
+    fs.writeFileSync(file, damaged);
+    const made = wt(f, f.repo, ["switch", "-c", "after-corruption"]);
+    assert.equal(made.success, true, made.output);
+    const kept = fs.readdirSync(path.dirname(file)).filter((name) => name.startsWith("worktrees.json.corrupt"));
+    assert.equal(kept.length, 1, "the damaged file is kept for inspection");
+    assert.equal(fs.readFileSync(path.join(path.dirname(file), kept[0]), "utf8"), damaged);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).worktrees.map((w: any) => w.branch), ["after-corruption"]);
+  } finally { f.cleanup(); }
+});
+
+test("a recorded previous branch that is not a valid name is refused by the `-` shortcut", () => {
+  const f = fixture();
+  try {
+    const file = path.join(f.repo, ".git", "nexus", "worktrees.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ version: 1, previous: "--upload-pack=touch /tmp/x", worktrees: [] }));
+    const r = wt(f, f.repo, ["path", "-"]);
+    assert.equal(r.success, false);
+    assert.match(r.output, /invalid branch name/);
+  } finally { f.cleanup(); }
+});
+
+test("names that Git reads as something other than a local branch are refused", async () => {
+  const { validateBranchName } = await import("../src/worktrunk/paths.js");
+  for (const bad of ["refs/heads/main", "refs/tags/v1", "refs/anything", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "HEAD"]) {
+    assert.notEqual(validateBranchName(bad), undefined, bad);
+  }
+  for (const ok of ["refsfoo", "feature/refs/x", "fetch-head", "heads/x"]) assert.equal(validateBranchName(ok), undefined, ok);
+});
+
+test("a worktree whose .git points at a sibling worktree's admin directory is not removed", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "wt-a"]).success, true);
+    assert.equal(wt(f, f.repo, ["switch", "-c", "wt-b"]).success, true);
+    const a = named(f, "wt-a"), b = named(f, "wt-b");
+    const adminB = fs.readFileSync(path.join(b, ".git"), "utf8").trim().replace(/^gitdir: /, "");
+    fs.writeFileSync(path.join(a, ".git"), `gitdir: ${adminB}\n`); // still inside <common>/worktrees/, but not a's own
+    const r = wt(f, f.repo, ["remove", "wt-a", "--delete-unmerged", "--force"]);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /does not belong|refusing/);
+    assert.equal(fs.existsSync(a), true);
+    assert.equal(fs.existsSync(b), true);
+  } finally { f.cleanup(); }
+});
+
+test("a repository whose git directory is not <checkout>/.git is refused by `nexus worktree`, and WorktreeManager anchors on the checkout it runs in", () => {
+  const f = fixture();
+  try {
+    const main = path.join(f.root, "sep");
+    fs.mkdirSync(main);
+    git(main, "init", "-q", "-b", "main", "--separate-git-dir", path.join(f.root, "gitdata"));
+    git(main, "config", "user.email", "t@example.com");
+    git(main, "config", "user.name", "T");
+    git(main, "config", "commit.gpgsign", "false");
+    commitFile(main, "a.txt", "one\n", "init");
+    const refused = wt(f, main, ["list"]);
+    assert.equal(refused.success, false);
+    assert.match(refused.output, /not supported/);
+    const linked = path.join(f.root, "linked");
+    git(main, "worktree", "add", "-q", "-b", "side", linked);
+    // Git records no way back to the main checkout, so the documented limit is the checkout itself, never the git directory
+    assert.equal(new WorktreeManager(linked).getWorktreesBaseDir(), path.join(linked, ".nexus", "worktrees"));
   } finally { f.cleanup(); }
 });

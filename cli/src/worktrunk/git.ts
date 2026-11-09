@@ -6,6 +6,11 @@
  * fsmonitor, no external transport helpers, no inherited repository-selecting environment. Refs and paths that
  * come from a user are passed after `--end-of-options`; callers also validate them first (see paths.ts), so a
  * name such as `--upload-pack=...` is refused before it reaches Git.
+ *
+ * Trust boundary: `.git/config`, the user's and the system's Git configuration are trusted as Git trusts them. Hooks,
+ * fsmonitor and external transports are pinned off because a checkout can reach them, but a `filter.<name>.clean`
+ * command configured in that trusted configuration still runs when `git status` compares content; `.gitattributes`
+ * can only name a filter, never define its command.
  */
 import { spawnSync } from "node:child_process";
 import { envWithoutConfiguredHooks } from "../core/git_hook_guard.js";
