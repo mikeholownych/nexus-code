@@ -536,6 +536,8 @@ export class ConvergenceScheduler {
     }
     const resumed = unit.agentTaskId !== undefined;
     unit.status = "RUNNING";
+    // A new attempt's outcome is unknown until it settles: the previous failed run is no longer this unit's evidence.
+    delete unit.failedRun;
     unit.runs++;
     unit.assignment = { resourceId: resource.id, model: resource.model, since: at };
     if (!unit.modelsUsed.includes(resource.model)) unit.modelsUsed.push(resource.model);
