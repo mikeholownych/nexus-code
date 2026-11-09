@@ -70,6 +70,8 @@ export interface EgressEvaluationResult {
   sanitizedPayload?: any;
   sanitizedText?: string;
   classifiedSecrets: ClassifiedSecret[];
+  /** The classified values actually replaced in sanitizedText (a value inside a longer one may not be). */
+  quarantinedSecrets?: ClassifiedSecret[];
   reason?: string;
 }
 
@@ -520,16 +522,14 @@ interface PositionedMatch {
  * Two classifiers can match one credential at the same place, one taking more of it than the other: the Bearer pattern
  * stops at "~" where the Authorization pattern takes the whole token68 value; the Bearer capture keeps a sentence's
  * full stop where the entropy tokenizer trims it; an entropy token spans `sk-…/models` where the key pattern stops at
- * the "/". Redaction replaces by value, so the shorter value replaced first would leave the rest of the credential in
- * the text, and one credential would be vaulted twice. Resolution: an uncertain (entropy) token that starts where a
- * more confident match starts and extends past it is dropped (the token `sk-…/models` loses to the key at its start,
- * keeping the path); no other longer match is ever dropped for a shorter one it contains, so an operator secret that
- * is a prefix or a middle part of a key does not shorten the key. Then a match inside another is dropped, so the
- * longest wins and, among equals, the first classifier. A key start inside a longer credential (`AbCd…+sk-A/…`) is
- * such an inner match: the enclosing credential is redacted whole. A key inside an uncertain token is kept beside it
- * (the token is replaced first), so the key's deterministic classification is not lost. Matches that only partly
- * overlap are both kept.
- * The result has one entry per distinct value, longest first.
+ * the "/". Redaction replaces by value, longest value first, so the enclosing value is replaced whole before a shorter
+ * value inside it, and the shorter value is still replaced wherever else it occurs in the text. Resolution: an
+ * uncertain (entropy) token that starts where a more confident match starts and extends past it is dropped (the token
+ * `sk-…/models` loses to the key at its start, keeping the path). Every other match is kept, inner ones included:
+ * an operator secret inside a key does not shorten the key (the key is longer), a key inside an uncertain token keeps
+ * its deterministic classification for callers that refuse or redact only positive findings (the checkpoint guard,
+ * path display), and a key inside a Bearer match is still redacted where it occurs again unmatched. The result has
+ * one entry per distinct value, longest first.
  */
 function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
   const order = matches.map((_, i) => i).sort(
@@ -551,28 +551,10 @@ function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
     }
     open.push(i);
   }
-  const kept = new Set<number>();
-  let current = -1;
-  let coveredEnd = -1;
-  for (const i of order) {
-    if (dropped.has(i)) continue;
-    // Sorted by start, so a match ending inside the one that set coveredEnd starts inside it too.
-    if (matches[i].end <= coveredEnd) {
-      // A key inside an uncertain token is kept as well: the token, longer, is replaced first, so the whole of it is
-      // redacted, and callers that refuse positive findings (the checkpoint guard) or redact only them (path display)
-      // still see the key.
-      const enclosing = matches[current].item;
-      if (enclosing.classificationType === "UNCERTAIN" && matches[i].item.confidence > enclosing.confidence) kept.add(i);
-      continue;
-    }
-    kept.add(i);
-    current = i;
-    coveredEnd = matches[i].end;
-  }
   const seen = new Set<string>();
   const classified: ClassifiedSecret[] = [];
   matches.forEach((match, i) => {
-    if (kept.has(i) && !seen.has(match.item.secret)) {
+    if (!dropped.has(i) && !seen.has(match.item.secret)) {
       seen.add(match.item.secret);
       classified.push(match.item);
     }
@@ -1090,9 +1072,11 @@ export class InformationFlowBoundary {
       const taskId = context?.taskId || "default_task";
       const sessionId = context?.sessionId || "default_session";
 
+      const quarantinedSecrets: ClassifiedSecret[] = [];
       for (const item of classifiedSecrets) {
         const secret = item.secret;
         if (!sanitizedText.includes(secret)) continue;
+        quarantinedSecrets.push(item);
 
         let replacement: string;
         if (mode === "IRREVERSIBLE_REDACTION") {
@@ -1127,6 +1111,7 @@ export class InformationFlowBoundary {
         sanitizedPayload,
         sanitizedText,
         classifiedSecrets,
+        quarantinedSecrets,
       };
     } catch (err: any) {
       // Fail closed on unhandled error (FAIL-003)

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
 import { assertNoSensitivePersistenceContent, redactDiagnosticForOutput } from "../src/core/persistence_protection.js";
+import { SecretsVault } from "../src/security.js";
 
 /**
  * Secret shapes whose body contains "/" and "+" (base64, not base64url). The body is what must never survive:
@@ -150,19 +151,22 @@ test("a key directly followed by / or - is redacted whole, with no tail", () => 
 
 /**
  * Two classifiers can match the same credential at the same place, one taking more of it than the other. The longest
- * match wins and the shorter one is dropped: replacing the shorter one first would leave the rest of the credential in
- * the text, and a second entry for the same credential is a second vault mapping.
+ * value comes first and is replaced first: replacing the shorter one first would leave the rest of the credential in
+ * the text. The shorter value stays classified (it may occur elsewhere), but only the value replaced is vaulted.
  */
-test("a credential matched at the same place by two classifiers is classified once, as the longest match", () => {
+test("a credential matched at the same place by two classifiers is replaced as the longest match", () => {
   const boundary = new InformationFlowBoundary();
   // The Bearer pattern stops at "~"; the Authorization pattern takes the whole token68 value.
   const token = "AbCd/EfGhIjKlMnOp~QrStUvWxYz0123456789";
   const header = boundary.classifyText(`Authorization: Bearer ${token} rejected`, []);
-  assert.deepEqual(header.map((s) => s.secret), [token]);
+  assert.equal(header[0].secret, token, JSON.stringify(header));
   // The Bearer capture keeps the sentence's full stop; the entropy tokenizer trims it.
-  const sentence = boundary.classifyText("Connecting to provider with Bearer bAGOhOwLeY7Mabcdef123456789.\n", []);
-  assert.equal(sentence.length, 1, JSON.stringify(sentence));
-  assert.ok(sentence[0].secret.startsWith("bAGOhOwLeY7Mabcdef123456789"));
+  const sentenceText = "Connecting to provider with Bearer bAGOhOwLeY7Mabcdef123456789.\n";
+  const sentence = boundary.classifyText(sentenceText, []);
+  assert.equal(sentence[0].secret, "bAGOhOwLeY7Mabcdef123456789.", JSON.stringify(sentence));
+  const vault = new SecretsVault(new InformationFlowBoundary());
+  assert.equal(vault.quarantine(sentenceText).quarantinedCount, 1);
+  assert.equal(vault.getMappingCount(), 1);
   // The same two matches, in redaction: nothing of the token survives.
   const original = InformationFlowBoundary.getGlobalInstance();
   InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
@@ -377,4 +381,12 @@ test("a Bearer token is redacted whatever the case of the scheme name", () => {
     assert.ok(!output.includes("aaaabbbbcccc"), `${scheme}: ${output}`);
   }
   assert.equal(boundary.redactForTelemetry("the bearer of this note is welcome"), "the bearer of this note is welcome");
+});
+
+/** A secret value found inside a longer match is still replaced wherever else it appears in the text. */
+test("a secret inside a longer match is redacted at its other occurrences too", () => {
+  const boundary = new InformationFlowBoundary();
+  const text = "Bearer abc-sk-0123456789abcdefghij; saved prefix_sk-0123456789abcdefghij.log";
+  const output = boundary.redactForTelemetry(text);
+  assert.ok(!output.includes("0123456789abcdefghij"), output);
 });
