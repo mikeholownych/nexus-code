@@ -627,3 +627,21 @@ test("a retried tester's earlier failed run stops admitting a debugger once the 
   sched.decide();
   assert.equal(state.units[1].status, "WAITING_ON_DEPENDENCY", "the debugger is not admitted on historical evidence");
 });
+
+test("a tracked file removed from the index but kept on disk and ignored shows as a deletion in the candidate diff (01M70JGKF7)", async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-auto-untracked-"));
+  const run = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
+  run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t");
+  fs.writeFileSync(path.join(repo, "generated.txt"), "GENERATED_BODY\n");
+  fs.writeFileSync(path.join(repo, "a.txt"), "one\n");
+  run("add", "."); run("commit", "-q", "-m", "base");
+  run("rm", "--cached", "-q", "generated.txt");
+  fs.writeFileSync(path.join(repo, ".gitignore"), "generated.txt\n");
+  fs.writeFileSync(path.join(repo, "a.txt"), "two VISIBLE_EDIT\n");
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  const prompt = fake.prompts[0];
+  assert.match(prompt, /VISIBLE_EDIT/);
+  assert.match(prompt, /deleted file mode[\s\S]*generated\.txt|generated\.txt[\s\S]*deleted file mode/, "the staged removal is part of the candidate");
+});
