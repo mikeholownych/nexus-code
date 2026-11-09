@@ -921,6 +921,11 @@ export class InformationFlowBoundary {
         const span = match.indices?.[match[1] && typeof match[1] === "string" ? 1 : 0];
         if (!span) continue;
         const [start, matchEnd] = span;
+        // "bearer" in another case is also ordinary prose ("the bearer of"): its value must look like a token. An
+        // Authorization header carrying it is matched by AUTHORIZATION_HEADER whatever the value.
+        if (name === "BEARER_AUTH_HEADER" && !match[0].startsWith("Bearer") && !/[0-9A-Z+/=]/.test(text.slice(start, matchEnd))) {
+          continue;
+        }
         let end = name === "BEARER_AUTH_HEADER" ? start + bearerTokenLength(text.slice(start, matchEnd)) : matchEnd;
         while (end > start) {
           const ch = text.charCodeAt(end - 1);

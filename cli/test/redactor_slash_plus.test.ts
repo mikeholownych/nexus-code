@@ -373,14 +373,29 @@ test("a short secret after base64, is still redacted", () => {
   }
 });
 
-/** The scheme name is case-insensitive (RFC 7235): a low-entropy token after `bearer` is redacted as after `Bearer`. */
-test("a Bearer token is redacted whatever the case of the scheme name", () => {
+/**
+ * The scheme name is case-insensitive (RFC 7235). After "Bearer" any 16-character token is redacted; after another case
+ * of the word, which is also ordinary prose ("the bearer of"), the value must look like a token (a digit, a capital,
+ * "+", "/" or "=") unless an Authorization header carries it.
+ */
+test("a Bearer token is redacted whatever the case of the scheme name; prose after bearer is not", () => {
   const boundary = new InformationFlowBoundary();
-  for (const scheme of ["Bearer", "bearer", "BEARER"]) {
-    const output = boundary.redactForTelemetry(`curl -H "x-auth: ${scheme} aaaabbbbccccddddeeee" https://api.example`);
-    assert.ok(!output.includes("aaaabbbbcccc"), `${scheme}: ${output}`);
+  for (const text of [
+    "Authorization: bearer aaaaaaaabbbbbbbbcccccccc",
+    "token was bearer abcdefghijklmnopqrstu1234",
+    "token was BEARER Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1",
+    "token was Bearer aaaabbbbccccddddeeee",
+  ]) {
+    const output = boundary.redactForTelemetry(text);
+    assert.ok(!/aaaabbbb|aaaaaaaabbbb|abcdefghijkl|Qx7Km2/.test(output), `${text}: ${output}`);
   }
-  assert.equal(boundary.redactForTelemetry("the bearer of this note is welcome"), "the bearer of this note is welcome");
+  for (const text of [
+    "the bearer tokenizationsuffixes are lost",
+    "a bearer of_information_system",
+    "the bearer of this note is welcome",
+  ]) {
+    assert.equal(boundary.redactForTelemetry(text), text);
+  }
 });
 
 /** A secret value found inside a longer match is still replaced wherever else it appears in the text. */
