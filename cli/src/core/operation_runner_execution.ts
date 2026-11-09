@@ -43,19 +43,20 @@ const SPECIALIST_SUMMARY_MAX = 6_000;
  * built by `candidateDiff` with protected paths removed. Once earlier units have run, a base is required: without a
  * recorded starting commit their (possibly committed) work could not be shown, so nothing is diffed against HEAD.
  */
-function candidateDiffFor(ctx: UnitRunContext, workspace: string): ReturnType<typeof candidateDiff> {
+function candidateDiffFor(ctx: UnitRunContext, workspace: string, policyWorkspace: string): ReturnType<typeof candidateDiff> {
   const base = ctx.baseCommit ?? ctx.startCommit;
   if (base === undefined && ctx.dependencies.length > 0) {
     return { error: "no starting commit was recorded for this operation, so earlier (possibly committed) work cannot be shown; start a new operation" };
   }
-  return candidateDiff(ctx.workspace ?? workspace, base);
+  return candidateDiff(ctx.workspace ?? workspace, base, policyWorkspace);
 }
 
 /** The diff text a unit is given, with the count of protected sections that were left out. */
-function candidateDiffText(candidate: { diff: string; omitted: number; omittedNew: number }): string {
+function candidateDiffText(candidate: { diff: string; omitted: number; omittedNew: number; omittedNested?: number }): string {
   const notes = [
     ...(candidate.omitted ? [`[${candidate.omitted} protected file section(s) omitted]`] : []),
-    ...(candidate.omittedNew ? [`[${candidate.omittedNew} new file(s) omitted: a protected file changed, and a new file may carry its content]`] : []),
+    ...(candidate.omittedNew ? [`[${candidate.omittedNew} new file(s) omitted: a protected file changed, or a new file carries content of a protected file]`] : []),
+    ...(candidate.omittedNested ? [`[${candidate.omittedNested} untracked nested git repositor${candidate.omittedNested === 1 ? "y" : "ies"} omitted]`] : []),
   ];
   return notes.length ? `${candidate.diff}\n${notes.join("\n")}\n` : candidate.diff;
 }
@@ -686,7 +687,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     if (unit.role === "security_reviewer") {
       if (supplied.authorized_scope === undefined) collected.authorized_scope = boundedRedactedInput(`Operation objective: ${ctx.objective}\nThis unit's task: ${unitBaseTask(unit.prompt)}`);
       if (supplied.unified_diff === undefined) {
-        const candidate = candidateDiffFor(ctx, workspace);
+        const candidate = candidateDiffFor(ctx, workspace, this.opts.baseConfig.workspace);
         if ("error" in candidate) why.unified_diff = `candidate diff unavailable: ${candidate.error}`.slice(0, 200);
         else if (candidate.diff.trim() === "") why.unified_diff = emptyCandidateReason(candidate);
         else collected.unified_diff = boundedRedactedInput(candidateDiffText(candidate));
@@ -716,7 +717,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   /** The objective evidence a review unit is given: requirements, scope, base, candidate diff and verifier receipts. */
   private reviewEvidence(unit: WorkUnit, ctx: UnitRunContext, workspace: string): ReviewEvidencePackage {
-    const candidate = candidateDiffFor(ctx, workspace);
+    const candidate = candidateDiffFor(ctx, workspace, this.opts.baseConfig.workspace);
     // The worst result across every dependency that ran a verifier decides; order must not matter.
     const verifications = ctx.dependencies.flatMap((d) => (d.verification ? [d.verification] : []));
     const passing = (v: { status: string; hasExecutedTests: boolean }) => v.status === "PASSED" && v.hasExecutedTests;

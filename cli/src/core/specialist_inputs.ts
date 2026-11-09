@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { SecurityManager } from "../security.js";
 import { MAX_SPECIALIST_INPUT_CHARS } from "./specialist_profiles.js";
 import { redactForPersistence } from "./persistence_protection.js";
@@ -27,7 +28,7 @@ export function inputPathProtection(security: SecurityManager, relative: string)
  * repository configures may run in this process: no fsmonitor hook, no hooks, no replace objects, no system or
  * per-user attributes, no automatic gc. Clean/smudge filters are kept out by the attribute source below.
  */
-const GIT_SAFE = [
+export const GIT_SAFE = [
   "--no-replace-objects",
   "-c", "core.quotepath=false", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c", "diff.external=", "-c", "core.pager=cat",
   "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null", "-c", "core.untrackedCache=false",
@@ -44,7 +45,7 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
  * applies (and on Git older than 2.40 so do the worktree's .gitattributes), so a filter or diff driver assigned that
  * way is refused before any command could invoke it.
  */
-function safeGitEnv(indexFile: string | undefined, attrs?: { tree: string; objects: string }): NodeJS.ProcessEnv {
+export function safeGitEnv(indexFile: string | undefined, attrs?: { tree: string; objects: string }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) if (!key.startsWith("GIT_")) env[key] = value;
   return {
@@ -72,6 +73,61 @@ const GIT_MAX_BUFFER = 4 * 1024 * 1024;
 const LISTING_MAX_BUFFER = 256 * 1024 * 1024;
 /** Paths per `check-attr` call, so its output stays small whatever the repository's size. */
 const ATTR_BATCH = 1_000;
+
+const SOURCE_FILE_MAX = 4 * 1024 * 1024;
+const SOURCE_TOTAL_MAX = 64 * 1024 * 1024;
+const ADDED_FILE_MAX = 16 * 1024 * 1024;
+const SIGNIFICANT_LINE_MIN = 8;
+
+/**
+ * The content of the protected files present in the workspace (tracked, untracked or ignored), for recognising a new
+ * file that carries it. A new file is carried when it equals a protected file exactly (whatever its size) or shares a
+ * significant line with one: a trimmed, non-comment line of at least 8 characters. Files inside `.nexus` take part by
+ * exact content only (their lines are structural). When the sources cannot all be read within the limits, every new
+ * file counts as carried: nothing is kept because it could not be compared.
+ */
+function protectedContent(root: string, files: string[]): { carriedBy(root: string, relative: string): boolean } {
+  const hashes = new Set<string>();
+  const lines = new Set<string>();
+  let complete = true;
+  let total = 0;
+  for (const file of files) {
+    let size: number;
+    try {
+      const st = fs.lstatSync(path.join(root, file));
+      if (!st.isFile()) continue;
+      size = st.size;
+    } catch { continue; }
+    total += size;
+    if (size > SOURCE_FILE_MAX || total > SOURCE_TOTAL_MAX) { complete = false; continue; }
+    let data: Buffer;
+    try { data = fs.readFileSync(path.join(root, file)); } catch { complete = false; continue; }
+    hashes.add(createHash("sha256").update(data).digest("hex"));
+    if (file.split(/[\\/]/).some((seg) => seg.toLowerCase() === ".nexus")) continue;
+    for (const line of significantLines(data)) lines.add(line);
+  }
+  return {
+    carriedBy(base: string, relative: string): boolean {
+      if (!complete) return true;
+      if (hashes.size === 0 && lines.size === 0) return false;
+      let data: Buffer;
+      try {
+        const st = fs.lstatSync(path.join(base, relative));
+        if (!st.isFile()) return false;
+        if (st.size > ADDED_FILE_MAX) return true;
+        data = fs.readFileSync(path.join(base, relative));
+      } catch { return true; }
+      if (hashes.has(createHash("sha256").update(data).digest("hex"))) return true;
+      for (const line of significantLines(data)) if (lines.has(line)) return true;
+      return false;
+    },
+  };
+}
+
+function significantLines(data: Buffer): string[] {
+  return data.toString("latin1").split("\n").map((l) => l.trim())
+    .filter((l) => l.length >= SIGNIFICANT_LINE_MIN && !l.startsWith("#") && !l.startsWith("//") && /[A-Za-z0-9]/.test(l));
+}
 
 /**
  * The attribute source for a diff: the worktree's .gitattributes files with filter and diff assignments removed, as a
@@ -114,7 +170,8 @@ function attributesTree(root: string, scratch: string, files: string[]): { tree:
  * Any git failure or an unmanageable path count returns an error: nothing is ever kept because it could not be
  * classified.
  */
-export function candidateDiff(workspace: string, base: string | undefined): { base: string; diff: string; omitted: number; omittedNew: number } | { error: string } {
+export interface CandidateDiff { base: string; diff: string; omitted: number; omittedNew: number; omittedNested: number }
+export function candidateDiff(workspace: string, base: string | undefined, policyWorkspace?: string): CandidateDiff | { error: string } {
   const root = path.resolve(workspace);
   let scratch: string | undefined;
   let attrs: { tree: string; objects: string } | undefined;
@@ -132,7 +189,9 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
   };
   try {
     scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-candidate-index-"));
-    const security = new SecurityManager(root);
+    // The policy is the operator's (their workspace), not whatever a unit's own worktree holds: an untracked
+    // .nexus-security.json never reaches a worktree.
+    const security = new SecurityManager(policyWorkspace ?? root);
     // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     git(["read-tree", "--end-of-options", commit]);
@@ -144,7 +203,12 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
     // show, and git would reject it as a pathspec.
     const onDisk = (p: string) => { try { fs.lstatSync(path.join(root, p)); return true; } catch { return false; } };
     const ownIndex = new Set(listing([], true));
-    attrs = attributesTree(root, scratch, [...new Set([...listing(["--others", "--exclude-standard"]), ...ownIndex])]);
+    // Untracked, non-ignored entries, listed once. A directory entry (trailing slash) is an untracked nested git
+    // repository, which `git add` refuses: it is skipped and counted rather than failing every review.
+    const others = listing(["--others", "--exclude-standard"]);
+    const omittedNested = others.filter((p) => p.endsWith("/")).length;
+    const untracked = others.filter((p) => !p.endsWith("/"));
+    attrs = attributesTree(root, scratch, [...new Set([...untracked, ...ownIndex])]);
     // A path tracked at the base but removed from the real index (`git rm --cached`) is part of the candidate as a
     // deletion even when the file stays on disk: force it out of the scratch index too (its entry can match neither HEAD nor the worktree), and never re-add it as new.
     const removed = [...atBase].filter((p) => !ownIndex.has(p));
@@ -153,7 +217,7 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
     }
     const removedSet = new Set(removed);
     const added = new Set([
-      ...listing(["--others", "--exclude-standard"]).filter((p) => !removedSet.has(p)),
+      ...untracked.filter((p) => !removedSet.has(p)),
       ...[...ownIndex].filter((p) => !atBase.has(p) && onDisk(p)),
     ]);
     if (added.size) {
@@ -174,7 +238,7 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
       }
     }
     // name-status with rename detection (no limit on the exhaustive pass), only to learn which paths belong together.
-    const tokens = git(["diff", "--name-status", "-z", "-M", "-C", "-l0", "--relative", "--no-ext-diff", "--no-textconv", "--end-of-options", commit, "--"]).split("\0");
+    const tokens = git(["diff", "--name-status", "-z", "-M", "-C", "--find-copies-harder", "-l0", "--relative", "--no-ext-diff", "--no-textconv", "--end-of-options", commit, "--"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0");
     const groups: Array<{ status: string; paths: string[] }> = [];
     for (let i = 0; i < tokens.length; ) {
       const status = tokens[i++];
@@ -188,17 +252,24 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
     if (groups.length > MAX_DIFF_PATHS) return { error: `the change touches more than ${MAX_DIFF_PATHS} paths; scope it with explicit inputs` };
     const isProtected = (group: { paths: string[] }) => group.paths.some((p) => inputPathProtection(security, p) !== undefined);
     const protectedChanged = groups.some(isProtected);
+    // Git's copy detection stops at its similarity threshold and never sees an ignored protected file, so an added file
+    // is also compared with the content of every protected file present in the workspace.
+    const ignored = listing(["--others", "--ignored", "--exclude-standard"]).filter((p) => !p.endsWith("/"));
+    const sources = protectedContent(root, [...new Set([...atBase, ...ownIndex, ...untracked, ...ignored])].filter((p) => inputPathProtection(security, p) !== undefined));
     let omitted = 0;
     let omittedNew = 0;
     const allowed: string[] = [];
     for (const group of groups) {
       if (isProtected(group)) omitted++;
-      else if (protectedChanged && group.status[0] === "A") omittedNew++;
+      else if (group.status[0] === "A" && (protectedChanged || sources.carriedBy(root, group.paths[0]))) omittedNew++;
       else allowed.push(...group.paths);
     }
     const diff = allowed.length ? git(["diff", ...DIFF_FLAGS, "--end-of-options", commit, "--", ...allowed.map((p) => `:(literal)${p}`)]) : "";
-    return { base: commit, diff, omitted, omittedNew };
+    return { base: commit, diff, omitted, omittedNew, omittedNested };
   } catch (err: any) {
+    if (err?.code === "ENOBUFS" || /ENOBUFS/.test(String(err?.message))) {
+      return { error: `the candidate diff is too large to show (over ${GIT_MAX_BUFFER / (1024 * 1024)} MiB); scope it with explicit inputs` };
+    }
     return { error: `git could not produce the diff (${String(err?.message ?? err).split("\n")[0].slice(0, 120)})` };
   } finally {
     if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
