@@ -368,3 +368,13 @@ test("a short secret after base64, is still redacted", () => {
     assert.ok(!output.includes(secret.slice(0, 12)) && !output.includes(secret.slice(-12)), `${text}: ${output}`);
   }
 });
+
+/** The scheme name is case-insensitive (RFC 7235): a low-entropy token after `bearer` is redacted as after `Bearer`. */
+test("a Bearer token is redacted whatever the case of the scheme name", () => {
+  const boundary = new InformationFlowBoundary();
+  for (const scheme of ["Bearer", "bearer", "BEARER"]) {
+    const output = boundary.redactForTelemetry(`curl -H "x-auth: ${scheme} aaaabbbbccccddddeeee" https://api.example`);
+    assert.ok(!output.includes("aaaabbbbcccc"), `${scheme}: ${output}`);
+  }
+  assert.equal(boundary.redactForTelemetry("the bearer of this note is welcome"), "the bearer of this note is welcome");
+});

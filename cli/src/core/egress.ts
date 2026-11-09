@@ -635,11 +635,12 @@ export class InformationFlowBoundary {
     // Slack Tokens
     { name: "SLACK_TOKEN", regex: /\b(?:xox[baprs]-[0-9a-zA-Z]{10,48})\b/g },
     // Bearer tokens: RFC 6750 token68 (letters, digits, "-._~+/", "=" padding; a JSON-escaped `\/` counts as "/"),
-    // not starting with "/". A value with "/" is checked in classifyText (`bearerTokenLength`): `Bearer /api/v1/x` and
-    // `Bearer api/v1/organizations` in ordinary text are paths, not tokens.
+    // not starting with "/"; the scheme name is case-insensitive (RFC 7235). A value with "/" is checked in
+    // classifyText (`bearerTokenLength`): `Bearer /api/v1/x` and `Bearer api/v1/organizations` in ordinary text are
+    // paths, not tokens.
     {
       name: "BEARER_AUTH_HEADER",
-      regex: /\bBearer\s+([A-Za-z0-9_.~+-](?:[A-Za-z0-9_.~+\/-]|\\\/){15,}={0,2})/g,
+      regex: /\bBearer\s+([A-Za-z0-9_.~+-](?:[A-Za-z0-9_.~+\/-]|\\\/){15,}={0,2})/gi,
     },
     // Authorization header values, including Basic (base64 user:password) and provider Token schemes.
     { name: "AUTHORIZATION_HEADER", regex: /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?((?:[A-Za-z0-9._~+/=-]|\\\/){8,})/gi },
