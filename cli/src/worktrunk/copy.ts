@@ -14,7 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { redactSecrets } from "../ui.js";
-import { ancestryProblem, mkdirVerified } from "../safe_fs.js";
+import { ancestryProblem, mkdirVerified, SafePathError } from "../safe_fs.js";
 import { findEntry, shownPath, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git } from "./git.js";
 import { currentEntry, openRepo } from "./repo.js";
@@ -127,17 +127,40 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
     copied = files;
   } else {
     const blocked = new Set<string>();
+    const unsafe = (rel: string, problem: string) => `${rel}: destination is not safe (${problem.includes("symbolic link") ? "a symbolic link in the way" : problem.replace(destRoot, "")})`;
+    // Directories already proven to be real, user-owned entries under the destination: each is verified once.
+    const ensured = new Set<string>([destRoot]);
+    const ensureDir = (dir: string): string | undefined => {
+      if (ensured.has(dir)) return undefined;
+      try {
+        mkdirVerified(destRoot, dir);
+      } catch (err) {
+        if (err instanceof SafePathError) return err.message;
+        throw err;
+      }
+      ensured.add(dir);
+      return undefined;
+    };
     for (const op of ops) {
       if ([...blocked].some((b) => op.rel === b || op.rel.startsWith(b + path.sep))) continue;
       const dst = path.join(destRoot, op.rel);
-      const problem = ancestryProblem(destRoot, dst);
-      if (problem) {
-        skipped.push(`${op.rel}: destination is not safe (${problem.includes("symbolic link") ? "a symbolic link in the way" : problem.replace(destRoot, "")})`);
-        if (op.kind === "dir") blocked.add(op.rel);
+      if (op.kind === "dir") {
+        const problem = ensureDir(dst);
+        if (problem) {
+          skipped.push(unsafe(op.rel, problem));
+          blocked.add(op.rel);
+        }
         continue;
       }
-      if (op.kind === "dir") {
-        mkdirVerified(destRoot, dst);
+      // A file or link selected on its own has no directory operation above it: its parents are created and verified here.
+      const parentProblem = ensureDir(path.dirname(dst));
+      if (parentProblem) {
+        skipped.push(unsafe(op.rel, parentProblem));
+        continue;
+      }
+      const problem = ancestryProblem(destRoot, dst);
+      if (problem) {
+        skipped.push(unsafe(op.rel, problem));
         continue;
       }
       const present = fs.lstatSync(dst, { throwIfNoEntry: false });
