@@ -14,7 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { redactSecrets } from "../ui.js";
-import { ancestryProblem, mkdirVerified, SafePathError } from "../safe_fs.js";
+import { mkdirVerified, SafePathError } from "../safe_fs.js";
 import { findEntry, shownPath, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git } from "./git.js";
 import { currentEntry, openRepo } from "./repo.js";
@@ -158,15 +158,14 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
         skipped.push(unsafe(op.rel, parentProblem));
         continue;
       }
-      const problem = ancestryProblem(destRoot, dst);
-      if (problem) {
-        skipped.push(unsafe(op.rel, problem));
-        continue;
-      }
+      // Only the ancestors must be real directories: the entry itself may be a stale file or link that --force replaces,
+      // and it is never followed (lstat here, exclusive create or rename below).
       const present = fs.lstatSync(dst, { throwIfNoEntry: false });
       if (present) {
         if (!options.force) { existing++; continue; }
         if (!present.isFile() && !present.isSymbolicLink()) { skipped.push(`${op.rel}: a directory is in the way`); continue; }
+        const me = process.getuid?.();
+        if (me !== undefined && present.uid !== me) { skipped.push(unsafe(op.rel, `owned by uid ${present.uid}, not ${me}`)); continue; }
         fs.unlinkSync(dst);
       }
       if (op.kind === "symlink") {
