@@ -492,7 +492,9 @@ interface PositionedMatch {
  * keeping the path); no other longer match is ever dropped for a shorter one it contains, so an operator secret that
  * is a prefix or a middle part of a key does not shorten the key. Then a match inside another is dropped, so the
  * longest wins and, among equals, the first classifier. A key start inside a longer credential (`AbCd…+sk-A/…`) is
- * such an inner match: the enclosing credential is redacted whole. Matches that only partly overlap are both kept.
+ * such an inner match: the enclosing credential is redacted whole, and takes the strongest classification among the
+ * matches it contains (a key inside an entropy token stays PATTERN_DETERMINISTIC). Matches that only partly overlap
+ * are both kept.
  * The result has one entry per distinct value, longest first.
  */
 function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
@@ -515,20 +517,31 @@ function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
     }
     open.push(i);
   }
-  const kept = new Set<number>();
+  // Each kept match, with the strongest classification among it and the matches it contains.
+  const kept = new Map<number, ClassifiedSecret>();
+  let current = -1;
   let coveredEnd = -1;
   for (const i of order) {
+    if (dropped.has(i)) continue;
     // Sorted by start, so a match ending inside the one that set coveredEnd starts inside it too.
-    if (dropped.has(i) || matches[i].end <= coveredEnd) continue;
-    kept.add(i);
+    if (matches[i].end <= coveredEnd) {
+      const strongest = kept.get(current)!;
+      if (matches[i].item.confidence > strongest.confidence) kept.set(current, matches[i].item);
+      continue;
+    }
+    kept.set(i, matches[i].item);
+    current = i;
     coveredEnd = matches[i].end;
   }
   const seen = new Set<string>();
   const classified: ClassifiedSecret[] = [];
   matches.forEach((match, i) => {
-    if (kept.has(i) && !seen.has(match.item.secret)) {
+    const strongest = kept.get(i);
+    if (strongest && !seen.has(match.item.secret)) {
       seen.add(match.item.secret);
-      classified.push(match.item);
+      // A key inside a longer token: the whole token is redacted, under the key's (deterministic) classification, so
+      // callers that refuse deterministic findings (the checkpoint guard) still refuse it.
+      classified.push(strongest === match.item ? match.item : { ...strongest, secret: match.item.secret });
     }
   });
   // Longest value first: a value that also occurs inside a longer one elsewhere is replaced after it, not through it.

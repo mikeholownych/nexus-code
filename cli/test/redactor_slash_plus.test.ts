@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
-import { redactDiagnosticForOutput } from "../src/core/persistence_protection.js";
+import { assertNoSensitivePersistenceContent, redactDiagnosticForOutput } from "../src/core/persistence_protection.js";
 
 /**
  * Secret shapes whose body contains "/" and "+" (base64, not base64url). The body is what must never survive:
@@ -231,6 +231,31 @@ test("an operator secret inside a key does not shorten the key's redaction", () 
       assert.ok(boundary.classifyText(text, []).some((f) => f.secret === key), `${explicit}: the key is classified whole`);
       const output = boundary.redactForTelemetry(text);
       assert.ok(!output.includes("Qx7Km2") && !output.includes("Xo2Rt") && !output.includes(explicit), `${explicit}: ${output}`);
+    }
+  }
+});
+
+/**
+ * A key inside a longer high-entropy token keeps its deterministic classification: persistence refuses deterministic
+ * findings and only redacts uncertain ones, so losing the classification would let the key be written to disk.
+ */
+test("a key inside a high-entropy token keeps its deterministic classification and the token is redacted whole", () => {
+  const boundary = new InformationFlowBoundary();
+  for (const [text, fragment] of [
+    ["abc/ghp_Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo", "Qx7Km2"],
+    ["x+sk-proj7KaMb3QxZt9Lw2Vn5Hd8Rc1Yf4Jg6Pu0Eo", "7KaMb3"],
+    ["prefix-sk-4fA8zK1x9qLmP3wV7tY0bE5rC2uI8oNs", "4fA8zK"],
+  ]) {
+    const found = boundary.classifyText(text, []);
+    assert.ok(found.some((f) => f.classificationType === "PATTERN_DETERMINISTIC"), `${text}: ${JSON.stringify(found)}`);
+    const output = boundary.redactForTelemetry(text);
+    assert.ok(!output.includes(fragment) && !output.includes(text.slice(0, 4)), `${text}: ${output}`);
+    const original = InformationFlowBoundary.getGlobalInstance();
+    InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+    try {
+      assert.throws(() => assertNoSensitivePersistenceContent(text, "checkpoint"), /./, `${text}: the checkpoint guard refuses it`);
+    } finally {
+      InformationFlowBoundary.setGlobalInstance(original);
     }
   }
 });
