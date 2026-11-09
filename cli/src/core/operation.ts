@@ -19,7 +19,9 @@
  *   unit WAITING_ON_DEPENDENCY a dependency is not COMPLETE (a BLOCKED dependency keeps it here: it never runs on
  *                              unfinished inputs). The one exception is a failure_debugger, whose input is the
  *                              failure itself: a dependency BLOCKED on a run whose verifier did not pass (its
- *                              `failedRun`) counts as satisfied for that role only.
+ *                              `failedRun`) counts as satisfied for that role only. A debugger that has COMPLETED
+ *                              is not run again if that dependency is later retried and fails a second time; the
+ *                              operator adds or retries a debugger unit for the new failure.
  *   unit BLOCKED               no safe autonomous transition: terminal execution failure, unknown execution with
  *                              its replay budget spent, an interrupted tool, or no qualified resource. Carries one
  *                              structured decision; only an applied operator decision moves it on.
@@ -181,6 +183,8 @@ export interface WorkUnit {
   contextBudget?: number;
   /** Named inputs the unit's role contract requires (specialists); enforced before the unit starts. */
   inputs?: Record<string, string>;
+  /** Hash of the effective inputs last submitted in this unit's conversation; a resume repeats them only on change. */
+  renderedInputsHash?: string;
   /** Results the executor refused (for example a specialist output that failed its contract), most recent last. */
   rejectedOutputs?: StoredRejectedOutput[];
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */

@@ -66,6 +66,12 @@ function emptyCandidateReason(candidate: { omitted: number; omittedNew: number }
   return candidate.omitted ? "only protected files changed" : "there is no change against the base to review";
 }
 
+/** Identifies a set of inputs, so a resumed conversation is not sent the same inputs again. */
+function inputsHash(inputs: Record<string, string> | undefined): string | undefined {
+  if (!inputs || !Object.keys(inputs).length) return undefined;
+  return createHash("sha256").update(JSON.stringify(Object.entries(inputs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))).digest("hex");
+}
+
 function origin(endpoint: string): string {
   try {
     return new URL(endpoint).origin;
@@ -296,6 +302,16 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     };
   }
 
+  /**
+   * Notes which inputs the unit's conversation now holds, once a prompt carrying them was submitted and persisted. A
+   * later resume renders its inputs again only when they differ (each copy can be as large as the input limit).
+   */
+  private recordRenderedInputs(unit: WorkUnit, inputs: Record<string, string> | undefined): void {
+    const hash = inputsHash(inputs);
+    if (hash) unit.renderedInputsHash = hash;
+    else delete unit.renderedInputsHash;
+  }
+
   /** Private sidecar holding RED evidence keyed by the unit agent's durable task id. */
   private tddStateFile(agent: AutonomousAgent): string | undefined {
     try {
@@ -478,7 +494,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           promptMessages = unsubmittedMessages(agent.getMessages(), ctx.messages);
           prompt =
             `[Work unit resumed on ${resource.id} (${resource.model}) after: ${ctx.resumeReason ?? "a resource change"}]\n${decision}` +
-            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${inputsBlock(promptUnit, "current")}${stopped}${messagesBlock(promptMessages)}` +
+            `The unit's authorized task, which remains its only objective:\n${unit.prompt}\n${inputsHash(promptUnit.inputs) !== unit.renderedInputsHash ? inputsBlock(promptUnit, "current") : ""}${stopped}${messagesBlock(promptMessages)}` +
             `Your earlier progress on this unit is above; tools that already ran are not repeated. Continue the unit and call task_completed with a concise summary when done.`;
         }
       } else {
@@ -514,7 +530,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt, promptUnit.inputs);
         if (budgetFailure) return budgetFailure;
         const redTurn = await agent.runTurn(redPrompt, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
-        if (redTurn.capacity?.pendingMessageRetained !== false && redTurn.persistence?.durable !== false) ctx.messagesSubmitted?.();
+        if (redTurn.capacity?.pendingMessageRetained !== false && redTurn.persistence?.durable !== false) {
+          ctx.messagesSubmitted?.();
+          this.recordRenderedInputs(unit, promptUnit.inputs);
+        }
         const afterRed = this.tddTestSnapshot(agent, config.workspace);
         const testPaths = [...afterRed]
           .filter(([file, hash]) => !beforeRed.has(file) || beforeRed.get(file) !== hash)
@@ -584,7 +603,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       const budgetFailure = this.contextBudgetFailure(agent, unit, greenPrompt, promptUnit.inputs);
       if (budgetFailure) return budgetFailure;
       const turn = await agent.runTurn(greenPrompt, undefined, { signal: ctx.signal, resume: isResume || (tdd && redEvidence !== undefined) });
-      if (turn.capacity?.pendingMessageRetained !== false && turn.persistence?.durable !== false) ctx.messagesSubmitted?.();
+      if (turn.capacity?.pendingMessageRetained !== false && turn.persistence?.durable !== false) {
+        ctx.messagesSubmitted?.();
+        this.recordRenderedInputs(unit, promptUnit.inputs);
+      }
       const configuredVerifier = config.authoritativeVerifierCommand?.trim();
       const testerVerifiedThisTurn = unit.role === "tester" &&
         (agent.getObjective()?.verification.slice(priorVerificationAttempts).some((attempt) => {
@@ -611,7 +633,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       if (outcome.kind === "completed") return { ...outcome, verification };
       // A failed attempt that ran a verifier is evidence too: a dependent failure_debugger works from it while the
       // unit waits on the operator (the scheduler lets that role run on such a dependency).
-      if (outcome.kind === "failed") return { ...outcome, failedRun: { summary: (summary ?? turn.detail ?? outcome.reason).slice(0, SPECIALIST_SUMMARY_MAX), verification } };
+      if (outcome.kind === "failed") {
+        return { ...outcome, failedRun: { summary: redactForPersistence(summary ?? turn.detail ?? outcome.reason).slice(0, SPECIALIST_SUMMARY_MAX), verification } };
+      }
       return outcome;
     } finally {
       agent.setProviderRecoveryHooks(undefined);
@@ -730,7 +754,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       );
     }
     const deps = ctx.dependencies.length
-      ? `\n${ctx.dependencies.some((d) => d.failed) ? "Prerequisite work" : "Completed prerequisite work"}:\n${ctx.dependencies.map((d) => `- ${d.title}${d.failed ? " (failed; its verifier evidence is in the inputs)" : ""}: ${d.summary}`).join("\n")}\n`
+      ? `\n${ctx.dependencies.some((d) => d.failed) ? "Prerequisite work" : "Completed prerequisite work"}:\n${ctx.dependencies.map((d) => `- ${d.title}${d.failed ? " (failed; its verifier evidence is in the inputs)" : ""}: ${redactForPersistence(d.summary)}`).join("\n")}\n`
       : "";
     return (
       `[Work unit '${unit.id}': ${unit.title}] Part of the operation: ${ctx.objective}\n${role}${inputsBlock(unit, "supplied")}${deps}${messagesBlock(messages)}\n` +
