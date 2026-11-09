@@ -337,6 +337,9 @@ function humanAge(seconds: number): string {
 
 export interface RemoveOptions { force?: boolean; deleteUnmerged?: boolean }
 
+/** Test seam: runs after every refusal check and immediately before the worktree is removed. Not a hook point. */
+export const removeSeams: { beforeRemove?: (entry: WorktreeEntry) => void } = {};
+
 export function removeWorktrees(ctx: WorktreeContext, tokens: string[], options: RemoveOptions = {}): CommandResult {
   if (tokens.length === 0) throw new WorktreeError("usage: worktree remove <branch|path>... [--force] [--delete-unmerged]");
   const lines: string[] = [];
@@ -382,6 +385,7 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
         throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
       }
     }
+    removeSeams.beforeRemove?.(entry);
     // The directory must still be the one that was inspected: a swap for a link or another tree is refused.
     const after = identityOf(entry.path);
     if (!after || after.dev !== before.dev || after.ino !== before.ino) throw new WorktreeError("the worktree directory changed while it was being checked; nothing was removed");
@@ -392,12 +396,20 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
   if (entry.branch && entry.branch !== target) {
     const stillCheckedOut = listAfter(repo).some((other) => other.branch === entry.branch);
     if (!stillCheckedOut) {
-      git(repo.cwd, ["branch", "-D", "--end-of-options", entry.branch]);
-      branchNote = " and deleted its branch";
+      // Only the commit that passed the integration check may be deleted. A commit made by another session in the
+      // meantime (its `/commit`, for example) moves the branch, and `branch -D` would make it unreachable.
+      branchNote = deleteBranchAt(repo, entry.branch, entry.head) ? " and deleted its branch" : "; its branch moved after it was checked and was kept";
     }
   }
   dropFromRegistry();
   return `Removed worktree ${label}${branchNote}`;
+}
+
+/** Delete `refs/heads/<branch>` only while it still points at `expectedSha` (Git's compare-and-delete). */
+function deleteBranchAt(repo: Repo, branch: string, expectedSha: string): boolean {
+  // The all-zero id tells update-ref to skip the comparison, so it is never accepted as an expected value.
+  if (!/^[0-9a-f]{40,64}$/.test(expectedSha) || /^0+$/.test(expectedSha)) return false;
+  return git(repo.cwd, ["update-ref", "-d", "--end-of-options", `refs/heads/${branch}`, expectedSha], { allowFailure: true }).status === 0;
 }
 
 function listAfter(repo: Repo): WorktreeEntry[] {
