@@ -39,16 +39,31 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /**
  * The environment for those calls: inherited GIT_* variables (GIT_DIR, GIT_INDEX_FILE, GIT_CONFIG_PARAMETERS, ...)
  * are dropped, system config and system attributes are ignored, replace objects are off, and attributes come from
- * the empty tree. `$GIT_DIR/info/attributes` still applies (and on Git older than 2.40 so do the worktree's
- * .gitattributes), so a filter or diff driver assigned that way is refused before any command could invoke it.
+ * a tree of the worktree's own .gitattributes files with every filter and diff assignment removed (the empty tree when
+ * there are none), so `text`/`eol` normalization still applies but no driver does. `$GIT_DIR/info/attributes` still
+ * applies (and on Git older than 2.40 so do the worktree's .gitattributes), so a filter or diff driver assigned that
+ * way is refused before any command could invoke it.
  */
-function safeGitEnv(indexFile: string | undefined): NodeJS.ProcessEnv {
+function safeGitEnv(indexFile: string | undefined, attrs?: { tree: string; objects: string }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) if (!key.startsWith("GIT_")) env[key] = value;
   return {
     ...env, ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}), GIT_CONFIG_NOSYSTEM: "1", GIT_ATTR_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1",
-    GIT_ATTR_SOURCE: EMPTY_TREE, GIT_OPTIONAL_LOCKS: "0",
+    GIT_ATTR_SOURCE: attrs?.tree ?? EMPTY_TREE, GIT_OPTIONAL_LOCKS: "0",
+    ...(attrs ? { GIT_ALTERNATE_OBJECT_DIRECTORIES: attrs.objects } : {}),
   };
+}
+
+/** Drops every `filter` and `diff` assignment (and unset/unspecify forms) from .gitattributes text, macros included. */
+export function withoutDrivers(text: string): string {
+  return text.split("\n").map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return line;
+    const head = /^("(?:[^"\\]|\\.)*"|\S+)(\s+|$)/.exec(trimmed);
+    if (!head) return line;
+    const rest = trimmed.slice(head[0].length).split(/\s+/).filter(Boolean);
+    return [head[1], ...rest.filter((token) => !/^[-!]?(filter|diff)(=|$)/.test(token))].join(" ");
+  }).join("\n");
 }
 const DIFF_FLAGS = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--relative"];
 const MAX_DIFF_PATHS = 2_000;
@@ -57,6 +72,28 @@ const GIT_MAX_BUFFER = 4 * 1024 * 1024;
 const LISTING_MAX_BUFFER = 256 * 1024 * 1024;
 /** Paths per `check-attr` call, so its output stays small whatever the repository's size. */
 const ATTR_BATCH = 1_000;
+
+/**
+ * The attribute source for a diff: the worktree's .gitattributes files with filter and diff assignments removed, as a
+ * tree in a private object directory (nothing is written to the repository). Undefined when there are none.
+ */
+function attributesTree(root: string, scratch: string, files: string[]): { tree: string; objects: string } | undefined {
+  const sources = files.filter((f) => path.posix.basename(f) === ".gitattributes").flatMap((f) => {
+    try {
+      const full = path.join(root, f);
+      const st = fs.lstatSync(full);
+      return st.isFile() && st.size <= 1024 * 1024 ? [{ file: f, text: withoutDrivers(fs.readFileSync(full, "utf8")) }] : [];
+    } catch { return []; }
+  });
+  if (!sources.length) return undefined;
+  const objects = path.join(scratch, "attr-objects");
+  fs.mkdirSync(objects);
+  const env = { ...safeGitEnv(path.join(scratch, "attr-index")), GIT_OBJECT_DIRECTORY: objects };
+  const run = (args: string[], input?: string) => execFileSync("git", [...GIT_SAFE, ...args], { cwd: root, env, encoding: "utf8", stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: 30_000, ...(input === undefined ? {} : { input }) });
+  const entries = sources.map(({ file, text }) => `100644 ${run(["hash-object", "-w", "--stdin"], text).trim()}\t${file}\0`);
+  run(["update-index", "--add", "-z", "--index-info"], entries.join(""));
+  return { tree: run(["write-tree"]).trim(), objects };
+}
 
 /**
  * The candidate diff against `base` (HEAD when absent), for every unit that is shown one: review units and the
@@ -80,11 +117,12 @@ const ATTR_BATCH = 1_000;
 export function candidateDiff(workspace: string, base: string | undefined): { base: string; diff: string; omitted: number; omittedNew: number } | { error: string } {
   const root = path.resolve(workspace);
   let scratch: string | undefined;
+  let attrs: { tree: string; objects: string } | undefined;
   // `ownIndex` reads the repository's own index (never written: only listed); everything else uses the scratch index.
   const git = (args: string[], options: { okExit?: number[]; input?: string; maxBuffer?: number; ownIndex?: boolean } = {}): string => {
     try {
       return execFileSync("git", [...GIT_SAFE, ...args], {
-        cwd: root, env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch!, "index")), encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        cwd: root, env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch!, "index"), attrs), encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         timeout: 30_000, maxBuffer: options.maxBuffer ?? GIT_MAX_BUFFER, ...(options.input === undefined ? {} : { input: options.input }),
       });
     } catch (err: any) {
@@ -106,6 +144,7 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
     // show, and git would reject it as a pathspec.
     const onDisk = (p: string) => { try { fs.lstatSync(path.join(root, p)); return true; } catch { return false; } };
     const ownIndex = new Set(listing([], true));
+    attrs = attributesTree(root, scratch, [...new Set([...listing(["--others", "--exclude-standard"]), ...ownIndex])]);
     // A path tracked at the base but removed from the real index (`git rm --cached`) is part of the candidate as a
     // deletion even when the file stays on disk: force it out of the scratch index too (its entry can match neither HEAD nor the worktree), and never re-add it as new.
     const removed = [...atBase].filter((p) => !ownIndex.has(p));

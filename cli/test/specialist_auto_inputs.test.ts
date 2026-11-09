@@ -17,7 +17,7 @@ import type { ResourceDescriptor } from "../src/core/resources.js";
 import type { TurnResult } from "../src/core/turn.js";
 import type { ChatMessage } from "../src/types.js";
 import { TeamOrchestrator } from "../src/team.js";
-import { candidateDiff } from "../src/core/specialist_inputs.js";
+import { candidateDiff, withoutDrivers } from "../src/core/specialist_inputs.js";
 
 const resource: ResourceDescriptor = {
   id: "primary", endpoint: "https://api.test/v1", provider: "https://api.test", model: "m",
@@ -678,4 +678,11 @@ test("text/eol normalization from the worktree's .gitattributes still applies, s
   assert.match(diff, /CHANGED_LINE/);
   assert.doesNotMatch(diff, /crlf\.txt/, "an unchanged CRLF file is not a change");
   assert.doesNotMatch(diff, /\r/, "line endings are normalized as git would on commit");
+});
+
+test("withoutDrivers keeps normalization attributes and drops every filter and diff assignment, macros and quoted patterns included", () => {
+  const out = withoutDrivers([
+    "# comment", "*.txt text eol=crlf filter=evil diff=evil", "[attr]mine filter=evil -diff text", "\"a b.txt\" -filter !diff eol=lf", "*.bin binary",
+  ].join("\n")).split("\n");
+  assert.deepEqual(out, ["# comment", "*.txt text eol=crlf", "[attr]mine text", "\"a b.txt\" eol=lf", "*.bin binary"]);
 });
