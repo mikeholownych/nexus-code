@@ -14,9 +14,9 @@ import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { isNexusDirPermissive } from "./doctor.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
+import { formatDiagnosticForOutput } from "./ui.js";
 import {
   appendProtectedHistoryLine,
-  redactDiagnosticForOutput,
   redactForPersistence,
   writeProtectedTextFile,
 } from "./core/persistence_protection.js";
@@ -34,7 +34,6 @@ import { HunkStager } from "./stager.js";
 import { TurnResult, lifecycleStatusForTurn } from "./core/turn.js";
 import { buildSessionExport } from "./session_export.js";
 import { SensitivePersistenceError } from "./core/persistence_protection.js";
-import { safeTerminal } from "./ui.js";
 
 interface PatchHunk {
   header: string;
@@ -68,15 +67,14 @@ function parsePatchHunks(patch: string): { fileHeader: string; hunks: PatchHunk[
 
 export const REPL_APPROVAL_GRACE_MS = 400;
 
-/** Redact and terminal-escape diagnostic text before displaying it to the operator. */
-export function formatReplDiagnostic(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return safeTerminal(redactDiagnosticForOutput(message));
+/** The /step failure line: the error text is redacted and made terminal-safe like every other REPL diagnostic. */
+export function formatReplStepError(error: unknown): string {
+  return `\nStep error: ${formatDiagnosticForOutput(error)}\n`;
 }
 
 /** Return a bounded, credential-safe excerpt when reporting input that arrived outside a prompt. */
 export function formatIgnoredInputExcerpt(line: string): string {
-  const safe = formatReplDiagnostic(line);
+  const safe = formatDiagnosticForOutput(line);
   return `${safe.slice(0, 60)}${line.length > 60 ? "…" : ""}`;
 }
 
@@ -171,7 +169,7 @@ export class InteractiveRepl {
           this.currentSessionId = this.sessionManager.generateSessionId();
         }
       } catch (err: any) {
-        console.log(pc.red(`Failed to restore session ${resumeSessionId}: ${formatReplDiagnostic(err)}\n`));
+        console.log(pc.red(`Failed to restore session ${resumeSessionId}: ${formatDiagnosticForOutput(err)}\n`));
         this.currentSessionId = this.sessionManager.generateSessionId();
       }
     } else {
@@ -223,7 +221,7 @@ export class InteractiveRepl {
         return true;
       } catch (error) {
         const sensitiveBlocked = error instanceof SensitivePersistenceError;
-        const failure = formatReplDiagnostic(error)
+        const failure = formatDiagnosticForOutput(error)
           .replace(/;\s*no checkpoint was written\.?$/i, "")
           .slice(0, 240) || "unknown error";
         if (sensitiveBlocked) {
@@ -828,7 +826,7 @@ export class InteractiveRepl {
               process.stdout.write(receipt.output);
             }
             if (receipt.error) {
-              console.log(pc.red(formatReplDiagnostic(receipt.error)));
+              console.log(pc.red(formatDiagnosticForOutput(receipt.error)));
             }
             if (!receipt.success && receipt.status === "DENIED") {
               console.log(pc.yellow(`Execution denied by authority admission gate.`));
@@ -864,7 +862,7 @@ export class InteractiveRepl {
             this.agent.setProgressListener(() => this.saveCurrentSession());
             try {
               const result = await this.agent.compactNow(arg.includes("--llm"));
-              console.log(result.ok ? pc.green(`✔ ${result.message}\n`) : pc.red(`✖ ${formatReplDiagnostic(result.message)}\n`));
+              console.log(result.ok ? pc.green(`✔ ${result.message}\n`) : pc.red(`✖ ${formatDiagnosticForOutput(result.message)}\n`));
             } finally {
               this.agent.setProgressListener(undefined);
             }
@@ -880,7 +878,7 @@ export class InteractiveRepl {
                 await this.runInteractiveTurn("", undefined, { step: true, resume: true });
               }
             } catch (err: any) {
-              console.error(pc.red(`\nStep error: ${err.message}\n`));
+              console.error(pc.red(formatReplStepError(err)));
             }
             continue;
           } else if (cmd === "doctor") {
@@ -924,7 +922,7 @@ export class InteractiveRepl {
             try {
               targetRelease = await resolveTargetRelease(pinnedVersion);
             } catch (err: any) {
-              console.log(pc.red(`Failed to resolve release: ${formatReplDiagnostic(err)}\n`));
+              console.log(pc.red(`Failed to resolve release: ${formatDiagnosticForOutput(err)}\n`));
               continue;
             }
 
@@ -935,7 +933,7 @@ export class InteractiveRepl {
               console.log(`Target release:     ${targetRelease.tag_name}${targetRelease.prerelease ? " (prerelease)" : " (stable)"}${targetRelease.published_at ? ` [published ${targetRelease.published_at}]` : ""}`);
               if (installed.prefix) console.log(`Install prefix:     ${installed.prefix}`);
               if (comparison.reasons.length > 0) {
-                for (const r of comparison.reasons) console.log(`Note:               ${formatReplDiagnostic(r)}`);
+                for (const r of comparison.reasons) console.log(`Note:               ${formatDiagnosticForOutput(r)}`);
               }
               if (comparison.action === "upgrade") {
                 console.log(pc.green(`\nUpdate available: ${installed.version} -> ${comparison.targetVersion}. Run /upgrade to install.\n`));
@@ -948,7 +946,7 @@ export class InteractiveRepl {
             }
 
             if (!comparison.canUpgrade) {
-              console.log(pc.red(`Cannot upgrade: ${formatReplDiagnostic(comparison.reasons.join("\n"))}\n`));
+              console.log(pc.red(`Cannot upgrade: ${formatDiagnosticForOutput(comparison.reasons.join("\n"))}\n`));
               continue;
             }
 
@@ -980,7 +978,7 @@ export class InteractiveRepl {
               console.log(`Launcher:    ${result.binPath}`);
               console.log(pc.yellow(`\nNotice: ${result.restartNotice}\n`));
             } catch (err: any) {
-              console.log(pc.red(`Upgrade failed: ${formatReplDiagnostic(err)}\n`));
+              console.log(pc.red(`Upgrade failed: ${formatDiagnosticForOutput(err)}\n`));
             }
             continue;
           } else if (cmd === "status") {
@@ -1033,7 +1031,7 @@ export class InteractiveRepl {
                 console.log();
               }
             } catch (err: any) {
-              console.log(pc.red(`Git diff error: ${formatReplDiagnostic(err)}\n`));
+              console.log(pc.red(`Git diff error: ${formatDiagnosticForOutput(err)}\n`));
             }
             continue;
           } else if (cmd === "stage") {
@@ -1075,7 +1073,7 @@ export class InteractiveRepl {
                 if (res.success) {
                   console.log(pc.green(`✔ Merged ${res.commitsMerged} speculative commit(s) from branch ${res.branch}.\n`));
                 } else {
-                  console.log(pc.red(`Failed to merge worktree: ${formatReplDiagnostic(res.error)}\n`));
+                  console.log(pc.red(`Failed to merge worktree: ${formatDiagnosticForOutput(res.error)}\n`));
                 }
               }
             } else if (arg === "discard") {
@@ -1086,7 +1084,7 @@ export class InteractiveRepl {
                 if (res.success) {
                   console.log(pc.green("✔ Discarded active speculative worktree.\n"));
                 } else {
-                  console.log(pc.red(`Failed to discard worktree: ${formatReplDiagnostic(res.error)}\n`));
+                  console.log(pc.red(`Failed to discard worktree: ${formatDiagnosticForOutput(res.error)}\n`));
                 }
               }
             } else {
@@ -1193,7 +1191,7 @@ export class InteractiveRepl {
                 console.log(pc.green(`✔ Resumed session ${pc.bold(sess.id)} (${sess.messages.length} messages loaded).\n`));
               }
             } catch (err: any) {
-              console.log(pc.red(`Failed to resume session: ${formatReplDiagnostic(err)}\n`));
+              console.log(pc.red(`Failed to resume session: ${formatDiagnosticForOutput(err)}\n`));
             }
             continue;
           } else if (cmd === "tokens" || cmd === "cost") {
@@ -1225,7 +1223,7 @@ export class InteractiveRepl {
               console.log(pc.bold(pc.white("\nGit Status:")));
               console.log(status ? status : pc.green("Working tree clean"));
             } catch (err: any) {
-              console.log(pc.red(`Git status error: ${formatReplDiagnostic(err)}`));
+              console.log(pc.red(`Git status error: ${formatDiagnosticForOutput(err)}`));
             }
             console.log();
             continue;
@@ -1270,7 +1268,7 @@ export class InteractiveRepl {
             if (commitRes.success) {
               console.log(pc.green(`✔ Committed changes: ${pc.bold(commitRes.hash || "")} - ${commitMsg}\n`));
             } else {
-              console.log(pc.red(`Commit failed: ${formatReplDiagnostic(commitRes.error)}\n`));
+              console.log(pc.red(`Commit failed: ${formatDiagnosticForOutput(commitRes.error)}\n`));
             }
             continue;
           } else if (cmd === "init") {
@@ -1364,7 +1362,7 @@ export class InteractiveRepl {
                   console.log(`  • Configuration saved to ~/.config/nexus/mcp.json\n`);
                 }
               } else {
-                console.log(pc.red(`✖ MCP connection failed: ${formatReplDiagnostic(res.error)}\n`));
+                console.log(pc.red(`✖ MCP connection failed: ${formatDiagnosticForOutput(res.error)}\n`));
               }
             } else if (subCmd === "resources") {
               const resources = mcp.listResources();
@@ -1389,7 +1387,7 @@ export class InteractiveRepl {
                   console.log(res.content || "");
                   console.log(pc.bold(pc.cyan("================================\n")));
                 } else {
-                  console.log(pc.red(`Error reading resource: ${formatReplDiagnostic(res.error)}\n`));
+                  console.log(pc.red(`Error reading resource: ${formatDiagnosticForOutput(res.error)}\n`));
                 }
               }
             } else if (subCmd === "prompts") {
@@ -1419,7 +1417,7 @@ export class InteractiveRepl {
                   console.log(JSON.stringify(res.messages, null, 2));
                   console.log(pc.bold(pc.yellow("==========================\n")));
                 } else {
-                  console.log(pc.red(`Error fetching prompt: ${formatReplDiagnostic(res.error)}\n`));
+                  console.log(pc.red(`Error fetching prompt: ${formatDiagnosticForOutput(res.error)}\n`));
                 }
               }
             } else {
@@ -1520,11 +1518,11 @@ export class InteractiveRepl {
                   if (res.success) {
                     console.log(pc.green(`✔ Copied git diff (${diffOut.split("\n").length} lines) to clipboard.\n`));
                   } else {
-                    console.log(pc.red(`Clipboard error: ${formatReplDiagnostic(res.error)}\n`));
+                    console.log(pc.red(`Clipboard error: ${formatDiagnosticForOutput(res.error)}\n`));
                   }
                 }
               } catch (err: any) {
-                console.log(pc.red(`Git diff error: ${formatReplDiagnostic(err)}\n`));
+                console.log(pc.red(`Git diff error: ${formatDiagnosticForOutput(err)}\n`));
               }
             } else if (subArg === "code") {
               const lastAssistant = this.getLastAssistantMessage();
@@ -1543,7 +1541,7 @@ export class InteractiveRepl {
               if (res.success) {
                 console.log(pc.green(`✔ Copied ${codeBlocks.length > 0 ? `${codeBlocks.length} code block(s)` : "latest response"} to clipboard.\n`));
               } else {
-                console.log(pc.red(`Clipboard error: ${formatReplDiagnostic(res.error)}\n`));
+                console.log(pc.red(`Clipboard error: ${formatDiagnosticForOutput(res.error)}\n`));
               }
             } else {
               const lastAssistant = this.getLastAssistantMessage();
@@ -1555,14 +1553,14 @@ export class InteractiveRepl {
               if (res.success) {
                 console.log(pc.green(`✔ Copied last assistant response (${lastAssistant.length} chars) to clipboard.\n`));
               } else {
-                console.log(pc.red(`Clipboard error: ${formatReplDiagnostic(res.error)}\n`));
+                console.log(pc.red(`Clipboard error: ${formatDiagnosticForOutput(res.error)}\n`));
               }
             }
             continue;
           } else if (cmd === "paste") {
             const res = readFromClipboard();
             if (!res.success || !res.text) {
-              console.log(pc.red(`Clipboard error: ${formatReplDiagnostic(res.error || "Clipboard is empty")}\n`));
+              console.log(pc.red(`Clipboard error: ${formatDiagnosticForOutput(res.error || "Clipboard is empty")}\n`));
             } else {
               const preview = res.text.length > 200 ? res.text.slice(0, 200) + "..." : res.text;
               console.log(pc.bold(pc.white(`\nClipboard contents (${res.text.length} chars):`)));
@@ -1587,7 +1585,7 @@ export class InteractiveRepl {
             }
             const encoded = encodeImageFile(imgPath, this.config.workspace);
             if (!encoded.success) {
-              console.log(pc.red(`Error loading image: ${formatReplDiagnostic(encoded.error)}\n`));
+              console.log(pc.red(`Error loading image: ${formatDiagnosticForOutput(encoded.error)}\n`));
               continue;
             }
             console.log(pc.cyan(`🖼️  Loaded image: ${pc.bold(path.basename(encoded.filePath))} (${(encoded.sizeBytes / 1024).toFixed(1)} KB)`));
@@ -1642,7 +1640,7 @@ export class InteractiveRepl {
                 independentReview,
                 maxInProcessWaitMs: 60_000,
                 onEvent: (e) => {
-                  console.log((e.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan)(`◆ ${formatReplDiagnostic(e.message)}`));
+                  console.log((e.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan)(`◆ ${formatDiagnosticForOutput(e.message)}`));
                 },
               });
               console.log(pc.bold(pc.cyan(`\n👥 Team ${subCmd === "full" ? "workflow" : `role ${subCmd}`} as a durable operation`)));
@@ -1765,12 +1763,12 @@ export class InteractiveRepl {
               console.log(pc.red(`✖ Test suite FAILED.`));
               if (res.failures.length > 0) {
                 console.log(pc.bold(pc.red("\nFailing Tests:")));
-                res.failures.slice(0, 10).forEach((f) => console.log(`  • ${pc.red(formatReplDiagnostic(f))}`));
+                res.failures.slice(0, 10).forEach((f) => console.log(`  • ${pc.red(formatDiagnosticForOutput(f))}`));
               }
               if (res.diagnostics.length > 0) {
                 console.log(pc.bold(pc.yellow("\nParsed Diagnostics:")));
                 res.diagnostics.slice(0, 5).forEach((d) => {
-                  console.log(`  • [${formatReplDiagnostic(d.severity.toUpperCase())}] ${formatReplDiagnostic(d.file || "unknown")}:${d.line || "?"} - ${formatReplDiagnostic(d.message)}`);
+                  console.log(`  • [${formatDiagnosticForOutput(d.severity.toUpperCase())}] ${formatDiagnosticForOutput(d.file || "unknown")}:${d.line || "?"} - ${formatDiagnosticForOutput(d.message)}`);
                 });
               }
               console.log();
@@ -1790,7 +1788,7 @@ export class InteractiveRepl {
                   console.log(pc.bold(pc.white(`\nCheckpoint Diff (${cpId}${baseId ? ` vs ${baseId}` : " vs current"}):`)));
                   this.agent.getUi().renderDiff(res.diff);
                 } else {
-                  console.log(pc.red(`Diff error: ${formatReplDiagnostic(res.error)}\n`));
+                  console.log(pc.red(`Diff error: ${formatDiagnosticForOutput(res.error)}\n`));
                 }
               }
             } else if (subCmd === "prune") {
@@ -1820,7 +1818,7 @@ export class InteractiveRepl {
             if (res.success) {
               console.log(pc.green(`✔ ${res.message}\n`));
             } else {
-              console.log(pc.red(`✖ ${formatReplDiagnostic(res.message)}\n`));
+              console.log(pc.red(`✖ ${formatDiagnosticForOutput(res.message)}\n`));
             }
             continue;
           } else if (cmd === "audit") {
@@ -1844,12 +1842,12 @@ export class InteractiveRepl {
                   const tool = pc.bold(pc.cyan(r.tool.padEnd(16)));
                   console.log(`[${time}] [${status}] ${tool} (${dur})`);
                   if (r.error) {
-                    console.log(`  ${pc.red("Error:")} ${formatReplDiagnostic(r.error)}`);
+                    console.log(`  ${pc.red("Error:")} ${formatDiagnosticForOutput(r.error)}`);
                   }
                 }
                 console.log();
               } catch (e: any) {
-                console.log(pc.red(`Failed to read audit log: ${formatReplDiagnostic(e)}\n`));
+                console.log(pc.red(`Failed to read audit log: ${formatDiagnosticForOutput(e)}\n`));
               }
             }
             continue;
@@ -1896,7 +1894,7 @@ export class InteractiveRepl {
                   console.log(indicator);
                 }
               } catch (e: any) {
-                console.log(pc.red(`Error fetching models: ${formatReplDiagnostic(e)}`));
+                console.log(pc.red(`Error fetching models: ${formatDiagnosticForOutput(e)}`));
               }
               console.log();
             }
@@ -1913,7 +1911,7 @@ export class InteractiveRepl {
             await this.runInteractiveTurn(trimmed);
           }
         } catch (err: any) {
-          console.error(pc.red(`\nTurn error: ${formatReplDiagnostic(err)}\n`));
+          console.error(pc.red(`\nTurn error: ${formatDiagnosticForOutput(err)}\n`));
         }
       }
     };
