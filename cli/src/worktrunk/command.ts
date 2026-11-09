@@ -172,9 +172,32 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
   }
 }
 
-/** Split the text after the command name into tokens (no quoting: branch names and paths here contain no spaces). */
+/**
+ * Split the text after the command name into tokens. Whitespace separates tokens except inside single or double
+ * quotes, which are removed and may be joined to adjacent text as in a shell (no escapes, no expansion), so
+ * `merge ^ -m "feat: add login"` keeps its message in one token. An unterminated quote runs to the end.
+ */
 export function tokenizeWorktreeArgs(args: string): string[] {
-  return args.trim().split(/\s+/).filter(Boolean);
+  const tokens: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: string | undefined;
+  for (const char of args) {
+    if (quote) {
+      if (char === quote) quote = undefined; else current += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+    } else if (/\s/.test(char)) {
+      if (started || current) tokens.push(current);
+      current = "";
+      started = false;
+    } else {
+      current += char;
+    }
+  }
+  if (started || current) tokens.push(current);
+  return tokens;
 }
 
 /**
