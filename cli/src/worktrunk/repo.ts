@@ -77,6 +77,9 @@ export function openRepo(startDir: string): Repo {
   const entries = listEntries(cwd);
   const main = entries[0];
   if (!main || main.bare) throw new Error("bare repositories are not supported by `nexus worktree`");
+  // `git worktree list` names the git directory itself as the main worktree when it is not `<checkout>/.git`
+  // (`--separate-git-dir`), and nothing in the common directory leads back to the checkout, so the anchor would be wrong.
+  if (path.basename(commonDir) !== ".git") throw new Error("repositories whose git directory is not <checkout>/.git (for example --separate-git-dir) are not supported by `nexus worktree`");
   const repoPath = fs.realpathSync(main.path);
   return { cwd, commonDir, repoPath, repoName: path.basename(repoPath), entries };
 }
