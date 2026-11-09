@@ -27,6 +27,8 @@ export function skillNoteBudget(contextLimit: number): number {
 export const MAX_SKILL_MATCHES = 5;
 /** Heading of the catalog section in the system prompt. */
 export const SKILL_CATALOG_HEADING = "### Specialized Agent Skills Available:";
+/** First line under the heading, unchanged since v1.0: with the heading it marks the catalog (rules may quote the heading). */
+const SKILL_CATALOG_INTRO = "You have access to specialized skills.";
 /** Prefix of the per-prompt skill note; `[Nexus ` marks it as a harness note, never an operator request. */
 export const SKILL_NOTE_PREFIX = "[Nexus skill note]";
 /** Descriptions shorter than this stop helping the model pick a skill; below it the catalog lists names only. */
@@ -118,11 +120,12 @@ export function formatSkillNote(matches: Skill[], maxChars: number): string {
 }
 
 /**
- * The catalog section of a system prompt written by any release: from its heading to the next `###` section or the
+ * The catalog section of a system prompt written by any release: its heading directly followed by the catalog's intro
+ * line (workspace rules, placed before the catalog, may quote the heading alone), to the next `###` section or the
  * end, ending after the catalog's own final newline (the blank lines that separate sections are not part of it).
  */
 export function findCatalogSpan(content: string): { start: number; end: number } | null {
-  const start = content.indexOf(SKILL_CATALOG_HEADING);
+  const start = content.indexOf(`${SKILL_CATALOG_HEADING}\n${SKILL_CATALOG_INTRO}`);
   if (start < 0) return null;
   const next = content.indexOf("\n### ", start + 1);
   const stop = next < 0 ? content.length : next;
@@ -427,8 +430,8 @@ export class SkillManager {
     }
 
     const head =
-      `${SKILL_CATALOG_HEADING}\n` +
-      "You have access to specialized skills. If a user task matches a skill's description, call the `activate_skill` tool with the skill's name to load its specialized workflows and guidelines into context.\n";
+      `${SKILL_CATALOG_HEADING}\n${SKILL_CATALOG_INTRO}` +
+      " If a user task matches a skill's description, call the `activate_skill` tool with the skill's name to load its specialized workflows and guidelines into context.\n";
 
     const full = head + "\n" + skills.map((s) => `- **${s.name}** [source: ${s.path}] [trust: ${s.trusted ? "trusted" : "untrusted"}]: ${s.description}\n`).join("");
     if (full.length <= maxChars) return full;

@@ -92,7 +92,7 @@ describe("formatSkillNote", () => {
 
 describe("findCatalogSpan", () => {
   test("recognises a catalog of any release by its heading, ending at the next section", () => {
-    const catalog = `${SKILL_CATALOG_HEADING}\nintro\n\n- **a** [source: /x] [trust: trusted]: first\n- **b** [source: /y] [trust: trusted]: second\n`;
+    const catalog = `${SKILL_CATALOG_HEADING}\nYou have access to specialized skills. Pick one.\n\n- **a** [source: /x] [trust: trusted]: first\n- **b** [source: /y] [trust: trusted]: second\n`;
     const prompt = `rules\n${catalog}\n### Runtime Identity\nid`;
     const span = findCatalogSpan(prompt)!;
     assert.equal(prompt.slice(span.start, span.end), catalog);
@@ -100,6 +100,15 @@ describe("findCatalogSpan", () => {
     const span2 = findCatalogSpan(tail)!;
     assert.equal(tail.slice(span2.start, span2.end), catalog);
     assert.equal(findCatalogSpan("no skills here"), null);
+  });
+
+  test("review item 7: a rules section quoting the heading before the catalog is not taken for it", () => {
+    const catalog = `${SKILL_CATALOG_HEADING}\nYou have access to specialized skills. If a user task matches a skill's description, call the \`activate_skill\` tool.\n\n- **a**: first\n`;
+    const rules = `### Project Instructions (loaded from AGENTS.md):\nOur docs use the heading\n${SKILL_CATALOG_HEADING}\nin skill READMEs; keep it.\n`;
+    const prompt = `head\n${rules}\n${catalog}\n### Runtime Identity\nid`;
+    const span = findCatalogSpan(prompt)!;
+    assert.equal(prompt.slice(span.start, span.end), catalog);
+    assert.equal(findCatalogSpan(rules), null, "a heading without the catalog's intro line is not a catalog");
   });
 });
 
