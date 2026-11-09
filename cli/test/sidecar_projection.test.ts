@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
-import { MAX_DIFF_DETAIL } from "../src/evidence.js";
-import { encodeEvent, MAX_SLASH_OUTPUT, MAX_TEXT_FIELD, type SidecarEvent } from "../src/protocol.js";
+import { MAX_DETAIL, MAX_DIFF_DETAIL } from "../src/evidence.js";
+import { capText, encodeEvent, MAX_SLASH_OUTPUT, MAX_TEXT_FIELD, type SidecarEvent } from "../src/protocol.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -236,4 +236,18 @@ test("review item 12: FIELD_LIMITS covers every free-text field of every protoco
     for (const field of fields) assert.ok(Number.isInteger(table[field]) && table[field] > 0, `${type}.${field} has a limit`);
     assert.deepEqual(Object.keys(table).sort(), [...fields].sort(), `${type}: no limit on a field the protocol does not carry`);
   }
+});
+
+test("Entire 01M70D1HN3YR / 01M70D4NYM7J: an over-cap ledger record keeps the producer's truncation count through the projection", () => {
+  withFreshBoundary(() => {
+    const big = (n: number) => "line of tool output\n".repeat(Math.ceil(n / 20)).slice(0, n);
+    const args = capText(big(MAX_DETAIL + 50_000), MAX_DETAIL);
+    const output = capText(big(MAX_DETAIL + 300_000), MAX_DETAIL);
+    const diff = capText(big(MAX_DIFF_DETAIL + 900_000), MAX_DIFF_DETAIL);
+    const event: any = formatSafeSidecarEvent({ type: "tool.detail", id: "i", evidence: "e", tool: "run_command", subject: "s", status: "succeeded", args, output, duration_ms: 1, diff });
+    assert.equal(event.args, args, "args unchanged: …[truncated 50000 chars]");
+    assert.equal(event.output, output, "output unchanged: …[truncated 300000 chars]");
+    assert.equal(event.diff, diff, "diff unchanged: …[truncated 900000 chars]");
+    assert.match(event.output, /…\[truncated 300000 chars\]$/);
+  });
 });

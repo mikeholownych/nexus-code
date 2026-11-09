@@ -238,7 +238,7 @@ function copy(ctx: SlashContext): SlashOutcome {
 }
 
 /** Keeps the escaped `slash.result` line under the TUI's 1 MiB protocol line cap. */
-const MAX_PASTE = 100_000;
+export const MAX_PASTE = 100_000;
 
 function paste(): SlashOutcome {
   const result = readFromClipboard();

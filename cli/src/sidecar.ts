@@ -62,6 +62,7 @@ import {
 } from "./protocol.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
+import { MAX_PASTE } from "./slash/workspace_commands.js";
 import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
 
@@ -1102,7 +1103,8 @@ const PATH_FIELDS: Partial<Record<SidecarEvent["type"], readonly string[]>> = {
 /**
  * Characters kept per free-text string field (text from the model, a tool, the operator or a provider). Applied after
  * redaction, so a cut can never split a credential. Each limit is at least the cap the field's producer already
- * applies, so it changes nothing that is sent today; it bounds the field if a producer stops capping. Event types not
+ * applies, and a value the producer already cut with `capText` keeps its own `…[truncated N chars]` count (see
+ * limitEventFields), so this changes nothing that is sent today; it bounds the field if a producer stops capping. Event types not
  * listed are structured or bounded elsewhere (paths: PATH_FIELDS; history: HISTORY_LIMITS); the coverage test in
  * test/sidecar_projection.test.ts classifies every protocol event type.
  */
@@ -1118,8 +1120,7 @@ export const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<
   "approval.request": { tool: 200, subject: MAX_TEXT_FIELD, preview: MAX_TEXT_FIELD },
   "checkpoint.choice.request": { message: MAX_TEXT_FIELD },
   "turn.result": { heading: MAX_TEXT_FIELD, line: MAX_TEXT_FIELD },
-  // composer: /paste takes at most 100,000 characters.
-  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: 100_000 },
+  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: MAX_PASTE },
   notice: { text: MAX_TEXT_FIELD },
   error: { message: MAX_TEXT_FIELD },
   "provider.auth": { instructions: MAX_TEXT_FIELD },
@@ -1130,9 +1131,17 @@ export const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<
 /** Characters kept of a resumed conversation's entries: tool names and subjects are short, messages are bounded. */
 const HISTORY_LIMITS = { toolName: 80, toolSubject: 200, text: HISTORY_CHARS } as const;
 
+/** Longest `…[truncated N chars]` marker capText appends after the kept text. */
+const CAP_MARKER_ROOM = 40;
+const CAP_MARKER = /…\[truncated \d+ chars\]$/;
+
 function limitEventFields(event: any): void {
   for (const [field, max] of Object.entries(FIELD_LIMITS[event.type as SidecarEvent["type"]] ?? {})) {
-    if (typeof event[field] === "string") event[field] = capText(event[field], max);
+    const value = event[field];
+    if (typeof value !== "string") continue;
+    // Already cut to this limit by its producer: keep the producer's count of what was dropped.
+    if (value.length <= max + CAP_MARKER_ROOM && CAP_MARKER.test(value)) continue;
+    event[field] = capText(value, max);
   }
   if (event.type === "history") {
     for (const entry of event.messages as HistoryEntry[]) {
