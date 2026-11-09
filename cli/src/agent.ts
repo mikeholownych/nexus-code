@@ -819,6 +819,9 @@ function gitIndexIdentity(workspace: string): string {
   return createHash("sha256").update(out).digest("hex").slice(0, 16);
 }
 
+/** Why an operator /compact --llm is not run while a resumed turn's provider window is open. */
+const RESUMED_WINDOW_COMPACT_REASON = "the provider is still inside the retry window it asked for";
+
 /** An endpoint URL for equality: scheme and host lower-cased, trailing slashes dropped. */
 function comparableEndpoint(endpoint: string): string {
   const trimmed = endpoint.trim();
@@ -3997,6 +4000,10 @@ export class AutonomousAgent {
 
   /** As compactConversation, returning the outcome instead of throwing (used by the queue and the hosts). */
   public async compactNow(useLlm: boolean, signal?: AbortSignal, step = 0): Promise<{ ok: boolean; durable: boolean; message: string; outcome?: CompactionOutcome }> {
+    // `/compact --llm` calls the provider: not inside the retry window a resumed turn is still waiting out.
+    if (useLlm && this.resumedWindowCovers(this.client.endpoint)) {
+      return { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_COMPACT_REASON}.` };
+    }
     const previousParent = this.activeTraceSpanId;
     const previousTrace = this.activeCompactionTrace;
     const span = this.safeStartTraceSpan("nexus.context.compaction", {
@@ -6594,7 +6601,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // Queued /compact: run now that the last step has settled, or cancelled with the turn.
       if (this.compactionQueue.length) {
         try {
-          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : this.resumedWindowCovers(this.client.endpoint) ? "the provider is still inside the retry window it asked for" : undefined);
+          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : this.resumedWindowCovers(this.client.endpoint) ? RESUMED_WINDOW_COMPACT_REASON : undefined);
         } catch (err) {
           if (!(err instanceof CompactionCommitError)) throw err;
           persistenceFailure ??= err.outcome.message;

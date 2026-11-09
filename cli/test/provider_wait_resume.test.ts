@@ -533,19 +533,53 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       a.cognitiveRoutingEnabled = true;
       a.plannerClient = (plannerHost as any).client;
       const ran: number[] = [];
+      const reports: Array<{ ids: string[]; message: string; status: string }> = [];
       const original = a.compactNow.bind(a);
       a.compactNow = (...args: unknown[]) => {
         ran.push(ctx.resumedClock.now());
         return original(...args);
       };
+      const report = a.reportCompaction.bind(a);
+      a.reportCompaction = (ids: string[], result: { message: string }, status: string) => {
+        reports.push({ ids, message: result.message, status });
+        return report(ids, result, status);
+      };
       a.compactionQueue.push({ ids: ["queued-1"], llm: true, at: new Date().toISOString() });
       await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
       assert.ok(plannerGateway.requests.length >= 1, "precondition: step 1 ran on the planner endpoint");
-      for (const at of ran) assert.ok(at >= eligibleAt, `the queued compaction called the recorded provider at ${at}, before the eligible time ${eligibleAt}`);
-      assert.deepEqual(a.compactionQueue, [], "the held compaction was reported as not run, not left queued");
+      assert.deepEqual(ran, [], "the queued compaction never reached the provider inside the window");
+      assert.deepEqual(reports.map((x) => [x.ids, x.status]), [[["queued-1"], "cancelled"]], "it was reported once, as not run");
+      assert.match(reports[0].message, /\/compact was not run: the provider is still inside the retry window it asked for\./);
+      assert.deepEqual(a.compactionQueue, [], "and is not left queued");
     } finally {
       plannerHost.shutdown();
       await plannerGateway.close();
+      await ctx.cleanup();
+    }
+  });
+
+  test("an idle /compact --llm inside the window is refused; it runs once the window has passed", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      const a = ctx.resumed as any;
+      let reached = 0;
+      const impl = a.compactNowImpl.bind(a);
+      a.compactNowImpl = (...args: unknown[]) => {
+        reached++;
+        return impl(...args);
+      };
+      const refused = await ctx.resumed.compactNow(true);
+      assert.equal(refused.ok, false);
+      assert.match(refused.message, /\/compact was not run: the provider is still inside the retry window it asked for\./);
+      assert.equal(reached, 0, "no provider call inside the window");
+      const local = await ctx.resumed.compactNow(false);
+      assert.equal(reached, 1, "a compaction that does not call the provider is not held back");
+      void local;
+      ctx.resumedClock.advance(eligibleAt - ctx.resumedClock.now() + 1);
+      await ctx.resumed.compactNow(true);
+      assert.equal(reached, 2, "after the window the same command runs");
+    } finally {
       await ctx.cleanup();
     }
   });
