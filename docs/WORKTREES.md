@@ -5,7 +5,7 @@ tasks can run side by side without disturbing your checkout. It is a native subs
 [Worktrunk](https://worktrunk.dev) (a separate Rust CLI by its own authors); Nexus does not bundle, call or copy it.
 
 The speculative `nexus run --worktree` task worktrees (`nexus/<task-id>` under `.nexus/worktrees/`) are unchanged, and
-`/worktree status|merge|discard` still act on them.
+`/worktree status`, a bare `/worktree merge` and `/worktree discard` still act on them. `/worktree merge ^` (or `merge <target>`, or `merge` with any option) is the named merge described below; run it from inside the named worktree.
 
 ## Commands
 
@@ -33,7 +33,7 @@ worktree and a speculative task worktree (unless `--force`).
 syntax, for example `target/` or `node_modules/`) into the new worktree; `--no-copy` skips it. `copy-ignored` does the same on
 demand (`--from`/`--to` default to the main checkout and the current worktree). Existing files are kept unless `--force`.
 Copies use a reflink where the file system has one, keep modification times so incremental builds do not restart, and
-stop with an error beyond 50,000 files or 4 GiB. `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
+stop with an error beyond 50,000 files or 4 GiB (under `switch -c`, a warning: the worktree is still created). `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
 (absolute paths) are never copied, and a symbolic link that leaves the tree is skipped. `--all-ignored` copies every
 ignored file and can therefore carry secrets such as `.env` into each worktree; it is never the default.
 
@@ -46,8 +46,13 @@ clean. The state being merged (HEAD, plus uncommitted work) needs a recorded pas
 when its deliverable-bound verifier passes inside that worktree, keyed by branch, head and tree, so a later edit or commit
 no longer matches. Without one, merge refuses unless you pass `--no-verify-receipt --reason "why"`; the waiver (branch, head,
 reason) is recorded in the registry. Before history is rewritten the branch, including swept-in working-tree changes, is saved to
-`refs/nexus-backup/<branch>`. A rebase conflict stops the command and leaves the rebase open in the worktree. Ignored
-leftovers (build caches) are deleted with the worktree after a successful merge.
+`refs/nexus-backup/<name>-<hash>`: one flat ref per branch, where `<name>` is the branch name with every character outside
+`A-Za-z0-9._-` turned into `-` (at most 40 characters) and `<hash>` is the first 12 hex digits of the SHA-1 of the
+branch name, so `foo` and `foo/bar` never collide (Git cannot hold both as refs). Find yours with
+`git for-each-ref refs/nexus-backup`. A submodule is backed up as its recorded commit only. A rebase conflict stops the
+command and leaves the rebase open in the worktree. Ignored leftovers (build caches) are deleted with the worktree after
+a successful merge, but never while tracked, staged, untracked or submodule changes remain: then the worktree is kept
+and the command says so.
 
 `prune` removes worktrees whose HEAD is already integrated into the default branch (same commit, ancestor, empty diff,
 same tree or patch-id equivalent), that have no changes or untracked files, and that were last touched longer ago than
@@ -75,5 +80,7 @@ can never change it:
 * Git hooks never run while Nexus creates or removes a worktree.
 * The repository is found from `git rev-parse --git-common-dir`, so commands behave the same inside any linked worktree.
 * Created worktrees are recorded in `<git-common-dir>/nexus/worktrees.json` (64 KiB cap, no symbolic links).
-* Branch names and paths in output are redacted; read-only mode (`--read-only`, `/mode read-only`) allows only `list`
-  and `path`.
+* Human-readable output (the `list` table, messages, errors) passes branch names and paths through the secret
+  redactor and shows your home as `~`. Machine output is printed exactly as Git has it: `path` (so `cd "$(nexus
+  worktree path feature/x)"` works) and `list --json`. Treat `--json` output as you would `git worktree list`.
+* Read-only mode (`--read-only`, `/mode read-only`) allows only `list` and `path`.

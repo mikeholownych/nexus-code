@@ -106,50 +106,53 @@ export function generateConventionalCommit(workspace: string): { message: string
 
     const lines = statusOut.split("\n");
     const files = lines.map((l) => l.slice(3).trim());
-
-    // Determine primary scope
-    let scope = "core";
-    if (files.every((f) => f.startsWith("docs/") || f.endsWith(".md"))) {
-      scope = "docs";
-    } else if (files.every((f) => f.startsWith("cli/test/") || f.includes("test"))) {
-      scope = "test";
-    } else if (files.every((f) => f.startsWith("cli/"))) {
-      scope = "cli";
-    } else if (files.every((f) => f.startsWith("core/"))) {
-      scope = "core";
-    }
-
-    // Determine type
-    let type = "feat";
-    if (scope === "docs") {
-      type = "docs";
-    } else if (scope === "test") {
-      type = "test";
-    } else if (files.some((f) => f.includes("fix") || f.includes("bug"))) {
-      type = "fix";
-    }
-
-    // Identify primary topic
-    let topic = "update workspace files";
-    if (files.some((f) => f.includes("repl") || f.includes("prompt"))) {
-      topic = "enhance interactive REPL and command UX";
-    } else if (files.some((f) => f.includes("agent") || f.includes("diagnostics"))) {
-      topic = "improve agent self-healing and recovery loop";
-    } else if (files.some((f) => f.includes("mcp"))) {
-      topic = "update MCP server and tool integrations";
-    } else if (files.some((f) => f.includes("checkpoint"))) {
-      topic = "enhance workspace snapshotting and rollback";
-    } else if (files.some((f) => f.includes("file_ops"))) {
-      topic = "robust file editing and matching";
-    } else if (files.length === 1) {
-      topic = `update ${path.basename(files[0])}`;
-    }
-
-    const message = `${type}(${scope}): ${topic}`;
-    return { message, files };
+    return { message: conventionalCommitMessage(files), files };
   } catch {
     return { message: "chore(repo): update workspace", files: [] };
   }
+}
+
+/** The deterministic conventional-commit subject for a list of changed paths (no Git, no shell). */
+export function conventionalCommitMessage(files: string[]): string {
+  // Determine primary scope
+  let scope = "core";
+  if (files.every((f) => f.startsWith("docs/") || f.endsWith(".md"))) {
+    scope = "docs";
+  } else if (files.every((f) => f.startsWith("cli/test/") || f.includes("test"))) {
+    scope = "test";
+  } else if (files.every((f) => f.startsWith("cli/"))) {
+    scope = "cli";
+  } else if (files.every((f) => f.startsWith("core/"))) {
+    scope = "core";
+  }
+
+  // Determine type
+  let type = "feat";
+  if (scope === "docs") {
+    type = "docs";
+  } else if (scope === "test") {
+    type = "test";
+  } else if (files.some((f) => f.includes("fix") || f.includes("bug"))) {
+    type = "fix";
+  }
+
+  // Identify primary topic
+  let topic = "update workspace files";
+  if (files.some((f) => f.includes("repl") || f.includes("prompt"))) {
+    topic = "enhance interactive REPL and command UX";
+  } else if (files.some((f) => f.includes("agent") || f.includes("diagnostics"))) {
+    topic = "improve agent self-healing and recovery loop";
+  } else if (files.some((f) => f.includes("mcp"))) {
+    topic = "update MCP server and tool integrations";
+  } else if (files.some((f) => f.includes("checkpoint"))) {
+    topic = "enhance workspace snapshotting and rollback";
+  } else if (files.some((f) => f.includes("file_ops"))) {
+    topic = "robust file editing and matching";
+  } else if (files.length === 1) {
+    topic = `update ${path.basename(files[0])}`;
+  }
+
+  return `${type}(${scope}): ${topic}`;
 }
 
 export function commitChanges(workspace: string, message: string): { success: boolean; hash?: string; error?: string } {

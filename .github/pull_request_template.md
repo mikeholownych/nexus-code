@@ -6,6 +6,10 @@ Explain the user-visible problem and what this change does. Link issues and requ
 
 List commands, results, tested revision/environment, and material gaps. Distinguish existing evidence from checks run for this PR.
 
+## Reference coding
+
+Queries run (`xerj code ...`) and what was taken, borrowed or rejected; or "Not applicable" (trivial, docs-only or test-specified change); or "XERJ unavailable: <reason>".
+
 ## Compatibility, security, and recovery
 
 Describe relevant permission, persistence/schema, configuration, installation, or release impacts. Use “not applicable” where appropriate.

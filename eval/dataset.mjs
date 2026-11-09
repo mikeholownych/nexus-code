@@ -56,7 +56,7 @@ function readJsonl(file) {
   });
   return { bytes, rows };
 }
-function datasetTaskTreeDigest(root) {
+export function datasetTaskTreeDigest(root) {
   let total = 0;
   let entriesSeen = 0;
   const hash = createHash("sha256");

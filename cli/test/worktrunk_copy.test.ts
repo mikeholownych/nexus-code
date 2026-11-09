@@ -43,6 +43,24 @@ function fixture(): Fixture {
   return { root, repo, home, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
+function customFixture(gitignore: string, include: string): Fixture {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-wtcopy-custom-")));
+  const repo = path.join(root, "proj");
+  const home = path.join(root, "home");
+  fs.mkdirSync(repo);
+  fs.mkdirSync(home);
+  git(repo, "init", "-q", "-b", "main");
+  git(repo, "config", "user.email", "t@example.com");
+  git(repo, "config", "user.name", "T");
+  git(repo, "config", "commit.gpgsign", "false");
+  fs.writeFileSync(path.join(repo, ".gitignore"), gitignore);
+  fs.writeFileSync(path.join(repo, ".worktreeinclude"), include);
+  fs.writeFileSync(path.join(repo, "visible.txt"), "tracked\n");
+  git(repo, "add", ".");
+  git(repo, "commit", "-q", "-m", "init");
+  return { root, repo, home, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
 const wt = (f: Fixture, cwd: string, args: string[], readOnly = false) => runWorktreeCommand(args, { cwd, home: f.home, readOnly });
 const dirOf = (f: Fixture, slug: string) => path.join(f.repo, ".nexus", "worktrees", slug);
 
@@ -178,3 +196,151 @@ test("copy-ignored is a mutation: read-only mode refuses it except --dry-run", (
     }
   } finally { f.cleanup(); }
 });
+
+test("--force keeps the existing destination file when the replacement cannot be read", { skip: process.getuid?.() === 0 && "root reads anything" }, () => {
+  const f = customFixture("target/\n", "target/\n");
+  const source = path.join(f.repo, "target", "debug", "app.o");
+  try {
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, "object");
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/a", "--no-copy"]).success, true);
+    const dest = path.join(dirOf(f, "feat-a"), "target", "debug", "app.o");
+    assert.equal(wt(f, f.repo, ["copy-ignored", "--to", "feat/a"]).success, true);
+    assert.equal(fs.readFileSync(dest, "utf8"), "object");
+
+    fs.writeFileSync(source, "newer");
+    fs.chmodSync(source, 0o000);
+    const forced = wt(f, f.repo, ["copy-ignored", "--to", "feat/a", "--force"]);
+    assert.equal(forced.success, false, "an unreadable source is an error, not a silent success");
+    assert.equal(fs.readFileSync(dest, "utf8"), "object", "the old file must survive a failed replacement");
+    assert.deepEqual(fs.readdirSync(path.dirname(dest)), ["app.o"], "no temporary file is left behind");
+  } finally {
+    try { fs.chmodSync(source, 0o644); } catch { /* already gone */ }
+    f.cleanup();
+  }
+});
+
+test("a file or link selected on its own gets its parent directories created in a fresh destination", () => {
+  const f = customFixture("*.bin\nlink\n", "cache/build.bin\ncache/link\n");
+  try {
+    fs.mkdirSync(path.join(f.repo, "cache"));
+    fs.writeFileSync(path.join(f.repo, "cache", "build.bin"), "bin");
+    fs.writeFileSync(path.join(f.repo, "cache", "other.txt"), "untracked, not ignored");
+    fs.symlinkSync("build.bin", path.join(f.repo, "cache", "link"));
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/b", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-b");
+    const r = wt(f, f.repo, ["copy-ignored", "--to", "feat/b"]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(fs.readFileSync(path.join(dir, "cache", "build.bin"), "utf8"), "bin");
+    assert.equal(fs.readlinkSync(path.join(dir, "cache", "link")), "build.bin");
+    assert.equal(fs.existsSync(path.join(dir, "cache", "other.txt")), false, "an unlisted file is not copied");
+  } finally { f.cleanup(); }
+});
+
+test("ignored files inside an include-listed directory are copied when only the files, not the directory, are ignored", () => {
+  const f = customFixture("*.o\n", "cache/\n");
+  try {
+    fs.mkdirSync(path.join(f.repo, "cache", "sub"), { recursive: true });
+    fs.writeFileSync(path.join(f.repo, "cache", "a.o"), "obj a");
+    fs.writeFileSync(path.join(f.repo, "cache", "sub", "b.o"), "obj b");
+    fs.writeFileSync(path.join(f.repo, "cache", "notes.txt"), "untracked, not ignored");
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/c", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-c");
+    const dry = wt(f, f.repo, ["copy-ignored", "--to", "feat/c", "--dry-run"]);
+    assert.equal(dry.success, true, dry.output);
+    assert.match(dry.output, /2 file\(s\)/, dry.output);
+    const r = wt(f, f.repo, ["copy-ignored", "--to", "feat/c"]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(fs.readFileSync(path.join(dir, "cache", "a.o"), "utf8"), "obj a");
+    assert.equal(fs.readFileSync(path.join(dir, "cache", "sub", "b.o"), "utf8"), "obj b");
+    assert.equal(fs.existsSync(path.join(dir, "cache", "notes.txt")), false, "a file that is not ignored is not copied");
+  } finally { f.cleanup(); }
+});
+
+test("--force replaces a stale destination symlink while still refusing symlinked ancestors", () => {
+  const f = customFixture("target/\n", "target/\n");
+  try {
+    fs.mkdirSync(path.join(f.repo, "target", "debug"), { recursive: true });
+    fs.writeFileSync(path.join(f.repo, "target", "debug", "app.o"), "object");
+    fs.writeFileSync(path.join(f.repo, "target", "CACHEDIR.TAG"), "tag");
+    fs.symlinkSync("debug/app.o", path.join(f.repo, "target", "bin"));
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/d", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-d");
+    assert.equal(wt(f, f.repo, ["copy-ignored", "--to", "feat/d"]).success, true);
+    assert.equal(fs.readlinkSync(path.join(dir, "target", "bin")), "debug/app.o");
+
+    // The link moved in the source (a dependency changed); the destination must follow under --force.
+    fs.unlinkSync(path.join(f.repo, "target", "bin"));
+    fs.symlinkSync("CACHEDIR.TAG", path.join(f.repo, "target", "bin"));
+    const forced = wt(f, f.repo, ["copy-ignored", "--to", "feat/d", "--force"]);
+    assert.equal(forced.success, true, forced.output);
+    assert.equal(fs.readlinkSync(path.join(dir, "target", "bin")), "CACHEDIR.TAG");
+    assert.doesNotMatch(forced.output, /bin: destination is not safe/);
+
+    // A symlinked ancestor is still refused, with or without --force, and nothing lands outside.
+    const outside = path.join(f.root, "outside");
+    fs.mkdirSync(outside);
+    fs.rmSync(path.join(dir, "target"), { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, "target"));
+    const viaLink = wt(f, f.repo, ["copy-ignored", "--to", "feat/d", "--force"]);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.match(viaLink.output, /symbolic link|not safe/);
+  } finally { f.cleanup(); }
+});
+
+test("switch -c warns when the file cap stops the automatic copy", async () => {
+  const f = fixture();
+  const copyMod = await import("../src/worktrunk/copy.js") as any;
+  const original = { ...copyMod.defaultCopyLimits.current };
+  copyMod.defaultCopyLimits.current = { maxFiles: 1, maxBytes: 4 * 1024 ** 3 };
+  try {
+    const made = wt(f, f.repo, ["switch", "-c", "feat/cap"]);
+    assert.equal(made.success, true, "the cap never fails the switch itself");
+    assert.match(made.output, /warning/i, made.output);
+    assert.match(made.output, /file limit|more than 1 files/i, made.output);
+    assert.equal(fs.existsSync(path.join(dirOf(f, "feat-cap"), "target")), false, "nothing is written when the cap trips");
+  } finally {
+    copyMod.defaultCopyLimits.current = original;
+    f.cleanup();
+  }
+});
+
+test("a file selected inside a virtualenv is not copied: the virtualenv exclusion covers the selected entry's ancestors", () => {
+  const f = customFixture(".venv/\ncache/\n", ".venv/bin/activate\ncache/env/bin/python\n");
+  try {
+    fs.mkdirSync(path.join(f.repo, ".venv", "bin"), { recursive: true });
+    fs.writeFileSync(path.join(f.repo, ".venv", "pyvenv.cfg"), "home = /usr/bin\n");
+    fs.writeFileSync(path.join(f.repo, ".venv", "bin", "activate"), `VIRTUAL_ENV=${f.repo}/.venv\n`);
+    fs.mkdirSync(path.join(f.repo, "cache", "env", "bin"), { recursive: true });
+    fs.writeFileSync(path.join(f.repo, "cache", "env", "pyvenv.cfg"), "home = /usr/bin\n");
+    fs.writeFileSync(path.join(f.repo, "cache", "env", "bin", "python"), "py");
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/v", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-v");
+    const r = wt(f, f.repo, ["copy-ignored", "--to", "feat/v"]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(fs.existsSync(path.join(dir, ".venv")), false, "nothing from a virtualenv is copied");
+    assert.equal(fs.existsSync(path.join(dir, "cache", "env")), false, "nor from one nested below the selected root");
+    assert.match(r.output, /virtualenv/i, r.output);
+  } finally { f.cleanup(); }
+});
+
+test(".git, .nexus and .entire nested inside a copied directory are never copied", () => {
+  for (const mode of [[], ["--all-ignored"]]) {
+    const f = customFixture("node_modules/\n", "node_modules/\n");
+    try {
+      const vendored = path.join(f.repo, "node_modules", "dep");
+      for (const name of [".git", ".nexus", ".entire"]) {
+        fs.mkdirSync(path.join(vendored, name), { recursive: true });
+        fs.writeFileSync(path.join(vendored, name, "config"), "x");
+      }
+      fs.writeFileSync(path.join(vendored, "index.js"), "module.exports = 1;\n");
+      assert.equal(wt(f, f.repo, ["switch", "-c", "feat/n", "--no-copy"]).success, true);
+      const dir = path.join(dirOf(f, "feat-n"), "node_modules", "dep");
+      const r = wt(f, f.repo, ["copy-ignored", "--to", "feat/n", ...mode]);
+      assert.equal(r.success, true, r.output);
+      assert.equal(fs.readFileSync(path.join(dir, "index.js"), "utf8"), "module.exports = 1;\n");
+      for (const name of [".git", ".nexus", ".entire"]) assert.equal(fs.existsSync(path.join(dir, name)), false, `${name} ${mode.join(" ")}`);
+    } finally { f.cleanup(); }
+  }
+});
+
