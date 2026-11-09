@@ -10,11 +10,10 @@
 import type { ChatMessage } from "../types.js";
 import { redactSecrets } from "../ui.js";
 import { git, gitOut } from "./git.js";
-import { statusOf, WorktreeError, resolveBranchName, type WorktreeContext } from "./core.js";
-import { currentEntry, defaultBranch, openRepo, resolveCommit } from "./repo.js";
-import { workingState } from "./verification.js";
+import { WorktreeError, type WorktreeContext } from "./core.js";
+import { resolveMergeContext, type MergeContextInfo, type MergeOptions } from "./merge.js";
 
-export type Completer = (messages: ChatMessage[], signal: AbortSignal) => Promise<string>;
+export type Completer = (messages: ChatMessage[], signal: AbortSignal) => Promise<string | undefined>;
 
 export const MAX_DIFF_CHARS = 20_000;
 export const MAX_STAT_CHARS = 3_000;
@@ -27,20 +26,18 @@ function bounded(text: string, limit: number): string {
 }
 
 /** The prompt for the model: statistics and a bounded, redacted diff of exactly what the merge would commit. */
-export function buildPrompt(ctx: WorktreeContext, targetToken?: string): ChatMessage[] {
-  const repo = openRepo(ctx.cwd);
-  const source = currentEntry(repo);
-  if (!source || source.isMain || !source.branch) throw new WorktreeError("not inside a branch worktree");
-  const targetName = targetToken ? resolveBranchName(repo, targetToken) : defaultBranch(repo);
-  const targetSha = targetName ? resolveCommit(repo, targetName) : undefined;
-  if (!targetSha) throw new WorktreeError("no target to diff against");
-  const state = workingState(source.path, statusOf(source.path).total > 0);
-  const base = gitOut(source.path, ["merge-base", targetSha, state.head]);
+export function buildPrompt(mctx: MergeContextInfo): ChatMessage[];
+export function buildPrompt(ctx: WorktreeContext, targetToken?: string): ChatMessage[];
+export function buildPrompt(target: MergeContextInfo | WorktreeContext, targetToken?: string | MergeOptions): ChatMessage[] {
+  const mctx: MergeContextInfo = "branch" in target && "gateState" in target
+    ? (target as MergeContextInfo)
+    : resolveMergeContext(target as WorktreeContext, typeof targetToken === "string" ? { target: targetToken } : targetToken);
+  const base = gitOut(mctx.source.path, ["merge-base", mctx.targetSha, mctx.gateState.head]);
   const diffArgs = ["--no-ext-diff", "--no-textconv", "--no-color", "-M"];
-  const stat = git(source.path, ["diff", ...diffArgs, "--stat", base, state.tree]).stdout;
-  const diff = git(source.path, ["diff", ...diffArgs, base, state.tree]).stdout;
+  const stat = git(mctx.source.path, ["diff", ...diffArgs, "--stat", base, mctx.gateState.tree]).stdout;
+  const diff = git(mctx.source.path, ["diff", ...diffArgs, base, mctx.gateState.tree]).stdout;
   const user =
-    `Branch: ${source.branch}\n\nDiffstat:\n${bounded(redactSecrets(stat), MAX_STAT_CHARS)}\n\nDiff:\n${bounded(redactSecrets(diff), MAX_DIFF_CHARS)}`;
+    `Branch: ${mctx.source.branch}\n\nDiffstat:\n${bounded(redactSecrets(stat), MAX_STAT_CHARS)}\n\nDiff:\n${bounded(redactSecrets(diff), MAX_DIFF_CHARS)}`;
   return [
     {
       role: "system",
@@ -65,17 +62,34 @@ export function cleanReply(reply: unknown): string | undefined {
 }
 
 export async function generateMergeMessage(
+  mctx: MergeContextInfo,
+  completer: Completer | undefined,
+  timeoutMs?: number,
+): Promise<{ message?: string; note: string }>;
+export async function generateMergeMessage(
   ctx: WorktreeContext,
   targetToken: string | undefined,
   completer: Completer | undefined,
-  timeoutMs: number = DEFAULT_AI_TIMEOUT_MS,
+  timeoutMs?: number,
+): Promise<{ message?: string; note: string }>;
+export async function generateMergeMessage(
+  target: MergeContextInfo | WorktreeContext,
+  targetOrCompleter?: string | Completer | undefined,
+  completerOrTimeout?: Completer | number | undefined,
+  timeoutMsOrNothing?: number,
 ): Promise<{ message?: string; note: string }> {
   const fallback = (why: string) => ({ note: `note: ${why}; using the deterministic commit message.` });
+  const isMctx = "branch" in target && "gateState" in target;
+  const completer = (isMctx ? targetOrCompleter : completerOrTimeout) as Completer | undefined;
+  const timeoutMs = ((isMctx ? (typeof completerOrTimeout === "number" ? completerOrTimeout : undefined) : timeoutMsOrNothing) ?? DEFAULT_AI_TIMEOUT_MS);
+
   if (!completer) return fallback("no model provider is available for --ai-message");
   const controller = new AbortController();
   let timer: NodeJS.Timeout | undefined;
   try {
-    const prompt = buildPrompt(ctx, targetToken);
+    const prompt = isMctx
+      ? buildPrompt(target as MergeContextInfo)
+      : buildPrompt(target as WorktreeContext, typeof targetOrCompleter === "string" ? targetOrCompleter : undefined);
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => { controller.abort(); reject(new Error("timed out")); }, timeoutMs);
     });
@@ -83,6 +97,7 @@ export async function generateMergeMessage(
     const message = cleanReply(reply);
     return message ? { message, note: "note: commit message written by the configured model." } : fallback("the model's reply was unusable");
   } catch (err) {
+    if (err instanceof WorktreeError) throw err;
     return fallback(`the model request failed (${redactSecrets((err as Error).message).slice(0, 80)})`);
   } finally {
     if (timer) clearTimeout(timer);

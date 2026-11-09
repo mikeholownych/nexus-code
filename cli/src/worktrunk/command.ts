@@ -7,7 +7,7 @@ import { redactSecrets } from "../ui.js";
 import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { copyIgnored } from "./copy.js";
 import { generateMergeMessage, DEFAULT_AI_TIMEOUT_MS, type Completer } from "./ai_message.js";
-import { mergeWorktree, parseAge, pruneWorktrees } from "./merge.js";
+import { mergeWorktree, parseAge, pruneWorktrees, resolveMergeContext, type MergeContextInfo } from "./merge.js";
 import { GitError } from "./git.js";
 import { WorktreePathError } from "./paths.js";
 
@@ -31,24 +31,47 @@ const SPECS: Record<string, Spec> = {
   prune: { booleans: { "--dry-run": "dry-run", "--discard-ignored": "discard-ignored" }, values: { "--min-age": "min-age", "--limit": "limit" }, positional: "" },
 };
 
-const ALIASES: Record<string, string> = { copy: "copy-ignored", ls: "list", status: "list", rm: "remove", sw: "switch" };
+const ALIASES: Record<string, string> = { copy: "copy-ignored", ls: "list", rm: "remove", sw: "switch" };
 
 /** Subcommands that only read. Used by the slash gates and by `runWorktreeCommand`. */
 const READ_ONLY = new Set(["list", "path"]);
 /** Subcommands that mutate unless `--dry-run` is given. */
 const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored", "prune"]);
 
+/**
+ * The pre-WP-1310 `/worktree` forms, which act on the speculative worktree of the running session (`nexus run
+ * --worktree`): no argument or `status` shows it, a bare `merge` and `discard` resolve it. `status` is never a
+ * named-worktree subcommand (it is not an alias of `list`), and `merge` with arguments is the named merge, so the CLI
+ * and both slash entry points agree.
+ */
+const LEGACY = new Set(["", "status", "merge", "discard"]);
+
 export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove] [--no-verify-receipt --reason why] [--ai-message]|prune [--dry-run] [--min-age 1d] [--limit N]]";
 
+/** The subcommand a token names, matched case-insensitively (the slash gates lowercase their input; the CLI does not). */
 function canonical(sub: string): string | undefined {
-  const name = ALIASES[sub] ?? sub;
+  const key = sub.toLowerCase();
+  const name = ALIASES[key] ?? key;
   return SPECS[name] ? name : undefined;
+}
+
+function firstWord(args: string): string {
+  return (args.trim().split(/\s+/)[0] ?? "").toLowerCase();
+}
+
+/** True when `args` (the text after `/worktree`) is one of the legacy speculative-worktree forms. */
+export function isLegacyWorktreeArgs(args: string): boolean {
+  const first = firstWord(args);
+  // A bare `merge` resolves the speculative worktree. `merge <target>` or `merge <flags>` is the named-worktree merge
+  // (`/worktree merge ^` merges into the default branch), so both stay reachable from the slash commands.
+  if (first === "merge") return args.trim().split(/\s+/).length === 1;
+  return LEGACY.has(first);
 }
 
 /** True when `args` (the text after `/worktree` or `nexus worktree`) only inspects. Empty means list. */
 export function isReadOnlyWorktreeArgs(args: string): boolean {
-  const sub = args.trim().split(/\s+/)[0] ?? "";
-  if (!sub) return true;
+  const sub = firstWord(args);
+  if (isLegacyWorktreeArgs(sub)) return sub === "" || sub === "status";
   const name = canonical(sub);
   if (name === undefined) return false;
   if (READ_ONLY.has(name)) return true;
@@ -92,11 +115,12 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
         const switched = switchWorktree(ctx, parsed.positionals[0], { create: parsed.flags.has("create"), base: parsed.values.get("base") });
         const made = switched.data as { created?: boolean; path?: string } | undefined;
         if (switched.success && made?.created && !parsed.flags.has("no-copy") && made.path) {
-          // Sharing build caches is a convenience: a failure here never undoes or fails the switch.
+          // Sharing build caches is a convenience: a failure here never undoes or fails the switch, but it is said.
           try {
             const copied = copyIgnored(ctx, { to: made.path });
             const data = copied.data as { copied?: number } | undefined;
-            if (data?.copied) switched.output += `\n${copied.output}`;
+            if (!copied.success) switched.output += `\nwarning: ignored files were not copied: ${copied.output}`;
+            else if (data?.copied) switched.output += `\n${copied.output}`;
           } catch (err) {
             switched.output += `\nwarning: copying ignored files failed: ${redactSecrets((err as Error).message).slice(0, 200)}`;
           }
@@ -167,7 +191,25 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
   try { parsed = parse(SPECS.merge, tokens.slice(1)); } catch { return runWorktreeCommand(tokens, run); }
   if (parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
   const ctx: WorktreeContext = { cwd: run.cwd, home: run.home ?? homeDir(), readOnly: false };
-  const generated = await generateMergeMessage(ctx, parsed.positionals[0], deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS)
+
+  let mctx: MergeContextInfo;
+  try {
+    mctx = resolveMergeContext(ctx, {
+      target: parsed.positionals[0],
+      noSquash: parsed.flags.has("no-squash"),
+      noRebase: parsed.flags.has("no-rebase"),
+      noRemove: parsed.flags.has("no-remove"),
+      noVerifyReceipt: parsed.flags.has("no-verify-receipt"),
+      reason: parsed.values.get("reason"),
+    });
+  } catch (err) {
+    if (err instanceof WorktreeError || err instanceof WorktreePathError || err instanceof GitError) {
+      return { success: false, output: redactSecrets(err.message) };
+    }
+    return { success: false, output: redactSecrets((err as Error)?.message ?? String(err)).slice(0, 400) };
+  }
+
+  const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS)
     .catch(() => ({ message: undefined, note: "note: could not prepare the model request; using the deterministic commit message." }));
   const result = runWorktreeCommand(generated.message ? [...tokens, "-m", generated.message] : tokens, run);
   return { ...result, output: `${generated.note}\n${result.output}` };

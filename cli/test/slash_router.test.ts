@@ -327,8 +327,27 @@ describe("slash router: workspace commands", () => {
       assert.ok(fs.existsSync(path.join(repo, ".nexus", "worktrees", "feature-slash")));
       assert.match((await reply("worktree", "list")).output, /feature\/slash/);
       assert.equal((await reply("worktree", "bogus")).success, false);
+      // mixed case reaches the named command set; `status` in any case stays the legacy speculative view
+      assert.match((await reply("worktree", "List")).output, /feature\/slash/);
+      assert.match((await reply("worktree", "STATUS")).output, /^(• |No speculative worktrees)/); // legacy bullet view, not the named table
       assert.equal((await reply("worktree", "remove feature/slash")).success, true);
       assert.match((await reply("worktree")).output, /^No speculative worktrees/);
+    });
+  });
+
+  test("worktree merge with a target reaches the named merge; a bare merge stays the speculative one", async () => {
+    await withRig(async ({ reply, repo, host }) => {
+      assert.equal((await reply("worktree", "switch -c feature/slash-merge --no-copy")).success, true);
+      const dir = path.join(repo, ".nexus", "worktrees", "feature-slash-merge");
+      fs.writeFileSync(path.join(dir, "named.txt"), "named\n");
+      execSync("git add named.txt && git commit -q -m named", { cwd: dir });
+      host.setWorkspace(dir);
+      assert.equal((await reply("worktree", "merge")).output, "No active speculative worktree to merge.");
+      const merged = await reply("worktree", "merge ^");
+      assert.equal(merged.success, true, merged.output);
+      assert.match(merged.output, /Fast-forwarded/);
+      assert.ok(fs.existsSync(path.join(repo, "named.txt")));
+      assert.equal(fs.existsSync(dir), false);
     });
   });
 

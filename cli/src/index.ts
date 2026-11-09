@@ -1025,14 +1025,21 @@ program
   .option("--read-only", "Refuse every subcommand that changes the repository")
   .allowUnknownOption()
   .helpOption("-h, --help", "Show help")
-  .action(async (args: string[], options: { workspace?: string; readOnly?: boolean }) => {
+  .action(async (args: string[], _options: { workspace?: string; readOnly?: boolean }, cmd: Command) => {
+    const options = commandOptions(cmd);
     const { runWorktreeCommandAsync } = await import("./worktrunk/command.js");
     const cwd = options.workspace ? path.resolve(options.workspace) : process.cwd();
     const result = await runWorktreeCommandAsync(args, { cwd, readOnly: Boolean(options.readOnly) }, {
-      completer: (() => {
-        // Building the completer sends nothing; a configuration problem just means no model for --ai-message.
-        try { return providerCompleter(buildConfig({ workspace: cwd })); } catch { return undefined; }
-      })(),
+      completer: async (prompt, opts) => {
+        try {
+          const cfg = buildConfigOrThrow({ workspace: cwd });
+          const comp = providerCompleter(cfg);
+          if (!comp) return undefined;
+          return await comp(prompt, opts);
+        } catch {
+          return undefined;
+        }
+      },
     });
     (result.success ? console.log : console.error)(result.output);
     if (!result.success) process.exitCode = 1;

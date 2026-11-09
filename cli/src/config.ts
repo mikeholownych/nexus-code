@@ -68,7 +68,7 @@ export function loadEnvironment(): void {
   if (!credentialAuthorityRecorded && operatorEnvironment) {
     shellEnvironment = { ...operatorEnvironment };
   }
-  const operatorHome = credentialAuthorityRecorded ? credentialStorageHome() : os.homedir();
+  const operatorHome = operatorConfigHome();
   // 1. Installation directory defaults
   loadDotenv({ path: installEnv, quiet: true });
   // 2. Global user config (~/.config/nexus/config.env)
@@ -542,8 +542,27 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
   return Object.keys(policy).length ? policy : undefined;
 }
 
+/** The home whose `~/.config/nexus/config.json` is operator policy: the credential authority's once recorded, else the process owner's. */
+export function operatorConfigHome(): string {
+  return credentialAuthorityRecorded ? credentialStorageHome() : os.homedir();
+}
+
+/** The validated operator `config.json`: the operation policy, plus the `worktree` block as written (its reader validates it). */
+export interface OperatorConfigDocument {
+  operationPolicy: HarnessConfig["operationPolicy"];
+  worktree: unknown;
+}
+
 /** Read and validate only the supported operator-owned structured configuration fields. */
 function readOperatorOperationPolicy(file: string): HarnessConfig["operationPolicy"] {
+  return readOperatorConfigDocument(file)?.operationPolicy;
+}
+
+/**
+ * The one reader of the operator's `config.json` (no symbolic link, regular file re-checked after open, bounded read,
+ * version 1, no unknown top-level field). Absent file: undefined. Every consumer of the file goes through here.
+ */
+export function readOperatorConfigDocument(file: string): OperatorConfigDocument | undefined {
   let pathStat: fs.Stats;
   try {
     pathStat = fs.lstatSync(file);
@@ -590,12 +609,16 @@ function readOperatorOperationPolicy(file: string): HarnessConfig["operationPoli
     // `worktree` is validated where it is used (worktrunk/config.ts), so a bad value cannot stop unrelated commands.
     if (key !== "version" && key !== "operationPolicy" && key !== "worktree") throw new Error(`Unsupported Nexus config.json field '${key}'.`);
   }
-  if (root.operationPolicy === undefined) return undefined;
-  if (!root.operationPolicy || typeof root.operationPolicy !== "object" || Array.isArray(root.operationPolicy)) {
+  return { operationPolicy: parseOperationPolicy(root.operationPolicy), worktree: root.worktree };
+}
+
+function parseOperationPolicy(raw: unknown): HarnessConfig["operationPolicy"] {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("Nexus config.json operationPolicy must be an object.");
   }
 
-  const rawPolicy = root.operationPolicy as Record<string, unknown>;
+  const rawPolicy = raw as Record<string, unknown>;
   const policy: NonNullable<HarnessConfig["operationPolicy"]> = {};
   const fields = [
     ["maxWaitMs", 1],

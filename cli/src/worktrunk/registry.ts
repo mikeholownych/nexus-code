@@ -121,8 +121,28 @@ export function readRegistry(commonDir: string): { registry: Registry; warning?:
   }
 }
 
+/** Evicts the oldest verification and waiver records until the registry fits within REGISTRY_LIMIT_BYTES. */
+export function trimHistoryToFit(registry: Registry): void {
+  const verifications = registry.verifications ? [...registry.verifications] : [];
+  const waivers = registry.waivers ? [...registry.waivers] : [];
+
+  while ((verifications.length > 0 || waivers.length > 0) && Buffer.byteLength(`${JSON.stringify({ ...registry, verifications, waivers }, null, 1)}\n`) > REGISTRY_LIMIT_BYTES) {
+    const vOldest = verifications[0]?.recordedAt ?? "";
+    const wOldest = waivers[0]?.recordedAt ?? "";
+    if (verifications.length > 0 && (waivers.length === 0 || vOldest <= wOldest)) {
+      verifications.shift();
+    } else if (waivers.length > 0) {
+      waivers.shift();
+    }
+  }
+
+  if (registry.verifications) registry.verifications = verifications;
+  if (registry.waivers) registry.waivers = waivers;
+}
+
 /** Atomically replaces the registry. Throws on a linked target or when the result would exceed 64 KiB. */
 export function writeRegistry(commonDir: string, registry: Registry): void {
+  trimHistoryToFit(registry);
   const text = `${JSON.stringify(registry, null, 1)}\n`;
   if (Buffer.byteLength(text) > REGISTRY_LIMIT_BYTES) throw new Error("worktree registry would exceed 64 KiB (too large); remove finished worktrees first");
   const file = registryFile(commonDir);
@@ -140,33 +160,68 @@ export function writeRegistry(commonDir: string, registry: Registry): void {
 }
 
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
+let lockDepth = 0;
 
-/** Read, change and write the registry under an exclusive lock file (stale after 30 s). */
-export function updateRegistry<T>(commonDir: string, change: (registry: Registry) => T): T {
+/** How long a caller waits for the lock and when an old lock may be taken over. Mutable so tests can shorten the wait. */
+export const lockSettings = { waitMs: 120_000, staleMs: 600_000 };
+
+/** A checkout holds the lock for as long as it takes, so a lock is taken over only when its holder is gone (a dead pid) or it is far older than any checkout. */
+function lockIsStale(lock: string): boolean {
+  const stat = fs.lstatSync(lock);
+  let pid = NaN;
+  try { pid = Number.parseInt(fs.readFileSync(lock, "utf8").trim(), 10); } catch { /* unreadable: judge by age */ }
+  if (Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid) {
+    try {
+      process.kill(pid, 0);
+    } catch (err: any) {
+      if (err?.code === "ESRCH") return true; // the holder is gone
+    }
+  }
+  return Date.now() - stat.mtimeMs > lockSettings.staleMs;
+}
+
+/** Run an action under an exclusive lock file (taken over only from a dead holder or after lockSettings.staleMs), reentrant for the same process. */
+export function withWorktreeLock<T>(commonDir: string, fn: () => T): T {
+  if (lockDepth > 0) {
+    lockDepth++;
+    try {
+      return fn();
+    } finally {
+      lockDepth--;
+    }
+  }
   mkdirVerified(commonDir, registryDir(commonDir));
   const lock = path.join(registryDir(commonDir), "worktrees.lock");
   let held = false;
   let identity: ReturnType<typeof writeExclusiveVerified> | undefined;
-  for (let attempt = 0; attempt < 60 && !held; attempt++) {
+  for (let attempt = 0; attempt * 50 < lockSettings.waitMs && !held; attempt++) {
     try {
       identity = writeExclusiveVerified(commonDir, lock, String(process.pid));
       held = true;
     } catch (err: any) {
       if (err?.code !== "EEXIST") throw err;
       try {
-        const age = Date.now() - fs.lstatSync(lock).mtimeMs;
-        if (age > 30_000) fs.unlinkSync(lock);
+        if (lockIsStale(lock)) fs.unlinkSync(lock);
       } catch { /* raced with the holder */ }
       Atomics.wait(sleeper, 0, 0, 50);
     }
   }
   if (!held || !identity) throw new Error("worktree registry is locked by another process; retry");
+  lockDepth = 1;
   try {
+    return fn();
+  } finally {
+    lockDepth = 0;
+    try { unlinkVerified(commonDir, lock, identity); } catch { /* a stale lock expires */ }
+  }
+}
+
+/** Read, change and write the registry under an exclusive lock file (see withWorktreeLock for when it is taken over). */
+export function updateRegistry<T>(commonDir: string, change: (registry: Registry) => T): T {
+  return withWorktreeLock(commonDir, () => {
     const { registry } = readRegistry(commonDir);
     const result = change(registry);
     writeRegistry(commonDir, registry);
     return result;
-  } finally {
-    try { unlinkVerified(commonDir, lock, identity); } catch { /* a stale lock expires */ }
-  }
+  });
 }

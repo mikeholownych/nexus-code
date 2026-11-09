@@ -4522,8 +4522,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // host-side Git in the worktree, so its `.git` pointer is verified first (the agent could have rewritten it).
       const recordableWorktree = !this.activeWorktree ||
         (this.activeWorktree.kind === "named" && this.worktreeManager.isLinkedWorktree(this.activeWorktree.worktreePath));
-      if (recordableWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound) {
-        recordVerification(this.config.workspace, this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command || "verifier");
+      const isVerified = this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true;
+      if (recordableWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound && isVerified) {
+        recordVerification(this.config.workspace, this.verificationEvidence?.command || this.config.authoritativeVerifierCommand?.trim() || "verifier");
       }
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
       if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {
