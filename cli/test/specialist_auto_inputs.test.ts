@@ -686,3 +686,20 @@ test("withoutDrivers keeps normalization attributes and drops every filter and d
   ].join("\n")).split("\n");
   assert.deepEqual(out, ["# comment", "*.txt text eol=crlf", "[attr]mine text", "\"a b.txt\" eol=lf", "*.bin binary"]);
 });
+
+test("a diagnostic failure_debugger is not gated on the verifier that fails on its snapshot, but still reproduces with it (01M710Z5Q4)", async () => {
+  const repo = repoWithChange();
+  const deps = [{ id: "t", title: "Tests", summary: "1 failed", verification: { command: "make verify", status: "FAILED", hasExecutedTests: true }, failed: true as const }];
+  const seen: Array<string | undefined> = [];
+  const fake = fakeAgent("failure_debugger");
+  const run = (extra: Partial<UnitRunContext>) => new AgentWorkUnitExecutor({
+    baseConfig: { endpoint: "https://api.test/v1", model: "m", workspace: repo, authoritativeVerifierCommand: "make verify" } as any,
+    createAgent: (config: any) => { seen.push(config.authoritativeVerifierCommand); return fake.agent; },
+  }).run(unit("failure_debugger", {}), resource, ctx(repo, { dependencies: deps, ...extra }));
+  await run({ diagnostic: true });
+  assert.equal(seen[0], undefined, "the completion gate would reject a diagnosis while the verifier fails on the snapshot");
+  assert.match(fake.prompts[0], /reproduction_command: "make verify"/, "the operator's command is still the reproduction command");
+  assert.match(fake.prompts[0], /reproduction_command_source: "operator-configured verifier"/);
+  await run({});
+  assert.equal(seen[1], "make verify", "a debugger that is not diagnostic keeps the gate");
+});
