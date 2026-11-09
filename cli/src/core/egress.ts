@@ -881,8 +881,10 @@ export class InformationFlowBoundary {
       const plain = unescapeSlashes(tok);
       if (
         tok.length >= 20 &&
-        // Longer tokens are prose or data, except a base64 run ("+" or "/", not a path): it is a secret however long.
-        (tok.length <= 128 || (/[+/]/.test(plain) && !isPathLike(plain))) &&
+        // Longer tokens are prose or data. A base64 run ("+" or "/", not a path) is still a secret up to 512 characters,
+        // the size of long access tokens; longer runs and data-URI payloads (`;base64,…`) are embedded files.
+        (tok.length <= 128 || (tok.length <= 512 && /[+/]/.test(plain) && !isPathLike(plain))) &&
+        !text.startsWith("base64,", start - 7) &&
         // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
         (originalTokens.has(tok) || looksLikeCredentialToken(plain)) &&
         !isReference(tok)

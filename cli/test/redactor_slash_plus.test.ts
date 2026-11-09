@@ -334,3 +334,21 @@ test("a base64 run longer than 128 characters is redacted", () => {
     InformationFlowBoundary.setGlobalInstance(original);
   }
 });
+
+/** Base64 data (a data-URI payload, an embedded file of more than credential size) is data, not a secret. */
+test("base64 data blobs are not taken for secrets", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    const unit = "Qx7Km2+Vb9Lr/Tz4Wd8Ns3Hc6Yp1Jf5Ge0Ua+Xo2Rt/Bq";
+    for (const text of [
+      `<img src="data:image/png;base64,iVBORw0KGgo${unit.repeat(4)}AAAAElFTkSuQmCC">`,
+      `font: url(data:font/woff2;base64,d09GMgABAAAA${unit.repeat(3)}) format("woff2")`,
+      `fixture ${unit.repeat(20)} end`,
+    ]) {
+      assert.equal(redactDiagnosticForOutput(text), text);
+    }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
