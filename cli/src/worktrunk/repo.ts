@@ -96,6 +96,14 @@ export function defaultBranch(repo: Repo): string | undefined {
   return repo.entries[0].branch ?? undefined;
 }
 
+/**
+ * The commit a local branch names, or undefined. Always `refs/heads/<name>`: a tag (or any other ref) that shares the
+ * branch's short name would otherwise win Git's ambiguity rules and stand in for the branch.
+ */
+export function resolveBranchCommit(repo: Repo, name: string): string | undefined {
+  return resolveCommit(repo, `refs/heads/${name}`);
+}
+
 /** The commit a ref names, or undefined. The ref is passed after `--end-of-options`. */
 export function resolveCommit(repo: Repo, ref: string): string | undefined {
   const out = git(repo.cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`], { allowFailure: true });

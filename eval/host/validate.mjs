@@ -12,6 +12,7 @@ import { isolatedArgv, grantRunAsAccess, normalizeRunAsPermissions, sandboxAvail
 import { resourceConfigProblem, resourceProbeProblem, spawnContained } from "../resources.mjs";
 import { asUser, asUserSpec, hiddenTestIsolationProblem } from "../validate.mjs";
 import { bubblewrapVersionProblem } from "./bubblewrap.mjs";
+import { prlimitProblem } from "./prlimit.mjs";
 import { operatorAccountHome } from "./operator_home.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -51,6 +52,12 @@ await check("sudo allows only Bubblewrap as the evaluator, in exactly the form t
 await check("setfacl and Bubblewrap are available", () => {
   must(fs.existsSync("/usr/bin/setfacl"), "setfacl is missing");
   must(sandboxAvailable(), "Bubblewrap preflight failed");
+});
+
+await check("prlimit (util-linux) can cap evaluator command file writes", () => {
+  const problem = prlimitProblem();
+  must(!problem, problem);
+  return "ok";
 });
 
 await check("Bubblewrap is at least the minimum patched release", () => {
@@ -163,7 +170,7 @@ report.revision = {
   dirty: Boolean(spawnSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: ROOT, encoding: "utf8" }).stdout.trim()),
   profileSha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, "eval/host/resource-profile.json"))).digest("hex"),
   manifestSha256: "50895b84a604fbfd45ed82e29cbef4ba795d7fffbe6611af23bfbc9851f3e89b",
-  sourceDigests: ["eval/host/validate.mjs", "eval/host/operator_home.mjs", "eval/host/bubblewrap.mjs", "eval/host/provision.sh", "eval/host/rollback.sh", "eval/host/resource-profile.json", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/isolate.mjs", "eval/validate.mjs", "eval/run.mjs", "eval/hardened_check.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/workspace.mjs"].map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") })),
+  sourceDigests: ["eval/host/validate.mjs", "eval/host/operator_home.mjs", "eval/host/bubblewrap.mjs", "eval/host/prlimit.mjs", "eval/host/provision.sh", "eval/host/rollback.sh", "eval/host/resource-profile.json", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/isolate.mjs", "eval/validate.mjs", "eval/run.mjs", "eval/hardened_check.mjs", "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/workspace.mjs"].map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") })),
 };
 const out = process.argv.indexOf("--json");
 if (out > 0) fs.writeFileSync(process.argv[out + 1], `${JSON.stringify(report, null, 2)}\n`);

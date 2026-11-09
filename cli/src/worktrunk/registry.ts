@@ -101,9 +101,18 @@ export function writeRegistry(commonDir: string, registry: Registry): void {
 }
 
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
+let lockDepth = 0;
 
-/** Read, change and write the registry under an exclusive lock file (stale after 30 s). */
-export function updateRegistry<T>(commonDir: string, change: (registry: Registry) => T): T {
+/** Run an action under an exclusive lock file (stale after 30 s), reentrant for the same process. */
+export function withWorktreeLock<T>(commonDir: string, fn: () => T): T {
+  if (lockDepth > 0) {
+    lockDepth++;
+    try {
+      return fn();
+    } finally {
+      lockDepth--;
+    }
+  }
   mkdirVerified(commonDir, registryDir(commonDir));
   const lock = path.join(registryDir(commonDir), "worktrees.lock");
   let held = false;
@@ -122,12 +131,21 @@ export function updateRegistry<T>(commonDir: string, change: (registry: Registry
     }
   }
   if (!held || !identity) throw new Error("worktree registry is locked by another process; retry");
+  lockDepth = 1;
   try {
+    return fn();
+  } finally {
+    lockDepth = 0;
+    try { unlinkVerified(commonDir, lock, identity); } catch { /* a stale lock expires */ }
+  }
+}
+
+/** Read, change and write the registry under an exclusive lock file (stale after 30 s). */
+export function updateRegistry<T>(commonDir: string, change: (registry: Registry) => T): T {
+  return withWorktreeLock(commonDir, () => {
     const { registry } = readRegistry(commonDir);
     const result = change(registry);
     writeRegistry(commonDir, registry);
     return result;
-  } finally {
-    try { unlinkVerified(commonDir, lock, identity); } catch { /* a stale lock expires */ }
-  }
+  });
 }

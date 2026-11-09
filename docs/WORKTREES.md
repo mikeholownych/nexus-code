@@ -33,7 +33,7 @@ worktree and a speculative task worktree (unless `--force`).
 syntax, for example `target/` or `node_modules/`) into the new worktree; `--no-copy` skips it. `copy-ignored` does the same on
 demand (`--from`/`--to` default to the main checkout and the current worktree). Existing files are kept unless `--force`.
 Copies use a reflink where the file system has one, keep modification times so incremental builds do not restart, and
-stop with an error beyond 50,000 files or 4 GiB. `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
+stop with an error beyond 50,000 files or 4 GiB (under `switch -c`, a warning: the worktree is still created). `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
 (absolute paths) are never copied, and a symbolic link that leaves the tree is skipped. `--all-ignored` copies every
 ignored file and can therefore carry secrets such as `.env` into each worktree; it is never the default.
 
@@ -72,5 +72,7 @@ can never change it:
 * Git hooks never run while Nexus creates or removes a worktree.
 * The repository is found from `git rev-parse --git-common-dir`, so commands behave the same inside any linked worktree.
 * Created worktrees are recorded in `<git-common-dir>/nexus/worktrees.json` (64 KiB cap, no symbolic links).
-* Branch names and paths in output are redacted; read-only mode (`--read-only`, `/mode read-only`) allows only `list`
-  and `path`.
+* Human-readable output (the `list` table, messages, errors) passes branch names and paths through the secret
+  redactor and shows your home as `~`. Machine output is printed exactly as Git has it: `path` (so `cd "$(nexus
+  worktree path feature/x)"` works) and `list --json`. Treat `--json` output as you would `git worktree list`.
+* Read-only mode (`--read-only`, `/mode read-only`) allows only `list` and `path`.
