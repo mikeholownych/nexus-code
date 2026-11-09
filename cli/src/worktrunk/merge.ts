@@ -12,7 +12,7 @@ import { generateConventionalCommit } from "../git.js";
 import { redactSecrets } from "../ui.js";
 import { removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut } from "./git.js";
-import { currentEntry, defaultBranch, openRepo, resolveCommit, type WorktreeEntry } from "./repo.js";
+import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type WorktreeEntry } from "./repo.js";
 import { readRegistry } from "./registry.js";
 
 export interface MergeOptions {
@@ -72,7 +72,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
 
   const notes: string[] = [];
   const state = statusOf(source.path);
-  const targetSha = resolveCommit(repo, targetName);
+  const targetSha = resolveBranchCommit(repo, targetName);
   if (!targetSha) throw new WorktreeError(`target ${shownBranch(targetName)} does not name a commit`);
   const dirty = state.total > 0;
   const mergeBase = gitOut(source.path, ["merge-base", targetSha, "HEAD"], { allowFailure: false });
@@ -123,7 +123,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
 
   if (!options.noRemove) {
     // The merged work is on the target. What is left in the worktree is ignored output (build caches), which goes with it.
-    notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { force: true }));
+    notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { force: true, target: targetName }));
   }
   return { success: true, output: notes.join("\n"), data: { branch, target: targetName } };
 }
@@ -149,7 +149,7 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
   const here = currentEntry(repo);
   const registry = readRegistry(repo.commonDir).registry;
   const target = defaultBranch(repo);
-  const targetSha = target ? resolveCommit(repo, target) : undefined;
+  const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
   if (!targetSha) throw new WorktreeError("this repository has no default branch to compare against");
 
   const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;

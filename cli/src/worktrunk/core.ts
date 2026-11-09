@@ -344,7 +344,12 @@ function humanAge(seconds: number): string {
 
 // ---- remove ---------------------------------------------------------------------------------------------------
 
-export interface RemoveOptions { force?: boolean; deleteUnmerged?: boolean }
+export interface RemoveOptions {
+  force?: boolean;
+  deleteUnmerged?: boolean;
+  /** The branch the work must be integrated into (default: the repository's default branch). `merge` passes its target. */
+  target?: string;
+}
 
 /** Test seam: runs after every refusal check and immediately before the worktree is removed. Not a hook point. */
 export const removeSeams: { beforeRemove?: (entry: WorktreeEntry) => void; beforeBranchDeletion?: (entry: WorktreeEntry) => void } = {};
@@ -378,7 +383,7 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
   }
 
   const dropFromRegistry = () => updateRegistry(repo.commonDir, (reg) => { reg.worktrees = reg.worktrees.filter((item) => item.path !== entry.path); });
-  const target = defaultBranch(repo);
+  const target = options.target ?? defaultBranch(repo);
   const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
   const integrated = entry.head && targetSha ? integratedReason(repo, entry.head, targetSha) : null;
   if (!integrated && !options.deleteUnmerged) {
