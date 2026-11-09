@@ -8,9 +8,11 @@
  * never follow or create a link that leaves the tree.
  *
  * Residual race: a source file replaced by a link between the planning walk and its copy would be read through the
- * link. The source is the operator's own checkout, not a path an untrusted party can race; destinations are checked
- * component by component and files are created exclusively.
+ * link. The source is the operator's own checkout, not a path an untrusted party can race; destination directories are
+ * checked component by component, files are created exclusively, and a `--force` replacement is staged beside its
+ * destination and renamed into place, so a failed copy never removes the file it was meant to replace.
  */
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { redactSecrets } from "../ui.js";
@@ -166,13 +168,19 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
         if (!present.isFile() && !present.isSymbolicLink()) { skipped.push(`${op.rel}: a directory is in the way`); continue; }
         const me = process.getuid?.();
         if (me !== undefined && present.uid !== me) { skipped.push(unsafe(op.rel, `owned by uid ${present.uid}, not ${me}`)); continue; }
-        fs.unlinkSync(dst);
       }
-      if (op.kind === "symlink") {
-        fs.symlinkSync(op.target, dst);
+      if (!present) {
+        place(sourceRoot, op, dst);
       } else {
-        fs.copyFileSync(path.join(sourceRoot, op.rel), dst, fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL);
-        fs.utimesSync(dst, op.atimeMs / 1000, op.mtimeMs / 1000);
+        // Replace through a staged sibling and a rename, so a copy that fails (an unreadable source) leaves the old entry.
+        const staged = path.join(path.dirname(dst), `.nexus-copy-${randomUUID()}.tmp`);
+        try {
+          place(sourceRoot, op, staged);
+          fs.renameSync(staged, dst);
+        } catch (err) {
+          try { fs.unlinkSync(staged); } catch { /* never created */ }
+          throw err;
+        }
       }
       copied++;
     }
@@ -187,6 +195,16 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   if (skipped.length > REPORT_LINES) out.push(`... ${skipped.length - REPORT_LINES} more skipped`);
   if (options.allIgnored) out.push("warning: --all-ignored copies every ignored file, including secrets such as .env, into the destination");
   return { success: true, output: out.join("\n"), data: { copied, planned: files, bytes, skipped: skipped.length, existing } };
+}
+
+/** Creates the entry for `op` at `at`, exclusively (never through a link), with the source's modification time. */
+function place(sourceRoot: string, op: Exclude<Op, { kind: "dir" }>, at: string): void {
+  if (op.kind === "symlink") {
+    fs.symlinkSync(op.target, at);
+    return;
+  }
+  fs.copyFileSync(path.join(sourceRoot, op.rel), at, fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL);
+  fs.utimesSync(at, op.atimeMs / 1000, op.mtimeMs / 1000);
 }
 
 /**
