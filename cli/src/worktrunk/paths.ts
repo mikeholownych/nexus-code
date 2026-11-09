@@ -25,6 +25,8 @@ export function validateBranchName(name: string): string | undefined {
   if (name.length > MAX_BRANCH) return `branch name is longer than ${MAX_BRANCH} characters`;
   if (name.startsWith("-")) return "branch name must not start with '-'";
   if (name === "@") return "'@' is not a branch name";
+  // Git reads these as a full ref or a pseudo-ref, not a local branch, so they would resolve to something else.
+  if (name.startsWith("refs/") || ["HEAD", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD"].includes(name)) return "branch name is a ref or pseudo-ref name that Git does not treat as a local branch";
   if (FORBIDDEN.test(name)) return "branch name contains a control, whitespace or reserved character";
   if (name.includes("..") || name.includes("@{") || name.includes("//")) return "branch name contains '..', '@{' or '//'";
   if (name.startsWith("/") || name.endsWith("/") || name.endsWith(".") || name.endsWith(".lock")) return "branch name has an invalid start or end";

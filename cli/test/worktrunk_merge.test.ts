@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs } from "../src/worktrunk/command.js";
+import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter, tokenizeWorktreeArgs } from "../src/worktrunk/command.js";
 import { readRegistry } from "../src/worktrunk/registry.js";
 import { backupRef } from "../src/worktrunk/merge.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
@@ -434,7 +434,6 @@ test("pruneWorktrees reads no registry it does not use", () => {
   const pruneFunction = source.slice(source.indexOf("export function pruneWorktrees"));
   assert.doesNotMatch(pruneFunction, /readRegistry/);
 });
-
 test("a tag named like the target never stands in for the target branch in merge or prune", () => {
   const f = fixture();
   try {
@@ -472,3 +471,159 @@ test("in-progress operations report readable operation names and matching contin
   } finally { f.cleanup(); }
 });
 
+
+test("a submodule with a commit that exists nowhere else keeps the worktree after the merge", () => {
+  const f = fixture();
+  try {
+    const subrepo = path.join(f.root, "subrepo");
+    fs.mkdirSync(subrepo);
+    git(subrepo, "init", "-q", "-b", "main");
+    git(subrepo, "config", "user.email", "t@example.com");
+    git(subrepo, "config", "user.name", "T");
+    git(subrepo, "config", "commit.gpgsign", "false");
+    commitFile(subrepo, "s.txt", "sub\n", "sub init");
+    git(f.repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subrepo, "sub");
+    git(f.repo, "commit", "-q", "-m", "add submodule");
+
+    const dir = feature(f, "feat/sub-commit");
+    git(dir, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
+    git(path.join(dir, "sub"), "config", "user.email", "t@example.com");
+    git(path.join(dir, "sub"), "config", "user.name", "T");
+    git(path.join(dir, "sub"), "config", "commit.gpgsign", "false");
+    commitFile(path.join(dir, "sub"), "s.txt", "local only\n", "unpublished submodule commit");
+    git(dir, "add", "sub");
+    git(dir, "commit", "-q", "-m", "bump submodule"); // the worktree is clean now; the only copy of the commit is inside it
+
+    const r = wt(f, dir, ["merge", ...W]);
+    assert.ok(fs.existsSync(dir), `the worktree holding the only copy of a submodule commit must be kept: ${r.output}`);
+    assert.match(r.output, /submodule/i);
+  } finally { f.cleanup(); }
+});
+
+test("--no-squash refuses to rebase away a merge commit's own edits", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/with-merge");
+    commitFile(dir, "topic.txt", "topic\n", "topic work");
+    commitFile(f.repo, "x.txt", "x\n", "main moves");
+    git(dir, "merge", "-q", "--no-ff", "--no-edit", "main");
+    fs.writeFileSync(path.join(dir, "resolution.txt"), "only in the merge commit\n");
+    git(dir, "add", "resolution.txt");
+    git(dir, "commit", "-q", "--amend", "--no-edit");
+    commitFile(f.repo, "y.txt", "y\n", "main moves again"); // the target diverges, so a rebase would be needed
+    const mainBefore = git(f.repo, "rev-parse", "refs/heads/main");
+
+    const r = wt(f, dir, ["merge", "--no-squash", ...W]);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /merge commit/i);
+    assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore, "the target is untouched");
+    assert.ok(fs.existsSync(dir));
+    assert.equal(fs.readFileSync(path.join(dir, "resolution.txt"), "utf8"), "only in the merge commit\n");
+  } finally { f.cleanup(); }
+});
+
+test("a tag named like the source branch never stands in for the branch being merged", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/tagsrc");
+    commitFile(dir, "b.txt", "b\n", "add b");
+    const featureHead = git(dir, "rev-parse", "HEAD");
+    const later = git(dir, "commit-tree", "-p", featureHead, "-m", "unrelated descendant", `${featureHead}^{tree}`);
+    git(f.repo, "tag", "feat/tagsrc", later); // refs/tags/feat/tagsrc is a descendant of the branch
+    const r = wt(f, dir, ["merge", ...W]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), featureHead, "main received the branch, not the tag's commit");
+  } finally { f.cleanup(); }
+});
+
+test("a merge that removes the worktree the caller stands in says where to move the session", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/relocate");
+    commitFile(dir, "b.txt", "b\n", "add b");
+    const merged = wt(f, dir, ["merge", ...W]);
+    assert.equal(merged.success, true, merged.output);
+    assert.equal(fs.existsSync(dir), false);
+    assert.equal(relocationAfter(merged, dir), f.repo, "the session moves to the target's worktree");
+    assert.equal(relocationAfter(merged, path.join(dir, "sub", "dir")), f.repo, "also from a directory inside the removed worktree");
+    assert.equal(relocationAfter(merged, f.repo), undefined, "a session elsewhere stays where it is");
+
+    const kept = feature(f, "feat/relocate-kept");
+    commitFile(kept, "c.txt", "c\n", "add c");
+    const keptRun = wt(f, kept, ["merge", "--no-remove", ...W]);
+    assert.equal(relocationAfter(keptRun, kept), undefined, "a kept worktree needs no move");
+  } finally { f.cleanup(); }
+});
+
+test("prune keeps a hand-deleted detached worktree whose commits are not merged, and clears only the stale entries it selects", () => {
+  const f = fixture();
+  try {
+    const mk = (name: string) => {
+      const dir = path.join(f.repo, ".nexus", "worktrees", name);
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      git(f.repo, "worktree", "add", "-q", "--detach", dir);
+      return dir;
+    };
+    const unmerged = mk("stale-unmerged");
+    commitFile(unmerged, "only-here.txt", "x\n", "commit that only this worktree's admin HEAD references");
+    const unmergedHead = git(unmerged, "rev-parse", "HEAD");
+    const oldA = mk("stale-a");
+    const oldB = mk("stale-b");
+    for (const dir of [unmerged, oldA, oldB]) fs.rmSync(dir, { recursive: true, force: true });
+
+    const dry = wt(f, f.repo, ["prune", "--min-age", "0s", "--dry-run"]);
+    assert.match(dry.output, /stale-unmerged.*(not merged|unmerged)/i, dry.output);
+
+    const first = wt(f, f.repo, ["prune", "--min-age", "0s", "--limit", "1"]);
+    assert.equal(first.success, true, first.output);
+    const listed = git(f.repo, "worktree", "list", "--porcelain");
+    assert.match(listed, /stale-unmerged/, "the unmerged detached worktree keeps its registration");
+    assert.equal((listed.match(/stale-(a|b)/g) ?? []).length, 1, "--limit 1 clears one of the two integrated stale entries");
+    assert.equal(git(f.repo, "cat-file", "-t", unmergedHead), "commit");
+
+    const second = wt(f, f.repo, ["prune", "--min-age", "0s"]);
+    assert.equal(second.success, true, second.output);
+    const after = git(f.repo, "worktree", "list", "--porcelain");
+    assert.doesNotMatch(after, /stale-(a|b)/);
+    assert.match(after, /stale-unmerged/);
+    assert.match(second.output, /1 stale registration\(s\) pruned/);
+  } finally { f.cleanup(); }
+});
+
+test("prune --discard-ignored re-checks for real edits under the removal lock before forcing away ignored files", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = feature(f, "feat/ignored-cache");
+    fs.mkdirSync(path.join(dir, "target"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "target", "cache.bin"), "cache");
+    core.removeSeams.beforeLock = () => { fs.writeFileSync(path.join(dir, "a.txt"), "an edit that appeared while prune waited for the lock\n"); };
+    let result;
+    try { result = wt(f, f.repo, ["prune", "--min-age", "0s", "--discard-ignored"]); } finally { delete core.removeSeams.beforeLock; }
+    assert.equal(fs.existsSync(dir), true, `the worktree with a new edit must be kept: ${result.output}`);
+    assert.equal(fs.readFileSync(path.join(dir, "a.txt"), "utf8"), "an edit that appeared while prune waited for the lock\n");
+  } finally { f.cleanup(); }
+});
+
+test("prune does not force-remove a stale entry that was recreated while it waited for the lock", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = feature(f, "feat/recycled-by-switch");
+    fs.rmSync(dir, { recursive: true, force: true }); // stale now
+    core.removeSeams.beforeLock = () => {
+      git(f.repo, "worktree", "prune");
+      git(f.repo, "worktree", "add", "-q", dir, "feat/recycled-by-switch");
+      fs.writeFileSync(path.join(dir, "new-work.txt"), "precious\n");
+    };
+    let result;
+    try { result = wt(f, f.repo, ["prune", "--min-age", "0s"]); } finally { delete core.removeSeams.beforeLock; }
+    assert.equal(fs.readFileSync(path.join(dir, "new-work.txt"), "utf8"), "precious\n", `the recreated worktree must survive: ${result.output}`);
+    assert.match(git(f.repo, "worktree", "list", "--porcelain"), /recycled-by-switch/);
+  } finally { f.cleanup(); }
+});
+
+test("tokenizeWorktreeArgs preserves quoted options such as commit messages or reasons", () => {
+  assert.deepEqual(tokenizeWorktreeArgs('merge ^ -m "feat: add login"'), ["merge", "^", "-m", "feat: add login"]);
+  assert.deepEqual(tokenizeWorktreeArgs("merge --no-verify-receipt --reason 'why not'"), ["merge", "--no-verify-receipt", "--reason", "why not"]);
+});
