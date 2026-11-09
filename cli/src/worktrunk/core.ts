@@ -381,7 +381,9 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
   }
 
   if (entry.prunable) {
-    git(repo.cwd, ["worktree", "prune"]);
+    // Only this registration goes: a bare `worktree prune` would drop every stale worktree and leave their
+    // registry entries behind. `remove --force` accepts a missing directory and touches one admin entry.
+    git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
   } else {
     const before = verifiedWorktreeDir(repo, entry);
     if (!options.force) {
