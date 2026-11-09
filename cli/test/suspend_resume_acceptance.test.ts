@@ -153,8 +153,9 @@ function track(pid: number | undefined): void {
 function killGroup(pid: number): void {
   try {
     process.kill(-pid, "SIGKILL");
-  } catch (err: any) {
-    if (err?.code !== "ESRCH") throw err;
+  } catch (err: unknown) {
+    const code = typeof err === "object" && err !== null && "code" in err ? (err as { code?: unknown }).code : undefined;
+    if (code !== "ESRCH") throw err;
   }
   children.delete(pid);
 }
@@ -231,10 +232,11 @@ function sidecarProcess(args: string[], o: { cwd: string; home: string }) {
   };
 }
 
-async function until(cond: () => boolean, what: string, ms = 60_000): Promise<void> {
+/** Polls `cond`; on timeout `what` is evaluated then, so diagnostics show output from the moment the wait failed. */
+async function until(cond: () => boolean, what: string | (() => string), ms = 60_000): Promise<void> {
   const deadline = Date.now() + ms;
   while (!cond()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${typeof what === "function" ? what() : what}`);
     await new Promise((r) => setTimeout(r, 25));
   }
 }
@@ -295,14 +297,14 @@ describe("WP-1306 A1: suspend, restart and resume keep the operation, provider r
     const read = stateReaders(home, ws);
     let run: ReturnType<typeof cliProcess> | undefined;
     try {
-      // 1 + 2 + 3: an operation whose unit captures the failing baseline (npm test fails: impl.js is missing), writes
-      // impl.js, then hits the 429 and waits in place.
+      // 1 + 2 + 3: an operation whose unit captures the failing baseline (npm test fails: answer() returns 0), rewrites
+      // impl.js, then hits the 429; the runner hands the wait to the scheduler and the operation waits it out.
       const spec = writeSpec(home, "a1-op", gw.url, "Make impl.js export answer() = 42, then finish.");
       run = cliProcess(["operation", "run", spec, "-w", ws, "-s", "6", "-j"], { cwd: ws, home });
       // The suspend point: the operation document on disk says WAITING (the scheduler is sleeping out the 429).
       const opFile = path.join(read.tasksDir, "a1-op.json");
       const onDisk = () => { try { return JSON.parse(fs.readFileSync(opFile, "utf-8")).operation as DurableOperationState; } catch { return undefined; } };
-      await until(() => onDisk()?.status === "WAITING", `the operation to wait out the 429 (stderr so far: ${run.io.err.slice(-300)})`);
+      await until(() => onDisk()?.status === "WAITING", () => `the operation to wait out the 429 (stderr so far: ${run!.io.err.slice(-300)})`);
       assert.equal(state.limited, 1, "exactly one submission was rate limited before the suspend");
       const waitingOnDisk = onDisk()!;
       assert.ok(waitingOnDisk.wait && Date.parse(waitingOnDisk.wait.wakeAt) > Date.now(), `the recorded wake time is in the future: ${JSON.stringify(waitingOnDisk.wait)}`);
@@ -417,7 +419,7 @@ describe("WP-1306 A1: suspend, restart and resume keep the operation, provider r
       state.mode = "implement";
       const existing = read.otherTaskIds([]);
       run = cliProcess(["run", ...common, "Make impl.js export answer() = 42, then finish."], { cwd: ws, home });
-      await until(() => /Provider recovery \(step \d+\)/.test(run!.io.err), `the provider wait (stderr so far: ${run.io.err.slice(-300)})`);
+      await until(() => /Provider recovery \(step \d+\)/.test(run!.io.err), () => `the provider wait (stderr so far: ${run!.io.err.slice(-300)})`);
       assert.equal(state.limited, 1);
       run.interrupt();
       const suspended = await run.done();
@@ -444,7 +446,7 @@ describe("WP-1306 A1: suspend, restart and resume keep the operation, provider r
       const before = state.arrivals.length;
       const side = sidecarProcess(["--resume", taskId, ...common], { cwd: ws, home });
       sidecars.push(side);
-      await until(() => side.notices().some((n) => /^(Resumed session|Session not found|Could not resume)/.test(n)), `the sidecar's resume notice (stderr: ${side.err().slice(-300)})`);
+      await until(() => side.notices().some((n) => /^(Resumed session|Session not found|Could not resume)/.test(n)), () => `the sidecar's resume notice (stderr: ${side.err().slice(-300)})`);
       assert.ok(side.notices().some((n) => n.startsWith(`Resumed session ${taskId}`)), `notices: ${side.notices().join(" | ")}`);
       side.send({ type: "prompt.submit", id: "t1", text: "continue" });
       await until(() => side.events.some((e) => e.type === "turn.result"), "the resumed turn's result", 120_000);
@@ -461,7 +463,7 @@ describe("WP-1306 A1: suspend, restart and resume keep the operation, provider r
       state.mode = "report";
       const side2 = sidecarProcess(["--resume", "a1-doc", ...common], { cwd: ws, home });
       sidecars.push(side2);
-      await until(() => side2.notices().some((n) => /^(Resumed session|Session not found|Could not resume)/.test(n)), `the second sidecar's resume notice (stderr: ${side2.err().slice(-300)})`);
+      await until(() => side2.notices().some((n) => /^(Resumed session|Session not found|Could not resume)/.test(n)), () => `the second sidecar's resume notice (stderr: ${side2.err().slice(-300)})`);
       assert.ok(side2.notices().some((n) => n.startsWith("Resumed session a1-doc")), `notices: ${side2.notices().join(" | ")}`);
       side2.send({ type: "prompt.submit", id: "t2", text: "Anything left in the operation?" });
       await until(() => side2.events.some((e) => e.type === "turn.result"), "the second resumed turn's result", 120_000);
