@@ -401,9 +401,12 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   async run(unit: WorkUnit, resource: ResourceDescriptor, ctx: UnitRunContext): Promise<UnitRunResult> {
     const config = this.configFor(resource, unit, ctx.workspace);
+    // A diagnostic unit works on a candidate whose verifier fails by definition: the completion gate would reject its
+    // diagnosis. The command stays in `config` as the reproduction command; the agent just is not gated on it.
+    const agentConfig = ctx.diagnostic ? { ...config, authoritativeVerifierCommand: undefined } : config;
     const agent = this.opts.createAgent
-      ? this.opts.createAgent(config, 1, { durable: true, role: unit.role, unitId: unit.id })
-      : new AutonomousAgent(config, 1, undefined, { durable: true, role: unit.role, unitId: unit.id });
+      ? this.opts.createAgent(agentConfig, 1, { durable: true, role: unit.role, unitId: unit.id })
+      : new AutonomousAgent(agentConfig, 1, undefined, { durable: true, role: unit.role, unitId: unit.id });
     if (this.opts.createAgent) {
       if (!agent.durable) (agent as any).durable = true;
       if (unit.role && !agent.role) (agent as any).role = unit.role;

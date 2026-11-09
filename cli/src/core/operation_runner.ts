@@ -53,6 +53,8 @@ export interface UnitRunContext {
   messages?: OperationMessage[];
   /** Isolated operations: the unit's worktree. Absent means the executor's configured workspace. */
   workspace?: string;
+  /** The workspace is a snapshot of another unit's failing candidate (never integrated): diagnosis, not a fix, completes it. */
+  diagnostic?: true;
   observeFailure(failure: InferenceFailure): ResourceConditionRecord | null;
   observeSuccess(): void;
   shouldYield(failure: InferenceFailure, plannedDelayMs: number): boolean;
@@ -379,6 +381,7 @@ export class OperationRunner {
       observeSuccess: () => this.registry.observeSuccess(resource),
       shouldYield: (_f, delay) => this.shouldYield(unit, resource, delay),
       ...(workspace ? { workspace } : {}),
+      ...(workspace && this.git?.isSnapshotUnit(unit.id) ? { diagnostic: true as const } : {}),
     };
     try {
       if (recoverMerged) {

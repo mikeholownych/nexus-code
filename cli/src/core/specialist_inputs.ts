@@ -160,14 +160,15 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
       git(["--literal-pathspecs", "add", "--force", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${[...added].join("\0")}\0` });
     }
     // Comparing worktree content runs a path's clean filter, so before any diff every path is checked for a filter or
-    // diff driver the empty attribute source did not neutralise; one that applies is refused, never run. The check is
-    // batched so the repository's size never turns into a failure.
+    // diff driver the stripped attribute source did not neutralise ($GIT_DIR/info/attributes, or a worktree
+    // .gitattributes on Git before 2.40); one that applies is refused, never run. The check is batched so the
+    // repository's size never turns into a failure.
     const indexed = listing([]);
     for (let start = 0; start < indexed.length; start += ATTR_BATCH) {
       const batch = indexed.slice(start, start + ATTR_BATCH);
-      const attrs = git(["check-attr", "-z", "--stdin", "filter", "diff"], { input: `${batch.join("\0")}\0` }).split("\0");
-      for (let i = 0; i + 2 < attrs.length; i += 3) {
-        const [file, name, value] = [attrs[i], attrs[i + 1], attrs[i + 2]];
+      const checked = git(["check-attr", "-z", "--stdin", "filter", "diff"], { input: `${batch.join("\0")}\0` }).split("\0");
+      for (let i = 0; i + 2 < checked.length; i += 3) {
+        const [file, name, value] = [checked[i], checked[i + 1], checked[i + 2]];
         const safe = value === "unspecified" || value === "unset" || (name === "diff" && value === "set");
         if (!safe) return { error: `a ${name} driver ('${value}') applies to ${file.slice(0, 80)} outside the worktree's .gitattributes; it is not run` };
       }

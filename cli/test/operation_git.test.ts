@@ -1127,7 +1127,7 @@ test("a debugger retried after its dependency failed again starts a new conversa
   state.git = newOperationGitState(p);
   ensureIntegrationWorktree(p, state.git);
   let verifyRuns = 0;
-  const debuggerSaw: Array<{ resumeReason?: string; boundTask?: string; file?: string }> = [];
+  const debuggerSaw: Array<{ resumeReason?: string; boundTask?: string; file?: string; diagnostic?: true }> = [];
   const executor: WorkUnitExecutor = {
     async run(u, _resource, ctx) {
       if (u.id === "verify") {
@@ -1139,7 +1139,7 @@ test("a debugger retried after its dependency failed again starts a new conversa
           failedRun: { summary: `failed ${verifyRuns}`, verification: { command: "false", status: "FAILED", hasExecutedTests: true } },
         };
       }
-      debuggerSaw.push({ resumeReason: ctx.resumeReason, boundTask: u.agentTaskId, file: fs.readFileSync(path.join(ctx.workspace!, "file.txt"), "utf8") });
+      debuggerSaw.push({ diagnostic: ctx.diagnostic, resumeReason: ctx.resumeReason, boundTask: u.agentTaskId, file: fs.readFileSync(path.join(ctx.workspace!, "file.txt"), "utf8") });
       ctx.bindAgentTask?.(`task-${debuggerSaw.length}`);
       return {
         kind: "failed", cause: "EXECUTION_FAILED", reason: "debugger stopped", question: "q",
@@ -1159,4 +1159,6 @@ test("a debugger retried after its dependency failed again starts a new conversa
   assert.equal(debuggerSaw[1].file, "candidate 2\n", "the retry works on the new candidate");
   assert.equal(debuggerSaw[1].boundTask, undefined, "the old conversation, from the discarded candidate, is not resumed");
   assert.equal(debuggerSaw[1].resumeReason, undefined);
+  assert.equal(debuggerSaw[0].diagnostic, true, "the debugger is told its workspace is a diagnostic snapshot");
+  assert.equal(debuggerSaw[1].diagnostic, true);
 });
