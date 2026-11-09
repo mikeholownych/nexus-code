@@ -238,7 +238,7 @@ test("review item 12: FIELD_LIMITS covers every free-text field of every protoco
   }
 });
 
-test("Entire 01M70D1HN3YR / 01M70D4NYM7J: an over-cap ledger record keeps the producer's truncation count through the projection", () => {
+test("an over-cap ledger record keeps its producer's truncation count through the projection", () => {
   withFreshBoundary(() => {
     const big = (n: number) => "line of tool output\n".repeat(Math.ceil(n / 20)).slice(0, n);
     const args = capText(big(MAX_DETAIL + 50_000), MAX_DETAIL);
