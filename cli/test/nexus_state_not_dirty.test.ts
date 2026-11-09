@@ -11,7 +11,8 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, execSync, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { AutonomousAgent } from "../src/agent.js";
 import { commitChanges, getGitInfo } from "../src/git.js";
 import { UsageLedger } from "../src/usage.js";
@@ -240,6 +241,31 @@ describe("D-03: Nexus state is not a workspace change", () => {
     } finally {
       UsageLedger.resetGlobal();
       fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("REPL /git on a repository whose only change is Nexus state reports it clean", () => {
+    const index = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
+    assert.ok(fs.existsSync(index), `missing ${index} (run npm run build)`);
+    const repo = freshRepo();
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-d03-home-"));
+    try {
+      // Legacy state without its self-ignore, as an older version left it.
+      fs.mkdirSync(path.join(repo, ".nexus"));
+      fs.writeFileSync(path.join(repo, ".nexus", "rec.jsonl"), "{}\n");
+      const run = spawnSync(process.execPath, [index, "repl", "-w", repo, "-e", "http://127.0.0.1:9/v1", "-m", "m"], {
+        input: "/git\n",
+        encoding: "utf-8",
+        timeout: 60_000,
+        env: { ...process.env, HOME: home, NEXUS_STATE_DIR: path.join(home, "state"), NO_COLOR: "1" },
+      });
+      const after = run.stdout.split("Git Status:")[1];
+      assert.ok(after !== undefined, `REPL printed no /git output:\n${run.stdout}\n${run.stderr}`);
+      assert.doesNotMatch(after, /\.nexus/, "REPL /git lists Nexus state");
+      assert.match(after, /Working tree clean/);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 });
