@@ -107,10 +107,10 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
     const onDisk = (p: string) => { try { fs.lstatSync(path.join(root, p)); return true; } catch { return false; } };
     const ownIndex = new Set(listing([], true));
     // A path tracked at the base but removed from the real index (`git rm --cached`) is part of the candidate as a
-    // deletion even when the file stays on disk: take it out of the scratch index too, and never re-add it as new.
+    // deletion even when the file stays on disk: force it out of the scratch index too (its entry can match neither HEAD nor the worktree), and never re-add it as new.
     const removed = [...atBase].filter((p) => !ownIndex.has(p));
     if (removed.length) {
-      git(["--literal-pathspecs", "rm", "--cached", "--quiet", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${removed.join("\0")}\0` });
+      git(["--literal-pathspecs", "rm", "--cached", "--force", "--quiet", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${removed.join("\0")}\0` });
     }
     const removedSet = new Set(removed);
     const added = new Set([
