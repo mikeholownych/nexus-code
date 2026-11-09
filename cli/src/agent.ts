@@ -4801,7 +4801,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           return {
             success: false,
             output: "",
-            error: `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
+            error: `Error: Skill '${oneLine(String(skillName ?? "").slice(0, 200))}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
           };
         }
         // No skill has that name: treat the text as a search. Matching advertises descriptions and activates nothing.
@@ -4817,7 +4817,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
       return {
         success: true,
-        output: `[Activated Skill: ${skill.name}] [source: ${skill.path}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n[Host application: Nexus Code. Provider/model identity does not change the host; select host-specific instructions for Nexus Code.]\n\n${skill.content}`,
+        output: `[Activated Skill: ${skill.name}] [source: ${oneLine(skill.path)}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n[Host application: Nexus Code. Provider/model identity does not change the host; select host-specific instructions for Nexus Code.]\n\n${skill.content}`,
       };
     });
 
