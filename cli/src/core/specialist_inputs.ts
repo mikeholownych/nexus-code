@@ -42,17 +42,21 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
  * the empty tree. `$GIT_DIR/info/attributes` still applies (and on Git older than 2.40 so do the worktree's
  * .gitattributes), so a filter or diff driver assigned that way is refused before any command could invoke it.
  */
-function safeGitEnv(indexFile: string): NodeJS.ProcessEnv {
+function safeGitEnv(indexFile: string | undefined): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) if (!key.startsWith("GIT_")) env[key] = value;
   return {
-    ...env, GIT_INDEX_FILE: indexFile, GIT_CONFIG_NOSYSTEM: "1", GIT_ATTR_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1",
+    ...env, ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}), GIT_CONFIG_NOSYSTEM: "1", GIT_ATTR_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1",
     GIT_ATTR_SOURCE: EMPTY_TREE, GIT_OPTIONAL_LOCKS: "0",
   };
 }
 const DIFF_FLAGS = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--relative"];
 const MAX_DIFF_PATHS = 2_000;
 const GIT_MAX_BUFFER = 4 * 1024 * 1024;
+/** Path listings scale with the repository, not the change, so they get room for very large repositories. */
+const LISTING_MAX_BUFFER = 256 * 1024 * 1024;
+/** Paths per `check-attr` call, so its output stays small whatever the repository's size. */
+const ATTR_BATCH = 1_000;
 
 /**
  * The candidate diff against `base` (HEAD when absent), for every unit that is shown one: review units and the
@@ -76,11 +80,12 @@ const GIT_MAX_BUFFER = 4 * 1024 * 1024;
 export function candidateDiff(workspace: string, base: string | undefined): { base: string; diff: string; omitted: number; omittedNew: number } | { error: string } {
   const root = path.resolve(workspace);
   let scratch: string | undefined;
-  const git = (args: string[], options: { okExit?: number[]; input?: string } = {}): string => {
+  // `ownIndex` reads the repository's own index (never written: only listed); everything else uses the scratch index.
+  const git = (args: string[], options: { okExit?: number[]; input?: string; maxBuffer?: number; ownIndex?: boolean } = {}): string => {
     try {
       return execFileSync("git", [...GIT_SAFE, ...args], {
-        cwd: root, env: safeGitEnv(path.join(scratch!, "index")), encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-        timeout: 30_000, maxBuffer: GIT_MAX_BUFFER, ...(options.input === undefined ? {} : { input: options.input }),
+        cwd: root, env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch!, "index")), encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        timeout: 30_000, maxBuffer: options.maxBuffer ?? GIT_MAX_BUFFER, ...(options.input === undefined ? {} : { input: options.input }),
       });
     } catch (err: any) {
       if (typeof err?.status === "number" && options.okExit?.includes(err.status) && typeof err.stdout === "string") return err.stdout;
@@ -93,13 +98,21 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
     // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     git(["read-tree", "--end-of-options", commit]);
-    const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
-    if (untracked.length) git(["--literal-pathspecs", "add", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${untracked.join("\0")}\0` });
+    const listing = (args: string[], ownIndex = false) => git(["ls-files", "-z", ...args], { maxBuffer: LISTING_MAX_BUFFER, ownIndex }).split("\0").filter(Boolean);
+    // New paths: untracked files git does not ignore, plus files tracked now but not at the base (a force-added file
+    // can match .gitignore and still be part of the candidate).
+    const atBase = new Set(listing([]));
+    const added = new Set([...listing(["--others", "--exclude-standard"]), ...listing([], true).filter((p) => !atBase.has(p))]);
+    if (added.size) {
+      git(["--literal-pathspecs", "add", "--force", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${[...added].join("\0")}\0` });
+    }
     // Comparing worktree content runs a path's clean filter, so before any diff every path is checked for a filter or
-    // diff driver the empty attribute source did not neutralise; one that applies is refused, never run.
-    const indexed = git(["ls-files", "-z"]);
-    if (indexed) {
-      const attrs = git(["check-attr", "-z", "--stdin", "filter", "diff"], { input: indexed }).split("\0");
+    // diff driver the empty attribute source did not neutralise; one that applies is refused, never run. The check is
+    // batched so the repository's size never turns into a failure.
+    const indexed = listing([]);
+    for (let start = 0; start < indexed.length; start += ATTR_BATCH) {
+      const batch = indexed.slice(start, start + ATTR_BATCH);
+      const attrs = git(["check-attr", "-z", "--stdin", "filter", "diff"], { input: `${batch.join("\0")}\0` }).split("\0");
       for (let i = 0; i + 2 < attrs.length; i += 3) {
         const [file, name, value] = [attrs[i], attrs[i + 1], attrs[i + 2]];
         const safe = value === "unspecified" || value === "unset" || (name === "diff" && value === "set");
