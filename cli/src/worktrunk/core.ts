@@ -14,7 +14,7 @@ import { readWorktreeSettings } from "./config.js";
 import { git, gitOut } from "./git.js";
 import { resolveWorktreePath, sanitizeBranch, validateBranchName, allowedRoot } from "./paths.js";
 import { readRegistry, updateRegistry, type Registry } from "./registry.js";
-import { currentEntry, defaultBranch, openRepo, refExists, resolveCommit, type Repo, type WorktreeEntry } from "./repo.js";
+import { currentEntry, defaultBranch, openRepo, refExists, resolveBranchCommit, resolveCommit, type Repo, type WorktreeEntry } from "./repo.js";
 
 export interface WorktreeContext {
   cwd: string;
@@ -184,7 +184,8 @@ export function switchWorktree(ctx: WorktreeContext, branchToken: string, option
   let baseSha = "";
   if (options.create) {
     baseName = options.base ? resolveBranchName(repo, options.base) : (defaultBranch(repo) ?? "HEAD");
-    const sha = resolveCommit(repo, baseName);
+    // A local branch of that name wins; only when there is none may --base name another commit (a tag, a sha).
+    const sha = resolveBranchCommit(repo, baseName) ?? resolveCommit(repo, baseName);
     if (!sha) throw new WorktreeError(`base ${shownBranch(baseName)} does not name a commit`);
     baseSha = sha;
   }
@@ -271,7 +272,7 @@ export function listWorktrees(ctx: WorktreeContext, options: { limit?: number; j
   const here = currentEntry(repo);
   const limit = Math.max(1, options.limit ?? DEFAULT_LIMIT);
   const target = defaultBranch(repo);
-  const targetSha = target ? resolveCommit(repo, target) : undefined;
+  const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
 
   const rank = (entry: WorktreeEntry) => (entry.isMain ? 0 : entry === here ? 1 : registry.worktrees.some((r) => r.path === entry.path) ? 2 : 3);
   const ordered = [...repo.entries].sort((a, b) => rank(a) - rank(b));
@@ -365,7 +366,7 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
 
   const dropFromRegistry = () => updateRegistry(repo.commonDir, (reg) => { reg.worktrees = reg.worktrees.filter((item) => item.path !== entry.path); });
   const target = defaultBranch(repo);
-  const targetSha = target ? resolveCommit(repo, target) : undefined;
+  const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
   const integrated = entry.head && targetSha ? integratedReason(repo, entry.head, targetSha) : null;
   if (!integrated && !options.deleteUnmerged) {
     throw new WorktreeError(`${entry.branch ? "branch" : "HEAD"} is not merged into ${target ? shownBranch(target) : "the default branch"}; merge it, or pass --delete-unmerged to discard its commits`);
