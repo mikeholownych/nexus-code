@@ -4,6 +4,7 @@
  * Git's worktree list is the truth about what exists; the registry (registry.ts) records what Nexus created. Nothing
  * here runs a hook, a project-supplied command or a shell. Every Git call goes through git.ts.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { operatorConfigHome } from "../config.js";
@@ -62,6 +63,8 @@ export function resolveBranchName(repo: Repo, token: string): string {
   if (token === "^") {
     const name = defaultBranch(repo);
     if (!name) throw new WorktreeError("this repository has no default branch yet");
+    const problem = validateBranchName(name);
+    if (problem) throw new WorktreeError(`invalid branch name: the default branch ${problem}`);
     return name;
   }
   if (token === "@") {
@@ -72,11 +75,25 @@ export function resolveBranchName(repo: Repo, token: string): string {
   if (token === "-") {
     const previous = loadRegistry(repo).previous;
     if (!previous) throw new WorktreeError("there is no previous worktree recorded");
+    // The registry is a file an unrelated process could have damaged: it is validated like typed input.
+    const problem = validateBranchName(previous);
+    if (problem) throw new WorktreeError(`invalid branch name: the recorded previous branch ${problem}`);
     return previous;
   }
   const problem = validateBranchName(token);
   if (problem) throw new WorktreeError(`invalid branch name: ${problem}`);
   return token;
+}
+
+/** `fs.realpathSync` for a path that may not exist: the real path of its deepest existing ancestor, then the missing tail. */
+function normalizedPath(file: string): string {
+  const absolute = path.resolve(file);
+  try {
+    return fs.realpathSync(absolute);
+  } catch {
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(normalizedPath(parent), path.basename(absolute));
+  }
 }
 
 function looksLikePath(token: string): boolean {
@@ -87,10 +104,13 @@ function looksLikePath(token: string): boolean {
 export function findEntry(repo: Repo, token: string, home: string): WorktreeEntry {
   if (looksLikePath(token)) {
     const expanded = token.startsWith("~") ? path.join(home, token.slice(1)) : path.resolve(repo.cwd, token);
-    let real: string;
-    try { real = fs.realpathSync(expanded); } catch { throw new WorktreeError(`no worktree at ${shownPath(home, expanded)}`); }
-    const hit = repo.entries.find((entry) => { try { return fs.realpathSync(entry.path) === real; } catch { return false; } });
-    if (!hit) throw new WorktreeError(`${shownPath(home, real)} is not a worktree of this repository`);
+    // A worktree whose directory was deleted by hand is still listed by Git (as prunable), so a path that no longer
+    // exists is matched on its normalised location: the real path of its deepest existing ancestor plus the rest.
+    const real = normalizedPath(expanded);
+    const hit = repo.entries.find((entry) => normalizedPath(entry.path) === real);
+    if (!hit) {
+      throw new WorktreeError(fs.existsSync(expanded) ? `${shownPath(home, real)} is not a worktree of this repository` : `no worktree at ${shownPath(home, expanded)}`);
+    }
     return hit;
   }
   const name = resolveBranchName(repo, token);
@@ -347,7 +367,13 @@ function humanAge(seconds: number): string {
 export interface RemoveOptions { force?: boolean; deleteUnmerged?: boolean }
 
 /** Test seam: runs after every refusal check and immediately before the worktree is removed. Not a hook point. */
-export const removeSeams: { beforeRemove?: (entry: WorktreeEntry) => void; beforeBranchDeletion?: (entry: WorktreeEntry) => void } = {};
+export const removeSeams: {
+  beforeLock?: (entry: WorktreeEntry) => void;
+  beforeRemove?: (entry: WorktreeEntry) => void;
+  afterGuardSwitch?: (entry: WorktreeEntry) => void;
+  beforeGitRemove?: (entry: WorktreeEntry) => void;
+  beforeBranchDeletion?: (entry: WorktreeEntry) => void;
+} = {};
 
 export function removeWorktrees(ctx: WorktreeContext, tokens: string[], options: RemoveOptions = {}): CommandResult {
   if (tokens.length === 0) throw new WorktreeError("usage: worktree remove <branch|path>... [--force] [--delete-unmerged]");
@@ -384,27 +410,102 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
     throw new WorktreeError(`${entry.branch ? "branch" : "HEAD"} is not merged into ${target ? shownBranch(target) : "the default branch"}; merge it, or pass --delete-unmerged to discard its commits`);
   }
 
-  if (entry.prunable) {
-    // Only this registration goes: a bare `worktree prune` would drop every stale worktree and leave their
-    // registry entries behind. `remove --force` accepts a missing directory and touches one admin entry.
-    git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
-  } else {
-    const before = verifiedWorktreeDir(repo, entry);
-    if (!options.force) {
-      const dirty = statusOf(entry.path, { ignored: true });
-      if (dirty.total + dirty.ignored > 0) {
-        throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
+  // The lock is taken before anything is deleted and held through the branch and registry bookkeeping, so a
+  // concurrent `switch` (which holds it across its checkout) either finishes first or waits; a lock that cannot be
+  // had fails here with the worktree, branch and registry untouched.
+  let branchNote = "";
+  let guardBranch = "";
+  let guardHead = "";
+  removeSeams.beforeLock?.(entry);
+  withWorktreeLock(repo.commonDir, () => {
+    // What was read before waiting for the lock may be out of date: another remover can have dropped this stale
+    // registration and a `switch` recreated the path. Anything that differs from what was checked is not removed.
+    const fresh = openRepo(repo.cwd).entries.find((candidate) => candidate.path === entry.path);
+    if (!fresh) {
+      dropFromRegistry();
+      branchNote = " (it was already gone)";
+      return;
+    }
+    if (fresh.prunable !== entry.prunable || fresh.head !== entry.head || fresh.branch !== entry.branch || fresh.locked) {
+      throw new WorktreeError("the worktree changed while this command waited for the lock; nothing was removed. Run the command again");
+    }
+    if (entry.prunable) {
+      // Only this registration goes: a bare `worktree prune` would drop every stale worktree and leave their
+      // registry entries behind. `remove --force` accepts a missing directory and touches one admin entry.
+      git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
+    } else {
+      const before = verifiedWorktreeDir(repo, entry);
+      if (!options.force) {
+        const dirty = statusOf(entry.path, { ignored: true });
+        if (dirty.total + dirty.ignored > 0) {
+          throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
+        }
+      }
+      removeSeams.beforeRemove?.(entry);
+      // A commit made here since the integration check (another session's `/commit`, an editor) must not be lost with
+      // the directory: on a detached HEAD nothing else would keep it. A moved HEAD is checked again, or nothing is removed.
+      const headNow = git(entry.path, ["rev-parse", "--verify", "HEAD"], { allowFailure: true }).stdout.trim();
+      if (headNow && headNow !== entry.head) {
+        if (!targetSha || !integratedReason(repo, headNow, targetSha)) {
+          throw new WorktreeError("HEAD changed while the worktree was being checked and the new commit is not merged; nothing was removed. Run the command again");
+        }
+        entry.head = headNow;
+      }
+      // The directory must still be the one that was inspected: a swap for a link or another tree is refused.
+      const after = identityOf(entry.path);
+      if (!after || after.dev !== before.dev || after.ino !== before.ino) throw new WorktreeError("the worktree directory changed while it was being checked; nothing was removed");
+      // A detached HEAD keeps a commit only in this worktree's own administrative state, which the removal deletes, and
+      // commit writers never take this lock. Putting the worktree on a temporary branch first means a commit that lands
+      // from here on advances that branch instead; it is deleted below only if it still points at the checked commit.
+      if (!entry.branch) {
+        guardBranch = `nexus-removed/${createHash("sha1").update(entry.path).digest("hex").slice(0, 10)}-${entry.head.slice(0, 8)}`;
+        // The commit the guard must protect is the one verified above, never one read after the switch: a commit that
+        // lands in between would otherwise be adopted as "expected" and the branch deleted over it.
+        guardHead = entry.head;
+        const existing = git(repo.cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `refs/heads/${guardBranch}`], { allowFailure: true });
+        const leaked = existing.status === 0 ? existing.stdout.trim() : "";
+        if (leaked && leaked !== entry.head) {
+          const name = guardBranch;
+          guardBranch = "";
+          throw new WorktreeError(`the branch ${name} already exists at another commit; inspect it, delete it with \`git branch -D ${name}\` if it is not needed, and run the command again. Nothing was removed`);
+        }
+        // A guard branch left by an interrupted earlier attempt for this worktree and commit is reused.
+        const switched = git(entry.path, leaked ? ["switch", "--end-of-options", guardBranch] : ["switch", "-c", guardBranch, "--end-of-options"], { allowFailure: true });
+        if (switched.status !== 0) {
+          guardBranch = "";
+          throw new WorktreeError("could not protect the detached HEAD before removing it; nothing was removed");
+        }
+        removeSeams.afterGuardSwitch?.(entry);
+        const nowHead = git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim();
+        if (nowHead !== guardHead) {
+          const name = guardBranch;
+          guardBranch = ""; // kept: it now holds the commit that landed
+          throw new WorktreeError(`a commit landed while the detached HEAD was being protected; it is kept on the branch ${name} in ${shownPath(ctx.home, entry.path)} and nothing was removed. Merge or delete that branch, then run the command again`);
+        }
+      }
+      try {
+        removeSeams.beforeGitRemove?.(entry);
+        git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
+      } catch (err) {
+        // Git refused (an initialised submodule, a file that appeared): the worktree stays, so put it back on its
+        // detached HEAD and drop the guard branch (unless a commit already moved it, then it is the only reference).
+        if (guardBranch) {
+          const back = git(entry.path, ["switch", "--detach", "--end-of-options", guardBranch], { allowFailure: true });
+          if (back.status === 0) {
+            deleteBranchAt(repo, guardBranch, git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim());
+          } else {
+            throw new WorktreeError(`${(err as Error).message}; could not restore the detached HEAD, so ${shownPath(ctx.home, entry.path)} stays on the temporary branch ${guardBranch} (nothing is lost). To undo: git -C <that path> switch --detach, then git branch -D ${guardBranch}. A retry reuses it`);
+          }
+        }
+        throw err;
       }
     }
-    removeSeams.beforeRemove?.(entry);
-    // The directory must still be the one that was inspected: a swap for a link or another tree is refused.
-    const after = identityOf(entry.path);
-    if (!after || after.dev !== before.dev || after.ino !== before.ino) throw new WorktreeError("the worktree directory changed while it was being checked; nothing was removed");
-    git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
-  }
 
-  let branchNote = "";
-  withWorktreeLock(repo.commonDir, () => {
+    if (guardBranch) {
+      branchNote = deleteBranchAt(repo, guardBranch, guardHead)
+        ? ""
+        : `; a commit landed after the last check and is kept on the branch ${guardBranch}`;
+    }
     if (entry.branch && entry.branch !== target) {
       removeSeams.beforeBranchDeletion?.(entry);
       const stillCheckedOut = listAfter(repo).some((other) => other.branch === entry.branch);
@@ -439,8 +540,20 @@ function verifiedWorktreeDir(repo: Repo, entry: WorktreeEntry): { dev: number; i
   const dotStat = fs.lstatSync(dotGit);
   if (!dotStat.isFile()) throw new WorktreeError("the worktree has no .git file; refusing to remove it");
   const pointer = fs.readFileSync(dotGit, "utf8").trim();
-  const expected = `gitdir: ${path.join(repo.commonDir, "worktrees")}${path.sep}`;
-  if (!pointer.startsWith(expected)) throw new WorktreeError("the worktree does not belong to this repository's common directory; refusing to remove it");
+  // The pointer may be absolute or, with `worktree.useRelativePaths`, relative to the worktree directory. Either way
+  // its canonical location must be an entry under this repository's common directory.
+  const match = /^gitdir: (.+)$/.exec(pointer);
+  const admin = match ? normalizedPath(path.resolve(entry.path, match[1])) : "";
+  if (!admin || !admin.startsWith(path.join(normalizedPath(repo.commonDir), "worktrees") + path.sep)) {
+    throw new WorktreeError("the worktree does not belong to this repository's common directory; refusing to remove it");
+  }
+  // The admin directory must point back at this very `.git` file. A pointer into a sibling worktree's admin directory
+  // is inside the common directory too, but removing through it would act on the sibling's registration.
+  let back = "";
+  try { back = fs.readFileSync(path.join(admin, "gitdir"), "utf8").trim(); } catch { /* checked below */ }
+  if (!back || normalizedPath(path.resolve(admin, back)) !== normalizedPath(dotGit)) {
+    throw new WorktreeError("the worktree's administrative directory does not point back at it; refusing to remove it");
+  }
   return { dev: before.dev, ino: before.ino };
 }
 

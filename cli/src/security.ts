@@ -514,8 +514,9 @@ export class SecretsVault {
       preferredProtectionMode: "REVERSIBLE_TOKENIZATION",
     });
 
-    // Populate local refMap for synchronous local restore compatibility
-    for (const item of result.classifiedSecrets) {
+    // Populate local refMap for synchronous local restore compatibility: only values that were replaced (a value inside
+    // a longer classified value is classified too, but its token is never used).
+    for (const item of result.quarantinedSecrets ?? result.classifiedSecrets) {
       const token = this.boundary.generateToken(item.secret, taskId, sessionId, "HOST_LOCAL", "EXTERNAL_PUBLIC");
       this.refMap.set(token, item.secret);
       this.secretMap.set(item.secret, token);
