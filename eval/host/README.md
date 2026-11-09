@@ -11,6 +11,7 @@ services. The changes are limited to the following:
 | Change | File or object | Why |
 |---|---|---|
 | Install `acl` | apt package | `setfacl` grants the evaluator uid access to each disposable run directory (`grantRunAsAccess`). |
+| Require `prlimit` | none (checked only) | util-linux `prlimit` caps single-file writes and disables core dumps for code-evaluator build/typecheck commands; provisioning stops, and `validate.mjs` fails, if it is missing. |
 | System account `nexus-eval` | `/etc/passwd`, `/var/lib/nexus-eval` (0700), shell `nologin` | The candidate and validators run as a uid that cannot read the operator's files or the held-out store. |
 | One sudoers rule | `/etc/sudoers.d/90-nexus-eval`: `<operator> ALL=(nexus-eval) NOPASSWD: /usr/bin/bwrap` | The harness's only privilege. No `env`, no shell, no other command. |
 | Size-capped tmpfs | `srv-nexus\x2dqual-ws.mount` at `/srv/nexus-qual/ws`, `size=storageBytes,mode=0711,uid=<operator>,nosuid,nodev` | The resource contract's `workspaceRoot`: the hard cap on what a run keeps, across all phases. |

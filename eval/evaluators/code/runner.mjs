@@ -246,13 +246,24 @@ function readVerifiedCandidateFile(root, relative, snapshotEntry) {
   }
 }
 
-function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorkspace) {
+/** Where an explicit candidate working directory lands in the pinned workspace, or null when it is outside the candidate. */
+function pinnedWorkingDirectory(candidateWorkspace, pinnedWorkspace, cwd) {
+  if (cwd === undefined || cwd === null) return pinnedWorkspace;
+  if (typeof cwd !== "string") return null;
+  const real = (value) => { try { return fs.realpathSync(value); } catch { return path.resolve(value); } };
+  const relative = path.relative(real(candidateWorkspace), real(path.resolve(candidateWorkspace, cwd)));
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  return path.join(pinnedWorkspace, relative);
+}
+
+/** `options.scratchRoot` places the copy where the run keeps its workspaces (a size-capped tmpfs under the resource contract). */
+export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorkspace, { scratchRoot = os.tmpdir() } = {}) {
   if (!baselineWorkspace) throw new Error("no pre-agent build configuration workspace is available");
   const snapshotOptions = { skipDirectories: DEPENDENCY_DIRECTORIES };
   const baseline = captureWorkspaceSnapshot(baselineWorkspace, snapshotOptions);
   const candidate = captureWorkspaceSnapshot(candidateWorkspace, snapshotOptions);
   const ignored = [];
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-evaluator-pinned-config-"));
+  const tempRoot = fs.mkdtempSync(path.join(scratchRoot, "nexus-evaluator-pinned-config-"));
   const pinnedWorkspace = path.join(tempRoot, "workspace");
   try {
     fs.cpSync(baselineWorkspace, pinnedWorkspace, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
@@ -326,7 +337,7 @@ export function needsEvaluatorConfigurationBaseline(task) {
 }
 
 /** Run the deterministic evaluator set against the actual candidate workspace and pre-agent snapshot. */
-export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorkspace, typecheckBaselineWorkspace, agent, baselineSnapshot }) {
+export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorkspace, typecheckBaselineWorkspace, agent, baselineSnapshot, resources = null, scratchRoot }) {
   if (!task.evaluators || !Array.isArray(task.evaluators) || task.evaluators.length === 0) return [];
   const results = [];
   let changedFiles = null;
@@ -343,7 +354,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
   const withIgnored = (result) => ({ ...result, details: { ...result.details, ignoredCandidateChanges: pinnedIgnored } });
   if (needsEvaluatorConfigurationBaseline(task)) {
     try {
-      const pinned = createPinnedCandidateWorkspace(typecheckBaselineWorkspace, candidateWorkspace);
+      const pinned = createPinnedCandidateWorkspace(typecheckBaselineWorkspace, candidateWorkspace, { scratchRoot });
       pinnedWorkspace = pinned.workspace;
       pinnedWorkspaceRoot = pinned.tempRoot;
       pinnedIgnored = pinned.ignored;
@@ -368,7 +379,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
             if (spec.files === undefined && files.length === 0) {
               results.push(evaluatorResult("syntax_ast", true, 1, { files: [], failures: [] }));
             } else {
-              results.push(await evaluateSyntaxAst({ root: candidateWorkspace, files, parsers: spec.parsers }));
+              results.push(await evaluateSyntaxAst({ root: candidateWorkspace, files, parsers: spec.parsers, maxSourceBytes: spec.maxSourceBytes, parserTimeoutMs: spec.parserTimeoutMs }));
             }
           }
           break;
@@ -392,7 +403,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
           const timeoutMs = spec.timeoutMs ?? task.build?.timeoutMs;
           if (!command) results.push(evaluatorResult("build", false, 0, { error: "no build command specified" }));
           else if (!pinnedWorkspace) results.push(evaluatorResult("build", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
-          else results.push(withIgnored(await evaluateBuild({ command, args, cwd: pinnedWorkspace, timeoutMs })));
+          else results.push(withIgnored(await evaluateBuild({ command, args, cwd: pinnedWorkspace, timeoutMs, resources, maxFileBytes: spec.maxFileBytes ?? task.build?.maxFileBytes })));
           break;
         }
         case "typecheck_clean": {
@@ -403,10 +414,15 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
             cwd: typecheckBaselineWorkspace,
           } : null);
           const candidateSpec = spec.candidate ?? task.typecheck?.candidate ?? { command: spec.command ?? task.typecheck?.command, args: spec.args ?? task.typecheck?.args ?? [], cwd: candidateWorkspace };
-          const candSpec = { ...candidateSpec, cwd: pinnedWorkspace ?? candidateWorkspace };
-          if (!baseSpec?.command || !candSpec?.command) results.push(evaluatorResult("typecheck_clean", false, 0, { error: explicitBaseline ? "no typecheck command specified" : "no pre-agent typecheck baseline workspace" }));
+          // An explicit candidate working directory (a package inside a monorepo) maps to the same place in the pinned copy.
+          const candidateCwd = pinnedWorkspace ? pinnedWorkingDirectory(candidateWorkspace, pinnedWorkspace, candidateSpec.cwd) : candidateWorkspace;
+          // maxFileBytes on the evaluator spec applies to both revisions unless a revision's own spec sets it.
+          const fileBudget = spec.maxFileBytes ?? task.typecheck?.maxFileBytes;
+          const candSpec = { ...candidateSpec, cwd: candidateCwd, maxFileBytes: candidateSpec.maxFileBytes ?? fileBudget };
+          if (candidateCwd === null) results.push(evaluatorResult("typecheck_clean", false, 0, { error: "candidate typecheck cwd is outside the candidate workspace" }));
+          else if (!baseSpec?.command || !candSpec?.command) results.push(evaluatorResult("typecheck_clean", false, 0, { error: explicitBaseline ? "no typecheck command specified" : "no pre-agent typecheck baseline workspace" }));
           else if (!pinnedWorkspace) results.push(evaluatorResult("typecheck_clean", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
-          else results.push(withIgnored(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec })));
+          else results.push(withIgnored(await evaluateTypecheckClean({ baseline: { ...baseSpec, maxFileBytes: baseSpec?.maxFileBytes ?? fileBudget }, candidate: candSpec, resources, diagnosticPattern: spec.diagnosticPattern ?? task.typecheck?.diagnosticPattern })));
           break;
         }
         default:
