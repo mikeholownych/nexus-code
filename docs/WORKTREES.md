@@ -5,7 +5,7 @@ tasks can run side by side without disturbing your checkout. It is a native subs
 [Worktrunk](https://worktrunk.dev) (a separate Rust CLI by its own authors); Nexus does not bundle, call or copy it.
 
 The speculative `nexus run --worktree` task worktrees (`nexus/<task-id>` under `.nexus/worktrees/`) are unchanged, and
-`/worktree status|merge|discard` still act on them.
+`/worktree status`, a bare `/worktree merge` and `/worktree discard` still act on them. `/worktree merge ^` (or `merge <target>`, or `merge` with any option) is the named merge described below; run it from inside the named worktree.
 
 ## Commands
 
