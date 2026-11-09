@@ -102,7 +102,10 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
     // New paths: untracked files git does not ignore, plus files tracked now but not at the base (a force-added file
     // can match .gitignore and still be part of the candidate).
     const atBase = new Set(listing([]));
-    const added = new Set([...listing(["--others", "--exclude-standard"]), ...listing([], true).filter((p) => !atBase.has(p))]);
+    // A path tracked since the base but already removed from disk is a deletion against nothing: it has no content to
+    // show, and git would reject it as a pathspec.
+    const onDisk = (p: string) => { try { fs.lstatSync(path.join(root, p)); return true; } catch { return false; } };
+    const added = new Set([...listing(["--others", "--exclude-standard"]), ...listing([], true).filter((p) => !atBase.has(p) && onDisk(p))]);
     if (added.size) {
       git(["--literal-pathspecs", "add", "--force", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${[...added].join("\0")}\0` });
     }
