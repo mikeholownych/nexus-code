@@ -344,11 +344,27 @@ test("base64 data blobs are not taken for secrets", () => {
     for (const text of [
       `<img src="data:image/png;base64,iVBORw0KGgo${unit.repeat(4)}AAAAElFTkSuQmCC">`,
       `font: url(data:font/woff2;base64,d09GMgABAAAA${unit.repeat(3)}) format("woff2")`,
+      // Over the 512-character cap for base64 runs: an embedded file, not a credential.
       `fixture ${unit.repeat(20)} end`,
     ]) {
       assert.equal(redactDiagnosticForOutput(text), text);
     }
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
+
+/** The data-URI exemption is for long payloads only: a credential-sized value after `base64,` is still a secret. */
+test("a short secret after base64, is still redacted", () => {
+  const boundary = new InformationFlowBoundary();
+  const key = "Qx7Km2+Vb9Lr/Tz4Wd8Ns3Hc6Yp1Jf5Ge0Ua+Xo2Rt/Bq";
+  for (const [text, secret] of [
+    [`config base64,${key} end`, key],
+    [`{"token":"base64,${key}"}`, key],
+    ["x=base64,wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYq9Zr3", "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYq9Zr3"],
+    [`data:text/plain;base64,${key}`, key],
+  ]) {
+    const output = boundary.redactForTelemetry(text);
+    assert.ok(!output.includes(secret.slice(0, 12)) && !output.includes(secret.slice(-12)), `${text}: ${output}`);
   }
 });
