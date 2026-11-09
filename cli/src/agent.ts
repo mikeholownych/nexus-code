@@ -5499,7 +5499,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   private rememberResumedProviderWait(lastTurn: TurnResult | null | undefined): void {
     const interruption = lastTurn?.execution === "INTERRUPTED" ? lastTurn.interruption : null;
     const eligibleAt = interruption?.phase === "provider_wait" ? interruption.providerEligibleAt : undefined;
-    // Durable records are same-user writable: an unparseable time is ignored, and the wait is capped where it is used.
+    // Durable records are same-user writable: an unparseable time is ignored, and the wait is bounded where it is used.
     if (!eligibleAt || !Number.isFinite(Date.parse(eligibleAt))) {
       this.resumedProviderWait = undefined;
       return;
@@ -5509,23 +5509,28 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   }
 
   /**
-   * Before the first request of a resumed turn: wait until the provider's recorded eligible time, capped by the
-   * recovery policy's maxDelayMs, shown as the ordinary provider-wait status. Cancellation throws RecoveryCancelled
-   * (the caller records the interruption with the same eligible time). Returns the record of the wait, or undefined.
+   * Before the first request of a resumed turn: wait until the provider's recorded eligible time, shown as the
+   * ordinary provider-wait status; skipped when the recorded wait was against another endpoint. Like live recovery, the advertised window is honoured in full (maxDelayMs caps only
+   * backoff) and bounded by the recovery deadline: live recovery never plans a wait past deadlineMs, so only a damaged
+   * or far-future record is cut. Cancellation throws RecoveryCancelled (the caller records the interruption with the
+   * same eligible time). Returns the record of the wait, or undefined.
    */
   private async waitOutResumedProviderWindow(
     policy: RecoveryPolicy,
     step: number,
     turn: NonNullable<AutonomousAgent["activeTurn"]>,
     signal: AbortSignal | undefined,
+    endpoint: string | undefined,
   ): Promise<ProviderRecoveryRecord | undefined> {
     const pending = this.resumedProviderWait;
     this.resumedProviderWait = undefined;
     if (!pending) return undefined;
+    // The window is the recorded provider's: a resume against another endpoint is not held back by it.
+    if (pending.record?.endpoint && endpoint && pending.record.endpoint !== endpoint) return undefined;
     const now = this.recoveryClock.now();
     const remaining = Date.parse(pending.eligibleAt) - now;
     if (!(remaining > 0)) return undefined;
-    const delay = Math.min(remaining, policy.maxDelayMs);
+    const delay = Math.min(remaining, policy.deadlineMs);
     const iso = (ms: number) => new Date(ms).toISOString();
     const prior = pending.record;
     const record: ProviderRecoveryRecord = {
@@ -6145,7 +6150,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         });
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         try {
-          resumedWait = await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal);
+          resumedWait = await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal, activeClient.endpoint);
           providerEligibleAt = undefined;
           assistantMessage = await recovery.run(requestId, {
             submit: (s) => this.submitGenAiRequest(activeClient, () =>

@@ -216,7 +216,7 @@ export interface InterruptionRecord {
   undispatchedToolCalls: number;
   /**
    * phase `provider_wait` only: when the provider may be asked again (the planned next attempt, which honours its
-   * Retry-After). A resumed turn waits until then before its first request (capped by the recovery policy).
+   * Retry-After). A resumed turn waits until then before its first request (bounded by the recovery deadline).
    */
   providerEligibleAt?: string;
 }
