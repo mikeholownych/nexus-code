@@ -6854,7 +6854,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           throw new Error("Cannot create or reuse a named worktree in read-only or dry-run mode.");
         }
         const named = this.worktreeManager.ensureNamedWorktree(this.config.worktreeBranch, process.env.HOME || os.homedir());
-        this.activeWorktree = { taskId: `task-${randomUUID().slice(0, 8)}`, worktreePath: named.path, branch: named.branch, kind: "named" };
+        // The binding belongs to this durable task; the worktree itself is addressed by its branch.
+        this.activeWorktree = { taskId: this.currentTaskId, worktreePath: named.path, branch: named.branch, kind: "named" };
         this.originalWorkspace = this.config.workspace;
         this.switchWorktreeWorkspace(named.path);
         console.log(pc.cyan(`🌲 ${named.created ? "Created" : "Reusing"} named git worktree: ${named.branch} at ${named.path}`));
