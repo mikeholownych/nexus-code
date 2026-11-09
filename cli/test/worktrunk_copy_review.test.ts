@@ -144,3 +144,46 @@ test("switch -c warns when the file cap stops the automatic copy", () => {
     assert.equal(fs.existsSync(path.join(dirOf(f, "feat-e"), "target")), false, "nothing is written when the cap trips");
   } finally { f.cleanup(); }
 });
+
+// Review round 2 (Entire, head 9df0896e) -------------------------------------------------------------------------
+
+// 01M6ZYSSA70NVHH372PGPJ165Z (medium)
+test("a file selected inside a virtualenv is not copied: the virtualenv exclusion covers the selected entry's ancestors", () => {
+  const f = fixture(".venv/\ncache/\n", ".venv/bin/activate\ncache/env/bin/python\n");
+  try {
+    fs.mkdirSync(path.join(f.repo, ".venv", "bin"), { recursive: true });
+    fs.writeFileSync(path.join(f.repo, ".venv", "pyvenv.cfg"), "home = /usr/bin\n");
+    fs.writeFileSync(path.join(f.repo, ".venv", "bin", "activate"), `VIRTUAL_ENV=${f.repo}/.venv\n`);
+    fs.mkdirSync(path.join(f.repo, "cache", "env", "bin"), { recursive: true });
+    fs.writeFileSync(path.join(f.repo, "cache", "env", "pyvenv.cfg"), "home = /usr/bin\n");
+    fs.writeFileSync(path.join(f.repo, "cache", "env", "bin", "python"), "py");
+    assert.equal(wt(f, ["switch", "-c", "feat/v", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-v");
+    const r = wt(f, ["copy-ignored", "--to", "feat/v"]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(fs.existsSync(path.join(dir, ".venv")), false, "nothing from a virtualenv is copied");
+    assert.equal(fs.existsSync(path.join(dir, "cache", "env")), false, "nor from one nested below the selected root");
+    assert.match(r.output, /virtualenv/i, r.output);
+  } finally { f.cleanup(); }
+});
+
+// 01M6ZYP02A3PHFHTXY4SS3VGRV (low)
+test(".git, .nexus and .entire nested inside a copied directory are never copied", () => {
+  for (const mode of [[], ["--all-ignored"]]) {
+    const f = fixture("node_modules/\n", "node_modules/\n");
+    try {
+      const vendored = path.join(f.repo, "node_modules", "dep");
+      for (const name of [".git", ".nexus", ".entire"]) {
+        fs.mkdirSync(path.join(vendored, name), { recursive: true });
+        fs.writeFileSync(path.join(vendored, name, "config"), "x");
+      }
+      fs.writeFileSync(path.join(vendored, "index.js"), "module.exports = 1;\n");
+      assert.equal(wt(f, ["switch", "-c", "feat/n", "--no-copy"]).success, true);
+      const dir = path.join(dirOf(f, "feat-n"), "node_modules", "dep");
+      const r = wt(f, ["copy-ignored", "--to", "feat/n", ...mode]);
+      assert.equal(r.success, true, r.output);
+      assert.equal(fs.readFileSync(path.join(dir, "index.js"), "utf8"), "module.exports = 1;\n");
+      for (const name of [".git", ".nexus", ".entire"]) assert.equal(fs.existsSync(path.join(dir, name)), false, `${name} ${mode.join(" ")}`);
+    } finally { f.cleanup(); }
+  }
+});
