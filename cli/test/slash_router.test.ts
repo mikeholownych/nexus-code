@@ -335,7 +335,7 @@ describe("slash router: workspace commands", () => {
     });
   });
 
-  test("worktree merge with a target reaches the named merge; a bare merge stays the speculative one (01M6VSCBZJN44S6SHYJQE7QV92)", async () => {
+  test("worktree merge with a target reaches the named merge; a bare merge stays the speculative one", async () => {
     await withRig(async ({ reply, repo, host }) => {
       assert.equal((await reply("worktree", "switch -c feature/slash-merge --no-copy")).success, true);
       const dir = path.join(repo, ".nexus", "worktrees", "feature-slash-merge");
