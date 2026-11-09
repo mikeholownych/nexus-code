@@ -8,7 +8,11 @@ import {
   CandidateIdentity,
 } from "./core/candidate.js";
 import { ensureGitExclude } from "./core/git_exclude.js";
-import { isLinkedWorktreeDir } from "./core/persistence_protection.js";
+import { isLinkedWorktreeDir, isNamedWorktreePath } from "./core/persistence_protection.js";
+import { WORKTREE_BINDING_VERSION } from "./core/state_schema.js";
+import { WorkspacePath } from "./core/workspace_path.js";
+import { ensureWorktree } from "./worktrunk/core.js";
+import { openRepo } from "./worktrunk/repo.js";
 import { git as pinnedGit } from "./worktrunk/git.js";
 export { ensureGitExclude };
 
@@ -195,6 +199,27 @@ export class WorktreeManager {
   /** Returns whether a speculative worktree contains changes or commits to verify. */
   public hasChanges(taskId: string): boolean {
     return this.hasChangesAt(path.join(this.getWorktreesBaseDir(), taskId), `nexus/${taskId}`);
+  }
+
+  /**
+   * The named worktree for `branch` (`run --worktree-branch`): reused when it exists, created from the default branch
+   * otherwise. A branch checked out in the primary checkout is refused (running there would not be isolated and
+   * `nexus worktree merge` refuses the primary checkout), and the result is accepted only when it passes the same
+   * validation the durable binding uses: Git lists it on that branch, its `.git` pointer leads into this repository,
+   * and the registry holds it.
+   */
+  public ensureNamedWorktree(branch: string, home: string): { branch: string; path: string; created: boolean } {
+    const repo = openRepo(this.gitRoot);
+    const checkedOut = repo.entries.find((entry) => entry.branch === branch);
+    if (checkedOut?.isMain) {
+      throw new Error(`--worktree-branch ${branch}: that branch is checked out in the primary checkout (${checkedOut.path}); a named worktree must be a separate linked worktree.`);
+    }
+    const named = ensureWorktree({ cwd: this.gitRoot, home, readOnly: false }, branch);
+    const binding = { kind: "named", bindingVersion: WORKTREE_BINDING_VERSION, branch: named.branch };
+    if (!isNamedWorktreePath(WorkspacePath.fromSelectedWorkspace(this.gitRoot), named.path, binding)) {
+      throw new Error(`Named worktree ${named.branch} at ${named.path} is not a registered linked worktree of this repository; inspect it with \`nexus worktree list\`.`);
+    }
+    return named;
   }
 
   /** The repository's common Git directory (resolved), where linked worktrees keep their administrative directories. */

@@ -57,7 +57,6 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { recordVerification } from "./worktrunk/verification.js";
-import { ensureWorktree } from "./worktrunk/core.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
@@ -6854,7 +6853,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (this.isReadOnly() || this.config.dryRun) {
           throw new Error("Cannot create or reuse a named worktree in read-only or dry-run mode.");
         }
-        const named = ensureWorktree({ cwd: this.config.workspace, home: process.env.HOME || os.homedir(), readOnly: false }, this.config.worktreeBranch);
+        const named = this.worktreeManager.ensureNamedWorktree(this.config.worktreeBranch, process.env.HOME || os.homedir());
         this.activeWorktree = { taskId: `task-${randomUUID().slice(0, 8)}`, worktreePath: named.path, branch: named.branch, kind: "named" };
         this.originalWorkspace = this.config.workspace;
         this.switchWorktreeWorkspace(named.path);
