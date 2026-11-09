@@ -99,6 +99,8 @@ test("pathological 800 KB inputs are redacted in linear time", () => {
     ["exclamation run", `${"!".repeat(size)}x`],
     // Many short `sk-` runs with no "/": a backward search for a path separator must not reach into earlier text.
     ["short sk- runs", "sk-a ".repeat(Math.ceil(size / 5))],
+    ["sk- with escaped slashes", "sk-A1\\/".repeat(Math.ceil(size / 6))],
+    ["Bearer then escaped slashes", `Bearer A1a${"\\/".repeat(Math.ceil(size / 2))}`],
   ];
   try {
     for (const [name, input] of inputs) {
@@ -257,5 +259,27 @@ test("a key inside a high-entropy token keeps its deterministic classification a
     } finally {
       InformationFlowBoundary.setGlobalInstance(original);
     }
+  }
+});
+
+/** JSON may escape "/" as "\/": the escaped slash is part of the secret, not its end. */
+test("secrets with JSON-escaped slashes are redacted whole", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    for (const [secret, render] of [
+      [String.raw`sk-ant-api03-Qx7Km2+Vb9Lr\/Tz4Wd8Ns3Hc6Yp1Jf5Ge0Ua+Xo2Rt\/Bq`, (s: string) => `{"a":"${s}"}`],
+      [String.raw`sk-proj7Ka+Mb3Qx\/Zt9Lw2Vn5Hd8Rc1Yf4Jg6Pu0Eo+Sa\/Tk`, (s: string) => `{"k":"${s}"}`],
+      [String.raw`Tq8Zc3+Lm5Xv\/Rb2Nk7Hd1Yw4Js6Pg9Fe0Ua+Oi8Sx2Q==`, (s: string) => `{"t":"${s}"}`],
+      [String.raw`Hn4Vb7+Cx2Zl\/Km9Qw3Rt6Yu1Ip8Oa5Sd0Fg+Jk2Lz\/Mq`, (s: string) => `{"h":"Authorization: Bearer ${s}"}`],
+      [String.raw`Hn4Vb7Cx2Zl\/Km9Qw3Rt6Yu1Ip8Oa5Sd0FgJk2Lz\/Mq`, (s: string) => `{"h":"Bearer ${s}"}`],
+    ] as Array<[string, (s: string) => string]>) {
+      const output = redactDiagnosticForOutput(render(secret));
+      for (const segment of secret.replace(/=+$/, "").split("\\/")) {
+        assert.ok(!output.includes(segment) && !leftoverWindow(output, segment), `${secret}: left "${segment}" in ${output}`);
+      }
+    }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
   }
 });

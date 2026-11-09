@@ -424,6 +424,11 @@ function trimTrailingDelimiters(value: string): string {
   return value.slice(0, end);
 }
 
+/** JSON may escape "/" as `\/`: classify the value as if the slash were plain; the redacted span keeps the escape. */
+function unescapeSlashes(value: string): string {
+  return value.includes("\\/") ? value.replaceAll("\\/", "/") : value;
+}
+
 function isBase64KeyChar(code: number): boolean {
   return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
     code === 95 || code === 45 || code === 43 || code === 47; // _ - + /
@@ -440,7 +445,8 @@ function isPathTail(tail: string): boolean {
 
 /**
  * `sk-` / `sk-ant-` keys whose body is base64 ("/" and "+" included), found in one left-to-right pass: from each `sk-`
- * at a word boundary take the maximal run of key characters once, validate it, and resume after it. Nothing of the run
+ * at a word boundary take the maximal run of key characters (a JSON-escaped `\/` counts as "/") once, validate it,
+ * and resume after it. Nothing of the run
  * is trimmed: its last segment is key material whatever its letter case. A run is a key if its body is at least 20
  * characters, contains "/" or "+", and has a digit, a capital or "+" (`sk-learn/linear_model/ridge` is a path).
  * A plain key followed by a URL path (`sk-…RtBq/models`: the body before its first "/" is a 20-64 character plain key
@@ -459,9 +465,13 @@ function scanBase64Keys(text: string): Array<{ start: number; end: number; name:
       continue;
     }
     let end = at + 3;
-    while (end < text.length && isBase64KeyChar(text.charCodeAt(end))) end++;
+    while (end < text.length) {
+      if (isBase64KeyChar(text.charCodeAt(end))) end++;
+      else if (text[end] === "\\" && text[end + 1] === "/") end += 2; // a JSON-escaped "/"
+      else break;
+    }
     const anthropic = text.startsWith("sk-ant-", at);
-    const body = text.slice(at + (anthropic ? 7 : 3), end);
+    const body = unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end));
     const separator = body.search(/[/+]/);
     const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
       isPathTail(body.slice(separator + 1));
@@ -603,13 +613,14 @@ export class InformationFlowBoundary {
     { name: "SLACK_TOKEN", regex: /\b(?:xox[baprs]-[0-9a-zA-Z]{10,48})\b/g },
     // Bearer tokens: RFC 6750 token68 (letters, digits, "-._~+/", "=" padding). A body that uses "/" must be base64:
     // a digit, a capital and a lower-case letter, and not starting with "/", so `Bearer /api/v1/organizations/x` in
-    // ordinary text is a path, not a token. The lookaheads scan the token once each; the pattern stays linear.
+    // ordinary text is a path, not a token. A JSON-escaped `\/` counts as "/". The lookaheads scan the token once
+    // each; the pattern stays linear.
     {
       name: "BEARER_AUTH_HEADER",
-      regex: /\bBearer\s+((?:(?=[A-Za-z0-9_.~+\/-]*\d)(?=[A-Za-z0-9_.~+\/-]*[A-Z])(?=[A-Za-z0-9_.~+\/-]*[a-z])[A-Za-z0-9_.~+-][A-Za-z0-9_.~+\/-]{15,}|[A-Za-z0-9_.~-]{16,})={0,2})/g,
+      regex: /\bBearer\s+((?:(?=(?:[A-Za-z0-9_.~+\/-]|\\\/)*\d)(?=(?:[A-Za-z0-9_.~+\/-]|\\\/)*[A-Z])(?=(?:[A-Za-z0-9_.~+\/-]|\\\/)*[a-z])[A-Za-z0-9_.~+-](?:[A-Za-z0-9_.~+\/-]|\\\/){15,}|[A-Za-z0-9_.~-]{16,})={0,2})/g,
     },
     // Authorization header values, including Basic (base64 user:password) and provider Token schemes.
-    { name: "AUTHORIZATION_HEADER", regex: /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?([A-Za-z0-9._~+/=-]{8,})/gi },
+    { name: "AUTHORIZATION_HEADER", regex: /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?((?:[A-Za-z0-9._~+/=-]|\\\/){8,})/gi },
     // JWT Tokens (3 base64url segments separated by dots)
     {
       name: "JWT_TOKEN",
@@ -849,14 +860,15 @@ export class InformationFlowBoundary {
         tok.length >= 20 &&
         tok.length <= 128 &&
         // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
-        (originalTokens.has(tok) || looksLikeCredentialToken(tok)) &&
+        (originalTokens.has(tok) || looksLikeCredentialToken(unescapeSlashes(tok))) &&
         !isReference(tok)
       ) {
         // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above). Nexus's own session
         // ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
         // id made the session impossible to save or resume.
-        if (/^[a-zA-Z0-9+/=_-]+$/.test(tok) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(tok)) {
-          const entropy = calculateShannonEntropy(tok);
+        const plain = unescapeSlashes(tok);
+        if (/^[a-zA-Z0-9+/=_-]+$/.test(plain) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain)) {
+          const entropy = calculateShannonEntropy(plain);
           // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
           const threshold = tok.length < 32 ? 4.0 : 4.5;
           if (entropy >= threshold) {
