@@ -79,6 +79,17 @@ export function resolveBranchName(repo: Repo, token: string): string {
   return token;
 }
 
+/** `fs.realpathSync` for a path that may not exist: the real path of its deepest existing ancestor, then the missing tail. */
+function normalizedPath(file: string): string {
+  const absolute = path.resolve(file);
+  try {
+    return fs.realpathSync(absolute);
+  } catch {
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(normalizedPath(parent), path.basename(absolute));
+  }
+}
+
 function looksLikePath(token: string): boolean {
   return path.isAbsolute(token) || token === "." || token === ".." || token.startsWith("./") || token.startsWith("../") || token.startsWith("~");
 }
@@ -87,10 +98,13 @@ function looksLikePath(token: string): boolean {
 export function findEntry(repo: Repo, token: string, home: string): WorktreeEntry {
   if (looksLikePath(token)) {
     const expanded = token.startsWith("~") ? path.join(home, token.slice(1)) : path.resolve(repo.cwd, token);
-    let real: string;
-    try { real = fs.realpathSync(expanded); } catch { throw new WorktreeError(`no worktree at ${shownPath(home, expanded)}`); }
-    const hit = repo.entries.find((entry) => { try { return fs.realpathSync(entry.path) === real; } catch { return false; } });
-    if (!hit) throw new WorktreeError(`${shownPath(home, real)} is not a worktree of this repository`);
+    // A worktree whose directory was deleted by hand is still listed by Git (as prunable), so a path that no longer
+    // exists is matched on its normalised location: the real path of its deepest existing ancestor plus the rest.
+    const real = normalizedPath(expanded);
+    const hit = repo.entries.find((entry) => normalizedPath(entry.path) === real);
+    if (!hit) {
+      throw new WorktreeError(fs.existsSync(expanded) ? `${shownPath(home, real)} is not a worktree of this repository` : `no worktree at ${shownPath(home, expanded)}`);
+    }
     return hit;
   }
   const name = resolveBranchName(repo, token);
@@ -384,27 +398,30 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
     throw new WorktreeError(`${entry.branch ? "branch" : "HEAD"} is not merged into ${target ? shownBranch(target) : "the default branch"}; merge it, or pass --delete-unmerged to discard its commits`);
   }
 
-  if (entry.prunable) {
-    // Only this registration goes: a bare `worktree prune` would drop every stale worktree and leave their
-    // registry entries behind. `remove --force` accepts a missing directory and touches one admin entry.
-    git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
-  } else {
-    const before = verifiedWorktreeDir(repo, entry);
-    if (!options.force) {
-      const dirty = statusOf(entry.path, { ignored: true });
-      if (dirty.total + dirty.ignored > 0) {
-        throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
-      }
-    }
-    removeSeams.beforeRemove?.(entry);
-    // The directory must still be the one that was inspected: a swap for a link or another tree is refused.
-    const after = identityOf(entry.path);
-    if (!after || after.dev !== before.dev || after.ino !== before.ino) throw new WorktreeError("the worktree directory changed while it was being checked; nothing was removed");
-    git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
-  }
-
+  // The lock is taken before anything is deleted and held through the branch and registry bookkeeping, so a
+  // concurrent `switch` (which holds it across its checkout) either finishes first or waits; a lock that cannot be
+  // had fails here with the worktree, branch and registry untouched.
   let branchNote = "";
   withWorktreeLock(repo.commonDir, () => {
+    if (entry.prunable) {
+      // Only this registration goes: a bare `worktree prune` would drop every stale worktree and leave their
+      // registry entries behind. `remove --force` accepts a missing directory and touches one admin entry.
+      git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
+    } else {
+      const before = verifiedWorktreeDir(repo, entry);
+      if (!options.force) {
+        const dirty = statusOf(entry.path, { ignored: true });
+        if (dirty.total + dirty.ignored > 0) {
+          throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
+        }
+      }
+      removeSeams.beforeRemove?.(entry);
+      // The directory must still be the one that was inspected: a swap for a link or another tree is refused.
+      const after = identityOf(entry.path);
+      if (!after || after.dev !== before.dev || after.ino !== before.ino) throw new WorktreeError("the worktree directory changed while it was being checked; nothing was removed");
+      git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
+    }
+
     if (entry.branch && entry.branch !== target) {
       removeSeams.beforeBranchDeletion?.(entry);
       const stillCheckedOut = listAfter(repo).some((other) => other.branch === entry.branch);
@@ -439,8 +456,13 @@ function verifiedWorktreeDir(repo: Repo, entry: WorktreeEntry): { dev: number; i
   const dotStat = fs.lstatSync(dotGit);
   if (!dotStat.isFile()) throw new WorktreeError("the worktree has no .git file; refusing to remove it");
   const pointer = fs.readFileSync(dotGit, "utf8").trim();
-  const expected = `gitdir: ${path.join(repo.commonDir, "worktrees")}${path.sep}`;
-  if (!pointer.startsWith(expected)) throw new WorktreeError("the worktree does not belong to this repository's common directory; refusing to remove it");
+  // The pointer may be absolute or, with `worktree.useRelativePaths`, relative to the worktree directory. Either way
+  // its canonical location must be an entry under this repository's common directory.
+  const match = /^gitdir: (.+)$/.exec(pointer);
+  const admin = match ? normalizedPath(path.resolve(entry.path, match[1])) : "";
+  if (!admin || !admin.startsWith(path.join(normalizedPath(repo.commonDir), "worktrees") + path.sep)) {
+    throw new WorktreeError("the worktree does not belong to this repository's common directory; refusing to remove it");
+  }
   return { dev: before.dev, ino: before.ino };
 }
 
