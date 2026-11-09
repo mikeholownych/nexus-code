@@ -72,8 +72,8 @@ export const GLOBAL_OPTIONAL_VALUE_OPTIONS = new Set(["-r", "--resume", "--sandb
 export function firstCommandToken(args: readonly string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    // After `--` every token is an operand of the default command, never a subcommand.
-    if (arg === "--") return undefined;
+    // Commander still dispatches the first operand after a bare `--` as the subcommand (`nexus -- eval x`).
+    if (arg === "--") return args[i + 1];
     if (!arg.startsWith("-")) return arg;
     if (arg.includes("=")) continue;
     const takesNext = (flag: string) => args[i + 1] !== undefined && (GLOBAL_VALUE_OPTIONS.has(flag) || (GLOBAL_OPTIONAL_VALUE_OPTIONS.has(flag) && !args[i + 1].startsWith("-")));

@@ -2,25 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const EVAL_RUNTIME_FILES = [
-  "eval/run.mjs", "eval/validate.mjs", "eval/t4_fixtures.mjs", "eval/isolate.mjs",
-  "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh",
-  "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/dataset.mjs",
-  "eval/runner_integrity.mjs", "eval/runner_api.mjs", "eval/oracle.mjs", "eval/infra.mjs",
-  "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs",
-  "eval/hardened_check.mjs", "eval/toolchain-versions.json", "eval/scan-compiler-exposure.mjs",
-  "eval/evaluators/code/index.mjs",
-  "eval/evaluators/code/syntax_ast.mjs",
-  "eval/evaluators/code/build.mjs",
-  "eval/evaluators/code/typecheck_clean.mjs",
-  "eval/evaluators/code/diff_boundary.mjs",
-  "eval/evaluators/code/runner.mjs",
-  "eval/evaluators/code/json_repair_rate.mjs",
-  "eval/evaluators/code/parsers.mjs",
-  "eval/evaluators/code/command.mjs",
-  "eval/evaluators/code/result.mjs",
-  "eval/evaluators/code/README.md",
-];
+// The list is defined once, in eval/runtime_files.mjs, and shared with eval/run.mjs harnessIdentity().
+import { EVAL_RUNTIME_FILES } from "../eval/runtime_files.mjs";
+export { EVAL_RUNTIME_FILES };
 
 export function stageEvaluatorRuntime(sourceRoot, packageRoot) {
   const source = path.resolve(sourceRoot);

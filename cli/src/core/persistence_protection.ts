@@ -45,6 +45,21 @@ function classifyPathComponents(value: string): ReturnType<InformationFlowBounda
   ];
 }
 
+/**
+ * Redact credentials in a filesystem path (or a single path component) for display. Generated directory names such as
+ * `/tmp/nexus-sidecar-otKj5G` look like high-entropy tokens to the prose classifier, so UNCERTAIN findings are kept;
+ * anything positively classified (a provider key, an explicit secret, a contextual assignment) is replaced.
+ * Throws if classification fails, so a caller never emits an unchecked path.
+ */
+export function redactPathForOutput(value: string): string {
+  let redacted = value;
+  for (const finding of classifyPathComponents(value)) {
+    if (finding.classificationType === "UNCERTAIN") continue;
+    redacted = redacted.replaceAll(finding.secret, `[REDACTED:${finding.patternName || "SECRET"}]`);
+  }
+  return redacted;
+}
+
 /** Verify that an uncertain-only path is an actual Nexus worktree in the selected repository. */
 export function isManagedWorktreePath(
   workspace: WorkspacePath,

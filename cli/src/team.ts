@@ -8,11 +8,15 @@
  * BLOCKED on a decision, never reported as done.
  */
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { SecurityManager } from "./security.js";
+import { redactForPersistence } from "./core/persistence_protection.js";
 import { isRequired, newOperation, type DurableOperationState, type OperationEvent, type WorkUnit, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, driveOperation, OperationStore, resourcesFromConfig, type WorkUnitExecutor } from "./core/operation_runner.js";
 import type { RecoveryClock } from "./core/provider_recovery.js";
 import type { ResourceDescriptor } from "./core/resources.js";
-import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, SPECIALIST_CONTRACTS, type AgentRole } from "./core/roles.js";
+import { ROLE_PROFILES, ROLE_REQUIREMENTS, roleRequirements, SPECIALIST_CONTRACTS, isSpecialistRole, parseLeadingSpecialistInputs, type AgentRole } from "./core/roles.js";
 import { mergeOperationPolicy } from "./config.js";
 import type { HarnessConfig } from "./types.js";
 
@@ -35,20 +39,67 @@ const ROLE_MAX_STEPS = 15;
  * research, implementation needs the design, verification needs the implementation). Independent review needs only
  * the implementation, so it runs alongside verification, and must use a model the implementation did not use.
  */
-export function teamUnits(target: TeamTarget, objective: string, opts: { independentReview?: boolean } = {}): WorkUnitSpec[] {
-  const unit = (role: AgentRole, dependsOn: string[], independentOf?: string[]): WorkUnitSpec => ({
+export function teamUnits(target: TeamTarget, objective: string, opts: { independentReview?: boolean; workspace?: string } = {}): WorkUnitSpec[] {
+  const unit = (role: AgentRole, dependsOn: string[], independentOf?: string[]): WorkUnitSpec => {
+    // A specialist target takes its contract inputs as leading name=value words; they are enforced at admission.
+    const parsed = isSpecialistRole(role) ? parseLeadingSpecialistInputs(role, objective) : undefined;
+    return {
     id: UNIT_ID[role] ?? role,
     title: ROLE_PROFILES[role].title,
     role,
-    prompt: objective,
+    prompt: parsed ? parsed.task : objective,
+    ...(parsed && (Object.keys(parsed.inputs).length || Object.keys(parsed.files).length)
+      ? { inputs: { ...parsed.inputs, ...(Object.keys(parsed.files).length ? readTeamFileInputs(requireWorkspace(opts.workspace), parsed.files) : {}) } }
+      : {}),
     dependsOn,
     requires: roleRequirements(role, independentOf ? { independentOf } : {}),
     ...(ROLE_REQUIREMENTS[role].taskClass ? { taskClass: ROLE_REQUIREMENTS[role].taskClass } : {}),
-  });
+    };
+  };
   if (target !== "full") return [unit(target, [])];
   const units = [unit("researcher", []), unit("architect", ["research"]), unit("implementer", ["design"]), unit("tester", ["implement"])];
   if (opts.independentReview) units.push(unit("reviewer", ["implement"], ["implement"]));
   return units;
+}
+
+function requireWorkspace(workspace: string | undefined): string {
+  if (!workspace) throw new Error("@file: inputs need a workspace");
+  return workspace;
+}
+
+/** Largest file a `/team name=@file:path` input reads; the text is persisted with the operation. */
+const MAX_TEAM_FILE_INPUT_BYTES = 64 * 1024;
+
+/**
+ * Reads the `@file:` inputs of a `/team` specialist target. The file must be a regular file inside the workspace and
+ * not protected by the same security policy the read_file tool applies (checked on the path as written and on where
+ * it really points, so a symlink cannot reach a protected file). The text is capped and credential-redacted before it
+ * is persisted with the operation.
+ */
+function readTeamFileInputs(workspace: string, files: Record<string, string>): Record<string, string> {
+  const root = fs.realpathSync(workspace);
+  const security = new SecurityManager(root);
+  const out: Record<string, string> = {};
+  for (const [name, written] of Object.entries(files)) {
+    const file = path.resolve(root, written);
+    let real: string;
+    try {
+      real = fs.realpathSync(file);
+    } catch {
+      throw new Error(`Input '${name}': file '${written}' not found`);
+    }
+    if (real !== root && !real.startsWith(root + path.sep)) throw new Error(`Input '${name}': '${written}' is outside the workspace`);
+    for (const candidate of [path.relative(root, file), path.relative(root, real)]) {
+      const check = security.isPathProtected(candidate);
+      // Nexus's own state directory is never an input, whatever the workspace policy lists.
+      if (candidate.split(path.sep).includes(".nexus")) throw new Error(`Input '${name}': '${written}' is inside .nexus and is protected`);
+      if (check.protected) throw new Error(`Input '${name}': '${written}' is protected (${check.reason})`);
+    }
+    const stat = fs.statSync(real);
+    if (!stat.isFile() || stat.size > MAX_TEAM_FILE_INPUT_BYTES) throw new Error(`Input '${name}': '${written}' is not a regular file of at most ${MAX_TEAM_FILE_INPUT_BYTES} bytes`);
+    out[name] = redactForPersistence(fs.readFileSync(real, "utf8"));
+  }
+  return out;
 }
 
 export interface TeamRunOptions {
@@ -83,7 +134,7 @@ export class TeamOrchestrator {
     const now = this.opts.clock?.now() ?? Date.now();
     const resources = this.opts.resources ?? resourcesFromConfig(this.config);
     const policy = mergeOperationPolicy(this.config.operationPolicy, undefined);
-    return newOperation(this.opts.id ?? `team-${randomUUID().slice(0, 8)}`, objective, teamUnits(target, objective, this.opts), resources, now, policy);
+    return newOperation(this.opts.id ?? `team-${randomUUID().slice(0, 8)}`, objective, teamUnits(target, objective, { ...this.opts, workspace: this.config.workspace }), resources, now, policy);
   }
 
   async run(target: TeamTarget, objective: string): Promise<TeamOutcome> {

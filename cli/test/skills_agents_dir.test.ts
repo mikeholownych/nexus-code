@@ -175,7 +175,7 @@ describe("skill catalog stays within its prompt budget", () => {
 
       const counted = sm.getPromptSection(500);
       assert.ok(counted.length <= 500, `catalog is ${counted.length} chars`);
-      assert.match(counted, /…and \d+ more \(an unknown name passed to `activate_skill` lists them all\)\n$/);
+      assert.match(counted, /…and \d+ more \(pass words describing the task to `activate_skill` to search them\)\n$/);
 
       for (const budget of [-5, 0, 150, 307]) {
         assert.ok(sm.getPromptSection(budget).length <= Math.max(0, budget), `budget ${budget} is never exceeded`);

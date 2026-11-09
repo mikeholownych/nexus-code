@@ -2,6 +2,7 @@
 
 **Status:** Plan and owner decisions recorded (section 6); execution starts when this PR merges. **Base:** `main` at v1.1.3 (published 2026-11-05, `46fd5045`).
 **Scope (owner, 2026-11-04):** (1) resolve every open finding from the v1.1.2 source (shipped as v1.1.3); (2) add Worktrunk functionality in the best-integrated way.
+**Mandate (owner, restated 2026-11-07):** v1.1.4 delivers a **production-ready v1.1.x stream**. Nothing is deferred. The owner used the published v1.1.3 TUI and found it far from production ready, so the release is defined by the production bar in section 5, not by the findings ledger alone. The ledger is necessary, not sufficient.
 
 ## 1. Principles
 
@@ -70,7 +71,7 @@ Found in the post-v1.1.3 housekeeping (2026-11-05): detached worktrees held 122 
   - Read-only admission and explicit approval-mode precedence: `--read-only`, `--mode read-only` and `NEXUS_APPROVAL_MODE=read-only` (`cli/src/config.ts:372-393`) all end in read-only approval, but only `--read-only` sets the `readOnly` flag. `agent.ts:1445` and `types.ts:73` treat a mode-selected read-only (`readOnlyModeSelected`) as a deliberate, changeable posture, so the difference may be intended. Decide with a red test (`b733f069`, `eed469dd`).
   - Commander option precedence: a global-only or REPL option set on the command line must survive a default from the subcommand (`845cd1b6`, `244c97cc`, `7df4aea5`; `cli/src/index.ts:424` handles only part of it). **FIXED** (red test first: a command-line option before the subcommand was dropped by `run`; see FINDINGS section C).
   - Restore mode after a checkpoint-free turn (`cac400ea`; `repl.ts` already resets the fallback, check the sidecar and TUI paths). **WITHDRAWN** (sidecar and REPL both release the fallback; regression guard added; see FINDINGS section C).
-- **Acceptance (audit A1):** a real suspend, restart and resume test with provider recovery, an operation and a failing-test baseline, in addition to the red-first unit tests.
+- **Acceptance (audit A1):** a real suspend, restart and resume test with provider recovery, an operation and a failing-test baseline, in addition to the red-first unit tests. **DONE** (`cli/test/suspend_resume_acceptance.test.ts`, PR #468; see FINDINGS section D row A1).
 - Everything else in the orphan set is evidence-doc commits, six 2026-10-05 `wip` commits from the dogfood experiments, and repeated rebases of fixes already on `main`; nothing to port.
 
 ### WP-1307 Research: review Harness² (issue #69)
@@ -100,6 +101,9 @@ Source: owner report 2026-11-05. On v1.1.3 a single prompt in a repository on a 
 
 ### WP-1316 Specialist contract enforcement
 From the 2026-11-06 readiness audit (FINDINGS section D, A4). `maxContextTokens` is never consumed, `validateSpecialistOutput` has no runtime caller, required inputs are prompt advice only, and the independent-review verdict gate covers reviewer units only. Enforce ceilings at admission, validate inputs and results through the operation executor, retain raw rejected output, add tests through the executor.
+
+### WP-1317 TUI and interactive-surface production readiness
+Owner finding (2026-11-07): the published v1.1.3 TUI "kind of works" but is nowhere close to production ready. Source of truth: `docs/v1.1.4/TUI-AUDIT.md` (dogfood audit of the real TUI in a pseudo-terminal at 80x24, 120x40 and 200x60: input editing, paste and unicode, streaming and markdown, tool progress, approvals, diffs, errors, slash commands, sessions, interrupt, resize, scrollback, status line, colours and `NO_COLOR`, redraw artefacts, idle CPU, clean exit, non-TTY) plus the owner's own list of defects. Every blocker and major defect is fixed red-first (a terminal-capture test where it can be automated, a recorded capture otherwise); minor and polish items are fixed or recorded with the owner's explicit decision. The owner dogfoods the exact release head before the tag.
 
 ## 3. Worktrunk integration
 
@@ -183,7 +187,11 @@ Licence: reimplementing ideas needs no licence. Do not copy code. Credit Worktru
 - WP-1308: the citable prompt on the 305-skill host starts without a capacity block; per-turn skill notes and the lookup pass the tests listed under WP-1308; the system prompt is byte-identical across turns.
 - WP-1316: role ceilings, required inputs and specialist results are enforced through the operation executor, with executor-level tests.
 - WP-1307: `docs/v1.1.4/HARNESS2-REVIEW.md` is merged and issue #69 is closed with a link to it.
-- G1.1-4 measured or still explicitly "not met".
+- **Production bar (owner mandate):**
+  - `docs/v1.1.4/TUI-AUDIT.md` has 0 open blocker or major defects; each is fixed with a captured before and after, and the REPL, TUI and sidecar surfaces agree on mode, tokens and status.
+  - The owner dogfoods the exact release head in the TUI and accepts it (recorded in the release PR); the release notes claim only what that testing and the measurements support.
+  - A live smoke test of the wired GBNF path on the owner's llama.cpp host (shared `GATEWAY` claim) passes; `toolGrammarDefault` is then flipped on in a one-line commit, or the failure is fixed.
+- G1.1-4 is measured against live endpoints and reported with counts. If it is not met, the release is not production ready: fix the cause, do not ship with the gate marked "not met".
 - No new runtime dependency, no SBOM component change, `cargo deny` and `npm audit` clean.
 
 ## 6. Owner decisions (answered 2026-11-05)

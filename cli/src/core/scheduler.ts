@@ -17,6 +17,9 @@ import type {
   WorkUnit,
   WorkUnitStatus,
 } from "./operation.js";
+import { MAX_REJECTED_OUTPUT_CHARS, MAX_REJECTED_OUTPUTS, unitBaseTask } from "./operation.js";
+import { specialistInputsProblem } from "./specialist_profiles.js";
+import { redactForPersistence } from "./persistence_protection.js";
 import type { ResourceDescriptor, ResourceRegistry, Selection } from "./resources.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 import { effectiveConcurrency } from "./operation_schema.js";
@@ -402,6 +405,19 @@ export class ConvergenceScheduler {
     const action = option.action;
     const text = note?.trim();
     if (action.kind === "revise" && !text) throw new DecisionRejected("Revising a unit requires a note describing the revision.");
+    if (action.kind === "replace_task" && !text) throw new DecisionRejected("Replacing a unit's task requires a note holding the new task.");
+    let suppliedInputs: Record<string, string> | undefined;
+    if (action.kind === "set_inputs") {
+      try {
+        const parsed = JSON.parse(text ?? "");
+        // The merged map is what gets persisted and reloaded, so that is what must be valid.
+        const problem = specialistInputsProblem(parsed) ?? specialistInputsProblem({ ...(u.inputs ?? {}), ...parsed });
+        if (problem) throw new Error(problem);
+        suppliedInputs = parsed;
+      } catch (error: any) {
+        throw new DecisionRejected(`Supplying inputs requires a note holding a JSON object of named strings (${String(error?.message ?? error).slice(0, 160)}).`);
+      }
+    }
     if (action.kind === "drop" && isRequired(u)) throw new DecisionRejected(`${u.title} is required; dropping it would leave the objective unmet.`);
     if (action.kind === "assign") {
       const r = this.registry.get(action.resourceId);
@@ -434,6 +450,18 @@ export class ConvergenceScheduler {
         break;
       case "revise":
         u.prompt = `${u.prompt}${REVISION_MARKER}${text}`;
+        u.runsBase = u.runs;
+        u.status = "RUNNABLE";
+        break;
+      case "replace_task":
+        // The earlier operator revisions stay: only the base task is replaced.
+        u.prompt = `${text}${u.prompt.slice(unitBaseTask(u.prompt).length)}`;
+        delete u.context;
+        u.runsBase = u.runs;
+        u.status = "RUNNABLE";
+        break;
+      case "set_inputs":
+        u.inputs = redactForPersistence({ ...(u.inputs ?? {}), ...suppliedInputs });
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;
@@ -550,6 +578,14 @@ export class ConvergenceScheduler {
         });
         return;
       case "failed":
+        if (result.rejectedOutput) {
+          const { raw, reason } = result.rejectedOutput;
+          const kept = raw.length > MAX_REJECTED_OUTPUT_CHARS;
+          u.rejectedOutputs = [
+            ...(u.rejectedOutputs ?? []),
+            { at, reason, raw: kept ? raw.slice(0, MAX_REJECTED_OUTPUT_CHARS) : raw, ...(kept ? { truncated: true } : {}) },
+          ].slice(-MAX_REJECTED_OUTPUTS);
+        }
         this.block(u, { ...result, options: [...result.options, ...(result.offerReassign ? this.assignable(u, [resourceId]) : [])] });
         return;
       case "cancelled":

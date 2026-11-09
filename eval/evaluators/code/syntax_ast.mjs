@@ -9,6 +9,9 @@ const EXTENSIONS = new Map([
   [".rs", "rust"], [".py", "python"],
 ]);
 
+/** A source file larger than this is refused unparsed: parser time grows with size and a candidate controls the file. */
+const DEFAULT_MAX_SOURCE_BYTES = 8 * 1024 * 1024;
+
 export function isSupportedSyntaxPath(relativePath) {
   return typeof relativePath === "string" && EXTENSIONS.has(path.extname(relativePath).toLowerCase());
 }
@@ -30,9 +33,13 @@ function confinedFile(root, relativePath) {
  * Parse every modified source file with a real parser: the built-in ones (parsers.mjs) unless the caller supplies a
  * parser for that language. Parser functions receive source text and { file, language, absolutePath } and return an
  * object, or throw/return { errors: [...] } when parsing fails. Unsupported extensions and languages without a parser
- * fail closed.
+ * fail closed, as does a file over `maxSourceBytes` (default 8 MiB). Built-in parsers run in a child process stopped
+ * after `parserTimeoutMs` (default 30 s).
  */
-export async function evaluateSyntaxAst({ root, files, parsers = {} }) {
+export async function evaluateSyntaxAst({ root, files, parsers = {}, maxSourceBytes = DEFAULT_MAX_SOURCE_BYTES, parserTimeoutMs }) {
+  for (const [name, value] of [["maxSourceBytes", maxSourceBytes], ["parserTimeoutMs", parserTimeoutMs]]) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) throw new RangeError(`${name} must be a positive integer`);
+  }
   const available = { ...DEFAULT_PARSERS, ...parsers };
   if (!Array.isArray(files) || !files.length) return evaluatorResult("syntax_ast", false, 0, { error: "no modified source files supplied", files: [] });
   const failures = [];
@@ -41,12 +48,14 @@ export async function evaluateSyntaxAst({ root, files, parsers = {} }) {
     let file;
     try { file = confinedFile(root, relativePath); }
     catch (error) { failures.push({ file: relativePath, error: error.message }); continue; }
+    const size = fs.statSync(file).size;
+    if (size > maxSourceBytes) { failures.push({ file: relativePath, error: `source file is larger than ${maxSourceBytes} bytes (${size})` }); continue; }
     const language = EXTENSIONS.get(path.extname(relativePath).toLowerCase());
     if (!language) { failures.push({ file: relativePath, error: "unsupported source extension" }); continue; }
     const parser = available[language];
     if (typeof parser !== "function") { failures.push({ file: relativePath, error: `no ${language} AST parser configured` }); continue; }
     try {
-      const ast = await parser(fs.readFileSync(file, "utf8"), { file: relativePath, language, absolutePath: file });
+      const ast = await parser(fs.readFileSync(file, "utf8"), { file: relativePath, language, absolutePath: file, timeoutMs: parserTimeoutMs });
       if (ast == null || typeof ast !== "object" || Array.isArray(ast) ||
           (Object.hasOwn(ast, "errors") && (!Array.isArray(ast.errors) || ast.errors.length > 0))) {
         failures.push({ file: relativePath, error: "parser returned no AST or reported errors" });

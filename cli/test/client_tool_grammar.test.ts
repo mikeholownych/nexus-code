@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { LocalLlmClient } from "../src/client.js";
+import { normalizeNullableOptionalToolArguments, normalizeToolArguments, unwrapSingleKeyWrapper } from "../src/core/tool_arguments.js";
 import { adaptToolDefinitionsForServer } from "../src/core/tool_grammar_provider.js";
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse, body: string) => void;
@@ -235,9 +236,9 @@ test("client preserves vLLM strict schemas in a streaming completion", async () 
   assert.equal("response_format" in sent, false);
 });
 
-test("client normalizes nullable optional arguments in streamed and non-streamed calls", async () => {
+test("client returns tool-call arguments verbatim; normalisation happens once, where the agent parses a response (WP-1303)", async () => {
   const wireArgs = { path: null, start_line: null, end_line: 0, include_hidden: false, label: "" };
-  const expected = { path: null, end_line: 0, include_hidden: false, label: "" };
+  const expected = wireArgs;
   const observed: unknown[] = [];
   const run = async (stream: boolean) => withEndpoint((req, res, body) => {
     if (req.url === "/v1/models") return json(res, { data: [{ id: "model-a", owned_by: "vllm", max_model_len: 8192 }] });
@@ -456,4 +457,43 @@ test("client omits constrained fields for missing malformed or mismatched provid
       assert.equal(sent.tools[0].function.strict, undefined);
     });
   }
+});
+
+test("normalizer keeps an explicit null where the declared schema allows null (WP-1303)", () => {
+  const tool = { type: "function", function: { name: "t", parameters: { type: "object", required: ["a"], properties: {
+    a: { type: "string" },
+    typeList: { type: ["string", "null"] },
+    anyOfNull: { anyOf: [{ type: "string" }, { type: "null" }] },
+    oneOfNull: { oneOf: [{ type: "number" }, { type: "null" }] },
+    nullableFlag: { type: "string", nullable: true },
+    enumNull: { enum: ["x", null] },
+    plain: { type: "number" },
+  } } } } as any;
+  const out = normalizeNullableOptionalToolArguments("t", { a: "v", typeList: null, anyOfNull: null, oneOfNull: null, nullableFlag: null, enumNull: null, plain: null }, [tool]);
+  assert.deepEqual(out, { a: "v", typeList: null, anyOfNull: null, oneOfNull: null, nullableFlag: null, enumNull: null });
+  assert.deepEqual(normalizeNullableOptionalToolArguments("t", { a: null, plain: null }, [tool]), { a: null }, "a required argument stays null so validation rejects it");
+});
+
+test("normalizer fails safe on $ref and honours allOf when deciding whether null is allowed (WP-1303)", () => {
+  const tool = { type: "function", function: { name: "t", parameters: { type: "object", required: [], properties: {
+    ref: { $ref: "#/$defs/Maybe" },
+    allBoth: { allOf: [{ type: ["string", "null"] }, { nullable: true }] },
+    allOne: { allOf: [{ type: ["string", "null"] }, { type: "string" }] },
+  } } } } as any;
+  assert.deepEqual(
+    normalizeNullableOptionalToolArguments("t", { ref: null, allBoth: null, allOne: null }, [tool]),
+    { ref: null, allBoth: null },
+    "an unresolvable $ref keeps the null; allOf allows null only when every branch does",
+  );
+});
+
+test("one shared wrapper rule: the parser and the agent unwrap alike, and a declared property keeps its name (WP-1303)", () => {
+  assert.deepEqual(unwrapSingleKeyWrapper({ input: { a: 1 } }), { a: 1 });
+  assert.deepEqual(unwrapSingleKeyWrapper({ parameters: { a: 1 } }), { a: 1 });
+  assert.deepEqual(unwrapSingleKeyWrapper({ args: { a: 1 } }), { a: 1 });
+  assert.deepEqual(unwrapSingleKeyWrapper({ input: { a: 1 }, other: 2 }), { input: { a: 1 }, other: 2 }, "more than one key is not a wrapper");
+  assert.deepEqual(unwrapSingleKeyWrapper({ input: [1] }), { input: [1] }, "only a plain object is unwrapped");
+  assert.deepEqual(unwrapSingleKeyWrapper({ input: { a: 1 } }, new Set(["input"])), { input: { a: 1 } }, "a declared property is not a wrapper");
+  const tool = { type: "function", function: { name: "t", parameters: { type: "object", properties: { path: { type: "string" }, start_line: { type: "number" } }, required: ["path"] } } } as any;
+  assert.deepEqual(normalizeToolArguments("t", { input: { path: "a" }, start_line: null }, [tool]), { path: "a" });
 });
