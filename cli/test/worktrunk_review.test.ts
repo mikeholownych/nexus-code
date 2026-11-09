@@ -17,6 +17,9 @@ import { integratedReason } from "../src/worktrunk/core.js";
 import { openRepo } from "../src/worktrunk/repo.js";
 import { readWorktreeSettings } from "../src/worktrunk/config.js";
 import { WorktreeManager } from "../src/worktree.js";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { lockSettings, withWorktreeLock } from "../src/worktrunk/registry.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -277,7 +280,7 @@ test("root-level --read-only and --workspace options are merged for the worktree
   }
 });
 
-test("concurrent switch and removal are serialized around the occupancy check and branch deletion", async () => {
+test("01M70WYAQ44B: removal re-reads which worktrees hold the branch after removing its own; a branch another worktree now holds is kept", async () => {
   const f = fixture();
   try {
     const core = await import("../src/worktrunk/core.js") as any;
@@ -287,10 +290,8 @@ test("concurrent switch and removal are serialized around the occupancy check an
     const targetDir = named(f, "target");
     assert.equal(fs.existsSync(targetDir), true);
 
-    // Set seam: right before checking occupancy in removeOne, another switch creates a worktree for the same branch
     let switched = false;
     core.removeSeams.beforeBranchDeletion = () => {
-      // Create another worktree at a different path for the same branch
       const otherDir = path.join(f.repo, ".nexus", "worktrees", "target-second");
       git(f.repo, "worktree", "add", "--end-of-options", otherDir, "target");
       switched = true;
@@ -305,7 +306,6 @@ test("concurrent switch and removal are serialized around the occupancy check an
 
     assert.equal(switched, true, "seam must have run");
     assert.equal(fs.existsSync(targetDir), false, "the targeted worktree directory is removed");
-    // The branch must still exist because target-second is checking it out
     assert.equal(git(f.repo, "rev-parse", "--verify", "--quiet", "refs/heads/target").length > 0, true, "branch must be kept while checked out by another worktree");
     assert.match(result.output, /Removed worktree/);
     assert.doesNotMatch(result.output, /deleted its branch/);
@@ -314,3 +314,102 @@ test("concurrent switch and removal are serialized around the occupancy check an
   }
 });
 
+
+test("01M70X4E529M: a detached worktree whose directory was deleted is removable by its absolute path", () => {
+  const f = fixture();
+  try {
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-gone");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert.match(git(f.repo, "worktree", "list", "--porcelain"), /prunable/);
+    const removed = wt(f, f.repo, ["remove", dir]);
+    assert.equal(removed.success, true, removed.output);
+    assert.doesNotMatch(git(f.repo, "worktree", "list", "--porcelain"), /detached-gone/);
+  } finally { f.cleanup(); }
+});
+
+test("01M70X4E4K2C: a worktree whose .git file holds a relative gitdir pointer (worktree.useRelativePaths) is removable", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "relative"]).success, true);
+    const dir = named(f, "relative");
+    const dotGit = path.join(dir, ".git");
+    const admin = fs.readFileSync(dotGit, "utf8").trim().replace(/^gitdir: /, "");
+    fs.writeFileSync(dotGit, `gitdir: ${path.relative(dir, admin)}\n`); // what Git writes with worktree.useRelativePaths=true
+    git(dir, "status", "--porcelain"); // Git still understands it
+    const removed = wt(f, f.repo, ["remove", "relative", "--delete-unmerged"]);
+    assert.equal(removed.success, true, removed.output);
+    assert.equal(fs.existsSync(dir), false);
+  } finally { f.cleanup(); }
+});
+
+test("01M70X4E44FH: removal takes the lock before it deletes anything; a lock it cannot get leaves the worktree, branch and registry alone", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "locked-out"]).success, true);
+    const dir = named(f, "locked-out");
+    const common = path.join(f.repo, ".git");
+    const lock = path.join(common, "nexus", "worktrees.lock");
+    fs.writeFileSync(lock, String(process.pid)); // held by a live process (this one, from the lock's point of view another holder)
+    const before = lockSettings.waitMs;
+    lockSettings.waitMs = 200;
+    let removed;
+    try { removed = wt(f, f.repo, ["remove", "locked-out", "--delete-unmerged"]); } finally { lockSettings.waitMs = before; fs.rmSync(lock, { force: true }); }
+    assert.equal(removed.success, false);
+    assert.match(removed.output, /locked by another process/);
+    assert.equal(fs.existsSync(dir), true, "the worktree must not be deleted when the lock cannot be taken");
+    assert.ok(git(f.repo, "branch", "--list", "locked-out").includes("locked-out"));
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(common, "nexus", "worktrees.json"), "utf8")).worktrees.map((w: any) => w.branch), ["locked-out"]);
+  } finally { f.cleanup(); }
+});
+
+test("01M70WYAPEQT: a live holder's lock is not stolen after 30 s; a dead holder's is taken at once", async () => {
+  const f = fixture();
+  try {
+    const common = path.join(f.repo, ".git");
+    fs.mkdirSync(path.join(common, "nexus"), { recursive: true });
+    const lock = path.join(common, "nexus", "worktrees.lock");
+    const old = new Date(Date.now() - 40_000);
+
+    fs.writeFileSync(lock, String(process.pid));
+    fs.utimesSync(lock, old, old);
+    const before = lockSettings.waitMs;
+    lockSettings.waitMs = 300;
+    try {
+      assert.throws(() => withWorktreeLock(common, () => "ran"), /locked by another process/);
+      assert.equal(fs.existsSync(lock), true, "a live holder's lock must survive");
+
+      const dead = spawn(process.execPath, ["-e", ""]);
+      await new Promise((resolve) => dead.on("exit", resolve));
+      fs.writeFileSync(lock, String(dead.pid));
+      fs.utimesSync(lock, old, old);
+      assert.equal(withWorktreeLock(common, () => "ran"), "ran", "a lock whose holder is gone is taken");
+    } finally { lockSettings.waitMs = before; fs.rmSync(lock, { force: true }); }
+  } finally { f.cleanup(); }
+});
+
+test("01M70WYAQ44B: the worktree lock excludes another process while it runs a long action, then lets go", async () => {
+  const f = fixture();
+  try {
+    const common = path.join(f.repo, ".git");
+    const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const script = path.join(f.root, "holder.ts");
+    fs.writeFileSync(script, `import { withWorktreeLock } from ${JSON.stringify(path.join(cliRoot, "src", "worktrunk", "registry.ts"))};
+withWorktreeLock(process.argv[2], () => { console.log("held"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500); });
+`);
+    const child = spawn(path.join(cliRoot, "node_modules", ".bin", "tsx"), [script, common], { stdio: ["ignore", "pipe", "inherit"] });
+    const exited = new Promise((resolve) => child.on("exit", resolve));
+    await new Promise<void>((resolve, reject) => {
+      child.stdout.on("data", (chunk) => { if (String(chunk).includes("held")) resolve(); });
+      child.on("exit", () => reject(new Error("the holder exited before taking the lock")));
+    });
+    const before = lockSettings.waitMs;
+    lockSettings.waitMs = 200;
+    try {
+      assert.throws(() => withWorktreeLock(common, () => "ran"), /locked by another process/, "the other process holds the lock");
+    } finally { lockSettings.waitMs = before; }
+    await exited;
+    assert.equal(withWorktreeLock(common, () => "ran"), "ran", "after the holder finished the lock is free");
+  } finally { f.cleanup(); }
+});

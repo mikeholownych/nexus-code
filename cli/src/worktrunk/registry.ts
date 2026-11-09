@@ -103,6 +103,9 @@ export function writeRegistry(commonDir: string, registry: Registry): void {
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 let lockDepth = 0;
 
+/** How long a caller waits for the lock and when an old lock may be taken over. Mutable so tests can shorten the wait. */
+export const lockSettings = { waitMs: 3_000, staleMs: 30_000 };
+
 /** Run an action under an exclusive lock file (stale after 30 s), reentrant for the same process. */
 export function withWorktreeLock<T>(commonDir: string, fn: () => T): T {
   if (lockDepth > 0) {
@@ -117,7 +120,7 @@ export function withWorktreeLock<T>(commonDir: string, fn: () => T): T {
   const lock = path.join(registryDir(commonDir), "worktrees.lock");
   let held = false;
   let identity: ReturnType<typeof writeExclusiveVerified> | undefined;
-  for (let attempt = 0; attempt < 60 && !held; attempt++) {
+  for (let attempt = 0; attempt * 50 < lockSettings.waitMs && !held; attempt++) {
     try {
       identity = writeExclusiveVerified(commonDir, lock, String(process.pid));
       held = true;
@@ -125,7 +128,7 @@ export function withWorktreeLock<T>(commonDir: string, fn: () => T): T {
       if (err?.code !== "EEXIST") throw err;
       try {
         const age = Date.now() - fs.lstatSync(lock).mtimeMs;
-        if (age > 30_000) fs.unlinkSync(lock);
+        if (age > lockSettings.staleMs) fs.unlinkSync(lock);
       } catch { /* raced with the holder */ }
       Atomics.wait(sleeper, 0, 0, 50);
     }
