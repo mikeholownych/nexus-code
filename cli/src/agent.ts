@@ -5106,7 +5106,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (toolName === "activate_skill") {
       const skillName = args?.name;
       if (skillName && this.skillManager.getUntrustedSkill(skillName)) {
-        const cancelMsg = `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`;
+        const cancelMsg = `Error: Skill '${oneLine(String(skillName ?? "").slice(0, 200))}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`;
         const receipt: ExecutionReceipt = {
           invocationId: call.id,
           taskId: this.activeWorktree?.taskId || this.currentTaskId,
