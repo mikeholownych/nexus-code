@@ -472,6 +472,46 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     }
   });
 
+  test("a step on another endpoint leaves the window pending for a later step on the recorded endpoint (planner/coder routing)", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      const recorded = String(ctx.interrupted.providerRecovery?.at(-1)?.endpoint);
+      assert.ok(recorded, "precondition: the recorded endpoint");
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      const turn = { phase: "inference" } as any;
+      const policy = { ...DEFAULT_RECOVERY_POLICY };
+      await a.waitOutResumedProviderWindow(policy, 1, turn, undefined, "http://other.invalid:1/v1", () => {});
+      assert.deepEqual(ctx.resumedClock.sleeps, [], "the other endpoint's step does not wait");
+      await a.waitOutResumedProviderWindow(policy, 2, turn, undefined, recorded, () => {});
+      assert.equal(ctx.resumedClock.sleeps.length, 1, "the later step on the recorded endpoint still waits");
+      assert.equal(ctx.resumedClock.now(), eligibleAt, "until the recorded eligible time");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("an operator /compact --llm queued before the resumed step runs after the wait, not inside the window", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      const a = ctx.resumed as any;
+      const ran: Array<{ at: number; llm: boolean }> = [];
+      const original = a.compactNow.bind(a);
+      a.compactNow = (llm: boolean, ...rest: unknown[]) => {
+        ran.push({ at: ctx.resumedClock.now(), llm });
+        return original(llm, ...rest);
+      };
+      a.compactionQueue.push({ ids: ["queued-1"], llm: true, at: new Date().toISOString() });
+      const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      assert.equal(ran.length, 1, "precondition: the queued compaction ran in the resumed turn");
+      assert.ok(ran[0].at >= eligibleAt, `the queued compaction called the provider at ${ran[0].at}, before the eligible time ${eligibleAt}`);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
   test("nothing reaches the provider before the window ends: not the capability read, nor the auxiliary requests of compaction admission", async () => {
     const ctx = await interruptedThenRestored({});
     try {

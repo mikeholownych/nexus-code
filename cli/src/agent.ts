@@ -5524,7 +5524,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   /**
    * Before the first request of a resumed turn, waits until the provider's recorded eligible time.
    * The wait is shown as the ordinary provider-wait status.
-   * It is skipped when the recorded wait was against another endpoint.
+   * It is skipped, and stays pending, for a step on another endpoint than the recorded one.
    * As in live recovery, the advertised window is honoured in full: maxDelayMs caps only backoff.
    * The wait is bounded by deadlineMs. Live recovery never plans a wait past it, so only a damaged or far-future
    * record is cut.
@@ -5541,14 +5541,15 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   ): Promise<void> {
     const pending = this.resumedProviderWait;
     if (!pending) return;
-    // The window is the recorded provider's: a resume against another endpoint is not held back by it.
-    const otherEndpoint = pending.record?.endpoint && endpoint && comparableEndpoint(pending.record.endpoint) !== comparableEndpoint(endpoint);
     const now = this.recoveryClock.now();
     const remaining = Date.parse(pending.eligibleAt) - now;
-    if (otherEndpoint || !(remaining > 0)) {
+    if (!(remaining > 0)) {
       this.resumedProviderWait = undefined;
       return;
     }
+    // The window is the recorded provider's: a step on another endpoint is not held back by it.
+    // It stays pending, for a later step that routes back to the recorded endpoint (planner/coder).
+    if (pending.record?.endpoint && endpoint && comparableEndpoint(pending.record.endpoint) !== comparableEndpoint(endpoint)) return;
     const delay = Math.min(remaining, policy.deadlineMs);
     const iso = (ms: number) => new Date(ms).toISOString();
     const prior = pending.record;
@@ -5917,15 +5918,20 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           break;
         }
         // Operator /compact queued during the previous step runs here: its inference and tool batch have settled.
-        if (this.compactionQueue.length) {
+        // False when a compaction that is not durable ends the turn.
+        const drainQueuedCompactions = async (): Promise<boolean> => {
+          if (!this.compactionQueue.length) return true;
           try {
             await this.drainCompactionQueue(currentStep, signal);
           } catch (err) {
             if (!(err instanceof CompactionCommitError)) throw err;
             persistenceFailure = err.outcome.message;
-            break;
+            return false;
           }
-        }
+          return true;
+        };
+        // While a resumed turn still owes a provider wait, the queue waits too (`/compact --llm` calls the provider).
+        if (!this.resumedProviderWait && !(await drainQueuedCompactions())) break;
         if (budget && currentStep > 1 && (currentStep - 1) % segmentSteps === 0) {
           segment++;
           if (this.objective) this.objective.continuation.segments = segment;
@@ -6126,6 +6132,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
         providerEligibleAt = undefined;
         if (resumedWait) providerRecoveries.push(resumedWait);
+        if (!(await drainQueuedCompactions())) break;
         // Provider limits for this step's connection (cached; re-read on change or after the TTL). Optional capability.
         await this.refreshCapabilities(activeClient, this.capabilitiesStale ?? "step", Boolean(this.capabilitiesStale), signal);
         this.capabilitiesStale = undefined;
