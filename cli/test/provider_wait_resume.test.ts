@@ -263,14 +263,23 @@ describe("a provider wait interrupted inside an operation", () => {
     try {
       const spec = writeOperationSpec(home, "pw-op", gw.url);
       const run = cli(["operation", "run", spec, "-w", ws, "-s", "4", "-j"], { cwd: ws, home });
-      await until(() => arrivals.length === 1, () => `the rate-limited request (stderr: ${run.io.err.slice(-300)})`);
-      await new Promise((r) => setTimeout(r, 1_000));
+      // The suspend point: the unit's task is bound in the operation document and its checkpoint shows the in-place wait.
+      const opFile = path.join(home, ".nexus", "tasks", "pw-op.json");
+      const unitWaiting = () => {
+        try {
+          const unitTaskId = JSON.parse(fs.readFileSync(opFile, "utf-8")).operation?.units?.[0]?.agentTaskId;
+          return Boolean(unitTaskId) && readers(home, ws).task(unitTaskId).providerRecovery?.state === "WAITING";
+        } catch {
+          return false;
+        }
+      };
+      await until(unitWaiting, () => `the unit's in-place provider wait (requests ${arrivals.length}; stderr: ${run.io.err.slice(-300)})`);
       run.interrupt();
       await run.exited;
       assert.equal(arrivals.length, 1, "no resubmission before the suspend");
       const advertisedEligibleAt = arrivals[0] + IN_PLACE_RETRY_AFTER_SECS * 1000;
       // The suspend interrupted the unit's in-place wait: its turn records the eligible time the resume must honour.
-      const opDoc = JSON.parse(fs.readFileSync(path.join(home, ".nexus", "tasks", "pw-op.json"), "utf-8"));
+      const opDoc = JSON.parse(fs.readFileSync(opFile, "utf-8"));
       const unitTaskId = opDoc.operation?.units?.[0]?.agentTaskId;
       assert.ok(unitTaskId, `the unit's task is bound in the operation document: ${JSON.stringify(opDoc.operation?.units)}`);
       const unitTurn = readers(home, ws).task(unitTaskId).lastTurn;
@@ -446,6 +455,23 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     }
   });
 
+  test("while the resumed turn waits, the durable record and the host's last turn still carry the eligible time (a crash then loses nothing)", async () => {
+    let seen: { checkpoint?: any; host?: TurnResult } = {};
+    const ctx = await interruptedThenRestored({}, undefined, (agent) => {
+      const a = agent as any;
+      seen = { checkpoint: a.stateManager.loadTaskState(a.currentTaskId)?.lastTurn, host: agent.getLastTurnResult() };
+    });
+    try {
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(ctx.resumedClock.sleeps.length, 1, "precondition: the resumed turn waited");
+      assert.equal(Date.parse(String(seen.checkpoint?.interruption?.providerEligibleAt)), eligibleAt, `the checkpoint written during the wait keeps the interruption: ${JSON.stringify(seen.checkpoint?.interruption ?? seen.checkpoint)}`);
+      assert.equal(eligibleAtOf(seen.host!), eligibleAt, "the REPL and sidecar save the same last turn during the wait");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
   test("cancelling the resumed wait sends no request and suspends again with the same eligible time", async () => {
     const ctx = await interruptedThenRestored({}, undefined, (agent) => agent.requestCancel("suspend again"));
     try {
@@ -455,6 +481,9 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       assert.equal(r.interruption?.phase, "provider_wait");
       assert.equal(eligibleAtOf(r), eligibleAt, "the eligible time is kept, not reset");
       assert.equal(ctx.requestedAt.length, 0, "no request was sent while the resumed turn waited");
+      const cancelled = r.providerRecovery?.at(-1);
+      assert.equal(cancelled?.state, "CANCELLED", `the cancelled wait is recorded in the interrupted turn: ${JSON.stringify(r.providerRecovery)}`);
+      assert.equal(cancelled?.endpoint, ctx.interrupted.providerRecovery?.at(-1)?.endpoint, "with the endpoint it waited for, so a later resume elsewhere skips it");
     } finally {
       await ctx.cleanup();
     }

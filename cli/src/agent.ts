@@ -975,7 +975,7 @@ export class AutonomousAgent {
    * again, and the recovery record of that wait (its real submissions, for the status shown while waiting). Consumed
    * by the first inference step of the next turn.
    */
-  private resumedProviderWait?: { eligibleAt: string; record?: ProviderRecoveryRecord };
+  private resumedProviderWait?: { eligibleAt: string; record?: ProviderRecoveryRecord; lastTurn: TurnResult };
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
@@ -1586,7 +1586,7 @@ export class AutonomousAgent {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: turn ? lifecycleStatusForTurn(turn) : this.verifiedWorktreeCompletion ? "completed" : "in_progress",
-      lastTurn: turn ?? this.lastTurnResult ?? null,
+      lastTurn: turn ?? this.getLastTurnResult() ?? null,
       activePlan: this.activePlan,
       milestones: [],
       worktreeBinding: this.activeWorktree
@@ -5503,7 +5503,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   }
 
   public getLastTurnResult(): TurnResult | undefined {
-    return this.lastTurnResult;
+    // Until the next turn ends, a restored turn still waiting out its provider window is the last one: saves keep it.
+    return this.lastTurnResult ?? this.resumedProviderWait?.lastTurn;
   }
 
   /** Records the provider window a restored turn was waiting out when it ended, if any (see resumedProviderWait). */
@@ -5516,7 +5517,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       return;
     }
     const recoveries = lastTurn?.providerRecovery ?? [];
-    this.resumedProviderWait = { eligibleAt, record: recoveries[recoveries.length - 1] };
+    this.resumedProviderWait = { eligibleAt, record: recoveries[recoveries.length - 1], lastTurn: lastTurn! };
   }
 
   /**
@@ -5526,8 +5527,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
    * As in live recovery, the advertised window is honoured in full: maxDelayMs caps only backoff.
    * The wait is bounded by deadlineMs. Live recovery never plans a wait past it, so only a damaged or far-future
    * record is cut.
+   * Each state of the wait (WAITING, then RESUMED or CANCELLED) is passed to `track` for the turn's recovery history.
    * Cancellation throws RecoveryCancelled; the caller records the interruption with the same eligible time.
-   * Returns the record of the wait, or undefined.
    */
   private async waitOutResumedProviderWindow(
     policy: RecoveryPolicy,
@@ -5535,15 +5536,18 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     turn: NonNullable<AutonomousAgent["activeTurn"]>,
     signal: AbortSignal | undefined,
     endpoint: string | undefined,
-  ): Promise<ProviderRecoveryRecord | undefined> {
+    track: (record: ProviderRecoveryRecord) => void,
+  ): Promise<void> {
     const pending = this.resumedProviderWait;
-    this.resumedProviderWait = undefined;
-    if (!pending) return undefined;
+    if (!pending) return;
     // The window is the recorded provider's: a resume against another endpoint is not held back by it.
-    if (pending.record?.endpoint && endpoint && comparableEndpoint(pending.record.endpoint) !== comparableEndpoint(endpoint)) return undefined;
+    const otherEndpoint = pending.record?.endpoint && endpoint && comparableEndpoint(pending.record.endpoint) !== comparableEndpoint(endpoint);
     const now = this.recoveryClock.now();
     const remaining = Date.parse(pending.eligibleAt) - now;
-    if (!(remaining > 0)) return undefined;
+    if (otherEndpoint || !(remaining > 0)) {
+      this.resumedProviderWait = undefined;
+      return;
+    }
     const delay = Math.min(remaining, policy.deadlineMs);
     const iso = (ms: number) => new Date(ms).toISOString();
     const prior = pending.record;
@@ -5562,15 +5566,20 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       ...(prior?.endpoint ? { endpoint: prior.endpoint } : {}),
       policy: { deadlineMs: policy.deadlineMs, maxDelayMs: policy.maxDelayMs, maxUnknownReplays: policy.maxUnknownReplays },
     };
+    track(record);
+    // The restored turn stays pending through the sleep, so a checkpoint or save during it keeps the eligible time.
     this.onProviderRecoveryState(record, turn, false);
     try {
       await this.recoveryClock.sleep(delay, signal);
-    } catch (err) {
-      // Still inside the provider's window: a later resume waits for the rest of it.
-      this.resumedProviderWait = pending;
-      throw err instanceof RecoveryCancelled ? err : new RecoveryCancelled();
+    } catch {
+      // Still inside the provider's window: the interrupted turn records it, and a later resume waits for the rest.
+      const at = this.recoveryClock.now();
+      track({ ...record, state: "CANCELLED", updatedAt: iso(at), waitedMs: at - now, reason: "cancelled while waiting out the recorded provider window" });
+      throw new RecoveryCancelled();
     }
-    return { ...record, state: "RESUMED", updatedAt: iso(this.recoveryClock.now()), resumedAt: iso(this.recoveryClock.now()), waitedMs: delay };
+    this.resumedProviderWait = undefined;
+    const at = iso(this.recoveryClock.now());
+    track({ ...record, state: "RESUMED", updatedAt: at, resumedAt: at, waitedMs: delay });
   }
 
   /** Recovery of the current inference step; null when no provider failure is being waited out. */
@@ -6164,7 +6173,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         });
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         try {
-          resumedWait = await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal, activeClient.endpoint);
+          await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal, activeClient.endpoint, (r) => (resumedWait = r));
           providerEligibleAt = undefined;
           assistantMessage = await recovery.run(requestId, {
             submit: (s) => this.submitGenAiRequest(activeClient, () =>
