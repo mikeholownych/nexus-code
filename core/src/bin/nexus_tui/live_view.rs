@@ -3907,13 +3907,13 @@ mod surface_tests {
         for (i, c) in "test".chars().enumerate() {
             assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), ms(1000 + i as u64 * 120)), None);
         }
-        assert_eq!(state.composer, "steer test");
+        assert_eq!(state.composer, "steer ntest", "the ignored `n` is kept in the draft with the rest");
         assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
         assert_eq!(
             state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), ms(1900)),
             Some(Action::Send(Command::Approve { id: "a1".into(), always: false }))
         );
-        assert_eq!(state.composer, "steer test", "the draft is kept");
+        assert_eq!(state.composer, "steer ntest", "the draft is kept");
     }
 
     #[test]

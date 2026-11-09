@@ -1407,6 +1407,12 @@ impl LiveState {
         }
         if approval.guard_until.is_some_and(|until| now < until) {
             approval.notice = Some(APPROVAL_IGNORED);
+            // The key was typing in flight: its letter is kept in the draft and starts the typing run, so the rest of
+            // the word (an `a`, `n` and then `y` of "any") is text too.
+            if let KeyCode::Char(c) = key.code {
+                approval.last_text = Some(now);
+                self.composer.insert(c.encode_utf8(&mut [0; 4]));
+            }
             return None;
         }
         // Approving every later action is never one key: it asks once, then Enter or `a` confirms.
@@ -3136,14 +3142,14 @@ mod tests {
             (KeyCode::Char('y'), almost),
         ] {
             assert_eq!(state.on_key_at(key(code), now), None, "{code:?}");
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("panel just opened"))), "{code:?} is reported");
+            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("ignored"))), "{code:?} is reported");
         }
         assert_eq!(state.transcript, transcript, "no decision is recorded");
         assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.focus == Verdict::Approved && !a.confirming), "the focus is kept");
-        assert_eq!(state.composer, "dra", "ignored keys do not reach the draft");
+        assert_eq!(state.composer, "draynay", "ignored letters are kept in the draft");
         // Once the guard has passed, the same key answers.
         assert_eq!(
-            state.on_key_at(key(KeyCode::Char('y')), opened + APPROVAL_GUARD),
+            state.on_key_at(key(KeyCode::Char('y')), opened + APPROVAL_GUARD + APPROVAL_TYPING_RUN),
             Some(Action::Send(Command::Approve { id: "approval-1".into(), always: false }))
         );
     }
@@ -4191,9 +4197,9 @@ mod tests {
             let shown = screen(&mut state);
             assert!(shown.contains("ignored") && shown.contains("panel just opened"), "{shown}");
             assert!(shown.contains("▸y Approve"), "the focus is not reset: {shown}");
-            assert_eq!(state.composer, "", "the ignored key did not reach the draft");
+            assert_eq!(state.composer, "y", "the ignored `y` is kept as typing in the draft; the Enter is not");
             // A moment later the same key answers.
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 1000)), approve("approval-1", false));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 1200)), approve("approval-1", false));
         }
 
         #[test]
@@ -4256,13 +4262,31 @@ mod tests {
         }
 
         #[test]
+        fn typing_a_word_across_the_panels_opening_never_answers_on_a_letter_of_it() {
+            // "any" at 120 ms per key, the panel drawn after the first key: `a`, `n` and the `y` are all text.
+            let t0 = Instant::now();
+            let mut state = ready();
+            type_text(&mut state, "go");
+            assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some());
+            assert_eq!(state.on_key_at(key(KeyCode::Char('x')), at(t0, 900)), None);
+            state.apply(ev(APPROVAL));
+            state.note_approval_shown(at(t0, 950));
+            for (i, c) in "any".chars().enumerate() {
+                assert_eq!(state.on_key_at(key(KeyCode::Char(c)), at(t0, 1000 + i as u64 * 120)), None, "{c:?}");
+            }
+            assert_eq!(state.composer, "xany", "every letter is text");
+            assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
+            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
+        }
+
+        #[test]
         fn a_paste_or_burst_cancels_the_approve_all_question() {
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5100)), None);
             assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.confirming));
             state.on_paste("some text");
             assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming), "the question is gone");
-            assert_eq!(state.composer.text().is_empty(), false);
+            assert!(!state.composer.text().is_empty());
         }
 
         #[test]
