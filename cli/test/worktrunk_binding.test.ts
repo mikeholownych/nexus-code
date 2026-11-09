@@ -192,6 +192,20 @@ describe("host-side Git in a named worktree", () => {
     } finally { f.cleanup(); }
   });
 
+  test("ensureNamedWorktree refuses the primary checkout's branch and returns only a registered linked worktree", () => {
+    const f = fixture();
+    try {
+      const manager = new WorktreeManager(f.repo);
+      assert.throws(() => manager.ensureNamedWorktree("main", f.home), /primary checkout/);
+      assert.equal(fs.existsSync(path.join(f.repo, ".nexus", "worktrees", "main")), false, "nothing was created for it");
+      const reused = manager.ensureNamedWorktree("feat/bind", f.home);
+      assert.deepEqual(reused, { branch: "feat/bind", path: f.dir, created: false });
+      const made = manager.ensureNamedWorktree("feat/new", f.home);
+      assert.equal(made.created, true);
+      assert.equal(isNamedWorktreePath(WorkspacePath.fromSelectedWorkspace(f.repo), made.path, { ...namedBinding(f), branch: "feat/new" }), true);
+    } finally { f.cleanup(); }
+  });
+
   test("a redirected .git pointer is refused before any host-side Git runs, and its fsmonitor never executes", () => {
     const f = fixture();
     try {
@@ -227,6 +241,7 @@ describe("agent run with a named worktree", { skip: !isSandboxAvailable("auto") 
       const active = agent.getActiveWorktree() as any;
       assert.equal(active?.kind, "named");
       assert.equal(active?.branch, "feat/agent");
+      assert.equal(active?.taskId, agent.getTaskId(), "the binding names the durable task, not a random id");
       const dir = path.join(f.repo, ".nexus", "worktrees", "feat-agent");
       assert.equal(active?.worktreePath, dir);
       assert.ok(fs.existsSync(dir), "named worktree retained");
@@ -238,6 +253,51 @@ describe("agent run with a named worktree", { skip: !isSandboxAvailable("auto") 
       assert.equal(discarded.success, false);
       assert.match(discarded.error ?? "", /nexus worktree remove/);
       assert.ok(fs.existsSync(dir));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+      f.cleanup();
+    }
+  });
+
+  test("follow-up runs and REPL turns continue in the retained named worktree", async () => {
+    const f = fixture();
+    const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+    const home = process.env.HOME;
+    process.env.HOME = f.home;
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.repo, shell: "bash", worktree: true, worktreeBranch: "feat/again" } as any);
+    try {
+      await agent.run("first");
+      const first = agent.getActiveWorktree()!;
+      const second = await agent.run("second");
+      assert.equal(second.execution, "COMPLETED");
+      assert.equal(agent.getActiveWorktree()?.worktreePath, first.worktreePath, "the second run reuses the named worktree");
+      // What the REPL and the sidecar call for a follow-up prompt.
+      const third = await agent.runTurn("third");
+      assert.equal(third.execution, "COMPLETED");
+      assert.equal(agent.getActiveWorktree()?.worktreePath, first.worktreePath, "the follow-up turn stays in the named worktree");
+      assert.equal(agent.getActiveWorktree()?.kind, "named");
+      assert.ok(fs.existsSync(first.worktreePath));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+      f.cleanup();
+    }
+  });
+
+  test("--worktree-branch naming the primary checkout's branch is refused before anything runs", async () => {
+    const f = fixture();
+    const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+    const home = process.env.HOME;
+    process.env.HOME = f.home;
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.repo, shell: "bash", worktree: true, worktreeBranch: "main" } as any);
+    try {
+      await assert.rejects(agent.run("write to main"), /primary checkout/);
+      assert.equal(agent.getActiveWorktree(), undefined);
+      assert.equal(gw.requests.length, 0, "no inference was dispatched");
+      assert.equal(fs.existsSync(path.join(f.repo, ".nexus", "worktrees", "main")), false);
     } finally {
       agent.shutdown();
       await gw.close();
