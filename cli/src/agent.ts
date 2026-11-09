@@ -5541,8 +5541,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
   private async runTurnImpl(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
-    // same establishment and resolution boundary as one-shot `run` tasks.
-    if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
+    // same establishment and resolution boundary as one-shot `run` tasks. A retained
+    // named worktree is where the session keeps working; `run` reuses it.
+    if (this.config.worktree && this.activeWorktree && this.activeWorktree.kind !== "named" && !this.worktreeRunTurnAuthorized) {
       throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
     }
     if (this.config.worktree && !this.worktreeRunTurnAuthorized) {
@@ -6837,8 +6838,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.verifiedWorktreeCompletion = false;
     this.activeValidationReceipt = undefined;
     if (this.config.worktree) {
-      if (this.activeWorktree) {
-        throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
+      // A task worktree must be merged or discarded before another task starts. A named worktree is kept by design,
+      // so later runs and REPL/TUI turns continue inside it; only a request for a different named worktree is refused.
+      const retained = this.activeWorktree;
+      if (retained && retained.kind !== "named") {
+        throw new Error(`Cannot start a new task: unresolved worktree ${retained.taskId}; merge or discard it first.`);
+      }
+      if (retained && this.config.worktreeBranch && this.config.worktreeBranch !== retained.branch) {
+        throw new Error(`Cannot start a new task: this session runs in the named worktree ${retained.branch} at ${retained.worktreePath}; start a new session for ${this.config.worktreeBranch}.`);
       }
       if (!this.worktreeManager.isGitRepo()) {
         throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
@@ -6849,7 +6856,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (!isSandboxAvailable(configuredSandbox)) {
         throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
       }
-      if (this.config.worktreeBranch) {
+      if (retained) {
+        // Still the linked worktree it was: the directory and its `.git` pointer can change between turns.
+        if (!this.worktreeManager.isLinkedWorktree(retained.worktreePath)) {
+          throw new Error(`Cannot continue: ${retained.worktreePath} is no longer a linked worktree of this repository for ${retained.branch}.`);
+        }
+        console.log(pc.cyan(`🌲 Continuing in named git worktree: ${retained.branch} at ${retained.worktreePath}`));
+      } else if (this.config.worktreeBranch) {
         if (this.isReadOnly() || this.config.dryRun) {
           throw new Error("Cannot create or reuse a named worktree in read-only or dry-run mode.");
         }

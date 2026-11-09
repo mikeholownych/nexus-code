@@ -31,8 +31,10 @@ worktree and a speculative task worktree (unless `--force`).
 
 `nexus run --worktree-branch feature/login "task"` (also on `nexus repl` and `nexus live`) runs the task inside the named worktree
 for that branch, creating it from the default branch when it does not exist and reusing it when it does. It has the same
-sandbox requirement as `--worktree`. Unlike the ephemeral task worktree, a named worktree is never auto-merged or discarded:
-when the task ends it stays, and a passing verifier run inside it records the verification that `nexus worktree merge` needs. The
+sandbox requirement as `--worktree`. The branch must not be the one checked out in the primary checkout (`--worktree-branch main`
+is refused: running there would not be isolated). Unlike the ephemeral task worktree, a named worktree is never auto-merged or
+discarded: when the task ends it stays, later runs and follow-up `repl`/`live` prompts in the same session continue inside it, and a
+passing verifier run inside it records the verification that `nexus worktree merge` needs. The
 task state records a binding of kind `named` (binding version 1); builds that predate it ignore the kind and cannot merge or discard
 it, because their paths are derived from `nexus/<task-id>`.
 
