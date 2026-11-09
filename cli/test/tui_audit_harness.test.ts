@@ -87,3 +87,42 @@ test("setup.sh refuses a target that is not a scratch workspace and leaves it as
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+/** Sources t.sh in a bash with a throwaway HOME and a fake tmux on PATH, then runs `body`; returns stdout and the tmux calls. */
+function withHarness(body: string, env: Record<string, string>): { stdout: string; status: number | null; stderr: string; tmux: string[][] } {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tui-audit-t-"));
+  try {
+    const bin = path.join(home, "bin");
+    fs.mkdirSync(bin);
+    const calls = path.join(home, "tmux-calls.txt");
+    // Each call: its arguments, NUL-separated, one line per call.
+    fs.writeFileSync(path.join(bin, "tmux"), `#!/bin/bash\nprintf '%s\\0' "$@" >> "${calls}"; printf '\\n' >> "${calls}"\n`, { mode: 0o755 });
+    const r = spawnSync("bash", ["-c", `source "${path.join(HARNESS, "t.sh")}"; ${body}`], {
+      cwd: home,
+      env: { PATH: `${bin}:${process.env.PATH ?? ""}`, HOME: home, ...env },
+      encoding: "utf8",
+    });
+    const tmux = fs.existsSync(calls)
+      ? fs.readFileSync(calls, "utf8").split("\n").filter(Boolean).map((line) => line.split("\0").filter((_, i, a) => i < a.length - 1))
+      : [];
+    return { stdout: r.stdout, stderr: r.stderr, status: r.status, tmux };
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+/** The words of the shell command `start` hands to tmux, up to the exit-code echo, as bash would split them. */
+function commandWords(call: string[]): string[] {
+  const command = call.at(-1)!;
+  const head = command.split("; echo EXIT_CODE=")[0];
+  return execFileSync("bash", ["-c", 'eval "set -- $1"; printf "%s\\n" "$@"', "_", head], { encoding: "utf8" }).split("\n").filter(Boolean);
+}
+
+test("t.sh drives the checkout it lives in unless WT is set", () => {
+  const defaults = withHarness('printf "%s" "$WT"', {});
+  assert.equal(defaults.status, 0, defaults.stderr);
+  assert.ok(fs.existsSync(defaults.stdout), `WT points at a checkout that exists: ${defaults.stdout}`);
+  assert.equal(fs.realpathSync(defaults.stdout), fs.realpathSync(ROOT), "WT defaults to this repository, not the auditor's worktree");
+  const override = withHarness('printf "%s" "$WT"', { WT: "/elsewhere/nexus" });
+  assert.equal(override.stdout, "/elsewhere/nexus");
+});

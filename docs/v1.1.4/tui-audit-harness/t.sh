@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage: source t.sh ; helpers
 S=${S:-/tmp/nexus-tui-audit}
-WT=$HOME/nexus-wt/tui-audit
+# The checkout whose cli/dist is driven: the repository this file lives in, unless WT is set.
+WT=${WT:-$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)}
 start() { # name cols rows [extra args] [env...]
   local n=$1 c=${2:-120} r=${3:-40}; shift 3
   tmux kill-session -t $n 2>/dev/null
