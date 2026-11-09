@@ -14,6 +14,7 @@ import path from "node:path";
 import { execFileSync, execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
 import { commitChanges, getGitInfo } from "../src/git.js";
+import { UsageLedger } from "../src/usage.js";
 import { WORKSPACE_HANDLERS } from "../src/slash/workspace_commands.js";
 import type { SlashContext, SlashReply } from "../src/slash/catalog.js";
 
@@ -159,16 +160,86 @@ describe("D-03: Nexus state is not a workspace change", () => {
         fs.mkdirSync(path.join(sub, ".nexus"), { recursive: true });
         fs.writeFileSync(path.join(sub, ".nexus", "rec.jsonl"), "{}\n");
         fs.writeFileSync(path.join(sub, "g"), "user\n");
-        // (getGitInfo reports no repository on an unborn branch; that predates D-03.)
-        if (born) assert.equal(getGitInfo(sub).dirtyCount, 1);
+        assert.equal(getGitInfo(sub).dirtyCount, 1);
         const result = commitChanges(sub, "feat: x");
         assert.equal(result.success, true, result.error);
         const committed = execSync("git show --name-only --format= HEAD", { cwd: repo, encoding: "utf-8" }).trim().split("\n");
         assert.deepEqual(committed, ["sub/g"]);
-        if (born) assert.equal(getGitInfo(sub).dirtyCount, 0);
+        assert.equal(getGitInfo(sub).dirtyCount, 0);
       } finally {
         fs.rmSync(repo, { recursive: true, force: true });
       }
     });
   }
+
+  test("an inherited GIT_LITERAL_PATHSPECS (or other pathspec mode) does not break the exclusions", () => {
+    const repo = freshRepo();
+    const saved = { ...process.env };
+    try {
+      fs.mkdirSync(path.join(repo, ".nexus"));
+      fs.writeFileSync(path.join(repo, ".nexus", "rec.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(repo, "base.txt"), "changed\n");
+      for (const key of ["GIT_LITERAL_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
+        process.env[key] = "1";
+        assert.equal(getGitInfo(repo).dirtyCount, 1, `${key}=1`);
+        assert.equal(slash("git", repo).output, " M base.txt", `${key}=1`);
+        delete process.env[key];
+      }
+      process.env.GIT_LITERAL_PATHSPECS = "1";
+      assert.equal(commitChanges(repo, "fix: x").success, true);
+      assert.deepEqual(execSync("git show --name-only --format= HEAD", { cwd: repo, encoding: "utf-8" }).trim().split("\n"), ["base.txt"]);
+    } finally {
+      process.env = saved;
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("/diff names staged files rather than calling the tree clean", () => {
+    const repo = freshRepo();
+    try {
+      fs.writeFileSync(path.join(repo, "staged.txt"), "s\n");
+      fs.writeFileSync(path.join(repo, "base.txt"), "staged edit\n");
+      execSync("git add staged.txt base.txt", { cwd: repo });
+      fs.writeFileSync(path.join(repo, "loose.txt"), "u\n");
+      assert.equal(slash("diff", repo).output, "No unstaged changes to tracked files; 1 untracked, 2 staged (see /git).");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("an unborn repository (no commit yet) still counts its untracked files", () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-d03-unborn-"));
+    try {
+      execSync("git init -q -b main", { cwd: repo, stdio: "ignore" });
+      fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
+      const info = getGitInfo(repo);
+      assert.equal(info.isRepo, true);
+      assert.equal(info.branch, "main");
+      assert.equal(info.dirtyCount, 1);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("receipts write the self-ignore once per workspace, and again only if it was removed", () => {
+    const repo = freshRepo();
+    const ignore = path.join(repo, ".nexus", ".gitignore");
+    try {
+      UsageLedger.resetGlobal();
+      const receipt = (n: number) => ({ requestId: `r${n}` }) as any;
+      UsageLedger.global().record(receipt(0), repo);
+      assert.equal(fs.readFileSync(ignore, "utf-8"), "*\n");
+      // A later receipt does not re-verify an ignore file that is still there (the verifier would append "*" here).
+      fs.writeFileSync(ignore, "# edited\n");
+      UsageLedger.global().record(receipt(1), repo);
+      assert.equal(fs.readFileSync(ignore, "utf-8"), "# edited\n", "self-ignore re-verified on every receipt");
+      fs.rmSync(ignore);
+      UsageLedger.global().record(receipt(2), repo);
+      assert.equal(fs.readFileSync(ignore, "utf-8"), "*\n", "a removed .nexus/.gitignore is restored");
+      assert.equal(execSync("git status --porcelain", { cwd: repo, encoding: "utf-8" }), "");
+    } finally {
+      UsageLedger.resetGlobal();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
 });

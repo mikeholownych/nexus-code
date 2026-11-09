@@ -19,23 +19,40 @@ const NEXUS_STATE = [".nexus", ":(top).nexus"];
 const NEXUS_STATE_EXCLUDED = [":(exclude).nexus", ":(exclude).nexus/**", ":(top,exclude).nexus", ":(top,exclude).nexus/**"];
 const WITHOUT_NEXUS_STATE = ["--", ":/", ...NEXUS_STATE_EXCLUDED];
 
+/** The environment for git calls that pass the pathspecs above: an inherited pathspec mode would make them literal. */
+function pathspecEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
+    delete env[key];
+  }
+  return env;
+}
+
 /** `git status` in `format` for the workspace's repository, without Nexus state. Throws when git fails. */
 export function workspaceStatus(workspace: string, format: "--porcelain" | "--short"): string {
   return execFileSync("git", ["status", format, ...WITHOUT_NEXUS_STATE], {
     cwd: workspace,
+    env: pathspecEnv(),
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 64 * 1024 * 1024,
   });
 }
 
+/** The current branch; on an unborn branch (no commit yet) `rev-parse` fails, so read the symbolic ref instead. */
+function currentBranch(workspace: string): string {
+  const run = (args: string[]) =>
+    execFileSync("git", args, { cwd: workspace, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  try {
+    return run(["rev-parse", "--abbrev-ref", "HEAD"]);
+  } catch {
+    return run(["symbolic-ref", "--short", "HEAD"]);
+  }
+}
+
 export function getGitInfo(workspace: string): GitInfo {
   try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
-      cwd: workspace,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    }).trim();
+    const branch = currentBranch(workspace);
 
     const statusOut = workspaceStatus(workspace, "--porcelain").trim();
 
@@ -166,10 +183,7 @@ export function generateConventionalCommit(workspace: string): { message: string
 
 export function commitChanges(workspace: string, message: string): { success: boolean; hash?: string; error?: string } {
   try {
-    const gitEnv = { ...process.env };
-    for (const key of ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
-      delete gitEnv[key];
-    }
+    const gitEnv = pathspecEnv();
     // Exclusions in `git add` do not remove paths that were already staged.
     // Restore only the internal state entries in the index, leaving their working
     // tree contents untouched, before staging the user's workspace changes.
