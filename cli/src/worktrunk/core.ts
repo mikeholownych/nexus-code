@@ -513,8 +513,15 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
  * entry and its registry record, never a branch. Callers decide whether it is safe (see `prune`).
  */
 export function clearStaleEntry(repo: Repo, entry: WorktreeEntry): void {
+  removeSeams.beforeLock?.(entry);
   withWorktreeLock(repo.commonDir, () => {
-    git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
+    // Re-read under the lock, as removeOne does: a `switch` may have recreated the path while this waited, and a live
+    // worktree must not be force-removed on the strength of an entry read earlier.
+    const fresh = openRepo(repo.cwd).entries.find((candidate) => candidate.path === entry.path);
+    if (fresh && (!fresh.prunable || fresh.head !== entry.head || fresh.branch !== entry.branch || fresh.locked)) {
+      throw new WorktreeError("the worktree changed while this command waited for the lock; it was left alone");
+    }
+    if (fresh) git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
     updateRegistry(repo.commonDir, (reg) => { reg.worktrees = reg.worktrees.filter((item) => item.path !== entry.path); });
   });
 }
