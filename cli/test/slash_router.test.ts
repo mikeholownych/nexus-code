@@ -327,6 +327,9 @@ describe("slash router: workspace commands", () => {
       assert.ok(fs.existsSync(path.join(repo, ".nexus", "worktrees", "feature-slash")));
       assert.match((await reply("worktree", "list")).output, /feature\/slash/);
       assert.equal((await reply("worktree", "bogus")).success, false);
+      // mixed case reaches the named command set; `status` in any case stays the legacy speculative view
+      assert.match((await reply("worktree", "List")).output, /feature\/slash/);
+      assert.match((await reply("worktree", "STATUS")).output, /^(• |No speculative worktrees)/); // legacy bullet view, not the named table
       assert.equal((await reply("worktree", "remove feature/slash")).success, true);
       assert.match((await reply("worktree")).output, /^No speculative worktrees/);
     });

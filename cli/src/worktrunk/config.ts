@@ -1,15 +1,15 @@
 /**
  * Operator-owned worktree settings: the `worktree` object in `~/.config/nexus/config.json` (version 1).
  *
- * Only the operator's own file is read. A project file (`.nexus/config.json`, a checked-in file) can never opt the
- * repository into a different layout or allow paths outside the sandbox. An invalid value is an error, never guessed.
+ * Only the operator's own file is read, through the same reader as the rest of the operator config
+ * (`readOperatorConfigDocument` in config.ts: one home, one set of file checks). A project file (`.nexus/config.json`,
+ * a checked-in file) can never opt the repository into a different layout or allow paths outside the sandbox. An
+ * invalid value is an error, never guessed; it is raised here, where the block is used, so a bad `worktree` value
+ * cannot stop unrelated commands.
  */
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { operatorConfigHome, readOperatorConfigDocument } from "../config.js";
 import type { WorktreeLayout } from "./paths.js";
-
-const LIMIT = 64 * 1024;
 
 export interface WorktreeSettings {
   layout: WorktreeLayout;
@@ -21,33 +21,9 @@ export function operatorConfigPath(home: string): string {
   return path.join(home, ".config", "nexus", "config.json");
 }
 
-export function readWorktreeSettings(home: string = process.env.HOME || os.homedir()): WorktreeSettings {
+export function readWorktreeSettings(home: string = operatorConfigHome()): WorktreeSettings {
   const settings: WorktreeSettings = { layout: "nexus", allowOutside: false };
-  const file = operatorConfigPath(home);
-  let stat: fs.Stats;
-  try {
-    stat = fs.lstatSync(file);
-  } catch (err: any) {
-    if (err?.code === "ENOENT" || err?.code === "ENOTDIR") return settings;
-    throw new Error("Unable to inspect the operator config.json file.");
-  }
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Nexus config.json must be a regular file, not a link.");
-  if (stat.size > LIMIT) throw new Error("Nexus config.json exceeds the 64 KiB size limit.");
-  let parsed: unknown;
-  try {
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-    try {
-      parsed = JSON.parse(fs.readFileSync(fd, "utf8"));
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    throw new Error("Nexus config.json is not valid JSON.");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Nexus config.json must contain a JSON object.");
-  const root = parsed as Record<string, unknown>;
-  if (root.version !== 1) throw new Error("Nexus config.json requires version: 1.");
-  const raw = root.worktree;
+  const raw = readOperatorConfigDocument(operatorConfigPath(home))?.worktree;
   if (raw === undefined) return settings;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Nexus config.json worktree must be an object.");
   const block = raw as Record<string, unknown>;

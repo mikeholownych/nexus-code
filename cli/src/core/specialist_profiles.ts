@@ -176,6 +176,51 @@ export function isSpecialistRole(role: string | undefined): role is SpecialistRo
   return role !== undefined && typeof role === "string" && Object.hasOwn(SPECIALIST_CONTRACTS, role);
 }
 
+/** Largest accepted value for one named input, and the most inputs one unit may carry. */
+export const MAX_SPECIALIST_INPUT_CHARS = 200_000;
+export const MAX_SPECIALIST_INPUTS = 16;
+/** Input names are rendered into prompts, so they are restricted to plain identifiers. */
+export const SPECIALIST_INPUT_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** Why `inputs` is not a valid named-input map, or undefined when it is. Shared by specs, new operations and loads. */
+export function specialistInputsProblem(inputs: unknown): string | undefined {
+  if (!inputs || typeof inputs !== "object" || Array.isArray(inputs)) return "'inputs' must be an object of named strings";
+  const entries = Object.entries(inputs as Record<string, unknown>);
+  if (entries.length > MAX_SPECIALIST_INPUTS) return `'inputs' has more than ${MAX_SPECIALIST_INPUTS} entries`;
+  for (const [name, value] of entries) {
+    if (!SPECIALIST_INPUT_NAME.test(name)) return `input name '${name.slice(0, 40)}' must match ${SPECIALIST_INPUT_NAME}`;
+    if (typeof value !== "string") return `input '${name}' must be a string`;
+    if (value.length > MAX_SPECIALIST_INPUT_CHARS) return `input '${name}' is longer than ${MAX_SPECIALIST_INPUT_CHARS} characters`;
+  }
+  return undefined;
+}
+
+/** The contract's required inputs that are absent or blank in `inputs`. */
+export function missingSpecialistInputs(role: SpecialistRole, inputs: Record<string, string> | undefined): string[] {
+  return SPECIALIST_CONTRACTS[role].inputRequirements.filter((name) => !inputs || typeof inputs[name] !== "string" || inputs[name].trim() === "");
+}
+
+/**
+ * Splits leading `name=value` words (names from the role's contract; a value is one word or a quoted string) off a
+ * one-line task, for callers such as `/team` that have no structured input channel. A bare (unquoted) `@file:path`
+ * value is a workspace file the caller resolves and is returned in `files`; every other value, quoted or not, is a
+ * literal. The rest is the task.
+ */
+export function parseLeadingSpecialistInputs(role: SpecialistRole, text: string): { inputs: Record<string, string>; files: Record<string, string>; task: string } {
+  const names = new Set<string>(SPECIALIST_CONTRACTS[role].inputRequirements);
+  const inputs: Record<string, string> = {};
+  const files: Record<string, string> = {};
+  let rest = text.trimStart();
+  for (;;) {
+    const m = /^([a-z_]+)=(?:"([^"]*)"|'([^']*)'|(\S+))\s*/.exec(rest);
+    if (!m || !names.has(m[1]) || Object.hasOwn(inputs, m[1]) || Object.hasOwn(files, m[1])) break;
+    if (m[4] !== undefined && m[4].startsWith("@file:") && m[4].length > 6) files[m[1]] = m[4].slice(6);
+    else inputs[m[1]] = m[2] ?? m[3] ?? m[4];
+    rest = rest.slice(m[0].length);
+  }
+  return { inputs, files, task: rest.trim() };
+}
+
 export interface SpecialistEvidenceItem {
   path: string;
   lineRange?: [number, number];
@@ -215,6 +260,11 @@ export function validateSpecialistOutput<T>(
   for (const item of obj.evidence) {
     if (!item || typeof item !== "object" || typeof item.path !== "string") {
       throw new Error("Each evidence item must contain a 'path' string");
+    }
+    if (typeof item.note !== "string") throw new Error("Each evidence item must contain a 'note' string");
+    const range = item.lineRange;
+    if (range !== undefined && !(Array.isArray(range) && range.length === 2 && range.every((n: unknown) => Number.isInteger(n) && (n as number) >= 0) && range[0] <= range[1])) {
+      throw new Error("An evidence 'lineRange' must be [start, end] non-negative integers with start <= end");
     }
   }
   return obj as unknown as SpecialistStructuredOutput<T>;

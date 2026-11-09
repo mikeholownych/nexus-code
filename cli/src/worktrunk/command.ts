@@ -27,24 +27,42 @@ const SPECS: Record<string, Spec> = {
   path: { booleans: {}, values: {}, positional: "<branch|path>" },
 };
 
-const ALIASES: Record<string, string> = { copy: "copy-ignored", ls: "list", status: "list", rm: "remove", sw: "switch" };
+const ALIASES: Record<string, string> = { copy: "copy-ignored", ls: "list", rm: "remove", sw: "switch" };
 
 /** Subcommands that only read. Used by the slash gates and by `runWorktreeCommand`. */
 const READ_ONLY = new Set(["list", "path"]);
 /** Subcommands that mutate unless `--dry-run` is given. */
 const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored"]);
 
+/**
+ * The pre-WP-1310 `/worktree` forms, which act on the speculative worktree of the running session (`nexus run
+ * --worktree`): no argument or `status` shows it, `merge` and `discard` resolve it. They are never named-worktree
+ * subcommands (`status` is not an alias of `list`), so the CLI and both slash entry points agree.
+ */
+const LEGACY = new Set(["", "status", "merge", "discard"]);
+
 export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]]";
 
+/** The subcommand a token names, matched case-insensitively (the slash gates lowercase their input; the CLI does not). */
 function canonical(sub: string): string | undefined {
-  const name = ALIASES[sub] ?? sub;
+  const key = sub.toLowerCase();
+  const name = ALIASES[key] ?? key;
   return SPECS[name] ? name : undefined;
+}
+
+function firstWord(args: string): string {
+  return (args.trim().split(/\s+/)[0] ?? "").toLowerCase();
+}
+
+/** True when `args` (the text after `/worktree`) is one of the legacy speculative-worktree forms. */
+export function isLegacyWorktreeArgs(args: string): boolean {
+  return LEGACY.has(firstWord(args));
 }
 
 /** True when `args` (the text after `/worktree` or `nexus worktree`) only inspects. Empty means list. */
 export function isReadOnlyWorktreeArgs(args: string): boolean {
-  const sub = args.trim().split(/\s+/)[0] ?? "";
-  if (!sub) return true;
+  const sub = firstWord(args);
+  if (isLegacyWorktreeArgs(sub)) return sub === "" || sub === "status";
   const name = canonical(sub);
   if (name === undefined) return false;
   if (READ_ONLY.has(name)) return true;
