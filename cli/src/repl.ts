@@ -383,7 +383,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/mode [auto|review]"))} Toggle autonomous execution vs human review approval`);
     console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
     console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
-    console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard|list|path|switch|remove]"))} Manage isolated ephemeral and named git worktrees`);
+    console.log(`  ${pc.bold(pc.yellow("/worktree [status|discard|list|path|switch|remove|copy-ignored|prune|merge [<target>]]"))} Manage isolated ephemeral and named git worktrees (a bare merge is the speculative one)`);
     console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         [experimental] Execute strict RED-GREEN-REFACTOR TDD cycle`);
     console.log(`  ${pc.bold(pc.yellow("/knowledge [set|del]"))} Manage persistent project knowledge graph`);
     console.log(`  ${pc.bold(pc.yellow("/browse <url>"))}        Verify URL in headless browser driver`);
