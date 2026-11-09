@@ -96,15 +96,24 @@ const SKILL_NOTE_HEAD = `${SKILL_NOTE_PREFIX} Installed skills that may fit this
 /**
  * A saved conversation with its skill notes marked. Sessions saved before the `harness` marker existed hold notes
  * recognisable only by their text; on restore, a user message without a marker is marked only when it starts with the
- * exact note header and directly follows another user message (the operator's request), which is where Nexus writes
- * the note. An operator message that copies a note follows the model's reply and stays the operator's.
+ * exact note header, is made of nothing but note entries (`- **name**: description`, at least one) and directly follows
+ * another user message (the operator's request), which is where Nexus writes the note. An operator message that copies
+ * a note follows the model's reply, and a hand-typed header with other text after it is not entry-shaped: both stay
+ * the operator's.
  */
+const NOTE_ENTRY = /^- \*\*[^\n]+\*\*:/;
+function noteShaped(content: string): boolean {
+  const lines = content.slice(SKILL_NOTE_HEAD.length).split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines.length > 0 && lines.every((line) => NOTE_ENTRY.test(line));
+}
 export function withSkillNoteProvenance<T extends { role: string; content?: unknown; harness?: string }>(messages: readonly T[]): T[] {
   return messages.map((message, i) =>
     message.role === "user" &&
     message.harness === undefined &&
     typeof message.content === "string" &&
     message.content.startsWith(SKILL_NOTE_HEAD) &&
+    noteShaped(message.content) &&
     messages[i - 1]?.role === "user"
       ? { ...message, harness: "skill-note" }
       : message,
@@ -116,7 +125,9 @@ export function withSkillNoteProvenance<T extends { role: string; content?: unkn
  * marker Nexus sets when it writes the note), so an operator message that begins with the note's text stays a request.
  */
 export function isSkillNote(message: unknown): boolean {
-  return Boolean(message) && typeof message === "object" && (message as { harness?: unknown }).harness === "skill-note";
+  if (!message || typeof message !== "object") return false;
+  const { role, harness } = message as { role?: unknown; harness?: unknown };
+  return role === "user" && harness === "skill-note";
 }
 
 /**
