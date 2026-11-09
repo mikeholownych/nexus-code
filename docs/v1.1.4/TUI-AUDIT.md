@@ -53,7 +53,7 @@ Format: **what I did** / **what I saw** / **expected** / **suspected source**.
 - Did: new git repo with a clean tree, started the TUI, sent "hello".
 - Saw: header `⎇ main ●1 changed`; after the turn still `●1 changed`; `/git` prints `?? .nexus/`; `/diff` prints `Working tree clean: no uncommitted changes.`; the model prompt carries `[Git Status: main (1 uncommitted dirty files)]`. `.nexus/inference_receipts.jsonl` is written into the user's workspace and is not added to `.git/info/exclude`.
 - Expected: tool state is ignored (or lives under the state dir), header, `/git`, `/diff` and the prompt context agree.
-- Source: `cli/src/sidecar.ts:1032` (`dirty: git.dirtyCount`), `cli/src/git.ts` (dirtyCount; note `:210` already excludes `.nexus` for `git add`), `live_view.rs:1136`.
+- Source: `cli/src/sidecar.ts:1030` (`dirty: git.dirtyCount`), `cli/src/git.ts` (dirtyCount; note `:210` already excludes `.nexus` for `git add`), `live_view.rs:1136`.
 
 **D-04 Turn verdict contradicts what just happened.**
 - Saw (all with the fake model, `package.json` has `scripts.test`):
@@ -89,7 +89,7 @@ Format: **what I did** / **what I saw** / **expected** / **suspected source**.
 
 **D-09 Shift+Enter is advertised unconditionally but only works on kitty-protocol terminals; other terminals submit half-written prompts.**
 - Did: in tmux (no extended keys) Shift+Enter is plain CR. Sent `ESC[13;2u` (kitty): newline OK. Sent `ESC[27;2;13~` (xterm modifyOtherKeys, used by tmux `extended-keys`, xterm, newer VS Code): not recognised, `B` and `C` ended up on one line. Alt+Enter works.
-- Saw: footer always says `shift+enter newline`; Help says "alt+enter where shift is not reported" but nothing detects it. On a terminal that cannot report Shift+Enter the user submits their partial prompt.
+- Saw: footer says `shift+enter newline` at normal widths (`⇧↵ newline` when narrow), whatever the terminal reports; Help says "alt+enter where shift is not reported" but nothing detects it. On a terminal that cannot report Shift+Enter the user submits their partial prompt.
 - Expected: detect keyboard-enhancement support (`supports_keyboard_enhancement`) and advertise `alt+enter`/`ctrl+j` otherwise; accept modifyOtherKeys.
 - Source: `core/src/bin/nexus_tui/live.rs:335-345` (pushes only `DISAMBIGUATE_ESCAPE_CODES`), hint `live_view.rs:1874-1877`.
 
@@ -102,7 +102,7 @@ Format: **what I did** / **what I saw** / **expected** / **suspected source**.
 
 **D-11 `/model` picker does not show the active endpoint's models.** Session started with `-e http://127.0.0.1:18080/v1 -m fake-model` (the fake serves `/v1/models`). `/model` shows `Appliance (localhost:1234)  local · could not list models` / `no models listed: fetch failed`, then five `+ Connect ...` rows. The working endpoint and the current model are neither listed nor marked. Source: `core/src/bin/nexus_tui/models.rs` and the `models.catalog` event in `cli/src/sidecar.ts` (probes the configured appliance, not the session endpoint). Needs confirmation with an env-configured (not flag) endpoint.
 
-**D-12 Denied tool result shows the model-facing sentence and a misleading duration.** `× Delete base.txt — Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach. · 16.6s` (the 16.6 s is the time the approval waited). Source: `cli/src/agent.ts:5116`.
+**D-12 Denied tool result shows the model-facing sentence and a misleading duration.** `× Delete base.txt — Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach. · 16.6s` (the 16.6 s is the time the approval waited). Source: `cli/src/agent.ts:5178` (the rejection sentence; the result is built from `:5116`).
 
 **D-13 Delete approval is raw JSON, not a preview.** Write shows a diff; Delete shows `Delete base.txt` plus `{ "path": "base.txt" }` and no content/size. Source: `cli/src/approval_review.ts` (no `delete_file` case) and the approval renderer.
 
@@ -112,7 +112,7 @@ Format: **what I did** / **what I saw** / **expected** / **suspected source**.
 
 **D-16 `/copy` has no fallback.** `Clipboard error: No supported clipboard tool found (install wl-copy, xclip, or xsel).` There is no OSC 52 path, so SSH/tmux/headless users cannot copy. Source: `cli/src/clipboard.ts`.
 
-**D-17 16-colour terminals get 256-colour SGR.** `TERM=xterm` and `TERM=linux` (no COLORTERM) emit `38;5;15`, `38;5;8`, `48;5;0` (indexed 8-15 passed through), not `30-37/90-97`; on an 8-colour terminal or the Linux VT these are wrong or ignored. Source: `core/src/bin/nexus_tui/theme.rs:78-88` (`reduce`: Indexed < 16 is left as is for `Ansi16`).
+**D-17 16-colour terminals get 256-colour SGR.** `TERM=xterm` and `TERM=linux` (no COLORTERM) emit `38;5;15`, `38;5;8`, `48;5;0` (indexed 8-15 passed through), not `30-37/90-97`; on an 8-colour terminal or the Linux VT these are wrong or ignored. Source: `core/src/bin/nexus_tui/theme.rs:78-88` (`reduce`: Indexed < 16 is left as is for `Ansi16`); `TERM=xterm` selects `Ansi16` in `Depth::detect` (`theme.rs:20-48`, unit test at `:192`).
 
 **D-18 Prompts typed while the agent works become steering and are merged.** Typing `SC:e500 go` and `SC:reset go` during a rate-limit wait showed `↳ ... steering · queued for the next step`; after Esc the two were sent together as one user message (`SC:e500 go\nSC:reset go` in the request). There is no way to queue a separate next prompt. Design choice, but surprising and undiscoverable. Source: steering path in `live_state.rs` / `cli/src/sidecar.ts`.
 
@@ -122,7 +122,7 @@ Format: **what I did** / **what I saw** / **expected** / **suspected source**.
 
 ### Polish
 
-**D-21 Trust prompt is a separate inline widget with awkward copy.** Wrapped at ~40 columns on a 100-column terminal ("Includes future project config changes." / "Trust loads project instructions and / workspace integrations."), absolute path unwrapped, no welcome frame, different look from the Ratatui UI. After "Continue without trusting" the welcome appears with only `workspace: untrusted` in the header. Source: `cli/src/startup_trust.ts:132`.
+**D-21 Trust prompt is a separate inline widget with awkward copy.** Wrapped at ~40 columns on a 100-column terminal ("Includes future project config changes." / "Trust loads project instructions and / workspace integrations."), absolute path unwrapped, no welcome frame, different look from the Ratatui UI. After "Continue without trusting" the welcome appears with only `workspace: untrusted` in the header. Source: `cli/src/startup_trust.ts:132-139` (title at `:132`, the wrapped copy at `:138-139`).
 
 **D-22 Exit leaves nothing behind.** After `/exit` the alternate screen is dropped; the pane shows only the shell prompt. No "session id / resume with ..." line. Source: `live.rs` teardown.
 
