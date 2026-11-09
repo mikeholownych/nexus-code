@@ -141,3 +141,69 @@ test("an explicit -m wins and the model is not called", async () => {
     assert.equal(git(f.repo, "log", "-1", "--format=%s"), "chore: mine");
   } finally { f.cleanup(); }
 });
+
+test("precondition failures refuse merge before asking the model", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    let calls = 0;
+    const completer = async () => { calls++; return "feat: bad"; };
+
+    // 1. Receipt gate failure: merge without waiver or verification
+    const rGate = await f.run(dir, ["merge", "--ai-message"], completer);
+    assert.equal(rGate.success, false, rGate.output);
+    assert.match(rGate.output, /no recorded passing verification/);
+    assert.equal(calls, 0, "model must not be called when receipt gate fails");
+
+    // 2. Dirty target worktree failure
+    fs.writeFileSync(path.join(f.repo, "dirty.txt"), "uncommitted target work");
+    const rTargetDirty = await f.run(dir, MERGE, completer);
+    assert.equal(rTargetDirty.success, false, rTargetDirty.output);
+    assert.match(rTargetDirty.output, /target worktree.*has uncommitted changes/);
+    assert.equal(calls, 0, "model must not be called when target worktree is dirty");
+  } finally { f.cleanup(); }
+});
+
+test("sibling worktree merge with --ai-message does not stage .nexus receipts", async () => {
+  const f = fixture();
+  try {
+    const configDir = path.join(f.home, ".config", "nexus");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({ version: 1, worktree: { layout: "sibling" } }));
+
+    const made = await f.run(f.repo, ["switch", "-c", "feat/sibling", "--no-copy"]);
+    assert.equal(made.success, true, made.output);
+    const siblingDir = path.join(f.root, "proj.feat-sibling");
+    assert.ok(fs.existsSync(siblingDir));
+
+    // Simulate an inference receipt written during completer execution or diagnostics
+    fs.mkdirSync(path.join(siblingDir, ".nexus"), { recursive: true });
+    fs.writeFileSync(path.join(siblingDir, ".nexus", "inference_receipts.jsonl"), '{"requestId":"test"}\n');
+    fs.writeFileSync(path.join(siblingDir, "file.txt"), "hello\n");
+
+    const r = await f.run(siblingDir, MERGE, async () => "feat: add sibling file");
+    assert.equal(r.success, true, r.output);
+
+    const committed = git(f.repo, "show", "--name-only", "--pretty=format:", "HEAD").split("\n").filter(Boolean);
+    assert.deepEqual(committed, ["file.txt"]);
+  } finally { f.cleanup(); }
+});
+
+test("invalid configuration during completion falls back gracefully to deterministic message", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    // Completer simulates buildConfigOrThrow throwing on invalid config
+    const failingCompleter: Completer = async () => {
+      try {
+        throw new Error("Provider 'compatible' requires a base URL.");
+      } catch {
+        return undefined as any;
+      }
+    };
+    const r = await f.run(dir, MERGE, failingCompleter);
+    assert.equal(r.success, true, r.output);
+    assert.match(r.output, /deterministic|fallback/i);
+    assert.ok(git(f.repo, "log", "-1", "--format=%s").length > 0);
+  } finally { f.cleanup(); }
+});

@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { conventionalCommitMessage } from "../git.js";
 import { redactSecrets } from "../ui.js";
+import { ensureGitExclude } from "../core/git_exclude.js";
 import { removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type WorktreeEntry } from "./repo.js";
@@ -99,7 +100,21 @@ function backup(dir: string, branch: string, dirty: boolean): string {
   return sha;
 }
 
-export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}): CommandResult {
+export interface MergeContextInfo {
+  repo: ReturnType<typeof openRepo>;
+  source: WorktreeEntry & { branch: string };
+  branch: string;
+  targetName: string;
+  targetEntry: WorktreeEntry;
+  targetSha: string;
+  state: ReturnType<typeof statusOf>;
+  gateState: ReturnType<typeof workingState>;
+  waiver?: string;
+  mergeBase: string;
+  ahead: number;
+}
+
+export function resolveMergeContext(ctx: WorktreeContext, options: MergeOptions = {}): MergeContextInfo {
   const repo = openRepo(ctx.cwd);
   const source = currentEntry(repo);
   if (!source || source.isMain) throw new WorktreeError("run `worktree merge` from inside the worktree you want to merge, not the main checkout");
@@ -110,6 +125,10 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (targetName === branch) throw new WorktreeError("the target is the branch being merged");
   const targetEntry = repo.entries.find((entry) => entry.branch === targetName);
   if (!targetEntry || targetEntry.prunable) throw new WorktreeError(`target ${shownBranch(targetName)} is not checked out in any worktree; run \`worktree switch ${shownBranch(targetName)}\` first`);
+
+  if (fs.existsSync(path.join(source.path, ".nexus"))) {
+    ensureGitExclude(source.path);
+  }
 
   const gitDir = gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
   const busy = inProgress(gitDir);
@@ -140,13 +159,33 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     waiver = reason;
   }
 
+  const mergeBase = gitOut(source.path, ["merge-base", targetSha, "HEAD"], { allowFailure: false });
+  const ahead = Number(gitOut(source.path, ["rev-list", "--count", `${mergeBase}..HEAD`]));
+
+  return {
+    repo,
+    source: source as WorktreeEntry & { branch: string },
+    branch,
+    targetName,
+    targetEntry,
+    targetSha,
+    state,
+    gateState,
+    waiver,
+    mergeBase,
+    ahead,
+  };
+}
+
+export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}): CommandResult {
+  const mctx = resolveMergeContext(ctx, options);
+  const { repo, source, branch, targetName, targetEntry, targetSha, state, gateState, waiver, mergeBase, ahead } = mctx;
+
   const notes: string[] = [];
   if (waiver !== undefined) {
     notes.push(`Merging without a verification record (waiver recorded: ${waiver}).`);
   }
   const dirty = state.total > 0;
-  const mergeBase = gitOut(source.path, ["merge-base", targetSha, "HEAD"], { allowFailure: false });
-  const ahead = Number(gitOut(source.path, ["rev-list", "--count", `${mergeBase}..HEAD`]));
 
   mergeSeams.preMerge?.({ branch, target: targetName });
 

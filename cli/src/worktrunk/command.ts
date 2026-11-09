@@ -7,7 +7,7 @@ import { redactSecrets } from "../ui.js";
 import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { copyIgnored } from "./copy.js";
 import { generateMergeMessage, DEFAULT_AI_TIMEOUT_MS, type Completer } from "./ai_message.js";
-import { mergeWorktree, parseAge, pruneWorktrees } from "./merge.js";
+import { mergeWorktree, parseAge, pruneWorktrees, resolveMergeContext, type MergeContextInfo } from "./merge.js";
 import { GitError } from "./git.js";
 import { WorktreePathError } from "./paths.js";
 
@@ -191,7 +191,25 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
   try { parsed = parse(SPECS.merge, tokens.slice(1)); } catch { return runWorktreeCommand(tokens, run); }
   if (parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
   const ctx: WorktreeContext = { cwd: run.cwd, home: run.home ?? homeDir(), readOnly: false };
-  const generated = await generateMergeMessage(ctx, parsed.positionals[0], deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS)
+
+  let mctx: MergeContextInfo;
+  try {
+    mctx = resolveMergeContext(ctx, {
+      target: parsed.positionals[0],
+      noSquash: parsed.flags.has("no-squash"),
+      noRebase: parsed.flags.has("no-rebase"),
+      noRemove: parsed.flags.has("no-remove"),
+      noVerifyReceipt: parsed.flags.has("no-verify-receipt"),
+      reason: parsed.values.get("reason"),
+    });
+  } catch (err) {
+    if (err instanceof WorktreeError || err instanceof WorktreePathError || err instanceof GitError) {
+      return { success: false, output: redactSecrets(err.message) };
+    }
+    return { success: false, output: redactSecrets((err as Error)?.message ?? String(err)).slice(0, 400) };
+  }
+
+  const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS)
     .catch(() => ({ message: undefined, note: "note: could not prepare the model request; using the deterministic commit message." }));
   const result = runWorktreeCommand(generated.message ? [...tokens, "-m", generated.message] : tokens, run);
   return { ...result, output: `${generated.note}\n${result.output}` };
