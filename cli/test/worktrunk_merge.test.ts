@@ -547,3 +547,53 @@ test("a merge that removes the worktree the caller stands in says where to move 
     assert.equal(relocationAfter(keptRun, kept), undefined, "a kept worktree needs no move");
   } finally { f.cleanup(); }
 });
+
+test("prune keeps a hand-deleted detached worktree whose commits are not merged, and clears only the stale entries it selects", () => {
+  const f = fixture();
+  try {
+    const mk = (name: string) => {
+      const dir = path.join(f.repo, ".nexus", "worktrees", name);
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      git(f.repo, "worktree", "add", "-q", "--detach", dir);
+      return dir;
+    };
+    const unmerged = mk("stale-unmerged");
+    commitFile(unmerged, "only-here.txt", "x\n", "commit that only this worktree's admin HEAD references");
+    const unmergedHead = git(unmerged, "rev-parse", "HEAD");
+    const oldA = mk("stale-a");
+    const oldB = mk("stale-b");
+    for (const dir of [unmerged, oldA, oldB]) fs.rmSync(dir, { recursive: true, force: true });
+
+    const dry = wt(f, f.repo, ["prune", "--min-age", "0s", "--dry-run"]);
+    assert.match(dry.output, /stale-unmerged.*(not merged|unmerged)/i, dry.output);
+
+    const first = wt(f, f.repo, ["prune", "--min-age", "0s", "--limit", "1"]);
+    assert.equal(first.success, true, first.output);
+    const listed = git(f.repo, "worktree", "list", "--porcelain");
+    assert.match(listed, /stale-unmerged/, "the unmerged detached worktree keeps its registration");
+    assert.equal((listed.match(/stale-(a|b)/g) ?? []).length, 1, "--limit 1 clears one of the two integrated stale entries");
+    assert.equal(git(f.repo, "cat-file", "-t", unmergedHead), "commit");
+
+    const second = wt(f, f.repo, ["prune", "--min-age", "0s"]);
+    assert.equal(second.success, true, second.output);
+    const after = git(f.repo, "worktree", "list", "--porcelain");
+    assert.doesNotMatch(after, /stale-(a|b)/);
+    assert.match(after, /stale-unmerged/);
+    assert.match(second.output, /1 stale registration\(s\) pruned/);
+  } finally { f.cleanup(); }
+});
+
+test("prune --discard-ignored re-checks for real edits under the removal lock before forcing away ignored files", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = feature(f, "feat/ignored-cache");
+    fs.mkdirSync(path.join(dir, "target"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "target", "cache.bin"), "cache");
+    core.removeSeams.beforeLock = () => { fs.writeFileSync(path.join(dir, "a.txt"), "an edit that appeared while prune waited for the lock\n"); };
+    let result;
+    try { result = wt(f, f.repo, ["prune", "--min-age", "0s", "--discard-ignored"]); } finally { delete core.removeSeams.beforeLock; }
+    assert.equal(fs.existsSync(dir), true, `the worktree with a new edit must be kept: ${result.output}`);
+    assert.equal(fs.readFileSync(path.join(dir, "a.txt"), "utf8"), "an edit that appeared while prune waited for the lock\n");
+  } finally { f.cleanup(); }
+});
