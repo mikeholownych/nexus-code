@@ -547,3 +547,45 @@ test("failed-run and prerequisite summaries are credential-redacted before they 
   await exec(debuggerAgent.agent, repo).run(unit("failure_debugger", {}), resource, ctx(repo, { dependencies: deps }));
   assert.ok(!debuggerAgent.prompts[0].includes(SECRET), "the prerequisite summary is redacted");
 });
+
+// ---------------------------------------------------------------- Entire round on 0c63ecbd/5f3b96f2: force-added files, repository size, passing verifiers
+
+test("a force-added file that matches .gitignore is still part of the candidate diff", async () => {
+  const { repo, run } = protectedRepo();
+  fs.writeFileSync(path.join(repo, ".gitignore"), "*.fixture\n");
+  run("add", ".gitignore"); run("commit", "-q", "-m", "ignore fixtures");
+  const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  fs.writeFileSync(path.join(repo, "data.fixture"), "FORCE_ADDED_FIXTURE\n");
+  run("add", "-f", "data.fixture"); run("commit", "-q", "-m", "fixture");
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo, { startCommit: base }));
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  assert.match(fake.prompts[0], /FORCE_ADDED_FIXTURE/);
+});
+
+test("the size of the repository does not make the candidate diff fail", async () => {
+  const { repo, run } = protectedRepo();
+  // About 5,000 tracked paths of ~950 characters: well over the 4 MiB a single path listing could hold.
+  const deep = path.join(repo, ...Array.from({ length: 4 }, (_, i) => `${String(i)}${"d".repeat(199)}`));
+  fs.mkdirSync(deep, { recursive: true });
+  for (let i = 0; i < 5_000; i++) fs.writeFileSync(path.join(deep, `${String(i).padStart(5, "0")}${"f".repeat(145)}`), "x\n");
+  run("add", "-A"); run("commit", "-q", "-m", "many files");
+  fs.writeFileSync(path.join(repo, "keep.txt"), "keep4 VISIBLE_CHANGE\n");
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  assert.match(fake.prompts[0], /VISIBLE_CHANGE/);
+});
+
+test("a failed attempt whose verifier passed is not failure evidence", async () => {
+  const repo = repoWithChange();
+  const tester = fakeAgent("tester");
+  tester.agent.runTurn = async () => ({
+    execution: "LIMIT_REACHED", outcome: "UNVERIFIED", acceptance: "NOT_REQUESTED", modelStop: "NONE", finalOutputComplete: false,
+    verification: { command: "npm test", status: "PASSED", hasExecutedTests: true }, interruption: null, inferenceFailure: null,
+    steps: { used: 5, max: 5, limitReached: true }, unverifiedChangesPending: false, finishedAt: new Date().toISOString(),
+  } as unknown as TurnResult);
+  const outcome = await exec(tester.agent, repo).run(unit("tester"), resource, ctx(repo));
+  assert.equal(outcome.kind, "failed");
+  assert.equal((outcome as { failedRun?: unknown }).failedRun, undefined);
+});
