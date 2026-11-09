@@ -107,7 +107,7 @@ export function formatSkillNote(matches: Skill[], maxChars: number): string {
   const lines = new Map<Skill, string>();
   const line = (s: Skill): string => lines.get(s) ?? (lines.set(s, oneLine(s.description)), lines.get(s)!);
   const fit = (shown: Skill[], per: number) =>
-    head + shown.map((s) => `- **${oneLine(s.name)}**: ${line(s).length <= per ? line(s) : `${line(s).slice(0, Math.max(0, per - 1)).trimEnd()}…`}\n`).join("");
+    head + shown.map((s) => `- **${s.name}**: ${line(s).length <= per ? line(s) : `${line(s).slice(0, Math.max(0, per - 1)).trimEnd()}…`}\n`).join("");
   for (let n = matches.length; n > 0; n--) {
     const shown = matches.slice(0, n);
     // Longest uniform description length that fits, down to the bare name.
@@ -432,11 +432,11 @@ export class SkillManager {
    */
   public getPromptSection(maxChars: number = SKILL_CATALOG_MAX_CHARS): string {
     // Workspace skills first: they are the most specific to the task and survive any cut.
-    // Names and descriptions as one safe line each (template tokens, control markers and secrets removed), as in the
-    // per-prompt note: a description is untrusted text whether or not its skill is trusted.
+    // Descriptions and source paths as one safe line each (template tokens, control markers and secrets removed), as in
+    // the per-prompt note: they are untrusted text whether or not the skill is trusted. Names were sanitised at load.
     const skills = this.listSkills()
       .sort((a, b) => Number(Boolean(b.isWorkspaceSkill)) - Number(Boolean(a.isWorkspaceSkill)))
-      .map((s) => ({ ...s, name: oneLine(s.name), description: oneLine(s.description), path: oneLine(s.path) }));
+      .map((s) => ({ ...s, description: oneLine(s.description), path: oneLine(s.path) }));
     if (skills.length === 0) {
       return "";
     }
