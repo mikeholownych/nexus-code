@@ -3,6 +3,8 @@
  * command (REPL and sidecar) and the tests. Mutating subcommands are refused in read-only mode here as well as at the
  * two slash gates, so no entry point can reach them.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { redactSecrets } from "../ui.js";
 import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { copyIgnored } from "./copy.js";
@@ -175,7 +177,15 @@ export function tokenizeWorktreeArgs(args: string): string[] {
   return args.trim().split(/\s+/).filter(Boolean);
 }
 
-/** Where an interactive session standing in a worktree that a command just removed should move to. */
-export function relocationAfter(_result: CommandResult, _cwd: string): string | undefined {
-  return undefined;
+/**
+ * Where an interactive session standing in a worktree that a command just removed should move to: the worktree of the
+ * branch the work was merged into. Undefined when nothing was removed or the session is elsewhere.
+ */
+export function relocationAfter(result: CommandResult, cwd: string): string | undefined {
+  const data = result.data as { removedPath?: string; targetPath?: string } | undefined;
+  if (!result.success || !data?.removedPath || !data.targetPath) return undefined;
+  let here = cwd;
+  try { here = fs.realpathSync(cwd); } catch { /* the directory is already gone: compare as given */ }
+  const removed = data.removedPath;
+  return here === removed || here.startsWith(removed + path.sep) || cwd === removed || cwd.startsWith(removed + path.sep) ? data.targetPath : undefined;
 }

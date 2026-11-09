@@ -211,7 +211,8 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
       notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { force: true, target: targetName }));
     }
   }
-  return { success: true, output: notes.join("\n"), data: { branch, target: targetName } };
+  const removedPath = !fs.existsSync(source.path) ? source.path : undefined;
+  return { success: true, output: notes.join("\n"), data: { branch, target: targetName, targetPath: targetEntry.path, ...(removedPath ? { removedPath } : {}) } };
 }
 
 // ---- prune ----------------------------------------------------------------------------------------------------

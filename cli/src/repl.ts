@@ -1,4 +1,4 @@
-import { isLegacyWorktreeArgs, isReadOnlyWorktreeArgs, runWorktreeCommand, tokenizeWorktreeArgs } from "./worktrunk/command.js";
+import { isLegacyWorktreeArgs, isReadOnlyWorktreeArgs, relocationAfter, runWorktreeCommand, tokenizeWorktreeArgs } from "./worktrunk/command.js";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import * as path from "node:path";
@@ -1066,6 +1066,14 @@ export class InteractiveRepl {
           } else if (cmd === "worktree" && !isLegacyWorktreeArgs(arg)) {
             const result = runWorktreeCommand(tokenizeWorktreeArgs(arg), { cwd: this.config.workspace, readOnly: Boolean(this.config.readOnly) || this.agent.getApprovalMode() === "read-only" });
             console.log((result.success ? result.output : pc.red(result.output)) + "\n");
+            // A merge removes the worktree the session may be standing in: move it to the branch it was merged into.
+            const moveTo = relocationAfter(result, this.config.workspace);
+            if (moveTo) {
+              this.config.workspace = moveTo;
+              this.agent.setWorkspace(moveTo);
+              this.checkpointManager = new CheckpointManager(moveTo);
+              console.log(pc.green(`✔ Workspace changed to ${moveTo}\n`));
+            }
             continue;
           } else if (cmd === "worktree") {
             const mgr = this.agent.getWorktreeManager();
