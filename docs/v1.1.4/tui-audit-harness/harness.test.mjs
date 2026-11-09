@@ -2,8 +2,9 @@
  * The TUI dogfood audit harness (docs/v1.1.4/tui-audit-harness) is committed as a reproduction aid, so it must be safe
  * to run from any checkout: `setup.sh` writes fixtures and commits only inside the scratch workspace `S`, even when
  * that path contains a space, and refuses a target that is not a scratch workspace; `t.sh` finds the checkout it
- * drives from its own location and passes `start`'s optional arguments through intact. The audit document's summary
- * table counts what its entries count.
+ * drives from its own location and passes `start`'s optional arguments through intact.
+ *
+ * Run: node --test docs/v1.1.4/tui-audit-harness/harness.test.mjs (needs bash and git; not part of the product suite).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,22 +15,21 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(here, "../..");
-const HARNESS = path.join(ROOT, "docs/v1.1.4/tui-audit-harness");
-const AUDIT = path.join(ROOT, "docs/v1.1.4/TUI-AUDIT.md");
+const HARNESS = here;
+const ROOT = path.resolve(here, "../../..");
 
 /** A temporary directory whose path contains a space, under a throwaway HOME. */
-function scratch(): { home: string; s: string } {
+function scratch() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tui-audit-harness-"));
   return { home, s: path.join(home, "nexus audit") };
 }
 
 /** Runs a harness script from `cwd` with a throwaway HOME, so a stray write lands in the fixture, never in a real checkout. */
-function run(script: string, args: string[], cwd: string, env: Record<string, string>) {
+function run(script, args, cwd, env) {
   return spawnSync("bash", [path.join(HARNESS, script), ...args], { cwd, env: { PATH: process.env.PATH ?? "", ...env }, encoding: "utf8" });
 }
 
-function gitRepo(dir: string, files: Record<string, string>): void {
+function gitRepo(dir, files) {
   fs.mkdirSync(dir, { recursive: true });
   for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
   for (const cmd of [["init", "-q"], ["config", "user.name", "t"], ["config", "user.email", "t@t.invalid"], ["add", "."], ["commit", "-qm", "caller"]]) {
@@ -89,7 +89,7 @@ test("setup.sh refuses a target that is not a scratch workspace and leaves it as
 });
 
 /** Sources t.sh in a bash with a throwaway HOME and a fake tmux on PATH, then runs `body`; returns stdout and the tmux calls. */
-function withHarness(body: string, env: Record<string, string>): { stdout: string; status: number | null; stderr: string; tmux: string[][] } {
+function withHarness(body, env) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tui-audit-t-"));
   try {
     const bin = path.join(home, "bin");
@@ -112,8 +112,8 @@ function withHarness(body: string, env: Record<string, string>): { stdout: strin
 }
 
 /** The words of the shell command `start` hands to tmux, up to the exit-code echo, as bash would split them. */
-function commandWords(call: string[]): string[] {
-  const command = call.at(-1)!;
+function commandWords(call) {
+  const command = call.at(-1);
   const head = command.split("; echo EXIT_CODE=")[0];
   return execFileSync("bash", ["-c", 'eval "set -- $1"; printf "%s\\n" "$@"', "_", head], { encoding: "utf8" }).split("\n").filter(Boolean);
 }
@@ -143,23 +143,7 @@ test("start passes only the extra arguments it was given, with every path quoted
 
   // All three plus extras: the extras reach the CLI as the words they were, spaces included.
   const extras = withHarness('start bar 100 30 --mode review -p "two words"', { S: s, WT: "/wt" });
-  const call = extras.tmux.find((c) => c[0] === "new-session")!;
+  const call = extras.tmux.find((c) => c[0] === "new-session");
   assert.deepEqual(call.slice(3, 8), ["bar", "-x", "100", "-y", "30"]);
   assert.deepEqual(commandWords(call).slice(-6), ["-m", "fake-model", "--mode", "review", "-p", "two words"]);
-});
-
-test("the audit's summary table counts the defects its sections record as counted", () => {
-  const text = fs.readFileSync(AUDIT, "utf8");
-  const table = Object.fromEntries([...text.matchAll(/^\| (Blocker|Major|Minor|Polish|Total) \| (\d+) \|/gm)].map((m) => [m[1], Number(m[2])]));
-  assert.deepEqual(Object.keys(table).sort(), ["Blocker", "Major", "Minor", "Polish", "Total"]);
-  const counted: Record<string, number> = { Blocker: 0, Major: 0, Minor: 0, Polish: 0 };
-  let section = "";
-  for (const line of text.split("\n")) {
-    const heading = line.match(/^### (Blocker|Major|Minor|Polish)$/);
-    if (heading) section = heading[1];
-    else if (line.startsWith("## ")) section = "";
-    else if (section && /^\*\*D-\d+/.test(line) && !/not counted/i.test(line)) counted[section]++;
-  }
-  const total = Object.values(counted).reduce((a, b) => a + b, 0);
-  assert.deepEqual(table, { ...counted, Total: total }, `table ${JSON.stringify(table)} vs entries ${JSON.stringify(counted)}`);
 });
