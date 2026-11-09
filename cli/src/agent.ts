@@ -819,7 +819,6 @@ function gitIndexIdentity(workspace: string): string {
   return createHash("sha256").update(out).digest("hex").slice(0, 16);
 }
 
-/** What an archive read means for a resumed conversation; undefined when the archive is whole. */
 /** An endpoint URL for equality: scheme and host lower-cased, trailing slashes dropped. */
 function comparableEndpoint(endpoint: string): string {
   const trimmed = endpoint.trim();
@@ -831,6 +830,7 @@ function comparableEndpoint(endpoint: string): string {
   }
 }
 
+/** What an archive read means for a resumed conversation; undefined when the archive is whole. */
 function describeArchiveRead(read: ArchiveRead<ChatMessage>): string | undefined {
   const notes: string[] = [];
   if (read.uncommittedLines) notes.push(`${read.uncommittedLines} archived message(s) from a compaction that was interrupted before it was committed were set aside; their originals are in the resumed conversation itself`);
@@ -5509,15 +5509,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
   /** Records the provider window a restored turn was waiting out when it ended, if any (see resumedProviderWait). */
   private rememberResumedProviderWait(lastTurn: TurnResult | null | undefined): void {
-    const interruption = lastTurn?.execution === "INTERRUPTED" ? lastTurn.interruption : null;
+    const turn = lastTurn?.execution === "INTERRUPTED" ? lastTurn : undefined;
+    const interruption = turn?.interruption;
     const eligibleAt = interruption?.phase === "provider_wait" ? interruption.providerEligibleAt : undefined;
     // Durable records are same-user writable: an unparseable time is ignored, and the wait is bounded where it is used.
-    if (!eligibleAt || !Number.isFinite(Date.parse(eligibleAt))) {
+    if (!turn || !eligibleAt || !Number.isFinite(Date.parse(eligibleAt))) {
       this.resumedProviderWait = undefined;
       return;
     }
-    const recoveries = lastTurn?.providerRecovery ?? [];
-    this.resumedProviderWait = { eligibleAt, record: recoveries[recoveries.length - 1], lastTurn: lastTurn! };
+    const recoveries = turn.providerRecovery ?? [];
+    this.resumedProviderWait = { eligibleAt, record: recoveries[recoveries.length - 1], lastTurn: turn };
   }
 
   /**
