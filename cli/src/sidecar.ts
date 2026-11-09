@@ -1139,7 +1139,8 @@ function limitEventFields(event: any): void {
   for (const [field, max] of Object.entries(FIELD_LIMITS[event.type as SidecarEvent["type"]] ?? {})) {
     const value = event[field];
     if (typeof value !== "string") continue;
-    // Already cut to this limit by its producer: keep the producer's count of what was dropped.
+    // Already cut to this limit by its producer: keep the producer's count of what was dropped. A model- or tool-supplied
+    // text that fakes the marker only spoofs that count; the skip is bounded, since the value is at most max + CAP_MARKER_ROOM.
     if (value.length <= max + CAP_MARKER_ROOM && CAP_MARKER.test(value)) continue;
     event[field] = capText(value, max);
   }
