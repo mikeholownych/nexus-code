@@ -80,6 +80,8 @@ export class UsageLedger {
 
   private receipts: InferenceReceipt[] = [];
   private reserved = new Map<string, number>();
+  /** Workspaces whose `.nexus/.gitignore` has been verified by this process. */
+  private readonly selfIgnored = new Set<string>();
   limits: SpendingLimits = spendingLimitsFromEnv();
 
   /**
@@ -114,11 +116,15 @@ export class UsageLedger {
     if (process.env.NEXUS_RECEIPTS === "0") return;
     this.receipts.push(receipt);
     if (!workspace) return;
-    try {
-      // Receipts land in the user's workspace: keep them out of the user's `git status` without touching Git metadata.
-      ensureSelfIgnore(workspace);
-    } catch {
-      // Dirty counts exclude .nexus regardless (git.ts workspaceStatus); a refused ignore file must not lose the receipt.
+    // Receipts land in the user's workspace: keep them out of the user's `git status` without touching Git metadata.
+    // Verified once per workspace; done again only if the ignore file has since been removed.
+    if (!this.selfIgnored.has(workspace) || !fs.existsSync(path.join(workspace, ".nexus", ".gitignore"))) {
+      try {
+        ensureSelfIgnore(workspace);
+        this.selfIgnored.add(workspace);
+      } catch {
+        // Dirty counts exclude .nexus regardless (git.ts workspaceStatus); a refused ignore file must not lose the receipt.
+      }
     }
     try {
       const dir = path.join(workspace, ".nexus");
