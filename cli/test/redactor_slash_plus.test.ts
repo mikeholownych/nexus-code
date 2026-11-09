@@ -164,3 +164,22 @@ test("a credential matched at the same place by two classifiers is classified on
     InformationFlowBoundary.setGlobalInstance(original);
   }
 });
+
+/** A plain key is matched by its bounded pattern; the base64 scanner only adds keys whose body has "/" or "+". */
+test("a plain key followed by a URL path is redacted once and the path is kept", () => {
+  const boundary = new InformationFlowBoundary();
+  const key = "sk-ant-api03-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq";
+  for (const suffix of ["/models", "/v1/x", "/v1/messages?beta=true"]) {
+    const text = `calling ${key}${suffix} now`;
+    const found = boundary.classifyText(text, []);
+    assert.equal(found.length, 1, `${suffix}: ${JSON.stringify(found)}`);
+    assert.equal(found[0].secret, key, suffix);
+    const original = InformationFlowBoundary.getGlobalInstance();
+    InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+    try {
+      assert.equal(redactDiagnosticForOutput(text), `calling [REDACTED:ANTHROPIC_API_KEY]${suffix} now`);
+    } finally {
+      InformationFlowBoundary.setGlobalInstance(original);
+    }
+  }
+});
