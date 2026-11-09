@@ -280,7 +280,7 @@ test("root-level --read-only and --workspace options are merged for the worktree
   }
 });
 
-test("01M70WYAQ44B: removal re-reads which worktrees hold the branch after removing its own; a branch another worktree now holds is kept", async () => {
+test("removal re-reads which worktrees hold the branch after removing its own; a branch another worktree now holds is kept", async () => {
   const f = fixture();
   try {
     const core = await import("../src/worktrunk/core.js") as any;
@@ -315,7 +315,7 @@ test("01M70WYAQ44B: removal re-reads which worktrees hold the branch after remov
 });
 
 
-test("01M70X4E529M: a detached worktree whose directory was deleted is removable by its absolute path", () => {
+test("a detached worktree whose directory was deleted is removable by its absolute path", () => {
   const f = fixture();
   try {
     const dir = path.join(f.repo, ".nexus", "worktrees", "detached-gone");
@@ -329,7 +329,7 @@ test("01M70X4E529M: a detached worktree whose directory was deleted is removable
   } finally { f.cleanup(); }
 });
 
-test("01M70X4E4K2C: a worktree whose .git file holds a relative gitdir pointer (worktree.useRelativePaths) is removable", () => {
+test("a worktree whose .git file holds a relative gitdir pointer (worktree.useRelativePaths) is removable", () => {
   const f = fixture();
   try {
     assert.equal(wt(f, f.repo, ["switch", "-c", "relative"]).success, true);
@@ -344,7 +344,7 @@ test("01M70X4E4K2C: a worktree whose .git file holds a relative gitdir pointer (
   } finally { f.cleanup(); }
 });
 
-test("01M70X4E44FH: removal takes the lock before it deletes anything; a lock it cannot get leaves the worktree, branch and registry alone", () => {
+test("removal takes the lock before it deletes anything; a lock it cannot get leaves the worktree, branch and registry alone", () => {
   const f = fixture();
   try {
     assert.equal(wt(f, f.repo, ["switch", "-c", "locked-out"]).success, true);
@@ -364,7 +364,7 @@ test("01M70X4E44FH: removal takes the lock before it deletes anything; a lock it
   } finally { f.cleanup(); }
 });
 
-test("01M70WYAPEQT: a live holder's lock is not stolen after 30 s; a dead holder's is taken at once", async () => {
+test("a live holder's lock is not stolen after 30 s; a dead holder's is taken at once", async () => {
   const f = fixture();
   try {
     const common = path.join(f.repo, ".git");
@@ -389,7 +389,7 @@ test("01M70WYAPEQT: a live holder's lock is not stolen after 30 s; a dead holder
   } finally { f.cleanup(); }
 });
 
-test("01M70WYAQ44B: the worktree lock excludes another process while it runs a long action, then lets go", async () => {
+test("the worktree lock excludes another process while it runs a long action, then lets go", async () => {
   const f = fixture();
   try {
     const common = path.join(f.repo, ".git");
