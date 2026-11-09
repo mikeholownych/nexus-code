@@ -22,6 +22,22 @@ from tui_diff_driver import DiffSession, has  # noqa: E402
 from tui_pty_driver import T0, count_events, pty_env, wait_events  # noqa: E402
 
 
+def approval_panel_shown(lines):
+    """The approval panel is wholly on screen: its title, the decisions row and the hint row under it, closed by the
+    panel's bottom border. A frame reaches the terminal cell by cell from the top row down, so the title can be on
+    screen while the decisions and their hint are still in flight; waiting for the title alone and reading the hint a
+    fixed moment later failed once in CI. The structure is checked, not one hint's wording: the hint differs by state
+    (letters armed or not, a choice made, settling)."""
+    title = next((i for i, line in enumerate(lines) if "Approval needed" in line), None)
+    if title is None:
+        return False
+    decisions = next((i for i in range(title + 1, len(lines)) if lines[i].startswith("│") and has([lines[i]], "Deny")), None)
+    if decisions is None or decisions + 2 >= len(lines):
+        return False
+    hint, bottom = lines[decisions + 1], lines[decisions + 2]
+    return hint.startswith("│") and hint.strip("│ ") != "" and bottom.startswith("╰")
+
+
 def children(pid):
     try:
         out = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout
@@ -91,8 +107,8 @@ def main():
     s.send("/mode review\r", settle=0.5)
     s.send("Write the config file.\r", settle=0.05)
     s.send("yyy", settle=0.05)
-    s.wait_screen(lambda lines: has(lines, "Approval needed"), 20, "the approval modal")
-    s.pump(0.9)  # a pause in typing before the deliberate decision
+    s.wait_screen(approval_panel_shown, 20, "the approval modal with its decisions and hint")
+    s.pump(0.9)  # the operator's pause in typing before the deliberate decision (the panel's grace and quiet periods)
     shot(s, "10-approval")
     result["approval_survived_buffered_keys"] = has(s.color.lines(), "Approval needed")
     # Keys were typed just before it opened, so its letters are not answers: ← selects Approve, Enter confirms.
