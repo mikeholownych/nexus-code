@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { conventionalCommitMessage } from "../git.js";
 import { redactSecrets } from "../ui.js";
-import { removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
+import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type WorktreeEntry } from "./repo.js";
 
@@ -208,7 +208,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     } else if (left.total > 0) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: ${left.total} uncommitted change(s) remain that the merge could not carry (check \`git status\` there, submodules included). Nothing was deleted.`);
     } else {
-      notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { force: true, target: targetName }));
+      notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { discardIgnored: true, target: targetName }));
     }
   }
   const removedPath = !fs.existsSync(source.path) ? source.path : undefined;
@@ -249,7 +249,25 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
   for (const entry of repo.entries) {
     if (entry.isMain || entry === here) continue;
     if (counts.removed >= limit) { limited = true; break; }
-    if (entry.prunable) { counts.stale++; continue; }
+    if (entry.prunable && entry.locked) { keep(entry, "stale but locked"); continue; }
+    if (entry.prunable) {
+      // A hand-deleted worktree is judged like any other. A detached one may hold the only reference to commits in its
+      // administrative HEAD and reflog, so it goes only if that HEAD is integrated and old enough; a branch worktree's
+      // commits live on its branch, which stays. Only the selected entries are cleared, never a global `worktree prune`.
+      try {
+        const stamp = Number(gitOut(repo.cwd, ["log", "-1", "--format=%ct", "--end-of-options", entry.head], { timeoutMs: 5000 })) * 1000;
+        if (entry.detached && now - stamp < minAge) { counts.young++; continue; }
+        const reason = entry.detached ? integratedReason(repo, entry.head, targetSha) : "branch kept";
+        if (!reason) { keep(entry, `stale, but its detached HEAD is not merged into ${shownBranch(target!)}`); continue; }
+        if (!options.dryRun) clearStaleEntry(repo, entry);
+        counts.stale++;
+        counts.removed++;
+        lines.push(`${options.dryRun ? "would clear" : "cleared"} stale ${label(entry)} (${reason})`);
+      } catch (err) {
+        keep(entry, redactSecrets((err as Error).message).slice(0, 160));
+      }
+      continue;
+    }
     if (entry.locked) { keep(entry, "locked"); continue; }
     if (entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase)) { keep(entry, "speculative task worktree"); continue; }
     try {
@@ -265,7 +283,7 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
         lines.push(`would remove ${label(entry)} (integrated: ${reason})`);
         continue;
       }
-      removeOne(ctx, entry.path, { force: dirty.ignored > 0 });
+      removeOne(ctx, entry.path, { discardIgnored: dirty.ignored > 0 });
       counts.removed++;
       lines.push(`removed ${label(entry)} (integrated: ${reason})`);
     } catch (err) {
@@ -273,7 +291,6 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
     }
   }
 
-  if (counts.stale > 0 && !options.dryRun) git(repo.cwd, ["worktree", "prune"]);
   const summary = `${options.dryRun ? "Would remove" : "Removed"} ${counts.removed}, kept ${counts.kept}, ${counts.young} younger than the minimum age${counts.stale ? `, ${counts.stale} stale registration(s) ${options.dryRun ? "would be pruned" : "pruned"}` : ""}.`;
   const shown = lines.slice(0, REPORT_LINES);
   if (lines.length > REPORT_LINES) shown.push(`... ${lines.length - REPORT_LINES} more lines`);

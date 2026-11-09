@@ -367,6 +367,11 @@ function humanAge(seconds: number): string {
 export interface RemoveOptions {
   force?: boolean;
   deleteUnmerged?: boolean;
+  /**
+   * Remove even if ignored files (build caches) are present, but never over tracked, staged or untracked changes: they
+   * are checked again under the removal lock. Unlike `force`, which skips every check.
+   */
+  discardIgnored?: boolean;
   /** The branch the work must be integrated into (default: the repository's default branch). `merge` passes its target. */
   target?: string;
 }
@@ -442,7 +447,7 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
       const before = verifiedWorktreeDir(repo, entry);
       if (!options.force) {
         const dirty = statusOf(entry.path, { ignored: true });
-        if (dirty.total + dirty.ignored > 0) {
+        if (dirty.total + (options.discardIgnored ? 0 : dirty.ignored) > 0) {
           throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
         }
       }
@@ -472,7 +477,7 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
       }
       try {
         removeSeams.beforeGitRemove?.(entry);
-        git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
+        git(repo.cwd, ["worktree", "remove", ...(options.force || options.discardIgnored ? ["--force"] : []), "--end-of-options", entry.path]);
       } catch (err) {
         // Git refused (an initialised submodule, a file that appeared): the worktree stays, so put it back on its
         // detached HEAD and drop the guard branch (unless a commit already moved it, then it is the only reference).
@@ -501,6 +506,17 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
     dropFromRegistry();
   });
   return `Removed worktree ${label}${branchNote}`;
+}
+
+/**
+ * Drops one stale (directory deleted by hand) worktree registration: `git worktree remove --force <path>` on that one
+ * entry and its registry record, never a branch. Callers decide whether it is safe (see `prune`).
+ */
+export function clearStaleEntry(repo: Repo, entry: WorktreeEntry): void {
+  withWorktreeLock(repo.commonDir, () => {
+    git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
+    updateRegistry(repo.commonDir, (reg) => { reg.worktrees = reg.worktrees.filter((item) => item.path !== entry.path); });
+  });
 }
 
 /** Delete `refs/heads/<branch>` only while it still points at `expectedSha` (Git's compare-and-delete). */

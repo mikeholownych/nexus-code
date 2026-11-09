@@ -54,7 +54,7 @@ and the command says so.
 `prune` removes worktrees whose HEAD is already integrated into the default branch (same commit, ancestor, empty diff,
 same tree or patch-id equivalent), that have no changes or untracked files, and that were last touched longer ago than
 `--min-age` (default `1d`). It never touches the main checkout, the worktree you are in, locked worktrees or speculative
-task worktrees; worktrees holding ignored files are kept unless `--discard-ignored`; `--limit` bounds one run (default 100).
+task worktrees; worktrees holding ignored files are kept unless `--discard-ignored`; `--limit` bounds one run (default 100). `--discard-ignored` removes ignored files only: tracked, staged and untracked changes are checked again under the removal lock, so an edit made while prune waited keeps the worktree. Worktrees whose directory was deleted by hand are judged too: a detached one is cleared only if its HEAD is integrated and old enough (its administrative HEAD may be the only reference to its commits), a branch one always (the branch stays), and only the selected entries are cleared, never every stale one at once.
 
 ## Where worktrees go
 
