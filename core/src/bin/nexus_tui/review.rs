@@ -34,6 +34,12 @@ fn line(kind: LineKind, text: impl Into<String>) -> ReviewLine {
     }
 }
 
+/// A row of a command or script as drawn: tabs as spaces, every other control character (a lone carriage return that
+/// would redraw the line, ESC) and bidirectional override shown as a visible stand-in, so what is displayed is what runs.
+fn safe_row(row: &str) -> String {
+    crate::diff_view::safe_text(&row.replace('\t', "    "))
+}
+
 fn truncation_note() -> ReviewLine {
     line(
         LineKind::Meta,
@@ -77,7 +83,7 @@ pub fn review_lines(review: &Review) -> Vec<ReviewLine> {
             lines.extend(command.lines().enumerate().map(|(index, row)| {
                 line(
                     LineKind::Command,
-                    format!("{} {row}", if index == 0 { "$" } else { " " }),
+                    format!("{} {}", if index == 0 { "$" } else { " " }, safe_row(row)),
                 )
             }));
             false
@@ -88,18 +94,18 @@ pub fn review_lines(review: &Review) -> Vec<ReviewLine> {
             detail,
         } => {
             if let Some(detail) = detail {
-                lines.push(line(LineKind::Meta, format!("verifier: {detail}")));
+                lines.push(line(LineKind::Meta, format!("verifier: {}", safe_row(detail))));
             }
             lines.extend(command.lines().enumerate().map(|(index, row)| {
                 line(
                     LineKind::Command,
-                    format!("{} {row}", if index == 0 { "$" } else { " " }),
+                    format!("{} {}", if index == 0 { "$" } else { " " }, safe_row(row)),
                 )
             }));
             if let Some(script) = script {
                 if script != command {
                     lines.push(line(LineKind::Meta, "script:"));
-                    lines.extend(script.lines().map(|row| line(LineKind::Context, format!("  {row}"))));
+                    lines.extend(script.lines().map(|row| line(LineKind::Context, format!("  {}", safe_row(row)))));
                 }
             }
             false
@@ -362,5 +368,18 @@ mod tests {
             vec!["{", "  \"url\": \"u\"", "}"]
         );
         assert_eq!(review_lines(&Review::Unknown)[0].kind, LineKind::Meta);
+    }
+
+    #[test]
+    fn shell_and_verifier_rows_show_control_and_bidi_characters_instead_of_acting_on_them() {
+        let rows = review_lines(&Review::Shell { command: "echo safe\rrm -rf /\u{202e}txt.sh\x1b[2J".into() });
+        let text: String = rows.iter().map(|row| row.text.as_str()).collect();
+        for bad in ['\r', '\u{202e}', '\x1b'] {
+            assert!(!text.contains(bad), "{bad:?} reached the screen text: {text:?}");
+        }
+        assert!(text.contains("␍") && text.contains("<U+202E>") && text.contains("␛"), "stand-ins are visible: {text:?}");
+        let verifier = review_lines(&Review::Verifier { command: "npm test\rcurl x".into(), script: Some("echo \u{202e}hi".into()), detail: None });
+        let text: String = verifier.iter().map(|row| row.text.as_str()).collect();
+        assert!(!text.contains('\r') && !text.contains('\u{202e}'), "{text:?}");
     }
 }
