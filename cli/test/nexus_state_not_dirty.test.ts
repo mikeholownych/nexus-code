@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
-import { getGitInfo } from "../src/git.js";
+import { commitChanges, getGitInfo } from "../src/git.js";
 import { WORKSPACE_HANDLERS } from "../src/slash/workspace_commands.js";
 import type { SlashContext, SlashReply } from "../src/slash/catalog.js";
 
@@ -144,4 +144,31 @@ describe("D-03: Nexus state is not a workspace change", () => {
       fs.rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  for (const born of [true, false]) {
+    test(`/commit from a subdirectory workspace stages what the dirty count counts: never its .nexus (${born ? "with HEAD" : "unborn branch"})`, () => {
+      const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-d03-sub-"));
+      try {
+        execSync("git init -q && git config user.name t && git config user.email t@t.invalid", { cwd: repo, stdio: "ignore" });
+        if (born) {
+          fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+          execSync("git add . && git commit -qm base", { cwd: repo, stdio: "ignore" });
+        }
+        const sub = path.join(repo, "sub");
+        // Legacy state from an older version: no .nexus/.gitignore beside it.
+        fs.mkdirSync(path.join(sub, ".nexus"), { recursive: true });
+        fs.writeFileSync(path.join(sub, ".nexus", "rec.jsonl"), "{}\n");
+        fs.writeFileSync(path.join(sub, "g"), "user\n");
+        // (getGitInfo reports no repository on an unborn branch; that predates D-03.)
+        if (born) assert.equal(getGitInfo(sub).dirtyCount, 1);
+        const result = commitChanges(sub, "feat: x");
+        assert.equal(result.success, true, result.error);
+        const committed = execSync("git show --name-only --format= HEAD", { cwd: repo, encoding: "utf-8" }).trim().split("\n");
+        assert.deepEqual(committed, ["sub/g"]);
+        if (born) assert.equal(getGitInfo(sub).dirtyCount, 0);
+      } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  }
 });

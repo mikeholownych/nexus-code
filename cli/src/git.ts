@@ -10,11 +10,14 @@ export interface GitInfo {
 }
 
 /**
- * The whole repository except Nexus's own state directory (the workspace's and the repository root's `.nexus`).
- * Every surface that reports uncommitted changes reads `git status` through this one pathspec, so the header, the
- * model's [Git Status] line, /git and /commit agree, and Nexus's receipts never count as a user change.
+ * Nexus's own state directories: the workspace's `.nexus` and the repository root's. Status reads the whole repository
+ * without them, and commitChanges unstages and excludes exactly the same set, so the header, the model's [Git Status]
+ * line, /git and /commit agree and Nexus's receipts never count as, or get committed with, a user change.
+ * A file the user deliberately tracks under `.nexus/` is therefore not reported or committed by Nexus either.
  */
-const WITHOUT_NEXUS_STATE = ["--", ":/", ":(exclude).nexus", ":(top,exclude).nexus"];
+const NEXUS_STATE = [".nexus", ":(top).nexus"];
+const NEXUS_STATE_EXCLUDED = [":(exclude).nexus", ":(exclude).nexus/**", ":(top,exclude).nexus", ":(top,exclude).nexus/**"];
+const WITHOUT_NEXUS_STATE = ["--", ":/", ...NEXUS_STATE_EXCLUDED];
 
 /** `git status` in `format` for the workspace's repository, without Nexus state. Throws when git fails. */
 export function workspaceStatus(workspace: string, format: "--porcelain" | "--short"): string {
@@ -177,7 +180,7 @@ export function commitChanges(workspace: string, message: string): { success: bo
     });
     if (head.error) throw head.error;
     if (head.status === 0) {
-      execFileSync("git", ["reset", "--quiet", "HEAD", "--", ":(top).nexus"], {
+      execFileSync("git", ["reset", "--quiet", "HEAD", "--", ...NEXUS_STATE], {
         cwd: workspace,
         env: gitEnv,
         stdio: ["pipe", "pipe", "pipe"],
@@ -208,7 +211,7 @@ export function commitChanges(workspace: string, message: string): { success: bo
       }
       // There is no HEAD tree to restore from, so remove only staged .nexus paths
       // from the index. --cached preserves their workspace contents.
-      execFileSync("git", ["rm", "--cached", "-r", "-f", "--ignore-unmatch", "--", ":(top).nexus"], {
+      execFileSync("git", ["rm", "--cached", "-r", "-f", "--ignore-unmatch", "--", ...NEXUS_STATE], {
         cwd: workspace,
         env: gitEnv,
         stdio: ["pipe", "pipe", "pipe"],
@@ -216,7 +219,8 @@ export function commitChanges(workspace: string, message: string): { success: bo
     }
     // Internal Nexus state must never enter an automated workspace commit, even if a user's
     // .git/info/exclude contains a malformed rule or a later negation that exposes .nexus/.
-    execFileSync("git", ["add", "-A", "--", ":(top,exclude).nexus", ":(top,exclude).nexus/**"], {
+    // Same exclusion set as workspaceStatus(): what the dirty count leaves out is never staged.
+    execFileSync("git", ["add", "-A", "--", ...NEXUS_STATE_EXCLUDED], {
       cwd: workspace,
       env: gitEnv,
       stdio: ["pipe", "pipe", "pipe"],
