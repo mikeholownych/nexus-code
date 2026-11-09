@@ -157,21 +157,21 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   six rows shows `line n of m`. Drafts are kept while panels are open and across a sidecar crash.
 - **Approvals.** A panel sized to its content states what is proposed and on which target (`Proposed: create
   config.json · +1 −0`), shows file changes with the diff view, and offers Approve, Approve all later actions and Deny.
-  No key decides until the panel has been on screen briefly, you have paused typing (about half a second, counted from
-  when it appeared or your last key) and, after you answered a previous request, a moment has passed (so a repeated `y`
-  answers only one request). Then:
-  - `y` approves and `n` denies — only if you were not typing or holding a draft when the panel appeared and have typed
-    nothing into it. Otherwise the panel says `typing ignored` and hides those letters.
-  - ←/→ choose Approve or Deny; Enter takes the choice once it has been on screen a moment (2 seconds on a panel you were
-    typing into, where ←/→ are easily cursor keys). On such a panel Approve takes Enter twice (the second confirms);
-    Deny takes one.
-  - **Approve all later actions** (switches to auto mode) is only reached with `a`, on a panel that shows the letters,
-    then Enter, then Enter again; Esc denies at that point and any other key cancels. Arrows never reach it.
-  - Esc denies (it too waits for the moment after a previous answer). Keys with Ctrl, Alt, Super or Meta never answer,
-    nor do Tab, bursts of keys or pastes. Delete and Backspace count as typing.
+  Every kind of approval (file changes, commands, the verifier) uses this one panel, and it answers at once:
+  - `y` approves and `n` denies. Enter takes the highlighted option, which is Approve when the panel opens; ←/→ (and
+    Tab/Shift+Tab) move the highlight across all three options.
+  - **Approve all later actions** (switches to auto mode) is never one key: `a`, or Enter on it, asks
+    `approve this and every later action?`; Enter or `a` again confirms. ←/→ go back, and other answers (`y`, `n`,
+    Esc) still answer.
+  - Esc denies. Keys with Ctrl, Alt, Super or Meta never answer, nor do bursts of keys or pastes (their text goes to
+    your draft).
+  - Other typing goes to your draft (steering), so nothing you type is lost; it does not switch the letters off.
+  - One guard against accidents: a key that was already on its way when the panel appeared (pressed within a quarter of
+    a second of it, while you were typing or had just answered another request) is ignored, and the panel says
+    `ignored: panel just opened`. Press it again.
   The panel is answerable only while its change is visible — on a window too small to show it, it asks you to enlarge
-  the terminal (Esc still denies), and timing starts again when it is drawn. Approvals that arrive while another panel
-  or approval is open wait in order; the panel title shows how many are waiting.
+  the terminal (Esc still denies). Approvals that arrive while another panel or approval is open wait in order; the
+  panel title shows how many are waiting.
 - **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
   diagnostic lines (progress chatter is dropped) and your draft; `r` starts a new agent, after which `/resume` reloads
   the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider: your prompts,

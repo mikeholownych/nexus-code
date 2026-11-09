@@ -1,0 +1,40 @@
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Write src/new.ts                                                                                                      │
+│Proposed: create src/new.ts · +2 −0                                                                                   │
+│                                                                                                                      │
+│ ▎ @@ −0,0 +1,2 @@                                                                                                    │
+│ ▎   1 + export const a = 1;                                                                                          │
+│ ▎   2 + export const b = 2;                                                                                          │
+│                                                                                                                      │
+│ Approve   Approve all later actions   Deny                                                                           │
+│typing ignored · ←→ approve/deny, pause, enter · esc denies                                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · ←→ then enter (typing is ignored) · esc denies ──────────────────────────────────────────────────────
+›
