@@ -221,7 +221,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
    * A unit budget below the resource's capacity is an operator cap. If the start prompt fits the resource but not the
    * cap, fail before inference; resource-limit pressure stays with the agent's admission/compaction path.
    */
-  private contextBudgetFailure(agent: AutonomousAgent, unit: WorkUnit, prompt: string): UnitRunResult | undefined {
+  private contextBudgetFailure(agent: AutonomousAgent, unit: WorkUnit, prompt: string, inputs: Record<string, string> | undefined): UnitRunResult | undefined {
     // A specialist's contract ceiling (maxContextTokens) binds like an operator cap, and no operator budget lifts it.
     const ceiling = isSpecialistRole(unit.role) ? SPECIALIST_CONTRACTS[unit.role].maxContextTokens : undefined;
     const operatorBudget = unit.contextBudget && unit.contextBudget > 0 ? unit.contextBudget : undefined;
@@ -261,8 +261,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         // Appending a revision only grows the prompt; replacing the task is what can bring it under the ceiling.
         options: [
           { label: "replace the unit's task with a narrower one (note required)", action: { kind: "replace_task" } },
-          // Supplied or auto-collected inputs are part of the prompt, so a smaller input can be what brings it under the ceiling.
-          ...(unit.inputs !== undefined
+          // Supplied or auto-collected inputs are part of the prompt, so a smaller input can be what brings it under the
+          // ceiling. A unit with none (a review unit builds its own evidence) cannot be helped that way.
+          ...(inputs && Object.keys(inputs).length
             ? [{ label: "supply smaller inputs (note: JSON object, required)", action: { kind: "set_inputs" as const } }]
             : []),
         ],
@@ -500,7 +501,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       if (tdd && !redEvidence) {
         const beforeRed = this.tddTestSnapshot(agent, config.workspace);
         const redPrompt = `${prompt}\n\n${TDD_RED_PROTOCOL}`;
-        const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt);
+        const budgetFailure = this.contextBudgetFailure(agent, unit, redPrompt, promptUnit.inputs);
         if (budgetFailure) return budgetFailure;
         const redTurn = await agent.runTurn(redPrompt, undefined, { signal: ctx.signal, resume: isResume, tddRed: true });
         if (redTurn.capacity?.pendingMessageRetained !== false && redTurn.persistence?.durable !== false) ctx.messagesSubmitted?.();
@@ -570,7 +571,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         }
       }
       const greenPrompt = tdd && redEvidence ? `${prompt}\n\n${tddGreenProtocol(redEvidence)}` : prompt;
-      const budgetFailure = this.contextBudgetFailure(agent, unit, greenPrompt);
+      const budgetFailure = this.contextBudgetFailure(agent, unit, greenPrompt, promptUnit.inputs);
       if (budgetFailure) return budgetFailure;
       const turn = await agent.runTurn(greenPrompt, undefined, { signal: ctx.signal, resume: isResume || (tdd && redEvidence !== undefined) });
       if (turn.capacity?.pendingMessageRetained !== false && turn.persistence?.durable !== false) ctx.messagesSubmitted?.();
