@@ -161,17 +161,25 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   - `y` approves and `n` denies. Enter takes the highlighted option, which is Approve when the panel opens; ←/→ (and
     Tab/Shift+Tab) move the highlight across all three options.
   - **Approve all later actions** (switches to auto mode) is never one key: `a`, or Enter on it, asks
-    `approve this and every later action?`; Enter or `a` again confirms. ←/→ go back, and other answers (`y`, `n`,
+    `approve this and every later action?`. Enter or `a` confirms, but only 0.4 seconds or more after the question
+    (and after any ignored press), so a double tap or a held key does not. ←/→ go back, and other answers (`y`, `n`,
     Esc) still answer.
-  - Esc denies. Keys with Ctrl, Alt, Super or Meta never answer, nor do bursts of keys or pastes (their text goes to
-    your draft).
+  - Esc denies, at any time. Keys with Ctrl, Alt, Super or Meta never answer, nor do bursts of keys or pastes (their
+    text goes to your draft, with its line breaks).
   - Other typing goes to your draft (steering), so nothing you type is lost; it does not switch the letters off. While
     you are in a run of typing (a key within about 0.3 seconds of the previous one), a `y`, `n` or `a` is a letter of
     your text and goes to the draft, Enter is ignored, and the panel says `ignored: you were typing`; after a pause the
-    same key answers. A paste or burst of keys also goes to the draft and cancels the approve-all question.
-  - One guard against accidents: a key that was already on its way when the panel appeared (pressed within a quarter of
-    a second of it, while you were typing or had just answered another request) is ignored, and the panel says
-    `ignored: panel just opened`. Press it again.
+    same key answers.
+  - Guards against accidents, and what they do not cover: a key that was already on its way when the panel appeared
+    (typed within a second before it was drawn, and pressed within a quarter of a second after) is ignored with
+    `ignored: panel just opened`, and each ignored key restarts that window, so a held Enter stays inert until you let
+    go. Not covered: typing that starts after the panel has been on screen for a quarter of a second and no key was
+    pressed in the second before it appeared (a `y` or Enter then answers); typing slower than about 0.3 seconds per
+    key; and a held key on a terminal that repeats slower than the window (the first repeat of a held key often arrives
+    after 0.5 seconds). Terminals that do not report key release cannot tell a held key from fast presses.
+  - A command or script longer than the panel shows `↓ n more rows below`. Approve and Approve all are refused (with a
+    notice) until you have scrolled to its end with ↓ or End; Deny never waits. Control characters and bidirectional
+    overrides in a command are shown as visible stand-ins (`␍`, `␛`, `<U+202E>`), and long lines wrap.
   The panel is answerable only while its change is visible — on a window too small to show it, it asks you to enlarge
   the terminal (Esc still denies). Approvals that arrive while another panel or approval is open wait in order; the
   panel title shows how many are waiting.
