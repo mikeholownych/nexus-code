@@ -279,6 +279,33 @@ describe("agent run with a named worktree", { skip: !isSandboxAvailable("auto") 
       assert.equal(agent.getActiveWorktree()?.worktreePath, first.worktreePath, "the follow-up turn stays in the named worktree");
       assert.equal(agent.getActiveWorktree()?.kind, "named");
       assert.ok(fs.existsSync(first.worktreePath));
+      // A follow-up continues the conversation: the first prompt is still in the transcript.
+      const transcript = JSON.stringify((agent as any).messages.map((m: any) => m.role + ":" + (typeof m.content === "string" ? m.content.slice(0, 40) : "")));
+      assert.match(transcript, /user:first/, "the original request survived the follow-up turns");
+      assert.match(transcript, /user:second/);
+      assert.match(transcript, /user:third/);
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+      f.cleanup();
+    }
+  });
+
+  test("a retained named worktree switched to another branch between turns is refused, not edited", async () => {
+    const f = fixture();
+    const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+    const home = process.env.HOME;
+    process.env.HOME = f.home;
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.repo, shell: "bash", worktree: true, worktreeBranch: "feat/a" } as any);
+    try {
+      await agent.run("first");
+      const dir = agent.getActiveWorktree()!.worktreePath;
+      git(f.repo, "branch", "feat/b");
+      git(dir, "switch", "-q", "feat/b"); // another terminal
+      const before = gw.requests.length;
+      await assert.rejects(agent.runTurn("second"), /feat\/a/);
+      assert.equal(gw.requests.length, before, "no inference ran against the wrong branch");
     } finally {
       agent.shutdown();
       await gw.close();
