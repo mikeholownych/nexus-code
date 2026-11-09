@@ -587,6 +587,180 @@ function isIdentifierPart(part: string): boolean {
   return words !== null && words.join("").length === part.length;
 }
 
+/** Every occurrence (overlapping ones included) of each value, as [start, value index]: few values, native search. */
+function findByIndexOf(text: string, values: string[]): Array<[start: number, index: number]> {
+  const occurrences: Array<[start: number, index: number]> = [];
+  values.forEach((value, index) => {
+    if (!value) return;
+    for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + 1)) occurrences.push([at, index]);
+  });
+  return occurrences;
+}
+
+/**
+ * Every occurrence (overlapping ones included) of each value, as [start, value index], in one pass over the text with
+ * an Aho-Corasick automaton. Transitions are keyed by node and by the index of the code unit in the values' own
+ * alphabet, which keeps the keys small integers (fast Map lookups).
+ */
+/** An open-addressing hash table from a non-negative integer key to a node number (-1 when absent). */
+class TransitionTable {
+  private keys: Float64Array;
+  private nodes: Int32Array;
+  private mask: number;
+
+  constructor(entries: number) {
+    let size = 16;
+    while (size < entries * 2) size *= 2;
+    this.keys = new Float64Array(size).fill(-1);
+    this.nodes = new Int32Array(size);
+    this.mask = size - 1;
+  }
+
+  private slot(key: number): number {
+    let slot = (Math.imul(key < 4294967296 ? key >>> 0 : key % 4294967296, 0x9e3779b1) >>> 0) & this.mask;
+    while (this.keys[slot] !== -1 && this.keys[slot] !== key) slot = (slot + 1) & this.mask;
+    return slot;
+  }
+
+  get(key: number): number {
+    const slot = this.slot(key);
+    return this.keys[slot] === key ? this.nodes[slot] : -1;
+  }
+
+  set(key: number, node: number): void {
+    const slot = this.slot(key);
+    this.keys[slot] = key;
+    this.nodes[slot] = node;
+  }
+}
+
+function findByAutomaton(text: string, values: string[]): Array<[start: number, index: number]> {
+  const alphabet = new Int32Array(65536).fill(-1); // UTF-16 code unit -> symbol, -1 when no value uses it
+  let radix = 0;
+  for (const value of values) {
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (alphabet[code] < 0) alphabet[code] = radix++;
+    }
+  }
+  radix = Math.max(radix, 1);
+  let capacity = 1;
+  for (const value of values) capacity += value.length;
+  const next = new TransitionTable(capacity); // node * radix + symbol -> child node
+  const parent = new Int32Array(capacity);
+  const symbolOf = new Int32Array(capacity);
+  const depth = new Int32Array(capacity);
+  const fail = new Int32Array(capacity);
+  const output = new Int32Array(capacity).fill(-1); // the value that ends at this node
+  const dictionary = new Int32Array(capacity).fill(-1); // the nearest node on the fail chain where a value ends
+  let nodes = 1;
+  let maxDepth = 0;
+  values.forEach((value, index) => {
+    if (!value) return;
+    let node = 0;
+    for (let i = 0; i < value.length; i++) {
+      const symbol = alphabet[value.charCodeAt(i)];
+      let child = next.get(node * radix + symbol);
+      if (child < 0) {
+        child = nodes++;
+        next.set(node * radix + symbol, child);
+        parent[child] = node;
+        symbolOf[child] = symbol;
+        depth[child] = depth[node] + 1;
+        if (depth[child] > maxDepth) maxDepth = depth[child];
+      }
+      node = child;
+    }
+    if (output[node] < 0) output[node] = index;
+  });
+  // Failure links in breadth-first order: nodes sorted by depth (a counting sort), so a parent's link is set first.
+  const byDepthStart = new Int32Array(maxDepth + 2);
+  for (let node = 1; node < nodes; node++) byDepthStart[depth[node] + 1]++;
+  for (let d = 1; d <= maxDepth + 1; d++) byDepthStart[d] += byDepthStart[d - 1];
+  const order = new Int32Array(nodes);
+  for (let node = 1; node < nodes; node++) order[byDepthStart[depth[node]]++] = node;
+  for (let k = 0; k < nodes - 1; k++) {
+    const node = order[k];
+    const symbol = symbolOf[node];
+    if (parent[node] !== 0) {
+      let link = fail[parent[node]];
+      while (link > 0 && next.get(link * radix + symbol) < 0) link = fail[link];
+      fail[node] = Math.max(next.get(link * radix + symbol), 0);
+    }
+    dictionary[node] = output[fail[node]] >= 0 ? fail[node] : dictionary[fail[node]];
+  }
+
+  const occurrences: Array<[start: number, index: number]> = [];
+  let node = 0;
+  for (let i = 0; i < text.length; i++) {
+    const symbol = alphabet[text.charCodeAt(i)];
+    if (symbol < 0) {
+      node = 0;
+      continue;
+    }
+    while (node > 0 && next.get(node * radix + symbol) < 0) node = fail[node];
+    node = Math.max(next.get(node * radix + symbol), 0);
+    for (let found = output[node] >= 0 ? node : dictionary[node]; found > 0; found = dictionary[found]) {
+      occurrences.push([i + 1 - depth[found], output[found]]);
+    }
+  }
+  return occurrences;
+}
+
+/**
+ * Replaces every occurrence of each value, in one pass over the text: the same result as `replaceAll` for each value in
+ * turn (values in priority order, longest first as classifyText returns them; text already replaced is not matched
+ * again), without one pass per value, which is quadratic for a text with thousands of distinct secrets. All occurrences
+ * are found first (native search for a few values, one Aho-Corasick automaton for many); they are accepted in priority
+ * order unless they overlap text already accepted (a Fenwick tree counts accepted positions); the output is built once
+ * from the accepted spans.
+ * `replacement(index)` is called once for each value that is replaced, in text order; returns the new text.
+ */
+export function replaceValues(text: string, values: string[], replacement: (index: number) => string): string {
+  if (values.length === 0 || text.length === 0) return text;
+  const occurrences = values.length <= 16 ? findByIndexOf(text, values) : findByAutomaton(text, values);
+  if (occurrences.length === 0) return text;
+  occurrences.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+
+  const covered = new Int32Array(text.length + 1); // Fenwick tree over accepted positions
+  const countBefore = (position: number): number => {
+    let sum = 0;
+    for (let i = position; i > 0; i -= i & -i) sum += covered[i];
+    return sum;
+  };
+  const accepted: Array<[start: number, index: number]> = [];
+  for (const [start, index] of occurrences) {
+    const end = start + values[index].length;
+    if (countBefore(end) - countBefore(start) !== 0) continue;
+    accepted.push([start, index]);
+    for (let position = start + 1; position <= end; position++) {
+      for (let i = position; i <= text.length; i += i & -i) covered[i]++;
+    }
+  }
+  if (accepted.length === 0) return text;
+  accepted.sort((a, b) => a[0] - b[0]);
+  const replacements = new Map<number, string>();
+  const parts: string[] = [];
+  let from = 0;
+  for (const [start, index] of accepted) {
+    let replaced = replacements.get(index);
+    if (replaced === undefined) {
+      replaced = replacement(index);
+      replacements.set(index, replaced);
+    }
+    parts.push(text.slice(from, start), replaced);
+    from = start + values[index].length;
+  }
+  parts.push(text.slice(from));
+  return parts.join("");
+}
+
+/** Irreversibly replaces every classified value in the text with its `[REDACTED:<pattern>]` label. */
+function redactValues(text: string, classified: ClassifiedSecret[]): string {
+  return replaceValues(text, classified.map((item) => item.secret), (index) =>
+    `[REDACTED:${classified[index].patternName || "SECRET"}]`);
+}
+
 /**
  * InformationFlowBoundary: The authoritative egress interception & secret quarantine layer.
  */
@@ -928,10 +1102,7 @@ export class InformationFlowBoundary {
       if (typeof item === "string") {
         const cached = redactedStrings.get(item);
         if (cached !== undefined) return cached;
-        let sanitized = item;
-        for (const secret of this.classifyText(item, envSecrets)) {
-          sanitized = sanitized.replaceAll(secret.secret, `[REDACTED:${secret.patternName || "SECRET"}]`);
-        }
+        const sanitized = redactValues(item, this.classifyText(item, envSecrets));
         redactedStrings.set(item, sanitized);
         return sanitized;
       }
@@ -952,10 +1123,7 @@ export class InformationFlowBoundary {
     // spans an object key and its nested string value.
     const serialized = JSON.stringify(recursivelySanitized);
     if (serialized === undefined) throw new Error("Telemetry payload is not JSON serializable");
-    let sanitizedSerialized = serialized;
-    for (const secret of this.classifyText(serialized, envSecrets)) {
-      sanitizedSerialized = sanitizedSerialized.replaceAll(secret.secret, `[REDACTED:${secret.patternName || "SECRET"}]`);
-    }
+    const sanitizedSerialized = redactValues(serialized, this.classifyText(serialized, envSecrets));
     return JSON.parse(sanitizedSerialized) as T;
   }
 
@@ -1066,32 +1234,19 @@ export class InformationFlowBoundary {
 
       // Determine protection mode (DISC-005)
       const mode = context?.preferredProtectionMode || "REVERSIBLE_TOKENIZATION";
-      let sanitizedText = rawText;
-      let quarantinedCount = 0;
 
       const taskId = context?.taskId || "default_task";
       const sessionId = context?.sessionId || "default_session";
 
       const quarantinedSecrets: ClassifiedSecret[] = [];
-      for (const item of classifiedSecrets) {
-        const secret = item.secret;
-        if (!sanitizedText.includes(secret)) continue;
+      const sanitizedText = replaceValues(rawText, classifiedSecrets.map((item) => item.secret), (index) => {
+        const item = classifiedSecrets[index];
         quarantinedSecrets.push(item);
-
-        let replacement: string;
-        if (mode === "IRREVERSIBLE_REDACTION") {
-          replacement = `[REDACTED:${item.patternName || "SECRET"}]`;
-        } else if (mode === "ENCRYPTION") {
-          // Reversible encrypted token simulation
-          replacement = this.generateToken(secret, taskId, sessionId, sourceBoundary, destBoundary);
-        } else {
-          // REVERSIBLE_TOKENIZATION (Default)
-          replacement = this.generateToken(secret, taskId, sessionId, sourceBoundary, destBoundary);
-        }
-
-        sanitizedText = sanitizedText.replaceAll(secret, replacement);
-        quarantinedCount++;
-      }
+        if (mode === "IRREVERSIBLE_REDACTION") return `[REDACTED:${item.patternName || "SECRET"}]`;
+        // ENCRYPTION (reversible encrypted token simulation) and REVERSIBLE_TOKENIZATION (the default) both tokenize.
+        return this.generateToken(item.secret, taskId, sessionId, sourceBoundary, destBoundary);
+      });
+      const quarantinedCount = quarantinedSecrets.length;
 
       // Reconstruct payload in original format
       let sanitizedPayload: any = sanitizedText;

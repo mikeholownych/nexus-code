@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { InformationFlowBoundary } from "../src/core/egress.js";
+import { InformationFlowBoundary, replaceValues } from "../src/core/egress.js";
 import { assertNoSensitivePersistenceContent, redactDiagnosticForOutput } from "../src/core/persistence_protection.js";
 import { SecretsVault } from "../src/security.js";
 
@@ -389,4 +389,42 @@ test("a secret inside a longer match is redacted at its other occurrences too", 
   const text = "Bearer abc-sk-0123456789abcdefghij; saved prefix_sk-0123456789abcdefghij.log";
   const output = boundary.redactForTelemetry(text);
   assert.ok(!output.includes("0123456789abcdefghij"), output);
+});
+
+/** Replacement is one pass over the text, not one pass per distinct secret: 20k distinct keys in about 1 MB. */
+test("many distinct secrets are redacted in linear time", () => {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let seed = 0x9e3779b9;
+  const next = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed >>> 26;
+  };
+  const keys = Array.from({ length: 20_000 }, () => `sk-${Array.from({ length: 44 }, () => alphabet[next()]).join("")}`);
+  const text = keys.join(" ");
+  const boundary = new InformationFlowBoundary();
+  const started = performance.now();
+  const output = boundary.redactForTelemetry(text);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 3000, `${Math.round(elapsed)} ms for ${keys.length} keys in ${text.length} chars`);
+  assert.ok(!keys.some((key) => output.includes(key.slice(3, 15))), "every key is redacted");
+});
+
+/** The one-pass replacement gives the same text as replaceAll for each value in turn, longest value first. */
+test("one-pass replacement matches sequential replaceAll, with few values and with many", () => {
+  let seed = 7;
+  const random = (n: number) => {
+    seed = (seed * 1103515245 + 12345) >>> 0;
+    return (seed >>> 8) % n;
+  };
+  for (let round = 0; round < 400; round++) {
+    const text = Array.from({ length: 40 + random(80) }, () => "ab+/"[random(4)]).join("");
+    const count = round % 2 === 0 ? 1 + random(6) : 17 + random(20);
+    const values = [...new Set(Array.from({ length: count }, () => {
+      const start = random(text.length - 2);
+      return text.slice(start, start + 2 + random(6));
+    }))].sort((a, b) => b.length - a.length);
+    let expected = text;
+    values.forEach((value, index) => { expected = expected.replaceAll(value, `<${index}>`); });
+    assert.equal(replaceValues(text, values, (index) => `<${index}>`), expected, JSON.stringify({ text, values }));
+  }
 });
