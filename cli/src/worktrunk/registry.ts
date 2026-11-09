@@ -106,6 +106,9 @@ let lockDepth = 0;
 /** How long a caller waits for the lock and when an old lock may be taken over. Mutable so tests can shorten the wait. */
 export const lockSettings = { waitMs: 120_000, staleMs: 600_000 };
 
+/** Test seam: runs between judging a lock stale and taking it over. Not an extension point. */
+export const lockSeams: { afterStaleCheck?: () => void } = {};
+
 /** A checkout holds the lock for as long as it takes, so a lock is taken over only when its holder is gone (a dead pid) or it is far older than any checkout. */
 function lockIsStale(lock: string): boolean {
   const stat = fs.lstatSync(lock);
