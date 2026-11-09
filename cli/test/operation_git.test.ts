@@ -1002,3 +1002,43 @@ test("post-hoc recovery restores a branch deleted by a verifier", async () => {
   assert.equal(ops.currentTip(), mergedTip);
   assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "u1.txt"), "utf8"), "one\n");
 });
+
+test("a failure_debugger on a failed tester works on a snapshot of the tester's candidate, which is never integrated", async () => {
+  const root = repo();
+  const state = newOperation("op-dbg", "fix it", [
+    { id: "verify", title: "verify", role: "tester", prompt: "add a regression test" },
+    { id: "debug", title: "debug", role: "failure_debugger", prompt: "find the cause", dependsOn: ["verify"] },
+  ], [resource()], Date.now());
+  const p = plan(root, state.id);
+  state.git = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state.git);
+  let debuggerSaw: { test?: string; scratch?: boolean } = {};
+  const executor: WorkUnitExecutor = {
+    async run(u, _resource, ctx) {
+      const ws = ctx.workspace!;
+      if (u.id === "verify") {
+        fs.writeFileSync(path.join(ws, "regression.test.txt"), "FAILING_REGRESSION_TEST\n");
+        fs.writeFileSync(path.join(ws, "file.txt"), "tester edit\n");
+        return {
+          kind: "failed", cause: "EXECUTION_FAILED", reason: "verifier failed", question: "q",
+          options: [{ label: "retry", action: { kind: "retry" } }],
+          failedRun: { summary: "1 failed", verification: { command: "test -f regression.test.txt && false", status: "FAILED", hasExecutedTests: true } },
+        };
+      }
+      debuggerSaw = {
+        test: fs.existsSync(path.join(ws, "regression.test.txt")) ? fs.readFileSync(path.join(ws, "regression.test.txt"), "utf8") : undefined,
+      };
+      fs.writeFileSync(path.join(ws, "debug-notes.txt"), "scratch\n");
+      return completed({ summary: "cause found" });
+    },
+  };
+  await new OperationRunner(state, { executor, clock: clock(), persist: () => {} }).run();
+  assert.equal(state.units.find((u) => u.id === "debug")!.status, "COMPLETE", JSON.stringify(state.units.map((u) => [u.id, u.status])));
+  assert.equal(debuggerSaw.test, "FAILING_REGRESSION_TEST\n", "the debugger reproduces against the tester's candidate, not the integration tip");
+  const tree = git(state.git!.integrationWorktree, ["ls-tree", "-r", "--name-only", "HEAD"]).split("\n").sort();
+  assert.deepEqual(tree, ["file.txt"], "neither the tester's unverified work nor the debugger's scratch files are integrated");
+  assert.equal(fs.readFileSync(path.join(state.git!.integrationWorktree, "file.txt"), "utf8"), "base\n");
+  const testerWorktree = state.git!.units.verify.worktree;
+  assert.equal(git(testerWorktree, ["status", "--porcelain"]).length > 0, true, "the tester's worktree keeps its uncommitted work");
+  assert.equal(git(testerWorktree, ["rev-parse", "HEAD"]), state.git!.units.verify.baseCommit, "the tester's branch did not move");
+});
