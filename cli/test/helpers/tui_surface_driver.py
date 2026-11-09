@@ -108,14 +108,12 @@ def main():
     s.send("Write the config file.\r", settle=0.05)
     s.send("yyy", settle=0.05)
     s.wait_screen(approval_panel_shown, 20, "the approval modal with its decisions and hint")
-    s.pump(0.9)  # the operator's pause in typing before the deliberate decision (the panel's grace and quiet periods)
+    s.pump(0.9)  # the operator reads the panel
     shot(s, "10-approval")
     result["approval_survived_buffered_keys"] = has(s.color.lines(), "Approval needed")
-    # Keys were typed just before it opened, so its letters are not answers: ← selects Approve, Enter confirms.
-    result["letters_disarmed_hint"] = any("typing ignored" in l for l in s.color.lines())
-    s.send("\x1b[D", settle=2.2)  # on a typed-into panel the choice stays on screen 2 s before Enter takes it
-    s.send("\r", settle=0.6)  # where letters are off, approving takes Enter twice
-    s.send("\r", settle=0.4)
+    # The keys typed before it opened went to the draft; they did not disarm its letters: one `y` approves.
+    result["approval_keys_hint"] = any("y approve · n deny" in l for l in s.color.lines())
+    s.send("y", settle=0.4)
     wait_events(events, "turn.result", 4, 30, s)
     s.wait_idle()
     result["draft_after_approval"] = s.color.lines()[-1]

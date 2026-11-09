@@ -4,12 +4,13 @@ inputs reached the sidecar as decisions; the node test (tui_approval_input_e2e.t
 sidecar's command log.
 
 1. Queued input: the TUI is frozen (SIGSTOP) while the approval request arrives and `y⏎` is typed; it is resumed
-   after the grace period has passed. The queued keys must not decide.
-2. A burst `yyy` typed at once, long after the panel appeared, must not decide.
+   a while later. The queued keys must not decide.
+2. A burst `yyy` typed at once, long after the panel appeared, must not decide (its text goes to the draft).
 3. A bracketed paste of `y⏎` must not decide.
-4. After keys were typed into that panel, `n` is text; Esc denies. The next approval appears to an operator who is
-   not typing, and one deliberate `y` approves it.
-5. Typing that continues across the third panel's appearance never decides, nor does `n` after a pause; Esc denies.
+4. One deliberate `n` then denies that panel (typing into it did not disarm its letters). The next approval is
+   answered by one `y` shortly after it appears (no lock-out after a decision).
+5. Text without an approval key typed across the third panel's appearance goes to the draft and decides nothing;
+   `n` then denies.
 
 Usage: tui_approval_driver.py PLAN.json
 """
@@ -64,21 +65,19 @@ def main():
     s.send("\x1b[200~y\r\x1b[201~", settle=0.8)
     result["after_paste"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
 
-    # 4. Keys were typed into this panel (the burst), so its letters are not answers: Esc denies. The pause lets the
-    # next approval appear to an operator who is not typing, where one deliberate `y` approves.
-    s.send("n", settle=0.3)
-    result["n_after_typing"] = decisions(commands)
-    s.pump(2.2)
-    s.send("\x1b", settle=0.5)
+    # 4. Typing into the panel (the burst, the paste) did not disarm its letters: one `n` denies. The next panel takes
+    # one `y` shortly after it appears.
+    s.pump(0.3)
+    s.send("n", settle=0.5)
     result["after_deny"] = decisions(commands)
     wait_events(events, "approval.request", 2, 20, s)
     s.wait_screen(lambda lines: has(lines, "Approval needed"), 10, "the second approval panel")
-    s.pump(1.8)  # the next panel takes keys 1.5 s after the previous decision
+    s.pump(0.4)
     s.send("y", settle=0.5)
     result["after_approve"] = decisions(commands)
 
-    # 5. Typing that continues across the third approval panel's appearance never decides.
-    typed = "please add tests and then run them now"
+    # 5. Text with no approval key, typed across the third approval panel's appearance, goes to the draft.
+    typed = "check the tests"
     seen_while_typing = False
     for ch in typed:
         s.send(ch, settle=0.1)
@@ -89,14 +88,14 @@ def main():
     s.wait_screen(lambda lines: has(lines, "Approval needed"), 10, "the third approval panel")
     s.pump(0.2)
     result["after_typing_across"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
-    s.pump(1.0)
+    result["draft_kept"] = has(s.color.lines(), typed)
+    s.pump(0.5)
     s.send("n", settle=0.5)
-    result["n_after_typing_across"] = decisions(commands)
-    s.send("\x1b", settle=0.5)
     result["after_typing_then_deny"] = decisions(commands)
     wait_events(events, "turn.result", 1, 30, s)
     s.wait_idle()
     result["transcript"] = s.color.lines()
+    s.send("\x03", settle=0.3)  # the draft typed in 2. and 5. is cleared first
     s.send("\x03", settle=0.1)
     result["exit"] = s.wait_exit(20)
     print(json.dumps(result))
