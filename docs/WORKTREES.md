@@ -31,7 +31,7 @@ worktree and a speculative task worktree (unless `--force`).
 syntax, for example `target/` or `node_modules/`) into the new worktree; `--no-copy` skips it. `copy-ignored` does the same on
 demand (`--from`/`--to` default to the main checkout and the current worktree). Existing files are kept unless `--force`.
 Copies use a reflink where the file system has one, keep modification times so incremental builds do not restart, and
-stop with an error beyond 50,000 files or 4 GiB. `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
+stop with an error beyond 50,000 files or 4 GiB (under `switch -c`, a warning: the worktree is still created). `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
 (absolute paths) are never copied, and a symbolic link that leaves the tree is skipped. `--all-ignored` copies every
 ignored file and can therefore carry secrets such as `.env` into each worktree; it is never the default.
 
