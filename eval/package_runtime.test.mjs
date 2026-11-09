@@ -9,25 +9,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { stageEvaluatorRuntime, EVAL_RUNTIME_FILES } from "../scripts/stage_eval_runtime.mjs";
 
-const expectedRuntimeFiles = [
-  "eval/run.mjs", "eval/validate.mjs", "eval/t4_fixtures.mjs", "eval/isolate.mjs",
-  "eval/hide_oracle.cjs", "eval/hide_oracle.py", "eval/unlink_then_exec.sh",
-  "eval/agent_sandbox.mjs", "eval/model_proxy.mjs", "eval/score.mjs", "eval/dataset.mjs",
-  "eval/runner_integrity.mjs", "eval/runner_api.mjs", "eval/oracle.mjs", "eval/infra.mjs",
-  "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs",
-  "eval/hardened_check.mjs", "eval/check_phase.mjs", "eval/toolchain-versions.json", "eval/scan-compiler-exposure.mjs",
-  "eval/evaluators/code/index.mjs",
-  "eval/evaluators/code/syntax_ast.mjs",
-  "eval/evaluators/code/build.mjs",
-  "eval/evaluators/code/typecheck_clean.mjs",
-  "eval/evaluators/code/diff_boundary.mjs",
-  "eval/evaluators/code/runner.mjs",
-  "eval/evaluators/code/json_repair_rate.mjs",
-  "eval/evaluators/code/parsers.mjs",
-  "eval/evaluators/code/command.mjs",
-  "eval/evaluators/code/result.mjs",
-  "eval/evaluators/code/README.md",
-];
+// The single list (eval/runtime_files.mjs); a third hand-written copy here is what let the lists drift.
+import { EVAL_RUNTIME_FILES as expectedRuntimeFiles } from "./runtime_files.mjs";
 
 test("installed candidate runs all public benchmark tasks with provenance", {
   skip: process.env.NEXUS_PACKAGE_ARCHIVE && process.env.NEXUS_PACKAGE_INSTALL_ROOT && process.env.NEXUS_ACCEPTANCE_EVIDENCE_PATH
