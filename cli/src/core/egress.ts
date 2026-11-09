@@ -435,12 +435,23 @@ function isBase64KeyChar(code: number): boolean {
 }
 
 /**
- * The rest of a run after a plain key is a URL path (`/models`, `/v1/messages`) when it carries no base64-only "+"
- * and every segment is empty or made of words, numbers and short tags, as `isIdentifierPart` defines them. Random
- * base64 segments carry digits or split into one-letter pieces, so they are not taken for a path.
+ * One word of a path: identifier words, numbers and short tags as `isIdentifierPart` defines them, or a word with a short
+ * number (`Ridge2`). A part of 20 or more characters must split into two or more words (`RandomForestClassifier`): a
+ * long run of one letter or of random characters is key material, not a name.
  */
-function isPathTail(tail: string): boolean {
-  return !tail.includes("+") && tail.split("/").every((segment) => segment.split(/[._-]+/).every(isIdentifierPart));
+function isPathWord(part: string): boolean {
+  const word = /^[A-Za-z]{2,}\d{1,3}$/.test(part) ? part.replace(/\d+$/, "") : part;
+  if (!isIdentifierPart(word)) return false;
+  return part.length < 20 || (word.match(/[A-Z]{2,}(?![a-z])|[A-Z][a-z]+|[a-z]{2,}/g)?.length ?? 0) >= 2;
+}
+
+/**
+ * A "/"-separated value is a path (`learn/linear_model/Ridge2`, `/v1/models`), not key material, when it carries no
+ * base64-only "+" or "=" and every segment is made of path words. Random base64 segments carry digits, split into
+ * one-letter pieces or run 20+ characters without words, so they are not taken for a path.
+ */
+function isPathLike(value: string): boolean {
+  return !/[+=]/.test(value) && value.split("/").every((segment) => segment.split(/[._-]+/).every(isPathWord));
 }
 
 /**
@@ -448,9 +459,9 @@ function isPathTail(tail: string): boolean {
  * at a word boundary take the maximal run of key characters (a JSON-escaped `\/` counts as "/") once, validate it,
  * and resume after it. Nothing of the run
  * is trimmed: its last segment is key material whatever its letter case. A run is a key if its body is at least 20
- * characters, contains "/" or "+", and has a digit, a capital or "+" (`sk-learn/linear_model/ridge` is a path).
- * A plain key followed by a URL path (`sk-…RtBq/models`: the body before its first "/" is a 20-64 character plain key
- * and the rest is a path, see `isPathTail`) is left to the bounded `sk-` patterns, which stop at the "/".
+ * characters, contains "/" or "+", has a digit, a capital or "+", and is not a path (`sk-learn/linear_model/Ridge2`,
+ * see `isPathLike`). A plain key followed by a URL path (`sk-…RtBq/models`: the body before its first "/" is a 20-64
+ * character plain key and the rest is a path) is left to the bounded `sk-` patterns, which stop at the "/".
  * Every `sk-` inside a run is skipped: a key inside it is found by the bounded patterns. Nothing is rescanned and
  * nothing is searched backwards, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
  */
@@ -474,8 +485,8 @@ function scanBase64Keys(text: string): Array<{ start: number; end: number; name:
     const body = unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end));
     const separator = body.search(/[/+]/);
     const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
-      isPathTail(body.slice(separator + 1));
-    if (!plainKeyThenPath && body.length >= 20 && separator >= 0 && /[0-9A-Z+]/.test(body)) {
+      isPathLike(body.slice(separator + 1));
+    if (!plainKeyThenPath && body.length >= 20 && separator >= 0 && /[0-9A-Z+]/.test(body) && !isPathLike(body)) {
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
       found.push({ start: at, end: secretEnd, name: anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY" });

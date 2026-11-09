@@ -283,3 +283,21 @@ test("secrets with JSON-escaped slashes are redacted whole", () => {
     InformationFlowBoundary.setGlobalInstance(original);
   }
 });
+
+/** scikit-learn style paths start with `sk-` but are paths: identifier segments, no "+", no long random segment. */
+test("sk-learn style paths are not keys", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    for (const text of [
+      "see sk-learn/Linear_model/Ridge.py",
+      "see sk-learn/linear_model/Ridge2.py",
+      "error at sk-learn/sklearn/linear_model/ridge/Ridge_Regression.py",
+      "import sk-learn/Ensemble/RandomForestClassifier",
+    ]) {
+      assert.equal(redactDiagnosticForOutput(text), text);
+    }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
