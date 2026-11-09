@@ -37,11 +37,6 @@ const READ_ONLY = new Set(["list", "path"]);
 /** Subcommands that mutate unless `--dry-run` is given. */
 const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored", "prune"]);
 
-<<<<<<< HEAD
-export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove]|prune [--dry-run] [--min-age 1d] [--limit N]]";
-||||||| 92ad501f
-export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]]";
-=======
 /**
  * The pre-WP-1310 `/worktree` forms, which act on the speculative worktree of the running session (`nexus run
  * --worktree`): no argument or `status` shows it, `merge` and `discard` resolve it. They are never named-worktree
@@ -49,8 +44,7 @@ export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch>
  */
 const LEGACY = new Set(["", "status", "merge", "discard"]);
 
-export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]]";
->>>>>>> origin/v1/v114-wp1311-copy-ignored
+export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove]|prune [--dry-run] [--min-age 1d] [--limit N]]";
 
 /** The subcommand a token names, matched case-insensitively (the slash gates lowercase their input; the CLI does not). */
 function canonical(sub: string): string | undefined {
