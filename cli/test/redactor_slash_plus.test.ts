@@ -108,7 +108,8 @@ test("pathological 800 KB inputs are redacted in linear time", () => {
       const started = performance.now();
       redactDiagnosticForOutput(input);
       const elapsed = performance.now() - started;
-      assert.ok(elapsed < 2000, `${name}: ${Math.round(elapsed)} ms for ${input.length} chars`);
+      // Linear runs take well under 1 s; the quadratic scans this guards against took minutes. Loose for slow CI hosts.
+      assert.ok(elapsed < 10_000, `${name}: ${Math.round(elapsed)} ms for ${input.length} chars`);
     }
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
@@ -406,7 +407,11 @@ test("a secret inside a longer match is redacted at its other occurrences too", 
   assert.ok(!output.includes("0123456789abcdefghij"), output);
 });
 
-/** Replacement is one pass over the text, not one pass per distinct secret: 20k distinct keys in about 1 MB. */
+/**
+ * Replacement is one pass over the text, not one pass per distinct secret: 20k distinct keys in about 1 MB. Timed
+ * against 2.5k keys in the same process, so a slow host does not matter: 8 times the keys is about 12 times the time
+ * when linear, and about 120 times with one replaceAll per key (the quadratic version took about 20 s).
+ */
 test("many distinct secrets are redacted in linear time", () => {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let seed = 0x9e3779b9;
@@ -415,12 +420,21 @@ test("many distinct secrets are redacted in linear time", () => {
     return seed >>> 26;
   };
   const keys = Array.from({ length: 20_000 }, () => `sk-${Array.from({ length: 44 }, () => alphabet[next()]).join("")}`);
-  const text = keys.join(" ");
   const boundary = new InformationFlowBoundary();
-  const started = performance.now();
-  const output = boundary.redactForTelemetry(text);
-  const elapsed = performance.now() - started;
-  assert.ok(elapsed < 3000, `${Math.round(elapsed)} ms for ${keys.length} keys in ${text.length} chars`);
+  let output = "";
+  const fastest = (count: number, runs: number): number => {
+    const text = keys.slice(0, count).join(" ");
+    let best = Infinity;
+    for (let run = 0; run < runs; run++) {
+      const started = performance.now();
+      output = boundary.redactForTelemetry(text);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
+  };
+  const few = fastest(2_500, 3);
+  const many = fastest(20_000, 2);
+  assert.ok(many / few < 32, `${Math.round(few)} ms for 2.5k keys, ${Math.round(many)} ms for 20k keys`);
   assert.ok(!keys.some((key) => output.includes(key.slice(3, 15))), "every key is redacted");
 });
 
@@ -456,7 +470,8 @@ test("nested secrets over a repetitive text are redacted in bounded time", () =>
     const started = performance.now();
     const output = boundary.redactForTelemetry(text);
     const elapsed = performance.now() - started;
-    assert.ok(elapsed < 3000, `${count} secrets: ${Math.round(elapsed)} ms`);
+    // About 1 s when bounded; without the occurrence budget, 30 secrets took about 26 s. Loose for slow CI hosts.
+    assert.ok(elapsed < 10_000, `${count} secrets: ${Math.round(elapsed)} ms`);
     assert.ok(!output.includes("aa"), `${count} secrets: the run is redacted`);
     assert.ok(output.startsWith("st") && output.endsWith("end"), `${count} secrets: ${output.slice(0, 40)}`);
   }
@@ -476,7 +491,7 @@ test("egress tokens for self-overlapping secrets rehydrate to the exact text, in
   const text = `x ${"a".repeat(2000)} y ${"a".repeat(25)} z ${"a".repeat(800_000)} w`;
   const started = performance.now();
   const result = boundary.evaluateEgress(text, "EXTERNAL_PUBLIC", { taskId: "t1" });
-  assert.ok(performance.now() - started < 3000, "over budget fallback stays linear");
+  assert.ok(performance.now() - started < 10_000, "over budget fallback stays linear"); // about 0.5 s; loose for CI
   assert.ok(!result.sanitizedText!.includes("a".repeat(20)), result.sanitizedText!.slice(0, 80));
   assert.equal(result.quarantinedCount, 3);
   assert.deepEqual(result.quarantinedSecrets!.map((item) => item.secret.length), [2000, 25, 800_000]);
