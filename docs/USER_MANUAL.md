@@ -40,7 +40,7 @@ nexus -r
 nexus -r sess_1727668541234
 ```
 
-If the earlier turn was suspended while the provider asked you to wait (HTTP 429 or 503 with `Retry-After`), the resumed turn waits out the rest of that window before its first request.
+If the earlier turn was suspended when the provider asked for a wait (for example 429/503 with `Retry-After`) or a recovery wait was in progress, the resumed turn waits out the rest of that window before its first request.
 This applies to `nexus run --resume`, the TUI (`--resume` or `/resume`) and `nexus operation resume`.
 The wait is shown as the usual provider-wait status.
 It is bounded by `LOCAL_LLM_RECOVERY_DEADLINE_MS` (default 20 minutes), skipped when you resume against a different endpoint, and Ctrl-C during it suspends again with the same eligible time.
