@@ -10,7 +10,8 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { AgentWorkUnitExecutor } from "../src/core/operation_runner.js";
-import { isReviewRole, reviewCandidateDiff } from "../src/core/operation_runner_execution.js";
+import { isReviewRole } from "../src/core/operation_runner_execution.js";
+import { candidateDiff } from "../src/core/specialist_inputs.js";
 import type { HarnessConfig } from "../src/types.js";
 
 function repo(): string {
@@ -51,11 +52,11 @@ test("the candidate diff covers tracked edits and new files against the base", (
   const dir = repo();
   fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
   fs.writeFileSync(path.join(dir, "new file.js"), "export {};\n");
-  const out = reviewCandidateDiff(dir);
+  const out = candidateDiff(dir);
   assert.ok("diff" in out, JSON.stringify(out));
   assert.match(out.diff, /\+export const add = \(a, b\) => a \+ b;/);
   assert.match(out.diff, /new file\.js/);
-  assert.ok("error" in reviewCandidateDiff(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-nogit-"))));
+  assert.ok("error" in candidateDiff(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-nogit-"))));
 });
 
 test("the reviewer prompt carries the diff and verifier receipt but not the authors' summaries", () => {
@@ -130,7 +131,7 @@ test("a candidate diff that cannot be collected blocks the review instead of bec
   fs.writeFileSync(path.join(dir, "big.txt"), "x".repeat(5 * 1024 * 1024)); // untracked: exceeds the 4 MiB diff buffer
   const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
   const ctx = { objective: "Fix add", workspace: dir, startCommit: head(dir), dependencies: [{ id: "i", title: "I", summary: "s", verification: { command: "make test", status: "PASSED", hasExecutedTests: true } }], observeSuccess() {} };
-  assert.ok("error" in reviewCandidateDiff(dir), "the diff is not collectable");
+  assert.ok("error" in candidateDiff(dir), "the diff is not collectable");
   const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
   const reason = failedGate(internals(executor).classify(unit, resource, done, verdict(), null, ctx, false, pkg));
   assert.match(reason, /candidate diff/i);
@@ -463,11 +464,11 @@ test("R7: a persisted base that looks like an option is refused, not passed to g
   const dir = repo();
   const target = path.join(dir, "..", `injected-${process.pid}`);
   for (const bad of [`--output=${target}`, "-p", "not-a-commit", "HEAD; touch x"]) {
-    const out = reviewCandidateDiff(dir, bad);
+    const out = candidateDiff(dir, bad);
     assert.ok("error" in out, bad);
   }
   assert.equal(fs.existsSync(target), false);
-  assert.ok("diff" in reviewCandidateDiff(dir, head(dir)));
+  assert.ok("diff" in candidateDiff(dir, head(dir)));
 });
 
 test("R8: the review instructions name the scope only when one is declared", () => {

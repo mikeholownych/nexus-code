@@ -10,7 +10,7 @@ import type { ChatMessage, HarnessConfig } from "../types.js";
 import type { TaskRecoveryResult } from "./state.js";
 import { unitBaseTask, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { messagesBlock } from "./operation_messages.js";
-import { boundedRedactedInput, safeCandidateDiff } from "./specialist_inputs.js";
+import { boundedRedactedInput, candidateDiff } from "./specialist_inputs.js";
 import { redactForPersistence } from "./persistence_protection.js";
 import { ROLE_PROFILES, SPECIALIST_CONTRACTS, isReadOnlyRole, isSpecialistRole, missingSpecialistInputs, validateSpecialistOutput, type AgentRole, type SpecialistRole } from "./roles.js";
 import { applyProviderCatalog, ResourceRegistry, type ResourceConditionRecord, type ResourceDescriptor } from "./resources.js";
@@ -20,7 +20,6 @@ import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./op
 import { isTestPath } from "../tester.js";
 import { isContextAdmissible } from "../tokens.js";
 import { ensurePrivateDir, writePrivateFile } from "./durable_file.js";
-import { execFileSync } from "node:child_process";
 import {
   buildReviewEvidencePackage,
   formatIndependentReviewPrompt,
@@ -39,35 +38,22 @@ export function isReviewRole(role: AgentRole | undefined): boolean {
  */
 const SPECIALIST_SUMMARY_MAX = 6_000;
 
-const REVIEW_DIFF_MAX_BYTES = 4 * 1024 * 1024;
-
 /**
- * The candidate a review unit judges: tracked changes against the operation's base commit (HEAD when the operation is
- * not isolated) plus untracked files, as Git renders them. A workspace that is not a Git checkout yields no diff; the
- * reviewer is told so rather than shown nothing.
+ * The candidate a unit is shown: changes against the operation's base (HEAD when the operation is not isolated),
+ * built by `candidateDiff` with protected paths removed. Once earlier units have run, a base is required: without a
+ * recorded starting commit their (possibly committed) work could not be shown, so nothing is diffed against HEAD.
  */
-export function reviewCandidateDiff(workspace: string, baseCommit?: string): { base: string; diff: string } | { error: string } {
-  const git = (args: string[], okExit: number[] = [0]): string => {
-    try {
-      return execFileSync("git", args, { cwd: workspace, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000, maxBuffer: REVIEW_DIFF_MAX_BYTES });
-    } catch (err: any) {
-      if (typeof err?.status === "number" && okExit.includes(err.status) && typeof err.stdout === "string") return err.stdout;
-      throw err;
-    }
-  };
-  try {
-    // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
-    const base = git(["rev-parse", "--verify", "--end-of-options", `${baseCommit ?? "HEAD"}^{commit}`]).trim();
-    let diff = git(["diff", "--no-color", "--no-ext-diff", base, "--"]);
-    const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
-    for (const file of untracked) {
-      // `git diff --no-index` exits 1 when the files differ, which is always the case against /dev/null.
-      diff += git(["diff", "--no-color", "--no-ext-diff", "--no-index", "--", "/dev/null", file], [1]);
-    }
-    return { base, diff };
-  } catch (err: any) {
-    return { error: String(err?.stderr || err?.message || err).trim().slice(0, 300) };
+function candidateDiffFor(ctx: UnitRunContext, workspace: string): ReturnType<typeof candidateDiff> {
+  const base = ctx.baseCommit ?? ctx.startCommit;
+  if (base === undefined && ctx.dependencies.length > 0) {
+    return { error: "no starting commit was recorded for this operation, so earlier (possibly committed) work cannot be shown; start a new operation" };
   }
+  return candidateDiff(ctx.workspace ?? workspace, base);
+}
+
+/** The diff text a unit is given, with the count of protected sections that were left out. */
+function candidateDiffText(candidate: { diff: string; omitted: number }): string {
+  return candidate.omitted ? `${candidate.diff}\n[${candidate.omitted} protected file section(s) omitted]\n` : candidate.diff;
 }
 
 function origin(endpoint: string): string {
@@ -645,14 +631,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     const collected: Record<string, string> = {};
     if (unit.role === "security_reviewer") {
       collected.authorized_scope = boundedRedactedInput(`Operation objective: ${ctx.objective}\nThis unit's task: ${unitBaseTask(unit.prompt)}`);
-      const base = ctx.baseCommit ?? ctx.startCommit;
-      const root = ctx.workspace ?? workspace;
-      const candidate = base === undefined && ctx.dependencies.length > 0
-        ? { error: "no starting commit was recorded for this operation, so earlier (possibly committed) work cannot be shown" }
-        : safeCandidateDiff(root, base);
+      const candidate = candidateDiffFor(ctx, workspace);
       if ("error" in candidate) why.unified_diff = `candidate diff unavailable: ${candidate.error}`.slice(0, 200);
       else if (candidate.diff.trim() === "") why.unified_diff = candidate.omitted ? "only protected files changed" : "there is no change against the base to review";
-      else collected.unified_diff = boundedRedactedInput(candidate.omitted ? `${candidate.diff}\n[${candidate.omitted} protected file section(s) omitted]\n` : candidate.diff);
+      else collected.unified_diff = boundedRedactedInput(candidateDiffText(candidate));
     } else {
       const failed = ctx.dependencies.filter((d) => d.verification && d.verification.status !== "PASSED");
       if (failed.length) {
@@ -673,9 +655,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   /** The objective evidence a review unit is given: requirements, scope, base, candidate diff and verifier receipts. */
   private reviewEvidence(unit: WorkUnit, ctx: UnitRunContext, workspace: string): ReviewEvidencePackage {
-    const candidate = (ctx.baseCommit ?? ctx.startCommit) === undefined && ctx.dependencies.length > 0
-      ? { error: "no starting commit was recorded for this operation, so work done before this review (possibly committed) cannot be shown; start a new operation" }
-      : reviewCandidateDiff(ctx.workspace ?? workspace, ctx.baseCommit ?? ctx.startCommit);
+    const candidate = candidateDiffFor(ctx, workspace);
     // The worst result across every dependency that ran a verifier decides; order must not matter.
     const verifications = ctx.dependencies.flatMap((d) => (d.verification ? [d.verification] : []));
     const passing = (v: { status: string; hasExecutedTests: boolean }) => v.status === "PASSED" && v.hasExecutedTests;
@@ -688,12 +668,12 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       unitId: unit.id,
       objective: `${ctx.objective}\n\nReview task: ${unit.prompt}`,
       baselineCommit: "base" in candidate ? candidate.base : "unknown",
-      unifiedDiff: "diff" in candidate ? candidate.diff : "",
+      unifiedDiff: "diff" in candidate ? candidateDiffText(candidate) : "",
       // An empty diff gives the reviewer nothing to judge, so it is a failure to collect evidence, not an accept.
       ...("error" in candidate
         ? { diffError: candidate.error || "git diff failed" }
         : emptyDiff
-          ? { diffError: "the candidate diff is empty: there is no change against the base to review" }
+          ? { diffError: candidate.omitted ? "only protected files changed: there is nothing the reviewer may be shown" : "the candidate diff is empty: there is no change against the base to review" }
           : {}),
       ...(verified
         ? {

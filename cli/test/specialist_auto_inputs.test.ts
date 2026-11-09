@@ -160,7 +160,7 @@ function trickyRepo(stage = true): string {
   const run = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
   const put = (rel: string, text: string) => { fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true }); fs.writeFileSync(path.join(repo, rel), text); };
   run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t");
-  put("keep.txt", "keep1\n"); put(".env.local", "LOCAL_SECRET=1\n"); put(".env.old", "OLD_SECRET_BODY\n"); put("plain.txt", "plain body line\nsecond\n");
+  put("keep.txt", "keep1\n"); put(".env.local", "LOCAL_SECRET=1\n"); put(".env.old", `OLD_SECRET_BODY\n${"filler line of the old secret file\n".repeat(5)}`); put("plain.txt", "plain body line\nsecond\n");
   put("secrets/é/.env", "UNICODE_SECRET=1\n"); put("sp ace/.env", "SPACE_SECRET=1\n"); put("sp ace/ok.txt", "ok1\n");
   run("add", "-A"); run("commit", "-q", "-m", "base");
   // Repo-set options that change how git renders a diff.
@@ -192,7 +192,7 @@ test("the security_reviewer diff is built from paths: no protected content leaks
 
 test("a git failure while collecting the diff fails closed rather than keeping anything", async () => {
   const repo = trickyRepo();
-  fs.writeFileSync(path.join(repo, ".git", "index"), "garbage");
+  fs.writeFileSync(path.join(repo, ".git", "HEAD"), "garbage"); // the base cannot be resolved
   const fake = fakeAgent("security_reviewer");
   const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
   assert.equal(outcome.kind, "failed");
@@ -253,7 +253,7 @@ test("the reproduction command is trusted only when the operator configured it; 
 
 test("an unstaged move of a protected file is recognised as a rename: its body does not reach the prompt as a new file", async () => {
   const repo = trickyRepo(false);
-  // The moved secret is also edited (still well above git's similarity threshold), so an exact-content match is not enough.
+  // The moved secret is also edited (about a fifth of it, within git's similarity threshold), so an exact-content match is not enough.
   fs.appendFileSync(path.join(repo, "public.txt"), "an added line\nanother added line\n");
   fs.appendFileSync(path.join(repo, ".env.old.bak"), "UNRELATED_UNTRACKED_SECRET\n");
   const fake = fakeAgent("security_reviewer");
