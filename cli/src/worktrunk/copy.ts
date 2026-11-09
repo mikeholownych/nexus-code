@@ -96,6 +96,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   const walk = (rel: string, root: string): void => {
     const abs = path.join(sourceRoot, rel);
     if (nested.some((n) => insideOrEqual(n, abs))) { skipped.push(`${rel}: nested worktree`); return; }
+    if (NEVER_COPY.has(path.basename(rel))) return;
     const stat = fs.lstatSync(abs);
     if (only && !(stat.isDirectory() ? only.dirs.has(rel) : only.files.has(rel))) return;
     if (stat.isSymbolicLink()) {
@@ -126,7 +127,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
 
   for (const entry of roots) {
     const rel = entry.replace(/\/$/, "");
-    if (!rel || path.isAbsolute(rel) || rel.split("/").includes("..") || NEVER_COPY.has(rel.split("/")[0])) continue;
+    if (!rel || path.isAbsolute(rel) || rel.split("/").includes("..") || rel.split("/").some((part) => NEVER_COPY.has(part))) continue;
     // A root can be a single file deep inside a directory the walk never visits (`.venv/bin/activate`): the
     // virtualenv exclusion must hold for its ancestors too.
     const env = ancestors(rel).find((dir) => fs.existsSync(path.join(sourceRoot, dir, "pyvenv.cfg")));
