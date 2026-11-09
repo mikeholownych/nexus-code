@@ -1,6 +1,7 @@
 import { ToolCall, ChatMessage } from "./types.js";
 import { HARNESS_TOOLS } from "./tools.js";
 import { defaultRegistry } from "./core/capabilities.js";
+import { unwrapSingleKeyWrapper } from "./core/tool_arguments.js";
 
 const KNOWN_TOOLS = new Set<string>(HARNESS_TOOLS.map((t) => t.function.name));
 ["update_requirements", "task_completed", "manage_knowledge", "update_plan", "spawn_subagent"].forEach((t) => KNOWN_TOOLS.add(t));
@@ -376,13 +377,7 @@ function normalizeToolArgsWithClass(args: any): { args: string; repaired: JsonRe
   }
   if (typeof args === "object" && args !== null) {
     const outerRepaired: JsonRepairClass = (args as any).repaired ?? "none";
-    if (args.input && typeof args.input === "object" && !Array.isArray(args.input) && Object.keys(args).length === 1) {
-      args = args.input;
-    } else if (args.parameters && typeof args.parameters === "object" && !Array.isArray(args.parameters) && Object.keys(args).length === 1) {
-      args = args.parameters;
-    } else if (args.args && typeof args.args === "object" && !Array.isArray(args.args) && Object.keys(args).length === 1) {
-      args = args.args;
-    }
+    args = unwrapSingleKeyWrapper(args);
     return { args: JSON.stringify(args), repaired: outerRepaired };
   }
   return { args: JSON.stringify(args || {}), repaired: "none" };

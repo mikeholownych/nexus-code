@@ -4,7 +4,8 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import { ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
-import { LocalLlmClient, normalizeNullableOptionalToolArguments } from "./client.js";
+import { LocalLlmClient } from "./client.js";
+import { normalizeToolArguments } from "./core/tool_arguments.js";
 import { HARNESS_TOOLS, RustCoreBridge, forbiddenDeletion, registerBridgeCapabilities } from "./tools.js";
 import {
   CanonicalCapability,
@@ -1899,6 +1900,25 @@ export class AutonomousAgent {
     this.bridge.shutdown();
     this.skillManager.stopWatcher();
     this.mcpManager.shutdownAll();
+  }
+
+  /**
+   * Parses a model response and normalises nullable optional arguments on every call (native, repaired, text-mode) at
+   * the one point where calls enter the agent, before the history, loop tracking, read coverage and rerun keys read
+   * them. Dispatch repeats it idempotently only for callers that do not come through a model response.
+   */
+  private parseNormalizedResponse(message: ChatMessage, nativeTools: boolean | undefined): ReturnType<typeof parseModelResponse> {
+    const parsed = parseModelResponse(message, { nativeTools });
+    const tools = this.getEffectiveTools();
+    parsed.toolCalls = parsed.toolCalls.map((call) => {
+      const raw = call.function.arguments;
+      let value: unknown;
+      try { value = typeof raw === "string" ? JSON.parse(raw) : raw; } catch { return call; }
+      const normalized = normalizeToolArguments(call.function.name, value, tools);
+      if (normalized === value) return call;
+      return { ...call, function: { ...call.function, arguments: typeof raw === "string" ? JSON.stringify(normalized) : normalized as any } };
+    });
+    return parsed;
   }
 
   public getEffectiveTools(): ToolDefinition[] {
@@ -4913,7 +4933,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       };
     }
 
-    args = normalizeNullableOptionalToolArguments(toolName, args, this.getEffectiveTools());
+    args = normalizeToolArguments(toolName, args, this.getEffectiveTools());
 
     // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
     // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
@@ -6134,7 +6154,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
         // Parse the response using hybrid parser
         const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
-        const parsed = parseModelResponse(assistantMessage, { nativeTools });
+        const parsed = this.parseNormalizedResponse(assistantMessage, nativeTools);
         this.addToolCallSyntax(parsed.toolCallSyntax);
 
         // Update cumulative token usage
@@ -7001,7 +7021,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (reported?.inputTokens !== undefined) this.totalTokens.reportedRequests++;
       else this.totalTokens.estimatedRequests++;
       const nativeTools = activeClient?.supportsNativeTools?.() ?? true;
-      const parsed = parseModelResponse(assistantMessage, { nativeTools });
+      const parsed = this.parseNormalizedResponse(assistantMessage, nativeTools);
       this.addToolCallSyntax(parsed.toolCallSyntax);
       this.uniqueCallIds(parsed.toolCalls, tracker);
       this.messages.push({

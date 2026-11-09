@@ -61,38 +61,6 @@ function accountMarker(credential: string): number {
 
 type OAuthCredential = Extract<StoredCredential, { type: "oauth" }>;
 
-/** Remove nulls from optional top-level arguments using the tool schema the agent originally declared. */
-export function normalizeNullableOptionalToolArguments(toolName: string, rawArgs: unknown, tools: readonly ToolDefinition[]): unknown {
-  const tool = tools.find((candidate) => candidate.type === "function" && candidate.function.name === toolName);
-  if (!tool || !tool.function.parameters || !rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) return rawArgs;
-
-  const required = new Set(tool.function.parameters.required ?? []);
-  const properties = tool.function.parameters.properties ?? {};
-  let normalized: Record<string, unknown> | undefined;
-  for (const name of Object.keys(properties)) {
-    if (required.has(name) || (rawArgs as Record<string, unknown>)[name] !== null) continue;
-    normalized ??= { ...(rawArgs as Record<string, unknown>) };
-    delete normalized[name];
-  }
-  return normalized ?? rawArgs;
-}
-
-function normalizeNullableOptionalArguments(message: ChatMessage, tools: readonly ToolDefinition[]): ChatMessage {
-  if (!message.tool_calls?.length) return message;
-  let changed = false;
-  const toolCalls = message.tool_calls.map((call) => {
-    const rawArgs = call.function.arguments;
-    let parsed: unknown;
-    try { parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs; }
-    catch { return call; }
-    const normalized = normalizeNullableOptionalToolArguments(call.function.name, parsed, tools);
-    if (normalized === parsed) return call;
-    changed = true;
-    return { ...call, function: { ...call.function, arguments: JSON.stringify(normalized) } };
-  });
-  return changed ? { ...message, tool_calls: toolCalls } : message;
-}
-
 function originOf(url: string | undefined): string | undefined {
   if (!url?.trim()) return undefined;
   try {
@@ -1571,7 +1539,7 @@ export class LocalLlmClient {
     const response = await this.withReceipt(requestId, purpose, () =>
       this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
     );
-    return normalizeNullableOptionalArguments(response, tools);
+    return response;
   }
 
   private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal): Promise<ChatMessage> {
@@ -1731,7 +1699,7 @@ export class LocalLlmClient {
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
       ),
     );
-    return normalizeNullableOptionalArguments(response, tools);
+    return response;
   }
 
   /**
