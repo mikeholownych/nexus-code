@@ -67,10 +67,11 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   const destRoot = fs.realpathSync(dest.path);
   if (sourceRoot === destRoot) throw new WorktreeError("source and destination are the same worktree; pass --from and/or --to");
 
-  const roots = listRoots(sourceRoot, options.allIgnored === true);
-  if (roots === "no-include") {
+  const selection = listRoots(sourceRoot, options.allIgnored === true);
+  if (selection === "no-include") {
     return { success: true, output: `Nothing to copy: ${INCLUDE_FILE} is missing in the source worktree (add it, or pass --all-ignored).`, data: { copied: 0 } };
   }
+  const { roots, only } = selection;
 
   // Nested worktrees of this repository must never be walked into.
   const nested = repo.entries.map((entry) => { try { return fs.realpathSync(entry.path); } catch { return ""; } }).filter((p) => p && p !== sourceRoot && insideOrEqual(sourceRoot, p));
@@ -85,6 +86,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
     const abs = path.join(sourceRoot, rel);
     if (nested.some((n) => insideOrEqual(n, abs))) { skipped.push(`${rel}: nested worktree`); return; }
     const stat = fs.lstatSync(abs);
+    if (only && !(stat.isDirectory() ? only.dirs.has(rel) : only.files.has(rel))) return;
     if (stat.isSymbolicLink()) {
       const target = fs.readlinkSync(abs);
       const resolved = path.resolve(path.dirname(abs), target);
@@ -165,19 +167,30 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   return { success: true, output: out.join("\n"), data: { copied, planned: files, bytes, skipped: skipped.length, existing } };
 }
 
-/** Top-level entries (files, or directories with a trailing slash) to copy, from Git's own ignore evaluation. */
-function listRoots(sourceRoot: string, all: boolean): string[] | "no-include" {
-  const base = ["ls-files", "-z", "--others", "--ignored", "--directory"];
-  if (all) return nul(git(sourceRoot, [...base, "--exclude-standard"]).stdout);
+/**
+ * What to copy, from Git's own ignore evaluation: `roots` are the top-level entries (files, or directories with a
+ * trailing slash) the walk starts from and the report groups by; `only`, when set, is the exact set of files and links
+ * selected plus the directories above them, and the walk copies nothing outside it.
+ */
+interface Selection { roots: string[]; only?: { files: Set<string>; dirs: Set<string> } }
+
+function listRoots(sourceRoot: string, all: boolean): Selection | "no-include" {
+  const base = ["ls-files", "-z", "--others", "--ignored"];
+  if (all) return { roots: nul(git(sourceRoot, [...base, "--directory", "--exclude-standard"]).stdout) };
   const file = path.join(sourceRoot, INCLUDE_FILE);
   const stat = fs.lstatSync(file, { throwIfNoEntry: false });
   if (!stat) return "no-include";
   if (!stat.isFile() || stat.size > 64 * 1024) throw new WorktreeError(`${INCLUDE_FILE} must be a regular file of at most 64 KiB`);
+  // The intersection is taken file by file: a directory that the include file lists as a whole (`cache/`) is not
+  // itself ignored when `.gitignore` only matches files inside it (`*.o`), so a collapsed entry would be dropped.
   const included = nul(git(sourceRoot, [...base, `--exclude-from=${file}`]).stdout);
-  if (included.length === 0) return [];
-  // Keep only what the repository's own ignore rules also cover.
-  const ignored = git(sourceRoot, ["check-ignore", "-z", "--stdin"], { input: included.join("\0") + "\0", allowFailure: true });
-  return nul(ignored.stdout);
+  const files = new Set(included.length === 0 ? [] : nul(git(sourceRoot, ["check-ignore", "-z", "--stdin"], { input: included.join("\0") + "\0", allowFailure: true }).stdout));
+  const dirs = new Set<string>();
+  for (const rel of files) for (let dir = path.dirname(rel); dir !== "."; dir = path.dirname(dir)) dirs.add(dir);
+  if (files.size === 0) return { roots: [], only: { files, dirs } };
+  // Collapsed entries group the report; keep those that are selected or have a selected file beneath them.
+  const collapsed = nul(git(sourceRoot, [...base, "--directory", `--exclude-from=${file}`]).stdout);
+  return { roots: collapsed.filter((entry) => { const rel = entry.replace(/\/$/, ""); return files.has(rel) || dirs.has(rel); }), only: { files, dirs } };
 }
 
 function nul(text: string): string[] {
