@@ -472,6 +472,28 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     }
   });
 
+  test("nothing reaches the provider before the window ends: not the capability read, nor the auxiliary requests of compaction admission", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      const touched: Array<{ what: string; at: number }> = [];
+      const a = ctx.resumed as any;
+      for (const name of ["refreshCapabilities", "admitWithFindings", "measureAdmission"] as const) {
+        const original = a[name].bind(a);
+        a[name] = (...args: unknown[]) => {
+          touched.push({ what: name, at: ctx.resumedClock.now() });
+          return original(...args);
+        };
+      }
+      const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      assert.deepEqual(touched.map((t) => t.what), ["refreshCapabilities", "admitWithFindings", "measureAdmission"], "precondition: the step ran its provider-facing preparation");
+      for (const t of touched) assert.ok(t.at >= eligibleAt, `${t.what} ran at ${t.at}, before the eligible time ${eligibleAt}`);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
   test("cancelling the resumed wait sends no request and suspends again with the same eligible time", async () => {
     const ctx = await interruptedThenRestored({}, undefined, (agent) => agent.requestCancel("suspend again"));
     try {

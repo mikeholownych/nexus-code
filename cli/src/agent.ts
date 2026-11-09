@@ -6107,6 +6107,25 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
         const requestId = randomUUID();
         const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
+        // A resumed turn first waits out the provider window it was suspended in, before anything is sent to the
+        // provider: the capability read and compaction admission (which can make auxiliary requests) included.
+        const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+        // When the provider may be asked again, while this step waits for it (kept if the wait is interrupted).
+        let providerEligibleAt: string | undefined = this.resumedProviderWait?.eligibleAt;
+        let resumedWait: ProviderRecoveryRecord | undefined;
+        try {
+          await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal, activeClient.endpoint, (r) => (resumedWait = r));
+        } catch (err) {
+          if (!(err instanceof RecoveryCancelled)) throw err;
+          this.ui.stopSpinner(false, "Stopped while waiting for the inference provider");
+          if (resumedWait) providerRecoveries.push(resumedWait);
+          turn.phase = "inference";
+          this.activeProviderRecovery = null;
+          markInterrupted("provider_wait", providerEligibleAt ? { providerEligibleAt } : {});
+          break;
+        }
+        providerEligibleAt = undefined;
+        if (resumedWait) providerRecoveries.push(resumedWait);
         // Provider limits for this step's connection (cached; re-read on change or after the TTL). Optional capability.
         await this.refreshCapabilities(activeClient, this.capabilitiesStale ?? "step", Boolean(this.capabilitiesStale), signal);
         this.capabilitiesStale = undefined;
@@ -6164,18 +6183,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         let streamedTokens = false;
         // Temporary provider failures are waited out here, at the inference boundary: history and tool state
         // are untouched while waiting, and a submission's output is used only once it is complete.
-        const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
-        // When the provider may be asked again, while this step waits for it (kept if the wait is interrupted).
-        let providerEligibleAt: string | undefined = this.resumedProviderWait?.eligibleAt;
-        let resumedWait: ProviderRecoveryRecord | undefined;
         const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep, {
           everSucceeded: typeof activeClient.hasEverSucceeded === "function" ? activeClient.hasEverSucceeded() : true,
           endpoint: activeClient.endpoint,
         });
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
         try {
-          await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal, activeClient.endpoint, (r) => (resumedWait = r));
-          providerEligibleAt = undefined;
           assistantMessage = await recovery.run(requestId, {
             submit: (s) => this.submitGenAiRequest(activeClient, () =>
               this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request) =>
@@ -6294,7 +6307,6 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           }
           break;
         } finally {
-          if (resumedWait) providerRecoveries.push(resumedWait);
           if (recovery.record) providerRecoveries.push(recovery.record);
           turn.phase = "inference";
           this.activeProviderRecovery = null;
