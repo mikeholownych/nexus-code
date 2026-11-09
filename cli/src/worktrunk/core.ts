@@ -150,7 +150,12 @@ export function integratedReason(repo: Repo, head: string, target: string): Inte
   if (headTree && headTree === trees(target)) return "same-tree";
   const cherry = at(["cherry", target, head]);
   const lines = cherry.stdout.split("\n").filter(Boolean);
-  if (cherry.status === 0 && lines.length > 0 && lines.every((line) => line.startsWith("-"))) return "patch-id";
+  if (cherry.status === 0 && lines.length > 0 && lines.every((line) => line.startsWith("-"))) {
+    // `git cherry` skips merge commits, whose conflict resolutions can hold edits no ordinary commit carries. A
+    // merge left in target..head is unverified, so the patch-id match alone does not make the topic integrated.
+    const merges = at(["rev-list", "--merges", "--count", `${target}..${head}`]);
+    if (merges.status === 0 && merges.stdout.trim() === "0") return "patch-id";
+  }
   return null;
 }
 
