@@ -67,8 +67,13 @@ test("ordinary text around a redacted secret is untouched", () => {
   const original = InformationFlowBoundary.getGlobalInstance();
   InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
   try {
-    const output = redactDiagnosticForOutput("GET /v1/models/gpt-4o failed in src/a+b/file.ts: see https://llm.example/v1/models");
-    assert.equal(output, "GET /v1/models/gpt-4o failed in src/a+b/file.ts: see https://llm.example/v1/models");
+    for (const text of [
+      "GET /v1/models/gpt-4o failed in src/a+b/file.ts: see https://llm.example/v1/models",
+      // A path after the word "Bearer" is not a token (01M6VQ71ET1RHSQ05AH0TR1YG2).
+      "Bearer /api/v1/organizations/x returned 404; retry Bearer api/v1/organizations/default/members later",
+    ]) {
+      assert.equal(redactDiagnosticForOutput(text), text);
+    }
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
   }

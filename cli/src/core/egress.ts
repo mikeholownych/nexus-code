@@ -577,8 +577,13 @@ export class InformationFlowBoundary {
     { name: "AWS_ACCESS_KEY_ID", regex: /\b(?:AKIA[0-9A-Z]{16})\b/g },
     // Slack Tokens
     { name: "SLACK_TOKEN", regex: /\b(?:xox[baprs]-[0-9a-zA-Z]{10,48})\b/g },
-    // Bearer / Authorization tokens
-    { name: "BEARER_AUTH_HEADER", regex: /\bBearer\s+([a-zA-Z0-9_\-\.+\/]{16,}={0,2})/g },
+    // Bearer tokens: RFC 6750 token68 (letters, digits, "-._~+/", "=" padding). A body that uses "/" must be base64:
+    // a digit, a capital and a lower-case letter, and not starting with "/", so `Bearer /api/v1/organizations/x` in
+    // ordinary text is a path, not a token. The lookaheads scan the token once each; the pattern stays linear.
+    {
+      name: "BEARER_AUTH_HEADER",
+      regex: /\bBearer\s+((?:(?=[A-Za-z0-9_.~+\/-]*\d)(?=[A-Za-z0-9_.~+\/-]*[A-Z])(?=[A-Za-z0-9_.~+\/-]*[a-z])[A-Za-z0-9_.~+-][A-Za-z0-9_.~+\/-]{15,}|[A-Za-z0-9_.~-]{16,})={0,2})/g,
+    },
     // Authorization header values, including Basic (base64 user:password) and provider Token schemes.
     { name: "AUTHORIZATION_HEADER", regex: /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?([A-Za-z0-9._~+/=-]{8,})/gi },
     // JWT Tokens (3 base64url segments separated by dots)
