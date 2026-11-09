@@ -16,7 +16,7 @@ import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn 
 import { getGitInfo } from "./git.js";
 import { redactSecrets, redactSecretPatterns } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
-import { EvidenceLedger, LastTurn, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
+import { EvidenceLedger, LastTurn, MAX_DETAIL, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
 import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
 import type { ChatMessage, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
@@ -44,6 +44,8 @@ import {
   HistoryEntry,
   DIFF_PREVIEW_LINES,
   MAX_SLASH_OUTPUT,
+  MAX_SUMMARY,
+  TOOL_PREVIEW_LINES,
   MAX_TEXT_FIELD,
   PROTOCOL_VERSION,
   SteerStatus,
@@ -1097,18 +1099,32 @@ const PATH_FIELDS: Partial<Record<SidecarEvent["type"], readonly string[]>> = {
   "tool.detail": ["diff_path"],
 };
 
-/** Characters kept per string field. Applied after redaction, so a cut can never split a credential. */
-const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<string, number>>>> = {
-  "steer.ack": { text: 64_000 },
-  "file.diff": { path: 400 },
+/**
+ * Characters kept per free-text string field (text from the model, a tool, the operator or a provider). Applied after
+ * redaction, so a cut can never split a credential. Each limit is at least the cap the field's producer already
+ * applies, so it changes nothing that is sent today; it bounds the field if a producer stops capping. Event types not
+ * listed are structured or bounded elsewhere (paths: PATH_FIELDS; history: HISTORY_LIMITS); the coverage test in
+ * test/sidecar_projection.test.ts classifies every protocol event type.
+ */
+export const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<string, number>>>> = {
+  "assistant.delta": { text: 64_000 },
+  "steer.ack": { message: MAX_TEXT_FIELD, text: 64_000 },
+  "file.diff": { path: 400, preview: 2 * DIFF_PREVIEW_CHARS, note: MAX_TEXT_FIELD },
   activity: { tool: 200, subject: 200 },
-  "tool.start": { tool: 200 },
-  "tool.end": { tool: 200 },
-  "tool.detail": { diff: MAX_DIFF_DETAIL },
-  "approval.request": { preview: MAX_TEXT_FIELD },
-  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD },
+  "tool.start": { tool: 200, subject: MAX_TEXT_FIELD },
+  // summary: protocol toolSummary caps at MAX_SUMMARY; preview: TOOL_PREVIEW_LINES rows of at most 400 characters.
+  "tool.end": { tool: 200, summary: MAX_SUMMARY, preview: TOOL_PREVIEW_LINES * 401 },
+  "tool.detail": { tool: 200, subject: MAX_TEXT_FIELD, args: MAX_DETAIL, output: MAX_DETAIL, diff: MAX_DIFF_DETAIL },
+  "approval.request": { tool: 200, subject: MAX_TEXT_FIELD, preview: MAX_TEXT_FIELD },
+  "checkpoint.choice.request": { message: MAX_TEXT_FIELD },
+  "turn.result": { heading: MAX_TEXT_FIELD, line: MAX_TEXT_FIELD },
+  // composer: /paste takes at most 100,000 characters.
+  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: 100_000 },
+  notice: { text: MAX_TEXT_FIELD },
   error: { message: MAX_TEXT_FIELD },
+  "provider.auth": { instructions: MAX_TEXT_FIELD },
   "provider.result": { message: MAX_TEXT_FIELD },
+  "model.result": { message: MAX_TEXT_FIELD },
 };
 
 /** Characters kept of a resumed conversation's entries: tool names and subjects are short, messages are bounded. */

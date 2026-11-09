@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
 import { MAX_DIFF_DETAIL } from "../src/evidence.js";
 import { encodeEvent, MAX_SLASH_OUTPUT, MAX_TEXT_FIELD, type SidecarEvent } from "../src/protocol.js";
-import { formatSafeSidecarEvent, redactThenCap } from "../src/sidecar.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { ApplicationCore } from "../src/core/app.js";
+import { FIELD_LIMITS, formatSafeSidecarEvent, redactThenCap, SidecarServer } from "../src/sidecar.js";
+import { makeHome, makeRepo } from "./helpers/fixtures.js";
 
 const SECRET_BODY = "Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6";
 const SECRET = `ghp_${SECRET_BODY}`;
@@ -145,5 +150,90 @@ test("an event is dropped, never sent half-redacted, when classification fails",
     assert.equal(formatSafeSidecarEvent({ type: "session.state", workspace: "/w", workspace_name: "w", model: "m", mode: "auto", git: null, busy: false }), undefined);
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
+
+test("review item 12: a SidecarServer writes a tool.end and a nested history turn redacted and cut, through its write hook", () => {
+  const repo = makeRepo();
+  const home = makeHome();
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  const app = new ApplicationCore({ endpoint: "http://127.0.0.1:9", model: "m", maxSteps: 1, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true } as any);
+  const lines: string[] = [];
+  try {
+    withFreshBoundary(() => {
+      const server = new SidecarServer({ app, mode: "auto", write: (line) => lines.push(line) });
+      const emit = (event: SidecarEvent) => (server as any).emit(event);
+      emit({ type: "tool.end", turn_id: "t", call_id: "c", tool: "run_command", success: false, evidence: "e", lines: 3, summary: straddle(400), preview: straddle(6_000) });
+      emit({
+        type: "history", session: "s", total: 2, messages: [
+          { role: "user", text: `deploy with ${SECRET}` },
+          { role: "outcome", text: "done", heading: `Completed ${SECRET}`, turn: { detail: `token ${SECRET}`, reason: "x" } as any },
+        ],
+      });
+    });
+    assert.equal(lines.length, 2, "both frames were written");
+    const [toolEnd, history] = lines.map((line) => JSON.parse(line));
+    assertNoSecretFragment(toolEnd, "tool.end frame");
+    assertNoSecretFragment(history, "history frame");
+    for (const field of ["summary", "preview"] as const) {
+      const max = (FIELD_LIMITS["tool.end"] as Record<string, number>)[field];
+      assert.ok(max, `tool.end ${field} has a limit`);
+      assert.ok(toolEnd[field].length <= max + MARKER_ALLOWANCE, `tool.end ${field}: ${toolEnd[field].length} chars, limit ${max}`);
+    }
+  } finally {
+    app.shutdown();
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Every protocol event type is classified: its free-text fields (text that comes from the model, a tool, the operator
+ * or a provider) each have a limit in FIELD_LIMITS, or the type is structured and bounded elsewhere (reason given).
+ * A new event type, or a new free-text field, fails here until it is classified.
+ */
+const FREE_TEXT: Record<string, readonly string[] | string> = {
+  hello: "static slash catalog",
+  "session.state": "paths go through PATH_FIELDS; model id and enums",
+  "assistant.delta": ["text"],
+  activity: ["tool", "subject"],
+  "file.diff": ["path", "preview", "note"],
+  "steer.ack": ["message", "text"],
+  "tool.start": ["tool", "subject"],
+  "tool.end": ["tool", "summary", "preview"],
+  "approval.request": ["tool", "subject", "preview"],
+  "checkpoint.choice.request": ["message"],
+  "turn.result": ["heading", "line"],
+  "slash.result": ["output", "prompt", "composer"],
+  notice: ["text"],
+  history: "entries cut by HISTORY_LIMITS",
+  "tool.detail": ["tool", "subject", "args", "output", "diff"],
+  receipt: "structured sections built by Nexus",
+  error: ["message"],
+  "models.catalog": "structured provider and model lists",
+  "provider.auth": ["instructions"],
+  "provider.result": ["message"],
+  "model.result": ["message"],
+};
+
+test("review item 12: FIELD_LIMITS covers every free-text field of every protocol event type, and nothing else", () => {
+  const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "protocol.ts"), "utf8");
+  const union = source.slice(source.indexOf("export type SidecarEvent ="), source.indexOf("export type SidecarCommand"));
+  const types = [...new Set([...union.matchAll(/type: "([a-z.]+)"/g)].map((m) => m[1]))].sort();
+  assert.ok(types.length >= 20, `parsed ${types.length} event types`);
+  assert.deepEqual(Object.keys(FREE_TEXT).sort(), types, "every protocol event type is classified, and only those");
+  const limits = FIELD_LIMITS as Record<string, Record<string, number>>;
+  for (const type of types) {
+    const fields = FREE_TEXT[type];
+    const table = limits[type] ?? {};
+    if (typeof fields === "string") {
+      assert.deepEqual(Object.keys(table), [], `${type} is structured (${fields}) and has no field limits`);
+      continue;
+    }
+    for (const field of fields) assert.ok(Number.isInteger(table[field]) && table[field] > 0, `${type}.${field} has a limit`);
+    assert.deepEqual(Object.keys(table).sort(), [...fields].sort(), `${type}: no limit on a field the protocol does not carry`);
   }
 });
