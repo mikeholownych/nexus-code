@@ -662,3 +662,20 @@ test("a file committed after the base and then removed from the index but kept o
   assert.ok(!("error" in out), JSON.stringify(out));
   assert.match((out as { diff: string }).diff, /deleted file mode/);
 });
+
+test("text/eol normalization from the worktree's .gitattributes still applies, so unchanged CRLF files are not in the diff (01M70ZGX93)", () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-auto-eol-"));
+  const run = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
+  run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t"); run("config", "core.autocrlf", "false");
+  fs.writeFileSync(path.join(repo, ".gitattributes"), "*.txt text eol=crlf\n*.dat filter=evil\n");
+  fs.writeFileSync(path.join(repo, "crlf.txt"), "line1\r\nline2\r\n");
+  fs.writeFileSync(path.join(repo, "b.txt"), "b one\r\n");
+  run("add", "."); run("commit", "-q", "-m", "base");
+  fs.writeFileSync(path.join(repo, "b.txt"), "b one\r\nCHANGED_LINE\r\n");
+  const out = candidateDiff(repo, undefined);
+  assert.ok(!("error" in out), JSON.stringify(out));
+  const diff = (out as { diff: string }).diff;
+  assert.match(diff, /CHANGED_LINE/);
+  assert.doesNotMatch(diff, /crlf\.txt/, "an unchanged CRLF file is not a change");
+  assert.doesNotMatch(diff, /\r/, "line endings are normalized as git would on commit");
+});
