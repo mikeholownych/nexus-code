@@ -447,3 +447,25 @@ test("a tag named like the target never stands in for the target branch in merge
   } finally { f.cleanup(); }
 });
 
+test("in-progress operations report readable operation names and matching continue/abort hints", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/in-progress");
+    const gitDir = git(dir, "rev-parse", "--path-format=absolute", "--git-dir");
+
+    // MERGE_HEAD
+    fs.writeFileSync(path.join(gitDir, "MERGE_HEAD"), git(dir, "rev-parse", "HEAD") + "\n");
+    let r = wt(f, dir, ["merge"]);
+    assert.equal(r.success, false);
+    assert.match(r.output, /a merge is already in progress in this worktree; finish it \(git merge --continue \/ --abort\)/);
+    fs.rmSync(path.join(gitDir, "MERGE_HEAD"));
+
+    // CHERRY_PICK_HEAD
+    fs.writeFileSync(path.join(gitDir, "CHERRY_PICK_HEAD"), git(dir, "rev-parse", "HEAD") + "\n");
+    r = wt(f, dir, ["merge"]);
+    assert.equal(r.success, false);
+    assert.match(r.output, /a cherry-pick is already in progress in this worktree; finish it \(git cherry-pick --continue \/ --abort\)/);
+    fs.rmSync(path.join(gitDir, "CHERRY_PICK_HEAD"));
+  } finally { f.cleanup(); }
+});
+

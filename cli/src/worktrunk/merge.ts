@@ -44,9 +44,17 @@ function changedFiles(dir: string): string[] {
   return files;
 }
 
-function inProgress(gitDir: string): string | undefined {
-  for (const name of ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD"]) {
-    if (fs.existsSync(path.join(gitDir, name))) return name;
+interface InProgressOp { op: string; cmd: string }
+
+function inProgress(gitDir: string): InProgressOp | undefined {
+  if (fs.existsSync(path.join(gitDir, "rebase-merge")) || fs.existsSync(path.join(gitDir, "rebase-apply"))) {
+    return { op: "rebase", cmd: "git rebase --continue / --abort" };
+  }
+  if (fs.existsSync(path.join(gitDir, "MERGE_HEAD"))) {
+    return { op: "merge", cmd: "git merge --continue / --abort" };
+  }
+  if (fs.existsSync(path.join(gitDir, "CHERRY_PICK_HEAD"))) {
+    return { op: "cherry-pick", cmd: "git cherry-pick --continue / --abort" };
   }
   return undefined;
 }
@@ -94,7 +102,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
 
   const gitDir = gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
   const busy = inProgress(gitDir);
-  if (busy) throw new WorktreeError(`a ${busy.replace("-merge", "").replace("-apply", "")} is already in progress in this worktree; finish it (git rebase --continue / --abort) and run merge again`);
+  if (busy) throw new WorktreeError(`a ${busy.op} is already in progress in this worktree; finish it (${busy.cmd}) and run merge again`);
   const targetState = statusOf(targetEntry.path);
   if (targetState.total > 0) throw new WorktreeError(`the target worktree (${shownBranch(targetName)}) has uncommitted changes; commit or stash them first`);
 
