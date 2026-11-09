@@ -43,7 +43,7 @@
  *     fields in `saveSession`, together or one at a time, turns that test red; the operation-path and control tests
  *     do not touch the session store and stay green either way.
  */
-import { test, describe } from "node:test";
+import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -60,8 +60,15 @@ const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const srcIndex = path.join(cliRoot, "src/index.ts");
 const tsxLoader = import.meta.resolve("tsx");
 
-/** Retry-After the mock provider advertises on its 429, in seconds. Long enough that the restart lands inside it. */
-const RETRY_AFTER_SECS = 10;
+/**
+ * Retry-After the mock provider advertises on its 429, in seconds. Two constraints:
+ *   - well above the operation runner's in-place limit (`inPlaceMaxWaitMs`, 10 000 ms, `operation_runner.ts`
+ *     shouldYield: it yields only when the planned delay is strictly greater). The planned delay is Retry-After plus
+ *     0..1 s of jitter (`provider_recovery.ts` nextDelayMs), so at exactly 10 s it could stay in place;
+ *   - long enough that SIGINT, process exit and a second tsx start land inside the window on a loaded machine (about
+ *     3 s locally). The operation test only waits the remainder after the restart.
+ */
+const RETRY_AFTER_SECS = 25;
 
 // ---------------------------------------------------------------- workspace and provider
 
@@ -121,24 +128,58 @@ async function provider() {
 
 // ---------------------------------------------------------------- the CLI as a child process
 
-const ENV_KEYS = ["HOME", "LOCAL_LLM_ENDPOINT", "LOCAL_LLM_API_KEY", "LOCAL_LLM_MODEL", "LOCAL_LLM_CREDENTIAL_ORIGINS", "LOCAL_LLM_FALLBACK_ENDPOINTS", "NEXUS_STATE_DIR"];
+/**
+ * The environment of every child: an allow-list, never this process's whole environment, so no endpoint, credential,
+ * state-dir or Nexus setting of the host leaks into the run. NODE_* is kept for the toolchain, except
+ * NODE_TEST_CONTEXT (the workspace verifier is itself `node --test`: inheriting this runner's test context would make
+ * it report to us instead of exiting non-zero on a failing test, so the baseline would read as passing) and
+ * NODE_OPTIONS (the loader is passed explicitly).
+ */
+function childEnv(home: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined) continue;
+    const allowed = ["PATH", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ"].includes(k) || (k.startsWith("NODE_") && k !== "NODE_TEST_CONTEXT" && k !== "NODE_OPTIONS");
+    if (allowed) env[k] = v;
+  }
+  return { ...env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), NEXUS_APPROVAL_MODE: "auto", NO_COLOR: "1" };
+}
+
+/** Every child this file started, by pid (each leads its own process group). Killed in each test's finally. */
+const children = new Set<number>();
+function track(pid: number | undefined): void {
+  if (pid !== undefined) children.add(pid);
+}
+function killGroup(pid: number): void {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (err: any) {
+    if (err?.code !== "ESRCH") throw err;
+  }
+  children.delete(pid);
+}
+/** Kills whatever is still running: a test timeout can fire before a helper's own timer or `finally`. */
+function killChildren(): void {
+  for (const pid of [...children]) killGroup(pid);
+}
+after(killChildren);
 
 function cliProcess(args: string[], o: { cwd: string; home: string }) {
-  const env: Record<string, string | undefined> = { ...process.env, HOME: o.home, XDG_CONFIG_HOME: path.join(o.home, ".config"), NEXUS_APPROVAL_MODE: "auto", NO_COLOR: "1" };
-  for (const k of ENV_KEYS) if (k !== "HOME") delete env[k];
-  // The workspace verifier is itself `node --test`: inheriting this runner's test context would make it report to us
-  // instead of exiting non-zero on a failing test, and the baseline would read as passing.
-  delete env.NODE_TEST_CONTEXT;
+  const env = childEnv(o.home);
   const child = spawn(process.execPath, ["--import", tsxLoader, srcIndex, ...args], { cwd: o.cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  track(child.pid);
   const io = { out: "", err: "" };
   child.stdout.on("data", (d) => (io.out += d.toString()));
   child.stderr.on("data", (d) => (io.err += d.toString()));
-  const exited = new Promise<number | null>((resolve) => child.on("close", (code, signal) => resolve(code ?? (signal ? 128 : null))));
+  const exited = new Promise<number | null>((resolve) => child.on("close", (code, signal) => {
+    children.delete(child.pid!);
+    resolve(code ?? (signal ? 128 : null));
+  }));
   return {
     io,
     /** The cooperative suspend: one SIGINT to the CLI process itself. */
     interrupt: () => process.kill(child.pid!, "SIGINT"),
-    kill: () => { try { process.kill(-child.pid!, "SIGKILL"); } catch {} },
+    kill: () => killGroup(child.pid!),
     done: async () => ({ code: await exited, out: io.out, err: io.err }),
   };
 }
@@ -155,10 +196,9 @@ async function cli(args: string[], o: { cwd: string; home: string }): Promise<{ 
 
 /** The TUI's backend, the sidecar, as its own process speaking the JSON-lines protocol on stdin/stdout. */
 function sidecarProcess(args: string[], o: { cwd: string; home: string }) {
-  const env: Record<string, string | undefined> = { ...process.env, HOME: o.home, XDG_CONFIG_HOME: path.join(o.home, ".config"), NEXUS_APPROVAL_MODE: "auto", NO_COLOR: "1" };
-  for (const k of ENV_KEYS) if (k !== "HOME") delete env[k];
-  delete env.NODE_TEST_CONTEXT;
+  const env = childEnv(o.home);
   const child = spawn(process.execPath, ["--import", tsxLoader, path.join(cliRoot, "src/sidecar.ts"), ...args], { cwd: o.cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+  track(child.pid);
   const events: any[] = [];
   let buffer = "";
   let err = "";
@@ -172,7 +212,10 @@ function sidecarProcess(args: string[], o: { cwd: string; home: string }) {
     }
   });
   child.stderr.on("data", (d) => (err += d.toString()));
-  const exited = new Promise<number | null>((resolve) => child.on("close", (code) => resolve(code)));
+  const exited = new Promise<number | null>((resolve) => child.on("close", (code) => {
+    children.delete(child.pid!);
+    resolve(code);
+  }));
   return {
     events,
     err: () => err,
@@ -181,10 +224,10 @@ function sidecarProcess(args: string[], o: { cwd: string; home: string }) {
     /** The protocol's own shutdown (what the TUI sends on exit); the session is saved by then. */
     shutdown: async () => {
       child.stdin.write(`${JSON.stringify({ v: 1, type: "shutdown" })}\n`);
-      const killer = setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch {} }, 30_000);
+      const killer = setTimeout(() => killGroup(child.pid!), 30_000);
       try { return await exited; } finally { clearTimeout(killer); }
     },
-    kill: () => { try { process.kill(-child.pid!, "SIGKILL"); } catch {} },
+    kill: () => killGroup(child.pid!),
   };
 }
 
@@ -339,6 +382,7 @@ describe("WP-1306 A1: suspend, restart and resume keep the operation, provider r
       assert.notEqual(unitOf(opAfterResume, "impl").status, "COMPLETE");
     } finally {
       run?.kill();
+      killChildren();
       await gw.close();
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -428,6 +472,7 @@ describe("WP-1306 A1: suspend, restart and resume keep the operation, provider r
     } finally {
       run?.kill();
       for (const s of sidecars) s.kill();
+      killChildren();
       await gw.close();
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -450,6 +495,7 @@ describe("WP-1306 A1: suspend, restart and resume keep the operation, provider r
       assert.equal(record.lastTurn?.verification?.independent, true, "fail-before/pass-after on tests the change did not write");
       assert.equal(done.code, 0);
     } finally {
+      killChildren();
       await gw.close();
       fs.rmSync(home, { recursive: true, force: true });
     }
