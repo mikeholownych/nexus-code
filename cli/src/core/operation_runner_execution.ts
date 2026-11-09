@@ -628,29 +628,37 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   private collectSpecialistInputs(unit: WorkUnit, ctx: UnitRunContext, workspace: string, configuredVerifier: string | undefined): { inputs: Record<string, string> | undefined; why: Record<string, string> } {
     const why: Record<string, string> = {};
     if (unit.inputs === undefined || (unit.role !== "security_reviewer" && unit.role !== "failure_debugger")) return { inputs: unit.inputs, why };
+    const supplied = unit.inputs;
     const collected: Record<string, string> = {};
     if (unit.role === "security_reviewer") {
-      collected.authorized_scope = boundedRedactedInput(`Operation objective: ${ctx.objective}\nThis unit's task: ${unitBaseTask(unit.prompt)}`);
-      const candidate = candidateDiffFor(ctx, workspace);
-      if ("error" in candidate) why.unified_diff = `candidate diff unavailable: ${candidate.error}`.slice(0, 200);
-      else if (candidate.diff.trim() === "") why.unified_diff = candidate.omitted ? "only protected files changed" : "there is no change against the base to review";
-      else collected.unified_diff = boundedRedactedInput(candidateDiffText(candidate));
+      if (supplied.authorized_scope === undefined) collected.authorized_scope = boundedRedactedInput(`Operation objective: ${ctx.objective}\nThis unit's task: ${unitBaseTask(unit.prompt)}`);
+      if (supplied.unified_diff === undefined) {
+        const candidate = candidateDiffFor(ctx, workspace);
+        if ("error" in candidate) why.unified_diff = `candidate diff unavailable: ${candidate.error}`.slice(0, 200);
+        else if (candidate.diff.trim() === "") why.unified_diff = candidate.omitted ? "only protected files changed" : "there is no change against the base to review";
+        else collected.unified_diff = boundedRedactedInput(candidateDiffText(candidate));
+      }
     } else {
       const failed = ctx.dependencies.filter((d) => d.verification && d.verification.status !== "PASSED");
-      if (failed.length) {
-        collected.failure_log = boundedRedactedInput(failed.map((d) => `${d.title}: verifier \`${d.verification!.command}\` status ${d.verification!.status}${d.verification!.hasExecutedTests ? "" : " (no tests executed)"}\n${d.summary}`).join("\n\n"));
-      } else why.failure_log = "no dependency in this operation ran a verifier that did not pass";
-      // Only the operator-configured verifier is a command the operation declared; a dependency's recorded command
-      // may have been chosen by a model, so it is passed on labelled as untrusted.
-      const command = configuredVerifier ?? failed[0]?.verification?.command;
-      if (command) {
-        collected.reproduction_command = boundedRedactedInput(command);
-        collected.reproduction_command_source = configuredVerifier
-          ? "operator-configured verifier"
-          : "untrusted: recorded by an earlier unit's run, not declared by the operator; confirm it is safe before running it";
-      } else why.reproduction_command = "no verifier command is recorded for this operation";
+      if (supplied.failure_log === undefined) {
+        if (failed.length) {
+          collected.failure_log = boundedRedactedInput(failed.map((d) => `${d.title}: verifier \`${d.verification!.command}\` status ${d.verification!.status}${d.verification!.hasExecutedTests ? "" : " (no tests executed)"}\n${d.summary}`).join("\n\n"));
+        } else why.failure_log = "no dependency in this operation ran a verifier that did not pass";
+      }
+      // The source label describes the collected command only, so neither is derived when the caller supplied the
+      // command. Only the operator-configured verifier is a command the operation declared; a dependency's recorded
+      // command may have been chosen by a model, so it is passed on labelled as untrusted.
+      if (supplied.reproduction_command === undefined) {
+        const command = configuredVerifier ?? failed[0]?.verification?.command;
+        if (command) {
+          collected.reproduction_command = boundedRedactedInput(command);
+          collected.reproduction_command_source = configuredVerifier
+            ? "operator-configured verifier"
+            : "untrusted: recorded by an earlier unit's run, not declared by the operator; confirm it is safe before running it";
+        } else why.reproduction_command = "no verifier command is recorded for this operation";
+      }
     }
-    return { inputs: { ...collected, ...unit.inputs }, why };
+    return { inputs: { ...collected, ...supplied }, why };
   }
 
   /** The objective evidence a review unit is given: requirements, scope, base, candidate diff and verifier receipts. */
