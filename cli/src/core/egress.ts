@@ -587,40 +587,41 @@ function isIdentifierPart(part: string): boolean {
   return words !== null && words.join("").length === part.length;
 }
 
-/** Every occurrence (overlapping ones included) of each value, as [start, value index]: few values, native search. */
-function findByIndexOf(text: string, values: string[]): Array<[start: number, index: number]> {
-  const occurrences: Array<[start: number, index: number]> = [];
-  values.forEach((value, index) => {
-    if (!value) return;
-    for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + 1)) occurrences.push([at, index]);
-  });
-  return occurrences;
+/** An Aho-Corasick automaton over a list of values. */
+interface Automaton {
+  alphabet: Int32Array; // UTF-16 code unit -> symbol, -1 when no value uses it
+  radix: number;
+  next: Map<number, number>; // node * radix + symbol -> child node
+  fail: Int32Array;
+  depth: Int32Array;
+  output: Int32Array; // the value that ends at this node (the first in the list when values repeat)
+  dictionary: Int32Array; // the nearest node on the fail chain where a value ends
 }
 
 /**
- * Every occurrence (overlapping ones included) of each value, as [start, value index], in one pass over the text with
- * an Aho-Corasick automaton. Transitions are keyed by node and by the index of the code unit in the values' own
- * alphabet, which keeps the keys small integers (fast Map lookups).
+ * Builds an Aho-Corasick automaton over the values. Transitions are keyed by node and by the index of the code unit in
+ * the values' own alphabet, which keeps the keys small integers (fast Map lookups). Failure links are set in
+ * breadth-first order (nodes sorted by depth), so a parent's link is set before its children's.
  */
-function findByAutomaton(text: string, values: string[]): Array<[start: number, index: number]> {
-  const alphabet = new Int32Array(65536).fill(-1); // UTF-16 code unit -> symbol, -1 when no value uses it
+function buildAutomaton(values: string[]): Automaton {
+  const alphabet = new Int32Array(65536).fill(-1);
   let radix = 0;
+  let capacity = 1;
   for (const value of values) {
+    capacity += value.length;
     for (let i = 0; i < value.length; i++) {
       const code = value.charCodeAt(i);
       if (alphabet[code] < 0) alphabet[code] = radix++;
     }
   }
   radix = Math.max(radix, 1);
-  let capacity = 1;
-  for (const value of values) capacity += value.length;
-  const next = new Map<number, number>(); // node * radix + symbol -> child node
+  const next = new Map<number, number>();
   const parent = new Int32Array(capacity);
   const symbolOf = new Int32Array(capacity);
   const depth = new Int32Array(capacity);
   const fail = new Int32Array(capacity);
-  const output = new Int32Array(capacity).fill(-1); // the value that ends at this node
-  const dictionary = new Int32Array(capacity).fill(-1); // the nearest node on the fail chain where a value ends
+  const output = new Int32Array(capacity).fill(-1);
+  const dictionary = new Int32Array(capacity).fill(-1);
   let nodes = 1;
   let maxDepth = 0;
   values.forEach((value, index) => {
@@ -641,7 +642,6 @@ function findByAutomaton(text: string, values: string[]): Array<[start: number, 
     }
     if (output[node] < 0) output[node] = index;
   });
-  // Failure links in breadth-first order: nodes sorted by depth (a counting sort), so a parent's link is set first.
   const byDepthStart = new Int32Array(maxDepth + 2);
   for (let node = 1; node < nodes; node++) byDepthStart[depth[node] + 1]++;
   for (let d = 1; d <= maxDepth + 1; d++) byDepthStart[d] += byDepthStart[d - 1];
@@ -657,8 +657,15 @@ function findByAutomaton(text: string, values: string[]): Array<[start: number, 
     }
     dictionary[node] = output[fail[node]] >= 0 ? fail[node] : dictionary[fail[node]];
   }
+  return { alphabet, radix, next, fail, depth, output, dictionary };
+}
 
-  const occurrences: Array<[start: number, index: number]> = [];
+/**
+ * Runs the automaton over the text and calls `visit(end, node)` at each position with the node of the longest value
+ * ending there (a node whose `output` is set), or not at all when no value ends there.
+ */
+function scanAutomaton(automaton: Automaton, text: string, visit: (end: number, node: number) => boolean | void): void {
+  const { alphabet, radix, next, fail, output, dictionary } = automaton;
   let node = 0;
   for (let i = 0; i < text.length; i++) {
     const symbol = alphabet[text.charCodeAt(i)];
@@ -668,25 +675,58 @@ function findByAutomaton(text: string, values: string[]): Array<[start: number, 
     }
     while (node > 0 && !next.has(node * radix + symbol)) node = fail[node];
     node = next.get(node * radix + symbol) ?? 0;
-    for (let found = output[node] >= 0 ? node : dictionary[node]; found > 0; found = dictionary[found]) {
-      occurrences.push([i + 1 - depth[found], output[found]]);
-    }
+    const found = output[node] >= 0 ? node : dictionary[node];
+    if (found > 0 && visit(i + 1, found) === false) return;
   }
-  return occurrences;
+}
+
+/**
+ * Every occurrence (overlapping ones included) of each value, as [start, value index], or null when there are more than
+ * `budget` of them. Few values: native search; many: one pass with an Aho-Corasick automaton.
+ */
+function findOccurrences(text: string, values: string[], budget: number): Array<[start: number, index: number]> | null {
+  const occurrences: Array<[start: number, index: number]> = [];
+  if (values.length <= 16) {
+    for (let index = 0; index < values.length; index++) {
+      const value = values[index];
+      if (!value) continue;
+      for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + 1)) {
+        if (occurrences.push([at, index]) > budget) return null;
+      }
+    }
+    return occurrences;
+  }
+  const automaton = buildAutomaton(values);
+  let exceeded = false;
+  scanAutomaton(automaton, text, (end, longest) => {
+    for (let found = longest; found > 0; found = automaton.dictionary[found]) {
+      if (occurrences.push([end - automaton.depth[found], automaton.output[found]]) > budget) {
+        exceeded = true;
+        return false;
+      }
+    }
+  });
+  return exceeded ? null : occurrences;
 }
 
 /**
  * Replaces every occurrence of each value, in one pass over the text: the same result as `replaceAll` for each value in
  * turn (values in priority order, longest first as classifyText returns them; text already replaced is not matched
  * again), without one pass per value, which is quadratic for a text with thousands of distinct secrets. All occurrences
- * are found first (native search for a few values, one Aho-Corasick automaton for many); they are accepted in priority
- * order unless they overlap text already accepted (a Fenwick tree counts accepted positions); the output is built once
- * from the accepted spans.
+ * are found first; they are accepted in priority order unless they overlap text already accepted (a Fenwick tree counts
+ * accepted positions); the output is built once from the accepted spans.
+ *
+ * Values that overlap themselves on a repetitive text (secrets that are suffixes of one another over a run of one
+ * letter) can occur far more often than the text is long. Past one occurrence per character the replacement falls
+ * back to a linear pass that replaces the union of all occurrences instead: each region where occurrences overlap is
+ * replaced whole, by the replacement of the longest value in it. Nothing that matches a value is left in clear; a
+ * reversible token for such a region restores only that value.
  * `replacement(index)` is called once for each value that is replaced, in text order; returns the new text.
  */
 export function replaceValues(text: string, values: string[], replacement: (index: number) => string): string {
   if (values.length === 0 || text.length === 0) return text;
-  const occurrences = values.length <= 16 ? findByIndexOf(text, values) : findByAutomaton(text, values);
+  const occurrences = findOccurrences(text, values, text.length + 1024);
+  if (occurrences === null) return replaceUnion(text, values, replacement);
   if (occurrences.length === 0) return text;
   occurrences.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
 
@@ -696,28 +736,59 @@ export function replaceValues(text: string, values: string[], replacement: (inde
     for (let i = position; i > 0; i -= i & -i) sum += covered[i];
     return sum;
   };
-  const accepted: Array<[start: number, index: number]> = [];
+  const accepted: Array<[start: number, end: number, index: number]> = [];
   for (const [start, index] of occurrences) {
     const end = start + values[index].length;
     if (countBefore(end) - countBefore(start) !== 0) continue;
-    accepted.push([start, index]);
+    accepted.push([start, end, index]);
     for (let position = start + 1; position <= end; position++) {
       for (let i = position; i <= text.length; i += i & -i) covered[i]++;
     }
   }
-  if (accepted.length === 0) return text;
-  accepted.sort((a, b) => a[0] - b[0]);
+  return buildReplaced(text, accepted, replacement);
+}
+
+/** The linear fallback of replaceValues: the union of all occurrences, each region by its longest value. */
+function replaceUnion(text: string, values: string[], replacement: (index: number) => string): string {
+  const automaton = buildAutomaton(values);
+  // The longest value ending at each position covers every shorter one ending there (they are its suffixes).
+  const spans: Array<[start: number, end: number, index: number]> = [];
+  scanAutomaton(automaton, text, (end, longest) => {
+    spans.push([end - automaton.depth[longest], end, automaton.output[longest]]);
+  });
+  spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const regions: Array<[start: number, end: number, index: number]> = [];
+  for (const [start, end, index] of spans) {
+    const last = regions[regions.length - 1];
+    if (last && start < last[1]) {
+      if (end > last[1]) last[1] = end;
+      if (values[index].length > values[last[2]].length) last[2] = index;
+    } else {
+      regions.push([start, end, index]);
+    }
+  }
+  return buildReplaced(text, regions, replacement);
+}
+
+/** Builds the text with the given non-overlapping spans replaced; `replacement(index)` is called once per value. */
+function buildReplaced(
+  text: string,
+  spans: Array<[start: number, end: number, index: number]>,
+  replacement: (index: number) => string
+): string {
+  if (spans.length === 0) return text;
+  spans.sort((a, b) => a[0] - b[0]);
   const replacements = new Map<number, string>();
   const parts: string[] = [];
   let from = 0;
-  for (const [start, index] of accepted) {
+  for (const [start, end, index] of spans) {
     let replaced = replacements.get(index);
     if (replaced === undefined) {
       replaced = replacement(index);
       replacements.set(index, replaced);
     }
     parts.push(text.slice(from, start), replaced);
-    from = start + values[index].length;
+    from = end;
   }
   parts.push(text.slice(from));
   return parts.join("");
@@ -882,21 +953,23 @@ export class InformationFlowBoundary {
       ...envSecrets,
     ];
 
+    // One match per secret, at its first occurrence: redaction replaces the value wherever it occurs, and recording
+    // every occurrence of short or self-overlapping secrets would grow with the text times the number of secrets.
     for (const explicit of explicitList) {
       if (!explicit) continue;
-      for (let at = text.indexOf(explicit); at >= 0; at = text.indexOf(explicit, at + explicit.length)) {
-        matches.push({
-          start: at,
-          end: at + explicit.length,
-          item: {
-            secret: explicit,
-            classificationType: "OPERATOR_EXPLICIT",
-            classifierId: "operator:policy",
-            confidence: 1.0,
-            patternName: "EXPLICIT_SECRET",
-          },
-        });
-      }
+      const at = text.indexOf(explicit);
+      if (at < 0) continue;
+      matches.push({
+        start: at,
+        end: at + explicit.length,
+        item: {
+          secret: explicit,
+          classificationType: "OPERATOR_EXPLICIT",
+          classifierId: "operator:policy",
+          confidence: 1.0,
+          patternName: "EXPLICIT_SECRET",
+        },
+      });
     }
 
     // 2. Deterministic High-Confidence Patterns (DATA-002: Category 2)

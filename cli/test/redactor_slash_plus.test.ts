@@ -442,4 +442,22 @@ test("one-pass replacement matches sequential replaceAll, with few values and wi
     values.forEach((value, index) => { expected = expected.replaceAll(value, `<${index}>`); });
     assert.equal(replaceValues(text, values, (index) => `<${index}>`), expected, JSON.stringify({ text, values }));
   }
+  // More occurrences than characters: the fallback replaces the union of all occurrences, by the longest value.
+  assert.equal(replaceValues(`x${"a".repeat(5000)}y`, ["aaa", "aa", "a"], (index) => `<${index}>`), "x<0>y");
+  assert.equal(replaceValues(`${"ab".repeat(3000)}-c`, Array.from({ length: 20 }, (_, i) => "ab".repeat(i + 1)), (index) => `<${index}>`), "<19>-c");
+});
+
+/** Secrets that are suffixes of one another over a repetitive text: occurrence collection is bounded. */
+test("nested secrets over a repetitive text are redacted in bounded time", () => {
+  for (const count of [10, 30]) {
+    const explicitSecrets = Array.from({ length: count }, (_, i) => "a".repeat(i + 1));
+    const boundary = new InformationFlowBoundary({ explicitSecrets });
+    const text = `start ${"a".repeat(1_000_000)} end`;
+    const started = performance.now();
+    const output = boundary.redactForTelemetry(text);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 3000, `${count} secrets: ${Math.round(elapsed)} ms`);
+    assert.ok(!output.includes("aa"), `${count} secrets: the run is redacted`);
+    assert.ok(output.startsWith("st") && output.endsWith("end"), `${count} secrets: ${output.slice(0, 40)}`);
+  }
 });
