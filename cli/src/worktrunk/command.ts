@@ -9,7 +9,7 @@ import { redactSecrets } from "../ui.js";
 import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { copyIgnored } from "./copy.js";
 import { generateMergeMessage, DEFAULT_AI_TIMEOUT_MS, type Completer } from "./ai_message.js";
-import { mergeWorktree, parseAge, pruneWorktrees, resolveMergeContext, type MergeContextInfo } from "./merge.js";
+import { mergeWorktree, parseAge, pruneWorktrees, resolveMergeContext, type MergeContextInfo, type MergeOptions } from "./merge.js";
 import { GitError } from "./git.js";
 import { WorktreePathError } from "./paths.js";
 
