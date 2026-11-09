@@ -11,6 +11,7 @@ import { BANG, SLASH_COMMANDS, SlashHost, SlashOutcome, SlashReply, findSlash, s
 import { hasHandler, routeSlash } from "../src/slash/router.js";
 import { receiptSections } from "../src/evidence.js";
 import { makeHome, makeRepo } from "./helpers/fixtures.js";
+import { relocationAfter, runWorktreeCommand } from "../src/worktrunk/command.js";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -348,6 +349,29 @@ describe("slash router: workspace commands", () => {
       assert.match(merged.output, /Fast-forwarded/);
       assert.ok(fs.existsSync(path.join(repo, "named.txt")));
       assert.equal(fs.existsSync(dir), false);
+      assert.equal(fs.realpathSync(host.app.getConfig().workspace), fs.realpathSync(repo), "the session is moved out of the removed worktree");
+      for (const identity of (host.app.getAgent().stateManager as any).workspacePaths) identity.assertCurrent(); // durable state stays usable
+    });
+  });
+
+  test("an agent that started inside a worktree can be moved out of it after the worktree is merged away, with its durable state still valid", async () => {
+    await withRig(async ({ reply, repo }) => {
+      assert.equal((await reply("worktree", "switch -c feature/started-inside --no-copy")).success, true);
+      const dir = path.join(repo, ".nexus", "worktrees", "feature-started-inside");
+      fs.writeFileSync(path.join(dir, "inside.txt"), "x\n");
+      execSync("git add inside.txt && git commit -q -m inside", { cwd: dir });
+      const inside = new ApplicationCore({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 4, temperature: 0, workspace: dir, shell: "bash" } as any);
+      try {
+        const merged = runWorktreeCommand(["merge"], { cwd: dir, readOnly: false });
+        assert.equal(merged.success, true, merged.output);
+        assert.equal(fs.existsSync(dir), false);
+        const moveTo = relocationAfter(merged, dir);
+        assert.ok(moveTo, "the merge says where to move");
+        inside.getAgent().setWorkspace(moveTo!);
+        for (const identity of (inside.getAgent().stateManager as any).workspacePaths) identity.assertCurrent();
+      } finally {
+        inside.shutdown();
+      }
     });
   });
 

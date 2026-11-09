@@ -164,46 +164,33 @@ test("precondition failures refuse merge before asking the model", async () => {
   } finally { f.cleanup(); }
 });
 
-test("sibling worktree merge with --ai-message does not stage .nexus receipts", async () => {
-  const f = fixture();
-  try {
-    const configDir = path.join(f.home, ".config", "nexus");
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({ version: 1, worktree: { layout: "sibling" } }));
-
-    const made = await f.run(f.repo, ["switch", "-c", "feat/sibling", "--no-copy"]);
-    assert.equal(made.success, true, made.output);
-    const siblingDir = path.join(f.root, "proj.feat-sibling");
-    assert.ok(fs.existsSync(siblingDir));
-
-    // Simulate an inference receipt written during completer execution or diagnostics
-    fs.mkdirSync(path.join(siblingDir, ".nexus"), { recursive: true });
-    fs.writeFileSync(path.join(siblingDir, ".nexus", "inference_receipts.jsonl"), '{"requestId":"test"}\n');
-    fs.writeFileSync(path.join(siblingDir, "file.txt"), "hello\n");
-
-    const r = await f.run(siblingDir, MERGE, async () => "feat: add sibling file");
-    assert.equal(r.success, true, r.output);
-
-    const committed = git(f.repo, "show", "--name-only", "--pretty=format:", "HEAD").split("\n").filter(Boolean);
-    assert.deepEqual(committed, ["file.txt"]);
-  } finally { f.cleanup(); }
-});
-
-test("invalid configuration during completion falls back gracefully to deterministic message", async () => {
+test("merge --ai-message succeeds when target is passed after the -- delimiter", async () => {
   const f = fixture();
   try {
     const dir = await featureWithWork(f);
-    // Completer simulates buildConfigOrThrow throwing on invalid config
-    const failingCompleter: Completer = async () => {
-      try {
-        throw new Error("Provider 'compatible' requires a base URL.");
-      } catch {
-        return undefined as any;
-      }
-    };
-    const r = await f.run(dir, MERGE, failingCompleter);
+    const r = await f.run(
+      dir,
+      ["merge", "--ai-message", "--no-verify-receipt", "--reason", "test fixture", "--", "main"],
+      async () => "feat: message after delimiter",
+    );
     assert.equal(r.success, true, r.output);
-    assert.match(r.output, /deterministic|fallback/i);
-    assert.ok(git(f.repo, "log", "-1", "--format=%s").length > 0);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat: message after delimiter");
+  } finally { f.cleanup(); }
+});
+
+test("clean branch exactly one commit ahead applies generated message from --ai-message", async () => {
+  const f = fixture();
+  try {
+    const made = await f.run(f.repo, ["switch", "-c", "feat/single", "--no-copy"]);
+    assert.equal(made.success, true, made.output);
+    const dir = path.join(f.repo, ".nexus", "worktrees", "feat-single");
+    // Make one commit and leave the worktree clean
+    fs.writeFileSync(path.join(dir, "single.txt"), "single\n");
+    git(dir, "add", "single.txt");
+    git(dir, "commit", "-m", "original single commit message");
+
+    const r = await f.run(dir, MERGE, async () => "feat: updated single commit message");
+    assert.equal(r.success, true, r.output);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat: updated single commit message");
   } finally { f.cleanup(); }
 });

@@ -52,15 +52,15 @@ back with a note to the deterministic message, and an explicit `-m` always wins.
 `refs/nexus-backup/<name>-<hash>`: one flat ref per branch, where `<name>` is the branch name with every character outside
 `A-Za-z0-9._-` turned into `-` (at most 40 characters) and `<hash>` is the first 12 hex digits of the SHA-1 of the
 branch name, so `foo` and `foo/bar` never collide (Git cannot hold both as refs). Find yours with
-`git for-each-ref refs/nexus-backup`. A submodule is backed up as its recorded commit only. A rebase conflict stops the
+`git for-each-ref refs/nexus-backup`. A submodule is backed up as its recorded commit only, so a worktree whose submodule holds a commit that is on no remote branch is kept after the merge (its objects live in the worktree and would go with it); push it, then run `remove`. `--no-squash` with merge commits in the branch and a moved target is refused, because a plain rebase would drop edits only the merge commits carry. The source branch is merged as `refs/heads/<branch>`, never as a same-named tag. A rebase conflict stops the
 command and leaves the rebase open in the worktree. Ignored leftovers (build caches) are deleted with the worktree after
 a successful merge, but never while tracked, staged, untracked or submodule changes remain: then the worktree is kept
-and the command says so.
+and the command says so. When `merge` removes the worktree an interactive session (`/worktree merge ^` in the REPL or the TUI) is standing in, the session moves to the worktree of the branch it was merged into and its checkpoints and session saves keep working.
 
 `prune` removes worktrees whose HEAD is already integrated into the default branch (same commit, ancestor, empty diff,
 same tree or patch-id equivalent), that have no changes or untracked files, and that were last touched longer ago than
 `--min-age` (default `1d`). It never touches the main checkout, the worktree you are in, locked worktrees or speculative
-task worktrees; worktrees holding ignored files are kept unless `--discard-ignored`; `--limit` bounds one run (default 100).
+task worktrees; worktrees holding ignored files are kept unless `--discard-ignored`; `--limit` bounds one run (default 100). `--discard-ignored` removes ignored files only: tracked, staged and untracked changes are checked again under the removal lock, so an edit made while prune waited keeps the worktree. Worktrees whose directory was deleted by hand are judged too: a detached one is cleared only if its HEAD is integrated and old enough (its administrative HEAD may be the only reference to its commits), a branch one always (the branch stays), and only the selected entries are cleared, never every stale one at once.
 
 ## Where worktrees go
 
@@ -87,3 +87,42 @@ can never change it:
   redactor and shows your home as `~`. Machine output is printed exactly as Git has it: `path` (so `cd "$(nexus
   worktree path feature/x)"` works) and `list --json`. Treat `--json` output as you would `git worktree list`.
 * Read-only mode (`--read-only`, `/mode read-only`) allows only `list` and `path`.
+
+## Locking, stale and detached worktrees, and limits
+
+* **One lock, two minutes of patience.** `switch`, `remove` and every registry write take `<git-common-dir>/nexus/worktrees.lock`.
+  `switch` holds it across the whole checkout and `remove` across the whole removal (worktree directory, branch, registry
+  record), so a second command waits up to two minutes and then fails with "locked by another process; retry" having
+  changed nothing.
+* **When a lock is taken over.** Only when the process id written in it no longer exists on this host, or the file is
+  older than ten minutes (a lock whose pid cannot be read is judged by age alone). A live holder is never displaced
+  sooner, however long its checkout runs. Takeovers are serialised through a kernel-owned
+  guard (`worktrees.lock.reclaim`, an `flock` that Nexus never deletes), and the lock is judged again under it and deleted
+  only if it is still the same file, so two waiters cannot both reclaim it and a lock another process has just taken is
+  not removed. Without the `flock` utility a stale lock is reported with its path instead of being taken. A holder in another PID namespace (a container,
+  `unshare`) has a pid that does not exist here and is therefore read as gone; run Nexus commands on one repository from
+  one namespace, or rely on the ten-minute rule alone.
+* **A commit that lands during removal is not lost.** After the checks and just before `git worktree remove`, `HEAD` is
+  read again. If it moved and the new commit is not integrated into the default branch, nothing is removed and the
+  command says to run it again; a branch is deleted only while it still points at the commit that was checked. A
+  detached worktree is first put on a temporary branch `nexus-removed/<id>`, so a commit that lands after that check
+  advances the branch instead of vanishing with the worktree; the branch is deleted again unless it moved, in which case
+  the command names it. What was read before waiting for the lock is re-read under it: a worktree that changed
+  meanwhile (a stale registration recreated by `switch`, for example) is not removed.
+* **Deleted and detached worktrees.** A worktree whose directory was deleted by hand is listed as prunable. `remove`
+  accepts its absolute path (a detached one has no branch name) and drops that one registration, never the other stale
+  ones. A worktree is removed only if its `.git` file (absolute, or relative as Git writes with
+  `worktree.useRelativePaths`) leads to its own entry under `<git-common-dir>/worktrees/` and that entry points back at
+  the same `.git` file.
+* **A damaged registry is kept.** If `worktrees.json` does not parse, the next change renames it to
+  `worktrees.json.corrupt-<time>` and starts a new one, so `previous` and per-branch variables can be recovered by hand.
+  `list` shows a warning while it is damaged. `-` and `^` are checked like a typed branch name; names that begin with
+  `refs/` or are pseudo-refs (`HEAD`, `FETCH_HEAD`, `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`) are refused.
+* **Trusted configuration.** Status checks run with Git's configuration as it is: hooks, fsmonitor and external transports
+  are pinned off, but `.git/config`, your user config and the system config are trusted like Git itself trusts them, so a
+  `filter.<name>.clean` command configured there still runs when `git status` compares content (a repository cannot add
+  one by itself: `.gitattributes` only names a filter, it cannot define its command).
+* **Limit: separate git directories.** A repository whose git directory is not `<checkout>/.git`
+  (`git init --separate-git-dir`) is refused by `nexus worktree`: Git records no path from that directory back to the main
+  checkout, so the anchor cannot be found from a linked worktree. `nexus run --worktree` there stores its task worktrees
+  under the checkout it runs in.

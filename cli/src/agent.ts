@@ -2430,14 +2430,13 @@ export class AutonomousAgent {
     if (!currentWorkspaceIdentityIsValid || selectedWorkspace.value !== this.workspacePathIdentity.value) {
       this.invalidateVerificationBaseline();
     }
-    if (selectedWorkspace.value === this.primaryWorkspacePathIdentity.value) {
-      try {
-        this.primaryWorkspacePathIdentity.assertCurrent();
-      } catch {
-        // Explicitly selecting the replacement rebinds persistence to the live directory,
-        // but the verifier baseline stays invalidated by the identity check above.
-        this.primaryWorkspacePathIdentity = selectedWorkspace;
-      }
+    try {
+      this.primaryWorkspacePathIdentity.assertCurrent();
+    } catch {
+      // The directory this session started in is gone or was replaced: an explicit selection of a live directory
+      // (the same path recreated, or the branch a named worktree was merged into) rebinds persistence to it, so
+      // checkpoints and session saves keep validating. The verifier baseline stays invalidated by the check above.
+      this.primaryWorkspacePathIdentity = selectedWorkspace;
     }
     const readOnly = this.isReadOnly();
     this.bridge.shutdown();

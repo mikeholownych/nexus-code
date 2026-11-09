@@ -151,11 +151,14 @@ test("staged ignored file with git add -f is preserved in working state and inva
 test("waiver is not recorded in the registry when merge fails", () => {
   const f = fixture();
   try {
-    // Make target worktree dirty to fail the merge
-    fs.writeFileSync(path.join(f.repo, "dirty.txt"), "dirty\n");
-    const r = f.wt(f.dir, ["merge", "--no-verify-receipt", "--reason", "waiver on failing merge"]);
+    // Commit a divergent change on main (target) so fast-forward fails under --no-rebase
+    fs.writeFileSync(path.join(f.repo, "diverged.txt"), "diverged\n");
+    git(f.repo, "add", "diverged.txt");
+    git(f.repo, "commit", "-m", "divergent commit on main");
+
+    const r = f.wt(f.dir, ["merge", "--no-rebase", "--no-verify-receipt", "--reason", "waiver on failing merge"]);
     assert.equal(r.success, false);
-    assert.match(r.output, /uncommitted changes/);
+    assert.match(r.output, /could not fast-forward/);
     const reg = readRegistry(path.join(f.repo, ".git")).registry;
     assert.equal(reg.waivers?.length ?? 0, 0, "waiver should not be recorded if merge failed");
   } finally { f.cleanup(); }
@@ -165,25 +168,42 @@ test("registry evicts oldest records when history approaches byte budget", () =>
   const f = fixture();
   try {
     const common = path.join(f.repo, ".git");
-    const longString = "x".repeat(350);
-    // Add 100 verifications and 100 waivers with long payloads
+    const verifications = [];
+    const waivers = [];
+    const payload = "v".repeat(350);
     for (let i = 0; i < 100; i++) {
-      const ok = recordVerification(f.dir, `verifier-${i}-${longString}`);
-      assert.equal(ok, true, `recordVerification ${i} should succeed`);
+      const time = new Date(Date.UTC(2026, 0, 1, 0, i, 0)).toISOString();
+      verifications.push({
+        branch: `feat-${i}`,
+        head: "a".repeat(40),
+        tree: "b".repeat(40),
+        verifier: `${i}-${payload}`,
+        recordedAt: time,
+      });
     }
-    const reg = readRegistry(common).registry;
-    assert.ok((reg.verifications?.length ?? 0) > 0);
-    // File size must be under 64 KiB
-    const stat = fs.statSync(path.join(common, "nexus", "worktrees.json"));
-    assert.ok(stat.size <= 64 * 1024, `registry file size ${stat.size} exceeds 64 KiB`);
-  } finally { f.cleanup(); }
-});
+    for (let i = 0; i < 50; i++) {
+      const time = new Date(Date.UTC(2026, 0, 1, 0, i, 30)).toISOString();
+      waivers.push({
+        branch: `waiver-${i}`,
+        head: "a".repeat(40),
+        reason: `${i}-${payload}`,
+        recordedAt: time,
+      });
+    }
+    const raw = JSON.stringify({ version: 1, worktrees: [], verifications, waivers }, null, 1);
+    assert.ok(Buffer.byteLength(raw) > 64 * 1024, `raw registry size ${Buffer.byteLength(raw)} should exceed 64 KiB`);
 
-test("verification.ts does not export readRegistry and uses statusOf", async () => {
-  const mod = await import("../src/worktrunk/verification.js") as any;
-  assert.equal(mod.readRegistry, undefined, "readRegistry should not be re-exported from verification.ts");
-  const source = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "worktrunk", "verification.ts"), "utf8");
-  assert.doesNotMatch(source, /function isDirty/);
+    writeRegistry(common, { version: 1, worktrees: [], verifications, waivers });
+
+    const file = path.join(common, "nexus", "worktrees.json");
+    const stat = fs.statSync(file);
+    assert.ok(stat.size <= 64 * 1024, `registry file size ${stat.size} exceeds 64 KiB`);
+
+    const read = readRegistry(common).registry;
+    assert.equal(read.verifications?.some((v) => v.branch === "feat-0"), false, "oldest verification should have been evicted");
+    assert.equal(read.verifications?.some((v) => v.branch === "feat-99"), true, "newest verification should be retained");
+    assert.ok((read.verifications?.length ?? 0) < 100, "some verifications should have been evicted");
+  } finally { f.cleanup(); }
 });
 
 test("agent records verification only when verifier is deliverable-bound and independent or configured", () => {

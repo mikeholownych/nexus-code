@@ -6,13 +6,11 @@
  * given). The pre-merge hook (WP-1313) will attach at `mergeSeams.preMerge` below, after every refusal.
  */
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { conventionalCommitMessage } from "../git.js";
 import { redactSecrets } from "../ui.js";
-import { ensureGitExclude } from "../core/git_exclude.js";
-import { removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
+import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type WorktreeEntry } from "./repo.js";
 import { readRegistry, updateRegistry, MAX_RECORDS } from "./registry.js";
@@ -37,6 +35,24 @@ const NON_INTERACTIVE = { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" };
  * committed, squashed or rebased. Exposed as an object so tests can observe it; not an extension point for callers.
  */
 export const mergeSeams: { preMerge?: (info: { branch: string; target: string }) => void } = {};
+
+/**
+ * Initialised submodules of the worktree whose checked-out commit is on no remote-tracking branch of that submodule.
+ * Their objects live in this worktree's own administrative directory, so removing the worktree would delete the only
+ * copy of such a commit while the target keeps pointing at it.
+ */
+function unpublishedSubmodules(dir: string): string[] {
+  const status = git(dir, ["submodule", "status", "--recursive"], { allowFailure: true }).stdout.split("\n").filter(Boolean);
+  const found: string[] = [];
+  for (const line of status) {
+    if (line[0] === "-") continue; // not initialised here: no objects of its own
+    const sub = line.slice(1).trim().split(/\s+/)[1];
+    if (!sub) continue;
+    const local = git(path.join(dir, sub), ["rev-list", "-n", "1", "HEAD", "--not", "--remotes"], { allowFailure: true });
+    if (local.status !== 0 || local.stdout.trim()) found.push(sub);
+  }
+  return found;
+}
 
 /** Paths `git status` reports for the worktree, read through the pinned helper (no shell, no fsmonitor, no hooks). */
 function changedFiles(dir: string): string[] {
@@ -79,22 +95,8 @@ export function backupRef(branch: string): string {
 function backup(dir: string, branch: string, dirty: boolean): string {
   let sha = gitOut(dir, ["rev-parse", "--verify", "HEAD"]);
   if (dirty) {
-    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-backup-"));
-    try {
-      const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
-      const gitDir = gitOut(dir, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-      const realIndex = path.join(gitDir, "index");
-      if (fs.existsSync(realIndex)) {
-        fs.copyFileSync(realIndex, path.join(scratch, "index"));
-      } else {
-        git(dir, ["read-tree", "HEAD"], { env });
-      }
-      git(dir, ["add", "-A"], { env });
-      const tree = gitOut(dir, ["write-tree"], { env });
-      sha = gitOut(dir, ["commit-tree", tree, "-p", sha, "-m", `nexus backup of ${branch} before merge`], { env });
-    } finally {
-      fs.rmSync(scratch, { recursive: true, force: true });
-    }
+    const tree = workingState(dir, dirty).tree;
+    sha = gitOut(dir, ["commit-tree", tree, "-p", sha, "-m", `nexus backup of ${branch} before merge`]);
   }
   git(dir, ["update-ref", "-m", "nexus: backup before merge", backupRef(branch), sha]);
   return sha;
@@ -126,9 +128,6 @@ export function resolveMergeContext(ctx: WorktreeContext, options: MergeOptions 
   const targetEntry = repo.entries.find((entry) => entry.branch === targetName);
   if (!targetEntry || targetEntry.prunable) throw new WorktreeError(`target ${shownBranch(targetName)} is not checked out in any worktree; run \`worktree switch ${shownBranch(targetName)}\` first`);
 
-  if (fs.existsSync(path.join(source.path, ".nexus"))) {
-    ensureGitExclude(source.path);
-  }
 
   const gitDir = gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
   const busy = inProgress(gitDir);
@@ -219,9 +218,16 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     git(source.path, ["reset", "--soft", mergeBase]);
     git(source.path, ["commit", "-m", message], { env: NON_INTERACTIVE });
     notes.push(`Squashed ${count} commits.`);
+  } else if (!cancelled && !dirty && count === 1 && options.message) {
+    git(source.path, ["commit", "--amend", "-m", options.message], { env: NON_INTERACTIVE });
   }
 
   if (!cancelled && !options.noRebase && mergeBase !== targetSha) {
+    // A plain rebase linearises the range and drops merge commits together with any edit only they carry (a conflict
+    // resolution, for one). Squashing (the default) keeps the tree; without it such a history is refused.
+    if (Number(gitOut(source.path, ["rev-list", "--merges", "--count", `${mergeBase}..HEAD`])) > 0) {
+      throw new WorktreeError(`${shownBranch(branch)} contains merge commits and the target has moved, so rebasing without squashing would drop edits that only the merge commits carry; merge without --no-squash, or rebase ${shownBranch(branch)} onto ${shownBranch(targetName)} yourself first. Nothing was merged`);
+    }
     const rebase = git(source.path, ["rebase", targetSha], { allowFailure: true, env: NON_INTERACTIVE });
     if (rebase.status !== 0) {
       const open = inProgress(gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]));
@@ -237,30 +243,37 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   }
 
   if (!cancelled) {
-    const ff = git(targetEntry.path, ["merge", "--ff-only", "--no-edit", "--end-of-options", branch], { allowFailure: true, env: NON_INTERACTIVE });
+    // `refs/heads/<branch>`, not the short name: a tag of the same name would otherwise be what gets merged.
+    const ff = git(targetEntry.path, ["merge", "--ff-only", "--no-edit", "--end-of-options", `refs/heads/${branch}`], { allowFailure: true, env: NON_INTERACTIVE });
     if (ff.status !== 0) {
       throw new WorktreeError(`could not fast-forward ${shownBranch(targetName)} to ${shownBranch(branch)}: ${options.noRebase ? "the branch is not a descendant of the target (merge without --no-rebase)" : "the target moved while merging; run merge again"}`);
     }
     notes.push(`Fast-forwarded ${shownBranch(targetName)}.`);
   }
 
-  if (!options.noRemove) {
-    // The merged work is on the target. Only ignored output (build caches) may still be in the worktree; it goes with
-    // it. Anything else left (edits inside a submodule cannot be committed from here, for one) is never forced away.
-    const left = statusOf(source.path);
-    if (left.total > 0) {
-      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: ${left.total} uncommitted change(s) remain that the merge could not carry (check \`git status\` there, submodules included). Nothing was deleted.`);
-    } else {
-      notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { force: true, target: targetName }));
-    }
-  }
   if (waiver !== undefined) {
     const reason = waiver;
     updateRegistry(repo.commonDir, (reg) => {
       reg.waivers = [...(reg.waivers ?? []), { branch, head: gateState.head, reason, recordedAt: new Date().toISOString() }].slice(-MAX_RECORDS);
     });
   }
-  return { success: true, output: notes.join("\n"), data: { branch, target: targetName } };
+
+  if (!options.noRemove) {
+    // The merged work is on the target. Only ignored output (build caches) may still be in the worktree; it goes with
+    // it. Anything else left (edits inside a submodule cannot be committed from here, for one) is never forced away.
+    const left = statusOf(source.path);
+    const unpublished = left.total > 0 ? [] : unpublishedSubmodules(source.path);
+    if (unpublished.length > 0) {
+      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${unpublished.map((sub) => redactSecrets(sub)).join(", ")} has a commit that is on no remote branch, and removing the worktree would delete its only copy. Push it from there, then run \`worktree remove\`. The merge itself is done.`);
+    } else if (left.total > 0) {
+      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: ${left.total} uncommitted change(s) remain that the merge could not carry (check \`git status\` there, submodules included). Nothing was deleted.`);
+    } else {
+      notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { discardIgnored: true, target: targetName }));
+    }
+  }
+
+  const removedPath = !fs.existsSync(source.path) ? source.path : undefined;
+  return { success: true, output: notes.join("\n"), data: { branch, target: targetName, targetPath: targetEntry.path, ...(removedPath ? { removedPath } : {}) } };
 }
 
 // ---- prune ----------------------------------------------------------------------------------------------------
@@ -297,7 +310,25 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
   for (const entry of repo.entries) {
     if (entry.isMain || entry === here) continue;
     if (counts.removed >= limit) { limited = true; break; }
-    if (entry.prunable) { counts.stale++; continue; }
+    if (entry.prunable && entry.locked) { keep(entry, "stale but locked"); continue; }
+    if (entry.prunable) {
+      // A hand-deleted worktree is judged like any other. A detached one may hold the only reference to commits in its
+      // administrative HEAD and reflog, so it goes only if that HEAD is integrated and old enough; a branch worktree's
+      // commits live on its branch, which stays. Only the selected entries are cleared, never a global `worktree prune`.
+      try {
+        const stamp = Number(gitOut(repo.cwd, ["log", "-1", "--format=%ct", "--end-of-options", entry.head], { timeoutMs: 5000 })) * 1000;
+        if (entry.detached && now - stamp < minAge) { counts.young++; continue; }
+        const reason = entry.detached ? integratedReason(repo, entry.head, targetSha) : "branch kept";
+        if (!reason) { keep(entry, `stale, but its detached HEAD is not merged into ${shownBranch(target!)}`); continue; }
+        if (!options.dryRun) clearStaleEntry(repo, entry);
+        counts.stale++;
+        counts.removed++;
+        lines.push(`${options.dryRun ? "would clear" : "cleared"} stale ${label(entry)} (${reason})`);
+      } catch (err) {
+        keep(entry, redactSecrets((err as Error).message).slice(0, 160));
+      }
+      continue;
+    }
     if (entry.locked) { keep(entry, "locked"); continue; }
     if (entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase)) { keep(entry, "speculative task worktree"); continue; }
     try {
@@ -313,7 +344,7 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
         lines.push(`would remove ${label(entry)} (integrated: ${reason})`);
         continue;
       }
-      removeOne(ctx, entry.path, { force: dirty.ignored > 0 });
+      removeOne(ctx, entry.path, { discardIgnored: dirty.ignored > 0 });
       counts.removed++;
       lines.push(`removed ${label(entry)} (integrated: ${reason})`);
     } catch (err) {
@@ -321,7 +352,6 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
     }
   }
 
-  if (counts.stale > 0 && !options.dryRun) git(repo.cwd, ["worktree", "prune"]);
   const summary = `${options.dryRun ? "Would remove" : "Removed"} ${counts.removed}, kept ${counts.kept}, ${counts.young} younger than the minimum age${counts.stale ? `, ${counts.stale} stale registration(s) ${options.dryRun ? "would be pruned" : "pruned"}` : ""}.`;
   const shown = lines.slice(0, REPORT_LINES);
   if (lines.length > REPORT_LINES) shown.push(`... ${lines.length - REPORT_LINES} more lines`);
