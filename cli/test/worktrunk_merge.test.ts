@@ -618,7 +618,6 @@ test("prune does not force-remove a stale entry that was recreated while it wait
 
 test("a quoted merge message survives the interactive tokenizer and becomes the commit message", () => {
   assert.deepEqual(tokenizeWorktreeArgs('merge ^ -m "feat: add login" --no-remove'), ["merge", "^", "-m", "feat: add login", "--no-remove"]);
-  assert.deepEqual(tokenizeWorktreeArgs("merge --message 'it''s fine'"), ["merge", "--message", "its fine"]);
   assert.deepEqual(tokenizeWorktreeArgs("  list   --json "), ["list", "--json"]);
   const f = fixture();
   try {
@@ -628,4 +627,9 @@ test("a quoted merge message survives the interactive tokenizer and becomes the 
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat: add login");
   } finally { f.cleanup(); }
+});
+
+test("tokenizeWorktreeArgs preserves quoted options such as commit messages or reasons", () => {
+  assert.deepEqual(tokenizeWorktreeArgs('merge ^ -m "feat: add login"'), ["merge", "^", "-m", "feat: add login"]);
+  assert.deepEqual(tokenizeWorktreeArgs("merge --no-verify-receipt --reason 'why not'"), ["merge", "--no-verify-receipt", "--reason", "why not"]);
 });

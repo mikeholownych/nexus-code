@@ -172,31 +172,20 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
   }
 }
 
-/**
- * Split the text after the command name into tokens. Whitespace separates tokens except inside single or double
- * quotes, which are removed and may be joined to adjacent text as in a shell (no escapes, no expansion), so
- * `merge ^ -m "feat: add login"` keeps its message in one token. An unterminated quote runs to the end.
- */
+/** Split the text after the command name into tokens, preserving single- and double-quoted strings. */
 export function tokenizeWorktreeArgs(args: string): string[] {
   const tokens: string[] = [];
-  let current = "";
-  let started = false;
-  let quote: string | undefined;
-  for (const char of args) {
-    if (quote) {
-      if (char === quote) quote = undefined; else current += char;
-    } else if (char === '"' || char === "'") {
-      quote = char;
-      started = true;
-    } else if (/\s/.test(char)) {
-      if (started || current) tokens.push(current);
-      current = "";
-      started = false;
-    } else {
-      current += char;
+  const regex = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(args)) !== null) {
+    if (match[1] !== undefined) {
+      tokens.push(match[1].replace(/\\(["\\])/g, "$1"));
+    } else if (match[2] !== undefined) {
+      tokens.push(match[2].replace(/\\(['\\])/g, "$1"));
+    } else if (match[3] !== undefined) {
+      tokens.push(match[3]);
     }
   }
-  if (started || current) tokens.push(current);
   return tokens;
 }
 
