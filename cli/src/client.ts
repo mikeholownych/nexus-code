@@ -36,6 +36,26 @@ import { UsageLedger, type UsageReport } from "./usage.js";
 import { localEndpointCredential, localEndpointCredentials, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
 import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
 import { providerDefinition } from "./providers.js";
+import { ServerKindCache } from "./core/server_kind_cache.js";
+
+/** Longest a request waits for an expired server identity to be re-read before proceeding without it. */
+const REVERIFY_WAIT_MS = 1000;
+
+/**
+ * Opaque per-process account markers for the server-kind cache key. No hash of the credential is computed: the
+ * credential is compared by equality here and only a small integer enters the cache key (never logged or persisted).
+ */
+const accountMarkers = new Map<string, number>();
+let nextAccountMarker = 1;
+function accountMarker(credential: string): number {
+  let marker = accountMarkers.get(credential);
+  if (marker === undefined) {
+    if (accountMarkers.size >= 64) accountMarkers.clear(); // bounded; a cleared marker only costs one re-discovery
+    marker = nextAccountMarker++;
+    accountMarkers.set(credential, marker);
+  }
+  return marker;
+}
 
 type OAuthCredential = Extract<StoredCredential, { type: "oauth" }>;
 
@@ -838,9 +858,10 @@ export class LocalLlmClient {
     return changed ? out : messages;
   }
 
-  private routingHeaders(): Record<string, string> {
+  /** Headers for a request sent to `ep` (the endpoint actually used, which differs from the active one during failover). */
+  private routingHeaders(ep: string = this.endpoint): Record<string, string> {
     if (!this.conn.sendTaskClass) return {};
-    const kind = LocalLlmClient.serverKindCache.get(this.endpoint);
+    const kind = LocalLlmClient.serverKindCache.get(this.kindKey(ep));
     const operatorOverride = operatorSetting("NEXUS_TASK_CLASS") || operatorSetting("LOCAL_LLM_TASK_CLASS");
     if (!operatorOverride && kind !== "gateway") {
       return {};
@@ -1160,7 +1181,16 @@ export class LocalLlmClient {
    */
   async discoverAdvertisement(signal?: AbortSignal): Promise<{ state: "supported" | "unsupported" | "unavailable"; advertised?: Advertisement; detail?: string }> {
     const ep = this.endpoint;
-    const previousKind = LocalLlmClient.serverKindCache.get(ep);
+    const previousKind = LocalLlmClient.serverKindCache.get(this.kindKey(ep));
+    // A catalog that cannot speak for itself (404, model unlisted) keeps a verified server identity, except a gateway:
+    // the gateway-only task-class header must follow positive evidence, not a replaced server's silence (REQ-PRV-109).
+    const retainedKind = previousKind === "gateway" ? undefined : previousKind;
+    this.everDiscovered = true;
+    let retained = false;
+    const remember = (kind: ServerKind): void => {
+      if (retained && kind === previousKind) return; // retained without new evidence: do not extend the TTL
+      LocalLlmClient.serverKindCache.set(this.kindKey(ep), kind);
+    };
     if (this.conn.protocol !== "openai-chat") return { state: "unsupported", detail: `${this.conn.protocol} connection` };
     const url = `${ep}/models`;
     try {
@@ -1173,7 +1203,8 @@ export class LocalLlmClient {
       });
       if (res.status === 404) {
         // A catalog-less response does not contradict an identity verified earlier on this same endpoint.
-        if (previousKind) LocalLlmClient.serverKindCache.set(ep, previousKind);
+        // A retained identity keeps its original expiry: silence is not re-verification.
+        if (!retainedKind) LocalLlmClient.serverKindCache.set(this.kindKey(ep), "unknown"); // negative result, kept for the TTL
         return { state: "unsupported", detail: "no /models catalog" };
       }
       if (!res.ok) {
@@ -1183,7 +1214,8 @@ export class LocalLlmClient {
       const entry = Array.isArray(data?.data) ? data.data.find((e) => e?.id === this.model) : undefined;
       // A catalog that cannot identify this model provides no contradictory identity evidence.
       if (!entry) {
-        if (previousKind) LocalLlmClient.serverKindCache.set(ep, previousKind);
+        // A retained identity keeps its original expiry: silence is not re-verification.
+        if (!retainedKind) LocalLlmClient.serverKindCache.set(this.kindKey(ep), "unknown"); // negative result, kept for the TTL
         return { state: "unsupported", detail: `model ${this.model} not listed` };
       }
       let advertised = parseAdvertisement(entry);
@@ -1193,7 +1225,9 @@ export class LocalLlmClient {
         if (entryKind === "llamacpp" && (process.env.NEXUS_SERVER_PROBE === "0" || !(await this.discoverServerContext(entry, signal))) ) {
           entryKind = "unknown";
         } else if (entryKind === "ollama" && (process.env.NEXUS_SERVER_PROBE === "0" || !(await this.discoverOllamaIdentity(signal))) ) {
-          entryKind = "unknown";
+          // A failed identity probe on an endpoint already verified as Ollama is not contradictory evidence.
+          retained = previousKind === "ollama" && process.env.NEXUS_SERVER_PROBE !== "0";
+          entryKind = retained ? "ollama" : "unknown";
         } else if (vllmCatalogMarker && entryKind === "unknown" && process.env.NEXUS_SERVER_PROBE !== "0") {
           const version = await this.discoverVllmVersion(signal);
           if (version) {
@@ -1202,6 +1236,8 @@ export class LocalLlmClient {
           } else if (previousKind === "vllm") {
             // Keep strict mode and the /tokenize fallback through a transient version-route outage.
             entryKind = "vllm";
+            retained = true;
+            if (advertised) advertised = { ...advertised, via: "vllm" };
           }
         }
       }
@@ -1212,13 +1248,13 @@ export class LocalLlmClient {
         // Only for a plain endpoint: cloud provider connections have no such endpoints.
         const local = this.conn.providerId || entryKind === "unknown" ? undefined : await this.discoverServerContext(entry, signal);
         if (local) {
-          LocalLlmClient.serverKindCache.set(ep, local.serverKind ?? entryKind);
+          remember(local.serverKind ?? entryKind);
           return { state: "supported", advertised: local };
         }
-        LocalLlmClient.serverKindCache.set(ep, entryKind);
+        remember(entryKind);
         return { state: "unsupported", advertised, detail: "catalog lists no limits" };
       }
-      LocalLlmClient.serverKindCache.set(ep, entryKind);
+      remember(entryKind);
       return { state: "supported", advertised };
     } catch (err: any) {
       if (signal?.aborted) throw abortedError(randomUUID());
@@ -1227,12 +1263,45 @@ export class LocalLlmClient {
   }
 
   private static serverContextCache = new Map<string, Advertisement>();
-  private static serverKindCache = new Map<string, ServerKind>();
+  private static serverKindCache = new ServerKindCache();
+
+  private everDiscovered = false;
+  private reverifying: Promise<void> | undefined;
+  private lastReverifyAt = 0;
+
+  /**
+   * An identity this client discovered earlier (or one under a credential that changed since) has no live entry: re-read
+   * the catalog (at most once a minute) so a long-running agent keeps the gateway routing hint and the /tokenize
+   * fallback instead of losing them at the TTL or after a credential rotation. The request waits at most
+   * REVERIFY_WAIT_MS for it; a slower probe finishes in the background and the request proceeds with the unknown kind
+   * (no gateway hint, no strict adaptation: fail closed). Only the active endpoint is re-verified; a failover endpoint
+   * keeps whatever identity it was discovered with, or none.
+   */
+  private async reverifyExpiredKind(signal?: AbortSignal): Promise<void> {
+    if (this.conn.providerId || this.conn.protocol !== "openai-chat" || !this.everDiscovered) return;
+    if (LocalLlmClient.serverKindCache.get(this.kindKey()) !== undefined) return;
+    const now = Date.now();
+    if (!this.reverifying && now - this.lastReverifyAt >= 60_000) {
+      this.lastReverifyAt = now;
+      this.reverifying = this.discoverAdvertisement(signal).then(() => undefined, () => undefined).finally(() => { this.reverifying = undefined; });
+    }
+    if (!this.reverifying) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([this.reverifying, new Promise<void>((resolve) => { timer = setTimeout(resolve, REVERIFY_WAIT_MS); })]);
+    clearTimeout(timer);
+  }
+
+  /** Identity key: provider, endpoint and an opaque per-process account marker, so no switch inherits another server's kind. */
+  private kindKey(ep: string = this.endpoint): string {
+    const credential = this.credentialFor(ep);
+    const account = credential ? String(accountMarker(credential)) : "-";
+    return `${this.conn.providerId ?? ""}\u0000${ep}\u0000${account}`;
+  }
   private static serverShowCache = new Map<string, unknown>();
 
   /** Provider identity detected for the active endpoint after capability discovery; unknown until a positive handshake. */
   getDetectedServerKind(): ServerKind {
-    return LocalLlmClient.serverKindCache.get(this.endpoint) ?? "unknown";
+    return LocalLlmClient.serverKindCache.get(this.kindKey()) ?? "unknown";
   }
 
   private async discoverVllmVersion(signal?: AbortSignal): Promise<string | undefined> {
@@ -1345,7 +1414,11 @@ export class LocalLlmClient {
     const denial = this.disclosureDenial(ep, requestId);
     if (denial) throw new TokenCountError("denied", denial.message);
     if (signal?.aborted) throw new TokenCountError("aborted", "cancelled");
-    const kind = LocalLlmClient.serverKindCache.get(ep);
+    await this.reverifyExpiredKind(signal);
+    const kind = LocalLlmClient.serverKindCache.get(this.kindKey(ep));
+    // An identity this client had, now unresolved: counting would try the wrong routes and report "unsupported", which
+    // the agent latches for good. Say "unavailable" so the next step retries once discovery has recovered.
+    if (kind === undefined && this.everDiscovered) throw new TokenCountError("unavailable", "server identity is being re-verified");
     const root = ep.replace(/\/v1\/?$/, "");
     const urls = (kind === "llamacpp" || kind === "vllm") && root !== ep ? [`${ep}/tokenize`, `${root}/tokenize`] : [`${ep}/tokenize`];
     let body: any;
@@ -1366,7 +1439,7 @@ export class LocalLlmClient {
       try {
         res = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders() },
+          headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders(ep) },
           body: JSON.stringify(reqBody),
           signal: metadataSignal(signal),
           ...this.fetchPolicy(),
@@ -1443,6 +1516,7 @@ export class LocalLlmClient {
     /** Receipt role override for auxiliary calls (e.g. "compaction"). */
     purpose?: string,
   ): Promise<ChatMessage> {
+    await this.reverifyExpiredKind(signal);
     const response = await this.withReceipt(requestId, purpose, () =>
       this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
     );
@@ -1495,7 +1569,7 @@ export class LocalLlmClient {
         }
         outboundTools = toolsEgress.sanitizedPayload || tools;
       }
-      outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(currentEp) ?? "unknown", outboundTools);
+      outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown", outboundTools);
 
       const payload: any = {
         model: this.model,
@@ -1529,7 +1603,7 @@ export class LocalLlmClient {
             ...this.authorization(url),
             ...this.providerHeaders(messages),
             "X-Request-ID": requestId,
-            ...this.routingHeaders(),
+            ...this.routingHeaders(currentEp),
           },
           body: JSON.stringify(payload),
           signal: watchdog.signal,
@@ -1599,6 +1673,7 @@ export class LocalLlmClient {
     requestId: string = randomUUID(),
     signal?: AbortSignal,
   ): Promise<ChatMessage> {
+    await this.reverifyExpiredKind(signal);
     const response = await this.withReceipt(requestId, undefined, () =>
       this.withOAuthRetry(this.endpoint, requestId, () =>
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
@@ -1651,7 +1726,7 @@ export class LocalLlmClient {
       }
       outboundTools = toolsEgress.sanitizedPayload || tools;
     }
-    outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(currentEp) ?? "unknown", outboundTools);
+    outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown", outboundTools);
 
     const payload: any = {
       model: this.model,
@@ -1705,7 +1780,7 @@ export class LocalLlmClient {
             ...this.authorization(url),
             ...this.providerHeaders(messages),
             "X-Request-ID": requestId,
-            ...this.routingHeaders(),
+            ...this.routingHeaders(currentEp),
           },
           body: JSON.stringify(payload),
           signal: watchdog.signal,
