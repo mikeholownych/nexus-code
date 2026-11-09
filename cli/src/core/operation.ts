@@ -36,6 +36,8 @@
  * spawn_subagent is in-turn delegation: its result is a tool result of the parent's (durable) turn.
  */
 import type { AgentRole } from "./roles.js";
+import { isSpecialistRole, specialistInputsProblem } from "./specialist_profiles.js";
+import { redactForPersistence } from "./persistence_protection.js";
 import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, WorkRequirements } from "./resources.js";
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
@@ -75,6 +77,10 @@ export type DecisionAction =
   | { kind: "assign"; resourceId: string; overriding: string[] }
   /** Append the operator's note to the unit's task and run it again. */
   | { kind: "revise" }
+  /** Replace the unit's task with the operator's note (the only way to shrink a prompt) and run it again. */
+  | { kind: "replace_task" }
+  /** Merge the operator's note, a JSON object of named strings, into the unit's `inputs` and run it again. */
+  | { kind: "set_inputs" }
   /** Remove this unit's context budget and run it again (the resource limit still applies). */
   | { kind: "lift_context_budget" }
   /** Drop an advisory unit (required units cannot be dropped: the objective would be unmet). */
@@ -164,6 +170,10 @@ export interface WorkUnit {
    * whose start prompt cannot fit this budget is blocked before any inference.
    */
   contextBudget?: number;
+  /** Named inputs the unit's role contract requires (specialists); enforced before the unit starts. */
+  inputs?: Record<string, string>;
+  /** Results the executor refused (for example a specialist output that failed its contract), most recent last. */
+  rejectedOutputs?: StoredRejectedOutput[];
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
   context?: {
     estimatedPromptTokens: number;
@@ -171,7 +181,7 @@ export interface WorkUnit {
     contextLimit: number;
     at: string;
     /** Which bound decided the check. Absent on records written before v1.1. */
-    source?: "agent-estimate" | "operator-budget";
+    source?: "agent-estimate" | "operator-budget" | "role-ceiling";
   };
 }
 
@@ -354,6 +364,23 @@ export interface OptionSpec {
   action: DecisionAction;
 }
 
+/** A unit result the executor refused, kept verbatim (bounded) so the operator can see what the model said. */
+export interface RejectedOutput {
+  raw: string;
+  reason: string;
+}
+
+/** A rejected output as the unit stores it. */
+export interface StoredRejectedOutput extends RejectedOutput {
+  at: string;
+  truncated?: boolean;
+}
+
+/** The longest rejected output kept on a unit; the rest is cut and the record says so. */
+export const MAX_REJECTED_OUTPUT_CHARS = 65_536;
+/** How many rejected outputs a unit keeps (the most recent). */
+export const MAX_REJECTED_OUTPUTS = 5;
+
 export interface BlockSpec {
   cause: BlockCause;
   reason: string;
@@ -375,7 +402,7 @@ export type UnitRunResult =
   | { kind: "resource_unavailable"; failure: InferenceFailure; condition: ResourceConditionRecord }
   /** Inference may have executed and its bounded replays are spent: never resubmitted elsewhere automatically. */
   | { kind: "execution_unknown"; failure: InferenceFailure }
-  | ({ kind: "failed" } & BlockSpec)
+  | ({ kind: "failed" } & BlockSpec & { rejectedOutput?: RejectedOutput })
   | { kind: "cancelled" };
 
 export type Decision =
@@ -403,6 +430,8 @@ export interface WorkUnitSpec {
   taskClass?: string;
   /** Operator cap on this unit's prompt context, in tokens. */
   contextBudget?: number;
+  /** Named inputs for a specialist role's contract (see SPECIALIST_CONTRACTS[role].inputRequirements). */
+  inputs?: Record<string, string>;
 }
 
 export function newOperation(
@@ -422,6 +451,10 @@ export function newOperation(
   for (const u of units) {
     if (u.contextBudget !== undefined && (!Number.isInteger(u.contextBudget) || u.contextBudget <= 0)) {
       throw new Error(`Work unit '${u.id}': contextBudget must be a positive integer number of tokens`);
+    }
+    if (u.inputs !== undefined) {
+      const problem = specialistInputsProblem(u.inputs);
+      if (problem) throw new Error(`Work unit '${u.id}': ${problem}`);
     }
     for (const d of u.dependsOn ?? []) {
       if (!ids.has(d)) throw new Error(`Work unit '${u.id}' depends on unknown unit '${d}'`);
@@ -453,6 +486,9 @@ export function newOperation(
       ...(u.required === false ? { required: false } : {}),
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
       ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
+      // A specialist unit always records its inputs (possibly none): a unit with no `inputs` field predates input
+      // enforcement and is grandfathered by the executor.
+      ...(u.inputs !== undefined || isSpecialistRole(u.role) ? { inputs: redactForPersistence({ ...(u.inputs ?? {}) }) } : {}),
       status: "WAITING_ON_DEPENDENCY",
       reroutes: [],
       runs: 0,
