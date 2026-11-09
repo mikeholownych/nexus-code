@@ -82,7 +82,9 @@ const CONTROL_MARKER = /\[\s*(?:nexus|operator|system|assistant|user|tool|git st
  * as text: ChatML and Llama 3 specials (`<|im_start|>`, `<|eot_id|>`, any `<|...|>`), `<system>` tags and the Llama 2
  * `[INST]` / `<<SYS>>` markers.
  */
-const TEMPLATE_TOKEN = /<\|[^|<>\n]{0,64}\|>|<\s*\/?\s*system\s*>|\[\s*\/?\s*INST\s*\]|<<\s*\/?\s*SYS\s*>>/gi;
+// Each optional slash carries its own trailing whitespace (`\s*(?:\/\s*)?`), so a run of spaces has exactly one way to
+// match: no overlapping quantifiers, linear time on any input (CodeQL js/polynomial-redos).
+const TEMPLATE_TOKEN = /<\|[^|<>\n]{0,64}\|>|<\s*(?:\/\s*)?system\s*>|\[\s*(?:\/\s*)?INST\s*\]|<<\s*(?:\/\s*)?SYS\s*>>/gi;
 /** A skill's text as one safe line: control markers, template tokens and secrets removed, whitespace collapsed (a trusted skill is still untrusted text). */
 export function oneLine(text: string): string {
   return redactSecrets(text.replace(TEMPLATE_TOKEN, " ").replace(CONTROL_MARKER, " ")).replace(/\s+/g, " ").trim();

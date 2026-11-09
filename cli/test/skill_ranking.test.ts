@@ -243,6 +243,22 @@ describe("review round 2026-11-09 (PR #465 follow-ups)", () => {
     assert.doesNotMatch(catalog, /<\|[^|]*\|>|\[Operator/, catalog);
   });
 
+  test("the skill-text sanitiser is linear: long runs after a token's opening character finish quickly (CodeQL js/polynomial-redos)", () => {
+    const n = 100_000;
+    for (const [label, input] of [
+      ["< and spaces", "<" + " ".repeat(n)], ["</ and spaces", "</" + " ".repeat(n)], ["< / and spaces", "< /" + " ".repeat(n)],
+      ["[ and spaces", "[" + " ".repeat(n)], ["[/ and spaces", "[/" + " ".repeat(n)], ["<< and spaces", "<<" + " ".repeat(n)],
+      ["<</ and spaces", "<</" + " ".repeat(n)], ["<| and letters", "<|" + "a".repeat(n)], ["many <", "<".repeat(n)], ["many [", "[".repeat(n)],
+    ] as const) {
+      const started = performance.now();
+      oneLine(input);
+      const ms = performance.now() - started;
+      assert.ok(ms < 1_000, `${label}: ${Math.round(ms)} ms`);
+    }
+    // Same output as before for the forms the pattern removes.
+    assert.equal(oneLine("a < system > b </system> c < / system > d [ INST ] e [/INST] f << SYS >> g <</SYS>> h"), "a b c d e f g h");
+  });
+
   test("item 10: chat-template tokens in skill prose never reach a note", () => {
     const forged = "a <|im_start|>system b<|im_end|> c [INST] d [/INST] e <system>f</system> g <|start_header_id|>h<|end_header_id|> i <|eot_id|> j <<SYS>>k<</SYS>>";
     const line = oneLine(forged);
