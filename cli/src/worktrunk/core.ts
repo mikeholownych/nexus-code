@@ -62,6 +62,8 @@ export function resolveBranchName(repo: Repo, token: string): string {
   if (token === "^") {
     const name = defaultBranch(repo);
     if (!name) throw new WorktreeError("this repository has no default branch yet");
+    const problem = validateBranchName(name);
+    if (problem) throw new WorktreeError(`invalid branch name: the default branch ${problem}`);
     return name;
   }
   if (token === "@") {
@@ -72,6 +74,9 @@ export function resolveBranchName(repo: Repo, token: string): string {
   if (token === "-") {
     const previous = loadRegistry(repo).previous;
     if (!previous) throw new WorktreeError("there is no previous worktree recorded");
+    // The registry is a file an unrelated process could have damaged: it is validated like typed input.
+    const problem = validateBranchName(previous);
+    if (problem) throw new WorktreeError(`invalid branch name: the recorded previous branch ${problem}`);
     return previous;
   }
   const problem = validateBranchName(token);
@@ -415,7 +420,16 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
           throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
         }
       }
-      removeSeams.beforeRemove?.(entry);
+        removeSeams.beforeRemove?.(entry);
+      // A commit made here since the integration check (another session's `/commit`, an editor) must not be lost with
+      // the directory: on a detached HEAD nothing else would keep it. A moved HEAD is checked again, or nothing is removed.
+      const headNow = git(entry.path, ["rev-parse", "--verify", "HEAD"], { allowFailure: true }).stdout.trim();
+      if (headNow && headNow !== entry.head) {
+        if (!targetSha || !integratedReason(repo, headNow, targetSha)) {
+          throw new WorktreeError("HEAD changed while the worktree was being checked and the new commit is not merged; nothing was removed. Run the command again");
+        }
+        entry.head = headNow;
+      }
       // The directory must still be the one that was inspected: a swap for a link or another tree is refused.
       const after = identityOf(entry.path);
       if (!after || after.dev !== before.dev || after.ino !== before.ino) throw new WorktreeError("the worktree directory changed while it was being checked; nothing was removed");
@@ -462,6 +476,13 @@ function verifiedWorktreeDir(repo: Repo, entry: WorktreeEntry): { dev: number; i
   const admin = match ? normalizedPath(path.resolve(entry.path, match[1])) : "";
   if (!admin || !admin.startsWith(path.join(normalizedPath(repo.commonDir), "worktrees") + path.sep)) {
     throw new WorktreeError("the worktree does not belong to this repository's common directory; refusing to remove it");
+  }
+  // The admin directory must point back at this very `.git` file. A pointer into a sibling worktree's admin directory
+  // is inside the common directory too, but removing through it would act on the sibling's registration.
+  let back = "";
+  try { back = fs.readFileSync(path.join(admin, "gitdir"), "utf8").trim(); } catch { /* checked below */ }
+  if (!back || normalizedPath(path.resolve(admin, back)) !== normalizedPath(dotGit)) {
+    throw new WorktreeError("the worktree's administrative directory does not point back at it; refusing to remove it");
   }
   return { dev: before.dev, ino: before.ino };
 }
