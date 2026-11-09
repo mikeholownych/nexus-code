@@ -321,9 +321,12 @@ export class OperationRunner {
           }
           const snapshotOf = failedDeps[0];
           const snapshotRun = snapshotOf ? this.scheduler.unit(snapshotOf).failedRun!.at : undefined;
-          workspace = this.git.prepareUnit(unit, {
+          const prepared = this.git.prepareUnit(unit, {
             restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf, snapshotRun } : {}),
-          }).workspace;
+          });
+          workspace = prepared.workspace;
+          // The conversation (observations, tool results) is about the discarded candidate: start a new one.
+          if (prepared.snapshotReplaced) { delete unit.agentTaskId; delete unit.renderedInputsHash; }
           this.save();
         } catch (err: any) {
           return {

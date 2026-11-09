@@ -157,6 +157,8 @@ export interface UnitGitPreparation {
   branch: string;
   /** True when an existing worktree was reused (resume/retry). */
   reused: boolean;
+  /** True when a stale diagnostic snapshot was discarded for a fresh one: a conversation about the old one is void. */
+  snapshotReplaced?: boolean;
 }
 
 export class OperationGit {
@@ -253,7 +255,7 @@ export class OperationGit {
       branch: restartBranch, worktree, baseCommit,
       ...(snapshotOf ? { snapshotOf } : {}), ...(snapshotRun ? { snapshotRun } : {}),
     };
-    return { workspace: worktree, branch: restartBranch, reused: false };
+    return { workspace: worktree, branch: restartBranch, reused: false, ...(staleSnapshot && snapshot ? { snapshotReplaced: true } : {}) };
   }
 
   /**
