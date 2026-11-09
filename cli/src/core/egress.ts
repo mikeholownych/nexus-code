@@ -602,38 +602,6 @@ function findByIndexOf(text: string, values: string[]): Array<[start: number, in
  * an Aho-Corasick automaton. Transitions are keyed by node and by the index of the code unit in the values' own
  * alphabet, which keeps the keys small integers (fast Map lookups).
  */
-/** An open-addressing hash table from a non-negative integer key to a node number (-1 when absent). */
-class TransitionTable {
-  private keys: Float64Array;
-  private nodes: Int32Array;
-  private mask: number;
-
-  constructor(entries: number) {
-    let size = 16;
-    while (size < entries * 2) size *= 2;
-    this.keys = new Float64Array(size).fill(-1);
-    this.nodes = new Int32Array(size);
-    this.mask = size - 1;
-  }
-
-  private slot(key: number): number {
-    let slot = (Math.imul(key < 4294967296 ? key >>> 0 : key % 4294967296, 0x9e3779b1) >>> 0) & this.mask;
-    while (this.keys[slot] !== -1 && this.keys[slot] !== key) slot = (slot + 1) & this.mask;
-    return slot;
-  }
-
-  get(key: number): number {
-    const slot = this.slot(key);
-    return this.keys[slot] === key ? this.nodes[slot] : -1;
-  }
-
-  set(key: number, node: number): void {
-    const slot = this.slot(key);
-    this.keys[slot] = key;
-    this.nodes[slot] = node;
-  }
-}
-
 function findByAutomaton(text: string, values: string[]): Array<[start: number, index: number]> {
   const alphabet = new Int32Array(65536).fill(-1); // UTF-16 code unit -> symbol, -1 when no value uses it
   let radix = 0;
@@ -646,7 +614,7 @@ function findByAutomaton(text: string, values: string[]): Array<[start: number, 
   radix = Math.max(radix, 1);
   let capacity = 1;
   for (const value of values) capacity += value.length;
-  const next = new TransitionTable(capacity); // node * radix + symbol -> child node
+  const next = new Map<number, number>(); // node * radix + symbol -> child node
   const parent = new Int32Array(capacity);
   const symbolOf = new Int32Array(capacity);
   const depth = new Int32Array(capacity);
@@ -661,7 +629,7 @@ function findByAutomaton(text: string, values: string[]): Array<[start: number, 
     for (let i = 0; i < value.length; i++) {
       const symbol = alphabet[value.charCodeAt(i)];
       let child = next.get(node * radix + symbol);
-      if (child < 0) {
+      if (child === undefined) {
         child = nodes++;
         next.set(node * radix + symbol, child);
         parent[child] = node;
@@ -684,8 +652,8 @@ function findByAutomaton(text: string, values: string[]): Array<[start: number, 
     const symbol = symbolOf[node];
     if (parent[node] !== 0) {
       let link = fail[parent[node]];
-      while (link > 0 && next.get(link * radix + symbol) < 0) link = fail[link];
-      fail[node] = Math.max(next.get(link * radix + symbol), 0);
+      while (link > 0 && !next.has(link * radix + symbol)) link = fail[link];
+      fail[node] = next.get(link * radix + symbol) ?? 0;
     }
     dictionary[node] = output[fail[node]] >= 0 ? fail[node] : dictionary[fail[node]];
   }
@@ -698,8 +666,8 @@ function findByAutomaton(text: string, values: string[]): Array<[start: number, 
       node = 0;
       continue;
     }
-    while (node > 0 && next.get(node * radix + symbol) < 0) node = fail[node];
-    node = Math.max(next.get(node * radix + symbol), 0);
+    while (node > 0 && !next.has(node * radix + symbol)) node = fail[node];
+    node = next.get(node * radix + symbol) ?? 0;
     for (let found = output[node] >= 0 ? node : dictionary[node]; found > 0; found = dictionary[found]) {
       occurrences.push([i + 1 - depth[found], output[found]]);
     }
