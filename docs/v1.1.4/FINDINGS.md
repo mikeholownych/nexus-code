@@ -103,3 +103,9 @@ Every row is reproduced by the audit. Rows A1 to A3 and A5 to A9 restate earlier
 | PR #443 review | low | Missing tests: note with compaction, resume, redaction | FIXED. Tests `a resumed conversation keeps its note, re-sends it unchanged and adds no second one` and the compaction and redaction tests above |
 
 ## E. WP-1308 relevance-based skill injection, including the items carried from the PR #409 review
+
+## F. WP-1317 TUI audit follow-ups (docs/v1.1.4/TUI-AUDIT.md)
+
+| Source | Sev | Finding | Status |
+|---|---|---|---|
+| D-03 PR | low | REPL `/git` (`cli/src/repl.ts`) still runs plain `git status --short`, so a `.nexus/` left by an older version without its `.nexus/.gitignore` shows as `?? .nexus/` there until the next turn writes the ignore file. Header, `[Git Status]`, TUI `/git`, `/commit` and `/diff` already exclude it. | OPEN. Route REPL `/git` through `workspaceStatus()` in the D-04 follow-up (repl.ts was claimed) |
