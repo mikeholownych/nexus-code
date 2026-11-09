@@ -8,7 +8,7 @@ import { HunkStager } from "../stager.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "../tester.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { PolicyContext } from "../core/approval_policy.js";
-import { runWorktreeCommand, tokenizeWorktreeArgs } from "../worktrunk/command.js";
+import { isLegacyWorktreeArgs, runWorktreeCommand, tokenizeWorktreeArgs } from "../worktrunk/command.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 
 function git(cwd: string, args: string[]): string {
@@ -118,9 +118,8 @@ function worktree(ctx: SlashContext): SlashOutcome {
   const agent = ctx.host.app.getAgent();
   const active = agent.getActiveWorktree();
   const sub = ctx.args.trim().toLowerCase();
-  const first = sub.split(/\s+/)[0] ?? "";
   // Legacy forms act on the speculative worktree of this run; everything else is the named-worktree command set.
-  if (first && !["status", "merge", "discard"].includes(first)) {
+  if (!isLegacyWorktreeArgs(sub)) {
     const result = runWorktreeCommand(tokenizeWorktreeArgs(ctx.args), { cwd: workspace(ctx), readOnly: ctx.host.mode() === "read-only" });
     return reply("worktree", result.output, result.success);
   }

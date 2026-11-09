@@ -25,10 +25,17 @@ const SPECS: Record<string, Spec> = {
   path: { booleans: {}, values: {}, positional: "<branch|path>" },
 };
 
-const ALIASES: Record<string, string> = { ls: "list", status: "list", rm: "remove", sw: "switch" };
+const ALIASES: Record<string, string> = { ls: "list", rm: "remove", sw: "switch" };
 
 /** Subcommands that only read. Used by the slash gates and by `runWorktreeCommand`. */
 const READ_ONLY = new Set(["list", "path"]);
+
+/**
+ * The pre-WP-1310 `/worktree` forms, which act on the speculative worktree of the running session (`nexus run
+ * --worktree`): no argument or `status` shows it, `merge` and `discard` resolve it. They are never named-worktree
+ * subcommands (`status` is not an alias of `list`), so the CLI and both slash entry points agree.
+ */
+const LEGACY = new Set(["", "status", "merge", "discard"]);
 
 export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B]|remove <branch>... [--force] [--delete-unmerged]]";
 
@@ -39,10 +46,19 @@ function canonical(sub: string): string | undefined {
   return SPECS[name] ? name : undefined;
 }
 
+function firstWord(args: string): string {
+  return (args.trim().split(/\s+/)[0] ?? "").toLowerCase();
+}
+
+/** True when `args` (the text after `/worktree`) is one of the legacy speculative-worktree forms. */
+export function isLegacyWorktreeArgs(args: string): boolean {
+  return LEGACY.has(firstWord(args));
+}
+
 /** True when `args` (the text after `/worktree` or `nexus worktree`) only inspects. Empty means list. */
 export function isReadOnlyWorktreeArgs(args: string): boolean {
-  const sub = args.trim().split(/\s+/)[0] ?? "";
-  if (!sub) return true;
+  const sub = firstWord(args);
+  if (isLegacyWorktreeArgs(sub)) return sub === "" || sub === "status";
   const name = canonical(sub);
   return name !== undefined && READ_ONLY.has(name);
 }
