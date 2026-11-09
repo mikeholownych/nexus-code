@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runWorktreeCommand, isReadOnlyWorktreeArgs } from "../src/worktrunk/command.js";
-import { copyIgnored } from "../src/worktrunk/copy.js";
+import { copyIgnored, defaultCopyLimits } from "../src/worktrunk/copy.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
 import { replReadOnlyAllowed } from "../src/repl.js";
 
@@ -288,11 +288,10 @@ test("--force replaces a stale destination symlink while still refusing symlinke
   } finally { f.cleanup(); }
 });
 
-test("switch -c warns when the file cap stops the automatic copy", async () => {
+test("switch -c warns when the file cap stops the automatic copy", () => {
   const f = fixture();
-  const copyMod = await import("../src/worktrunk/copy.js") as any;
-  const original = { ...copyMod.defaultCopyLimits.current };
-  copyMod.defaultCopyLimits.current = { maxFiles: 1, maxBytes: 4 * 1024 ** 3 };
+  const original = { ...defaultCopyLimits.current };
+  defaultCopyLimits.current = { maxFiles: 1, maxBytes: 4 * 1024 ** 3 };
   try {
     const made = wt(f, f.repo, ["switch", "-c", "feat/cap"]);
     assert.equal(made.success, true, "the cap never fails the switch itself");
@@ -300,7 +299,7 @@ test("switch -c warns when the file cap stops the automatic copy", async () => {
     assert.match(made.output, /file limit|more than 1 files/i, made.output);
     assert.equal(fs.existsSync(path.join(dirOf(f, "feat-cap"), "target")), false, "nothing is written when the cap trips");
   } finally {
-    copyMod.defaultCopyLimits.current = original;
+    defaultCopyLimits.current = original;
     f.cleanup();
   }
 });
