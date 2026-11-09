@@ -89,6 +89,9 @@ test("pathological 800 KB inputs are redacted in linear time", () => {
     ["token soup", "A1/+".repeat(Math.ceil(size / 4))],
     ["delimiter soup", "a<`|&?".repeat(Math.ceil(size / 6))],
     ["one huge sk- run", `sk-${"aB3".repeat(Math.ceil(size / 3))}`],
+    // A checkpointed file is scanned whole; `/[.!]+$/` on this was quadratic (01M6VSBN5H912QJ5KTPF5CAEKR).
+    ["trailing punctuation run", `${".".repeat(size)}x`],
+    ["exclamation run", `${"!".repeat(size)}x`],
   ];
   try {
     for (const [name, input] of inputs) {
@@ -131,6 +134,32 @@ test("a key directly followed by / or - is redacted whole, with no tail", () => 
       assert.ok(!output.includes("Qx7Km2"), `${JSON.stringify(suffix)}: ${output}`);
       assert.ok(!output.includes("RtBq"), `${JSON.stringify(suffix)}: ${output}`);
     }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
+
+/**
+ * Two classifiers can match the same credential at the same place, one taking more of it than the other. The longest
+ * match wins and the shorter one is dropped: replacing the shorter one first would leave the rest of the credential in
+ * the text (01M6VSJWP30F54V0FG128H06DQ), and a second entry for the same credential is a second vault mapping.
+ */
+test("a credential matched at the same place by two classifiers is classified once, as the longest match", () => {
+  const boundary = new InformationFlowBoundary();
+  // The Bearer pattern stops at "~"; the Authorization pattern takes the whole token68 value.
+  const token = "AbCd/EfGhIjKlMnOp~QrStUvWxYz0123456789";
+  const header = boundary.classifyText(`Authorization: Bearer ${token} rejected`, []);
+  assert.deepEqual(header.map((s) => s.secret), [token]);
+  // The Bearer capture keeps the sentence's full stop; the entropy tokenizer trims it.
+  const sentence = boundary.classifyText("Connecting to provider with Bearer bAGOhOwLeY7Mabcdef123456789.\n", []);
+  assert.equal(sentence.length, 1, JSON.stringify(sentence));
+  assert.ok(sentence[0].secret.startsWith("bAGOhOwLeY7Mabcdef123456789"));
+  // The same two matches, in redaction: nothing of the token survives.
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    const output = redactDiagnosticForOutput(`Authorization: Bearer ${token} rejected`);
+    assert.ok(!output.includes("QrStUvWxYz") && !output.includes("AbCd/EfGh"), output);
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
   }

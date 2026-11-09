@@ -436,8 +436,8 @@ function isBase64KeyChar(code: number): boolean {
  * Every `sk-` inside a rejected run would be rejected too (its body is a subset), so nothing is rescanned and the cost
  * is linear however the input is crafted (`sk-sk-sk-...`). Keys without "/" or "+" keep their original patterns.
  */
-function scanBase64Keys(text: string): Array<{ secret: string; name: string }> {
-  const found: Array<{ secret: string; name: string }> = [];
+function scanBase64Keys(text: string): Array<{ start: number; end: number; name: string }> {
+  const found: Array<{ start: number; end: number; name: string }> = [];
   let from = 0;
   while (from < text.length) {
     const at = text.indexOf("sk-", from);
@@ -453,11 +453,61 @@ function scanBase64Keys(text: string): Array<{ secret: string; name: string }> {
     if (body.length >= 20 && /[0-9A-Z+]/.test(body)) {
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
-      found.push({ secret: text.slice(at, secretEnd), name: anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY" });
+      found.push({ start: at, end: secretEnd, name: anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY" });
     }
     from = Math.max(end, at + 1);
   }
   return found;
+}
+
+/** A classifier match with its place in the text. */
+interface PositionedMatch {
+  start: number;
+  end: number;
+  item: ClassifiedSecret;
+}
+
+/**
+ * Two classifiers can match one credential at the same place, one taking more of it than the other: the Bearer pattern
+ * stops at "~" where the Authorization pattern takes the whole token68 value; the Bearer capture keeps a sentence's
+ * full stop where the entropy tokenizer trims it; an entropy token spans `sk-…/models` where the key pattern stops at
+ * the "/". Redaction replaces by value, so the shorter value replaced first would leave the rest of the credential in
+ * the text, and one credential would be vaulted twice. Resolution: a match containing a more confident match is
+ * dropped (the token loses to the key it contains); then a match inside another is dropped, so the longest wins and,
+ * among equals, the first classifier. Matches that only partly overlap are both kept. The result keeps classifier
+ * order, one entry per distinct value.
+ */
+function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
+  const order = matches.map((_, i) => i).sort(
+    (a, b) => matches[a].start - matches[b].start || matches[b].end - matches[a].end || a - b
+  );
+  const dropped = new Set<number>();
+  let open: number[] = []; // earlier matches that reach the current position, so may contain the current one
+  for (const i of order) {
+    const { start, end, item } = matches[i];
+    open = open.filter((j) => matches[j].end >= start);
+    for (const j of open) {
+      if (matches[j].end >= end && matches[j].item.confidence < item.confidence) dropped.add(j);
+    }
+    open.push(i);
+  }
+  const kept = new Set<number>();
+  let coveredEnd = -1;
+  for (const i of order) {
+    // Sorted by start, so a match ending inside the one that set coveredEnd starts inside it too.
+    if (dropped.has(i) || matches[i].end <= coveredEnd) continue;
+    kept.add(i);
+    coveredEnd = matches[i].end;
+  }
+  const seen = new Set<string>();
+  const classified: ClassifiedSecret[] = [];
+  matches.forEach((match, i) => {
+    if (kept.has(i) && !seen.has(match.item.secret)) {
+      seen.add(match.item.secret);
+      classified.push(match.item);
+    }
+  });
+  return classified;
 }
 
 /**
@@ -619,8 +669,10 @@ export class InformationFlowBoundary {
   public classifyText(text: string, envSecrets: string[] = this.environmentSecrets()): ClassifiedSecret[] {
     if (!text || typeof text !== "string") return [];
 
-    const classified: ClassifiedSecret[] = [];
-    const seenSecrets = new Set<string>();
+    // Every match with its place in the text; overlaps are resolved once all classifiers have run.
+    const matches: PositionedMatch[] = [];
+    const isReference = (value: string): boolean =>
+      value.startsWith("[NEXUS_SEC_REF_") || value.startsWith("[SECRET_REF_") || value.startsWith("[REDACTED:");
 
     // 1. Explicit Operator Classifications (DATA-002: Category 1)
     const explicitList = [
@@ -629,64 +681,65 @@ export class InformationFlowBoundary {
     ];
 
     for (const explicit of explicitList) {
-      if (explicit && text.includes(explicit) && !seenSecrets.has(explicit)) {
-        seenSecrets.add(explicit);
-        classified.push({
-          secret: explicit,
-          classificationType: "OPERATOR_EXPLICIT",
-          classifierId: "operator:policy",
-          confidence: 1.0,
-          patternName: "EXPLICIT_SECRET",
+      if (!explicit) continue;
+      for (let at = text.indexOf(explicit); at >= 0; at = text.indexOf(explicit, at + explicit.length)) {
+        matches.push({
+          start: at,
+          end: at + explicit.length,
+          item: {
+            secret: explicit,
+            classificationType: "OPERATOR_EXPLICIT",
+            classifierId: "operator:policy",
+            confidence: 1.0,
+            patternName: "EXPLICIT_SECRET",
+          },
         });
       }
     }
 
     // 2. Deterministic High-Confidence Patterns (DATA-002: Category 2)
-    for (const { secret, name } of text.includes("sk-") ? scanBase64Keys(text) : []) {
-      if (!seenSecrets.has(secret)) {
-        seenSecrets.add(secret);
-        classified.push({
-          secret,
+    for (const { start, end, name } of text.includes("sk-") ? scanBase64Keys(text) : []) {
+      matches.push({
+        start,
+        end,
+        item: {
+          secret: text.slice(start, end),
           classificationType: "PATTERN_DETERMINISTIC",
           classifierId: `regex:${name.toLowerCase()}`,
           confidence: 0.95,
           patternName: name,
-        });
-      }
+        },
+      });
     }
     for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
-      const re = new RegExp(regex.source, regex.flags);
+      const re = new RegExp(regex.source, `${regex.flags}d`);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
-        const fullMatch = match[0];
         // If capture group exists (e.g. Bearer token), extract captured secret, else fullMatch
-        let secretVal = match[1] && typeof match[1] === "string" ? match[1] : fullMatch;
-        let trimEnd = secretVal.length;
-        while (trimEnd > 0) {
-          const ch = secretVal.charCodeAt(trimEnd - 1);
+        const span = match.indices?.[match[1] && typeof match[1] === "string" ? 1 : 0];
+        if (!span) continue;
+        const [start, matchEnd] = span;
+        let end = matchEnd;
+        while (end > start) {
+          const ch = text.charCodeAt(end - 1);
           if (ch === 34 || ch === 39 || ch === 59 || ch === 44) { // ", ', ;, ,
-            trimEnd--;
+            end--;
           } else {
             break;
           }
         }
-        if (trimEnd < secretVal.length) {
-          secretVal = secretVal.slice(0, trimEnd);
-        }
-        if (
-          secretVal.length >= 8 &&
-          !secretVal.startsWith("[NEXUS_SEC_REF_") &&
-          !secretVal.startsWith("[SECRET_REF_") &&
-          !secretVal.startsWith("[REDACTED:") &&
-          !seenSecrets.has(secretVal)
-        ) {
-          seenSecrets.add(secretVal);
-          classified.push({
-            secret: secretVal,
-            classificationType: "PATTERN_DETERMINISTIC",
-            classifierId: `regex:${name.toLowerCase()}`,
-            confidence: 0.95,
-            patternName: name,
+        const secretVal = text.slice(start, end);
+        if (secretVal.length >= 8 && !isReference(secretVal)) {
+          matches.push({
+            start,
+            end,
+            item: {
+              secret: secretVal,
+              classificationType: "PATTERN_DETERMINISTIC",
+              classifierId: `regex:${name.toLowerCase()}`,
+              confidence: 0.95,
+              patternName: name,
+            },
           });
         }
       }
@@ -699,19 +752,13 @@ export class InformationFlowBoundary {
     const contextualPatterns = /password|passwd|secret|api_key|apikey|access_token|private_key|auth_token/i.test(text)
       ? InformationFlowBoundary.CONTEXTUAL_PATTERNS : [];
     for (const { name, regex } of contextualPatterns) {
-      const re = new RegExp(regex.source, regex.flags);
+      const re = new RegExp(regex.source, `${regex.flags}d`);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
-        let secretVal = match[1];
-        if (!secretVal) continue;
-        secretVal = trimTrailingDelimiters(secretVal);
-        if (
-          secretVal.length >= 8 &&
-          !secretVal.startsWith("[NEXUS_SEC_REF_") &&
-          !secretVal.startsWith("[SECRET_REF_") &&
-          !secretVal.startsWith("[REDACTED:") &&
-          !seenSecrets.has(secretVal)
-        ) {
+        if (!match[1]) continue;
+        const secretVal = trimTrailingDelimiters(match[1]);
+        const start = match.indices?.[1]?.[0];
+        if (start !== undefined && secretVal.length >= 8 && !isReference(secretVal)) {
           // Avoid matching obvious non-secrets / placeholders
           const lower = secretVal.toLowerCase();
           if (
@@ -727,13 +774,16 @@ export class InformationFlowBoundary {
           ) {
             continue;
           }
-          seenSecrets.add(secretVal);
-          classified.push({
-            secret: secretVal,
-            classificationType: "CONTEXTUAL_HEURISTIC",
-            classifierId: `heuristic:${name.toLowerCase()}`,
-            confidence: 0.75,
-            patternName: name,
+          matches.push({
+            start,
+            end: start + secretVal.length,
+            item: {
+              secret: secretVal,
+              classificationType: "CONTEXTUAL_HEURISTIC",
+              classifierId: `heuristic:${name.toLowerCase()}`,
+              confidence: 0.75,
+              patternName: name,
+            },
           });
         }
       }
@@ -742,17 +792,21 @@ export class InformationFlowBoundary {
     // 4. High-Entropy Token Detection (DATA-002: Category 4 / DATA-004)
     // Check individual non-whitespace tokens length >= 20 with high Shannon entropy
     const originalTokens = new Set(text.split(/[\s,;'"()\[\]{}=:]+/));
-    const tokens = text.split(/[\s,;'"()\[\]{}=:&?<>`|]+/).map((token) => token.replace(/[.!]+$/, ""));
-    for (const tok of tokens) {
+    const tokenPattern = /[^\s,;'"()\[\]{}=:&?<>`|]+/g;
+    let token: RegExpExecArray | null;
+    while ((token = tokenPattern.exec(text)) !== null) {
+      const start = token.index;
+      // Trailing sentence punctuation is not part of the token. A backward scan: `/[.!]+$/` is quadratic on a long
+      // run of dots, and checkpoint scans pass whole files through here.
+      let end = start + token[0].length;
+      while (end > start && (text[end - 1] === "." || text[end - 1] === "!")) end--;
+      const tok = text.slice(start, end);
       if (
-        // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
-        (originalTokens.has(tok) || looksLikeCredentialToken(tok)) &&
         tok.length >= 20 &&
         tok.length <= 128 &&
-        !tok.startsWith("[NEXUS_SEC_REF_") &&
-        !tok.startsWith("[SECRET_REF_") &&
-        !tok.startsWith("[REDACTED:") &&
-        !seenSecrets.has(tok)
+        // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
+        (originalTokens.has(tok) || looksLikeCredentialToken(tok)) &&
+        !isReference(tok)
       ) {
         // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above). Nexus's own session
         // ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
@@ -762,20 +816,23 @@ export class InformationFlowBoundary {
           // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
           const threshold = tok.length < 32 ? 4.0 : 4.5;
           if (entropy >= threshold) {
-            seenSecrets.add(tok);
-            classified.push({
-              secret: tok,
-              classificationType: "UNCERTAIN",
-              classifierId: "entropy:shannon_token",
-              confidence: 0.55,
-              patternName: "HIGH_ENTROPY_STRING",
+            matches.push({
+              start,
+              end,
+              item: {
+                secret: tok,
+                classificationType: "UNCERTAIN",
+                classifierId: "entropy:shannon_token",
+                confidence: 0.55,
+                patternName: "HIGH_ENTROPY_STRING",
+              },
             });
           }
         }
       }
     }
 
-    return classified;
+    return resolveOverlaps(matches);
   }
 
   /**
