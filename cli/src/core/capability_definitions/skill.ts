@@ -18,7 +18,7 @@ export const activateSkillCapability: CanonicalCapability = {
         "properties": {
           "name": {
             "type": "string",
-            "description": "The name of the skill to activate (e.g. 'graphify')."
+            "description": "The skill to activate (e.g. 'graphify'). If no skill has exactly this name, it is used as a search and the best matching skills are listed."
           }
         },
         "required": [

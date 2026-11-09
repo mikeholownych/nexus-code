@@ -17,11 +17,11 @@ test("GBNF grammars are generated from exactly the four registered tool schemas"
   for (const name of GBNF_TOOL_ALLOWLIST) {
     const parameters = schemaFor(name).function.parameters;
     const grammar = grammars[name];
-    const generatedNames = [...grammar.matchAll(/^member_\d+ ::= ("(?:\\.|[^"\\])*") ws ":" ws /gm)]
-      .map((match) => JSON.parse(match[1]));
+    const generatedNames = [...grammar.matchAll(/^member-\d+ ::= ("(?:\\.|[^"\\])*") ws ":" ws /gm)]
+      .map((match) => JSON.parse(JSON.parse(match[1])));
     assert.deepEqual(generatedNames, Object.keys(parameters.properties), `${name} field names must match its registered schema`);
-    for (const match of grammar.matchAll(/^member_\d+ ::= ("(?:\\.|[^"\\])*") ws ":" ws (json-string|json-number|json-boolean)$/gm)) {
-      const field = JSON.parse(match[1]);
+    for (const match of grammar.matchAll(/^member-\d+ ::= ("(?:\\.|[^"\\])*") ws ":" ws (json-string|json-number|json-boolean)$/gm)) {
+      const field = JSON.parse(JSON.parse(match[1]));
       const type = parameters.properties[field as keyof typeof parameters.properties].type;
       const expectedRule = type === "string" ? "json-string" : type === "number" ? "json-number" : "json-boolean";
       assert.equal(match[2], expectedRule, `${name}.${field} value rule must match its registered schema`);
@@ -35,13 +35,13 @@ test("GBNF object states permit every property order without duplicate fields an
   const grammar = generateToolArgumentsGbnf("read_file");
   const names = Object.keys(tool.function.parameters.properties);
   const requiredMask = (tool.function.parameters.required ?? []).reduce((mask, name) => mask | (1 << names.indexOf(name)), 0);
-  const requiredTail = new RegExp(`^fields_tail_${requiredMask} ::= "" \\|`, "m");
-  const initialTail = /^fields_tail_0 ::= ""/m;
+  const requiredTail = new RegExp(`^fields-tail-${requiredMask} ::= "" \\|`, "m");
+  const initialTail = /^fields-tail-0 ::= ""/m;
 
   assert.match(grammar, requiredTail, "the state containing required path can terminate");
   assert.doesNotMatch(grammar, initialTail, "an object cannot terminate before required path is emitted");
-  assert.match(grammar, /"," ws member_0 fields_tail_/);
-  assert.match(grammar, /"," ws member_4 fields_tail_/);
+  assert.match(grammar, /"," ws member-0 fields-tail-/);
+  assert.match(grammar, /"," ws member-4 fields-tail-/);
 });
 
 test("GBNF generation fails closed for recursive or unsupported property schemas", () => {
@@ -73,4 +73,14 @@ test("GBNF generation rejects missing, duplicate, out-of-scope, and overlarge sc
   for (let i = 0; i < 9; i++) oversized.function.parameters.properties[`extra_${i}`] = { type: "string" };
   const registered = HARNESS_TOOLS.filter((tool) => tool.function.name !== "read_file").concat(oversized);
   assert.throws(() => generateToolArgumentsGbnf("read_file", registered), /8-property GBNF bound/);
+});
+
+test("compiled argument grammars accept valid argument objects and reject invalid ones (structural)", async () => {
+  const { gbnfAccepts } = await import("./helpers/gbnf_match.js");
+  const read = generateToolArgumentsGbnf("read_file");
+  assert.equal(gbnfAccepts(read, '{"path":"a.txt"}'), true);
+  assert.equal(gbnfAccepts(read, '{"start_line":2,"path":"a.txt"}'), true);
+  assert.equal(gbnfAccepts(read, '{"start_line":2}'), false, "a required property is mandatory");
+  assert.equal(gbnfAccepts(read, '{"path":"a.txt","path":"b"}'), false, "no duplicate properties");
+  assert.equal(gbnfAccepts(read, '{path:"a.txt"}'), false, "property names are quoted JSON strings");
 });

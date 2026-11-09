@@ -5,16 +5,16 @@
  * here runs a hook, a project-supplied command or a shell. Every Git call goes through git.ts.
  */
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { operatorConfigHome } from "../config.js";
 import { redactSecrets } from "../ui.js";
 import { ensureGitExclude } from "../core/git_exclude.js";
 import { identityOf, mkdirVerified } from "../safe_fs.js";
 import { readWorktreeSettings } from "./config.js";
 import { git, gitOut } from "./git.js";
 import { resolveWorktreePath, sanitizeBranch, validateBranchName, allowedRoot } from "./paths.js";
-import { readRegistry, updateRegistry, type Registry } from "./registry.js";
-import { currentEntry, defaultBranch, openRepo, refExists, resolveCommit, type Repo, type WorktreeEntry } from "./repo.js";
+import { readRegistry, updateRegistry, withWorktreeLock, type Registry } from "./registry.js";
+import { currentEntry, defaultBranch, openRepo, refExists, resolveBranchCommit, resolveCommit, type Repo, type WorktreeEntry } from "./repo.js";
 
 export interface WorktreeContext {
   cwd: string;
@@ -79,6 +79,17 @@ export function resolveBranchName(repo: Repo, token: string): string {
   return token;
 }
 
+/** `fs.realpathSync` for a path that may not exist: the real path of its deepest existing ancestor, then the missing tail. */
+function normalizedPath(file: string): string {
+  const absolute = path.resolve(file);
+  try {
+    return fs.realpathSync(absolute);
+  } catch {
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(normalizedPath(parent), path.basename(absolute));
+  }
+}
+
 function looksLikePath(token: string): boolean {
   return path.isAbsolute(token) || token === "." || token === ".." || token.startsWith("./") || token.startsWith("../") || token.startsWith("~");
 }
@@ -87,10 +98,13 @@ function looksLikePath(token: string): boolean {
 export function findEntry(repo: Repo, token: string, home: string): WorktreeEntry {
   if (looksLikePath(token)) {
     const expanded = token.startsWith("~") ? path.join(home, token.slice(1)) : path.resolve(repo.cwd, token);
-    let real: string;
-    try { real = fs.realpathSync(expanded); } catch { throw new WorktreeError(`no worktree at ${shownPath(home, expanded)}`); }
-    const hit = repo.entries.find((entry) => { try { return fs.realpathSync(entry.path) === real; } catch { return false; } });
-    if (!hit) throw new WorktreeError(`${shownPath(home, real)} is not a worktree of this repository`);
+    // A worktree whose directory was deleted by hand is still listed by Git (as prunable), so a path that no longer
+    // exists is matched on its normalised location: the real path of its deepest existing ancestor plus the rest.
+    const real = normalizedPath(expanded);
+    const hit = repo.entries.find((entry) => normalizedPath(entry.path) === real);
+    if (!hit) {
+      throw new WorktreeError(fs.existsSync(expanded) ? `${shownPath(home, real)} is not a worktree of this repository` : `no worktree at ${shownPath(home, expanded)}`);
+    }
     return hit;
   }
   const name = resolveBranchName(repo, token);
@@ -150,7 +164,12 @@ export function integratedReason(repo: Repo, head: string, target: string): Inte
   if (headTree && headTree === trees(target)) return "same-tree";
   const cherry = at(["cherry", target, head]);
   const lines = cherry.stdout.split("\n").filter(Boolean);
-  if (cherry.status === 0 && lines.length > 0 && lines.every((line) => line.startsWith("-"))) return "patch-id";
+  if (cherry.status === 0 && lines.length > 0 && lines.every((line) => line.startsWith("-"))) {
+    // `git cherry` skips merge commits, whose conflict resolutions can hold edits no ordinary commit carries. A
+    // merge left in target..head is unverified, so the patch-id match alone does not make the topic integrated.
+    const merges = at(["rev-list", "--merges", "--count", `${target}..${head}`]);
+    if (merges.status === 0 && merges.stdout.trim() === "0") return "patch-id";
+  }
   return null;
 }
 
@@ -184,7 +203,8 @@ export function switchWorktree(ctx: WorktreeContext, branchToken: string, option
   let baseSha = "";
   if (options.create) {
     baseName = options.base ? resolveBranchName(repo, options.base) : (defaultBranch(repo) ?? "HEAD");
-    const sha = resolveCommit(repo, baseName);
+    // A local branch of that name wins; only when there is none may --base name another commit (a tag, a sha).
+    const sha = resolveBranchCommit(repo, baseName) ?? resolveCommit(repo, baseName);
     if (!sha) throw new WorktreeError(`base ${shownBranch(baseName)} does not name a commit`);
     baseSha = sha;
   }
@@ -207,26 +227,28 @@ export function switchWorktree(ctx: WorktreeContext, branchToken: string, option
     fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
   }
 
-  const args = options.create
-    ? ["worktree", "add", "-b", name, "--end-of-options", target, baseSha]
-    : ["worktree", "add", "--end-of-options", target, name];
-  git(repo.cwd, args);
+  return withWorktreeLock(repo.commonDir, () => {
+    const args = options.create
+      ? ["worktree", "add", "-b", name, "--end-of-options", target, baseSha]
+      : ["worktree", "add", "--end-of-options", target, name];
+    git(repo.cwd, args);
 
-  const root = allowedRoot(repo.repoPath, settings.layout);
-  if (!settings.allowOutside) {
-    const real = fs.realpathSync(target);
-    const realRoot = fs.realpathSync(root);
-    if (real !== path.join(realRoot, path.relative(root, target))) {
-      throw new WorktreeError("the new worktree resolved outside its allowed directory; inspect it with `git worktree list` before using it");
+    const root = allowedRoot(repo.repoPath, settings.layout);
+    if (!settings.allowOutside) {
+      const real = fs.realpathSync(target);
+      const realRoot = fs.realpathSync(root);
+      if (real !== path.join(realRoot, path.relative(root, target))) {
+        throw new WorktreeError("the new worktree resolved outside its allowed directory; inspect it with `git worktree list` before using it");
+      }
     }
-  }
 
-  updateRegistry(repo.commonDir, (reg) => {
-    reg.worktrees = reg.worktrees.filter((item) => item.path !== target && item.branch !== name);
-    reg.worktrees.push({ branch: name, path: target, base: options.create ? baseName : name, createdAt: new Date().toISOString() });
-    if (here?.branch && here.branch !== name) reg.previous = here.branch;
+    updateRegistry(repo.commonDir, (reg) => {
+      reg.worktrees = reg.worktrees.filter((item) => item.path !== target && item.branch !== name);
+      reg.worktrees.push({ branch: name, path: target, base: options.create ? baseName : name, createdAt: new Date().toISOString() });
+      if (here?.branch && here.branch !== name) reg.previous = here.branch;
+    });
+    return { success: true, output: `Created worktree for ${shownBranch(name)} at ${shownPath(ctx.home, target)}`, data: { branch: name, path: target, created: true } };
   });
-  return { success: true, output: `Created worktree for ${shownBranch(name)} at ${shownPath(ctx.home, target)}`, data: { branch: name, path: target, created: true } };
 }
 
 function rememberPrevious(repo: Repo, from: string | null | undefined, to: string): void {
@@ -271,7 +293,7 @@ export function listWorktrees(ctx: WorktreeContext, options: { limit?: number; j
   const here = currentEntry(repo);
   const limit = Math.max(1, options.limit ?? DEFAULT_LIMIT);
   const target = defaultBranch(repo);
-  const targetSha = target ? resolveCommit(repo, target) : undefined;
+  const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
 
   const rank = (entry: WorktreeEntry) => (entry.isMain ? 0 : entry === here ? 1 : registry.worktrees.some((r) => r.path === entry.path) ? 2 : 3);
   const ordered = [...repo.entries].sort((a, b) => rank(a) - rank(b));
@@ -280,7 +302,7 @@ export function listWorktrees(ctx: WorktreeContext, options: { limit?: number; j
   const now = Date.now() / 1000;
   const items: ListItem[] = shown.map((entry) => {
     const item: ListItem = {
-      branch: entry.branch ? shownBranch(entry.branch) : null, path: entry.path, head: entry.head, main: entry.isMain, current: entry === here,
+      branch: entry.branch, path: entry.path, head: entry.head, main: entry.isMain, current: entry === here,
       detached: entry.detached, locked: entry.locked, prunable: entry.prunable, kind: kindOf(repo, entry, registry),
       registered: registry.worktrees.some((r) => r.path === entry.path), dirty: null, ahead: null, behind: null,
       integrated: null, ageSeconds: null, agent: null,
@@ -302,10 +324,12 @@ export function listWorktrees(ctx: WorktreeContext, options: { limit?: number; j
     return item;
   });
 
+  // Machine output (`--json`, like `path`) carries branch names and paths as they are; only the human-readable
+  // rendering below redacts them (docs/WORKTREES.md, "Safety").
   const data = {
     schema: LIST_SCHEMA,
     repo: { name: repo.repoName, path: repo.repoPath },
-    defaultBranch: target ? shownBranch(target) : null,
+    defaultBranch: target ?? null,
     total: repo.entries.length,
     truncated: repo.entries.length > shown.length,
     ...(warning ? { warning } : {}),
@@ -319,7 +343,7 @@ export function listWorktrees(ctx: WorktreeContext, options: { limit?: number; j
     const track = item.ahead === null ? "" : `↑${item.ahead}↓${item.behind}`;
     const state = item.integrated ? `integrated(${item.integrated})` : "";
     const age = item.ageSeconds === null ? "" : humanAge(item.ageSeconds);
-    return [mark, item.branch ?? "(detached)", item.kind, dirty, track, state, age, shownPath(ctx.home, item.path), item.error ? `[${item.error}]` : ""].filter((part, i) => i < 2 || part !== "").join("  ");
+    return [mark, item.branch ? shownBranch(item.branch) : "(detached)", item.kind, dirty, track, state, age, shownPath(ctx.home, item.path), item.error ? `[${item.error}]` : ""].filter((part, i) => i < 2 || part !== "").join("  ");
   });
   if (data.truncated) lines.push(`... ${repo.entries.length - shown.length} more worktrees not shown (--limit ${repo.entries.length} to show all)`);
   if (warning) lines.push(`warning: ${warning}`);
@@ -334,7 +358,15 @@ function humanAge(seconds: number): string {
 
 // ---- remove ---------------------------------------------------------------------------------------------------
 
-export interface RemoveOptions { force?: boolean; deleteUnmerged?: boolean }
+export interface RemoveOptions {
+  force?: boolean;
+  deleteUnmerged?: boolean;
+  /** The branch the work must be integrated into (default: the repository's default branch). `merge` passes its target. */
+  target?: string;
+}
+
+/** Test seam: runs after every refusal check and immediately before the worktree is removed. Not a hook point. */
+export const removeSeams: { beforeRemove?: (entry: WorktreeEntry) => void; beforeBranchDeletion?: (entry: WorktreeEntry) => void } = {};
 
 export function removeWorktrees(ctx: WorktreeContext, tokens: string[], options: RemoveOptions = {}): CommandResult {
   if (tokens.length === 0) throw new WorktreeError("usage: worktree remove <branch|path>... [--force] [--delete-unmerged]");
@@ -365,39 +397,56 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
   }
 
   const dropFromRegistry = () => updateRegistry(repo.commonDir, (reg) => { reg.worktrees = reg.worktrees.filter((item) => item.path !== entry.path); });
-  const target = defaultBranch(repo);
-  const targetSha = target ? resolveCommit(repo, target) : undefined;
+  const target = options.target ?? defaultBranch(repo);
+  const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
   const integrated = entry.head && targetSha ? integratedReason(repo, entry.head, targetSha) : null;
   if (!integrated && !options.deleteUnmerged) {
     throw new WorktreeError(`${entry.branch ? "branch" : "HEAD"} is not merged into ${target ? shownBranch(target) : "the default branch"}; merge it, or pass --delete-unmerged to discard its commits`);
   }
 
-  if (entry.prunable) {
-    git(repo.cwd, ["worktree", "prune"]);
-  } else {
-    const before = verifiedWorktreeDir(repo, entry);
-    if (!options.force) {
-      const dirty = statusOf(entry.path, { ignored: true });
-      if (dirty.total + dirty.ignored > 0) {
-        throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
+  // The lock is taken before anything is deleted and held through the branch and registry bookkeeping, so a
+  // concurrent `switch` (which holds it across its checkout) either finishes first or waits; a lock that cannot be
+  // had fails here with the worktree, branch and registry untouched.
+  let branchNote = "";
+  withWorktreeLock(repo.commonDir, () => {
+    if (entry.prunable) {
+      // Only this registration goes: a bare `worktree prune` would drop every stale worktree and leave their
+      // registry entries behind. `remove --force` accepts a missing directory and touches one admin entry.
+      git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
+    } else {
+      const before = verifiedWorktreeDir(repo, entry);
+      if (!options.force) {
+        const dirty = statusOf(entry.path, { ignored: true });
+        if (dirty.total + dirty.ignored > 0) {
+          throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
+        }
+      }
+      removeSeams.beforeRemove?.(entry);
+      // The directory must still be the one that was inspected: a swap for a link or another tree is refused.
+      const after = identityOf(entry.path);
+      if (!after || after.dev !== before.dev || after.ino !== before.ino) throw new WorktreeError("the worktree directory changed while it was being checked; nothing was removed");
+      git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
+    }
+
+    if (entry.branch && entry.branch !== target) {
+      removeSeams.beforeBranchDeletion?.(entry);
+      const stillCheckedOut = listAfter(repo).some((other) => other.branch === entry.branch);
+      if (!stillCheckedOut) {
+        // Only the commit that passed the integration check may be deleted. A commit made by another session in the
+        // meantime (its `/commit`, for example) moves the branch, and `branch -D` would make it unreachable.
+        branchNote = deleteBranchAt(repo, entry.branch, entry.head) ? " and deleted its branch" : "; its branch moved after it was checked and was kept";
       }
     }
-    // The directory must still be the one that was inspected: a swap for a link or another tree is refused.
-    const after = identityOf(entry.path);
-    if (!after || after.dev !== before.dev || after.ino !== before.ino) throw new WorktreeError("the worktree directory changed while it was being checked; nothing was removed");
-    git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
-  }
-
-  let branchNote = "";
-  if (entry.branch && entry.branch !== target) {
-    const stillCheckedOut = listAfter(repo).some((other) => other.branch === entry.branch);
-    if (!stillCheckedOut) {
-      git(repo.cwd, ["branch", "-D", "--end-of-options", entry.branch]);
-      branchNote = " and deleted its branch";
-    }
-  }
-  dropFromRegistry();
+    dropFromRegistry();
+  });
   return `Removed worktree ${label}${branchNote}`;
+}
+
+/** Delete `refs/heads/<branch>` only while it still points at `expectedSha` (Git's compare-and-delete). */
+function deleteBranchAt(repo: Repo, branch: string, expectedSha: string): boolean {
+  // The all-zero id tells update-ref to skip the comparison, so it is never accepted as an expected value.
+  if (!/^[0-9a-f]{40,64}$/.test(expectedSha) || /^0+$/.test(expectedSha)) return false;
+  return git(repo.cwd, ["update-ref", "-d", "--end-of-options", `refs/heads/${branch}`, expectedSha], { allowFailure: true }).status === 0;
 }
 
 function listAfter(repo: Repo): WorktreeEntry[] {
@@ -413,11 +462,17 @@ function verifiedWorktreeDir(repo: Repo, entry: WorktreeEntry): { dev: number; i
   const dotStat = fs.lstatSync(dotGit);
   if (!dotStat.isFile()) throw new WorktreeError("the worktree has no .git file; refusing to remove it");
   const pointer = fs.readFileSync(dotGit, "utf8").trim();
-  const expected = `gitdir: ${path.join(repo.commonDir, "worktrees")}${path.sep}`;
-  if (!pointer.startsWith(expected)) throw new WorktreeError("the worktree does not belong to this repository's common directory; refusing to remove it");
+  // The pointer may be absolute or, with `worktree.useRelativePaths`, relative to the worktree directory. Either way
+  // its canonical location must be an entry under this repository's common directory.
+  const match = /^gitdir: (.+)$/.exec(pointer);
+  const admin = match ? normalizedPath(path.resolve(entry.path, match[1])) : "";
+  if (!admin || !admin.startsWith(path.join(normalizedPath(repo.commonDir), "worktrees") + path.sep)) {
+    throw new WorktreeError("the worktree does not belong to this repository's common directory; refusing to remove it");
+  }
   return { dev: before.dev, ino: before.ino };
 }
 
+/** The operator home: the same one config.ts reads policy from, so worktree settings never come from another file. */
 export function homeDir(): string {
-  return process.env.HOME || os.homedir();
+  return operatorConfigHome();
 }

@@ -22,6 +22,8 @@ import { observeT4Fixture } from "./t4_fixtures.mjs";
 import { assertDatasetTaskDigest, loadDataset } from "./dataset.mjs";
 import { createAgentLaunchPayload, serializeAgentLaunchPayload } from "./runner_api.mjs";
 import { assertTaskSnapshotDigest } from "./runner_integrity.mjs";
+import { runPostAgentPhase } from "./check_phase.mjs";
+import { EVAL_RUNTIME_FILES } from "./runtime_files.mjs";
 import { captureWorkspaceSnapshot, needsEvaluatorConfigurationBaseline, runCodeEvaluators } from "./evaluators/code/runner.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -296,12 +298,16 @@ async function runOnce(task, run) {
       cloneWorkspace(hiddenWs, regressionWs);
     }
     const refused = (check) => ({ pass: false, status: null, timedOut: false, overflow: false, output: `hardened check refused: ${hardening.configChanges.join("; ")}`, refused: true, resources: null, containmentProblem: null, check });
-    const hidden = hardening?.configChanges.length ? refused("hidden") : await runCheck(task, hiddenWs, task.hidden, true, { readOnlyHidden: hardened, protectedCorpusPaths: protectedCorpusPathsForRun() });
-    const regression = task.regression ? (hardening?.configChanges.length ? refused("regression") : await runCheck(task, regressionWs, task.regression, false)) : null;
+    // Evaluators first (eval/check_phase.mjs): in a non-hardened run the hidden and regression checks stage tests and write
+    // caches into the candidate workspace, which diff_boundary and the build/typecheck copy would count as the agent's work.
+    const { evaluators, hidden, regression } = await runPostAgentPhase({
+      evaluators: () => runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline, resources: config.resources ?? null, scratchRoot: scratch }),
+      hidden: async () => hardening?.configChanges.length ? refused("hidden") : await runCheck(task, hiddenWs, task.hidden, true, { readOnlyHidden: hardened, protectedCorpusPaths: protectedCorpusPathsForRun() }),
+      regression: async () => task.regression ? (hardening?.configChanges.length ? refused("regression") : await runCheck(task, regressionWs, task.regression, false)) : null,
+    });
     for (const [phase, check] of [["hidden", hidden], ["regression", regression]]) {
       if (check?.containmentProblem) throw new Error(`${phase} check containment failed: ${check.containmentProblem}`);
     }
-    const evaluators = await runCodeEvaluators({ task, candidateWorkspace: ws, hiddenWorkspace: hiddenWs, typecheckBaselineWorkspace, agent, baselineSnapshot: evaluatorBaseline });
     const turn = agent.json?.turn ?? null;
     // Nexus reports a structured outcome; for the other agents a clean exit within the budget is their completion claim.
     const claimedComplete = turn
@@ -742,17 +748,7 @@ function harnessIdentity() {
   const git = (...a) => spawnSync("git", a, { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const commit = git("rev-parse", "HEAD");
   const dirty = Boolean(git("status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude)cli/dist"));
-  const sourceFiles = [
-    "eval/run.mjs", "eval/dataset.mjs", "eval/runner_api.mjs", "eval/runner_integrity.mjs",
-    "eval/validate.mjs", "eval/t4_fixtures.mjs", "eval/isolate.mjs", "eval/hide_oracle.cjs",
-    "eval/hide_oracle.py", "eval/unlink_then_exec.sh", "eval/agent_sandbox.mjs", "eval/model_proxy.mjs",
-    "eval/score.mjs", "eval/infra.mjs", "eval/workspace.mjs", "eval/resources.mjs",
-    "eval/cgroup_supervisor.mjs", "eval/t3.mjs", "eval/hardened_check.mjs",
-    "eval/evaluators/code/index.mjs", "eval/evaluators/code/syntax_ast.mjs", "eval/evaluators/code/build.mjs",
-    "eval/evaluators/code/typecheck_clean.mjs", "eval/evaluators/code/diff_boundary.mjs",
-    "eval/evaluators/code/json_repair_rate.mjs", "eval/evaluators/code/parsers.mjs",
-    "eval/evaluators/code/command.mjs", "eval/evaluators/code/runner.mjs", "eval/evaluators/code/result.mjs",
-  ];
+  const sourceFiles = EVAL_RUNTIME_FILES;
   const sourceDigests = sourceFiles.map((file) => ({ file, sha256: createHash("sha256").update(fs.readFileSync(path.join(ROOT, file))).digest("hex") }));
   const sourceSha256 = createHash("sha256").update(JSON.stringify(sourceDigests)).digest("hex");
   return { commit, dirty, sourceDigests, sourceSha256, string: `${commit.slice(0, 12)}${dirty ? "-dirty" : ""}` };
