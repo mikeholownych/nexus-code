@@ -49,7 +49,7 @@ branch name, so `foo` and `foo/bar` never collide (Git cannot hold both as refs)
 `git for-each-ref refs/nexus-backup`. A submodule is backed up as its recorded commit only, so a worktree whose submodule holds a commit that is on no remote branch is kept after the merge (its objects live in the worktree and would go with it); push it, then run `remove`. `--no-squash` with merge commits in the branch and a moved target is refused, because a plain rebase would drop edits only the merge commits carry. The source branch is merged as `refs/heads/<branch>`, never as a same-named tag. A rebase conflict stops the
 command and leaves the rebase open in the worktree. Ignored leftovers (build caches) are deleted with the worktree after
 a successful merge, but never while tracked, staged, untracked or submodule changes remain: then the worktree is kept
-and the command says so.
+and the command says so. When `merge` removes the worktree an interactive session (`/worktree merge ^` in the REPL or the TUI) is standing in, the session moves to the worktree of the branch it was merged into and its checkpoints and session saves keep working.
 
 `prune` removes worktrees whose HEAD is already integrated into the default branch (same commit, ancestor, empty diff,
 same tree or patch-id equivalent), that have no changes or untracked files, and that were last touched longer ago than
