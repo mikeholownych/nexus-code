@@ -320,7 +320,10 @@ export class OperationRunner {
             };
           }
           const snapshotOf = failedDeps[0];
-          workspace = this.git.prepareUnit(unit, { restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf } : {}) }).workspace;
+          const snapshotRun = snapshotOf ? this.scheduler.unit(snapshotOf).failedRun!.at : undefined;
+          workspace = this.git.prepareUnit(unit, {
+            restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf, snapshotRun } : {}),
+          }).workspace;
           this.save();
         } catch (err: any) {
           return {

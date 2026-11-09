@@ -23,7 +23,8 @@
  *                              is not run again if that dependency is later retried and fails a second time; the
  *                              operator adds or retries a debugger unit for the new failure. A debugger works on
  *                              exactly one failed candidate: with two or more failed dependencies it is BLOCKED
- *                              before any checkout is made.
+ *                              before any checkout is made. Its snapshot is bound to that dependency's failed run
+ *                              (`failedRun.at`); a retry after a newer failure discards the old checkout.
  *   unit BLOCKED               no safe autonomous transition: terminal execution failure, unknown execution with
  *                              its replay budget spent, an interrupted tool, or no qualified resource. Carries one
  *                              structured decision; only an applied operator decision moves it on.
@@ -270,6 +271,8 @@ export interface OperationGitUnit {
    * on a failed verifier run). That candidate is unverified, so this branch is diagnostic and never integrated.
    */
   snapshotOf?: string;
+  /** The `failedRun.at` of the dependency run this snapshot was taken from; a newer failure takes a fresh snapshot. */
+  snapshotRun?: string;
 }
 
 /** Opt-in Git isolation for an operation (`spec.git.isolate`). */

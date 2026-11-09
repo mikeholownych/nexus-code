@@ -193,12 +193,16 @@ export class OperationGit {
    * Give the unit a worktree branched from the integration tip. A recorded worktree is reused so a retry or a resume
    * continues on the same files; an operator restart throws the old worktree and branch away first.
    */
-  prepareUnit(unit: WorkUnit, options: { restart?: boolean; snapshotOf?: string } = {}): UnitGitPreparation {
+  prepareUnit(unit: WorkUnit, options: { restart?: boolean; snapshotOf?: string; snapshotRun?: string } = {}): UnitGitPreparation {
     const recorded = this.state.units[unit.id];
     const branch = recorded?.branch ?? `nexus/op-${this.plan.key}/${gitSlug(unit.id)}`;
     const worktree = recorded?.worktree ?? path.join(this.plan.baseDir, "units", gitSlug(unit.id));
 
-    const restart = Boolean(options.restart && recorded);
+    // A snapshot belongs to one failed run of its dependency. When the dependency has failed again since, the old
+    // checkout shows a candidate that no longer exists: discard it (it is diagnostic and never integrated).
+    const staleSnapshot = Boolean(recorded && options.snapshotOf
+      && (recorded.snapshotOf !== options.snapshotOf || recorded.snapshotRun !== options.snapshotRun));
+    const restart = Boolean((options.restart || staleSnapshot) && recorded);
     let restartBranch = branch;
     if (restart) {
       // The worktree may be gone while its registration survives; prune before deleting the branch, or `branch -D`
@@ -243,8 +247,12 @@ export class OperationGit {
       ? gitResult(this.plan.repoRoot, ["merge-base", this.plan.integrationBranch, restartBranch]).stdout.trim() || this.currentTip()
       : startPoint;
     const snapshotOf = snapshot ? options.snapshotOf : branchExists ? recorded?.snapshotOf : undefined;
+    const snapshotRun = snapshot ? options.snapshotRun : branchExists ? recorded?.snapshotRun : undefined;
     // Only now is the old record replaced; a failed add leaves the previous entry intact so a retry can restart.
-    this.state.units[unit.id] = { branch: restartBranch, worktree, baseCommit, ...(snapshotOf ? { snapshotOf } : {}) };
+    this.state.units[unit.id] = {
+      branch: restartBranch, worktree, baseCommit,
+      ...(snapshotOf ? { snapshotOf } : {}), ...(snapshotRun ? { snapshotRun } : {}),
+    };
     return { workspace: worktree, branch: restartBranch, reused: false };
   }
 
