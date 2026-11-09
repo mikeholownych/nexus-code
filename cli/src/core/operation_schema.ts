@@ -19,6 +19,7 @@
  * `.pre-migration-v1` copy of the whole record before the first v2 write (see `OperationStore.save`).
  */
 import type { DurableOperationState, OperationPolicy, WorkUnit } from "./operation.js";
+import { specialistInputsProblem } from "./specialist_profiles.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
 export const CURRENT_OPERATION_SCHEMA_VERSION = 2;
@@ -109,6 +110,10 @@ export function validateOperationState(state: DurableOperationState): void {
     ids.add(unit.id);
     if (unit.contextBudget !== undefined && (!Number.isInteger(unit.contextBudget) || unit.contextBudget <= 0)) {
       throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}' has an invalid contextBudget (${String(unit.contextBudget)}); expected a positive integer`);
+    }
+    if (unit.inputs !== undefined) {
+      const problem = specialistInputsProblem(unit.inputs);
+      if (problem) throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': ${problem}`);
     }
   }
   for (const unit of state.units) {

@@ -5,6 +5,7 @@ import { highlightDiff, highlightCode } from "./syntax.js";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { visibleControls } from "./file_diff.js";
 import { isNexusDirPermissive } from "./core/durable_file.js";
+import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 
 export function redactSecrets(text: string): string {
   if (!text) return text;
@@ -16,6 +17,11 @@ export function redactSecrets(text: string): string {
       result = redacted;
     }
   } catch {}
+  return redactSecretPatterns(result);
+}
+
+/** The literal-pattern half of redactSecrets (no classifier call): for text the classifier has already been run over. */
+export function redactSecretPatterns(result: string): string {
   return result
     .replace(/Bearer\s+[A-Za-z0-9_\-\.]{15,}/gi, "Bearer [REDACTED_TOKEN]")
     .replace(/((?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[REDACTED]")
@@ -27,6 +33,12 @@ export function redactSecrets(text: string): string {
 /** Text safe to write to a terminal: secrets redacted, then every terminal control/bidi character made visible. */
 export function safeTerminal(text: string): string {
   return visibleControls(redactSecrets(text));
+}
+
+/** The one operator-facing diagnostic formatter: an Error or any value, redacted (fail-closed) and made terminal-safe. */
+export function formatDiagnosticForOutput(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return safeTerminal(redactDiagnosticForOutput(message));
 }
 
 export class TerminalUI {

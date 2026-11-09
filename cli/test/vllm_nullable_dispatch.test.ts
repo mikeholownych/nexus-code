@@ -121,3 +121,28 @@ test("unknown special-name tools do not enter nullable argument normalization", 
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test("nullable optional arguments are normalised for repaired and object-form calls too (WP-1303)", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-nullable-paths-"));
+  const agent = new AutonomousAgent({
+    endpoint: "http://127.0.0.1:9/v1", model: "test-model", maxSteps: 1, temperature: 0, workspace,
+    shell: "bash", approvalMode: "auto", fullAccess: true,
+  } as any);
+  const bridge = (agent as any).bridge;
+  const seen: Array<Record<string, unknown>> = [];
+  const executeTool = bridge.executeTool.bind(bridge);
+  bridge.executeTool = (tool: string, args: Record<string, unknown>) => { seen.push({ ...args }); return executeTool(tool, args); };
+  try {
+    fs.writeFileSync(path.join(workspace, "r.txt"), "x\n");
+    const repaired = await (agent as any).dispatchToolCall(
+      { id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"r.txt","start_line":null,}' } }, 1, "agent");
+    assert.equal(repaired.receipt.success, true, repaired.receipt.error);
+    const objectForm = await (agent as any).dispatchToolCall(
+      { id: "c2", type: "function", function: { name: "read_file", arguments: { path: "r.txt", end_line: null } } }, 2, "agent");
+    assert.equal(objectForm.receipt.success, true, objectForm.receipt.error);
+    assert.deepEqual(seen, [{ path: "r.txt" }, { path: "r.txt" }]);
+  } finally {
+    bridge.shutdown();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});

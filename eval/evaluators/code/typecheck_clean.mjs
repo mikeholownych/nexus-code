@@ -2,15 +2,93 @@ import path from "node:path";
 import { runArgv } from "./command.mjs";
 import { evaluatorResult } from "./result.mjs";
 
-function diagnosticLines(result) {
-  return `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+// Colored (`--pretty`) output: ANSI escapes would hide the diagnostic code from the recogniser.
+const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+// Source excerpts and squiggles that --pretty and rustc print under a diagnostic; they carry line numbers, not messages.
+const CODE_FRAME = /^(?:\d+\s.*|[|\s~^]+)$/;
+// Rustc's location and note lines belong to the frame but are not gutters.
+const FRAME_CONTINUATION = /^(?:-->|=)\s/;
+// Whole-line summaries restate the count (and, for tsc, the first location); the diagnostics above them are what is
+// compared. Coded diagnostics are recognised first, so a file named like a summary cannot hide one.
+const SUMMARY = /^(?:Found \d+ errors? in [^\n]*|Found \d+ errors?\.?|Errors\s+Files|error: aborting due to \d+ previous errors?(?:; [^\n]*)?)$/i;
+// A configuration error means the checker did not check the project, whatever the baseline printed. Only the
+// diagnostic's own (first) code counts: text inside a message can quote any code.
+const CHECKER_NOT_RUN_CODES = new Set(["TS5057", "TS5058", "TS5081", "TS5083", "TS5012", "TS18003", "TS6053"]);
+// A leading location names a file: an optional Windows drive, then a path (spaces and parentheses allowed, as in
+// `app/(auth)/page.tsx`, but no colon) that ends in an extension or is a well-known extension-less build file such as
+// `Makefile`. Requiring that keeps `error[E0080]: ... step:1: failed` and `error: cannot open 'a.ts:12: x'` from being read
+// as locations; the location delimiter after it is what ends the path.
+const BUILD_FILES = "Makefile|makefile|GNUmakefile|Dockerfile|Rakefile|Gemfile|Jenkinsfile|Vagrantfile|justfile|Procfile|BUILD|WORKSPACE";
+const PATH = String.raw`(?:[A-Za-z]:[\\/])?(?:[^:\n]+?\.[A-Za-z0-9_+-]+|(?:[^:\n]*[\\/])?(?:${BUILD_FILES}))`;
+const LOCATION_SHAPES = [
+  [new RegExp(String.raw`^(${PATH})\(\d+,\d+\):`), "$1(L,C):"],
+  [new RegExp(String.raw`^(${PATH}):\d+:\d+ - `), "$1:L:C - "],
+  [new RegExp(String.raw`^--> (${PATH}):\d+:\d+$`), "--> $1:L:C"],
+  [new RegExp(String.raw`^(${PATH}):\d+:\d+:(?=\s)`), "$1:L:C:"],
+  [new RegExp(String.raw`^(${PATH}):\d+:(?=\s)`), "$1:L:"],
+];
+
+/** The leading location of a line (the shape whose match ends first), or null. */
+function leadingLocation(line) {
+  let best = null;
+  for (const [shape, replacement] of LOCATION_SHAPES) {
+    const match = shape.exec(line);
+    if (match && (best === null || match[0].length < best.match[0].length)) best = { shape, replacement, match };
+  }
+  return best;
+}
+
+/**
+ * The code of a coded diagnostic (`TS2322`, `E0308`), read only at the diagnostic's leading position: after an optional
+ * leading location. Text further along (a quoted `error TS5057:` in a message or a source excerpt) is not a code.
+ */
+function diagnosticCode(line) {
+  const rest = line.slice(leadingLocation(line)?.match[0].length ?? 0).trimStart();
+  return /^(?:error|warning)\s+(TS\d+):/i.exec(rest)?.[1].toUpperCase() ?? /^error\[(E\d+)\]:/i.exec(rest)?.[1].toUpperCase() ?? null;
+}
+const isCheckerNotRun = (line) => CHECKER_NOT_RUN_CODES.has(diagnosticCode(line));
+
+function diagnosticLines(result, extraDiagnostic = null) {
+  const kept = [];
+  let inFrame = false;
+  for (const raw of `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.replace(ANSI, "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (diagnosticCode(line) !== null || extraDiagnostic?.test(line)) { kept.push(line); inFrame = true; continue; }
+    if (SUMMARY.test(line)) continue;
+    if (inFrame && CODE_FRAME.test(line)) continue;
+    kept.push(line);
+    if (!FRAME_CONTINUATION.test(line)) inFrame = false;
+  }
+  return kept;
+}
+
+/**
+ * Compare diagnostics by message: a position that merely moves (an insertion above it) is not a new diagnostic. Only the
+ * location field is normalized (tsc `file(l,c):`, pretty `file:l:c -`, rustc `--> file:l:c`, `file:l:` prefixes); text
+ * inside the message is compared as printed.
+ */
+function diagnosticKey(line) {
+  // Only the leading location field is rewritten (see leadingLocation); the message is compared as printed.
+  const location = leadingLocation(line);
+  return location ? line.replace(location.shape, location.replacement) : line;
+}
+
+function recognizer(diagnosticPattern) {
+  if (diagnosticPattern === undefined) return null;
+  if (typeof diagnosticPattern !== "string") throw new TypeError("diagnosticPattern must be a string");
+  try { return new RegExp(diagnosticPattern, "i"); }
+  catch (error) { throw new TypeError(`diagnosticPattern is not a valid regular expression: ${error.message}`); }
 }
 
 /**
  * Compare baseline and candidate typecheck diagnostics: new diagnostics fail, and so does a non-zero candidate exit when
  * the baseline exited 0 or the candidate printed no diagnostics (a silent failure).
  */
-export async function evaluateTypecheckClean({ baseline, candidate, runner = runArgv }) {
+export async function evaluateTypecheckClean({ baseline, candidate, runner = runArgv, diagnosticPattern, resources = null }) {
+  let extraDiagnostic;
+  try { extraDiagnostic = recognizer(diagnosticPattern); }
+  catch (error) { return evaluatorResult("typecheck_clean", false, 0, { error: error.message }); }
   for (const revision of [baseline, candidate]) {
     if (!revision || typeof revision.command !== "string" || !revision.command || !Array.isArray(revision.args ?? []) ||
         typeof revision.cwd !== "string" || !path.isAbsolute(revision.cwd)) {
@@ -21,22 +99,24 @@ export async function evaluateTypecheckClean({ baseline, candidate, runner = run
     throw new TypeError("baseline and candidate typecheck workspaces must be separate");
   }
   const invoke = async (spec) => {
-    try { return await runner(spec.command, spec.args ?? [], { cwd: spec.cwd, timeoutMs: spec.timeoutMs }); }
+    try { return await runner(spec.command, spec.args ?? [], { cwd: spec.cwd, timeoutMs: spec.timeoutMs, resources, maxFileBytes: spec.maxFileBytes }); }
     catch (error) { return { status: null, error: String(error?.message ?? error), stdout: "", stderr: "" }; }
   };
   const [baselineResult, candidateResult] = await Promise.all([invoke(baseline), invoke(candidate)]);
-  const baselineOutput = diagnosticLines(baselineResult);
-  const candidateOutput = diagnosticLines(candidateResult);
+  const baselineOutput = diagnosticLines(baselineResult, extraDiagnostic);
+  const candidateOutput = diagnosticLines(candidateResult, extraDiagnostic);
   const baselineCounts = new Map();
-  for (const line of baselineOutput) baselineCounts.set(line, (baselineCounts.get(line) ?? 0) + 1);
+  for (const line of baselineOutput) baselineCounts.set(diagnosticKey(line), (baselineCounts.get(diagnosticKey(line)) ?? 0) + 1);
   const seenCandidate = new Map();
   const newDiagnostics = candidateOutput.filter((line) => {
-    const seen = (seenCandidate.get(line) ?? 0) + 1;
-    seenCandidate.set(line, seen);
-    return seen > (baselineCounts.get(line) ?? 0);
+    const key = diagnosticKey(line);
+    const seen = (seenCandidate.get(key) ?? 0) + 1;
+    seenCandidate.set(key, seen);
+    return seen > (baselineCounts.get(key) ?? 0);
   });
-  const recognizedDiagnostic = (lines) => lines.some((line) => /\berror\s+TS\d+:|\berror\[E\d+\]:/i.test(line));
-  const infrastructureFailure = [baselineResult, candidateResult].some((result) =>
+  const recognizedDiagnostic = (lines) => lines.some((line) => diagnosticCode(line) !== null || extraDiagnostic?.test(line));
+  const checkerDidNotRun = [...baselineOutput, ...candidateOutput].some(isCheckerNotRun);
+  const infrastructureFailure = checkerDidNotRun || [baselineResult, candidateResult].some((result) =>
     result?.status == null || result?.signal != null || result?.timedOut === true || result?.error != null) ||
     (baselineResult.status !== 0 && !recognizedDiagnostic(baselineOutput)) ||
     (candidateResult.status !== 0 && !recognizedDiagnostic(candidateOutput));

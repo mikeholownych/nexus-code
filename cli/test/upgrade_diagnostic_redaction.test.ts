@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
-import { formatUpgradeDiagnostic } from "../src/upgrade.js";
+import { formatDiagnosticForOutput } from "../src/ui.js";
 
 test("redacts a synthetic credential from URL-bearing upgrade errors and preserves ordinary diagnostics", () => {
   const original = InformationFlowBoundary.getGlobalInstance();
@@ -9,10 +9,10 @@ test("redacts a synthetic credential from URL-bearing upgrade errors and preserv
   InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary({ explicitSecrets: [secret] }));
   try {
     const message = `request failed for https://updates.example.invalid/releases?token=${secret}`;
-    const formatted = formatUpgradeDiagnostic(new Error(message));
+    const formatted = formatDiagnosticForOutput(new Error(message));
     assert.equal(formatted.includes(secret), false);
     assert.match(formatted, /request failed for https:\/\/updates\.example\.invalid\/releases\?token=/);
-    assert.equal(formatUpgradeDiagnostic("HTTP 403 from GitHub releases API"), "HTTP 403 from GitHub releases API");
+    assert.equal(formatDiagnosticForOutput("HTTP 403 from GitHub releases API"), "HTTP 403 from GitHub releases API");
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
   }
@@ -24,7 +24,7 @@ test("suppresses upgrade diagnostics if canonical credential classification fail
   boundary.classifyText = () => { throw new Error("synthetic classifier failure"); };
   InformationFlowBoundary.setGlobalInstance(boundary);
   try {
-    const formatted = formatUpgradeDiagnostic(new Error("request failed with synthetic credential"));
+    const formatted = formatDiagnosticForOutput(new Error("request failed with synthetic credential"));
     assert.match(formatted, /diagnostic suppressed/);
     assert.doesNotMatch(formatted, /synthetic credential/);
   } finally {
@@ -37,7 +37,7 @@ test("redacts credentials before escaping terminal controls in upgrade diagnosti
   const secret = "synthetic_upgrade_terminal_secret_aa71";
   InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary({ explicitSecrets: [secret] }));
   try {
-    const formatted = formatUpgradeDiagnostic(new Error(`failed ${secret}\u001b[31mred\u001b[0m\u0007\u0085\u202e`));
+    const formatted = formatDiagnosticForOutput(new Error(`failed ${secret}\u001b[31mred\u001b[0m\u0007\u0085\u202e`));
     assert.equal(formatted.includes(secret), false);
     assert.doesNotMatch(formatted, /[\u0000-\u001f\u007f-\u009f\u202a-\u202e]/);
     assert.match(formatted, /REDACTED/);
