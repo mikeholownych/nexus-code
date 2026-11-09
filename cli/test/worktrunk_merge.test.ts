@@ -597,3 +597,21 @@ test("prune --discard-ignored re-checks for real edits under the removal lock be
     assert.equal(fs.readFileSync(path.join(dir, "a.txt"), "utf8"), "an edit that appeared while prune waited for the lock\n");
   } finally { f.cleanup(); }
 });
+
+test("prune does not force-remove a stale entry that was recreated while it waited for the lock", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = feature(f, "feat/recycled-by-switch");
+    fs.rmSync(dir, { recursive: true, force: true }); // stale now
+    core.removeSeams.beforeLock = () => {
+      git(f.repo, "worktree", "prune");
+      git(f.repo, "worktree", "add", "-q", dir, "feat/recycled-by-switch");
+      fs.writeFileSync(path.join(dir, "new-work.txt"), "precious\n");
+    };
+    let result;
+    try { result = wt(f, f.repo, ["prune", "--min-age", "0s"]); } finally { delete core.removeSeams.beforeLock; }
+    assert.equal(fs.readFileSync(path.join(dir, "new-work.txt"), "utf8"), "precious\n", `the recreated worktree must survive: ${result.output}`);
+    assert.match(git(f.repo, "worktree", "list", "--porcelain"), /recycled-by-switch/);
+  } finally { f.cleanup(); }
+});
