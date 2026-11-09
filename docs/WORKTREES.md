@@ -46,7 +46,7 @@ clean. Before history is rewritten the branch, including swept-in working-tree c
 `refs/nexus-backup/<name>-<hash>`: one flat ref per branch, where `<name>` is the branch name with every character outside
 `A-Za-z0-9._-` turned into `-` (at most 40 characters) and `<hash>` is the first 12 hex digits of the SHA-1 of the
 branch name, so `foo` and `foo/bar` never collide (Git cannot hold both as refs). Find yours with
-`git for-each-ref refs/nexus-backup`. A submodule is backed up as its recorded commit only. A rebase conflict stops the
+`git for-each-ref refs/nexus-backup`. A submodule is backed up as its recorded commit only, so a worktree whose submodule holds a commit that is on no remote branch is kept after the merge (its objects live in the worktree and would go with it); push it, then run `remove`. `--no-squash` with merge commits in the branch and a moved target is refused, because a plain rebase would drop edits only the merge commits carry. The source branch is merged as `refs/heads/<branch>`, never as a same-named tag. A rebase conflict stops the
 command and leaves the rebase open in the worktree. Ignored leftovers (build caches) are deleted with the worktree after
 a successful merge, but never while tracked, staged, untracked or submodule changes remain: then the worktree is kept
 and the command says so.
