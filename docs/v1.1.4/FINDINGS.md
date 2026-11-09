@@ -104,7 +104,16 @@ Every row is reproduced by the audit. Rows A1 to A3 and A5 to A9 restate earlier
 
 ## E. WP-1308 relevance-based skill injection, including the items carried from the PR #409 review
 
-## F. WP-1317 TUI audit follow-ups (docs/v1.1.4/TUI-AUDIT.md)
+## F. Redaction follow-ups from the PR #440 independent review, 2026-11-09 (pre-existing on main, not regressions of PR #440)
+
+Severity set by the fixing agent; the reviewer did not rate these. Each needs its own red test and fix in a follow-up change.
+
+| Item | Sev | Finding | Status |
+|---|---|---|---|
+| PR #440 review | medium | A key whose `/` or `+` is percent-encoded (`%2F`, `%2B`) or written as a look-alike (`∕`, U+2215) is not redacted whole: the patterns and the tokenizer stop at the encoded character, so the rest of the key stays in clear | OPEN |
+| PR #440 review | medium | Key material after a dot that directly follows an `sk-` key (`sk-…RtBq.Xo2RtBq`) is left in clear: the `sk-` patterns and the scanner stop at "." and the entropy tokenizer does not take dotted tokens | OPEN |
+
+## G. WP-1317 TUI audit follow-ups (docs/v1.1.4/TUI-AUDIT.md)
 
 | Source | Sev | Finding | Status |
 |---|---|---|---|

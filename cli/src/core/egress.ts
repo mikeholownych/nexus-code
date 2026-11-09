@@ -70,6 +70,8 @@ export interface EgressEvaluationResult {
   sanitizedPayload?: any;
   sanitizedText?: string;
   classifiedSecrets: ClassifiedSecret[];
+  /** The classified values actually replaced in sanitizedText (a value inside a longer one may not be). */
+  quarantinedSecrets?: ClassifiedSecret[];
   reason?: string;
 }
 
@@ -424,6 +426,390 @@ function trimTrailingDelimiters(value: string): string {
   return value.slice(0, end);
 }
 
+/** JSON may escape "/" as `\/`: classify the value as if the slash were plain; the redacted span keeps the escape. */
+function unescapeSlashes(value: string): string {
+  return value.includes("\\/") ? value.replaceAll("\\/", "/") : value;
+}
+
+function isBase64KeyChar(code: number): boolean {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
+    code === 95 || code === 45 || code === 43 || code === 47; // _ - + /
+}
+
+/**
+ * One word of a path: identifier words, numbers and short tags as `isIdentifierPart` defines them, or a word with a short
+ * number (`Ridge2`). A part of 20 or more characters must split into two or more words (`RandomForestClassifier`): a
+ * long run of one letter or of random characters is key material, not a name.
+ */
+function isPathWord(part: string): boolean {
+  const word = /^[A-Za-z]{2,}\d{1,3}$/.test(part) ? part.replace(/\d+$/, "") : part;
+  if (!isIdentifierPart(word)) return false;
+  return part.length < 20 || (word.match(/[A-Z]{2,}(?![a-z])|[A-Z][a-z]+|[a-z]{2,}/g)?.length ?? 0) >= 2;
+}
+
+/**
+ * A "/"-separated value is a path (`learn/linear_model/Ridge2`, `/v1/models`), not key material, when it carries no
+ * base64-only "+" or "=" and every segment is made of path words. Random base64 segments carry digits, split into
+ * one-letter pieces or run 20+ characters without words, so they are not taken for a path.
+ */
+function isPathLike(value: string): boolean {
+  return !/[+=]/.test(value) && value.split("/").every((segment) => segment.split(/[._-]+/).every(isPathWord));
+}
+
+/**
+ * How much of a Bearer value is the token. A value without "/" is a token. A value with "/" is a token when it has a
+ * digit or a capital and is not a path (`isPathLike`); otherwise only the part before its first "/" can be, as in the
+ * pattern before "/" was accepted, if it is at least 16 characters long. Returns 0 when nothing of it is a token.
+ */
+function bearerTokenLength(value: string): number {
+  const plain = unescapeSlashes(value);
+  if (!plain.includes("/") || (/[0-9A-Z]/.test(plain) && !isPathLike(plain))) return value.length;
+  const slash = value.indexOf("/");
+  const head = slash > 0 && value[slash - 1] === "\\" ? slash - 1 : slash;
+  return head >= 16 ? head : 0;
+}
+
+/**
+ * `sk-` / `sk-ant-` keys whose body is base64 ("/" and "+" included), found in one left-to-right pass: from each `sk-`
+ * at a word boundary take the maximal run of key characters (a JSON-escaped `\/` counts as "/") once, validate it,
+ * and resume after it. Nothing of the run
+ * is trimmed: its last segment is key material whatever its letter case. A run is a key if its body is at least 20
+ * characters, contains "/" or "+", has a digit, a capital or "+", and is not a path (`sk-learn/linear_model/Ridge2`,
+ * see `isPathLike`). A plain key followed by a URL path (`sk-…RtBq/models`: the body before its first "/" is a 20-64
+ * character plain key and the rest is a path) is left to the bounded `sk-` patterns, which stop at the "/".
+ * Every `sk-` inside a run is skipped: a key inside it is found by the bounded patterns. Nothing is rescanned and
+ * nothing is searched backwards, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
+ */
+function scanBase64Keys(text: string): Array<{ start: number; end: number; name: string }> {
+  const found: Array<{ start: number; end: number; name: string }> = [];
+  let from = 0;
+  while (from < text.length) {
+    const at = text.indexOf("sk-", from);
+    if (at < 0) break;
+    if (at > 0 && /\w/.test(text[at - 1])) {
+      from = at + 1;
+      continue;
+    }
+    let end = at + 3;
+    while (end < text.length) {
+      if (isBase64KeyChar(text.charCodeAt(end))) end++;
+      else if (text[end] === "\\" && text[end + 1] === "/") end += 2; // a JSON-escaped "/"
+      else break;
+    }
+    const anthropic = text.startsWith("sk-ant-", at);
+    const body = unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end));
+    const separator = body.search(/[/+]/);
+    const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
+      isPathLike(body.slice(separator + 1));
+    if (!plainKeyThenPath && body.length >= 20 && separator >= 0 && /[0-9A-Z+]/.test(body) && !isPathLike(body)) {
+      let secretEnd = end;
+      while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
+      found.push({ start: at, end: secretEnd, name: anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY" });
+    }
+    from = Math.max(end, at + 1);
+  }
+  return found;
+}
+
+/** A classifier match with its place in the text. */
+interface PositionedMatch {
+  start: number;
+  end: number;
+  item: ClassifiedSecret;
+}
+
+/**
+ * Two classifiers can match one credential at the same place, one taking more of it than the other: the Bearer pattern
+ * stops at "~" where the Authorization pattern takes the whole token68 value; the Bearer capture keeps a sentence's
+ * full stop where the entropy tokenizer trims it; an entropy token spans `sk-…/models` where the key pattern stops at
+ * the "/". Redaction replaces by value, longest value first, so the enclosing value is replaced whole before a shorter
+ * value inside it, and the shorter value is still replaced wherever else it occurs in the text. Resolution: an
+ * uncertain (entropy) token that starts where a more confident match starts and extends past it is dropped (the token
+ * `sk-…/models` loses to the key at its start, keeping the path). Every other match is kept, inner ones included:
+ * an operator secret inside a key does not shorten the key (the key is longer), a key inside an uncertain token keeps
+ * its deterministic classification for callers that refuse or redact only positive findings (the checkpoint guard,
+ * path display), and a key inside a Bearer match is still redacted where it occurs again unmatched. The result has
+ * one entry per distinct value, longest first.
+ */
+function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
+  const order = matches.map((_, i) => i).sort(
+    (a, b) => matches[a].start - matches[b].start || matches[b].end - matches[a].end || a - b
+  );
+  const dropped = new Set<number>();
+  let open: number[] = []; // earlier matches that reach the current position, so may contain the current one
+  for (const i of order) {
+    const { start, end, item } = matches[i];
+    open = open.filter((j) => matches[j].end >= start);
+    for (const j of open) {
+      const enclosing = matches[j];
+      if (
+        enclosing.item.classificationType === "UNCERTAIN" && enclosing.start === start && enclosing.end >= end &&
+        enclosing.item.confidence < item.confidence
+      ) {
+        dropped.add(j);
+      }
+    }
+    open.push(i);
+  }
+  const seen = new Set<string>();
+  const classified: ClassifiedSecret[] = [];
+  matches.forEach((match, i) => {
+    if (!dropped.has(i) && !seen.has(match.item.secret)) {
+      seen.add(match.item.secret);
+      classified.push(match.item);
+    }
+  });
+  // Longest value first: a value that also occurs inside a longer one elsewhere is replaced after it, not through it.
+  return classified.sort((a, b) => b.secret.length - a.secret.length);
+}
+
+/**
+ * A token produced only by the newer delimiters (`<>`, backticks, `|`, `&`, `?`) or by trimming trailing sentence
+ * punctuation must look like a credential, not like an identifier or a path: `UpgradeExecutionResult` from
+ * `Promise<UpgradeExecutionResult>` and `downstream/branch-specific` are made of letters and word separators only.
+ * Random credentials do not split into words (or carry "+"/"="). Tokens the original tokenizer already produced keep its behaviour.
+ */
+function looksLikeCredentialToken(token: string): boolean {
+  if (/[+=]/.test(token)) return true;
+  // A filesystem path (rooted, or with two or more separators) is not a credential even with a generated directory name;
+  // a base64 secret that happens to contain slashes also carries "+" or "=", or has at most one.
+  if (token.startsWith("/") || (token.match(/\//g)?.length ?? 0) >= 2) return false;
+  return !token.split(/[/._-]+/).every(isIdentifierPart);
+}
+
+/** A number, a short tag such as `v1` or `x86`, or letters that split cleanly into words of two or more letters. */
+function isIdentifierPart(part: string): boolean {
+  if (part === "") return true;
+  if (/^\d+$/.test(part) || /^[a-z]{1,3}\d{1,3}$/i.test(part)) return true;
+  if (!/^[A-Za-z]+$/.test(part)) return false;
+  // camelCase, PascalCase, UPPER and lower words. Random base64 splits into one-letter pieces (`wJalrXUtn...`).
+  const words = part.match(/[A-Z]{2,}(?![a-z])|[A-Z][a-z]+|[a-z]{2,}/g);
+  return words !== null && words.join("").length === part.length;
+}
+
+/** An Aho-Corasick automaton over a list of values. */
+interface Automaton {
+  alphabet: Int32Array; // UTF-16 code unit -> symbol, -1 when no value uses it
+  radix: number;
+  next: Map<number, number>; // node * radix + symbol -> child node
+  fail: Int32Array;
+  depth: Int32Array;
+  output: Int32Array; // the value that ends at this node (the first in the list when values repeat)
+  dictionary: Int32Array; // the nearest node on the fail chain where a value ends
+}
+
+/**
+ * Builds an Aho-Corasick automaton over the values. Transitions are keyed by node and by the index of the code unit in
+ * the values' own alphabet, which keeps the keys small integers (fast Map lookups). Failure links are set in
+ * breadth-first order (nodes sorted by depth), so a parent's link is set before its children's.
+ */
+function buildAutomaton(values: string[]): Automaton {
+  const alphabet = new Int32Array(65536).fill(-1);
+  let radix = 0;
+  let capacity = 1;
+  for (const value of values) {
+    capacity += value.length;
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (alphabet[code] < 0) alphabet[code] = radix++;
+    }
+  }
+  radix = Math.max(radix, 1);
+  const next = new Map<number, number>();
+  const parent = new Int32Array(capacity);
+  const symbolOf = new Int32Array(capacity);
+  const depth = new Int32Array(capacity);
+  const fail = new Int32Array(capacity);
+  const output = new Int32Array(capacity).fill(-1);
+  const dictionary = new Int32Array(capacity).fill(-1);
+  let nodes = 1;
+  let maxDepth = 0;
+  values.forEach((value, index) => {
+    if (!value) return;
+    let node = 0;
+    for (let i = 0; i < value.length; i++) {
+      const symbol = alphabet[value.charCodeAt(i)];
+      let child = next.get(node * radix + symbol);
+      if (child === undefined) {
+        child = nodes++;
+        next.set(node * radix + symbol, child);
+        parent[child] = node;
+        symbolOf[child] = symbol;
+        depth[child] = depth[node] + 1;
+        if (depth[child] > maxDepth) maxDepth = depth[child];
+      }
+      node = child;
+    }
+    if (output[node] < 0) output[node] = index;
+  });
+  const byDepthStart = new Int32Array(maxDepth + 2);
+  for (let node = 1; node < nodes; node++) byDepthStart[depth[node] + 1]++;
+  for (let d = 1; d <= maxDepth + 1; d++) byDepthStart[d] += byDepthStart[d - 1];
+  const order = new Int32Array(nodes);
+  for (let node = 1; node < nodes; node++) order[byDepthStart[depth[node]]++] = node;
+  for (let k = 0; k < nodes - 1; k++) {
+    const node = order[k];
+    const symbol = symbolOf[node];
+    if (parent[node] !== 0) {
+      let link = fail[parent[node]];
+      while (link > 0 && !next.has(link * radix + symbol)) link = fail[link];
+      fail[node] = next.get(link * radix + symbol) ?? 0;
+    }
+    dictionary[node] = output[fail[node]] >= 0 ? fail[node] : dictionary[fail[node]];
+  }
+  return { alphabet, radix, next, fail, depth, output, dictionary };
+}
+
+/**
+ * Runs the automaton over the text and calls `visit(end, node)` at each position with the node of the longest value
+ * ending there (a node whose `output` is set), or not at all when no value ends there.
+ */
+function scanAutomaton(automaton: Automaton, text: string, visit: (end: number, node: number) => boolean | void): void {
+  const { alphabet, radix, next, fail, output, dictionary } = automaton;
+  let node = 0;
+  for (let i = 0; i < text.length; i++) {
+    const symbol = alphabet[text.charCodeAt(i)];
+    if (symbol < 0) {
+      node = 0;
+      continue;
+    }
+    while (node > 0 && !next.has(node * radix + symbol)) node = fail[node];
+    node = next.get(node * radix + symbol) ?? 0;
+    const found = output[node] >= 0 ? node : dictionary[node];
+    if (found > 0 && visit(i + 1, found) === false) return;
+  }
+}
+
+/**
+ * Every occurrence (overlapping ones included) of each value, as [start, value index], or null when there are more than
+ * `budget` of them. Few values: native search; many: one pass with an Aho-Corasick automaton.
+ */
+function findOccurrences(text: string, values: string[], budget: number): Array<[start: number, index: number]> | null {
+  const occurrences: Array<[start: number, index: number]> = [];
+  if (values.length <= 16) {
+    for (let index = 0; index < values.length; index++) {
+      const value = values[index];
+      if (!value) continue;
+      for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + 1)) {
+        if (occurrences.push([at, index]) > budget) return null;
+      }
+    }
+    return occurrences;
+  }
+  const automaton = buildAutomaton(values);
+  let exceeded = false;
+  scanAutomaton(automaton, text, (end, longest) => {
+    for (let found = longest; found > 0; found = automaton.dictionary[found]) {
+      if (occurrences.push([end - automaton.depth[found], automaton.output[found]]) > budget) {
+        exceeded = true;
+        return false;
+      }
+    }
+  });
+  return exceeded ? null : occurrences;
+}
+
+/**
+ * Replaces every occurrence of each value, in one pass over the text: the same result as `replaceAll` for each value in
+ * turn (values in priority order, longest first as classifyText returns them; text already replaced is not matched
+ * again), without one pass per value, which is quadratic for a text with thousands of distinct secrets. All occurrences
+ * are found first; they are accepted in priority order unless they overlap text already accepted (a Fenwick tree counts
+ * accepted positions); the output is built once from the accepted spans.
+ *
+ * Values that overlap themselves on a repetitive text (secrets that are suffixes of one another over a run of one
+ * letter) can occur far more often than the text is long. Past one occurrence per character the replacement falls
+ * back to a linear pass that replaces the union of all occurrences instead: each region where occurrences overlap is
+ * replaced whole. Nothing that matches a value is left in clear.
+ * `replacement(index, matched)` is called once for each distinct replaced text, in text order: `matched` is the exact
+ * original text being replaced (the value itself, or a whole region in the fallback, where `index` is the longest value
+ * in the region), so a reversible token keyed to `matched` restores the text exactly. Returns the new text.
+ */
+export function replaceValues(
+  text: string,
+  values: string[],
+  replacement: (index: number, matched: string) => string
+): string {
+  if (values.length === 0 || text.length === 0) return text;
+  const occurrences = findOccurrences(text, values, text.length + 1024);
+  if (occurrences === null) return replaceUnion(text, values, replacement);
+  if (occurrences.length === 0) return text;
+  occurrences.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+
+  const covered = new Int32Array(text.length + 1); // Fenwick tree over accepted positions
+  const countBefore = (position: number): number => {
+    let sum = 0;
+    for (let i = position; i > 0; i -= i & -i) sum += covered[i];
+    return sum;
+  };
+  const accepted: Array<[start: number, end: number, index: number]> = [];
+  for (const [start, index] of occurrences) {
+    const end = start + values[index].length;
+    if (countBefore(end) - countBefore(start) !== 0) continue;
+    accepted.push([start, end, index]);
+    for (let position = start + 1; position <= end; position++) {
+      for (let i = position; i <= text.length; i += i & -i) covered[i]++;
+    }
+  }
+  return buildReplaced(text, accepted, replacement);
+}
+
+/** The linear fallback of replaceValues: the union of all occurrences, each region replaced whole. */
+function replaceUnion(
+  text: string,
+  values: string[],
+  replacement: (index: number, matched: string) => string
+): string {
+  const automaton = buildAutomaton(values);
+  // The longest value ending at each position covers every shorter one ending there (they are its suffixes).
+  const spans: Array<[start: number, end: number, index: number]> = [];
+  scanAutomaton(automaton, text, (end, longest) => {
+    spans.push([end - automaton.depth[longest], end, automaton.output[longest]]);
+  });
+  spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const regions: Array<[start: number, end: number, index: number]> = [];
+  for (const [start, end, index] of spans) {
+    const last = regions[regions.length - 1];
+    if (last && start < last[1]) {
+      if (end > last[1]) last[1] = end;
+      if (values[index].length > values[last[2]].length) last[2] = index;
+    } else {
+      regions.push([start, end, index]);
+    }
+  }
+  return buildReplaced(text, regions, replacement);
+}
+
+/** Builds the text with the given non-overlapping spans replaced; `replacement` is called once per distinct text. */
+function buildReplaced(
+  text: string,
+  spans: Array<[start: number, end: number, index: number]>,
+  replacement: (index: number, matched: string) => string
+): string {
+  if (spans.length === 0) return text;
+  spans.sort((a, b) => a[0] - b[0]);
+  const replacements = new Map<string, string>();
+  const parts: string[] = [];
+  let from = 0;
+  for (const [start, end, index] of spans) {
+    const matched = text.slice(start, end);
+    let replaced = replacements.get(matched);
+    if (replaced === undefined) {
+      replaced = replacement(index, matched);
+      replacements.set(matched, replaced);
+    }
+    parts.push(text.slice(from, start), replaced);
+    from = end;
+  }
+  parts.push(text.slice(from));
+  return parts.join("");
+}
+
+/** Irreversibly replaces every classified value in the text with its `[REDACTED:<pattern>]` label. */
+function redactValues(text: string, classified: ClassifiedSecret[]): string {
+  return replaceValues(text, classified.map((item) => item.secret), (index) =>
+    `[REDACTED:${classified[index].patternName || "SECRET"}]`);
+}
+
 /**
  * InformationFlowBoundary: The authoritative egress interception & secret quarantine layer.
  */
@@ -440,9 +826,9 @@ export class InformationFlowBoundary {
   // Deterministic secret patterns (DATA-002)
   private static DETERMINISTIC_PATTERNS: Array<{ name: string; regex: RegExp }> = [
     // OpenAI / LLM API keys
-    { name: "OPENAI_API_KEY", regex: /\b(?:sk-[a-zA-Z0-9_\-]{20,64})\b/g },
-    // Anthropic API keys
-    { name: "ANTHROPIC_API_KEY", regex: /\b(?:sk-ant-[a-zA-Z0-9_\-]{20,64})\b/g },
+    // The more specific Anthropic pattern first: at a tie between two matches of one key the first classifier names it.
+    { name: "ANTHROPIC_API_KEY", regex: /\bsk-ant-[a-zA-Z0-9_\-]{20,64}\b/g },
+    { name: "OPENAI_API_KEY", regex: /\bsk-[a-zA-Z0-9_\-]{20,64}\b/g },
     // GitHub Tokens (classic, fine-grained, oauth, user, server)
     { name: "GITHUB_TOKEN", regex: /\b(?:ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{50,90}|gho_[a-zA-Z0-9]{36}|ghu_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36})\b/g },
     // Google API Key
@@ -453,10 +839,16 @@ export class InformationFlowBoundary {
     { name: "AWS_ACCESS_KEY_ID", regex: /\b(?:AKIA[0-9A-Z]{16})\b/g },
     // Slack Tokens
     { name: "SLACK_TOKEN", regex: /\b(?:xox[baprs]-[0-9a-zA-Z]{10,48})\b/g },
-    // Bearer / Authorization tokens
-    { name: "BEARER_AUTH_HEADER", regex: /\bBearer\s+([a-zA-Z0-9_\-\.]{16,})/g },
+    // Bearer tokens: RFC 6750 token68 (letters, digits, "-._~+/", "=" padding; a JSON-escaped `\/` counts as "/"),
+    // not starting with "/"; the scheme name is case-insensitive (RFC 7235). A value with "/" is checked in
+    // classifyText (`bearerTokenLength`): `Bearer /api/v1/x` and `Bearer api/v1/organizations` in ordinary text are
+    // paths, not tokens.
+    {
+      name: "BEARER_AUTH_HEADER",
+      regex: /\bBearer\s+([A-Za-z0-9_.~+-](?:[A-Za-z0-9_.~+\/-]|\\\/){15,}={0,2})/gi,
+    },
     // Authorization header values, including Basic (base64 user:password) and provider Token schemes.
-    { name: "AUTHORIZATION_HEADER", regex: /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?([A-Za-z0-9._~+/=-]{8,})/gi },
+    { name: "AUTHORIZATION_HEADER", regex: /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?((?:[A-Za-z0-9._~+/=-]|\\\/){8,})/gi },
     // JWT Tokens (3 base64url segments separated by dots)
     {
       name: "JWT_TOKEN",
@@ -560,8 +952,10 @@ export class InformationFlowBoundary {
   public classifyText(text: string, envSecrets: string[] = this.environmentSecrets()): ClassifiedSecret[] {
     if (!text || typeof text !== "string") return [];
 
-    const classified: ClassifiedSecret[] = [];
-    const seenSecrets = new Set<string>();
+    // Every match with its place in the text; overlaps are resolved once all classifiers have run.
+    const matches: PositionedMatch[] = [];
+    const isReference = (value: string): boolean =>
+      value.startsWith("[NEXUS_SEC_REF_") || value.startsWith("[SECRET_REF_") || value.startsWith("[REDACTED:");
 
     // 1. Explicit Operator Classifications (DATA-002: Category 1)
     const explicitList = [
@@ -569,53 +963,73 @@ export class InformationFlowBoundary {
       ...envSecrets,
     ];
 
+    // One match per secret, at its first occurrence: redaction replaces the value wherever it occurs, and recording
+    // every occurrence of short or self-overlapping secrets would grow with the text times the number of secrets.
     for (const explicit of explicitList) {
-      if (explicit && text.includes(explicit) && !seenSecrets.has(explicit)) {
-        seenSecrets.add(explicit);
-        classified.push({
+      if (!explicit) continue;
+      const at = text.indexOf(explicit);
+      if (at < 0) continue;
+      matches.push({
+        start: at,
+        end: at + explicit.length,
+        item: {
           secret: explicit,
           classificationType: "OPERATOR_EXPLICIT",
           classifierId: "operator:policy",
           confidence: 1.0,
           patternName: "EXPLICIT_SECRET",
-        });
-      }
+        },
+      });
     }
 
     // 2. Deterministic High-Confidence Patterns (DATA-002: Category 2)
+    for (const { start, end, name } of text.includes("sk-") ? scanBase64Keys(text) : []) {
+      matches.push({
+        start,
+        end,
+        item: {
+          secret: text.slice(start, end),
+          classificationType: "PATTERN_DETERMINISTIC",
+          classifierId: `regex:${name.toLowerCase()}`,
+          confidence: 0.95,
+          patternName: name,
+        },
+      });
+    }
     for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
-      const re = new RegExp(regex.source, regex.flags);
+      const re = new RegExp(regex.source, `${regex.flags}d`);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
-        const fullMatch = match[0];
         // If capture group exists (e.g. Bearer token), extract captured secret, else fullMatch
-        let secretVal = match[1] && typeof match[1] === "string" ? match[1] : fullMatch;
-        let trimEnd = secretVal.length;
-        while (trimEnd > 0) {
-          const ch = secretVal.charCodeAt(trimEnd - 1);
+        const span = match.indices?.[match[1] && typeof match[1] === "string" ? 1 : 0];
+        if (!span) continue;
+        const [start, matchEnd] = span;
+        // "bearer" in another case is also ordinary prose ("the bearer of"): its value must look like a token. An
+        // Authorization header carrying it is matched by AUTHORIZATION_HEADER whatever the value.
+        if (name === "BEARER_AUTH_HEADER" && !match[0].startsWith("Bearer") && !/[0-9A-Z+/=]/.test(text.slice(start, matchEnd))) {
+          continue;
+        }
+        let end = name === "BEARER_AUTH_HEADER" ? start + bearerTokenLength(text.slice(start, matchEnd)) : matchEnd;
+        while (end > start) {
+          const ch = text.charCodeAt(end - 1);
           if (ch === 34 || ch === 39 || ch === 59 || ch === 44) { // ", ', ;, ,
-            trimEnd--;
+            end--;
           } else {
             break;
           }
         }
-        if (trimEnd < secretVal.length) {
-          secretVal = secretVal.slice(0, trimEnd);
-        }
-        if (
-          secretVal.length >= 8 &&
-          !secretVal.startsWith("[NEXUS_SEC_REF_") &&
-          !secretVal.startsWith("[SECRET_REF_") &&
-          !secretVal.startsWith("[REDACTED:") &&
-          !seenSecrets.has(secretVal)
-        ) {
-          seenSecrets.add(secretVal);
-          classified.push({
-            secret: secretVal,
-            classificationType: "PATTERN_DETERMINISTIC",
-            classifierId: `regex:${name.toLowerCase()}`,
-            confidence: 0.95,
-            patternName: name,
+        const secretVal = text.slice(start, end);
+        if (secretVal.length >= 8 && !isReference(secretVal)) {
+          matches.push({
+            start,
+            end,
+            item: {
+              secret: secretVal,
+              classificationType: "PATTERN_DETERMINISTIC",
+              classifierId: `regex:${name.toLowerCase()}`,
+              confidence: 0.95,
+              patternName: name,
+            },
           });
         }
       }
@@ -628,19 +1042,13 @@ export class InformationFlowBoundary {
     const contextualPatterns = /password|passwd|secret|api_key|apikey|access_token|private_key|auth_token/i.test(text)
       ? InformationFlowBoundary.CONTEXTUAL_PATTERNS : [];
     for (const { name, regex } of contextualPatterns) {
-      const re = new RegExp(regex.source, regex.flags);
+      const re = new RegExp(regex.source, `${regex.flags}d`);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
-        let secretVal = match[1];
-        if (!secretVal) continue;
-        secretVal = trimTrailingDelimiters(secretVal);
-        if (
-          secretVal.length >= 8 &&
-          !secretVal.startsWith("[NEXUS_SEC_REF_") &&
-          !secretVal.startsWith("[SECRET_REF_") &&
-          !secretVal.startsWith("[REDACTED:") &&
-          !seenSecrets.has(secretVal)
-        ) {
+        if (!match[1]) continue;
+        const secretVal = trimTrailingDelimiters(match[1]);
+        const start = match.indices?.[1]?.[0];
+        if (start !== undefined && secretVal.length >= 8 && !isReference(secretVal)) {
           // Avoid matching obvious non-secrets / placeholders
           const lower = secretVal.toLowerCase();
           if (
@@ -656,13 +1064,16 @@ export class InformationFlowBoundary {
           ) {
             continue;
           }
-          seenSecrets.add(secretVal);
-          classified.push({
-            secret: secretVal,
-            classificationType: "CONTEXTUAL_HEURISTIC",
-            classifierId: `heuristic:${name.toLowerCase()}`,
-            confidence: 0.75,
-            patternName: name,
+          matches.push({
+            start,
+            end: start + secretVal.length,
+            item: {
+              secret: secretVal,
+              classificationType: "CONTEXTUAL_HEURISTIC",
+              classifierId: `heuristic:${name.toLowerCase()}`,
+              confidence: 0.75,
+              patternName: name,
+            },
           });
         }
       }
@@ -670,38 +1081,53 @@ export class InformationFlowBoundary {
 
     // 4. High-Entropy Token Detection (DATA-002: Category 4 / DATA-004)
     // Check individual non-whitespace tokens length >= 20 with high Shannon entropy
-    const tokens = text.split(/[\s,;'"()\[\]{}=:]+/);
-    for (const tok of tokens) {
+    const originalTokens = new Set(text.split(/[\s,;'"()\[\]{}=:]+/));
+    const tokenPattern = /[^\s,;'"()\[\]{}=:&?<>`|]+/g;
+    let token: RegExpExecArray | null;
+    while ((token = tokenPattern.exec(text)) !== null) {
+      const start = token.index;
+      // Trailing sentence punctuation is not part of the token. A backward scan: `/[.!]+$/` is quadratic on a long
+      // run of dots, and checkpoint scans pass whole files through here.
+      let end = start + token[0].length;
+      while (end > start && (text[end - 1] === "." || text[end - 1] === "!")) end--;
+      const tok = text.slice(start, end);
+      const plain = unescapeSlashes(tok);
       if (
         tok.length >= 20 &&
-        tok.length <= 128 &&
-        !tok.startsWith("[NEXUS_SEC_REF_") &&
-        !tok.startsWith("[SECRET_REF_") &&
-        !tok.startsWith("[REDACTED:") &&
-        !seenSecrets.has(tok)
+        // Longer tokens are prose or data. A base64 run ("+" or "/", not a path) is still a secret up to 512 characters,
+        // the size of long access tokens, unless it is a data-URI payload (`;base64,…`): then it is an embedded file.
+        // A credential-sized token is classified wherever it stands, after `base64,` too.
+        (tok.length <= 128 ||
+          (tok.length <= 512 && /[+/]/.test(plain) && !isPathLike(plain) && !text.startsWith("base64,", start - 7))) &&
+        // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
+        (originalTokens.has(tok) || looksLikeCredentialToken(plain)) &&
+        !isReference(tok)
       ) {
         // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above). Nexus's own session
         // ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
         // id made the session impossible to save or resume.
-        if (/^[a-zA-Z0-9+/=_-]+$/.test(tok) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(tok)) {
-          const entropy = calculateShannonEntropy(tok);
+        if (/^[a-zA-Z0-9+/=_-]+$/.test(plain) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain)) {
+          const entropy = calculateShannonEntropy(plain);
           // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
           const threshold = tok.length < 32 ? 4.0 : 4.5;
           if (entropy >= threshold) {
-            seenSecrets.add(tok);
-            classified.push({
-              secret: tok,
-              classificationType: "UNCERTAIN",
-              classifierId: "entropy:shannon_token",
-              confidence: 0.55,
-              patternName: "HIGH_ENTROPY_STRING",
+            matches.push({
+              start,
+              end,
+              item: {
+                secret: tok,
+                classificationType: "UNCERTAIN",
+                classifierId: "entropy:shannon_token",
+                confidence: 0.55,
+                patternName: "HIGH_ENTROPY_STRING",
+              },
             });
           }
         }
       }
     }
 
-    return classified;
+    return resolveOverlaps(matches);
   }
 
   /**
@@ -732,10 +1158,7 @@ export class InformationFlowBoundary {
       if (typeof item === "string") {
         const cached = redactedStrings.get(item);
         if (cached !== undefined) return cached;
-        let sanitized = item;
-        for (const secret of this.classifyText(item, envSecrets)) {
-          sanitized = sanitized.replaceAll(secret.secret, `[REDACTED:${secret.patternName || "SECRET"}]`);
-        }
+        const sanitized = redactValues(item, this.classifyText(item, envSecrets));
         redactedStrings.set(item, sanitized);
         return sanitized;
       }
@@ -756,10 +1179,7 @@ export class InformationFlowBoundary {
     // spans an object key and its nested string value.
     const serialized = JSON.stringify(recursivelySanitized);
     if (serialized === undefined) throw new Error("Telemetry payload is not JSON serializable");
-    let sanitizedSerialized = serialized;
-    for (const secret of this.classifyText(serialized, envSecrets)) {
-      sanitizedSerialized = sanitizedSerialized.replaceAll(secret.secret, `[REDACTED:${secret.patternName || "SECRET"}]`);
-    }
+    const sanitizedSerialized = redactValues(serialized, this.classifyText(serialized, envSecrets));
     return JSON.parse(sanitizedSerialized) as T;
   }
 
@@ -870,30 +1290,23 @@ export class InformationFlowBoundary {
 
       // Determine protection mode (DISC-005)
       const mode = context?.preferredProtectionMode || "REVERSIBLE_TOKENIZATION";
-      let sanitizedText = rawText;
-      let quarantinedCount = 0;
 
       const taskId = context?.taskId || "default_task";
       const sessionId = context?.sessionId || "default_session";
 
-      for (const item of classifiedSecrets) {
-        const secret = item.secret;
-        if (!sanitizedText.includes(secret)) continue;
-
-        let replacement: string;
-        if (mode === "IRREVERSIBLE_REDACTION") {
-          replacement = `[REDACTED:${item.patternName || "SECRET"}]`;
-        } else if (mode === "ENCRYPTION") {
-          // Reversible encrypted token simulation
-          replacement = this.generateToken(secret, taskId, sessionId, sourceBoundary, destBoundary);
-        } else {
-          // REVERSIBLE_TOKENIZATION (Default)
-          replacement = this.generateToken(secret, taskId, sessionId, sourceBoundary, destBoundary);
-        }
-
-        sanitizedText = sanitizedText.replaceAll(secret, replacement);
-        quarantinedCount++;
-      }
+      const quarantinedSecrets: ClassifiedSecret[] = [];
+      const sanitizedText = replaceValues(rawText, classifiedSecrets.map((item) => item.secret), (index, matched) => {
+        // `matched` is the exact text replaced: the secret itself, or a whole region of self-overlapping secrets, so
+        // the token restores exactly what it replaced.
+        const item = matched === classifiedSecrets[index].secret
+          ? classifiedSecrets[index]
+          : { ...classifiedSecrets[index], secret: matched };
+        quarantinedSecrets.push(item);
+        if (mode === "IRREVERSIBLE_REDACTION") return `[REDACTED:${item.patternName || "SECRET"}]`;
+        // ENCRYPTION (reversible encrypted token simulation) and REVERSIBLE_TOKENIZATION (the default) both tokenize.
+        return this.generateToken(item.secret, taskId, sessionId, sourceBoundary, destBoundary);
+      });
+      const quarantinedCount = quarantinedSecrets.length;
 
       // Reconstruct payload in original format
       let sanitizedPayload: any = sanitizedText;
@@ -913,6 +1326,7 @@ export class InformationFlowBoundary {
         sanitizedPayload,
         sanitizedText,
         classifiedSecrets,
+        quarantinedSecrets,
       };
     } catch (err: any) {
       // Fail closed on unhandled error (FAIL-003)
