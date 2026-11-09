@@ -23,6 +23,11 @@ function snapshotError(message) {
 export function captureWorkspaceSnapshot(root, options = {}) {
   const limits = { ...DEFAULT_SNAPSHOT_LIMITS, ...options };
   const now = options.now ?? (() => performance.now());
+  // Each rule is a directory name, or { name, sibling, child, quiet }: skipped only where that sibling file exists beside it
+  // and that child file exists inside it (Cargo writes CACHEDIR.TAG into every target/ it creates). The skipped directories
+  // are listed on the returned map (`skippedDirectories`) so a caller can tell a skipped path from a deleted one.
+  const skippedDirectories = [];
+  const skipRules = new Map((options.skipDirectories ?? []).map((rule) => (typeof rule === "string" ? { name: rule } : rule)).map((rule) => [rule.name, rule]));
   for (const key of ["maxDepth", "maxEntries", "maxBytes", "timeoutMs"]) {
     if (!Number.isSafeInteger(limits[key]) || limits[key] < 1) throw new RangeError(`${key} must be a positive integer`);
   }
@@ -73,6 +78,15 @@ export function captureWorkspaceSnapshot(root, options = {}) {
           const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
           const absolute = path.join(`/proc/self/fd/${descriptor}`, name);
           checkEntry(relative, depth + 1);
+          const skipRule = skipRules.get(name);
+          if (skipRule && (!skipRule.sibling || fs.existsSync(path.join(`/proc/self/fd/${descriptor}`, skipRule.sibling))) &&
+              (!skipRule.child || fs.existsSync(path.join(absolute, skipRule.child)))) {
+            // Counted as one entry; the directory's contents are never listed.
+            let skipped;
+            try { skipped = fs.lstatSync(absolute); }
+            catch (error) { snapshotError(`cannot inspect ${relative}: ${error?.message ?? error}`); }
+            if (skipped.isDirectory()) { skippedDirectories.push({ path: relative, quiet: skipRule.quiet === true }); continue; }
+          }
           let stat;
           try { stat = fs.lstatSync(absolute); }
           catch (error) { snapshotError(`cannot inspect ${relative}: ${error?.message ?? error}`); }
@@ -127,6 +141,7 @@ export function captureWorkspaceSnapshot(root, options = {}) {
   visit(workspace, "", 0, rootStat);
   checkDeadline();
   if (!entries.size) snapshotError("workspace contains no regular files or symlinks");
+  entries.skippedDirectories = skippedDirectories;
   return entries;
 }
 
@@ -143,10 +158,57 @@ function changedWorkspacePaths(baseline, candidate) {
   return changed;
 }
 
-const excludedBuildConfiguration = /(?:^|\/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]+)?\.json|(?:webpack|vite|rollup|postcss|babel|jest|vitest|eslint|next|nuxt|tsup|turbo|metro)\.config\.[^/]+|scripts\/(?:build|compile|typecheck)\.[cm]?[jt]s)$/i;
+/**
+ * Pinning policy, one rule: a file the build or a checker obeys keeps its pre-agent content and an edit to it is reported in
+ * `ignoredCandidateChanges`. Two kinds of path are pinned, and nothing else is:
+ *  - files whose name is unambiguous at any depth (package manifests, lockfiles, `tsconfig*.json`, `Cargo.toml`, `go.mod`,
+ *    `build.rs`, `setup.py`, `conftest.py`, `Makefile`, ...);
+ *  - tool configuration and build scripts at the project root, or at a package root one level under `packages/`, `apps/`,
+ *    `libs/`, `crates/`, `modules/` or `services/` (`.babelrc*`, `.eslintrc*`, `.mocharc.*`, `<tool>.config.*` for a named list
+ *    of tools, `build.*s`, `gulpfile.*`, `scripts/build.*s`, `tools/*.js`, ...).
+ * Everything else is carried if it is a source or data type and reported if it is not, so ordinary source such as
+ * `src/config/database.config.ts` or `src/build.ts` reaches the build.
+ */
+const PACKAGE_ROOT = String.raw`(?:(?:packages|apps|libs|crates|modules|services)\/[^/]+\/)?`;
+const pinnedAnyDepth = new RegExp(String.raw`(?:^|\/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]+)?\.json|(?:pyright|js)config\.json|build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?)$`, "i");
+const pinnedAtPackageRoot = new RegExp(String.raw`^${PACKAGE_ROOT}(?:\.babelrc(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.mocharc\.[^/]+|eslint\.config\.[^/]+|(?:webpack|vite|vitest|rollup|postcss|babel|jest|next|nuxt|tsup|turbo|metro|tailwind|prettier|astro|playwright|cypress|karma|esbuild|gulp|stylelint|commitlint|svelte)\.config\.[^/]+|\.?ruff\.toml|(?:clippy|rustfmt|deny)\.toml|biome\.jsonc?|deno\.jsonc?|\.swcrc|tslint\.json|\.golangci\.ya?ml|\.rubocop\.yml|angular\.json|project\.json|nx\.json|lerna\.json|(?:build|compile|typecheck|gulpfile|Gruntfile|Jakefile)\.[cm]?[jt]s|scripts\/(?:build|compile|typecheck)\.[cm]?[jt]s|tools\/[^/]+\.[cm]?js)$`, "i");
 
-function sourceOverlayPath(relative) {
-  return isSupportedSyntaxPath(relative) && !excludedBuildConfiguration.test(relative);
+/**
+ * Candidate file types carried into the pinned workspace: source code and data a build reads. Anything else the agent
+ * changed (shell scripts, Gradle/Maven/Ruby/Just build files, INI configuration, lockfiles, binaries, symlinks) keeps its
+ * baseline content and is reported in `details.ignoredCandidateChanges`, because a build can run or obey it.
+ */
+const INPUT_EXTENSIONS = new Set([".json", ".css", ".scss", ".less", ".sql", ".proto", ".graphql", ".html", ".svg", ".txt", ".csv", ".yaml", ".yml", ".toml",
+  ".go", ".c", ".h", ".cc", ".cpp", ".hpp", ".java", ".kt", ".cs", ".swift"]);
+
+function carriedInputPath(relative) {
+  return isSupportedSyntaxPath(relative) || INPUT_EXTENSIONS.has(path.extname(relative).toLowerCase());
+}
+
+/**
+ * Dependency, cache and build-output directories (at any depth): skipped by the snapshot, so never overlaid. A virtualenv
+ * or cache directory is recognised by its marker file and, like `target/`, is reported in `ignoredCandidateChanges` when
+ * the baseline and the candidate disagree about skipping it. `node_modules/` and `__pycache__/` are never reported. `target` is skipped only where it is Cargo output: beside a `Cargo.toml` and holding Cargo's `CACHEDIR.TAG`;
+ * elsewhere it is an ordinary directory and is carried or reported like any other.
+ */
+const DEPENDENCY_DIRECTORIES = [
+  { name: "node_modules", quiet: true }, { name: "__pycache__", quiet: true },
+  { name: ".venv", child: "pyvenv.cfg" }, { name: "venv", child: "pyvenv.cfg" },
+  { name: ".mypy_cache", child: "CACHEDIR.TAG" }, { name: ".pytest_cache", child: "CACHEDIR.TAG" },
+  { name: "target", sibling: "Cargo.toml", child: "CACHEDIR.TAG" },
+];
+
+function pinnedBuildInput(relative) {
+  return pinnedAnyDepth.test(relative) || pinnedAtPackageRoot.test(relative);
+}
+
+/** Remove one entry without following it. `fs.rmSync` leaves a dangling symlink in place on current Node. */
+function removeEntry(target) {
+  let stat;
+  try { stat = fs.lstatSync(target); }
+  catch (error) { if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return; throw error; }
+  if (stat.isDirectory()) fs.rmSync(target, { recursive: true, force: true });
+  else fs.unlinkSync(target);
 }
 
 function readVerifiedCandidateFile(root, relative, snapshotEntry) {
@@ -186,23 +248,33 @@ function readVerifiedCandidateFile(root, relative, snapshotEntry) {
 
 function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorkspace) {
   if (!baselineWorkspace) throw new Error("no pre-agent build configuration workspace is available");
-  const baseline = captureWorkspaceSnapshot(baselineWorkspace);
-  const candidate = captureWorkspaceSnapshot(candidateWorkspace);
+  const snapshotOptions = { skipDirectories: DEPENDENCY_DIRECTORIES };
+  const baseline = captureWorkspaceSnapshot(baselineWorkspace, snapshotOptions);
+  const candidate = captureWorkspaceSnapshot(candidateWorkspace, snapshotOptions);
+  const ignored = [];
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-evaluator-pinned-config-"));
   const pinnedWorkspace = path.join(tempRoot, "workspace");
   try {
     fs.cpSync(baselineWorkspace, pinnedWorkspace, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
+    // One skip decision for both trees: a path under a directory either snapshot skipped is neither overlaid nor deleted.
+    const skipped = new Map();
+    for (const side of [baseline, candidate]) for (const item of side.skippedDirectories) skipped.set(item.path, (skipped.get(item.path) ?? 0) + 1);
+    const quiet = new Set([...baseline.skippedDirectories, ...candidate.skippedDirectories].filter((item) => item.quiet).map((item) => item.path));
+    for (const [directory, sides] of skipped) if (sides === 1 && !quiet.has(directory)) ignored.push(`${directory}/`);
+    const underSkipped = (relative) => { for (const directory of skipped.keys()) if (relative.startsWith(`${directory}/`)) return true; return false; };
     const paths = new Set([...baseline.keys(), ...candidate.keys()]);
     for (const relative of paths) {
-      if (!sourceOverlayPath(relative)) continue;
+      if (underSkipped(relative)) continue;
       const before = baseline.get(relative);
       const after = candidate.get(relative);
       if (before && after && sameEntry(before, after)) continue;
+      if (pinnedBuildInput(relative) || !carriedInputPath(relative)) { ignored.push(relative); continue; }
       const target = path.join(pinnedWorkspace, ...relative.split("/"));
       if (!after) {
-        fs.rmSync(target, { force: true });
+        removeEntry(target);
         continue;
       }
+      if (after.kind !== "file") { ignored.push(relative); continue; }
       const { bytes, mode } = readVerifiedCandidateFile(candidateWorkspace, relative, after);
       const targetParent = path.dirname(target);
       const parents = [];
@@ -215,7 +287,7 @@ function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorkspace) {
         try {
           const stat = fs.lstatSync(directory);
           if (stat.isSymbolicLink() || !stat.isDirectory()) {
-            fs.rmSync(directory, { recursive: true, force: true });
+            removeEntry(directory);
             fs.mkdirSync(directory, { recursive: false });
           }
         } catch (error) {
@@ -226,7 +298,7 @@ function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorkspace) {
       // The copied baseline can contain a symlink at this path. Remove the
       // entry itself, then create exclusively so a final-component symlink
       // can never redirect candidate bytes outside the pinned workspace.
-      fs.rmSync(target, { recursive: true, force: true });
+      removeEntry(target);
       const descriptor = fs.openSync(
         target,
         fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0),
@@ -239,7 +311,7 @@ function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorkspace) {
         fs.closeSync(descriptor);
       }
     }
-    return { tempRoot, workspace: pinnedWorkspace };
+    return { tempRoot, workspace: pinnedWorkspace, ignored: ignored.sort() };
   } catch (error) {
     fs.rmSync(tempRoot, { recursive: true, force: true });
     throw error;
@@ -266,11 +338,15 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
   let pinnedWorkspace = null;
   let pinnedWorkspaceRoot = null;
   let pinnedWorkspaceError = null;
+  let pinnedIgnored = [];
+  // Candidate edits to pinned build configuration are not applied; say so in the result rather than dropping them.
+  const withIgnored = (result) => ({ ...result, details: { ...result.details, ignoredCandidateChanges: pinnedIgnored } });
   if (needsEvaluatorConfigurationBaseline(task)) {
     try {
       const pinned = createPinnedCandidateWorkspace(typecheckBaselineWorkspace, candidateWorkspace);
       pinnedWorkspace = pinned.workspace;
       pinnedWorkspaceRoot = pinned.tempRoot;
+      pinnedIgnored = pinned.ignored;
     } catch (error) {
       pinnedWorkspaceError = String(error?.message ?? error);
     }
@@ -316,7 +392,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
           const timeoutMs = spec.timeoutMs ?? task.build?.timeoutMs;
           if (!command) results.push(evaluatorResult("build", false, 0, { error: "no build command specified" }));
           else if (!pinnedWorkspace) results.push(evaluatorResult("build", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
-          else results.push(await evaluateBuild({ command, args, cwd: pinnedWorkspace, timeoutMs }));
+          else results.push(withIgnored(await evaluateBuild({ command, args, cwd: pinnedWorkspace, timeoutMs })));
           break;
         }
         case "typecheck_clean": {
@@ -330,7 +406,7 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
           const candSpec = { ...candidateSpec, cwd: pinnedWorkspace ?? candidateWorkspace };
           if (!baseSpec?.command || !candSpec?.command) results.push(evaluatorResult("typecheck_clean", false, 0, { error: explicitBaseline ? "no typecheck command specified" : "no pre-agent typecheck baseline workspace" }));
           else if (!pinnedWorkspace) results.push(evaluatorResult("typecheck_clean", false, 0, { error: pinnedWorkspaceError ?? "no pre-agent build configuration workspace is available" }));
-          else results.push(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec }));
+          else results.push(withIgnored(await evaluateTypecheckClean({ baseline: baseSpec, candidate: candSpec })));
           break;
         }
         default:
