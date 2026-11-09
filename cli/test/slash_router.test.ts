@@ -344,7 +344,8 @@ describe("slash router: workspace commands", () => {
       execSync("git add named.txt && git commit -q -m named", { cwd: dir });
       host.setWorkspace(dir);
       assert.equal((await reply("worktree", "merge")).output, "No active speculative worktree to merge.");
-      const merged = await reply("worktree", "merge ^");
+      // the receipt gate (WP-1316) has its own tests; these merges are about routing and the session move, so they use the documented waiver
+      const merged = await reply("worktree", "merge ^ --no-verify-receipt --reason slash-router-fixture");
       assert.equal(merged.success, true, merged.output);
       assert.match(merged.output, /Fast-forwarded/);
       assert.ok(fs.existsSync(path.join(repo, "named.txt")));
@@ -362,7 +363,7 @@ describe("slash router: workspace commands", () => {
       execSync("git add inside.txt && git commit -q -m inside", { cwd: dir });
       const inside = new ApplicationCore({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 4, temperature: 0, workspace: dir, shell: "bash" } as any);
       try {
-        const merged = runWorktreeCommand(["merge"], { cwd: dir, readOnly: false });
+        const merged = runWorktreeCommand(["merge", "--no-verify-receipt", "--reason", "agent move fixture"], { cwd: dir, readOnly: false });
         assert.equal(merged.success, true, merged.output);
         assert.equal(fs.existsSync(dir), false);
         const moveTo = relocationAfter(merged, dir);
