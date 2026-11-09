@@ -419,3 +419,124 @@ test("a BLOCKED dependency satisfies a failure_debugger only while it holds fail
   sched.decide();
   assert.deepEqual(statuses(), { verify: "RUNNABLE", debug: "WAITING_ON_DEPENDENCY", review: "WAITING_ON_DEPENDENCY" }, "a retried tester is unfinished input again");
 });
+
+// ---------------------------------------------------------------- content of protected files cannot leave through new files; repo-configured commands never run
+
+function protectedRepo(): { repo: string; run: (...a: string[]) => void } {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-auto-protected-"));
+  const run = (...a: string[]) => { execFileSync("git", a, { cwd: repo, stdio: "ignore" }); };
+  run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t");
+  fs.writeFileSync(path.join(repo, ".env"), "API_KEY=plainvalue123\nDB_PASSWORD=hunter2\n");
+  fs.writeFileSync(path.join(repo, "keep.txt"), "keep1\n");
+  run("add", "-A"); run("commit", "-q", "-m", "base");
+  fs.writeFileSync(path.join(repo, "keep.txt"), "keep2 VISIBLE_CHANGE\n");
+  return { repo, run };
+}
+
+test("a protected file moved and rewritten past git's similarity threshold does not reach the diff as a new file", async () => {
+  const { repo } = protectedRepo();
+  fs.renameSync(path.join(repo, ".env"), path.join(repo, "moved.cfg"));
+  fs.appendFileSync(path.join(repo, "moved.cfg"), "new line of unrelated text\n".repeat(12));
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  const prompt = fake.prompts[0];
+  assert.match(prompt, /VISIBLE_CHANGE/);
+  assert.doesNotMatch(prompt, /hunter2|plainvalue123|unrelated text/);
+  assert.match(prompt, /new file\(s\) omitted.*protected file/);
+});
+
+test("a protected file edited in place hides new files, which may carry its content", async () => {
+  const { repo } = protectedRepo();
+  fs.writeFileSync(path.join(repo, ".env"), "API_KEY=plainvalue123\nDB_PASSWORD=hunter3\n");
+  // Enough other text that git's copy detection does not pair it with .env.
+  fs.writeFileSync(path.join(repo, "copy.txt"), `API_KEY=plainvalue123\nDB_PASSWORD=hunter2\n${"more unrelated text\n".repeat(12)}`);
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  assert.match(fake.prompts[0], /VISIBLE_CHANGE/);
+  assert.doesNotMatch(fake.prompts[0], /hunter|plainvalue123/);
+});
+
+test("new files are shown when no protected file changed", async () => {
+  const { repo } = protectedRepo();
+  fs.writeFileSync(path.join(repo, "fresh.txt"), "FRESH_FILE_BODY\n");
+  const fake = fakeAgent("security_reviewer");
+  await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
+  assert.match(fake.prompts[0], /FRESH_FILE_BODY/);
+  assert.doesNotMatch(fake.prompts[0], /omitted/);
+});
+
+test("collecting the diff runs no repository-configured filter or fsmonitor command", async () => {
+  const { repo, run } = protectedRepo();
+  const markers = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-auto-markers-"));
+  fs.writeFileSync(path.join(repo, ".gitattributes"), "*.txt filter=evil\n");
+  run("add", ".gitattributes"); run("commit", "-q", "-m", "attrs");
+  run("config", "filter.evil.clean", `sh -c 'touch ${markers}/filter; cat'`);
+  const monitor = path.join(markers, "fsmonitor.sh");
+  fs.writeFileSync(monitor, `#!/bin/sh\ntouch ${markers}/fsmonitor\n`, { mode: 0o755 });
+  run("config", "core.fsmonitor", monitor);
+  fs.rmSync(path.join(markers, "filter"), { force: true }); fs.rmSync(path.join(markers, "fsmonitor"), { force: true });
+  fs.writeFileSync(path.join(repo, "keep.txt"), "keep3 VISIBLE_CHANGE\n");
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
+  assert.equal(fs.existsSync(path.join(markers, "filter")), false, "the clean filter ran");
+  assert.equal(fs.existsSync(path.join(markers, "fsmonitor")), false, "the fsmonitor hook ran");
+  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
+  assert.match(fake.prompts[0], /VISIBLE_CHANGE/);
+});
+
+test("a filter assigned outside the worktree's .gitattributes fails closed without running", async () => {
+  const { repo, run } = protectedRepo();
+  const markers = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-auto-markers-"));
+  fs.mkdirSync(path.join(repo, ".git", "info"), { recursive: true });
+  fs.writeFileSync(path.join(repo, ".git", "info", "attributes"), "*.txt filter=evil\n");
+  run("config", "filter.evil.clean", `sh -c 'touch ${markers}/filter; cat'`);
+  const fake = fakeAgent("security_reviewer");
+  const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
+  assert.equal(fs.existsSync(path.join(markers, "filter")), false, "the clean filter ran");
+  assert.equal(outcome.kind, "failed");
+  assert.match((outcome as { reason: string }).reason, /unified_diff.*filter/);
+});
+
+test("unchanged inputs are rendered into a resumed prompt only once", async () => {
+  const repo = repoWithChange();
+  const history: ChatMessage[] = [
+    { role: "system", content: "system" },
+    { role: "user", content: "[Work unit 'u1': security_reviewer] Part of the operation: Harden the parser\n\nTask:\ndo the review\n\nCall task_completed with a concise summary when done." },
+  ];
+  const resumed: WorkUnit = { ...unit("security_reviewer", {}), agentTaskId: "task-auto", runs: 1 };
+  const prompts: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const fake = fakeAgent("security_reviewer");
+    fake.agent.getMessages = () => history;
+    fake.agent.recoverFromTaskState = async () => ({ success: true, state: { currentOperation: null }, obligationRecordPresent: true, interrupted: false });
+    await exec(fake.agent, repo).run(resumed, resource, ctx(repo, { resumeReason: "retry" }));
+    prompts.push(fake.prompts[0]);
+  }
+  assert.match(prompts[0], /Current inputs/);
+  assert.doesNotMatch(prompts[1], /Current inputs/, "the same inputs are already in the conversation");
+  fs.writeFileSync(path.join(repo, "a.txt"), "three NEWER_EDIT\n");
+  const fake = fakeAgent("security_reviewer");
+  fake.agent.getMessages = () => history;
+  fake.agent.recoverFromTaskState = async () => ({ success: true, state: { currentOperation: null }, obligationRecordPresent: true, interrupted: false });
+  await exec(fake.agent, repo).run(resumed, resource, ctx(repo, { resumeReason: "retry" }));
+  assert.match(fake.prompts[0], /Current inputs[\s\S]*NEWER_EDIT/, "changed inputs are rendered again");
+});
+
+test("failed-run and prerequisite summaries are credential-redacted before they reach a prompt or the unit", async () => {
+  const repo = repoWithChange();
+  const tester = fakeAgent("tester");
+  tester.agent.runTurn = async () => ({
+    execution: "COMPLETED", outcome: "UNVERIFIED", acceptance: "NOT_REQUESTED", modelStop: "TASK_COMPLETED", finalOutputComplete: true,
+    verification: { command: "npm test", status: "FAILED", hasExecutedTests: true }, interruption: null, inferenceFailure: null,
+    steps: { used: 2, max: 5, limitReached: false }, unverifiedChangesPending: false, finishedAt: new Date().toISOString(),
+  } as unknown as TurnResult);
+  tester.agent.getCompletionSummary = () => ({ summary: `failed with key ${SECRET}` });
+  const failed = await exec(tester.agent, repo).run(unit("tester"), resource, ctx(repo));
+  assert.ok(!JSON.stringify((failed as any).failedRun).includes(SECRET), "failedRun.summary is redacted");
+  const debuggerAgent = fakeAgent("failure_debugger");
+  const deps = [{ id: "t", title: "Tests", summary: `token ${SECRET}`, verification: { command: "npm test", status: "FAILED", hasExecutedTests: true }, failed: true as const }];
+  await exec(debuggerAgent.agent, repo).run(unit("failure_debugger", {}), resource, ctx(repo, { dependencies: deps }));
+  assert.ok(!debuggerAgent.prompts[0].includes(SECRET), "the prerequisite summary is redacted");
+});
