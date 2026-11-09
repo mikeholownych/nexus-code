@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
 import { validateBranchName } from "../worktrunk/paths.js";
+import { WORKTREE_BINDING_VERSION } from "./state_schema.js";
 import { readRegistry } from "../worktrunk/registry.js";
 import { openRepo } from "../worktrunk/repo.js";
 import { ensurePrivateDir, writePrivateFile, appendPrivateFile } from "./durable_file.js";
@@ -99,7 +100,7 @@ export function isNamedWorktreePath(
   worktreePath: string,
   binding: { kind?: string; bindingVersion?: number; branch?: string }
 ): boolean {
-  if (binding.kind !== "named" || binding.bindingVersion !== 1 || typeof binding.branch !== "string" || validateBranchName(binding.branch)) return false;
+  if (binding.kind !== "named" || binding.bindingVersion !== WORKTREE_BINDING_VERSION || typeof binding.branch !== "string" || validateBranchName(binding.branch)) return false;
   try {
     const resolved = path.resolve(worktreePath);
     if (fs.realpathSync(resolved) !== resolved) return false;

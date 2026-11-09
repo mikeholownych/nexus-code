@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { DurableStateManager, CorruptStateError, UnsupportedSchemaVersionError, CURRENT_STATE_SCHEMA_VERSION, type DurableTaskState } from "../src/core/state.js";
+import { DurableStateManager, CorruptStateError, TaskStateWriteError, UnsupportedSchemaVersionError, CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION, type DurableTaskState } from "../src/core/state.js";
 import { isManagedWorktreePath, isNamedWorktreePath } from "../src/core/persistence_protection.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 import { runWorktreeCommand } from "../src/worktrunk/command.js";
@@ -101,6 +101,17 @@ describe("named worktree binding", () => {
         fs.writeFileSync(file, JSON.stringify(raw));
         assert.throws(() => manager.loadTaskState(taskId), expected, taskId);
       }
+    } finally { f.cleanup(); }
+  });
+
+  test("save applies the same binding rules as load: a version without a kind is refused, not defaulted", () => {
+    const f = fixture();
+    try {
+      const manager = new DurableStateManager({ baseDir: f.tasks, workspacePaths: [WorkspacePath.fromSelectedWorkspace(f.repo), WorkspacePath.fromSelectedWorkspace(f.dir)] });
+      const { kind: _kind, ...versionOnly } = namedBinding(f);
+      assert.throws(() => manager.saveTaskState(stateFor(f, "task-vo", versionOnly)), TaskStateWriteError);
+      assert.throws(() => manager.saveTaskState(stateFor(f, "task-vo2", { ...namedBinding(f), bindingVersion: WORKTREE_BINDING_VERSION + 1 })), UnsupportedSchemaVersionError);
+      assert.equal(fs.readdirSync(f.tasks).some((n) => n.includes("task-vo")), false, "nothing persisted");
     } finally { f.cleanup(); }
   });
 

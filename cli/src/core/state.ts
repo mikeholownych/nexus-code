@@ -28,9 +28,8 @@ import { protectArchivedMessages } from "./persistence_protection.js";
 import { updateTaskMessages, readTaskMessages, TaskMessageLogError, type TaskMessageCursor } from "./task_message_log.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
 
-import { CURRENT_STATE_SCHEMA_VERSION } from "./state_schema.js";
-import { validateBranchName } from "../worktrunk/paths.js";
-export { CURRENT_STATE_SCHEMA_VERSION } from "./state_schema.js";
+import { CURRENT_STATE_SCHEMA_VERSION, normalizeWorktreeBinding } from "./state_schema.js";
+export { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION } from "./state_schema.js";
 
 interface StoredTaskRecord {
   filePath: string;
@@ -80,9 +79,6 @@ export interface InFlightOperationRecord {
   status: OperationLifecycleStatus;
   error?: string;
 }
-
-/** Version of the worktree binding shape itself (independent of the task-state schema version). */
-export const WORKTREE_BINDING_VERSION = 1;
 
 export interface DurableWorktreeBinding {
   taskId: string;
@@ -547,12 +543,10 @@ export class DurableStateManager {
     }
 
     if (state.worktreeBinding) {
-      const binding = state.worktreeBinding;
-      binding.kind ??= "task";
-      binding.bindingVersion ??= WORKTREE_BINDING_VERSION;
-      if (binding.kind === "named" && validateBranchName(binding.branch) !== undefined) {
-        throw new TaskStateWriteError(state.taskId, "Named worktree binding has an invalid branch");
-      }
+      // The same rules as loadTaskState applies (state_schema.ts), so a record this build writes is one it can read.
+      const problem = normalizeWorktreeBinding(state.worktreeBinding);
+      if (problem?.problem === "unsupported") throw new UnsupportedSchemaVersionError(problem.version);
+      if (problem) throw new TaskStateWriteError(state.taskId, problem.reason);
     }
     state.updatedAt = new Date().toISOString();
     if (state.schemaVersion > CURRENT_STATE_SCHEMA_VERSION) throw new UnsupportedSchemaVersionError(state.schemaVersion);
@@ -1138,24 +1132,15 @@ export class DurableStateManager {
   }
 
   /**
-   * Migrates and validates the worktree binding: records without `kind` are task bindings (version 1); an unknown
-   * kind, a missing or malformed version, or an unusable named branch is corruption; a newer binding version fails
-   * closed rather than being read with today's rules.
+   * Migrates and validates the worktree binding with the shared rules in state_schema.ts: records without `kind` are
+   * task bindings (version 1); corruption quarantines the file; a newer binding version fails closed.
    */
   private normalizeWorktreeBinding(state: DurableTaskState, taskId: string, record: StoredTaskRecord): void {
-    const binding = state.worktreeBinding;
-    if (!binding) return;
-    const corrupt = (why: string): never => { throw new CorruptStateError(taskId, why, this.quarantineFile(record.filePath)); };
-    if (binding.kind === undefined) {
-      if (binding.bindingVersion !== undefined) corrupt("Worktree binding has a version but no kind");
-      binding.kind = "task";
-      binding.bindingVersion = WORKTREE_BINDING_VERSION;
-      return;
-    }
-    if (binding.kind !== "task" && binding.kind !== "named") corrupt("Worktree binding has an unknown kind");
-    if (!Number.isSafeInteger(binding.bindingVersion) || (binding.bindingVersion as number) < 1) corrupt("Worktree binding has no valid version");
-    if ((binding.bindingVersion as number) > WORKTREE_BINDING_VERSION) throw new UnsupportedSchemaVersionError(binding.bindingVersion as number);
-    if (binding.kind === "named" && (typeof binding.branch !== "string" || validateBranchName(binding.branch) !== undefined)) corrupt("Named worktree binding has an invalid branch");
+    if (!state.worktreeBinding) return;
+    const problem = normalizeWorktreeBinding(state.worktreeBinding);
+    if (!problem) return;
+    if (problem.problem === "unsupported") throw new UnsupportedSchemaVersionError(problem.version);
+    throw new CorruptStateError(taskId, problem.reason, this.quarantineFile(record.filePath));
   }
 
   /**
