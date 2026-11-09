@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter } from "../src/worktrunk/command.js";
+import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter, tokenizeWorktreeArgs } from "../src/worktrunk/command.js";
 import { readRegistry } from "../src/worktrunk/registry.js";
 import { backupRef } from "../src/worktrunk/merge.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
@@ -613,5 +613,19 @@ test("prune does not force-remove a stale entry that was recreated while it wait
     try { result = wt(f, f.repo, ["prune", "--min-age", "0s"]); } finally { delete core.removeSeams.beforeLock; }
     assert.equal(fs.readFileSync(path.join(dir, "new-work.txt"), "utf8"), "precious\n", `the recreated worktree must survive: ${result.output}`);
     assert.match(git(f.repo, "worktree", "list", "--porcelain"), /recycled-by-switch/);
+  } finally { f.cleanup(); }
+});
+
+test("a quoted merge message survives the interactive tokenizer and becomes the commit message", () => {
+  assert.deepEqual(tokenizeWorktreeArgs('merge ^ -m "feat: add login" --no-remove'), ["merge", "^", "-m", "feat: add login", "--no-remove"]);
+  assert.deepEqual(tokenizeWorktreeArgs("merge --message 'it''s fine'"), ["merge", "--message", "its fine"]);
+  assert.deepEqual(tokenizeWorktreeArgs("  list   --json "), ["list", "--json"]);
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/quoted");
+    fs.writeFileSync(path.join(dir, "d.txt"), "uncommitted\n");
+    const r = wt(f, dir, tokenizeWorktreeArgs('merge ^ -m "feat: add login" --no-remove'));
+    assert.equal(r.success, true, r.output);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat: add login");
   } finally { f.cleanup(); }
 });
