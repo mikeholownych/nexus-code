@@ -39,6 +39,8 @@ const STOPWORDS = new Set(
     // common request verbs and fillers: they say what the operator wants done, not which domain it is in
     "write writes wrote read reads add adds create creates build builds run runs fix fixes update updates change changes check checks help get gets set sets show find list look give take new now see tell explain implement make test tests try let can't dont does did done say hello thanks thank").split(" "),
 );
+/** Two-letter words that never name a domain, even inside a skill name (`pdf-to-text`). */
+const SHORT_STOPWORDS = new Set("to of in on an at by is it be do as or if we my me up so no us am he".split(" "));
 /** Longest operator text (characters) and number of distinct terms the ranker will look at. */
 export const MAX_QUERY_CHARS = 2_000;
 const MAX_QUERY_TERMS = 200;
@@ -46,8 +48,10 @@ const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hang
 /**
  * Lower-case word stems of `text`: Unicode letters and digits (accents folded: u-umlaut to u), short words and stop
  * words dropped, English plural/-ing/-ed folded. Runs of CJK text, which have no spaces, become character bigrams.
+ * Two-character words (`go`, `ci`, `db`, `ml`, `ui`) are kept only when `keepShort` accepts them: they carry meaning
+ * when a skill is named after them and are noise otherwise.
  */
-function tokenize(text: string): string[] {
+function tokenize(text: string, keepShort: (word: string) => boolean = () => false): string[] {
   const out: string[] = [];
   const folded = text.toLowerCase().normalize("NFKD").replace(/\p{M}+/gu, "");
   for (const raw of folded.split(/[^\p{L}\p{N}]+/u)) {
@@ -56,6 +60,10 @@ function tokenize(text: string): string[] {
       const chars = Array.from(raw);
       if (chars.length === 1) out.push(raw);
       for (let i = 0; i + 1 < chars.length; i++) out.push(chars[i] + chars[i + 1]);
+      continue;
+    }
+    if (raw.length === 2 && !SHORT_STOPWORDS.has(raw) && keepShort(raw)) {
+      out.push(raw);
       continue;
     }
     if (raw.length < 3 || STOPWORDS.has(raw)) continue;
@@ -342,9 +350,10 @@ export class SkillManager {
    * number of installed skills and that are within reach of the best match; an unrelated text returns nothing.
    */
   public findSkills(text: string, limit: number = MAX_SKILL_MATCHES): Skill[] {
-    const query = new Set(tokenize(text.slice(0, MAX_QUERY_CHARS)).slice(0, MAX_QUERY_TERMS));
     const index = this.rankIndex();
-    if (query.size === 0 || !index) return [];
+    if (!index) return [];
+    const query = new Set(tokenize(text.slice(0, MAX_QUERY_CHARS), (w) => index.shortNames.has(w)).slice(0, MAX_QUERY_TERMS));
+    if (query.size === 0) return [];
     const { skills, docs, df, avg } = index;
     const N = docs.length;
     const scored = skills.map((skill, i) => {
@@ -372,24 +381,26 @@ export class SkillManager {
       .map((m) => m.skill);
   }
 
-  private rankCache?: { skills: Skill[]; docs: Array<{ tf: Map<string, number>; len: number }>; df: Map<string, number>; avg: number };
+  private rankCache?: { skills: Skill[]; docs: Array<{ tf: Map<string, number>; len: number }>; df: Map<string, number>; avg: number; shortNames: Set<string> };
   /** The term statistics of the trusted skills, built once per catalog (`refresh` drops it). */
   private rankIndex() {
     if (this.rankCache) return this.rankCache;
     const skills = this.listSkills();
     if (skills.length === 0) return undefined;
     const df = new Map<string, number>();
+    // Two-character words that occur in some skill's name: the only short words worth scoring.
+    const shortNames = new Set(skills.flatMap((s) => tokenize(s.name, () => true).filter((t) => t.length === 2)));
     const docs = skills.map((s) => {
       const tf = new Map<string, number>();
-      for (const t of tokenize(s.name)) tf.set(t, (tf.get(t) ?? 0) + 2);
-      for (const t of tokenize(s.description)) tf.set(t, (tf.get(t) ?? 0) + 1);
+      for (const t of tokenize(s.name, () => true)) tf.set(t, (tf.get(t) ?? 0) + 2);
+      for (const t of tokenize(s.description, (w) => shortNames.has(w))) tf.set(t, (tf.get(t) ?? 0) + 1);
       let len = 0;
       for (const n of tf.values()) len += n;
       for (const t of tf.keys()) df.set(t, (df.get(t) ?? 0) + 1);
       return { tf, len };
     });
     const avg = docs.reduce((n, d) => n + d.len, 0) / docs.length || 1;
-    return (this.rankCache = { skills, docs, df, avg });
+    return (this.rankCache = { skills, docs, df, avg, shortNames });
   }
 
   public getUntrustedSkill(name: string): Skill | null {

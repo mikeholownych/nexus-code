@@ -178,4 +178,20 @@ describe("review round 2026-11-09 (PR #465 follow-ups)", () => {
     assert.deepEqual(two.findSkills("terraform").map((s) => s.name), ["terraform-plan"]);
     assert.deepEqual(two.findSkills("bake a sourdough loaf"), []);
   });
+
+  test("item 9: two-character terms that occur in a skill name match (go, ci, db, ml, ui)", () => {
+    const ws = path.join(home, "ws-short");
+    for (const [name, description] of [
+      ["go-modules", "Manage module dependencies, vendoring and version upgrades for the toolchain."],
+      ["ci-pipelines", "Author and debug pipeline definitions and runner caches."],
+      ["db-migrations", "Plan schema migrations with rollback scripts."],
+      ["ml-training", "Train and evaluate models with experiment tracking."],
+      ["ui-review", "Review screens for layout and accessibility issues."],
+    ]) write(path.join(ws, ".nexus", "skills"), name, description);
+    const mgr = new SkillManager(ws, { trusted: true });
+    for (const [query, name] of [["my go build is broken", "go-modules"], ["the ci is red", "ci-pipelines"], ["db schema", "db-migrations"], ["ml model", "ml-training"], ["ui polish", "ui-review"]]) {
+      assert.equal(mgr.findSkills(query)[0]?.name, name, query);
+    }
+    assert.deepEqual(mgr.findSkills("go to it, do it as an op"), mgr.findSkills("go"), "two-letter words outside skill names add nothing");
+  });
 });
