@@ -20,9 +20,11 @@ Severity scale: blocker = the core workflow fails for a normal user; major = ser
 |---|---|
 | Blocker | 1 |
 | Major | 9 |
-| Minor | 10 |
+| Minor | 9 |
 | Polish | 7 |
-| Total | 27 |
+| Total | 26 |
+
+D-20 (intermittent, unconfirmed) is recorded under Minor but not counted.
 
 Things that held up (positives, so the list is calibrated): idle CPU 0.0-0.7% (release, 120x40), ~1.3% with spinner; rendering is diff-based (a 9 s markdown stream wrote 6.5 KB, no full clears, no flicker); unicode editing is grapheme-correct (CJK, emoji, ZWJ family, combining accent: Left/Backspace removed exactly one grapheme); `NO_COLOR` yields zero colour SGR; terminal fully restored after `/exit` (cooked echo, cursor visible, alt screen off); killing the sidecar with SIGKILL gives a clear "agent stopped, r restart" screen and restart works; Esc/Ctrl-C during a tool kills the child (`sleep 60` gone); resize reflows at 50x15 / 80x24 / 200x60; non-TTY gives `nexus-tui: interactive Nexus TUI requires a terminal`; large bracketed paste collapses to `[Pasted text #n: N lines]` and Ctrl-O/Ctrl-X work.
 

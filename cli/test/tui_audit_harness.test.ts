@@ -147,3 +147,19 @@ test("start passes only the extra arguments it was given, with every path quoted
   assert.deepEqual(call.slice(3, 8), ["bar", "-x", "100", "-y", "30"]);
   assert.deepEqual(commandWords(call).slice(-6), ["-m", "fake-model", "--mode", "review", "-p", "two words"]);
 });
+
+test("the audit's summary table counts the defects its sections record as counted", () => {
+  const text = fs.readFileSync(AUDIT, "utf8");
+  const table = Object.fromEntries([...text.matchAll(/^\| (Blocker|Major|Minor|Polish|Total) \| (\d+) \|/gm)].map((m) => [m[1], Number(m[2])]));
+  assert.deepEqual(Object.keys(table).sort(), ["Blocker", "Major", "Minor", "Polish", "Total"]);
+  const counted: Record<string, number> = { Blocker: 0, Major: 0, Minor: 0, Polish: 0 };
+  let section = "";
+  for (const line of text.split("\n")) {
+    const heading = line.match(/^### (Blocker|Major|Minor|Polish)$/);
+    if (heading) section = heading[1];
+    else if (line.startsWith("## ")) section = "";
+    else if (section && /^\*\*D-\d+/.test(line) && !/not counted/i.test(line)) counted[section]++;
+  }
+  const total = Object.values(counted).reduce((a, b) => a + b, 0);
+  assert.deepEqual(table, { ...counted, Total: total }, `table ${JSON.stringify(table)} vs entries ${JSON.stringify(counted)}`);
+});
