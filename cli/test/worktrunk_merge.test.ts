@@ -259,3 +259,83 @@ test("acceptance: create, copy-ignored, list, merge, prune, remove against a rea
     assert.equal(wt(f, f.repo, ["remove", "accept/three", "--force"]).success, true);
   } finally { f.cleanup(); }
 });
+
+test("backup refs do not collide when branches share prefix names", () => {
+  const f = fixture();
+  try {
+    const fooDir = feature(f, "foo");
+    commitFile(fooDir, "foo.txt", "foo\n", "foo work");
+    assert.equal(wt(f, fooDir, ["merge"]).success, true);
+
+    const fooBarDir = feature(f, "foo/bar");
+    commitFile(fooBarDir, "bar.txt", "bar\n", "bar work");
+    const mergedBar = wt(f, fooBarDir, ["merge"]);
+    assert.equal(mergedBar.success, true, mergedBar.output);
+  } finally { f.cleanup(); }
+});
+
+test("merging when commits cancel each other out (empty squash) succeeds", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/cancel");
+    commitFile(dir, "temp.txt", "temp\n", "add temp");
+    git(dir, "rm", "temp.txt");
+    git(dir, "commit", "-q", "-m", "revert temp");
+    const merged = wt(f, dir, ["merge"]);
+    assert.equal(merged.success, true, merged.output);
+    assert.equal(fs.existsSync(dir), false, "worktree should be cleaned up");
+  } finally { f.cleanup(); }
+});
+
+test("merging into an explicit non-default target fast-forwards and cleans up the source worktree", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "develop"]).success, true);
+    const devDir = dirOf(f, "develop");
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/sub", "--base", "develop"]).success, true);
+    const subDir = dirOf(f, "feat-sub");
+    commitFile(subDir, "sub.txt", "sub\n", "sub work");
+
+    const merged = wt(f, subDir, ["merge", "develop"]);
+    assert.equal(merged.success, true, merged.output);
+    assert.ok(fs.existsSync(path.join(devDir, "sub.txt")), "develop received the merge");
+    assert.equal(fs.existsSync(subDir), false, "source worktree was cleaned up");
+  } finally { f.cleanup(); }
+});
+
+test("merge refuses when the worktree has unresolved conflicts", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/conflict");
+    commitFile(dir, "file.txt", "conflict 1\n", "c1");
+    // Create an unmerged conflict entry in index
+    git(dir, "checkout", "-q", "-b", "other");
+    commitFile(dir, "file.txt", "conflict 2\n", "c2");
+    git(dir, "checkout", "-q", "feat/conflict");
+    git(dir, "merge", "--no-commit", "--no-ff", "other", { allowFailure: true });
+
+    const merged = wt(f, dir, ["merge"]);
+    assert.equal(merged.success, false);
+    assert.match(merged.output, /unresolved conflict/i);
+  } finally { f.cleanup(); }
+});
+
+test("prune summary formatting does not have double spaces in non-dry-run mode", () => {
+  const f = fixture();
+  try {
+    const one = feature(f, "feat/prune-fmt");
+    commitFile(one, "p.txt", "p\n", "p");
+    assert.equal(wt(f, one, ["merge"]).success, true);
+    // make a stale registration by removing directory behind git's back
+    const two = feature(f, "feat/prune-stale");
+    commitFile(two, "s.txt", "s\n", "s");
+    assert.equal(wt(f, two, ["merge", "--no-remove"]).success, true);
+    fs.rmSync(two, { recursive: true, force: true });
+
+    const pruned = wt(f, f.repo, ["prune", "--min-age", "0s"]);
+    assert.equal(pruned.success, true, pruned.output);
+    assert.doesNotMatch(pruned.output, /registration\(s\)  pruned/);
+    assert.match(pruned.output, /registration\(s\) pruned/);
+  } finally { f.cleanup(); }
+});
+

@@ -335,6 +335,22 @@ describe("slash router: workspace commands", () => {
     });
   });
 
+  test("worktree merge with a target reaches the named merge; a bare merge stays the speculative one (01M6VSCBZJN44S6SHYJQE7QV92)", async () => {
+    await withRig(async ({ reply, repo, host }) => {
+      assert.equal((await reply("worktree", "switch -c feature/slash-merge --no-copy")).success, true);
+      const dir = path.join(repo, ".nexus", "worktrees", "feature-slash-merge");
+      fs.writeFileSync(path.join(dir, "named.txt"), "named\n");
+      execSync("git add named.txt && git commit -q -m named", { cwd: dir });
+      host.setWorkspace(dir);
+      assert.equal((await reply("worktree", "merge")).output, "No active speculative worktree to merge.");
+      const merged = await reply("worktree", "merge ^");
+      assert.equal(merged.success, true, merged.output);
+      assert.match(merged.output, /Fast-forwarded/);
+      assert.ok(fs.existsSync(path.join(repo, "named.txt")));
+      assert.equal(fs.existsSync(dir), false);
+    });
+  });
+
   test("git commands outside a repository say so", async () => {
     await withRig(async ({ reply }) => {
       const plain = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plain-"));
