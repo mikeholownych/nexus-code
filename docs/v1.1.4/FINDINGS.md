@@ -120,7 +120,7 @@ Severity set by the fixing agent; the reviewer did not rate these. Each needs it
 
 One row per clause of PLAN.md section 5 "Production bar". A row closes only with the evidence named in its clause; the ledger is necessary, not sufficient, so these rows are OPEN until the release candidate.
 
-|---|---|---|---|---|---|---|
+| Row | Bar clause | WP | Status |
 |---|---|---|---|
 | G-1 | TUI blocker and major defects D-01 to D-10 fixed red-first with captured before and after | WP-1317 | OPEN until WP-1317 lands; tracked per defect in `docs/v1.1.4/TUI-AUDIT-STATUS.md` (audit: `docs/v1.1.4/TUI-AUDIT.md`, PR #444) |
 | G-2 | TUI minor and polish defects D-11 to D-27 fixed, or each with a dated owner decision | WP-1317 | OPEN; same table |
