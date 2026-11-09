@@ -69,7 +69,7 @@ test("ordinary text around a redacted secret is untouched", () => {
   try {
     for (const text of [
       "GET /v1/models/gpt-4o failed in src/a+b/file.ts: see https://llm.example/v1/models",
-      // A path after the word "Bearer" is not a token (01M6VQ71ET1RHSQ05AH0TR1YG2).
+      // A path after the word "Bearer" is not a token.
       "Bearer /api/v1/organizations/x returned 404; retry Bearer api/v1/organizations/default/members later",
     ]) {
       assert.equal(redactDiagnosticForOutput(text), text);
@@ -94,7 +94,7 @@ test("pathological 800 KB inputs are redacted in linear time", () => {
     ["token soup", "A1/+".repeat(Math.ceil(size / 4))],
     ["delimiter soup", "a<`|&?".repeat(Math.ceil(size / 6))],
     ["one huge sk- run", `sk-${"aB3".repeat(Math.ceil(size / 3))}`],
-    // A checkpointed file is scanned whole; `/[.!]+$/` on this was quadratic (01M6VSBN5H912QJ5KTPF5CAEKR).
+    // A checkpointed file is scanned whole; `/[.!]+$/` on this was quadratic.
     ["trailing punctuation run", `${".".repeat(size)}x`],
     ["exclamation run", `${"!".repeat(size)}x`],
     // Many short `sk-` runs with no "/": a backward search for a path separator must not reach into earlier text.
@@ -149,7 +149,7 @@ test("a key directly followed by / or - is redacted whole, with no tail", () => 
 /**
  * Two classifiers can match the same credential at the same place, one taking more of it than the other. The longest
  * match wins and the shorter one is dropped: replacing the shorter one first would leave the rest of the credential in
- * the text (01M6VSJWP30F54V0FG128H06DQ), and a second entry for the same credential is a second vault mapping.
+ * the text, and a second entry for the same credential is a second vault mapping.
  */
 test("a credential matched at the same place by two classifiers is classified once, as the longest match", () => {
   const boundary = new InformationFlowBoundary();
