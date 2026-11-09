@@ -512,6 +512,34 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     }
   });
 
+  test("with planner/coder routing, a queued /compact --llm stays held while the window covers the client it would use", async () => {
+    const ctx = await interruptedThenRestored({});
+    const plannerGateway = await startRecoveryGateway(() => ({ kind: "text", content: "planner answer" }));
+    const plannerHost = agentFor(plannerGateway.url, makeRepo(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-planner-"))), fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-planner-state-")), fakeClock());
+    try {
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      const a = ctx.resumed as any;
+      // Step 1 runs on the planner (another endpoint, so it does not wait); `compactNow` uses `this.client`, the recorded endpoint.
+      a.cognitiveRoutingEnabled = true;
+      a.plannerClient = (plannerHost as any).client;
+      const ran: number[] = [];
+      const original = a.compactNow.bind(a);
+      a.compactNow = (...args: unknown[]) => {
+        ran.push(ctx.resumedClock.now());
+        return original(...args);
+      };
+      a.compactionQueue.push({ ids: ["queued-1"], llm: true, at: new Date().toISOString() });
+      await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.ok(plannerGateway.requests.length >= 1, "precondition: step 1 ran on the planner endpoint");
+      for (const at of ran) assert.ok(at >= eligibleAt, `the queued compaction called the recorded provider at ${at}, before the eligible time ${eligibleAt}`);
+      assert.deepEqual(a.compactionQueue, [], "the held compaction was reported as not run, not left queued");
+    } finally {
+      plannerHost.shutdown();
+      await plannerGateway.close();
+      await ctx.cleanup();
+    }
+  });
+
   test("nothing reaches the provider before the window ends: not the capability read, nor the auxiliary requests of compaction admission", async () => {
     const ctx = await interruptedThenRestored({});
     try {

@@ -5521,6 +5521,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.resumedProviderWait = { eligibleAt, record: recoveries[recoveries.length - 1], lastTurn: turn };
   }
 
+  /** True while a restored provider window is still open and applies to this endpoint (or to any, when none was recorded). */
+  private resumedWindowCovers(endpoint: string | undefined): boolean {
+    const pending = this.resumedProviderWait;
+    if (!pending || !(Date.parse(pending.eligibleAt) > this.recoveryClock.now())) return false;
+    const recorded = pending.record?.endpoint;
+    return !recorded || !endpoint || comparableEndpoint(recorded) === comparableEndpoint(endpoint);
+  }
+
   /**
    * Before the first request of a resumed turn, waits until the provider's recorded eligible time.
    * The wait is shown as the ordinary provider-wait status.
@@ -5549,7 +5557,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     }
     // The window is the recorded provider's: a step on another endpoint is not held back by it.
     // It stays pending, for a later step that routes back to the recorded endpoint (planner/coder).
-    if (pending.record?.endpoint && endpoint && comparableEndpoint(pending.record.endpoint) !== comparableEndpoint(endpoint)) return;
+    if (!this.resumedWindowCovers(endpoint)) return;
     const delay = Math.min(remaining, policy.deadlineMs);
     const iso = (ms: number) => new Date(ms).toISOString();
     const prior = pending.record;
@@ -5920,7 +5928,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Operator /compact queued during the previous step runs here: its inference and tool batch have settled.
         // False when a compaction that is not durable ends the turn.
         const drainQueuedCompactions = async (): Promise<boolean> => {
-          if (!this.compactionQueue.length) return true;
+          // `/compact --llm` calls the provider through this.client: held while a resumed window still covers it.
+          if (!this.compactionQueue.length || this.resumedWindowCovers(this.client.endpoint)) return true;
           try {
             await this.drainCompactionQueue(currentStep, signal);
           } catch (err) {
@@ -5930,8 +5939,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           }
           return true;
         };
-        // While a resumed turn still owes a provider wait, the queue waits too (`/compact --llm` calls the provider).
-        if (!this.resumedProviderWait && !(await drainQueuedCompactions())) break;
+        if (!(await drainQueuedCompactions())) break;
         if (budget && currentStep > 1 && (currentStep - 1) % segmentSteps === 0) {
           segment++;
           if (this.objective) this.objective.continuation.segments = segment;
@@ -6586,7 +6594,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // Queued /compact: run now that the last step has settled, or cancelled with the turn.
       if (this.compactionQueue.length) {
         try {
-          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : undefined);
+          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : this.resumedWindowCovers(this.client.endpoint) ? "the provider is still inside the retry window it asked for" : undefined);
         } catch (err) {
           if (!(err instanceof CompactionCommitError)) throw err;
           persistenceFailure ??= err.outcome.message;
