@@ -302,7 +302,12 @@ export class OperationRunner {
       recoverMerged = !unit.pendingDecision?.restart && this.git.canRecoverMissingWorktree(unit.id);
       if (!recoverMerged) {
         try {
-          workspace = this.git.prepareUnit(unit, { restart: Boolean(unit.pendingDecision?.restart) }).workspace;
+          // A failure_debugger admitted on a dependency BLOCKED on a failed verifier run reproduces on that
+          // dependency's candidate, which was never integrated.
+          const snapshotOf = unit.role === "failure_debugger"
+            ? unit.dependsOn.find((id) => { const dep = this.scheduler.unit(id); return dep.status === "BLOCKED" && dep.failedRun !== undefined; })
+            : undefined;
+          workspace = this.git.prepareUnit(unit, { restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf } : {}) }).workspace;
           this.save();
         } catch (err: any) {
           return {
@@ -374,6 +379,15 @@ export class OperationRunner {
         this.save();
       }
       if (result.kind !== "completed" || !this.git) return result;
+      if (this.git.isSnapshotUnit(unit.id)) {
+        // Its branch carries another unit's unverified candidate: the diagnosis is the result, nothing is merged.
+        this.scheduler.emit("INTEGRATION_SKIPPED", `${unit.id} was not integrated: it ran on a snapshot of an unverified candidate.`, {
+          unitId: unit.id,
+          detail: { reason: "diagnostic_snapshot" },
+        });
+        this.reportPreservedWorktrees([unit.id]);
+        return result;
+      }
       return this.enqueueIntegration(unit, result);
     } catch (err: any) {
       if (signal?.aborted) return { kind: "cancelled" };

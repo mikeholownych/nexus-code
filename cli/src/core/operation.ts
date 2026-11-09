@@ -263,6 +263,11 @@ export interface OperationGitUnit {
   baseCommit: string;
   /** Integration tip after the unit was merged (absent until it is). */
   integratedCommit?: string;
+  /**
+   * The unit whose uncommitted candidate this branch was snapshotted from (a failure_debugger on a dependency BLOCKED
+   * on a failed verifier run). That candidate is unverified, so this branch is diagnostic and never integrated.
+   */
+  snapshotOf?: string;
 }
 
 /** Opt-in Git isolation for an operation (`spec.git.isolate`). */

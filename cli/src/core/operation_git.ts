@@ -13,6 +13,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { ensureGitExclude } from "./git_exclude.js";
 import { verifierTimeoutSecs } from "../tester.js";
@@ -192,7 +193,7 @@ export class OperationGit {
    * Give the unit a worktree branched from the integration tip. A recorded worktree is reused so a retry or a resume
    * continues on the same files; an operator restart throws the old worktree and branch away first.
    */
-  prepareUnit(unit: WorkUnit, options: { restart?: boolean } = {}): UnitGitPreparation {
+  prepareUnit(unit: WorkUnit, options: { restart?: boolean; snapshotOf?: string } = {}): UnitGitPreparation {
     const recorded = this.state.units[unit.id];
     const branch = recorded?.branch ?? `nexus/op-${this.plan.key}/${gitSlug(unit.id)}`;
     const worktree = recorded?.worktree ?? path.join(this.plan.baseDir, "units", gitSlug(unit.id));
@@ -222,9 +223,12 @@ export class OperationGit {
       restartBranch = `${branch}-${gitSlug(`${unit.id}-${Date.now()}`)}`;
       branchExists = false;
     }
+    // A failure_debugger on a failed dependency starts from that dependency's candidate, which was never integrated.
+    const snapshot = !branchExists && options.snapshotOf ? this.snapshotCandidate(options.snapshotOf) : undefined;
+    const startPoint = snapshot ?? this.currentTip();
     const add = () => branchExists
       ? gitResult(this.plan.repoRoot, ["worktree", "add", worktree, restartBranch])
-      : gitResult(this.plan.repoRoot, ["worktree", "add", "-b", restartBranch, worktree, this.currentTip()]);
+      : gitResult(this.plan.repoRoot, ["worktree", "add", "-b", restartBranch, worktree, startPoint]);
     // A worktree directory that disappeared outside Nexus leaves a registration behind; prune it, then add.
     gitResult(this.plan.repoRoot, ["worktree", "prune", "--expire", "now"]);
     let added = add();
@@ -237,9 +241,10 @@ export class OperationGit {
 
     const baseCommit = branchExists
       ? gitResult(this.plan.repoRoot, ["merge-base", this.plan.integrationBranch, restartBranch]).stdout.trim() || this.currentTip()
-      : this.currentTip();
+      : startPoint;
+    const snapshotOf = snapshot ? options.snapshotOf : branchExists ? recorded?.snapshotOf : undefined;
     // Only now is the old record replaced; a failed add leaves the previous entry intact so a retry can restart.
-    this.state.units[unit.id] = { branch: restartBranch, worktree, baseCommit };
+    this.state.units[unit.id] = { branch: restartBranch, worktree, baseCommit, ...(snapshotOf ? { snapshotOf } : {}) };
     return { workspace: worktree, branch: restartBranch, reused: false };
   }
 
@@ -407,6 +412,34 @@ export class OperationGit {
     };
     this.state.units[unit.id] = { ...entry, integratedCommit };
     return { kind: "integrated", receipt };
+  }
+
+  /**
+   * A commit of `unitId`'s worktree as it stands (tracked edits and untracked, non-ignored files) on top of its HEAD,
+   * built in a private index so that unit's index, branch and files are untouched. Throws when it cannot be built:
+   * a debugger must not silently fall back to a tree without the failure it is meant to reproduce.
+   */
+  private snapshotCandidate(unitId: string): string {
+    const entry = this.state.units[unitId];
+    if (!entry || !fs.existsSync(entry.worktree)) throw new Error(`unit ${unitId}'s worktree is not available to snapshot`);
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-candidate-snapshot-"));
+    const run = (args: string[]) => execFileSync("git", args, {
+      cwd: entry.worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS,
+      env: { ...process.env, GIT_INDEX_FILE: path.join(scratch, "index") },
+    }).trim();
+    try {
+      run(["read-tree", "HEAD"]);
+      run(["add", "-A"]);
+      const tree = run(["write-tree"]);
+      return run([...this.mechanicalGitConfig(), "commit-tree", tree, "-p", "HEAD", "-m", `nexus: snapshot of ${unitId}'s candidate for failure debugging`]);
+    } finally {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+
+  /** Whether the unit's branch is a diagnostic snapshot of another unit's unverified candidate (never integrated). */
+  isSnapshotUnit(unitId: string): boolean {
+    return this.state.units[unitId]?.snapshotOf !== undefined;
   }
 
   /** Remove a completed unit's clean worktree (its branch and receipt stay). */
