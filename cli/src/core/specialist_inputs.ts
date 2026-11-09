@@ -105,7 +105,18 @@ export function candidateDiff(workspace: string, base: string | undefined): { ba
     // A path tracked since the base but already removed from disk is a deletion against nothing: it has no content to
     // show, and git would reject it as a pathspec.
     const onDisk = (p: string) => { try { fs.lstatSync(path.join(root, p)); return true; } catch { return false; } };
-    const added = new Set([...listing(["--others", "--exclude-standard"]), ...listing([], true).filter((p) => !atBase.has(p) && onDisk(p))]);
+    const ownIndex = new Set(listing([], true));
+    // A path tracked at the base but removed from the real index (`git rm --cached`) is part of the candidate as a
+    // deletion even when the file stays on disk: take it out of the scratch index too, and never re-add it as new.
+    const removed = [...atBase].filter((p) => !ownIndex.has(p));
+    if (removed.length) {
+      git(["--literal-pathspecs", "rm", "--cached", "--quiet", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${removed.join("\0")}\0` });
+    }
+    const removedSet = new Set(removed);
+    const added = new Set([
+      ...listing(["--others", "--exclude-standard"]).filter((p) => !removedSet.has(p)),
+      ...[...ownIndex].filter((p) => !atBase.has(p) && onDisk(p)),
+    ]);
     if (added.size) {
       git(["--literal-pathspecs", "add", "--force", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${[...added].join("\0")}\0` });
     }
