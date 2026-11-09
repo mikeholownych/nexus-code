@@ -60,9 +60,9 @@ function slash(command: "git" | "diff" | "commit", workspace: string): SlashRepl
 const gitStatusLine = (prompt: string) => prompt.match(/\[Git Status: [^\]]*\((\d+) uncommitted dirty files\)\]/)?.[1];
 
 /** Runs two real turns (the second carries the [Git Status] line computed after the first wrote its receipt). */
-async function twoTurns(repo: string, between?: () => void): Promise<string[]> {
+async function twoTurns(repo: string, between?: () => void, extra: Record<string, unknown> = {}): Promise<string[]> {
   const gw = await gateway();
-  const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto" } as any);
+  const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", ...extra } as any);
   try {
     await agent.runTurn("hello");
     between?.();
@@ -128,6 +128,18 @@ describe("D-03: Nexus state is not a workspace change", () => {
       const diff = slash("diff", repo).output;
       assert.doesNotMatch(diff, /Working tree clean/);
       assert.match(diff, /1 untracked/);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a --read-only session writes nothing into the workspace: no receipts, no .nexus/, no ignore file", async () => {
+    const repo = freshRepo();
+    try {
+      const prompts = await twoTurns(repo, undefined, { readOnly: true });
+      assert.equal(prompts.length, 2, "both turns reached the provider");
+      assert.equal(fs.existsSync(path.join(repo, ".nexus")), false, "read-only mode created .nexus/ in the workspace");
+      assert.equal(getGitInfo(repo).dirtyCount, 0);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
