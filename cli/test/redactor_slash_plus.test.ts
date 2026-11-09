@@ -208,3 +208,16 @@ test("a base64 key ending in a lower-case segment is redacted whole", () => {
     InformationFlowBoundary.setGlobalInstance(original);
   }
 });
+
+/** A key start inside a longer credential does not split it: the enclosing credential is redacted whole. */
+test("a credential with an embedded sk- is redacted whole, prefix included", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    const credential = "AbCdEfGhIjKlMn+sk-A/4fA8zK1x9qLmP3wV7tY0bE5rC2uI8oNs";
+    const output = redactDiagnosticForOutput(`token ${credential} rejected`);
+    assert.ok(!output.includes("AbCdEfGh") && !output.includes("4fA8zK1x"), output);
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
