@@ -636,3 +636,25 @@ test("two processes that both find a stale lock do not reclaim it at the same ti
     assert.match(rival, /locked by another process/, "the rival must wait out the first reclaimer, not reclaim alongside it");
   } finally { f.cleanup(); }
 });
+
+test("a detached worktree whose removal Git refuses is put back on its detached HEAD and leaves no guard branch", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-refused");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    const head = git(dir, "rev-parse", "HEAD");
+    // Git's own check refuses a worktree with an untracked file when no --force is given
+    core.removeSeams.beforeGitRemove = () => { fs.writeFileSync(path.join(dir, "appeared.txt"), "x\n"); };
+    let refused;
+    try { refused = wt(f, f.repo, ["remove", dir]); } finally { delete core.removeSeams.beforeGitRemove; }
+    assert.equal(refused.success, false, refused.output);
+    assert.equal(fs.existsSync(dir), true);
+    assert.throws(() => git(dir, "symbolic-ref", "-q", "HEAD"), undefined, "the worktree must be detached again");
+    assert.equal(git(dir, "rev-parse", "HEAD"), head);
+    assert.equal(git(f.repo, "for-each-ref", "refs/heads/nexus-removed"), "", "no guard branch is left behind");
+    fs.rmSync(path.join(dir, "appeared.txt"));
+    assert.equal(wt(f, f.repo, ["remove", dir]).success, true, "a retry works");
+  } finally { f.cleanup(); }
+});
