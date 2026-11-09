@@ -163,15 +163,14 @@ function changedWorkspacePaths(baseline, candidate) {
  * `ignoredCandidateChanges`. Two kinds of path are pinned, and nothing else is:
  *  - files whose name is unambiguous at any depth (package manifests, lockfiles, `tsconfig*.json`, `Cargo.toml`, `go.mod`,
  *    `build.rs`, `setup.py`, `conftest.py`, `Makefile`, ...);
- *  - tool configuration and build scripts at the project root, or at a package root one level under `packages/`, `apps/`,
- *    `libs/`, `crates/`, `modules/` or `services/` (`.babelrc*`, `.eslintrc*`, `.mocharc.*`, `<tool>.config.*` for a named list
- *    of tools, `build.*s`, `gulpfile.*`, `scripts/build.*s`, `tools/*.js`, ...).
+ *  - tool configuration and build scripts at the project root, or at a package root named by the baseline's workspace
+ *    manifests (see workspacePackagePatterns): `.babelrc*`, `.eslintrc*`, `.mocharc.*`, `<tool>.config.*` for a named list
+ *    of tools, `build.*s`, `gulpfile.*`, `scripts/build.*s`, `tools/*.js`, ...
  * Everything else is carried if it is a source or data type and reported if it is not, so ordinary source such as
  * `src/config/database.config.ts` or `src/build.ts` reaches the build.
  */
-const PACKAGE_ROOT = String.raw`(?:(?:packages|apps|libs|crates|modules|services)\/[^/]+\/)?`;
-const pinnedAnyDepth = new RegExp(String.raw`(?:^|\/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]+)?\.json|(?:pyright|js)config\.json|build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?)$`, "i");
-const pinnedAtPackageRoot = new RegExp(String.raw`^${PACKAGE_ROOT}(?:\.babelrc(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.mocharc\.[^/]+|eslint\.config\.[^/]+|(?:webpack|vite|vitest|rollup|postcss|babel|jest|next|nuxt|tsup|turbo|metro|tailwind|prettier|astro|playwright|cypress|karma|esbuild|gulp|stylelint|commitlint|svelte)\.config\.[^/]+|\.?ruff\.toml|(?:clippy|rustfmt|deny)\.toml|biome\.jsonc?|deno\.jsonc?|\.swcrc|tslint\.json|\.golangci\.ya?ml|\.rubocop\.yml|angular\.json|project\.json|nx\.json|lerna\.json|(?:build|compile|typecheck|gulpfile|Gruntfile|Jakefile)\.[cm]?[jt]s|scripts\/(?:build|compile|typecheck)\.[cm]?[jt]s|tools\/[^/]+\.[cm]?js)$`, "i");
+const pinnedAnyDepth = new RegExp(String.raw`(?:^|\/)(?:pnpm-workspace\.yaml|lerna\.json|nx\.json|rush\.json|package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]+)?\.json|(?:pyright|js)config\.json|build\.rs|setup\.py|setup\.cfg|pyproject\.toml|conftest\.py|noxfile\.py|tox\.ini|pytest\.ini|Makefile|GNUmakefile|CMakeLists\.txt|go\.mod|go\.sum|go\.work|Cargo\.toml|Cargo\.lock|rust-toolchain(?:\.toml)?|\.cargo\/config(?:\.toml)?|\.npmrc|\.yarnrc(?:\.yml)?)$`, "i");
+const pinnedAtPackageRoot = new RegExp(String.raw`^(?:\.babelrc(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.mocharc\.[^/]+|eslint\.config\.[^/]+|(?:webpack|vite|vitest|rollup|postcss|babel|jest|next|nuxt|tsup|turbo|metro|tailwind|prettier|astro|playwright|cypress|karma|esbuild|gulp|stylelint|commitlint|svelte)\.config\.[^/]+|\.?ruff\.toml|(?:clippy|rustfmt|deny)\.toml|biome\.jsonc?|deno\.jsonc?|\.swcrc|tslint\.json|\.golangci\.ya?ml|\.rubocop\.yml|angular\.json|project\.json|nx\.json|lerna\.json|(?:build|compile|typecheck|gulpfile|Gruntfile|Jakefile)\.[cm]?[jt]s|scripts\/(?:build|compile|typecheck)\.[cm]?[jt]s|tools\/[^/]+\.[cm]?js)$`, "i");
 
 /**
  * Candidate file types carried into the pinned workspace: source code and data a build reads. Anything else the agent
@@ -198,8 +197,106 @@ const DEPENDENCY_DIRECTORIES = [
   { name: "target", sibling: "Cargo.toml", child: "CACHEDIR.TAG" },
 ];
 
-function pinnedBuildInput(relative) {
-  return pinnedAnyDepth.test(relative) || pinnedAtPackageRoot.test(relative);
+const MAX_MANIFEST_BYTES = 1024 * 1024;
+
+function readManifest(workspace, name) {
+  try {
+    const file = path.join(workspace, name);
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.size > MAX_MANIFEST_BYTES) return null;
+    return fs.readFileSync(file, "utf8");
+  } catch { return null; }
+}
+
+/** Quoted strings inside the first `[ ... ]` that follows `key =` in a TOML-ish text. */
+function tomlStringArray(text, key) {
+  const array = new RegExp(String.raw`(?:^|\n)\s*${key}\s*=\s*\[([^\]]*)\]`).exec(text);
+  return array ? [...array[1].matchAll(/["']([^"']+)["']/g)].map((match) => match[1]) : [];
+}
+
+/**
+ * The directories the baseline's own workspace manifests name as packages: `package.json` `workspaces`,
+ * `pnpm-workspace.yaml` `packages` (block or flow style), `lerna.json` `packages`, `rush.json` project folders, `nx.json`
+ * `workspaceLayout`, a Cargo `[workspace]` `members` list and `go.work` `use` entries. The manifests come
+ * from the pre-agent tree, so the candidate cannot name a directory into or out of the set. The project root is always one.
+ */
+export function workspacePackagePatterns(baselineWorkspace) {
+  const patterns = [];
+  // Things the parsers could not resolve; the conventional folders and the other manifests still apply, and the note is
+  // reported with the evaluator result so the gap is visible.
+  patterns.notes = [];
+  const packageJson = readManifest(baselineWorkspace, "package.json");
+  if (packageJson) {
+    try {
+      const workspaces = JSON.parse(packageJson)?.workspaces;
+      for (const entry of Array.isArray(workspaces) ? workspaces : workspaces?.packages ?? []) if (typeof entry === "string") patterns.push(entry);
+    } catch {}
+  }
+  const pnpm = readManifest(baselineWorkspace, "pnpm-workspace.yaml");
+  if (pnpm) {
+    // `packages:` may carry an anchor (`&name`) and a trailing comment; items may carry a trailing comment.
+    const flow = /(?:^|\n)packages\s*:\s*(?:&\S+\s*)?\[([^\]]*)\]/.exec(pnpm);
+    if (flow) for (const item of flow[1].matchAll(/["']([^"']+)["']/g)) patterns.push(item[1]);
+    let inPackages = false;
+    for (const line of pnpm.split("\n")) {
+      if (/^packages\s*:\s*(?:&\S+\s*)?(?:#.*)?$/.test(line)) { inPackages = true; continue; }
+      if (inPackages && /^\S/.test(line) && !/^\s*#/.test(line)) inPackages = false;
+      const item = inPackages ? /^\s*-\s*["']?([^"'#\s*&][^"'#\s]*)["']?/.exec(line) : null;
+      if (item) patterns.push(item[1]);
+    }
+    if (/^\s*(?:-\s*)?\*\S+|<<\s*:|^packages\s*:\s*\*/m.test(pnpm)) {
+      patterns.notes.push("pnpm-workspace.yaml uses a YAML alias or merge key that is not resolved; its package roots are only those found literally, plus the conventional folders");
+    }
+  }
+  const lerna = readManifest(baselineWorkspace, "lerna.json");
+  if (lerna) {
+    try { for (const entry of JSON.parse(lerna)?.packages ?? []) if (typeof entry === "string") patterns.push(entry); } catch {}
+  }
+  const rush = readManifest(baselineWorkspace, "rush.json");
+  if (rush) {
+    try { for (const project of JSON.parse(rush)?.projects ?? []) if (typeof project?.projectFolder === "string") patterns.push(project.projectFolder); } catch {}
+  }
+  const nx = readManifest(baselineWorkspace, "nx.json");
+  if (nx) {
+    try {
+      const layout = JSON.parse(nx)?.workspaceLayout;
+      for (const dir of [layout?.appsDir, layout?.libsDir]) if (typeof dir === "string") patterns.push(`${dir.replace(/\/+$/, "")}/*`);
+    } catch {}
+  }
+  const cargo = readManifest(baselineWorkspace, "Cargo.toml");
+  if (cargo && cargo.includes("[workspace]")) patterns.push(...tomlStringArray(cargo.slice(cargo.indexOf("[workspace]")), "members"));
+  const goWork = readManifest(baselineWorkspace, "go.work");
+  if (goWork) {
+    for (const block of goWork.matchAll(/(?:^|\n)\s*use\s*\(([^)]*)\)/g)) for (const line of block[1].split("\n")) { const item = /^\s*(\S+)/.exec(line); if (item) patterns.push(item[1]); }
+    for (const line of goWork.matchAll(/(?:^|\n)\s*use\s+([^\s(][^\s]*)/g)) patterns.push(line[1]);
+  }
+  return patterns;
+}
+
+/** A matcher for directory paths (`plugins/a`) from workspace globs (`plugins/*`, `plugins/**`, `./tools/x`). */
+function packageRootMatcher(patterns) {
+  const expressions = patterns.filter((pattern) => !pattern.startsWith("!")).map((pattern) => {
+    const segments = pattern.replace(/^\.\//, "").replace(/\/+$/, "").split("/").filter(Boolean);
+    const body = segments.map((segment) => (segment === "**" ? ".+" : segment.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]+"))).join("/");
+    return new RegExp(`^${body}$`);
+  });
+  // The conventional workspace folders stay package roots even when no manifest the parser understands names them
+  // (lerna, nx and rush layouts, other manifest styles): it is a union with the manifest-derived roots.
+  const conventional = /^(?:packages|apps|libs|crates|modules|services)\/[^/]+$/;
+  return (directory) => conventional.test(directory) || expressions.some((expression) => expression.test(directory));
+}
+
+/**
+ * Whether a candidate path is pinned. `isPackageRoot` is the baseline's workspace matcher; the project root is always a
+ * package root, and so is any directory above the file that the matcher accepts.
+ */
+function pinnedBuildInput(relative, isPackageRoot = () => false) {
+  if (pinnedAnyDepth.test(relative) || pinnedAtPackageRoot.test(relative)) return true;
+  const segments = relative.split("/");
+  for (let depth = 1; depth < segments.length; depth += 1) {
+    if (isPackageRoot(segments.slice(0, depth).join("/")) && pinnedAtPackageRoot.test(segments.slice(depth).join("/"))) return true;
+  }
+  return false;
 }
 
 /** Remove one entry without following it. `fs.rmSync` leaves a dangling symlink in place on current Node. */
@@ -263,6 +360,8 @@ export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorks
   const baseline = captureWorkspaceSnapshot(baselineWorkspace, snapshotOptions);
   const candidate = captureWorkspaceSnapshot(candidateWorkspace, snapshotOptions);
   const ignored = [];
+  const workspacePatterns = workspacePackagePatterns(baselineWorkspace);
+  const isPackageRoot = packageRootMatcher(workspacePatterns);
   const tempRoot = fs.mkdtempSync(path.join(scratchRoot, "nexus-evaluator-pinned-config-"));
   const pinnedWorkspace = path.join(tempRoot, "workspace");
   try {
@@ -279,7 +378,7 @@ export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorks
       const before = baseline.get(relative);
       const after = candidate.get(relative);
       if (before && after && sameEntry(before, after)) continue;
-      if (pinnedBuildInput(relative) || !carriedInputPath(relative)) { ignored.push(relative); continue; }
+      if (pinnedBuildInput(relative, isPackageRoot) || !carriedInputPath(relative)) { ignored.push(relative); continue; }
       const target = path.join(pinnedWorkspace, ...relative.split("/"));
       if (!after) {
         removeEntry(target);
@@ -322,7 +421,7 @@ export function createPinnedCandidateWorkspace(baselineWorkspace, candidateWorks
         fs.closeSync(descriptor);
       }
     }
-    return { tempRoot, workspace: pinnedWorkspace, ignored: ignored.sort() };
+    return { tempRoot, workspace: pinnedWorkspace, ignored: ignored.sort(), notes: workspacePatterns.notes };
   } catch (error) {
     fs.rmSync(tempRoot, { recursive: true, force: true });
     throw error;
@@ -350,14 +449,16 @@ export async function runCodeEvaluators({ task, candidateWorkspace, hiddenWorksp
   let pinnedWorkspaceRoot = null;
   let pinnedWorkspaceError = null;
   let pinnedIgnored = [];
+  let pinnedNotes = [];
   // Candidate edits to pinned build configuration are not applied; say so in the result rather than dropping them.
-  const withIgnored = (result) => ({ ...result, details: { ...result.details, ignoredCandidateChanges: pinnedIgnored } });
+  const withIgnored = (result) => ({ ...result, details: { ...result.details, ignoredCandidateChanges: pinnedIgnored, ...(pinnedNotes.length ? { workspaceNotes: pinnedNotes } : {}) } });
   if (needsEvaluatorConfigurationBaseline(task)) {
     try {
       const pinned = createPinnedCandidateWorkspace(typecheckBaselineWorkspace, candidateWorkspace, { scratchRoot });
       pinnedWorkspace = pinned.workspace;
       pinnedWorkspaceRoot = pinned.tempRoot;
       pinnedIgnored = pinned.ignored;
+      pinnedNotes = pinned.notes;
     } catch (error) {
       pinnedWorkspaceError = String(error?.message ?? error);
     }

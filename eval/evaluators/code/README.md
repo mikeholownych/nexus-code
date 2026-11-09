@@ -33,15 +33,28 @@ from what the agent said about its own work.
       `pyrightconfig.json`, `build.rs`, `setup.py`/`setup.cfg`, `pyproject.toml`, `conftest.py`, `noxfile.py`, `tox.ini`,
       `pytest.ini`, `Makefile`, `CMakeLists.txt`, `Cargo.toml`/`Cargo.lock`, `go.mod`/`go.sum`/`go.work`,
       `rust-toolchain*`, `.cargo/config*`, `.npmrc`, `.yarnrc*`;
-    - tool configuration and build scripts at the project root, or at a package root one level under `packages/`, `apps/`,
-      `libs/`, `crates/`, `modules/` or `services/`: `.babelrc*`, `.eslintrc*`, `.mocharc.*`, `eslint.config.*`,
-      `<tool>.config.*` for webpack, vite, vitest, rollup, postcss, babel, jest, next, nuxt, tsup, turbo, metro, tailwind,
-      prettier, astro, playwright, cypress, karma, esbuild, gulp, stylelint, commitlint and svelte, `ruff.toml`,
-      `clippy/rustfmt/deny.toml`, `biome.json*`, `deno.json*`, `.swcrc`, `tslint.json`, `.golangci.y*ml`, `.rubocop.yml`,
-      `angular.json`, `project.json`, `nx.json`, `lerna.json`, `build`/`compile`/`typecheck`/`gulpfile`/`Gruntfile`/
-      `Jakefile` `.js/.ts` variants, `scripts/build|compile|typecheck.*s`, and `tools/*.js`.
-    The package root is this fixed list of workspace folders, not read from the manifests: in a monorepo with another layout
-    (for example `plugins/<name>/`), a nested tool config is carried like ordinary source.
+    - tool configuration and build scripts at the project root, or at a package root that the baseline's own workspace
+      manifests name: `package.json` `workspaces` (array or `{ packages }`), `pnpm-workspace.yaml` `packages` (block or flow
+      style), `lerna.json` `packages`, `rush.json` project folders, `nx.json` `workspaceLayout`, a Cargo
+      `[workspace]` `members` list, and `go.work` `use` entries (`*` is one directory level, `**` any depth; `!` entries are
+      ignored). The conventional folders `packages/`, `apps/`, `libs/`, `crates/`, `modules/` and `services/` (one level) are package
+      roots too, as a union, so a layout whose manifest the parser does not understand keeps its pins. The manifests
+      themselves (`pnpm-workspace.yaml`, `lerna.json`, `nx.json`, `rush.json`, `package.json`, `go.work`, `Cargo.toml`) are
+      pinned at any depth, and the roots are read from the pre-agent tree, so a candidate cannot add or remove a package root. The pinned
+      names are `.babelrc*`, `.eslintrc*`, `.mocharc.*`, `eslint.config.*`, `<tool>.config.*` for webpack, vite, vitest,
+      rollup, postcss, babel, jest, next, nuxt, tsup, turbo, metro, tailwind, prettier, astro, playwright, cypress, karma,
+      esbuild, gulp, stylelint, commitlint and svelte, `ruff.toml`, `clippy/rustfmt/deny.toml`, `biome.json*`, `deno.json*`,
+      `.swcrc`, `tslint.json`, `.golangci.y*ml`, `.rubocop.yml`, `angular.json`, `project.json`, `nx.json`, `lerna.json`,
+      `build`/`compile`/`typecheck`/`gulpfile`/`Gruntfile`/`Jakefile` `.js/.ts` variants, `scripts/build|compile|typecheck.*s`,
+      and `tools/*.js`.
+    A layout that neither a manifest nor the conventional folders declare (a directory of plugins with no `workspaces` entry)
+    has no package roots below the project root, and its nested tool configs are carried like ordinary source.
+    Over-pinning is visible but not scored. A pinned path is listed in `ignoredCandidateChanges`, and its edit does not reach
+    the build, so a legitimate change to a source file that happens to carry a pinned name below a package root (for example
+    `packages/x/build.ts`) is not counted toward the build or typecheck result. Task authors should read that list: a task
+    whose deliverable lives in a pinned name needs a different layout, not a wider carry rule.
+    A YAML alias or merge key in `pnpm-workspace.yaml` is not resolved: the roots found literally and the conventional folders
+    still apply, and the gap is reported as `details.workspaceNotes`. Trailing comments and `&anchor` on `packages:` are handled.
     Everything else is carried if it is a source or data type, so ordinary source such as `src/config/database.config.ts`
     or `src/build.ts` reaches the build. A changed path that is not a source or data type (shell scripts, Gradle/Maven/
     Ruby/Just files, `.ini`, `.xml`, binaries) and any symlink or special file is not carried either, and is reported.
