@@ -4216,9 +4216,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
 
       const worktreeHasChanges = this.activeWorktree
-        ? (this.activeWorktree.kind === "named"
-          ? this.worktreeManager.hasChangesAt(this.activeWorktree.worktreePath)
-          : this.worktreeManager.hasChanges(this.activeWorktree.taskId))
+        ? this.worktreeManager.hasChangesAt(this.activeWorktree.worktreePath, this.activeWorktree.branch)
         : false;
       let verifierSucceeded = false;
       let hasExecuted = false;
@@ -4462,8 +4460,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         this.setUnverifiedChanges(false);
       }
       // A passing deliverable-bound run inside a named (linked) worktree is recorded for `nexus worktree merge`, which
-      // needs a verification for the exact state it merges. Recording never affects the task outcome.
-      if ((!this.activeWorktree || this.activeWorktree.kind === "named") && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound) {
+      // needs a verification for the exact state it merges. Recording never affects the task outcome. Recording runs
+      // host-side Git in the worktree, so its `.git` pointer is verified first (the agent could have rewritten it).
+      const recordableWorktree = !this.activeWorktree ||
+        (this.activeWorktree.kind === "named" && this.worktreeManager.isLinkedWorktree(this.activeWorktree.worktreePath));
+      if (recordableWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound) {
         recordVerification(this.config.workspace, this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command || "verifier");
       }
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.

@@ -12,6 +12,7 @@ import { runWorktreeCommand } from "../src/worktrunk/command.js";
 import { buildConfig } from "../src/config.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { isSandboxAvailable } from "../src/sandbox.js";
+import { WorktreeManager } from "../src/worktree.js";
 import { startGateway } from "./helpers/fixtures.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -172,6 +173,44 @@ describe("named worktree binding", () => {
       assert.equal(config.worktreeBranch, "feat/cfg");
       assert.throws(() => buildConfig({ workspace: f.repo, worktreeBranch: "--bad" }), /worktree-branch|branch name/i);
       assert.equal(buildConfig({ workspace: f.repo }).worktreeBranch, undefined);
+    } finally { f.cleanup(); }
+  });
+});
+
+describe("host-side Git in a named worktree", () => {
+  test("hasChangesAt counts committed work ahead of the primary checkout, not only a dirty tree", () => {
+    const f = fixture();
+    try {
+      const manager = new WorktreeManager(f.repo);
+      assert.equal(manager.hasChangesAt(f.dir, "feat/bind"), false, "fresh worktree");
+      fs.writeFileSync(path.join(f.dir, "b.txt"), "two\n");
+      assert.equal(manager.hasChangesAt(f.dir, "feat/bind"), true, "untracked file");
+      git(f.dir, "add", "b.txt");
+      git(f.dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "work");
+      assert.equal(git(f.dir, "status", "--porcelain"), "", "tree is clean after the commit");
+      assert.equal(manager.hasChangesAt(f.dir, "feat/bind"), true, "a commit the primary checkout lacks is work to verify");
+    } finally { f.cleanup(); }
+  });
+
+  test("a redirected .git pointer is refused before any host-side Git runs, and its fsmonitor never executes", () => {
+    const f = fixture();
+    try {
+      const manager = new WorktreeManager(f.repo);
+      const root = WorkspacePath.fromSelectedWorkspace(f.repo);
+      assert.equal(manager.isLinkedWorktree(f.dir), true);
+      assert.equal(isNamedWorktreePath(root, f.dir, namedBinding(f)), true);
+      // What a sandboxed agent can do: make `.git` point at a repository it controls, whose config runs a command.
+      const marker = path.join(f.root, "fsmonitor-ran");
+      const script = path.join(f.root, "fsmonitor.sh");
+      fs.writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\nexit 0\n`, { mode: 0o755 });
+      const planted = path.join(f.dir, "x");
+      git(f.dir, "init", "-q", planted);
+      git(planted, "config", "core.fsmonitor", script);
+      fs.writeFileSync(path.join(f.dir, ".git"), "gitdir: ./x/.git\n");
+      assert.equal(manager.isLinkedWorktree(f.dir), false);
+      assert.equal(isNamedWorktreePath(root, f.dir, namedBinding(f)), false, "the validator fails closed");
+      assert.equal(manager.hasChangesAt(f.dir, "feat/bind"), true, "fail closed: not safe to treat as clean");
+      assert.equal(fs.existsSync(marker), false, "host-side git status executed the planted fsmonitor command");
     } finally { f.cleanup(); }
   });
 });

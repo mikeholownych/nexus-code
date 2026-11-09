@@ -8,6 +8,8 @@ import {
   CandidateIdentity,
 } from "./core/candidate.js";
 import { ensureGitExclude } from "./core/git_exclude.js";
+import { isLinkedWorktreeDir } from "./core/persistence_protection.js";
+import { git as pinnedGit } from "./worktrunk/git.js";
 export { ensureGitExclude };
 
 export interface WorktreeInfo {
@@ -192,44 +194,44 @@ export class WorktreeManager {
 
   /** Returns whether a speculative worktree contains changes or commits to verify. */
   public hasChanges(taskId: string): boolean {
-    const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);
-    if (!fs.existsSync(worktreePath)) return false;
+    return this.hasChangesAt(path.join(this.getWorktreesBaseDir(), taskId), `nexus/${taskId}`);
+  }
+
+  /** The repository's common Git directory (resolved), where linked worktrees keep their administrative directories. */
+  private gitCommonDir(): string {
+    return fs.realpathSync(pinnedGit(this.gitRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).stdout.trim());
+  }
+
+  /** Whether the directory is a linked worktree of this repository whose `.git` pointer still leads into it. */
+  public isLinkedWorktree(worktreePath: string): boolean {
     try {
-      const status = execFileSync("git", ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"], {
-        cwd: worktreePath,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-      const statusLines = status
-        ? status
-            .split("\n")
-            .map((l) => l.trim())
-            .filter((l) => l.length > 0 && !l.startsWith("!! .nexus/") && l !== "!! .nexus")
-        : [];
-      if (statusLines.length > 0) return true;
-      const ahead = execFileSync("git", ["rev-list", "--count", `HEAD..nexus/${taskId}`], {
-        cwd: this.gitRoot,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-      return Number(ahead) > 0;
+      return isLinkedWorktreeDir(worktreePath, this.gitCommonDir());
     } catch {
-      // An unreadable worktree is not safe to merge as verified.
-      return true;
+      return false;
     }
   }
 
-  /** Whether the worktree at an explicit path (a named worktree) has uncommitted or untracked changes. */
-  public hasChangesAt(worktreePath: string): boolean {
+  /**
+   * Whether the worktree at `worktreePath` holds work the primary checkout lacks: uncommitted, untracked or ignored
+   * output (Nexus's own `.nexus/` state excepted), or commits on `branch` ahead of the primary checkout's HEAD.
+   * A missing directory holds nothing. Git runs with the worktree feature's pinned flags, and only after the
+   * worktree's `.git` pointer has been verified; an unreadable or unverifiable worktree counts as changed, because
+   * it is not safe to merge or complete as verified.
+   */
+  public hasChangesAt(worktreePath: string, branch: string): boolean {
+    if (!fs.existsSync(worktreePath)) return false;
     try {
-      return execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
-        cwd: worktreePath,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      })
+      if (!this.isLinkedWorktree(worktreePath)) return true;
+      const status = pinnedGit(worktreePath, ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"]).stdout;
+      const dirty = status
         .split("\n")
-        .some((line) => line.trim().length > 0 && !line.startsWith("?? .nexus/") && line.trim() !== "?? .nexus");
+        .map((line) => line.trim())
+        .some((line) => line.length > 0 && !/^(!!|\?\?) \.nexus(\/|$)/.test(line));
+      if (dirty) return true;
+      const ahead = pinnedGit(this.gitRoot, ["rev-list", "--count", "--end-of-options", `HEAD..${branch}`]).stdout.trim();
+      return Number(ahead) > 0;
     } catch {
+      // An unreadable worktree is not safe to merge as verified.
       return true;
     }
   }

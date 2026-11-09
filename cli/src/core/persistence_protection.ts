@@ -90,10 +90,36 @@ export function isManagedWorktreePath(
 }
 
 /**
+ * Whether `worktreePath` is a plain directory (not a link) whose `.git` is a regular file that points into
+ * `<commonDir>/worktrees/`, the layout `git worktree add` produces. The agent can write anywhere inside its worktree,
+ * including that pointer: rewritten to a repository it planted, every later host-side Git call (status, add, rev-parse)
+ * would read that repository's configuration (`core.fsmonitor`, filter drivers) outside the sandbox. Callers check
+ * this immediately before each host-side Git call on the worktree and fail closed when it is false.
+ */
+export function isLinkedWorktreeDir(worktreePath: string, commonDir: string): boolean {
+  try {
+    const dir = path.resolve(worktreePath);
+    const dirStat = fs.lstatSync(dir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return false;
+    const dotGit = path.join(dir, ".git");
+    const dotStat = fs.lstatSync(dotGit);
+    if (dotStat.isSymbolicLink() || !dotStat.isFile() || dotStat.size > 4096) return false;
+    const pointer = fs.readFileSync(dotGit, "utf8").trim();
+    if (!pointer.startsWith("gitdir: ")) return false;
+    const target = fs.realpathSync(path.resolve(dir, pointer.slice("gitdir: ".length)));
+    const admin = fs.realpathSync(path.join(commonDir, "worktrees"));
+    return target.startsWith(admin + path.sep) && fs.statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Verify that a named worktree (`--worktree-branch`) is a worktree this repository's registry knows: Git lists it for the
- * same common directory on the recorded branch, it is a real directory (not a link), and Nexus registered it. A plain
- * `git worktree add` by someone else, or a path a checkout merely points at, is not accepted. This does not widen
- * `isManagedWorktreePath`, which still accepts only `nexus/<taskId>` under `.nexus/worktrees`.
+ * same common directory on the recorded branch, it is a real directory (not a link) whose `.git` pointer leads into
+ * that common directory, and Nexus registered it. A plain `git worktree add` by someone else, or a path a checkout
+ * merely points at, is not accepted. This does not widen `isManagedWorktreePath`, which still accepts only
+ * `nexus/<taskId>` under `.nexus/worktrees`.
  */
 export function isNamedWorktreePath(
   workspace: WorkspacePath,
@@ -106,7 +132,7 @@ export function isNamedWorktreePath(
     if (fs.realpathSync(resolved) !== resolved) return false;
     const repo = openRepo(workspace.value);
     const entry = repo.entries.find((item) => !item.isMain && item.path === resolved && item.branch === binding.branch);
-    if (!entry) return false;
+    if (!entry || !isLinkedWorktreeDir(resolved, repo.commonDir)) return false;
     return readRegistry(repo.commonDir).registry.worktrees.some((item) => item.path === resolved && item.branch === binding.branch);
   } catch {
     return false;
