@@ -172,9 +172,21 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
   }
 }
 
-/** Split the text after the command name into tokens (no quoting: branch names and paths here contain no spaces). */
+/** Split the text after the command name into tokens, preserving single- and double-quoted strings. */
 export function tokenizeWorktreeArgs(args: string): string[] {
-  return args.trim().split(/\s+/).filter(Boolean);
+  const tokens: string[] = [];
+  const regex = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(args)) !== null) {
+    if (match[1] !== undefined) {
+      tokens.push(match[1].replace(/\\(["\\])/g, "$1"));
+    } else if (match[2] !== undefined) {
+      tokens.push(match[2].replace(/\\(['\\])/g, "$1"));
+    } else if (match[3] !== undefined) {
+      tokens.push(match[3]);
+    }
+  }
+  return tokens;
 }
 
 /**

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter } from "../src/worktrunk/command.js";
+import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter, tokenizeWorktreeArgs } from "../src/worktrunk/command.js";
 import { readRegistry } from "../src/worktrunk/registry.js";
 import { backupRef } from "../src/worktrunk/merge.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
@@ -614,4 +614,9 @@ test("prune does not force-remove a stale entry that was recreated while it wait
     assert.equal(fs.readFileSync(path.join(dir, "new-work.txt"), "utf8"), "precious\n", `the recreated worktree must survive: ${result.output}`);
     assert.match(git(f.repo, "worktree", "list", "--porcelain"), /recycled-by-switch/);
   } finally { f.cleanup(); }
+});
+
+test("tokenizeWorktreeArgs preserves quoted options such as commit messages or reasons", () => {
+  assert.deepEqual(tokenizeWorktreeArgs('merge ^ -m "feat: add login"'), ["merge", "^", "-m", "feat: add login"]);
+  assert.deepEqual(tokenizeWorktreeArgs("merge --no-verify-receipt --reason 'why not'"), ["merge", "--no-verify-receipt", "--reason", "why not"]);
 });
