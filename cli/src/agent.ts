@@ -48,7 +48,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget } from "./skills.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -3451,7 +3451,9 @@ export class AutonomousAgent {
    */
   private compactionCandidate(source: ChatMessage[], recentToolTurns: number, detailBudgetChars: number, unseenOutputChars?: number): { messages: ChatMessage[]; removedObservations: string[] } {
     const system = source[0];
-    const currentUserIndex = source.map((message, index) => message.role === "user" ? index : -1).filter((index) => index >= 0).at(-1);
+    // The operator's latest request; a skill note written after it is a hint, not the request.
+    const currentUserIndex = source.map((message, index) => message.role === "user" && !isSkillNote(message.content) ? index : -1).filter((index) => index >= 0).at(-1);
+    const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]?.content) ? currentUserIndex + 1 : -1;
     const toolTurnStarts = source
       .map((message, index) => message.role === "assistant" && message.tool_calls?.length ? index : -1)
       .filter((index) => index >= 0);
@@ -3464,10 +3466,10 @@ export class AutonomousAgent {
     });
     const retained = source
       .map((message, index) => ({ message, index }))
-      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && ((message.role !== "system" && index >= recentStart) || retainedOriginalContent.has(index)));
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && index !== noteIndex && ((message.role !== "system" && index >= recentStart) || retainedOriginalContent.has(index)));
     const messagesToSummarize = source
       .map((message, index) => ({ message, index }))
-      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && index !== noteIndex && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
     const summary = this.summarizeDiscardedHistory(messagesToSummarize.map(({ message }) => message), detailBudgetChars, new Set(this.unseenToolResults(source).map((index) => source[index])));
     const compacted: ChatMessage[] = [system];
     if (messagesToSummarize.length) {
@@ -3477,7 +3479,10 @@ export class AutonomousAgent {
     }
     const selected = new Map<number, ChatMessage>();
     for (const item of retained) selected.set(item.index, item.message);
-    if (currentUserIndex !== undefined) selected.set(currentUserIndex, source[currentUserIndex]);
+    if (currentUserIndex !== undefined) {
+      selected.set(currentUserIndex, source[currentUserIndex]);
+      if (noteIndex >= 0) selected.set(noteIndex, source[noteIndex]);
+    }
     if (unseenOutputChars !== undefined) {
       const unseen = this.unseenToolResults(source)
         .filter((index) => selected.has(index) && typeof source[index].content === "string" && !retainedOriginalContent.has(index))
@@ -4115,21 +4120,55 @@ export class AutonomousAgent {
    * setting or the client default. Re-size it once when the provider's window is first known, and after that only
    * when the window shrinks: planner and coder clients can report different windows, and every change to
    * `messages[0]` rewrites the message journal and drops the provider's prefix cache. Only the catalog text is
-   * replaced; the rest of the prompt stays as built. A resumed conversation, whose catalog text is not known, is left
-   * as saved.
+   * replaced; the rest of the prompt stays as built. A resumed conversation, whose catalog text is not known, has its
+   * catalog recognised by heading and is cut to the window only when it is larger than the window allows.
    */
   private resizeSkillCatalog(): void {
     const sized = this.skillCatalog;
     const first = this.messages[0];
     if (!sized || !this.skillManager || first?.role !== "system" || typeof first.content !== "string") return;
     const limit = this.contextLimit();
+    const budget = skillCatalogBudget(limit);
+    // A conversation saved by an earlier release carries a catalog this process never recorded (before PR #409 the
+    // full, unbounded one). Recognise it by its heading and cut it to the window; one that already fits stays as saved.
+    if (!first.content.includes(sized.text) || !sized.text) {
+      const span = findCatalogSpan(first.content);
+      if (!span || span.end - span.start <= budget) return;
+      const text = this.skillManager.getPromptSection(budget);
+      this.messages[0] = { ...first, content: first.content.slice(0, span.start) + text + first.content.slice(span.end) };
+      this.skillCatalog = { text, limit, discovered: Boolean(this.capabilities) };
+      return;
+    }
     const discovered = Boolean(this.capabilities);
     if (!(discovered && !sized.discovered) && limit >= sized.limit) return;
-    const text = this.skillManager.getPromptSection(skillCatalogBudget(limit));
-    const at = sized.text ? first.content.indexOf(sized.text) : -1;
-    this.skillCatalog = { text, limit, discovered };
-    if (at < 0 || text === sized.text) return;
+    const text = this.skillManager.getPromptSection(budget);
+    if (text === sized.text) {
+      this.skillCatalog = { text, limit, discovered };
+      return;
+    }
+    // A catalog that shrank to nothing (windows under about 3K tokens) is not put back: the per-prompt skill notes
+    // and the `activate_skill` lookup reach the skills without it, and rewriting `messages[0]` drops the prefix cache.
+    const at = first.content.indexOf(sized.text);
     this.messages[0] = { ...first, content: first.content.slice(0, at) + text + first.content.slice(at + sized.text.length) };
+    this.skillCatalog = { text, limit, discovered };
+  }
+
+  /** The system note advertising skills that fit an operator message ("" when none do). It activates nothing. */
+  private skillNoteFor(prompt: string | any[]): string {
+    if (!this.skillManager) return "";
+    const asked = typeof prompt === "string" ? prompt : prompt.map((part) => (part?.type === "text" && typeof part.text === "string" ? part.text : "")).join(" ");
+    if (!asked.trim()) return "";
+    // A hint is never worth the task: a message that takes a quarter of the window gets no note, because a note after
+    // it would turn it into an earlier request that compaction may condense instead of refusing the turn.
+    const limit = this.contextLimit();
+    if (asked.length / 3 > limit * 0.25) return "";
+    return formatSkillNote(this.skillManager.findSkills(asked, MAX_SKILL_MATCHES), skillNoteBudget(limit));
+  }
+
+  /** Whether everything after `from` is the operator's submission: the message, then at most its skill note. */
+  private isSubmissionTail(from: number): boolean {
+    const tail = this.messages.slice(from);
+    return tail.length === 1 || (tail.length === 2 && typeof tail[1].content === "string" && tail[1].content.startsWith(SKILL_NOTE_PREFIX));
   }
 
   private buildSystemPrompt(): string {
@@ -4763,11 +4802,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             error: `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
           };
         }
-        const avail = this.skillManager.listSkills().map((s) => s.name).join(", ");
+        // No skill has that name: treat the text as a search. Matching advertises descriptions and activates nothing.
+        const matches = this.skillManager.findSkills(String(skillName ?? ""), MAX_SKILL_MATCHES);
+        if (!matches.length) {
+          return { success: true, output: `No installed skill matches '${oneLine(String(skillName ?? "").slice(0, 200))}'. Nothing was activated; try other words describing the task.` };
+        }
         return {
-          success: false,
-          output: "",
-          error: `Error: Skill '${skillName}' not found. Available skills: ${avail || "none"}`,
+          success: true,
+          output: `No skill is named '${oneLine(String(skillName))}'. Nothing was activated. Installed skills that match those words; call activate_skill again with an exact name to load one:\n${matches.map((s) => `- **${oneLine(s.name)}**: ${oneLine(s.description)}`).join("\n")}`,
         };
       }
       console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
@@ -5679,6 +5721,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           role: "user",
           content: effectiveUserContent,
         });
+        // Skills whose descriptions fit this message, written once right after it and never moved: every later
+        // request extends the earlier ones, so the provider's prefix cache survives each new prompt.
+        const skillNote = this.skillNoteFor(taskPrompt);
+        if (skillNote) this.messages.push({ role: "user", content: skillNote });
         // The objective is durable before anything acts on it.
         this.persistProgress({ messages: true });
       }
@@ -5987,7 +6033,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           // the conversation and tool evidence are kept untouched.
           const modelCalled = stepsUsed > 0;
           let retained = true;
-          if (!modelCalled && this.messages.length === historyBeforeSubmission + 1) {
+          if (!modelCalled && this.isSubmissionTail(historyBeforeSubmission)) {
             this.messages.length = historyBeforeSubmission;
             retained = false;
             // The withdrawn submission is not the objective either.
