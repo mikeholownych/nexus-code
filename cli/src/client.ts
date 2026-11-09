@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { parse as parseDotenv } from "dotenv";
 import { parseAdmissionHeaders, parseAdvertisement, parseOllamaVersion, parseServerContext, parseTokenizeResponse, parseVllmVersion, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
-import { adaptToolDefinitionsForServer } from "./core/tool_grammar_provider.js";
+import { adaptToolDefinitionsForServer, constrainTextModeToolCall, isGrammarRejection, toolGrammarEnabled } from "./core/tool_grammar_provider.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
 import { InformationFlowBoundary, DestinationTrustBoundary } from "./core/egress.js";
 import pc from "picocolors";
@@ -40,6 +40,8 @@ import { ServerKindCache } from "./core/server_kind_cache.js";
 
 /** Longest a request waits for an expired server identity to be re-read before proceeding without it. */
 const REVERIFY_WAIT_MS = 1000;
+/** How long an endpoint that rejected the tool-call grammar is sent requests without it. */
+const GRAMMAR_REJECTION_TTL_MS = 10 * 60_000;
 
 /**
  * Opaque per-process account markers for the server-kind cache key. No hash of the credential is computed: the
@@ -592,6 +594,17 @@ export class LocalLlmClient {
    * unsupported during this session (learned once, then omitted from every later request).
    */
   private unsupportedParams = new Set<string>();
+
+  /**
+   * Parameters a connection never sends. Besides the provider's own, an operator can choose text-mode tool calling for a
+   * local endpoint with NEXUS_NATIVE_TOOLS=off: no native `tools` field is sent and tool calls travel as `<tool_call>`
+   * text. That is the one production way into the text mode the llama.cpp tool-call grammar constrains.
+   */
+  private initialUnsupportedParams(): Set<string> {
+    const omitted = new Set(this.conn.omitParams);
+    if (!this.conn.providerId && /^(off|0|false|no|disabled)$/i.test((operatorSetting("NEXUS_NATIVE_TOOLS") ?? "").trim())) omitted.add("tools");
+    return omitted;
+  }
   /** Copilot API token exchanged from another client's GitHub token; held in memory only. */
   private exchangedToken?: OAuthCredential;
   private readonly authorizedOrigins: Set<string>;
@@ -628,7 +641,7 @@ export class LocalLlmClient {
     }
   ) {
     this.conn = connectionFor(config.provider, config.model);
-    this.unsupportedParams = new Set(this.conn.omitParams);
+    this.unsupportedParams = this.initialUnsupportedParams();
     // A provider's base URL already carries its API path and version; only the legacy endpoint path appends /v1.
     const normalizeEp = (urlStr: string) => {
       let ep = urlStr.trim();
@@ -875,12 +888,38 @@ export class LocalLlmClient {
     // Some providers serve a model over a different protocol (Copilot gpt-5 via Responses).
     this.conn = connectionFor(this.conn.providerId, model);
     // Learned rejections belong to the previous model.
-    this.unsupportedParams = new Set(this.conn.omitParams);
+    this.unsupportedParams = this.initialUnsupportedParams();
+  }
+
+  /** Endpoints that rejected the tool-call grammar, and until when they are sent requests without it. */
+  private readonly grammarRejectedUntil = new Map<string, number>();
+  /** Per request id: the endpoint a request carrying the grammar was sent to (bounded). */
+  private readonly grammarSentTo = new Map<string, string>();
+  private grammarRejected(endpoint: string): boolean {
+    return (this.grammarRejectedUntil.get(endpoint) ?? 0) > Date.now();
+  }
+
+  /**
+   * Adds the text-mode tool-call grammar for the endpoint this body is sent to (see constrainTextModeToolCall). Built
+   * from `tools` as sanitized by the egress boundary, never the raw set.
+   */
+  private applyToolGrammar(currentEp: string, requestId: string, payload: Record<string, unknown>, sanitizedTools: ToolDefinition[]): void {
+    const applied = !this.grammarRejected(currentEp) && !this.conn.providerId && constrainTextModeToolCall(
+      LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown",
+      payload,
+      sanitizedTools,
+      toolGrammarEnabled(operatorSetting("NEXUS_TOOL_GRAMMAR")),
+    );
+    if (!applied) return;
+    if (this.grammarSentTo.size >= 64) this.grammarSentTo.delete(this.grammarSentTo.keys().next().value as string);
+    this.grammarSentTo.set(requestId, currentEp);
   }
 
   /** Removes parameters this connection was found not to accept. */
   private omitUnsupported(body: Record<string, unknown>): void {
     for (const p of this.unsupportedParams) delete body[p];
+    // tool_choice only means something beside tools.
+    if (this.unsupportedParams.has("tools")) delete body.tool_choice;
   }
 
   /**
@@ -893,6 +932,18 @@ export class LocalLlmClient {
         return await run();
       } catch (err) {
         if (!(err instanceof InferenceError) || err.httpStatus !== 400) throw err;
+        // A server that refused our grammar (the error says so) is sent requests without it for a while. Attribution is
+        // per request (by request id), so concurrent requests cannot blame each other's endpoint; any other 400 is not
+        // evidence about the grammar.
+        const grammarEndpoint = err.requestId ? this.grammarSentTo.get(err.requestId) : undefined;
+        if (grammarEndpoint && isGrammarRejection(err.message)) {
+          if (!this.grammarRejected(grammarEndpoint)) {
+            this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} rejected the tool-call grammar; resending without it.`));
+          }
+          this.grammarRejectedUntil.set(grammarEndpoint, Date.now() + GRAMMAR_REJECTION_TTL_MS);
+          this.grammarSentTo.delete(err.requestId!);
+          continue;
+        }
         const param = unsupportedParameter(err.message);
         const droppable = this.conn.providerId ? DROPPABLE_PARAMS : LOCAL_DROPPABLE_PARAMS;
         if (!param || !droppable.has(param) || this.unsupportedParams.has(param)) throw err;
@@ -1425,7 +1476,7 @@ export class LocalLlmClient {
     try {
       await this.prepareCredential(ep, requestId);
       this.preflight(ep, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
-      body = this.outboundChatBody(ep, messages, tools);
+      body = this.outboundChatBody(ep, requestId, messages, tools);
     } catch (err: any) {
       throw new TokenCountError("denied", boundedProviderText(String(err?.message ?? err)).slice(0, 200));
     }
@@ -1591,6 +1642,7 @@ export class LocalLlmClient {
       }
       if (this.conn.usage === "openrouter") payload.usage = { include: true };
       this.omitUnsupported(payload);
+      this.applyToolGrammar(currentEp, requestId, payload, outboundTools);
 
       const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
@@ -1688,7 +1740,7 @@ export class LocalLlmClient {
    * (max_tokens on local endpoints) and streaming options. Inference and request counting both send this body, so a
    * count is of the request that is actually sent. Throws when the information-flow boundary denies the egress.
    */
-  private outboundChatBody(currentEp: string, messages: ChatMessage[], tools: ToolDefinition[]): any {
+  private outboundChatBody(currentEp: string, requestId: string, messages: ChatMessage[], tools: ToolDefinition[]): any {
     // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
     const egressEvaluation = this.boundary.evaluateEgress(
       messages,
@@ -1751,6 +1803,7 @@ export class LocalLlmClient {
     if (this.conn.usage === "openrouter") payload.usage = { include: true };
     if (this.conn.usage === "openrouter" || this.conn.usage === "stream-options") payload.stream_options = { include_usage: true };
     this.omitUnsupported(payload);
+    this.applyToolGrammar(currentEp, requestId, payload, outboundTools);
     return payload;
   }
 
@@ -1768,7 +1821,7 @@ export class LocalLlmClient {
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
 
-      const payload = this.outboundChatBody(currentEp, messages, tools);
+      const payload = this.outboundChatBody(currentEp, requestId, messages, tools);
 
       const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
