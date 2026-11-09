@@ -103,9 +103,6 @@ Every row is reproduced by the audit. Rows A1 to A3 and A5 to A9 restate earlier
 | PR #443 review | low | Missing tests: note with compaction, resume, redaction | FIXED. Tests `a resumed conversation keeps its note, re-sends it unchanged and adds no second one` and the compaction and redaction tests above |
 
 ## E. WP-1308 relevance-based skill injection, including the items carried from the PR #409 review
-
-## F. Worktrunk work packages (WP-1310 to WP-1312)
-
 | WP | Item | Status |
 |---|---|---|
 | WP-1310 | `WorktreeManager.resolveGitRoot` used `--show-toplevel`, so a manager created inside a linked worktree anchored on that worktree instead of the main checkout (latent bug, PLAN 3.3 item 2) | FIXED in the WP-1310 PR; test `WorktreeManager anchors on the git common dir from inside a linked worktree` in `cli/test/worktrunk_core.test.ts` |
@@ -116,3 +113,11 @@ Every row is reproduced by the audit. Rows A1 to A3 and A5 to A9 restate earlier
 | WP-1310 review 4 (Entire nexus-code/180, `01M70ZA4HR1V`, `01M70ZA4HK36`, `01M70Z2JV58D`, `01M70YPPMG2G`) | A stale registration recreated while a remover waited was force-deleted; a commit landing on a detached worktree after the HEAD re-check was lost; mis-indented seam; two reclaimers of a stale lock could delete each other's live lock | FIXED in the PR #442 fourth round: state re-read under the lock, detached worktrees guarded by a temporary `nexus-removed/` branch deleted only if unmoved, reclaim serialised through the `file_guard` flock; `cli/test/worktrunk_review.test.ts` |
 | WP-1311 | `copy-ignored` and the automatic step in `switch -c` | OPEN (next PR in the stack) |
 | WP-1312 | `merge` and `prune` | OPEN (next PR in the stack) |
+| Item | Sev | Finding | Status |
+|---|---|---|---|
+| PR #440 review | medium | A key whose `/` or `+` is percent-encoded (`%2F`, `%2B`) or written as a look-alike (`∕`, U+2215) is not redacted whole: the patterns and the tokenizer stop at the encoded character, so the rest of the key stays in clear | OPEN |
+| PR #440 review | medium | Key material after a dot that directly follows an `sk-` key (`sk-…RtBq.Xo2RtBq`) is left in clear: the `sk-` patterns and the scanner stop at "." and the entropy tokenizer does not take dotted tokens | OPEN |
+
+## F. Worktrunk work packages (WP-1310 to WP-1312)
+## F. Redaction follow-ups from the PR #440 independent review, 2026-11-09 (pre-existing on main, not regressions of PR #440)
+Severity set by the fixing agent; the reviewer did not rate these. Each needs its own red test and fix in a follow-up change.
