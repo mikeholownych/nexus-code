@@ -9,6 +9,23 @@ export interface GitInfo {
   formattedBadge: string;
 }
 
+/**
+ * The whole repository except Nexus's own state directory (the workspace's and the repository root's `.nexus`).
+ * Every surface that reports uncommitted changes reads `git status` through this one pathspec, so the header, the
+ * model's [Git Status] line, /git and /commit agree, and Nexus's receipts never count as a user change.
+ */
+const WITHOUT_NEXUS_STATE = ["--", ":/", ":(exclude).nexus", ":(top,exclude).nexus"];
+
+/** `git status` in `format` for the workspace's repository, without Nexus state. Throws when git fails. */
+export function workspaceStatus(workspace: string, format: "--porcelain" | "--short"): string {
+  return execFileSync("git", ["status", format, ...WITHOUT_NEXUS_STATE], {
+    cwd: workspace,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
+}
+
 export function getGitInfo(workspace: string): GitInfo {
   try {
     const branch = execSync("git rev-parse --abbrev-ref HEAD", {
@@ -17,11 +34,7 @@ export function getGitInfo(workspace: string): GitInfo {
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
 
-    const statusOut = execSync("git status --porcelain", {
-      cwd: workspace,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    }).trim();
+    const statusOut = workspaceStatus(workspace, "--porcelain").trim();
 
     const lines = statusOut ? statusOut.split("\n") : [];
     const dirtyCount = lines.length;
@@ -94,11 +107,7 @@ export function scaffoldProjectRules(workspace: string): string {
 
 export function generateConventionalCommit(workspace: string): { message: string; files: string[] } {
   try {
-    const statusOut = execSync("git status --porcelain", {
-      cwd: workspace,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    }).trimEnd();
+    const statusOut = workspaceStatus(workspace, "--porcelain").trimEnd();
 
     if (!statusOut) {
       return { message: "chore(repo): update repository", files: [] };

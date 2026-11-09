@@ -126,6 +126,46 @@ function hasGitMarkerInAncestors(workspace: string): boolean {
 }
 
 /**
+ * Creates `.nexus/` with a self-contained `.gitignore` whose last rule ignores everything in it, so Nexus state never
+ * shows in the user's `git status`. Touches no Git metadata (safe in read-only Git directories). Throws on an unsafe
+ * path (a link or a redirected parent) or a failed write.
+ */
+export function ensureSelfIgnore(workspace: string): void {
+  const nexusDir = path.join(workspace, ".nexus");
+  mkdirVerified(workspace, nexusDir);
+  const nexusGitIgnore = path.join(nexusDir, ".gitignore");
+  try {
+    // Open the existing file without following links and bind the descriptor to
+    // the expected repository path before reading it.
+    readSelfIgnore(workspace, nexusGitIgnore);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      try {
+        writeExclusiveVerified(workspace, nexusGitIgnore, "*\n");
+      } catch (createError) {
+        // Another safe creator may have won the exclusive-create race. Any
+        // link or redirected parent still fails in readSelfIgnore below.
+        if (typeof createError !== "object" || createError === null || !("code" in createError) || createError.code !== "EEXIST") {
+          throw createError;
+        }
+      }
+    } else {
+      throw error;
+    }
+  }
+  const ignoreContent = readSelfIgnore(workspace, nexusGitIgnore);
+  const lastRule = ignoreContent
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .at(-1);
+  if (lastRule !== "*") {
+    const prefix = ignoreContent.length === 0 || ignoreContent.endsWith("\n") ? "" : "\n";
+    appendSelfIgnore(workspace, nexusGitIgnore, `${prefix}*\n`);
+  }
+}
+
+/**
  * Ensures .nexus/ is ignored by Git in the workspace (REQ-PER-105).
  * The self-contained rule protects state even when Git metadata is read-only;
  * info/exclude remains a best-effort convenience for older clients and status output.
@@ -171,38 +211,7 @@ export function ensureGitExclude(workspace: string): void {
     // Updating the convenience file is optional; self-ignore verification below is authoritative.
   }
 
-  const nexusDir = path.join(workspace, ".nexus");
-  mkdirVerified(workspace, nexusDir);
-  const nexusGitIgnore = path.join(nexusDir, ".gitignore");
-  try {
-    // Open the existing file without following links and bind the descriptor to
-    // the expected repository path before reading it.
-    readSelfIgnore(workspace, nexusGitIgnore);
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      try {
-        writeExclusiveVerified(workspace, nexusGitIgnore, "*\n");
-      } catch (createError) {
-        // Another safe creator may have won the exclusive-create race. Any
-        // link or redirected parent still fails in readSelfIgnore below.
-        if (typeof createError !== "object" || createError === null || !("code" in createError) || createError.code !== "EEXIST") {
-          throw createError;
-        }
-      }
-    } else {
-      throw error;
-    }
-  }
-  const ignoreContent = readSelfIgnore(workspace, nexusGitIgnore);
-  const lastRule = ignoreContent
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0 && !line.startsWith("#"))
-    .at(-1);
-  if (lastRule !== "*") {
-    const prefix = ignoreContent.length === 0 || ignoreContent.endsWith("\n") ? "" : "\n";
-    appendSelfIgnore(workspace, nexusGitIgnore, `${prefix}*\n`);
-  }
+  ensureSelfIgnore(workspace);
 
   const isIgnored = (relativePath: string): boolean => {
     try {

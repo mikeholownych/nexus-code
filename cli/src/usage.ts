@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
+import { ensureSelfIgnore } from "./core/git_exclude.js";
 
 export interface UsageReport {
   inputTokens?: number;
@@ -113,6 +114,12 @@ export class UsageLedger {
     if (process.env.NEXUS_RECEIPTS === "0") return;
     this.receipts.push(receipt);
     if (!workspace) return;
+    try {
+      // Receipts land in the user's workspace: keep them out of the user's `git status` without touching Git metadata.
+      ensureSelfIgnore(workspace);
+    } catch {
+      // Dirty counts exclude .nexus regardless (git.ts workspaceStatus); a refused ignore file must not lose the receipt.
+    }
     try {
       const dir = path.join(workspace, ".nexus");
       ensurePrivateDir(dir);
