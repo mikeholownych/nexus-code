@@ -105,7 +105,7 @@ const sleeper = new Int32Array(new SharedArrayBuffer(4));
 let lockDepth = 0;
 
 /** How long a caller waits for the lock and when an old lock may be taken over. Mutable so tests can shorten the wait. */
-export const lockSettings = { waitMs: 120_000, staleMs: 600_000 };
+export const lockSettings = { waitMs: 120_000, staleMs: 600_000, unreadableGraceMs: 30_000 };
 
 /** Test seam: runs between judging a lock stale and taking it over. Not an extension point. */
 export const lockSeams: { afterStaleCheck?: () => void } = {};
@@ -127,7 +127,11 @@ function staleLockIdentity(lock: string): fs.BigIntStats | undefined {
       if (err?.code === "ESRCH") return stat; // the holder is gone
     }
   }
-  return Date.now() - Number(stat.mtimeMs) > lockSettings.staleMs ? stat : undefined;
+  const age = Date.now() - Number(stat.mtimeMs);
+  // A lock with no readable pid: the holder created it and died before writing (or is about to write). A short grace
+  // covers the writer; after that nobody is coming, so waiting out the full ten minutes would only block everyone.
+  const unreadable = !(Number.isSafeInteger(pid) && pid > 0);
+  return age > (unreadable ? Math.min(lockSettings.unreadableGraceMs, lockSettings.staleMs) : lockSettings.staleMs) ? stat : undefined;
 }
 
 class LockTakeoverError extends Error {}

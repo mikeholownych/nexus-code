@@ -8,6 +8,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -656,5 +657,81 @@ test("a detached worktree whose removal Git refuses is put back on its detached 
     assert.equal(git(f.repo, "for-each-ref", "refs/heads/nexus-removed"), "", "no guard branch is left behind");
     fs.rmSync(path.join(dir, "appeared.txt"));
     assert.equal(wt(f, f.repo, ["remove", dir]).success, true, "a retry works");
+  } finally { f.cleanup(); }
+});
+
+test("a commit that lands between creating the guard branch and reading its head is kept on the branch and nothing is removed", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-between");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    let landed = "";
+    core.removeSeams.afterGuardSwitch = () => { landed = commitFile(dir, "between.txt", "x\n", "lands right after the guard switch"); };
+    let result;
+    try { result = wt(f, f.repo, ["remove", dir]); } finally { delete core.removeSeams.afterGuardSwitch; }
+    assert.ok(landed, "the seam must have run");
+    assert.equal(result.success, false, result.output);
+    assert.equal(fs.existsSync(dir), true, "nothing is removed");
+    const branches = git(f.repo, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/nexus-removed").split("\n").filter(Boolean);
+    assert.equal(branches.length, 1, branches.join(";"));
+    assert.ok(branches[0].endsWith(landed), "the guard branch holds the new commit");
+    assert.match(result.output, /nexus-removed\//);
+  } finally { f.cleanup(); }
+});
+
+test("a leaked guard branch for the same worktree and commit is reused by a retry", () => {
+  const f = fixture();
+  try {
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-leaked");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    const head = git(dir, "rev-parse", "HEAD");
+    const name = `nexus-removed/${crypto.createHash("sha1").update(fs.realpathSync(dir)).digest("hex").slice(0, 10)}-${head.slice(0, 8)}`;
+    git(f.repo, "branch", name, head); // what an interrupted removal leaves behind
+    const r = wt(f, f.repo, ["remove", dir]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(fs.existsSync(dir), false);
+    assert.equal(git(f.repo, "for-each-ref", "refs/heads/nexus-removed"), "", "the reused guard branch is cleaned up");
+  } finally { f.cleanup(); }
+});
+
+test("when the detached HEAD cannot be restored after a refused removal the message names the branch the worktree is left on", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-stuck");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    core.removeSeams.beforeGitRemove = () => {
+      fs.writeFileSync(path.join(dir, "appeared.txt"), "x\n"); // makes Git refuse the removal
+      const guard = git(f.repo, "for-each-ref", "--format=%(refname)", "refs/heads/nexus-removed");
+      git(f.repo, "update-ref", "-d", guard); // and makes the rollback fail: the branch it would switch to is gone
+    };
+    let r;
+    try { r = wt(f, f.repo, ["remove", dir]); } finally { delete core.removeSeams.beforeGitRemove; }
+    assert.equal(r.success, false);
+    assert.match(r.output, /could not restore the detached HEAD/);
+    assert.match(r.output, /nexus-removed\//);
+    assert.match(r.output, /switch --detach/);
+  } finally { f.cleanup(); }
+});
+
+test("a lock whose holder died before writing its pid is taken over after a short grace, not after ten minutes", () => {
+  const f = fixture();
+  try {
+    const common = path.join(f.repo, ".git");
+    fs.mkdirSync(path.join(common, "nexus"), { recursive: true });
+    const lock = path.join(common, "nexus", "worktrees.lock");
+    const before = lockSettings.waitMs;
+    lockSettings.waitMs = 300;
+    try {
+      fs.writeFileSync(lock, ""); // created, but the holder died before writing its pid
+      assert.throws(() => withWorktreeLock(common, () => "ran"), /locked by another process/, "fresh: the writer may still be about to write");
+      const old = new Date(Date.now() - 60_000);
+      fs.utimesSync(lock, old, old);
+      assert.equal(withWorktreeLock(common, () => "ran"), "ran", "older than the grace: taken over");
+    } finally { lockSettings.waitMs = before; fs.rmSync(lock, { force: true }); }
   } finally { f.cleanup(); }
 });

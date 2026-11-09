@@ -32,7 +32,7 @@
   "dependencies": {
     "commander": "^12.1.0",
     "dotenv": "^18.0.9",
-    "ora": "^9.4.1",
+    "ora": "^10.0.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
