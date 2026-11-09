@@ -455,6 +455,19 @@ function isPathLike(value: string): boolean {
 }
 
 /**
+ * How much of a Bearer value is the token. A value without "/" is a token. A value with "/" is a token when it has a
+ * digit or a capital and is not a path (`isPathLike`); otherwise only the part before its first "/" can be, as in the
+ * pattern before "/" was accepted, if it is at least 16 characters long. Returns 0 when nothing of it is a token.
+ */
+function bearerTokenLength(value: string): number {
+  const plain = unescapeSlashes(value);
+  if (!plain.includes("/") || (/[0-9A-Z]/.test(plain) && !isPathLike(plain))) return value.length;
+  const slash = value.indexOf("/");
+  const head = slash > 0 && value[slash - 1] === "\\" ? slash - 1 : slash;
+  return head >= 16 ? head : 0;
+}
+
+/**
  * `sk-` / `sk-ant-` keys whose body is base64 ("/" and "+" included), found in one left-to-right pass: from each `sk-`
  * at a word boundary take the maximal run of key characters (a JSON-escaped `\/` counts as "/") once, validate it,
  * and resume after it. Nothing of the run
@@ -621,13 +634,12 @@ export class InformationFlowBoundary {
     { name: "AWS_ACCESS_KEY_ID", regex: /\b(?:AKIA[0-9A-Z]{16})\b/g },
     // Slack Tokens
     { name: "SLACK_TOKEN", regex: /\b(?:xox[baprs]-[0-9a-zA-Z]{10,48})\b/g },
-    // Bearer tokens: RFC 6750 token68 (letters, digits, "-._~+/", "=" padding). A body that uses "/" must be base64:
-    // a digit, a capital and a lower-case letter, and not starting with "/", so `Bearer /api/v1/organizations/x` in
-    // ordinary text is a path, not a token. A JSON-escaped `\/` counts as "/". The lookaheads scan the token once
-    // each; the pattern stays linear.
+    // Bearer tokens: RFC 6750 token68 (letters, digits, "-._~+/", "=" padding; a JSON-escaped `\/` counts as "/"),
+    // not starting with "/". A value with "/" is checked in classifyText (`bearerTokenLength`): `Bearer /api/v1/x` and
+    // `Bearer api/v1/organizations` in ordinary text are paths, not tokens.
     {
       name: "BEARER_AUTH_HEADER",
-      regex: /\bBearer\s+((?:(?=(?:[A-Za-z0-9_.~+\/-]|\\\/)*\d)(?=(?:[A-Za-z0-9_.~+\/-]|\\\/)*[A-Z])(?=(?:[A-Za-z0-9_.~+\/-]|\\\/)*[a-z])[A-Za-z0-9_.~+-](?:[A-Za-z0-9_.~+\/-]|\\\/){15,}|[A-Za-z0-9_.~-]{16,})={0,2})/g,
+      regex: /\bBearer\s+([A-Za-z0-9_.~+-](?:[A-Za-z0-9_.~+\/-]|\\\/){15,}={0,2})/g,
     },
     // Authorization header values, including Basic (base64 user:password) and provider Token schemes.
     { name: "AUTHORIZATION_HEADER", regex: /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?((?:[A-Za-z0-9._~+/=-]|\\\/){8,})/gi },
@@ -784,7 +796,7 @@ export class InformationFlowBoundary {
         const span = match.indices?.[match[1] && typeof match[1] === "string" ? 1 : 0];
         if (!span) continue;
         const [start, matchEnd] = span;
-        let end = matchEnd;
+        let end = name === "BEARER_AUTH_HEADER" ? start + bearerTokenLength(text.slice(start, matchEnd)) : matchEnd;
         while (end > start) {
           const ch = text.charCodeAt(end - 1);
           if (ch === 34 || ch === 39 || ch === 59 || ch === 44) { // ", ', ;, ,
@@ -866,17 +878,18 @@ export class InformationFlowBoundary {
       let end = start + token[0].length;
       while (end > start && (text[end - 1] === "." || text[end - 1] === "!")) end--;
       const tok = text.slice(start, end);
+      const plain = unescapeSlashes(tok);
       if (
         tok.length >= 20 &&
-        tok.length <= 128 &&
+        // Longer tokens are prose or data, except a base64 run ("+" or "/", not a path): it is a secret however long.
+        (tok.length <= 128 || (/[+/]/.test(plain) && !isPathLike(plain))) &&
         // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
-        (originalTokens.has(tok) || looksLikeCredentialToken(unescapeSlashes(tok))) &&
+        (originalTokens.has(tok) || looksLikeCredentialToken(plain)) &&
         !isReference(tok)
       ) {
         // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above). Nexus's own session
         // ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
         // id made the session impossible to save or resume.
-        const plain = unescapeSlashes(tok);
         if (/^[a-zA-Z0-9+/=_-]+$/.test(plain) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain)) {
           const entropy = calculateShannonEntropy(plain);
           // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32

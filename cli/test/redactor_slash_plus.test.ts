@@ -301,3 +301,36 @@ test("sk-learn style paths are not keys", () => {
     InformationFlowBoundary.setGlobalInstance(original);
   }
 });
+
+/** A Bearer token with "/" needs a digit or a capital and must not be a path; then it is redacted whole. */
+test("a Bearer token with a slash is redacted whole unless it is a path", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    for (const text of [
+      "Bearer aaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbb1",
+      "Authorization: Bearer aaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbb1",
+      "Bearer Abcdefghijklmnopqrstuv/wxyzabcdefghijklmnop",
+    ]) {
+      const output = redactDiagnosticForOutput(text);
+      assert.ok(!/aaaaaa|bbbbbb|bcdefg|wxyzab/.test(output), `${text}: ${output}`);
+    }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
+
+/** A base64 run longer than the entropy tokenizer's 128-character cap is still a secret when it carries "+" or "/". */
+test("a base64 run longer than 128 characters is redacted", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary());
+  try {
+    for (const unit of ["Qx7Km2+Vb9Lr/Tz4Wd8Ns3Hc6Yp1Jf5Ge0Ua+Xo2Rt/Bq", "Qx7Km2Vb9Lr/Tz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2Rt/Bq"]) {
+      const blob = unit.repeat(4);
+      const output = redactDiagnosticForOutput(`blob ${blob} end`);
+      assert.ok(!output.includes("Qx7Km2") && !output.includes("Rt/Bq"), `${blob.length} chars: ${output}`);
+    }
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
