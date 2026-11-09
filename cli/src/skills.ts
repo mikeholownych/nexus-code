@@ -359,7 +359,10 @@ export class SkillManager {
       }
       return { skill, score };
     });
-    const threshold = Math.max(0.5, Math.min(2, 0.35 * Math.log(N + 1)));
+    // The floor never exceeds what one name term found in this skill alone scores at average length (f = 2, d = 1):
+    // with one or two skills installed, idf is small and a fixed 0.5 floor would refuse even an exact name.
+    const uniqueNameScore = (Math.log(1 + (N - 0.5) / 1.5) * 2 * (BM25_K1 + 1)) / (2 + BM25_K1);
+    const threshold = Math.min(Math.max(0.5, Math.min(2, 0.35 * Math.log(N + 1))), uniqueNameScore);
     const best = Math.max(...scored.map((m) => m.score));
     if (best < threshold) return [];
     return scored

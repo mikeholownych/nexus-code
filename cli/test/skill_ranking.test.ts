@@ -154,3 +154,28 @@ describe("WP-1308 review fixes", () => {
     assert.ok(!mgr.findSkills("write the release notes").some((s) => s.name === "git-commit-helper"));
   });
 });
+
+describe("review round 2026-11-09 (PR #465 follow-ups)", () => {
+  /** A SkillManager whose home holds exactly the given skills (and nothing else). */
+  const isolated = (skills: Array<[string, string]>) => {
+    const alone = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-skill-alone-"));
+    for (const [name, description] of skills) write(path.join(alone, ".agents", "skills"), name, description);
+    const previous = process.env.HOME;
+    process.env.HOME = alone;
+    try {
+      return new SkillManager(path.join(alone, "ws"), { trusted: true });
+    } finally {
+      process.env.HOME = previous;
+    }
+  };
+
+  test("item 8: with one or two trusted skills an exact-name query matches and an unrelated one does not", () => {
+    const one = isolated([["terraform-plan", "Review infrastructure changes before they are applied."]]);
+    assert.equal(one.listSkills().length, 1);
+    assert.deepEqual(one.findSkills("terraform").map((s) => s.name), ["terraform-plan"]);
+    assert.deepEqual(one.findSkills("bake a sourdough loaf"), []);
+    const two = isolated([["terraform-plan", "Review infrastructure changes before they are applied."], ["pdf-forms", "Fill and merge PDF forms."]]);
+    assert.deepEqual(two.findSkills("terraform").map((s) => s.name), ["terraform-plan"]);
+    assert.deepEqual(two.findSkills("bake a sourdough loaf"), []);
+  });
+});
