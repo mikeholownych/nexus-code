@@ -1042,3 +1042,77 @@ test("a failure_debugger on a failed tester works on a snapshot of the tester's 
   assert.equal(git(testerWorktree, ["status", "--porcelain"]).length > 0, true, "the tester's worktree keeps its uncommitted work");
   assert.equal(git(testerWorktree, ["rev-parse", "HEAD"]), state.git!.units.verify.baseCommit, "the tester's branch did not move");
 });
+
+test("a failure_debugger that depends on two failed units fails closed instead of snapshotting one of them (01M70ETZ)", async () => {
+  const root = repo();
+  const state = newOperation("op-dbg2", "fix it", [
+    { id: "verify-a", title: "verify a", role: "tester", prompt: "test a" },
+    { id: "verify-b", title: "verify b", role: "tester", prompt: "test b" },
+    { id: "debug", title: "debug", role: "failure_debugger", prompt: "find the cause", dependsOn: ["verify-a", "verify-b"] },
+  ], [resource()], Date.now());
+  const p = plan(root, state.id);
+  state.git = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state.git);
+  let debuggerRan = false;
+  const executor: WorkUnitExecutor = {
+    async run(u) {
+      if (u.id === "debug") { debuggerRan = true; return completed({ summary: "cause found" }); }
+      return {
+        kind: "failed", cause: "EXECUTION_FAILED", reason: "verifier failed", question: "q",
+        options: [{ label: "retry", action: { kind: "retry" } }],
+        failedRun: { summary: "1 failed", verification: { command: "false", status: "FAILED", hasExecutedTests: true } },
+      };
+    },
+  };
+  await new OperationRunner(state, { executor, clock: clock(), persist: () => {} }).run();
+  const debug = state.units.find((u) => u.id === "debug")!;
+  assert.equal(debuggerRan, false, "the debugger never runs on an arbitrary one of two failed candidates");
+  assert.equal(debug.status, "BLOCKED", JSON.stringify(state.units.map((u) => [u.id, u.status])));
+  assert.match(debug.blocked?.reason ?? "", /verify-a/);
+  assert.match(debug.blocked?.reason ?? "", /verify-b/);
+  assert.equal(state.git!.units.debug, undefined, "no snapshot worktree was created");
+});
+
+test("a debugger snapshot keeps files the tester force-added past .gitignore but did not commit (01M70EHSXT)", () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const tester = ops.prepareUnit(unit("verify")).workspace;
+  fs.writeFileSync(path.join(tester, ".gitignore"), "fixtures/\n");
+  fs.mkdirSync(path.join(tester, "fixtures"));
+  fs.writeFileSync(path.join(tester, "fixtures", "case.txt"), "FORCED_FIXTURE\n");
+  git(tester, ["add", "-f", "fixtures/case.txt"]);
+  fs.writeFileSync(path.join(tester, "fixtures", "case.txt"), "FORCED_FIXTURE edited after add\n");
+  fs.writeFileSync(path.join(tester, "fixtures", "noise.txt"), "ignored and never added\n");
+  const debug = ops.prepareUnit(unit("debug", { role: "failure_debugger" }), { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
+  assert.equal(fs.readFileSync(path.join(debug, "fixtures", "case.txt"), "utf8"), "FORCED_FIXTURE edited after add\n");
+  assert.equal(fs.existsSync(path.join(debug, "fixtures", "noise.txt")), false, "ignored files the tester never added stay out");
+  assert.equal(fs.readFileSync(path.join(debug, ".gitignore"), "utf8"), "fixtures/\n");
+  assert.equal(git(tester, ["diff", "--cached", "--name-only"]), "fixtures/case.txt", "the tester's own index is untouched");
+});
+
+test("a retried debugger takes a fresh snapshot when its dependency failed again, and reuses it otherwise (01M70EHSWZ)", () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const tester = ops.prepareUnit(unit("verify")).workspace;
+  fs.writeFileSync(path.join(tester, "file.txt"), "first failing candidate\n");
+  const debugUnit = unit("debug", { role: "failure_debugger" });
+  const first = ops.prepareUnit(debugUnit, { snapshotOf: "verify", snapshotRun: "2026-11-09T10:00:00.000Z" });
+  assert.equal(fs.readFileSync(path.join(first.workspace, "file.txt"), "utf8"), "first failing candidate\n");
+  fs.writeFileSync(path.join(first.workspace, "notes.txt"), "debugger scratch\n");
+
+  const same = ops.prepareUnit(debugUnit, { snapshotOf: "verify", snapshotRun: "2026-11-09T10:00:00.000Z" });
+  assert.equal(same.reused, true, "a retry against the same failed run continues in the same checkout");
+
+  fs.writeFileSync(path.join(tester, "file.txt"), "second failing candidate\n");
+  const second = ops.prepareUnit(debugUnit, { snapshotOf: "verify", snapshotRun: "2026-11-09T11:00:00.000Z" });
+  assert.equal(second.reused, false, "a new failed run of the dependency is a new candidate");
+  assert.equal(fs.readFileSync(path.join(second.workspace, "file.txt"), "utf8"), "second failing candidate\n");
+  assert.equal(fs.existsSync(path.join(second.workspace, "notes.txt")), false, "scratch from the stale snapshot is discarded");
+  assert.equal(state.units.debug.snapshotRun, "2026-11-09T11:00:00.000Z");
+});
