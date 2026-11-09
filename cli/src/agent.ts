@@ -820,6 +820,17 @@ function gitIndexIdentity(workspace: string): string {
 }
 
 /** What an archive read means for a resumed conversation; undefined when the archive is whole. */
+/** An endpoint URL for equality: scheme and host lower-cased, trailing slashes dropped. */
+function comparableEndpoint(endpoint: string): string {
+  const trimmed = endpoint.trim();
+  try {
+    const url = new URL(trimmed);
+    return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}${url.search}`;
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
 function describeArchiveRead(read: ArchiveRead<ChatMessage>): string | undefined {
   const notes: string[] = [];
   if (read.uncommittedLines) notes.push(`${read.uncommittedLines} archived message(s) from a compaction that was interrupted before it was committed were set aside; their originals are in the resumed conversation itself`);
@@ -5509,11 +5520,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   }
 
   /**
-   * Before the first request of a resumed turn: wait until the provider's recorded eligible time, shown as the
-   * ordinary provider-wait status; skipped when the recorded wait was against another endpoint. Like live recovery, the advertised window is honoured in full (maxDelayMs caps only
-   * backoff) and bounded by the recovery deadline: live recovery never plans a wait past deadlineMs, so only a damaged
-   * or far-future record is cut. Cancellation throws RecoveryCancelled (the caller records the interruption with the
-   * same eligible time). Returns the record of the wait, or undefined.
+   * Before the first request of a resumed turn, waits until the provider's recorded eligible time.
+   * The wait is shown as the ordinary provider-wait status.
+   * It is skipped when the recorded wait was against another endpoint.
+   * As in live recovery, the advertised window is honoured in full: maxDelayMs caps only backoff.
+   * The wait is bounded by deadlineMs. Live recovery never plans a wait past it, so only a damaged or far-future
+   * record is cut.
+   * Cancellation throws RecoveryCancelled; the caller records the interruption with the same eligible time.
+   * Returns the record of the wait, or undefined.
    */
   private async waitOutResumedProviderWindow(
     policy: RecoveryPolicy,
@@ -5526,7 +5540,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.resumedProviderWait = undefined;
     if (!pending) return undefined;
     // The window is the recorded provider's: a resume against another endpoint is not held back by it.
-    if (pending.record?.endpoint && endpoint && pending.record.endpoint !== endpoint) return undefined;
+    if (pending.record?.endpoint && endpoint && comparableEndpoint(pending.record.endpoint) !== comparableEndpoint(endpoint)) return undefined;
     const now = this.recoveryClock.now();
     const remaining = Date.parse(pending.eligibleAt) - now;
     if (!(remaining > 0)) return undefined;

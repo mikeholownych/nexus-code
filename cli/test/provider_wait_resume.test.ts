@@ -324,7 +324,7 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     policy: Partial<RecoveryPolicy>,
     edit: (t: TurnResult) => TurnResult = (t) => t,
     onResumedSleep?: (agent: AutonomousAgent) => void,
-    options: { otherEndpoint?: boolean } = {},
+    options: { otherEndpoint?: boolean; spellEndpoint?: (url: string) => string } = {},
   ) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-clock-"));
     const repo = makeRepo(root);
@@ -350,7 +350,7 @@ describe("the resumed provider wait (fake recovery clock)", () => {
           return { kind: "text", content: "The answer is 42." };
         })
       : undefined;
-    resumed = agentFor((other ?? gw).url, repo, path.join(root, "state-2"), resumedClock, policy);
+    resumed = agentFor((options.spellEndpoint ?? ((u: string) => u))((other ?? gw).url), repo, path.join(root, "state-2"), resumedClock, policy);
     resumed.restoreConversation({ messages, lastTurn: edit(interrupted) }, noArchive);
     const cleanup = async () => {
       resumed!.shutdown();
@@ -427,6 +427,20 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
       assert.deepEqual(ctx.resumedClock.sleeps, [], "the other provider's Retry-After does not hold this one back");
       assert.equal(ctx.requestedAt.length, 1);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("the same endpoint spelled differently (trailing slash, scheme and host case) still waits", async () => {
+    const respell = (url: string) => url.replace(/^http:\/\//, "HTTP://").replace(/127\.0\.0\.1|localhost/, (h) => h.toUpperCase()) + "/";
+    const ctx = await interruptedThenRestored({}, undefined, undefined, { spellEndpoint: respell });
+    try {
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      const start = ctx.resumedClock.now();
+      const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      assert.deepEqual(ctx.resumedClock.sleeps, [eligibleAt - start], "the recorded window still applies");
     } finally {
       await ctx.cleanup();
     }
