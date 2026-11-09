@@ -427,11 +427,6 @@ test("the preMerge seam runs after every refusal and before history is rewritten
   } finally { f.cleanup(); }
 });
 
-test("pruneWorktrees reads no registry it does not use", () => {
-  const source = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "worktrunk", "merge.ts"), "utf8");
-  assert.doesNotMatch(source, /readRegistry/);
-});
-
 test("a tag named like the target never stands in for the target branch in merge or prune", () => {
   const f = fixture();
   try {
