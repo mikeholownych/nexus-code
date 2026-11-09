@@ -472,21 +472,31 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     }
   });
 
-  test("a step on another endpoint leaves the window pending for a later step on the recorded endpoint (planner/coder routing)", async () => {
+  test("planner/coder routing: step 1 on the planner does not wait, step 2 on the coder (the recorded endpoint) waits until the eligible time", async () => {
     const ctx = await interruptedThenRestored({});
+    const plannerRequests: number[] = [];
+    const plannerGateway = await startRecoveryGateway((n) => {
+      plannerRequests.push(ctx.resumedClock.now());
+      return n === 1 ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] } : { kind: "text", content: "planner done" };
+    });
+    const plannerHost = agentFor(plannerGateway.url, makeRepo(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-planner-"))), fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-planner-state-")), fakeClock());
     try {
       const a = ctx.resumed as any;
-      const recorded = String(ctx.interrupted.providerRecovery?.at(-1)?.endpoint);
-      assert.ok(recorded, "precondition: the recorded endpoint");
       const eligibleAt = eligibleAtOf(ctx.interrupted);
-      const turn = { phase: "inference" } as any;
-      const policy = { ...DEFAULT_RECOVERY_POLICY };
-      await a.waitOutResumedProviderWindow(policy, 1, turn, undefined, "http://other.invalid:1/v1", () => {});
-      assert.deepEqual(ctx.resumedClock.sleeps, [], "the other endpoint's step does not wait");
-      await a.waitOutResumedProviderWindow(policy, 2, turn, undefined, recorded, () => {});
-      assert.equal(ctx.resumedClock.sleeps.length, 1, "the later step on the recorded endpoint still waits");
-      assert.equal(ctx.resumedClock.now(), eligibleAt, "until the recorded eligible time");
+      const start = ctx.resumedClock.now();
+      // Distinct endpoints: the planner serves step 1 (and plan updates), the coder (the recorded provider) the other steps.
+      a.cognitiveRoutingEnabled = true;
+      a.plannerClient = (plannerHost as any).client;
+      a.coderClient = a.client;
+      const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      assert.equal(plannerRequests[0], start, "step 1 on the planner is not held back by the coder's window");
+      assert.equal(ctx.requestedAt.length, 1, "the coder served step 2");
+      assert.equal(ctx.requestedAt[0], eligibleAt, "the coder's request waited for the recorded eligible time");
+      assert.equal(ctx.resumedClock.sleeps.length, 1, "one wait, at the coder step");
     } finally {
+      plannerHost.shutdown();
+      await plannerGateway.close();
       await ctx.cleanup();
     }
   });
