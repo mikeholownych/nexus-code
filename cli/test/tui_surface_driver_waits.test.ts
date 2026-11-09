@@ -68,7 +68,8 @@ test("the approval panel counts as shown only once its decisions and hint rows a
     hintButNoBottomBorder: halfDelivered(10),
     whole: AFTER,
   };
-  const shown = Object.fromEntries(Object.keys(screens).map((k, i) => [k, approvalPanelShown(Object.values(screens))[i]]));
+  const got = approvalPanelShown(Object.values(screens));
+  const shown = Object.fromEntries(Object.keys(screens).map((k, i) => [k, got[i]]));
   assert.deepEqual(shown, { before: false, titleOnly: false, proposedButNoDecisions: false, decisionsButNoHint: false, hintButNoBottomBorder: false, whole: true }, JSON.stringify(shown));
 });
 

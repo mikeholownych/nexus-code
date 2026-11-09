@@ -31,7 +31,7 @@ def approval_panel_shown(lines):
     title = next((i for i, line in enumerate(lines) if "Approval needed" in line), None)
     if title is None:
         return False
-    decisions = next((i for i in range(title + 1, len(lines)) if lines[i].startswith("│") and has([lines[i]], "Deny")), None)
+    decisions = next((i for i in range(title + 1, len(lines)) if lines[i].startswith("│") and has([lines[i]], "Approve") and has([lines[i]], "Deny")), None)
     if decisions is None or decisions + 2 >= len(lines):
         return False
     hint, bottom = lines[decisions + 1], lines[decisions + 2]
