@@ -69,7 +69,9 @@ describe("named worktree binding", () => {
     const f = fixture();
     try {
       const manager = new DurableStateManager({ baseDir: f.tasks, workspacePaths: [WorkspacePath.fromSelectedWorkspace(f.repo)] });
-      const legacy = { taskId: "task-old", worktreePath: path.join(f.root, "gone"), branch: "nexus/task-old", createdAt: new Date().toISOString() };
+      // The path an older build recorded for its task worktree (it no longer exists). A path with no dot under a random
+      // temporary root can look high-entropy to the persistence classifier, which made this fixture flaky.
+      const legacy = { taskId: "task-old", worktreePath: path.join(f.repo, ".nexus", "worktrees", "task-old"), branch: "nexus/task-old", createdAt: new Date().toISOString() };
       manager.saveTaskState(stateFor(f, "task-old", legacy));
       const file = fs.readdirSync(f.tasks).map((n) => path.join(f.tasks, n)).find((n) => n.endsWith("task-old.json"))!;
       const raw = JSON.parse(fs.readFileSync(file, "utf8"));

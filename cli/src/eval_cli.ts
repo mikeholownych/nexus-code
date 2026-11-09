@@ -63,7 +63,7 @@ export const GLOBAL_VALUE_OPTIONS = new Set([
   "-e", "--endpoint", "-m", "--model", "-w", "--workspace", "-s", "--max-steps", "--max-total-steps", "--max-turn-minutes",
   "--stagnation-steps", "-t", "--temperature", "--mode", "--shell", "--fallback", "--context-limit", "--authoritative-verifier",
   "--deliverable-file", "--planner-model", "--planner-endpoint", "--coder-model", "--coder-endpoint", "--provider", "--base-url",
-  "--planner-provider", "--coder-provider",
+  "--planner-provider", "--coder-provider", "--worktree-branch",
 ]);
 /** Global options whose value is optional: Commander takes the next token as the value unless it starts with `-`. */
 export const GLOBAL_OPTIONAL_VALUE_OPTIONS = new Set(["-r", "--resume", "--sandbox"]);

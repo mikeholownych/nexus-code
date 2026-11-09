@@ -60,6 +60,8 @@ test("--isolated-home after `--` is not an eval invocation, and clustered short 
   // -yr takes an optional value: `eval` would be consumed as the resume id, exactly as Commander does.
   assert.equal(firstCommandToken(["-yr", "eval", "run"]), "run");
   assert.equal(firstCommandToken(["-y", "eval"]), "eval");
+  // --worktree-branch takes a value: the branch name is not the subcommand.
+  assert.equal(firstCommandToken(["--worktree-branch", "feat/x", "run"]), "run");
 });
 
 test("GLOBAL_VALUE_OPTIONS matches the global option table in index.ts", () => {
