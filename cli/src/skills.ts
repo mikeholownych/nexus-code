@@ -424,7 +424,11 @@ export class SkillManager {
    */
   public getPromptSection(maxChars: number = SKILL_CATALOG_MAX_CHARS): string {
     // Workspace skills first: they are the most specific to the task and survive any cut.
-    const skills = this.listSkills().sort((a, b) => Number(Boolean(b.isWorkspaceSkill)) - Number(Boolean(a.isWorkspaceSkill)));
+    // Names and descriptions as one safe line each (template tokens, control markers and secrets removed), as in the
+    // per-prompt note: a description is untrusted text whether or not its skill is trusted.
+    const skills = this.listSkills()
+      .sort((a, b) => Number(Boolean(b.isWorkspaceSkill)) - Number(Boolean(a.isWorkspaceSkill)))
+      .map((s) => ({ ...s, name: oneLine(s.name), description: oneLine(s.description) }));
     if (skills.length === 0) {
       return "";
     }
