@@ -104,6 +104,7 @@ Every row is reproduced by the audit. Rows A1 to A3 and A5 to A9 restate earlier
 | PR #443 review | low | ASCII-only tokenizer | FIXED. Unicode letters and digits, accent fold, CJK bigrams. Test `German, Japanese and Cyrillic prompts match skills written in those languages` |
 | PR #443 review | low | Single common verb ("write") matched an unrelated skill | FIXED. Request verbs and fillers are stop words. Test `common request verbs alone match nothing; a domain word beside them still does` |
 | PR #443 review | low | Missing tests: note with compaction, resume, redaction | FIXED. Tests `a resumed conversation keeps its note, re-sends it unchanged and adds no second one` and the compaction and redaction tests above |
+| review 2026-11-09 (PR #467) | medium | `harnessNote` (`cli/src/agent.ts`) recognises Nexus's own user-role notes by their `[Nexus:` / `[Nexus ` text prefix, so an operator message beginning with that text is treated as a harness note (left out of earlier task requests in compaction and of the findings request). Switching to provenance (the message-level marker the skill note gets for item 11) needs a migration for the prefix-only notes in sessions saved by v1.1.3 | OPEN (WP-1308). Fix in v1.1.4: mark every harness note by provenance and migrate notes of saved v1.1.3 sessions on load; red test: an operator message starting with `[Nexus:` is kept as the operator's request |
 
 ## F. Production bar (owner mandate 2026-11-07)
 
