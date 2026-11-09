@@ -88,11 +88,12 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
         const switched = switchWorktree(ctx, parsed.positionals[0], { create: parsed.flags.has("create"), base: parsed.values.get("base") });
         const made = switched.data as { created?: boolean; path?: string } | undefined;
         if (switched.success && made?.created && !parsed.flags.has("no-copy") && made.path) {
-          // Sharing build caches is a convenience: a failure here never undoes or fails the switch.
+          // Sharing build caches is a convenience: a failure here never undoes or fails the switch, but it is said.
           try {
             const copied = copyIgnored(ctx, { to: made.path });
             const data = copied.data as { copied?: number } | undefined;
-            if (data?.copied) switched.output += `\n${copied.output}`;
+            if (!copied.success) switched.output += `\nwarning: ignored files were not copied: ${copied.output}`;
+            else if (data?.copied) switched.output += `\n${copied.output}`;
           } catch (err) {
             switched.output += `\nwarning: copying ignored files failed: ${redactSecrets((err as Error).message).slice(0, 200)}`;
           }
