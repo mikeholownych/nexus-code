@@ -75,9 +75,15 @@ function tokenize(text: string, keepShort: (word: string) => boolean = () => fal
 
 /** Bracketed markers a description could use to pose as a Nexus, operator or tool message. */
 const CONTROL_MARKER = /\[\s*(?:nexus|operator|system|assistant|user|tool|git status|active plan|work unit)[^\]]*\]?/gi;
-/** A skill's text as one safe line: control markers and secrets removed, whitespace collapsed (a trusted skill is still untrusted text). */
+/**
+ * Chat-template control tokens a description could use to open its own turn once a local server renders the prompt
+ * as text: ChatML and Llama 3 specials (`<|im_start|>`, `<|eot_id|>`, any `<|...|>`), `<system>` tags and the Llama 2
+ * `[INST]` / `<<SYS>>` markers.
+ */
+const TEMPLATE_TOKEN = /<\|[^|<>\n]{0,64}\|>|<\s*\/?\s*system\s*>|\[\s*\/?\s*INST\s*\]|<<\s*\/?\s*SYS\s*>>/gi;
+/** A skill's text as one safe line: control markers, template tokens and secrets removed, whitespace collapsed (a trusted skill is still untrusted text). */
 export function oneLine(text: string): string {
-  return redactSecrets(text.replace(CONTROL_MARKER, " ")).replace(/\s+/g, " ").trim();
+  return redactSecrets(text.replace(TEMPLATE_TOKEN, " ").replace(CONTROL_MARKER, " ")).replace(/\s+/g, " ").trim();
 }
 
 /** Whether a user-role message is a per-prompt skill note (never an operator request). */
