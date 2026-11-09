@@ -464,8 +464,18 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
         }
         guardHead = git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim();
       }
-      removeSeams.beforeGitRemove?.(entry);
-      git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
+      try {
+        removeSeams.beforeGitRemove?.(entry);
+        git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
+      } catch (err) {
+        // Git refused (an initialised submodule, a file that appeared): the worktree stays, so put it back on its
+        // detached HEAD and drop the guard branch (unless a commit already moved it, then it is the only reference).
+        if (guardBranch) {
+          const back = git(entry.path, ["switch", "--detach", "--end-of-options", guardBranch], { allowFailure: true });
+          if (back.status === 0) deleteBranchAt(repo, guardBranch, git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim());
+        }
+        throw err;
+      }
     }
 
     if (guardBranch) {
