@@ -415,8 +415,9 @@ export class OperationGit {
   }
 
   /**
-   * A commit of `unitId`'s worktree as it stands (tracked edits and untracked, non-ignored files) on top of its HEAD,
-   * built in a private index so that unit's index, branch and files are untouched. Throws when it cannot be built:
+   * A commit of `unitId`'s worktree as it stands on top of its HEAD: everything in that unit's index (including files
+   * force-added past .gitignore), their worktree edits and deletions, and untracked non-ignored files. Built in a
+   * private copy of the unit's index so that unit's index, branch and files are untouched. Throws when it cannot be built:
    * a debugger must not silently fall back to a tree without the failure it is meant to reproduce.
    */
   private snapshotCandidate(unitId: string): string {
@@ -428,7 +429,12 @@ export class OperationGit {
       env: { ...process.env, GIT_INDEX_FILE: path.join(scratch, "index") },
     }).trim();
     try {
-      run(["read-tree", "HEAD"]);
+      const { GIT_INDEX_FILE: _inherited, ...ownEnv } = process.env;
+      const ownIndex = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "index"], {
+        cwd: entry.worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS, env: ownEnv,
+      }).trim();
+      if (fs.existsSync(ownIndex)) fs.copyFileSync(ownIndex, path.join(scratch, "index"));
+      else run(["read-tree", "HEAD"]);
       run(["add", "-A"]);
       const tree = run(["write-tree"]);
       return run([...this.mechanicalGitConfig(), "commit-tree", tree, "-p", "HEAD", "-m", `nexus: snapshot of ${unitId}'s candidate for failure debugging`]);
