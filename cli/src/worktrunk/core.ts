@@ -380,6 +380,7 @@ export interface RemoveOptions {
 export const removeSeams: {
   beforeLock?: (entry: WorktreeEntry) => void;
   beforeRemove?: (entry: WorktreeEntry) => void;
+  afterGuardSwitch?: (entry: WorktreeEntry) => void;
   beforeGitRemove?: (entry: WorktreeEntry) => void;
   beforeBranchDeletion?: (entry: WorktreeEntry) => void;
 } = {};
@@ -469,11 +470,29 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
       // from here on advances that branch instead; it is deleted below only if it still points at the checked commit.
       if (!entry.branch) {
         guardBranch = `nexus-removed/${createHash("sha1").update(entry.path).digest("hex").slice(0, 10)}-${entry.head.slice(0, 8)}`;
-        if (git(entry.path, ["switch", "-c", guardBranch, "--end-of-options"], { allowFailure: true }).status !== 0) {
+        // The commit the guard must protect is the one verified above, never one read after the switch: a commit that
+        // lands in between would otherwise be adopted as "expected" and the branch deleted over it.
+        guardHead = entry.head;
+        const existing = git(repo.cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `refs/heads/${guardBranch}`], { allowFailure: true });
+        const leaked = existing.status === 0 ? existing.stdout.trim() : "";
+        if (leaked && leaked !== entry.head) {
+          const name = guardBranch;
+          guardBranch = "";
+          throw new WorktreeError(`the branch ${name} already exists at another commit; inspect it, delete it with \`git branch -D ${name}\` if it is not needed, and run the command again. Nothing was removed`);
+        }
+        // A guard branch left by an interrupted earlier attempt for this worktree and commit is reused.
+        const switched = git(entry.path, leaked ? ["switch", "--end-of-options", guardBranch] : ["switch", "-c", guardBranch, "--end-of-options"], { allowFailure: true });
+        if (switched.status !== 0) {
           guardBranch = "";
           throw new WorktreeError("could not protect the detached HEAD before removing it; nothing was removed");
         }
-        guardHead = git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim();
+        removeSeams.afterGuardSwitch?.(entry);
+        const nowHead = git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim();
+        if (nowHead !== guardHead) {
+          const name = guardBranch;
+          guardBranch = ""; // kept: it now holds the commit that landed
+          throw new WorktreeError(`a commit landed while the detached HEAD was being protected; it is kept on the branch ${name} in ${shownPath(ctx.home, entry.path)} and nothing was removed. Merge or delete that branch, then run the command again`);
+        }
       }
       try {
         removeSeams.beforeGitRemove?.(entry);
@@ -483,7 +502,11 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
         // detached HEAD and drop the guard branch (unless a commit already moved it, then it is the only reference).
         if (guardBranch) {
           const back = git(entry.path, ["switch", "--detach", "--end-of-options", guardBranch], { allowFailure: true });
-          if (back.status === 0) deleteBranchAt(repo, guardBranch, git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim());
+          if (back.status === 0) {
+            deleteBranchAt(repo, guardBranch, git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim());
+          } else {
+            throw new WorktreeError(`${(err as Error).message}; could not restore the detached HEAD, so ${shownPath(ctx.home, entry.path)} stays on the temporary branch ${guardBranch} (nothing is lost). To undo: git -C <that path> switch --detach, then git branch -D ${guardBranch}. A retry reuses it`);
+          }
         }
         throw err;
       }

@@ -623,6 +623,19 @@ test("prune does not force-remove a stale entry that was recreated while it wait
   } finally { f.cleanup(); }
 });
 
+test("a quoted merge message survives the interactive tokenizer and becomes the commit message", () => {
+  assert.deepEqual(tokenizeWorktreeArgs('merge ^ -m "feat: add login" --no-remove'), ["merge", "^", "-m", "feat: add login", "--no-remove"]);
+  assert.deepEqual(tokenizeWorktreeArgs("  list   --json "), ["list", "--json"]);
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/quoted");
+    fs.writeFileSync(path.join(dir, "d.txt"), "uncommitted\n");
+    const r = wt(f, dir, tokenizeWorktreeArgs('merge ^ -m "feat: add login" --no-remove --no-verify-receipt --reason fixture'));
+    assert.equal(r.success, true, r.output);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat: add login");
+  } finally { f.cleanup(); }
+});
+
 test("tokenizeWorktreeArgs preserves quoted options such as commit messages or reasons", () => {
   assert.deepEqual(tokenizeWorktreeArgs('merge ^ -m "feat: add login"'), ["merge", "^", "-m", "feat: add login"]);
   assert.deepEqual(tokenizeWorktreeArgs("merge --no-verify-receipt --reason 'why not'"), ["merge", "--no-verify-receipt", "--reason", "why not"]);
