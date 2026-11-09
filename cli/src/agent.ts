@@ -4274,6 +4274,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (
         (this.hasPendingModifications || worktreeHasChanges || this.configuredVerifierGatesCompletion()) &&
         !this.config.dryRun &&
+        !this.config.diagnosticRun &&
         !this.isReadOnly()
       ) {
         try {
@@ -6729,6 +6730,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         .join("; ")
         .slice(0, 300);
 
+    // A diagnostic run works on a snapshot of a failing candidate and is never integrated: its report is the result, and
+    // no verifier can establish it (the candidate fails by definition), so what it wrote (reproduction scratch files in
+    // a worktree that is never integrated) is not pending verification.
+    if (this.config.diagnosticRun && !requirementsIncomplete) {
+      return deepFreezeTurn(assertTurnResultInvariants({ ...base, unverifiedChangesPending: false, execution: "COMPLETED", outcome: "NOT_REQUIRED" }));
+    }
     // Execution COMPLETED: derive the engineering outcome strictly from verifier evidence.
     if (this.hasPendingModifications) {
       if (evidence?.status === "PASSED" && evidence?.hasExecutedTests === false) {
