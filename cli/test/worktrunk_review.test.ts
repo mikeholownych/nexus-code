@@ -1,7 +1,9 @@
 /**
- * WP-1310 review round (Entire findings on change nexus-code/180): branch-qualified refs, conditional branch deletion,
- * merge commits in the patch-id check, the originating checkout for `nexus run --worktree`, single-entry prune, one
- * operator config reader, machine output left unredacted, case-insensitive subcommands and one legacy predicate.
+ * Named worktrees regression and review test suite:
+ * branch-qualified refs, conditional branch deletion, merge commits in patch-id check,
+ * originating checkout for `nexus run --worktree`, single-entry prune, operator config reader,
+ * machine output unredacted, case-insensitive subcommands, legacy predicates,
+ * commander option merging (--read-only and --workspace), and serialization of switch and removal.
  * Every test runs against a real temporary repository.
  */
 import { test } from "node:test";
@@ -49,7 +51,7 @@ function wt(f: Fixture, cwd: string, args: string[], extra: { readOnly?: boolean
 
 const named = (f: Fixture, branch: string) => path.join(f.repo, ".nexus", "worktrees", branch.replace(/\//g, "-"));
 
-test("01M6VRE50EXQ78EEAM9V1BGTQQ: a tag named like the default branch never stands in for the branch", () => {
+test("a tag named like the default branch never stands in for the branch", () => {
   const f = fixture();
   try {
     const mainSha = git(f.repo, "rev-parse", "HEAD");
@@ -80,7 +82,7 @@ test("01M6VRE50EXQ78EEAM9V1BGTQQ: a tag named like the default branch never stan
   } finally { f.cleanup(); }
 });
 
-test("01M6VRE5002PS7D3WVHY701P53: a branch that moved after the integration check is kept, not force-deleted", async () => {
+test("a branch that moved after the integration check is kept, not force-deleted", async () => {
   const f = fixture();
   try {
     const core = await import("../src/worktrunk/core.js") as any;
@@ -105,7 +107,7 @@ test("01M6VRE5002PS7D3WVHY701P53: a branch that moved after the integration chec
   } finally { f.cleanup(); }
 });
 
-test("01M6VRE4ZJYCJRXTERYPV4V225: patch-id integration is rejected while unmatched merge commits remain", () => {
+test("patch-id integration is rejected while unmatched merge commits remain", () => {
   const f = fixture();
   try {
     git(f.repo, "checkout", "-q", "-b", "topic");
@@ -134,7 +136,7 @@ test("01M6VRE4ZJYCJRXTERYPV4V225: patch-id integration is rejected while unmatch
   } finally { f.cleanup(); }
 });
 
-test("01M6VRE4YZ9HJT5RQB66MTNXC6: WorktreeManager in a linked checkout starts from and merges into that checkout", () => {
+test("WorktreeManager in a linked checkout starts from and merges into that checkout", () => {
   const f = fixture();
   try {
     const mainSha = git(f.repo, "rev-parse", "HEAD");
@@ -161,7 +163,7 @@ test("01M6VRE4YZ9HJT5RQB66MTNXC6: WorktreeManager in a linked checkout starts fr
   } finally { f.cleanup(); }
 });
 
-test("01M6VR9Z953726YV966B3YV1K3: removing one prunable entry leaves other stale worktrees registered", () => {
+test("removing one prunable entry leaves other stale worktrees registered", () => {
   const f = fixture();
   try {
     assert.equal(wt(f, f.repo, ["switch", "-c", "gone-one"]).success, true);
@@ -179,7 +181,7 @@ test("01M6VR9Z953726YV966B3YV1K3: removing one prunable entry leaves other stale
   } finally { f.cleanup(); }
 });
 
-test("01M6VR9Z915H9A01AZHN03MTE3: worktree settings come through the operator config reader", async () => {
+test("worktree settings come through the operator config reader", async () => {
   const f = fixture();
   try {
     fs.mkdirSync(path.join(f.home, ".config", "nexus"), { recursive: true });
@@ -199,7 +201,7 @@ test("01M6VR9Z915H9A01AZHN03MTE3: worktree settings come through the operator co
   } finally { f.cleanup(); }
 });
 
-test("01M6VR9Z9FW56RXES5C00P4YSR: human output is redacted, machine output (`path`, `list --json`) is not", () => {
+test("human output is redacted, machine output (`path`, `list --json`) is not", () => {
   const f = fixture();
   try {
     const branch = "feat/ghp_abcdefghijklmnopqrstuvwxyz0123";
@@ -217,7 +219,7 @@ test("01M6VR9Z9FW56RXES5C00P4YSR: human output is redacted, machine output (`pat
   } finally { f.cleanup(); }
 });
 
-test("01M6VR9Z9B7BEQ8BHVP4ZF85VW: subcommands are matched case-insensitively", () => {
+test("subcommands are matched case-insensitively", () => {
   const f = fixture();
   try {
     const upper = wt(f, f.repo, ["List"]);
@@ -229,7 +231,7 @@ test("01M6VR9Z9B7BEQ8BHVP4ZF85VW: subcommands are matched case-insensitively", (
   } finally { f.cleanup(); }
 });
 
-test("01M6VR9Z985TF75PZZRNJEN1Y1: one legacy predicate; `status` is never the named list", async () => {
+test("one legacy predicate; `status` is never the named list", async () => {
   const command = await import("../src/worktrunk/command.js") as any;
   assert.equal(typeof command.isLegacyWorktreeArgs, "function", "command.ts must export the legacy predicate");
   for (const legacy of ["", "  ", "status", "STATUS", "merge", "discard", "Discard now"]) assert.equal(command.isLegacyWorktreeArgs(legacy), true, legacy);
@@ -243,3 +245,72 @@ test("01M6VR9Z985TF75PZZRNJEN1Y1: one legacy predicate; `status` is never the na
     assert.match(status.output, /unknown subcommand/);
   } finally { f.cleanup(); }
 });
+
+test("root-level --read-only and --workspace options are merged for the worktree command", async () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat"]).success, true);
+    const dir = named(f, "feat");
+    assert.equal(fs.existsSync(dir), true);
+
+    const cliDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+    const tsx = path.join(cliDir, "node_modules", ".bin", "tsx");
+    const indexTs = path.join(cliDir, "src", "index.ts");
+
+    const env = { ...process.env, HOME: f.home, XDG_CONFIG_HOME: path.join(f.home, ".config") };
+    // Run nexus with root-level --read-only and --workspace flags:
+    // nexus --read-only --workspace <repo> worktree remove feat
+    const res = execFileSync("node", [tsx, indexTs, "--read-only", "--workspace", f.repo, "worktree", "remove", "feat"], {
+      cwd: f.root,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    assert.fail(`expected command to fail in read-only mode, got output: ${res}`);
+  } catch (err: any) {
+    if (err.name === "AssertionError") throw err;
+    const combined = `${err.stdout ?? ""} ${err.stderr ?? ""}`;
+    assert.match(combined, /read-only mode.*refused/i);
+    assert.equal(fs.existsSync(named(f, "feat")), true, "worktree must not be removed in read-only mode");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("concurrent switch and removal are serialized around the occupancy check and branch deletion", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    assert.equal(typeof core.removeSeams, "object");
+
+    assert.equal(wt(f, f.repo, ["switch", "-c", "target"]).success, true);
+    const targetDir = named(f, "target");
+    assert.equal(fs.existsSync(targetDir), true);
+
+    // Set seam: right before checking occupancy in removeOne, another switch creates a worktree for the same branch
+    let switched = false;
+    core.removeSeams.beforeBranchDeletion = () => {
+      // Create another worktree at a different path for the same branch
+      const otherDir = path.join(f.repo, ".nexus", "worktrees", "target-second");
+      git(f.repo, "worktree", "add", "--end-of-options", otherDir, "target");
+      switched = true;
+    };
+
+    let result;
+    try {
+      result = wt(f, f.repo, ["remove", "target"]);
+    } finally {
+      delete core.removeSeams.beforeBranchDeletion;
+    }
+
+    assert.equal(switched, true, "seam must have run");
+    assert.equal(fs.existsSync(targetDir), false, "the targeted worktree directory is removed");
+    // The branch must still exist because target-second is checking it out
+    assert.equal(git(f.repo, "rev-parse", "--verify", "--quiet", "refs/heads/target").length > 0, true, "branch must be kept while checked out by another worktree");
+    assert.match(result.output, /Removed worktree/);
+    assert.doesNotMatch(result.output, /deleted its branch/);
+  } finally {
+    f.cleanup();
+  }
+});
+

@@ -1021,7 +1021,8 @@ program
   .option("--read-only", "Refuse every subcommand that changes the repository")
   .allowUnknownOption()
   .helpOption("-h, --help", "Show help")
-  .action(async (args: string[], options: { workspace?: string; readOnly?: boolean }) => {
+  .action(async (args: string[], _options: { workspace?: string; readOnly?: boolean }, cmd: Command) => {
+    const options = commandOptions(cmd);
     const { runWorktreeCommand } = await import("./worktrunk/command.js");
     const result = runWorktreeCommand(args, {
       cwd: options.workspace ? path.resolve(options.workspace) : process.cwd(),

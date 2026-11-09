@@ -13,7 +13,7 @@ import { identityOf, mkdirVerified } from "../safe_fs.js";
 import { readWorktreeSettings } from "./config.js";
 import { git, gitOut } from "./git.js";
 import { resolveWorktreePath, sanitizeBranch, validateBranchName, allowedRoot } from "./paths.js";
-import { readRegistry, updateRegistry, type Registry } from "./registry.js";
+import { readRegistry, updateRegistry, withWorktreeLock, type Registry } from "./registry.js";
 import { currentEntry, defaultBranch, openRepo, refExists, resolveBranchCommit, resolveCommit, type Repo, type WorktreeEntry } from "./repo.js";
 
 export interface WorktreeContext {
@@ -213,26 +213,28 @@ export function switchWorktree(ctx: WorktreeContext, branchToken: string, option
     fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
   }
 
-  const args = options.create
-    ? ["worktree", "add", "-b", name, "--end-of-options", target, baseSha]
-    : ["worktree", "add", "--end-of-options", target, name];
-  git(repo.cwd, args);
+  return withWorktreeLock(repo.commonDir, () => {
+    const args = options.create
+      ? ["worktree", "add", "-b", name, "--end-of-options", target, baseSha]
+      : ["worktree", "add", "--end-of-options", target, name];
+    git(repo.cwd, args);
 
-  const root = allowedRoot(repo.repoPath, settings.layout);
-  if (!settings.allowOutside) {
-    const real = fs.realpathSync(target);
-    const realRoot = fs.realpathSync(root);
-    if (real !== path.join(realRoot, path.relative(root, target))) {
-      throw new WorktreeError("the new worktree resolved outside its allowed directory; inspect it with `git worktree list` before using it");
+    const root = allowedRoot(repo.repoPath, settings.layout);
+    if (!settings.allowOutside) {
+      const real = fs.realpathSync(target);
+      const realRoot = fs.realpathSync(root);
+      if (real !== path.join(realRoot, path.relative(root, target))) {
+        throw new WorktreeError("the new worktree resolved outside its allowed directory; inspect it with `git worktree list` before using it");
+      }
     }
-  }
 
-  updateRegistry(repo.commonDir, (reg) => {
-    reg.worktrees = reg.worktrees.filter((item) => item.path !== target && item.branch !== name);
-    reg.worktrees.push({ branch: name, path: target, base: options.create ? baseName : name, createdAt: new Date().toISOString() });
-    if (here?.branch && here.branch !== name) reg.previous = here.branch;
+    updateRegistry(repo.commonDir, (reg) => {
+      reg.worktrees = reg.worktrees.filter((item) => item.path !== target && item.branch !== name);
+      reg.worktrees.push({ branch: name, path: target, base: options.create ? baseName : name, createdAt: new Date().toISOString() });
+      if (here?.branch && here.branch !== name) reg.previous = here.branch;
+    });
+    return { success: true, output: `Created worktree for ${shownBranch(name)} at ${shownPath(ctx.home, target)}`, data: { branch: name, path: target, created: true } };
   });
-  return { success: true, output: `Created worktree for ${shownBranch(name)} at ${shownPath(ctx.home, target)}`, data: { branch: name, path: target, created: true } };
 }
 
 function rememberPrevious(repo: Repo, from: string | null | undefined, to: string): void {
@@ -345,7 +347,7 @@ function humanAge(seconds: number): string {
 export interface RemoveOptions { force?: boolean; deleteUnmerged?: boolean }
 
 /** Test seam: runs after every refusal check and immediately before the worktree is removed. Not a hook point. */
-export const removeSeams: { beforeRemove?: (entry: WorktreeEntry) => void } = {};
+export const removeSeams: { beforeRemove?: (entry: WorktreeEntry) => void; beforeBranchDeletion?: (entry: WorktreeEntry) => void } = {};
 
 export function removeWorktrees(ctx: WorktreeContext, tokens: string[], options: RemoveOptions = {}): CommandResult {
   if (tokens.length === 0) throw new WorktreeError("usage: worktree remove <branch|path>... [--force] [--delete-unmerged]");
@@ -402,15 +404,18 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
   }
 
   let branchNote = "";
-  if (entry.branch && entry.branch !== target) {
-    const stillCheckedOut = listAfter(repo).some((other) => other.branch === entry.branch);
-    if (!stillCheckedOut) {
-      // Only the commit that passed the integration check may be deleted. A commit made by another session in the
-      // meantime (its `/commit`, for example) moves the branch, and `branch -D` would make it unreachable.
-      branchNote = deleteBranchAt(repo, entry.branch, entry.head) ? " and deleted its branch" : "; its branch moved after it was checked and was kept";
+  withWorktreeLock(repo.commonDir, () => {
+    if (entry.branch && entry.branch !== target) {
+      removeSeams.beforeBranchDeletion?.(entry);
+      const stillCheckedOut = listAfter(repo).some((other) => other.branch === entry.branch);
+      if (!stillCheckedOut) {
+        // Only the commit that passed the integration check may be deleted. A commit made by another session in the
+        // meantime (its `/commit`, for example) moves the branch, and `branch -D` would make it unreachable.
+        branchNote = deleteBranchAt(repo, entry.branch, entry.head) ? " and deleted its branch" : "; its branch moved after it was checked and was kept";
+      }
     }
-  }
-  dropFromRegistry();
+    dropFromRegistry();
+  });
   return `Removed worktree ${label}${branchNote}`;
 }
 
