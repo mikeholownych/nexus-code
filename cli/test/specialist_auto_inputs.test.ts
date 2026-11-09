@@ -601,3 +601,29 @@ test("a file committed after the base and then deleted from disk does not break 
   assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
   assert.match(fake.prompts[0], /VISIBLE_CHANGE/);
 });
+
+test("a retried tester's earlier failed run stops admitting a debugger once the new attempt starts (01M70GYKAE)", async () => {
+  const { ConvergenceScheduler } = await import("../src/core/scheduler.js");
+  const { ResourceRegistry } = await import("../src/core/resources.js");
+  const { newOperation } = await import("../src/core/operation.js");
+  const state = newOperation("op", "o", [
+    { id: "verify", role: "tester", prompt: "run the tests" },
+    { id: "debug", role: "failure_debugger", prompt: "find the cause", dependsOn: ["verify"] },
+  ], [resource], Date.now());
+  state.policy.unknownResumeBudget = 0;
+  const sched = new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now());
+  const verify = state.units[0];
+  verify.status = "RUNNING";
+  sched.apply("verify", { kind: "failed", cause: "EXECUTION_FAILED", reason: "r", question: "q", options: [{ label: "retry", action: { kind: "retry" } }], failedRun: { summary: "2 failed", verification: { command: "npm test", status: "FAILED", hasExecutedTests: true } } } as any);
+  sched.resolve(verify.blocked!.decision.id, verify.blocked!.decision.options[0].id);
+  const run = sched.decide();
+  assert.equal(run.kind, "run");
+  const retry = (run as { assignments: { unit: WorkUnit }[] }).assignments.find((a) => a.unit.id === "verify")!;
+  sched.start(retry as any);
+  assert.equal(verify.failedRun, undefined, "the new attempt's outcome is unknown: the old failure is no longer its evidence");
+  // The retry changes files and the process dies; recovery blocks it with an unknown outcome.
+  sched.reconcileInterruptedRuns();
+  assert.equal(verify.status, "BLOCKED");
+  sched.decide();
+  assert.equal(state.units[1].status, "WAITING_ON_DEPENDENCY", "the debugger is not admitted on historical evidence");
+});
