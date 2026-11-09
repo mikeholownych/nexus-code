@@ -222,6 +222,11 @@ export class WorktreeManager {
     return named;
   }
 
+  /** Whether `worktreePath` is still the registered linked worktree of this repository checked out on `branch`. */
+  public isRetainedNamedWorktree(worktreePath: string, branch: string): boolean {
+    return isNamedWorktreePath(WorkspacePath.fromSelectedWorkspace(this.gitRoot), worktreePath, { kind: "named", bindingVersion: WORKTREE_BINDING_VERSION, branch });
+  }
+
   /** The repository's common Git directory (resolved), where linked worktrees keep their administrative directories. */
   private gitCommonDir(): string {
     return fs.realpathSync(pinnedGit(this.gitRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).stdout.trim());

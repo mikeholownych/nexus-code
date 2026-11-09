@@ -6837,10 +6837,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
     this.verifiedWorktreeCompletion = false;
     this.activeValidationReceipt = undefined;
+    let continuingNamedWorktree = false;
     if (this.config.worktree) {
       // A task worktree must be merged or discarded before another task starts. A named worktree is kept by design,
       // so later runs and REPL/TUI turns continue inside it; only a request for a different named worktree is refused.
       const retained = this.activeWorktree;
+      continuingNamedWorktree = retained?.kind === "named";
       if (retained && retained.kind !== "named") {
         throw new Error(`Cannot start a new task: unresolved worktree ${retained.taskId}; merge or discard it first.`);
       }
@@ -6857,9 +6859,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
       }
       if (retained) {
-        // Still the linked worktree it was: the directory and its `.git` pointer can change between turns.
-        if (!this.worktreeManager.isLinkedWorktree(retained.worktreePath)) {
-          throw new Error(`Cannot continue: ${retained.worktreePath} is no longer a linked worktree of this repository for ${retained.branch}.`);
+        // Still the worktree it was: another terminal can switch its branch or replace it between turns, so the same
+        // validation as the durable binding (Git lists it on the recorded branch, pointer, registry) runs again.
+        if (!this.worktreeManager.isRetainedNamedWorktree(retained.worktreePath, retained.branch)) {
+          throw new Error(`Cannot continue: ${retained.worktreePath} is no longer the registered linked worktree for ${retained.branch} (its branch may have been switched); restore it or start a new session.`);
         }
         console.log(pc.cyan(`🌲 Continuing in named git worktree: ${retained.branch} at ${retained.worktreePath}`));
       } else if (this.config.worktreeBranch) {
@@ -6889,7 +6892,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       });
     }
 
-    if (!options?.resume) {
+    // Continuing in a retained named worktree is a follow-up, not a new task: keep the transcript, objective and findings.
+    if (!options?.resume && !continuingNamedWorktree) {
       this.resetConversation();
     }
     this.worktreeRunTurnAuthorized = true;
