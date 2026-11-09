@@ -328,18 +328,18 @@ pub fn render(text: &str, width: usize, pal: &Palette, prose: &Prose, streaming:
 /// A fenced code block: a gutter bar, the language as a quiet label, syntax colours on a code background spanning
 /// the row, and long lines wrapped onto continuation rows marked `↪` so nothing is hidden.
 fn code_block(lang: &str, lines: &[&str], width: usize, pal: &Palette, prose: &Prose) -> Vec<Line<'static>> {
-    let bar = Span::styled("  ▎ ", Style::default().fg(pal.bar));
+    let bar_lead = Span::styled("  ▎", Style::default().fg(pal.bar));
     let bg = pal.code_bg;
     let base = bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let room = width.saturating_sub(5).max(8);
+    let room = width.saturating_sub(4).max(8);
     let mut out = Vec::new();
     if !lang.is_empty() {
-        out.push(Line::from(vec![bar.clone(), Span::styled(diff_view::safe_text(lang), Style::default().fg(prose.muted).add_modifier(Modifier::ITALIC))]));
+        out.push(Line::from(vec![bar_lead.clone(), Span::styled(format!(" {}", diff_view::safe_text(lang)), Style::default().fg(prose.muted).add_modifier(Modifier::ITALIC))]));
     }
     let syntax = fence_lang(lang);
     for line in lines {
         for (n, (mut spans, used)) in diff_view::content_rows(line, syntax, room - 1, Fit::Wrap, pal, prose.text, bg).into_iter().enumerate() {
-            let mut row = vec![bar.clone(), Span::styled(if n == 0 { " " } else { "↪" }, base.fg(prose.muted))];
+            let mut row = vec![bar_lead.clone(), Span::styled(if n == 0 { " " } else { "↪" }, base.fg(prose.muted))];
             row.append(&mut spans);
             if used < room - 1 {
                 row.push(Span::styled(" ".repeat(room - 1 - used), base));
@@ -427,7 +427,7 @@ mod tests {
         assert!(all.contains(&"1. First step".to_string()));
         assert!(all.contains(&"• Reads".to_string()) && all.contains(&"  ◦ nested".to_string()));
         assert!(all.iter().any(|l| l.contains("▎ ts")) && all.iter().any(|l| l.contains("const x = 1;")));
-        assert!(all.iter().any(|l| l.contains("      indented();")), "tabs expand inside code: {all:#?}");
+        assert!(all.iter().any(|l| l.contains("    indented();")), "tabs expand inside code: {all:#?}");
         assert!(all.iter().any(|l| l.contains("Option │ Default")) && all.iter().any(|l| l.contains("size   │ 512")), "{all:#?}");
         assert!(all.iter().any(|l| l == "▌ quoted"));
         assert!(all.iter().any(|l| l.contains("See docs (https://example.com) and snake_case_name.")));
@@ -442,7 +442,7 @@ mod tests {
         let all = texts(&lines);
         assert!(all[0].starts_with("• a list") && all[1].starts_with("  "), "{all:#?}");
         assert!(all.iter().all(|l| UnicodeWidthStr::width(l.as_str()) <= 40), "{all:#?}");
-        assert!(all.iter().any(|l| l.contains("▎ ↪")), "continuation rows are marked: {all:#?}");
+        assert!(all.iter().any(|l| l.contains("▎↪") || l.contains("▎ ↪")), "continuation rows are marked: {all:#?}");
     }
 
     #[test]
@@ -456,7 +456,7 @@ mod tests {
             for span in line.spans.iter().skip(1) {
                 assert_eq!(span.style.bg, pal.code_bg, "every cell after the bar is on the code background: {:?} in {line:?}", span.content);
             }
-            assert_eq!(line.spans.iter().skip(1).map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum::<usize>(), 35, "{line:?}");
+            assert_eq!(line.spans.iter().skip(1).map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum::<usize>(), 36, "{line:?}");
         }
     }
 

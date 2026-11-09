@@ -345,7 +345,16 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     app.state.depth = depth;
     let result = event_loop(&mut terminal, &mut app);
     app.handle(Action::Quit);
+    drop(terminal);
+    drop(guard);
+    if let Some(session_id) = app.state.session.session_id.as_deref() {
+        println!("{}", format_exit_breadcrumb(session_id));
+    }
     result
+}
+
+pub fn format_exit_breadcrumb(session_id: &str) -> String {
+    format!("Nexus session {session_id} saved. Resume with: nexus --resume {session_id}")
 }
 
 fn draw(terminal: &mut ratatui::DefaultTerminal, app: &mut LiveApp) -> io::Result<()> {
@@ -792,6 +801,14 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
         typed.push(enter);
         assert_eq!(burst_text(&typed), None, "a quickly sent line still submits on its trailing Enter");
         assert!(!pasteable(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+    }
+
+    #[test]
+    fn exit_breadcrumb_formats_session_id_and_resume_hint() {
+        assert_eq!(
+            format_exit_breadcrumb("sess-1234"),
+            "Nexus session sess-1234 saved. Resume with: nexus --resume sess-1234"
+        );
     }
 
     #[test]
