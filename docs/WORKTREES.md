@@ -90,13 +90,19 @@ can never change it:
   changed nothing.
 * **When a lock is taken over.** Only when the process id written in it no longer exists on this host, or the file is
   older than ten minutes (a lock whose pid cannot be read is judged by age alone). A live holder is never displaced
-  sooner, however long its checkout runs. The takeover re-checks that the file is still the one it judged before it
-  deletes it, so a lock another process has just taken is not removed. A holder in another PID namespace (a container,
+  sooner, however long its checkout runs. Takeovers are serialised through a kernel-owned
+  guard (`worktrees.lock.reclaim`, an `flock` that Nexus never deletes), and the lock is judged again under it and deleted
+  only if it is still the same file, so two waiters cannot both reclaim it and a lock another process has just taken is
+  not removed. Without the `flock` utility a stale lock is reported with its path instead of being taken. A holder in another PID namespace (a container,
   `unshare`) has a pid that does not exist here and is therefore read as gone; run Nexus commands on one repository from
   one namespace, or rely on the ten-minute rule alone.
 * **A commit that lands during removal is not lost.** After the checks and just before `git worktree remove`, `HEAD` is
   read again. If it moved and the new commit is not integrated into the default branch, nothing is removed and the
-  command says to run it again; a branch is deleted only while it still points at the commit that was checked.
+  command says to run it again; a branch is deleted only while it still points at the commit that was checked. A
+  detached worktree is first put on a temporary branch `nexus-removed/<id>`, so a commit that lands after that check
+  advances the branch instead of vanishing with the worktree; the branch is deleted again unless it moved, in which case
+  the command names it. What was read before waiting for the lock is re-read under it: a worktree that changed
+  meanwhile (a stale registration recreated by `switch`, for example) is not removed.
 * **Deleted and detached worktrees.** A worktree whose directory was deleted by hand is listed as prunable. `remove`
   accepts its absolute path (a detached one has no branch name) and drops that one registration, never the other stale
   ones. A worktree is removed only if its `.git` file (absolute, or relative as Git writes with

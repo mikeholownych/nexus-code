@@ -567,3 +567,72 @@ test("a repository whose git directory is not <checkout>/.git is refused by `nex
     assert.equal(new WorktreeManager(linked).getWorktreesBaseDir(), path.join(linked, ".nexus", "worktrees"));
   } finally { f.cleanup(); }
 });
+
+test("a stale registration that was recreated while the remover waited for the lock is not force-deleted", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    assert.equal(wt(f, f.repo, ["switch", "-c", "recycled"]).success, true);
+    const dir = named(f, "recycled");
+    fs.rmSync(dir, { recursive: true, force: true }); // Git lists it as prunable
+    core.removeSeams.beforeLock = () => {
+      // another remover pruned the registration and `switch` recreated the same path with new work in it
+      git(f.repo, "worktree", "prune");
+      git(f.repo, "worktree", "add", "-q", dir, "recycled");
+      fs.writeFileSync(path.join(dir, "new-work.txt"), "precious\n");
+    };
+    let result;
+    try { result = wt(f, f.repo, ["remove", "recycled"]); } finally { delete core.removeSeams.beforeLock; }
+    assert.equal(result.success, false, result.output);
+    assert.equal(fs.readFileSync(path.join(dir, "new-work.txt"), "utf8"), "precious\n", "the recreated checkout must not be deleted");
+  } finally { f.cleanup(); }
+});
+
+test("a commit that lands on a detached worktree after the HEAD re-check is kept on a branch, not lost", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-late");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    let landed = "";
+    core.removeSeams.beforeGitRemove = () => { landed = commitFile(dir, "late.txt", "late\n", "late commit"); };
+    let result;
+    try { result = wt(f, f.repo, ["remove", dir]); } finally { delete core.removeSeams.beforeGitRemove; }
+    assert.ok(landed, "the seam must have run");
+    assert.equal(result.success, true, result.output);
+    assert.equal(fs.existsSync(dir), false);
+    const saved = git(f.repo, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/nexus-removed").split("\n").filter(Boolean);
+    assert.equal(saved.length, 1, `the late commit must be reachable from a branch: ${saved.join(";")}`);
+    assert.ok(saved[0].endsWith(landed));
+    assert.match(result.output, /nexus-removed/);
+    // an uneventful detached removal leaves no branch behind
+    const quiet = path.join(f.repo, ".nexus", "worktrees", "detached-quiet");
+    git(f.repo, "worktree", "add", "-q", "--detach", quiet);
+    assert.equal(wt(f, f.repo, ["remove", quiet]).success, true);
+    assert.equal(git(f.repo, "for-each-ref", "refs/heads/nexus-removed").split("\n").filter(Boolean).length, 1);
+  } finally { f.cleanup(); }
+});
+
+test("two processes that both find a stale lock do not reclaim it at the same time", () => {
+  const f = fixture();
+  try {
+    const common = path.join(f.repo, ".git");
+    fs.mkdirSync(path.join(common, "nexus"), { recursive: true });
+    const lock = path.join(common, "nexus", "worktrees.lock");
+    fs.writeFileSync(lock, "2147483000"); // a crashed holder
+    const before = lockSettings.waitMs;
+    let rival = "did not run";
+    lockSeams.afterStaleCheck = () => {
+      lockSeams.afterStaleCheck = undefined;
+      // a second reclaimer starts while the first is between judging the lock stale and removing it
+      lockSettings.waitMs = 150;
+      try { withWorktreeLock(common, () => { rival = "reclaimed concurrently"; }); rival = rival === "did not run" ? "ran" : rival; }
+      catch (err) { rival = (err as Error).message; }
+    };
+    try {
+      assert.equal(withWorktreeLock(common, () => "first"), "first");
+    } finally { lockSeams.afterStaleCheck = undefined; lockSettings.waitMs = before; fs.rmSync(lock, { force: true }); }
+    assert.match(rival, /locked by another process/, "the rival must wait out the first reclaimer, not reclaim alongside it");
+  } finally { f.cleanup(); }
+});
