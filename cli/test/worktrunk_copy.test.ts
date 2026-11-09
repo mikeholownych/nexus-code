@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runWorktreeCommand, isReadOnlyWorktreeArgs } from "../src/worktrunk/command.js";
-import { copyIgnored } from "../src/worktrunk/copy.js";
+import { copyIgnored, defaultCopyLimits } from "../src/worktrunk/copy.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
 import { replReadOnlyAllowed } from "../src/repl.js";
 
@@ -288,11 +288,10 @@ test("--force replaces a stale destination symlink while still refusing symlinke
   } finally { f.cleanup(); }
 });
 
-test("switch -c warns when the file cap stops the automatic copy", async () => {
+test("switch -c warns when the file cap stops the automatic copy", () => {
   const f = fixture();
-  const copyMod = await import("../src/worktrunk/copy.js") as any;
-  const original = { ...copyMod.defaultCopyLimits.current };
-  copyMod.defaultCopyLimits.current = { maxFiles: 1, maxBytes: 4 * 1024 ** 3 };
+  const original = { ...defaultCopyLimits.current };
+  defaultCopyLimits.current = { maxFiles: 1, maxBytes: 4 * 1024 ** 3 };
   try {
     const made = wt(f, f.repo, ["switch", "-c", "feat/cap"]);
     assert.equal(made.success, true, "the cap never fails the switch itself");
@@ -300,7 +299,7 @@ test("switch -c warns when the file cap stops the automatic copy", async () => {
     assert.match(made.output, /file limit|more than 1 files/i, made.output);
     assert.equal(fs.existsSync(path.join(dirOf(f, "feat-cap"), "target")), false, "nothing is written when the cap trips");
   } finally {
-    copyMod.defaultCopyLimits.current = original;
+    defaultCopyLimits.current = original;
     f.cleanup();
   }
 });
@@ -344,3 +343,33 @@ test(".git, .nexus and .entire nested inside a copied directory are never copied
   }
 });
 
+
+test("copy-ignored --dry-run previews only what a real run would write, and counts the files it would keep", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/preview", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-preview");
+    fs.mkdirSync(path.join(dir, "target", "debug"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "target", "debug", "app.o"), "mine");
+    fs.writeFileSync(path.join(dir, "target", "CACHEDIR.TAG"), "mine");
+    fs.writeFileSync(path.join(dir, "notes.log"), "mine");
+    // everything under target/ and notes.log already exists: nothing is pending
+    const dry = wt(f, f.repo, ["copy-ignored", "--to", "feat/preview", "--dry-run"]);
+    assert.equal(dry.success, true, dry.output);
+    assert.doesNotMatch(dry.output, /would copy/, dry.output);
+    assert.match(dry.output, /kept 3 existing file/);
+    assert.match(dry.output, /Dry run: 0 file\(s\)/);
+    // one file missing: only that one is previewed
+    fs.rmSync(path.join(dir, "target", "debug", "app.o"));
+    const one = wt(f, f.repo, ["copy-ignored", "--to", "feat/preview", "--dry-run"]);
+    assert.match(one.output, /would copy .*target \(1 file\)/);
+    assert.match(one.output, /Dry run: 1 file\(s\)/);
+    assert.match(one.output, /kept 2 existing file/);
+    // the preview and the real run agree
+    const real = wt(f, f.repo, ["copy-ignored", "--to", "feat/preview"]);
+    assert.match(real.output, /Copied 1 file/);
+    // --force previews overwriting everything
+    const forced = wt(f, f.repo, ["copy-ignored", "--to", "feat/preview", "--dry-run", "--force"]);
+    assert.match(forced.output, /Dry run: 3 file\(s\)/);
+  } finally { f.cleanup(); }
+});

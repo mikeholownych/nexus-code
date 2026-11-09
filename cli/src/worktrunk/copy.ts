@@ -41,8 +41,8 @@ const REPORT_LINES = 20;
 
 type Op =
   | { kind: "dir"; rel: string }
-  | { kind: "file"; rel: string; size: number; atimeMs: number; mtimeMs: number }
-  | { kind: "symlink"; rel: string; target: string };
+  | { kind: "file"; rel: string; root: string; size: number; atimeMs: number; mtimeMs: number }
+  | { kind: "symlink"; rel: string; root: string; target: string };
 
 const virtualenv = (rel: string) => `${rel}: virtualenv (absolute paths; recreate it in the worktree)`;
 
@@ -105,7 +105,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
       const resolved = path.resolve(path.dirname(abs), target);
       if (path.isAbsolute(target) || !insideOrEqual(sourceRoot, resolved)) { skipped.push(`${rel}: symbolic link leaves the tree`); return; }
       count(root, 0);
-      ops.push({ kind: "symlink", rel, target });
+      ops.push({ kind: "symlink", rel, root, target });
       return;
     }
     if (stat.isDirectory()) {
@@ -116,7 +116,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
     }
     if (!stat.isFile()) { skipped.push(`${rel}: not a regular file`); return; }
     count(root, stat.size);
-    ops.push({ kind: "file", rel, size: stat.size, atimeMs: stat.atimeMs, mtimeMs: stat.mtimeMs });
+    ops.push({ kind: "file", rel, root, size: stat.size, atimeMs: stat.atimeMs, mtimeMs: stat.mtimeMs });
   };
   const count = (root: string, size: number): void => {
     files++;
@@ -139,9 +139,21 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   const lines: string[] = [];
   let copied = 0;
   let existing = 0;
+  let dryBytes = 0;
   if (options.dryRun) {
-    for (const [root, n] of perRoot) lines.push(`would copy ${shownPath(ctx.home, root)} (${n} file${n === 1 ? "" : "s"})`);
-    copied = files;
+    // The same destination test as the real run: without --force an entry that is already there is kept, so it is not
+    // part of the preview or of the counts.
+    const pending = new Map<string, number>();
+    let pendingBytes = 0;
+    for (const op of ops) {
+      if (op.kind === "dir") continue;
+      if (!options.force && fs.lstatSync(path.join(destRoot, op.rel), { throwIfNoEntry: false })) { existing++; continue; }
+      pending.set(op.root, (pending.get(op.root) ?? 0) + 1);
+      pendingBytes += op.kind === "file" ? op.size : 0;
+      copied++;
+    }
+    for (const [root, n] of pending) lines.push(`would copy ${shownPath(ctx.home, root)} (${n} file${n === 1 ? "" : "s"})`);
+    dryBytes = pendingBytes;
   } else {
     const blocked = new Set<string>();
     const unsafe = (rel: string, problem: string) => `${rel}: destination is not safe (${problem.includes("symbolic link") ? "a symbolic link in the way" : problem.replace(destRoot, "")})`;
@@ -202,7 +214,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   }
 
   const head = options.dryRun
-    ? `Dry run: ${files} file(s), ${bytes} byte(s) would be copied from ${shownPath(ctx.home, sourceRoot)} to ${shownPath(ctx.home, destRoot)}`
+    ? `Dry run: ${copied} file(s), ${dryBytes} byte(s) would be copied from ${shownPath(ctx.home, sourceRoot)} to ${shownPath(ctx.home, destRoot)}`
     : `Copied ${copied} file(s) (${bytes} byte(s) planned) from ${shownPath(ctx.home, sourceRoot)} to ${shownPath(ctx.home, destRoot)}`;
   const out = [head, ...lines];
   if (existing) out.push(`kept ${existing} existing file(s) (use --force to overwrite)`);
