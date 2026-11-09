@@ -52,8 +52,18 @@ function candidateDiffFor(ctx: UnitRunContext, workspace: string): ReturnType<ty
 }
 
 /** The diff text a unit is given, with the count of protected sections that were left out. */
-function candidateDiffText(candidate: { diff: string; omitted: number }): string {
-  return candidate.omitted ? `${candidate.diff}\n[${candidate.omitted} protected file section(s) omitted]\n` : candidate.diff;
+function candidateDiffText(candidate: { diff: string; omitted: number; omittedNew: number }): string {
+  const notes = [
+    ...(candidate.omitted ? [`[${candidate.omitted} protected file section(s) omitted]`] : []),
+    ...(candidate.omittedNew ? [`[${candidate.omittedNew} new file(s) omitted: a protected file changed, and a new file may carry its content]`] : []),
+  ];
+  return notes.length ? `${candidate.diff}\n${notes.join("\n")}\n` : candidate.diff;
+}
+
+/** Why a candidate diff with nothing left to show is empty. */
+function emptyCandidateReason(candidate: { omitted: number; omittedNew: number }): string {
+  if (candidate.omitted && candidate.omittedNew) return "only protected files, and new files hidden with them, changed";
+  return candidate.omitted ? "only protected files changed" : "there is no change against the base to review";
 }
 
 function origin(endpoint: string): string {
@@ -649,7 +659,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       if (supplied.unified_diff === undefined) {
         const candidate = candidateDiffFor(ctx, workspace);
         if ("error" in candidate) why.unified_diff = `candidate diff unavailable: ${candidate.error}`.slice(0, 200);
-        else if (candidate.diff.trim() === "") why.unified_diff = candidate.omitted ? "only protected files changed" : "there is no change against the base to review";
+        else if (candidate.diff.trim() === "") why.unified_diff = emptyCandidateReason(candidate);
         else collected.unified_diff = boundedRedactedInput(candidateDiffText(candidate));
       }
     } else {
@@ -695,7 +705,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       ...("error" in candidate
         ? { diffError: candidate.error || "git diff failed" }
         : emptyDiff
-          ? { diffError: candidate.omitted ? "only protected files changed: there is nothing the reviewer may be shown" : "the candidate diff is empty: there is no change against the base to review" }
+          ? { diffError: candidate.omitted ? `${emptyCandidateReason(candidate)}: there is nothing the reviewer may be shown` : "the candidate diff is empty: there is no change against the base to review" }
           : {}),
       ...(verified
         ? {

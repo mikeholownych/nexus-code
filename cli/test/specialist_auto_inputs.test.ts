@@ -183,7 +183,9 @@ test("the security_reviewer diff is built from paths: no protected content leaks
   const prompt = fake.prompts[0];
   assert.match(prompt, /VISIBLE_CHANGE/);
   assert.match(prompt, /SPACE_OK/);
-  assert.match(prompt, /NEWLINE_NAME_OK/);
+  // Protected files changed, so new files (here one with a newline in its name) are omitted rather than trusted.
+  assert.doesNotMatch(prompt, /NEWLINE_NAME_OK/);
+  assert.match(prompt, /new file\(s\) omitted: a protected file changed/);
   for (const secret of ["LOCAL_SECRET", "UNICODE_SECRET", "SPACE_SECRET", "OLD_SECRET_BODY", "plain body line", "UNTRACKED_UNICODE_SECRET"]) {
     assert.ok(!prompt.includes(secret), `${secret} must not reach the prompt`);
   }
@@ -261,7 +263,9 @@ test("an unstaged move of a protected file is recognised as a rename: its body d
   assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
   const prompt = fake.prompts[0];
   assert.match(prompt, /VISIBLE_CHANGE/);
-  assert.match(prompt, /NEWLINE_NAME_OK/, "an innocent untracked file is still shown");
+  // Protected files changed, so new files (here one with a newline in its name) are omitted rather than trusted.
+  assert.doesNotMatch(prompt, /NEWLINE_NAME_OK/);
+  assert.match(prompt, /new file\(s\) omitted: a protected file changed/);
   for (const secret of [...SECRETS_IN_TRICKY_REPO, "UNRELATED_UNTRACKED_SECRET"]) {
     assert.ok(!prompt.includes(secret), `${secret} must not reach the prompt`);
   }
@@ -461,9 +465,12 @@ test("a protected file edited in place hides new files, which may carry its cont
 test("new files are shown when no protected file changed", async () => {
   const { repo } = protectedRepo();
   fs.writeFileSync(path.join(repo, "fresh.txt"), "FRESH_FILE_BODY\n");
+  fs.writeFileSync(path.join(repo, "nl\nname.txt"), "NEWLINE_NAME_OK\n");
+  execFileSync("git", ["config", "core.quotepath", "true"], { cwd: repo });
   const fake = fakeAgent("security_reviewer");
   await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
   assert.match(fake.prompts[0], /FRESH_FILE_BODY/);
+  assert.match(fake.prompts[0], /NEWLINE_NAME_OK/);
   assert.doesNotMatch(fake.prompts[0], /omitted/);
 });
 
