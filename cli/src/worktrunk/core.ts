@@ -5,8 +5,8 @@
  * here runs a hook, a project-supplied command or a shell. Every Git call goes through git.ts.
  */
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { operatorConfigHome } from "../config.js";
 import { redactSecrets } from "../ui.js";
 import { ensureGitExclude } from "../core/git_exclude.js";
 import { identityOf, mkdirVerified } from "../safe_fs.js";
@@ -437,6 +437,7 @@ function verifiedWorktreeDir(repo: Repo, entry: WorktreeEntry): { dev: number; i
   return { dev: before.dev, ino: before.ino };
 }
 
+/** The operator home: the same one config.ts reads policy from, so worktree settings never come from another file. */
 export function homeDir(): string {
-  return process.env.HOME || os.homedir();
+  return operatorConfigHome();
 }
