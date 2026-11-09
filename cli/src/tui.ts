@@ -9,6 +9,7 @@ import { ApplicationCore } from "./core/app.js";
 import { HarnessConfig, ChatMessage } from "./types.js";
 import { ThemeManager } from "./theme.js";
 import { redactSecrets } from "./ui.js";
+import { isSkillNote } from "./skills.js";
 
 interface ActivityProjection {
   kind: string;
@@ -91,7 +92,7 @@ export class TerminalDashboard {
     const messages = this.agent.getMessages() as ChatMessage[];
     let objective = "";
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "user") {
+      if (messages[i].role === "user" && !isSkillNote(messages[i].content)) {
         objective = redactSecrets(this.messageText(messages[i])).replace(/\s+/g, " ").trim();
         break;
       }

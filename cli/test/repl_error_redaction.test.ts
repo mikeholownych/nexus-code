@@ -1,17 +1,32 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
-import { formatIgnoredInputExcerpt, formatReplDiagnostic } from "../src/repl.js";
+import { formatIgnoredInputExcerpt, formatReplStepError } from "../src/repl.js";
+import { formatDiagnosticForOutput } from "../src/ui.js";
 
 test("redacts and terminal-escapes REPL turn error output", () => {
   const original = InformationFlowBoundary.getGlobalInstance();
   const secret = "synthetic_repl_error_secret_7f31";
   InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary({ explicitSecrets: [secret] }));
   try {
-    const output = formatReplDiagnostic(new Error(`turn failed with ${secret}\u001b[31m`));
+    const output = formatDiagnosticForOutput(new Error(`turn failed with ${secret}\u001b[31m`));
     assert.equal(output.includes(secret), false);
     assert.equal(output.includes("\u001b"), false);
     assert.match(output, /REDACTED/);
+  } finally {
+    InformationFlowBoundary.setGlobalInstance(original);
+  }
+});
+
+test("the REPL step error message redacts credentials and terminal controls", () => {
+  const original = InformationFlowBoundary.getGlobalInstance();
+  const secret = "synthetic_step_error_secret_91bc";
+  InformationFlowBoundary.setGlobalInstance(new InformationFlowBoundary({ explicitSecrets: [secret] }));
+  try {
+    const output = formatReplStepError(new Error(`checkpoint failed ${secret}\u001b[31m`));
+    assert.match(output, /Step error:/);
+    assert.equal(output.includes(secret), false);
+    assert.equal(output.includes("\u001b"), false);
   } finally {
     InformationFlowBoundary.setGlobalInstance(original);
   }
@@ -24,7 +39,7 @@ test("suppresses REPL turn errors when credential classification fails", () => {
   InformationFlowBoundary.setGlobalInstance(boundary);
   try {
     const secret = "synthetic_repl_error_secret_7f31";
-    const output = formatReplDiagnostic(new Error(`turn failed with ${secret}`));
+    const output = formatDiagnosticForOutput(new Error(`turn failed with ${secret}`));
     assert.match(output, /diagnostic suppressed/);
     assert.equal(output.includes(secret), false);
   } finally {

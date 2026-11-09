@@ -358,3 +358,11 @@ Deviations from §9, recorded before the run: fixture tasks rather than external
 only (no T3/T4 — the window is too short); Codex CLI excluded (the gateway does not serve `/v1/responses`); Aider runs
 one `--message` exchange with `--yes-always` (its non-interactive mode); no cloud configuration (operator decision);
 runs per task as many as the window allows, run-major, target 5.
+
+### Code-evaluator commands and `prlimit`
+
+`build` and `typecheck_clean` commands run in Bubblewrap behind `/usr/bin/prlimit` (util-linux), which caps a single file write
+(`maxFileBytes`, default 1 GiB, settable per evaluator spec) and disables core dumps. The evaluator refuses to run a command
+without it, so `eval/host/provision.sh` stops and `eval/host/validate.mjs` fails on a host where it is missing or unusable.
+Memory, process-count, CPU and total-disk limits come only from the resource contract above (`config.resources`); a run
+without one has the per-file cap but no cgroup budget for these commands.
