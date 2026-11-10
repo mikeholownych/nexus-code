@@ -1,0 +1,40 @@
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted
+› SC:cmd go
+  ✓ approved Run for i in $(seq 1 5); do echo step $i; sleep 1; done
+  ✓ Run for i in $(seq 1 5); do echo step $i; sleep 1; done · exit 0 · 5 lines · 5.1s
+    ▎ step 1
+    ▎ step 2
+    ▎ step 3
+    ▎ step 4
+    ▎ step 5
+  ✓ approved verifier npm test
+
+Command finished.
+
+✓ Done  No files changed, so there was nothing to verify.
+
+› /git
+  Working tree clean.
+
+› /diff
+  Working tree clean: no uncommitted changes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

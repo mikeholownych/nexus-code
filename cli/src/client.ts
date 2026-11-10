@@ -37,6 +37,7 @@ import { localEndpointCredential, localEndpointCredentials, resolveCredential, s
 import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
 import { providerDefinition } from "./providers.js";
 import { ServerKindCache } from "./core/server_kind_cache.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 /** Longest a request waits for an expired server identity to be re-read before proceeding without it. */
 const REVERIFY_WAIT_MS = 1000;
@@ -1111,7 +1112,7 @@ export class LocalLlmClient {
         const result = await operation(currentEp);
         if (idx !== this.activeEndpointIndex) {
           this.emitDiagnostic("warn",
-            pc.yellow(`\n⚡ Failover: Active inference endpoint switched to ${currentEp}`)
+            pc.yellow(`\n⚡ Failover: Active inference endpoint switched to ${persistableEndpoint(currentEp)}`)
           );
           this.activeEndpointIndex = idx;
         }
@@ -1123,7 +1124,7 @@ export class LocalLlmClient {
           const nextIdx = (idx + 1) % total;
           this.emitDiagnostic("warn",
             pc.dim(
-              `⚠️ [Failover] ${operationName} failed on ${currentEp} (${err.message}). Trying backup endpoint ${this.endpoints[nextIdx]}...`
+              `⚠️ [Failover] ${operationName} failed on ${persistableEndpoint(currentEp)} (${err.message}). Trying backup endpoint ${persistableEndpoint(this.endpoints[nextIdx])}...`
             )
           );
         }
@@ -1133,7 +1134,7 @@ export class LocalLlmClient {
     throw (
       lastError ||
       new Error(
-        `All inference endpoints failed for ${operationName} (attempted: ${this.endpoints.join(", ")})`
+        `All inference endpoints failed for ${operationName} (attempted: ${this.endpoints.map((e) => persistableEndpoint(e)).join(", ")})`
       )
     );
   }
