@@ -14,7 +14,7 @@ import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, 
 import { git, gitOut } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type Repo, type WorktreeEntry } from "./repo.js";
 import { readRegistry, updateRegistry, MAX_RECORDS, MAX_BRANCH_LENGTH } from "./registry.js";
-import { hasVerification, workingState } from "./verification.js";
+import { hasVerification, NEXUS_STATE_PATH, workingState } from "./verification.js";
 
 export interface MergeOptions {
   target?: string;
@@ -30,9 +30,6 @@ export interface MergeOptions {
   /** The working state the message was written for: the merge refuses if the state is no longer exactly this. */
   expectedState?: { head: string; tree: string };
 }
-
-/** Pathspec of `.nexus/` (sessions, knowledge, worktrees): unstaged after `add -A` so it never reaches a backup or an automatic commit. */
-const NEXUS_STATE_PATH = ":(top).nexus";
 
 const NON_INTERACTIVE = { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" };
 

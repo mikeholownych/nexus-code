@@ -355,6 +355,25 @@ describe("slash router: workspace commands", () => {
     });
   });
 
+  test("worktree merge --ai-message honours the command's cancel signal: a shutdown during the model request merges nothing", async () => {
+    await withRig(async ({ reply, repo, host }) => {
+      assert.equal((await reply("worktree", "switch -c feature/slash-cancel --no-copy")).success, true);
+      const dir = path.join(repo, ".nexus", "worktrees", "feature-slash-cancel");
+      fs.writeFileSync(path.join(dir, "cancel.txt"), "x\n");
+      execSync("git add cancel.txt && git commit -q -m cancel", { cwd: dir });
+      host.setWorkspace(dir);
+      const before = execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf8" }).trim();
+      const cancelled = new AbortController();
+      cancelled.abort(); // the shutdown lands while the model is being asked
+      const out = await routeSlash(host, "worktree", "merge ^ --ai-message --no-verify-receipt --reason slash-cancel-fixture", cancelled.signal);
+      assert.equal(out.kind, "reply");
+      assert.equal((out as SlashReply).success, false, (out as SlashReply).output);
+      assert.match((out as SlashReply).output, /Cancelled/);
+      assert.equal(execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf8" }).trim(), before, "nothing was merged");
+      assert.ok(fs.existsSync(dir), "the worktree was not removed");
+    });
+  });
+
   test("an agent that started inside a worktree can be moved out of it after the worktree is merged away, with its durable state still valid", async () => {
     await withRig(async ({ reply, repo }) => {
       assert.equal((await reply("worktree", "switch -c feature/started-inside --no-copy")).success, true);
