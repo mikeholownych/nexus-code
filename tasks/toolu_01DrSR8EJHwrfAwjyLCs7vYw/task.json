@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01DrSR8EJHwrfAwjyLCs7vYw",
+  "agent_id": "a12652a47795fc2eb",
+  "task_description": "Consolidated review of combined #449 vs main",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 90496,
+    "cache_read_tokens": 1932204,
+    "output_tokens": 10193,
+    "api_call_count": 28
+  },
+  "started_at": "2026-11-10T22:53:45.544008293Z",
+  "completed_at": "2026-11-10T23:16:41.293336784Z"
+}

@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01TGx3Fo5F7oY2bBHtS4etQZ",
+  "agent_id": "a6f835b9d5da6abb1",
+  "task_description": "Review #446 test-only delta 053bcf9e",
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 51709,
+    "cache_read_tokens": 1119128,
+    "output_tokens": 8110,
+    "api_call_count": 19
+  },
+  "started_at": "2026-11-10T22:17:24.036350903Z",
+  "completed_at": "2026-11-10T22:23:57.025883317Z"
+}
