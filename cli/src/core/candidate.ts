@@ -355,6 +355,19 @@ function decodeGitTokens(buffer: Buffer): string[] {
   return out;
 }
 
+/**
+ * How long one git call of the identity may run. A hung git (a stale lock, a network filesystem) must fail the identity,
+ * which callers treat as "state unknown", instead of blocking the turn. NEXUS_GIT_TIMEOUT_MS overrides the default.
+ */
+export function gitTimeoutMs(): number {
+  const configured = Number(process.env.NEXUS_GIT_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 30_000;
+}
+
+function isGitTimeout(err: unknown): boolean {
+  return (err as { code?: string } | undefined)?.code === "ETIMEDOUT";
+}
+
 /** A manifest path with the characters the manifest uses as separators escaped (ordinary names are unchanged). */
 function manifestPath(p: string): string {
   return /[\t\n\r\\]/.test(p) ? JSON.stringify(p) : p;
@@ -392,9 +405,12 @@ export function computeCandidateIdentitySyncForTesting(
       cwd: resolvedWorkspace,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitTimeoutMs(),
     }).trim();
     isGit = gitCheck === "true";
-  } catch {
+  } catch (err) {
+    // A git that hangs is not "not a repository": the weaker non-git identity must not stand in for it.
+    if (isGitTimeout(err)) throw new Error(`git rev-parse timed out after ${gitTimeoutMs()} ms`);
     isGit = false;
   }
 
@@ -427,9 +443,11 @@ function computeGitCandidateIdentity(
         cwd: workspacePath,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
+        timeout: gitTimeoutMs(),
       }
     ).trim();
-  } catch {
+  } catch (err) {
+    if (isGitTimeout(err)) throw new Error(`git rev-parse timed out after ${gitTimeoutMs()} ms`);
     rootBaseSha = "EMPTY_GIT_BASE";
   }
 
@@ -531,11 +549,14 @@ function computeGitCandidateIdentity(
           cwd: workspacePath,
           stdio: ["ignore", "pipe", "ignore"],
           maxBuffer: 256 * 1024 * 1024,
+          timeout: gitTimeoutMs(),
         }
       ));
     } catch (err: any) {
-      // A name that cannot be decoded makes the identity unknown; any other diff failure keeps the previous fallback.
+      // A name that cannot be decoded, or a git that hangs, makes the identity unknown; any other diff failure keeps the
+      // previous fallback.
       if (/cannot be decoded/.test(String(err?.message))) throw err;
+      if (isGitTimeout(err)) throw new Error(`git diff timed out after ${gitTimeoutMs()} ms`);
     }
     // `-z` records: STATUS NUL path NUL, and for a rename or copy STATUS NUL old NUL new NUL.
     const diffEntries: Array<{ status: string; filePath: string }> = [];
@@ -601,8 +622,39 @@ function computeGitCandidateIdentity(
         cwd: workspacePath,
         stdio: ["ignore", "pipe", "ignore"],
         maxBuffer: 256 * 1024 * 1024,
+        timeout: gitTimeoutMs(),
       }
     ));
+
+    // `git status` does not report an edit to a tracked file marked assume-unchanged or skip-worktree (a sparse
+    // checkout marks everything outside its cone). Those files are hashed by path, so an edit behind git's back changes
+    // the identity. `ls-files -v` tags assume-unchanged entries with a lowercase letter and skip-worktree with `S`.
+    const flaggedTokens = decodeGitTokens(execFileSync("git", ["ls-files", "-v", "-z"], {
+      cwd: workspacePath,
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 256 * 1024 * 1024,
+      timeout: gitTimeoutMs(),
+    }));
+    for (const record of flaggedTokens) {
+      if (record.length < 3 || record[1] !== " ") throw new Error(`unrecognised git ls-files record: ${JSON.stringify(record.slice(0, 12))}`);
+      const tag = record[0];
+      if (tag !== "S" && !(tag >= "a" && tag <= "z")) continue;
+      const hiddenPath = record.slice(2);
+      const hiddenPosix = hiddenPath.split(path.sep).join("/");
+      if (hiddenPosix === ".nexus" || hiddenPosix.startsWith(".nexus/")) continue;
+      assertTrackedEntryAvailable(hiddenPosix);
+      let details: ReturnType<typeof resolveWorkspaceFileDetails>;
+      try {
+        details = resolveWorkspaceFileDetails(workspacePath, hiddenPath, remainingBytesForTrackedPath(hiddenPosix), filesystem);
+      } catch (err: any) {
+        // Outside a sparse cone even the parent directory is absent.
+        if (err?.code === "ENOENT" || err?.code === "ENOTDIR") continue;
+        throw err;
+      }
+      // Absent (outside a sparse cone, or deleted): nothing to hash; a later reappearance or deletion still changes the manifest.
+      if (details.isDeleted) continue;
+      setTrackedEntry({ path: hiddenPosix, mode: details.mode, contentHash: details.contentHash, size: details.size, status: "modified" });
+    }
 
     if (statusTokens.length > 0) {
       for (let i = 0; i < statusTokens.length; i++) {

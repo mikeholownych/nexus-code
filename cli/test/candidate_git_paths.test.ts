@@ -75,3 +75,61 @@ describe("the candidate identity sees edits to files with awkward names", () => 
     }
   });
 });
+
+describe("git state that hides edits from `git status` cannot hide them from the identity", () => {
+  for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+    test(`an edit to a tracked file marked ${flag} changes the identity`, () => {
+      const repo = repoWith(["base.txt", "other.txt"]);
+      try {
+        git(repo, "update-index", flag, "base.txt");
+        const before = id(repo);
+        fs.writeFileSync(path.join(repo, "base.txt"), "edited behind git's back\n");
+        assert.notEqual(id(repo), before);
+      } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("in a sparse checkout an in-cone edit is seen and the identity is still computed", () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sparse-"));
+    try {
+      git(repo, "init", "-q");
+      git(repo, "config", "user.name", "t");
+      git(repo, "config", "user.email", "t@t.invalid");
+      for (const dir of ["in", "out"]) {
+        fs.mkdirSync(path.join(repo, dir));
+        fs.writeFileSync(path.join(repo, dir, "f.txt"), "one\n");
+      }
+      git(repo, "add", "-A");
+      git(repo, "commit", "-qm", "base");
+      git(repo, "sparse-checkout", "set", "in");
+      assert.equal(fs.existsSync(path.join(repo, "out", "f.txt")), false, "out/ is not checked out");
+      const before = id(repo);
+      fs.writeFileSync(path.join(repo, "in", "f.txt"), "two\n");
+      assert.notEqual(id(repo), before);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a git that hangs makes the identity fail (unknown) instead of blocking the turn", () => {
+    const repo = repoWith(["base.txt"]);
+    const wrapper = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-slowgit-"));
+    const realGit = execFileSync("which", ["git"], { encoding: "utf-8" }).trim();
+    fs.writeFileSync(path.join(wrapper, "git"), `#!/bin/sh\nfor a in "$@"; do [ "$a" = status ] && sleep 4; done\nexec ${realGit} "$@"\n`, { mode: 0o755 });
+    const saved = { PATH: process.env.PATH, ms: process.env.NEXUS_GIT_TIMEOUT_MS };
+    try {
+      process.env.PATH = `${wrapper}:${saved.PATH}`;
+      process.env.NEXUS_GIT_TIMEOUT_MS = "400";
+      const started = Date.now();
+      assert.throws(() => id(repo), /timed out|ETIMEDOUT/);
+      assert.ok(Date.now() - started < 3500, `took ${Date.now() - started} ms`);
+    } finally {
+      process.env.PATH = saved.PATH;
+      if (saved.ms === undefined) delete process.env.NEXUS_GIT_TIMEOUT_MS; else process.env.NEXUS_GIT_TIMEOUT_MS = saved.ms;
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(wrapper, { recursive: true, force: true });
+    }
+  });
+});
