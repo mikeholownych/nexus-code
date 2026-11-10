@@ -52,7 +52,7 @@ export function hasDirtySubmodule(dir: string): boolean {
   for (const line of listing.split("\n")) {
     const m = /^(.)[0-9a-f]{40,64} (.*?)(?: \(.*\))?$/.exec(line);
     if (!m || m[1] === "-") continue; // not initialised: no content to differ
-    if (gitOut(path.join(dir, m[2]), ["status", "--porcelain", "--ignore-submodules=none"]) !== "") return true;
+    if (gitOut(path.join(dir, m[2]), ["status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"]) !== "") return true;
   }
   return false;
 }
