@@ -32,6 +32,7 @@ export function workingState(dir: string, dirty: boolean): WorkingState {
       git(dir, ["read-tree", "HEAD"], { env });
     }
     git(dir, ["add", "-A"], { env });
+    git(dir, ["reset", "-q", "HEAD", "--", ":(top).nexus"], { env, allowFailure: true }); // internal state is never part of a merge
     return { head, tree: gitOut(dir, ["write-tree"], { env }), dirty };
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });

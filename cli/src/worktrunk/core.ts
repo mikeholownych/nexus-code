@@ -512,9 +512,6 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
         }
       }
       try {
-        if (options.discardIgnored && !options.force) {
-          git(entry.path, ["clean", "-f", "-X", "-d"], { allowFailure: true });
-        }
         removeSeams.beforeGitRemove?.(entry);
         git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
       } catch (err) {

@@ -1019,7 +1019,7 @@ program
 
 program
   .command("worktree")
-  .description("Named git worktrees: switch [-c] <branch> [--base B], list [--json] [--limit N], path <branch>, remove <branch>... [--force] [--delete-unmerged]")
+  .description("Named git worktrees: switch [-c] <branch> [--base B] [--no-copy], list [--json] [--limit N], path <branch>, remove <branch>... [--force] [--delete-unmerged], copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]")
   .argument("[args...]", "Subcommand and its arguments")
   .option("-w, --workspace <path>", "Directory inside the repository", process.cwd())
   .option("--read-only", "Refuse every subcommand that changes the repository")

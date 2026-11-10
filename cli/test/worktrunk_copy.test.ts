@@ -400,7 +400,7 @@ test("a leftover staging file from a killed run is swept, and copied files are p
     assert.equal(wt(f, f.repo, ["switch", "-c", "feat/sweep", "--no-copy"]).success, true);
     const dir = dirOf(f, "feat-sweep");
     fs.mkdirSync(path.join(dir, "target"), { recursive: true });
-    const stale = path.join(dir, "target", ".nexus-copy-123e4567-e89b-12d3-a456-426614174000.tmp");
+    const stale = path.join(dir, "target", ".nexus-copy-2147483000-123e4567-e89b-12d3-a456-426614174000.tmp"); // a pid that is not running
     fs.writeFileSync(stale, "half a file");
     const r = wt(f, f.repo, ["copy-ignored", "--to", "feat/sweep"]);
     assert.equal(r.success, true, r.output);
@@ -451,4 +451,89 @@ test("a symbolic link whose target only leaves the tree through another link is 
     assert.match(r.output, /chain.*symbolic link/);
     assert.ok(fs.lstatSync(path.join(dir, "target", "self")).isSymbolicLink(), "a link that stays inside the tree is copied");
   } finally { f.cleanup(); }
+});
+
+test("staging files left in the destination root by a killed run are swept too", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/rootsweep", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-rootsweep");
+    const stale = path.join(dir, ".nexus-copy-2147483000-123e4567-e89b-12d3-a456-426614174001.tmp");
+    fs.writeFileSync(stale, "half");
+    assert.equal(wt(f, f.repo, ["copy-ignored", "--to", "feat/rootsweep"]).success, true);
+    assert.equal(fs.existsSync(stale), false, "root-level leftovers are removed");
+    assert.equal(fs.readFileSync(path.join(dir, "notes.log"), "utf8"), "log\n", "the root-level selection was copied");
+  } finally { f.cleanup(); }
+});
+
+test("a staging file that belongs to a running copy is not swept by a second run", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/live", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-live");
+    fs.mkdirSync(path.join(dir, "target"), { recursive: true });
+    const live = path.join(dir, "target", `.nexus-copy-${process.pid}-123e4567-e89b-12d3-a456-426614174002.tmp`); // this process is alive
+    const old = path.join(dir, `.nexus-copy-123e4567-e89b-12d3-a456-426614174003.tmp`); // old naming, but fresh
+    fs.writeFileSync(live, "in progress");
+    fs.writeFileSync(old, "in progress");
+    assert.equal(wt(f, f.repo, ["copy-ignored", "--to", "feat/live"]).success, true);
+    assert.equal(fs.existsSync(live), true, "a live owner's staging file survives");
+    assert.equal(fs.existsSync(old), true, "a recent file of unknown owner survives");
+    const ancient = new Date(Date.now() - 3 * 3600_000);
+    fs.utimesSync(old, ancient, ancient);
+    assert.equal(wt(f, f.repo, ["copy-ignored", "--to", "feat/live"]).success, true);
+    assert.equal(fs.existsSync(old), false, "an unowned file older than the bound is swept");
+    assert.equal(fs.existsSync(live), true);
+  } finally { f.cleanup(); }
+});
+
+test("a destination file where a source directory would go skips that subtree with a report and copies the rest", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/obstructed", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-obstructed");
+    fs.writeFileSync(path.join(dir, "target"), "a regular file where target/ would go");
+    const r = wt(f, f.repo, ["copy-ignored", "--to", "feat/obstructed"]);
+    assert.equal(r.success, true, r.output);
+    assert.match(r.output, /target.*(in the way|not safe)/);
+    assert.equal(fs.readFileSync(path.join(dir, "target"), "utf8"), "a regular file where target/ would go");
+    assert.equal(fs.readFileSync(path.join(dir, "notes.log"), "utf8"), "log\n", "unrelated selections are still copied");
+    const dry = wt(f, f.repo, ["copy-ignored", "--to", "feat/obstructed", "--dry-run"]);
+    assert.equal(dry.success, true, dry.output);
+  } finally { f.cleanup(); }
+});
+
+test("nothing is written inside a submodule or a nested repository in the destination, even with --force", () => {
+  const f = fixture();
+  try {
+    fs.mkdirSync(path.join(f.repo, "target", "pkg"), { recursive: true });
+    fs.writeFileSync(path.join(f.repo, "target", "pkg", "x.txt"), "from the source cache");
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/nested", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-nested");
+    // a gitlink (submodule) at target/pkg in the destination, with a locally modified file in it
+    fs.mkdirSync(path.join(dir, "target", "pkg"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "target", "pkg", "x.txt"), "locally modified submodule file");
+    git(dir, "update-index", "--add", "--cacheinfo", `160000,${git(dir, "rev-parse", "HEAD")},target/pkg`);
+    const forced = wt(f, f.repo, ["copy-ignored", "--to", "feat/nested", "--force"]);
+    assert.equal(forced.success, true, forced.output);
+    assert.equal(fs.readFileSync(path.join(dir, "target", "pkg", "x.txt"), "utf8"), "locally modified submodule file");
+    assert.match(forced.output, /submodule|nested repository/);
+
+    // an untracked nested repository
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/nested2", "--no-copy"]).success, true);
+    const d2 = dirOf(f, "feat-nested2");
+    fs.mkdirSync(path.join(d2, "target", "pkg", ".git"), { recursive: true });
+    fs.writeFileSync(path.join(d2, "target", "pkg", "x.txt"), "inside a nested repo");
+    const f2 = wt(f, f.repo, ["copy-ignored", "--to", "feat/nested2", "--force"]);
+    assert.equal(f2.success, true, f2.output);
+    assert.equal(fs.readFileSync(path.join(d2, "target", "pkg", "x.txt"), "utf8"), "inside a nested repo");
+    assert.match(f2.output, /nested repository/);
+  } finally { f.cleanup(); }
+});
+
+test("`nexus worktree --help` lists copy-ignored and --no-copy", () => {
+  const cliRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+  const out = execFileSync(path.join(cliRoot, "node_modules", ".bin", "tsx"), [path.join(cliRoot, "src", "index.ts"), "worktree", "--help"], { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
+  assert.match(out, /copy-ignored/);
+  assert.match(out, /--no-copy/);
 });

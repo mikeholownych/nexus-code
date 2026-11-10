@@ -296,3 +296,56 @@ test("the merge usage is the same text whether or not --ai-message is given", as
     assert.match(viaAsync.output, /--ai-message/);
   } finally { f.cleanup(); }
 });
+
+test("a plain -m on a clean one-commit branch keeps the original commit; only the model path rewrites it", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    git(dir, "add", "b.txt");
+    git(dir, "commit", "-q", "-m", "original subject");
+    const plain = await f.run(dir, ["merge", "--no-verify-receipt", "--reason", "test fixture", "--no-remove", "-m", "explicit message"]);
+    assert.equal(plain.success, true, plain.output);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "original subject", "an explicit -m does not rewrite a lone clean commit");
+
+    const second = await f.run(f.repo, ["switch", "-c", "feat/ai2", "--no-copy"]);
+    assert.equal(second.success, true, second.output);
+    const dir2 = path.join(f.repo, ".nexus", "worktrees", "feat-ai2");
+    fs.writeFileSync(path.join(dir2, "c.txt"), "c\n");
+    git(dir2, "add", "c.txt");
+    git(dir2, "commit", "-q", "-m", "second original");
+    const viaModel = await f.run(dir2, MERGE, async () => "feat(c): written by the model");
+    assert.equal(viaModel.success, true, viaModel.output);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat(c): written by the model");
+  } finally { f.cleanup(); }
+});
+
+test("the model is not asked, and no note claims it wrote the message, when the commits cancel each other out", async () => {
+  const f = fixture();
+  try {
+    const made = await f.run(f.repo, ["switch", "-c", "feat/cancelled", "--no-copy"]);
+    assert.equal(made.success, true, made.output);
+    const dir = path.join(f.repo, ".nexus", "worktrees", "feat-cancelled");
+    fs.writeFileSync(path.join(dir, "x.txt"), "x\n"); git(dir, "add", "x.txt"); git(dir, "commit", "-q", "-m", "add x");
+    git(dir, "rm", "-q", "x.txt"); git(dir, "commit", "-q", "-m", "remove x");
+    let calls = 0;
+    const r = await f.run(dir, MERGE, async () => { calls++; return "feat: never used"; });
+    assert.equal(r.success, true, r.output);
+    assert.equal(calls, 0, "nothing to describe: the model is not asked");
+    assert.doesNotMatch(r.output, /written by the configured model/);
+  } finally { f.cleanup(); }
+});
+
+test("a state that changed while the model was writing the message is not merged under the old description", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    const r = await f.run(dir, MERGE, async () => {
+      fs.writeFileSync(path.join(dir, "late.txt"), "saved while the model was thinking\n");
+      return "feat(b): add b.txt";
+    });
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /changed while/i);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "init", "the target is untouched");
+    assert.ok(fs.existsSync(dir));
+  } finally { f.cleanup(); }
+});

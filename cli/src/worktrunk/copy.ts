@@ -145,15 +145,24 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   // One plan for the preview and the real run, so the two cannot diverge. Nothing here writes.
   const tracked = ops.some((op) => op.kind !== "dir") ? new Set(nul(git(destRoot, ["ls-files", "-z", "--cached"]).stdout)) : new Set<string>();
   const unsafe = (rel: string, problem: string) => `${rel}: destination is not safe (${problem})`;
-  /** The first existing ancestor of `rel` under the destination that is not a real directory, if any (missing ones are fine: they get created). */
-  const ancestryProblem = (rel: string): string | undefined => {
+  // Submodules of the destination (gitlinks in its index): nothing is written at or below them.
+  const gitlinks = new Set(nul(git(destRoot, ["ls-files", "-s", "-z"]).stdout).filter((line) => line.startsWith("160000 ")).map((line) => line.slice(line.indexOf("\t") + 1)));
+  const insideGitlink = (rel: string): boolean => [...gitlinks].some((g) => rel === g || rel.startsWith(g + path.sep));
+  /**
+   * The first problem with the path to `rel` under the destination, if any: an ancestor (or, for a directory, the entry
+   * itself) that is a link or a file, a submodule, or a nested repository. Missing ancestors are fine: they get created.
+   */
+  const ancestryProblem = (rel: string, includeSelf = false): string | undefined => {
+    if (insideGitlink(rel)) return "inside a submodule of the destination";
+    const parts = (includeSelf ? rel : path.dirname(rel)).split(path.sep).filter((p) => p && p !== ".");
     let current = destRoot;
-    for (const part of path.dirname(rel).split(path.sep).filter((p) => p && p !== ".")) {
+    for (const part of parts) {
       current = path.join(current, part);
       const stat = fs.lstatSync(current, { throwIfNoEntry: false });
       if (!stat) return undefined;
       if (stat.isSymbolicLink()) return "a symbolic link in the way";
       if (!stat.isDirectory()) return "a file in the way";
+      if (fs.lstatSync(path.join(current, ".git"), { throwIfNoEntry: false })) return "inside a nested repository of the destination";
     }
     return undefined;
   };
@@ -163,7 +172,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   const blocked: string[] = [];
   for (const op of ops) {
     if (blocked.some((b) => op.rel === b || op.rel.startsWith(b + path.sep))) continue;
-    const problem = ancestryProblem(op.rel);
+    const problem = ancestryProblem(op.rel, op.kind === "dir");
     if (problem) {
       skipped.push(unsafe(op.rel, problem));
       if (op.kind === "dir") blocked.push(op.rel);
@@ -191,6 +200,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
     // Directories already proven to be real, user-owned entries under the destination: each is verified once, and any
     // staging file a killed run left in it is removed.
     const ensured = new Set<string>([destRoot]);
+    sweepStaging(destRoot);
     const ensureDir = (dir: string): string | undefined => {
       if (ensured.has(dir)) return undefined;
       try {
@@ -215,7 +225,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
       // Always stage under a temporary name in the same directory: a run killed mid-copy leaves a `.nexus-copy-*.tmp`
       // (swept by the next run), never a truncated file under its final name. A new entry is linked into place, which
       // cannot replace anything; a replaced entry is renamed over.
-      const staged = path.join(path.dirname(dst), `.nexus-copy-${randomUUID()}.tmp`);
+      const staged = path.join(path.dirname(dst), `.nexus-copy-${process.pid}-${randomUUID()}.tmp`);
       try {
         place(sourceRoot, op, staged);
         if (replace) {
@@ -250,17 +260,32 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   return { success: true, output: out.join("\n"), data: { copied, planned: files, bytes, skipped: skipped.length, existing } };
 }
 
-/** Removes `.nexus-copy-<uuid>.tmp` files a killed earlier run left in `dir` (only regular files and links owned by this user). */
+const STALE_STAGING_MS = 3600_000;
+
+/**
+ * Removes staging files (`.nexus-copy-<pid>-<uuid>.tmp`) that a killed earlier run left in `dir`: only regular files and
+ * links owned by this user, and only when their owner process is gone. A file in the older pid-less form is removed once
+ * it is an hour old. A running copy's staging file is never touched.
+ */
 function sweepStaging(dir: string): void {
   const me = process.getuid?.();
   let names: string[];
   try { names = fs.readdirSync(dir); } catch { return; }
   for (const name of names) {
-    if (!/^\.nexus-copy-[0-9a-f-]{36}\.tmp$/.test(name)) continue;
+    const match = /^\.nexus-copy-(?:(\d+)-)?[0-9a-f-]{36}\.tmp$/.exec(name);
+    if (!match) continue;
     const file = path.join(dir, name);
     try {
       const stat = fs.lstatSync(file);
-      if ((stat.isFile() || stat.isSymbolicLink()) && (me === undefined || stat.uid === me)) fs.unlinkSync(file);
+      if (!(stat.isFile() || stat.isSymbolicLink()) || (me !== undefined && stat.uid !== me)) continue;
+      const owner = match[1] ? Number(match[1]) : undefined;
+      let ownerGone: boolean;
+      if (owner === undefined) {
+        ownerGone = Date.now() - stat.mtimeMs > STALE_STAGING_MS;
+      } else {
+        try { process.kill(owner, 0); ownerGone = false; } catch (err: any) { ownerGone = err?.code === "ESRCH"; }
+      }
+      if (ownerGone) fs.unlinkSync(file);
     } catch { /* raced with another run */ }
   }
 }

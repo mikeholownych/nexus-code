@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter, tokenizeWorktreeArgs } from "../src/worktrunk/command.js";
+import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter, tokenizeWorktreeArgs, WORKTREE_USAGE } from "../src/worktrunk/command.js";
 import { readRegistry } from "../src/worktrunk/registry.js";
 import { backupRef } from "../src/worktrunk/merge.js";
 import { removeSeams } from "../src/worktrunk/core.js";
@@ -725,6 +725,70 @@ test("a quoted merge message survives the interactive tokenizer and becomes the 
   } finally { f.cleanup(); }
 });
 
+test("WORKTREE_USAGE advertises [-m message] for merge and [--discard-ignored] for prune", () => {
+  assert.match(WORKTREE_USAGE, /merge \[target\] \[--no-squash\] \[--no-rebase\] \[--no-remove\] \[-m message\]/);
+  assert.match(WORKTREE_USAGE, /prune \[--dry-run\] \[--min-age 1d\] \[--limit N\] \[--discard-ignored\]/);
+});
+
+test("fast-forward merge refuses to overwrite target ignored file with source tracked file", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.repo, ".gitignore"), "build.log\n");
+    git(f.repo, "add", ".gitignore");
+    git(f.repo, "commit", "-q", "-m", "ignore build.log");
+    fs.writeFileSync(path.join(f.repo, "build.log"), "target local ignored content\n");
+
+    const dir = feature(f, "feat/track-build-log");
+    fs.writeFileSync(path.join(dir, "build.log"), "source tracked build log\n");
+    git(dir, "add", "-f", "build.log");
+    git(dir, "commit", "-q", "-m", "track build.log");
+
+    const r = wt(f, dir, ["merge", "--no-remove", ...W]);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /overwrit/i, r.output);
+    assert.equal(fs.readFileSync(path.join(f.repo, "build.log"), "utf8"), "target local ignored content\n", "target local ignored file must not be overwritten!");
+  } finally { f.cleanup(); }
+});
+
+test("merge rejects speculative task worktrees", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.repo, ".gitignore"), ".nexus/\n");
+    git(f.repo, "add", ".gitignore");
+    git(f.repo, "commit", "-q", "-m", "ignore .nexus");
+
+    const taskId = "task-spec-123";
+    const dir = path.join(f.repo, ".nexus", "worktrees", taskId);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "-b", `nexus/${taskId}`, dir);
+    commitFile(dir, "spec.txt", "speculative\n", "speculative work");
+
+    const r = wt(f, dir, ["merge", "^", "--no-remove"]);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /speculative task worktree/i, r.output);
+
+    const normalDir = feature(f, "feat/normal");
+    commitFile(normalDir, "norm.txt", "norm\n", "normal work");
+    const r2 = wt(f, normalDir, ["merge", `nexus/${taskId}`, "--no-remove"]);
+    assert.equal(r2.success, false, r2.output);
+    assert.match(r2.output, /speculative task worktree/i, r2.output);
+  } finally { f.cleanup(); }
+});
+
+test("merge with initialized submodule retains the worktree with an explanatory note", () => {
+  const f = fixture();
+  try {
+    const { dir } = withSubmodule(f, "feat/clean-sub");
+    commitFile(dir, "b.txt", "b\n", "add b");
+
+    const r = wt(f, dir, ["merge", ...W]);
+    assert.equal(r.success, true, r.output);
+    assert.match(r.output, /submodule .* (is initialized|initialized here)/i, r.output);
+    assert.ok(fs.existsSync(dir), "worktree with initialized submodule must be retained without failing the merge");
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "add b", "target must be fast-forwarded");
+  } finally { f.cleanup(); }
+});
+
 /** A repository with a submodule, and a feature worktree (named `name`) in which the submodule is initialised. */
 function withSubmodule(f: Fixture, name: string): { dir: string; sub: string } {
   const subrepo = path.join(f.root, "subrepo-" + name.replace(/\//g, "-"));
@@ -820,5 +884,42 @@ test("a revert stopped on a conflict (REVERT_HEAD, sequencer state) refuses the 
     const seqOnly = wt(f, dir, ["merge", ...W]);
     assert.equal(seqOnly.success, false, "outstanding sequencer state alone also refuses: " + seqOnly.output);
     assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore);
+  } finally { f.cleanup(); }
+});
+
+test("tracked Nexus state under .nexus is neither backed up nor committed by the automatic merge commit", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/state");
+    fs.mkdirSync(path.join(dir, ".nexus"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".nexus", "knowledge.json"), '{"v":1}\n');
+    git(dir, "add", "-f", ".nexus/knowledge.json");
+    git(dir, "commit", "-q", "-m", "an old commit that tracked internal state");
+    fs.writeFileSync(path.join(dir, ".nexus", "knowledge.json"), '{"v":2,"edited by a session":true}\n');
+    fs.writeFileSync(path.join(dir, "real.txt"), "real work\n");
+    const r = wt(f, dir, ["merge", ...W]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(git(f.repo, "show", "main:real.txt"), "real work");
+    assert.equal(git(f.repo, "show", "main:.nexus/knowledge.json"), '{"v":1}', "the state edit was not committed");
+    assert.equal(git(f.repo, "show", `${backupRef("feat/state")}:.nexus/knowledge.json`), '{"v":1}', "nor backed up");
+  } finally { f.cleanup(); }
+});
+
+test("a worktree reached through a symbolic link is recognised as removed after the merge deleted it", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/alias");
+    commitFile(dir, "b.txt", "b\n", "add b");
+    const alias = path.join(f.root, "alias-to-worktree");
+    fs.symlinkSync(dir, alias);
+    const merged = wt(f, alias, ["merge", "--no-remove", ...W]);
+    assert.equal(merged.success, true, merged.output);
+    const removed = wt(f, f.repo, ["remove", "feat/alias"]);
+    assert.equal(removed.success, true, removed.output);
+    const afterMerge = { success: true, output: "", data: { removedPath: dir, targetPath: f.repo } };
+    assert.equal(fs.existsSync(dir), false);
+    assert.equal(relocationAfter(afterMerge as any, alias), f.repo, "the dangling alias resolves to the removed worktree");
+    assert.equal(relocationAfter(afterMerge as any, path.join(alias, "sub")), f.repo);
+    assert.equal(relocationAfter(afterMerge as any, f.repo), undefined);
   } finally { f.cleanup(); }
 });
