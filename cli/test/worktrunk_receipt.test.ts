@@ -381,3 +381,18 @@ test("an edit hidden by assume-unchanged or skip-worktree blocks the receipt; an
     assert.equal(recordVerification(f.dir, "npm test"), false, "skip-worktree: no receipt");
   } finally { f.cleanup(); }
 });
+
+test("an unchanged tracked symlink flagged assume-unchanged does not block the receipt; a retargeted one does", () => {
+  const f = fixture();
+  try {
+    fs.symlinkSync("a.txt", path.join(f.dir, "link"));
+    git(f.dir, "add", "link");
+    git(f.dir, "commit", "-q", "-m", "add link");
+    git(f.dir, "update-index", "--assume-unchanged", "link");
+    assert.ok(captureVerificationState(f.dir), "the link equals its recorded blob (its target text)");
+    assert.equal(recordVerification(f.dir, "npm test"), true);
+    fs.rmSync(path.join(f.dir, "link"));
+    fs.symlinkSync("b.txt", path.join(f.dir, "link"));
+    assert.equal(captureVerificationState(f.dir), undefined, "a retargeted flagged link is a hidden edit");
+  } finally { f.cleanup(); }
+});
