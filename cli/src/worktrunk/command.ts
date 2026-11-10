@@ -9,7 +9,7 @@ import { redactSecrets } from "../ui.js";
 import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { copyIgnored } from "./copy.js";
 import { generateMergeMessage, DEFAULT_AI_TIMEOUT_MS, type Completer } from "./ai_message.js";
-import { mergeWorktree, parseAge, pruneWorktrees, resolveMergeContext, type MergeContextInfo, type MergeOptions } from "./merge.js";
+import { mergeWorktree, parseAge, pruneWorktrees, resolveMergeContext, writesCommitMessage, type MergeContextInfo, type MergeOptions } from "./merge.js";
 import { GitError } from "./git.js";
 import { WorktreePathError } from "./paths.js";
 
@@ -48,7 +48,7 @@ const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored", "prune"]);
  */
 const LEGACY = new Set(["", "status", "merge", "discard"]);
 
-export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove] [--no-verify-receipt --reason why] [--ai-message]|prune [--dry-run] [--min-age 1d] [--limit N]]";
+export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message] [--no-verify-receipt --reason why] [--ai-message]|prune [--dry-run] [--min-age 1d] [--limit N] [--discard-ignored]]";
 
 /** The subcommand a token names, matched case-insensitively (the slash gates lowercase their input; the CLI does not). */
 function canonical(sub: string): string | undefined {
@@ -215,10 +215,24 @@ export function tokenizeWorktreeArgs(args: string): string[] {
 export function relocationAfter(result: CommandResult, cwd: string): string | undefined {
   const data = result.data as { removedPath?: string; targetPath?: string } | undefined;
   if (!result.success || !data?.removedPath || !data.targetPath) return undefined;
-  let here = cwd;
-  try { here = fs.realpathSync(cwd); } catch { /* the directory is already gone: compare as given */ }
   const removed = data.removedPath;
-  return here === removed || here.startsWith(removed + path.sep) || cwd === removed || cwd.startsWith(removed + path.sep) ? data.targetPath : undefined;
+  const inside = (candidate: string) => candidate === removed || candidate.startsWith(removed + path.sep);
+  return inside(cwd) || inside(canonicalAfterRemoval(cwd)) ? data.targetPath : undefined;
+}
+
+/** `realpath` for a path whose tail may be gone: resolves links (also dangling ones) and the deepest existing ancestor. */
+function canonicalAfterRemoval(file: string, depth = 0): string {
+  const absolute = path.resolve(file);
+  try {
+    return fs.realpathSync(absolute);
+  } catch {
+    if (depth > 20) return absolute;
+    try {
+      if (fs.lstatSync(absolute).isSymbolicLink()) return canonicalAfterRemoval(path.resolve(path.dirname(absolute), fs.readlinkSync(absolute)), depth + 1);
+    } catch { /* not there at all */ }
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(canonicalAfterRemoval(parent, depth + 1), path.basename(absolute));
+  }
 }
 
 export interface AsyncDeps {
@@ -247,8 +261,8 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
     return formatCommandError(err);
   }
 
-  const willWriteCommit = mctx.state.total > 0 || (!mergeOptions.noSquash && mctx.ahead > 1) || (mctx.ahead === 1);
-  if (!willWriteCommit) {
+  const aiOptions: MergeOptions = { ...mergeOptions, amendSingleCommit: true };
+  if (!writesCommitMessage(mctx, aiOptions)) {
     return runWorktreeCommand(tokens, run); // nothing to describe: the ordinary path
   }
 
@@ -258,7 +272,7 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
   if (deps.signal?.aborted) return { success: false, output: "Cancelled while the model was being asked: nothing was merged, committed or removed." };
 
   try {
-    const options: MergeOptions = { ...mergeOptions, ...(generated.message ? { message: generated.message } : {}) };
+    const options: MergeOptions = { ...aiOptions, expectedState: { head: mctx.gateState.head, tree: mctx.gateState.tree }, ...(generated.message ? { message: generated.message } : {}) };
     const result = mergeWorktree(ctx, options);
     return { ...result, output: `${generated.note}\n${result.output}` };
   } catch (err) {
