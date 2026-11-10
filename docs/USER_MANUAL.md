@@ -137,7 +137,13 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   exits 0). "As they found it" means the workspace files git does not ignore, the git index, and a fixed list of
   ignored dependency and environment files (`node_modules/.package-lock.json`, `.venv/pyvenv.cfg`, `target/.rustc_info.json`,
   `.env` and the like) are unchanged; a command that changes only other ignored files, empty directories, file modes other
-  than the executable bit, anything outside the workspace, or git refs and config is not noticed. A file-write tool
+  than the executable bit, anything outside the workspace, or git refs and config is not noticed. A command that
+  keeps a process running after it returns can still change files later, so such a command is never treated as
+  "changed nothing": `run_command` with `background` or a `service_name`, and a command line that shows a lone `&`,
+  `nohup`, `setsid`, `disown`, `systemd-run` or `daemonize`. Nexus reads only the command line: a script or Makefile
+  target that backgrounds work internally, `coproc`, `tmux`, `screen`, `docker run -d`, `pm2`, `at` and `cron` are not
+  recognised. The check can also be wrongly cautious (a URL with `a=1&b=2`, `|&`, a quoted `&`, or the word `setsid`
+  in an `echo` keep the turn `UNVERIFIED`), which only keeps the verification step. A file-write tool
   (`write_file`, `edit_file`, `patch_file`, `delete_file`) always counts as a change, so it still needs a verifier
   (`UNVERIFIED`, exit code 2), as does a command that changes a file. Nexus's own `.nexus/` state is not part of that comparison, so a turn that only records knowledge (`manage_knowledge`, which writes `.nexus/knowledge.json`) also ends `Done`. The receipt's `turnEvidence`
   records what the turn did: whether the workspace changed, changes carried in, actions denied and verifier runs.
