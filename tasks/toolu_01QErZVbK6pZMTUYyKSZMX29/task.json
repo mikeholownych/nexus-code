@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01QErZVbK6pZMTUYyKSZMX29",
+  "agent_id": "a06b330e755e17312",
+  "task_description": "Independent review of PR 476 TUI delta",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 55558,
+    "cache_read_tokens": 1283924,
+    "output_tokens": 11540,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-10T16:46:30.851098601Z",
+  "completed_at": "2026-11-10T16:52:55.841890171Z"
+}

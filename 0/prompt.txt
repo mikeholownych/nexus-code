@@ -1,0 +1,294 @@
+continue
+
+---
+
+<task-notification>
+<task-id>a5418fe1389ac421e</task-id>
+<tool-use-id>toolu_01SsiNtY5tdWaVaLD8vkB4Ru</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a5418fe1389ac421e.output</output-file>
+<status>completed</status>
+<summary>Agent "I-3 surface agreement test" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #476 is open and not merged: https://github.com/mikeholownych/nexus-code/pull/476
+
+**Real mismatch found and fixed.** The REPL and sidecar surfaces each assembled their own facts, and four of the six fields did not agree:
+- **Sidecar:** `session.state` had no read-only flag, context tokens used, context limit or endpoint kind.
+- **REPL:** `/status` had no read-only flag, context tokens used or endpoint kind. It also showed the bare model where `session.state` showed `provider · model`.
+- **REPL `/status` handler:** it is `printStatus` in `cli/src/repl.ts`, separate from the sidecar's slash `status` handler.
+
+**Fix.**
+- New `cli/src/surface_facts.ts` holds one `surfaceFacts()` that both surfaces now read.
+- `session.state` gains optional `read_only`, `context_tokens`, `context_limit` and `endpoint_kind`.
+- Verbose REPL `/status` gains `READ-ONLY` and `CONTEXT` lines and an endpoint-kind suffix.
+- I did not rebuild or run the Rust TUI. Its deserializer ignores unknown fields, so the added fields are safe, and its status line renders the `session.state` event.
+
+**Test.** `cli/test/surface_agreement.test.ts` drives one session through both surfaces and compares the six fields one by one:
+- **Setup:** a read-only session with one turn through a fake SSE gateway.
+- **Red first:** it failed with `REPL /status reports read_only`.
+- **Green after the fix:** passes.
+- **Mutation check:** inverting `read_only` in the sidecar turned it red with `read_only: REPL /status says yes, sidecar session.state says no`. I reverted the mutation.
+
+**Test run.** `CI=true node scripts/run_tests.mjs` over `surface_agreement`, `sidecar`, `protocol`, `sidecar_surface`, `app`, `repl_readonly_commands` and `sidecar_projection` gave 102 tests, 102 pass, 0 fail. `tsc --noEmit` is clean.
+
+**Existing test edited.** In `cli/test/sidecar.test.ts`, "an exception escaping runTurn" counts `getAgent()` calls to throw inside the turn. `emitSessionState` now calls `getAgent()` once instead of twice, so I changed the index from `calls === 3` to `calls === 2`. It passed at base before my change.
+
+**FINDINGS.** Row I-3 in `docs/v1.1.4/FINDINGS.md` now reads FIXED with the test name. No other row was touched, and no status table mirrors it.
+
+**Setup.**
+- **`core/target`:** the worktree has none. I did not create the symlink or build it, because no test I ran needs the native core.
+- **`cli/node_modules`:** the main checkout has none either. I ran `npm ci` inside the worktree's `cli/`, which is gitignored.</result>
+<usage><subagent_tokens>106010</subagent_tokens><tool_uses>35</tool_uses><duration_ms>359100</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<tool-use-id>toolu_01KXMcvLkKQfhM7qMhyNi8kQ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The head-side run is still going. I'll continue once the monitor fires.</result>
+<usage><subagent_tokens>80695</subagent_tokens><tool_uses>32</tool_uses><duration_ms>390404</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>**Verdict: REQUEST CHANGES** on head 82197fa7a6f3c452e48599b8b3497a5a2108ef8d, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6770878034. The I-3 test is genuine for six of the seven fields, but session id is not really compared.
+
+1. **I-3 mutations:** I mutated the sidecar side, the REPL side and `surface_facts.ts` one field at a time, then reverted each.
+   - Red for mode, read_only, context_tokens, context_limit, model and endpoint_kind on both surfaces.
+   - A sidecar `session: "zz"` mutation stays green. The test sets the REPL's `currentSessionId` from the sidecar event, so the comparison is circular, yet FINDINGS marks I-3 FIXED including session id.
+   - Only the no-provider model case is tested. The model parse regex would cut "prov · model" at the first " · ", so a provider session would fail for the wrong reason.
+2. **`surface_facts.ts`:**
+   - The new protocol fields are optional, and the Rust `SessionState` deserializer has no `deny_unknown_fields`, so unknown keys are ignored.
+   - The TUI does not render the four new fields, so the FINDINGS wording about the TUI status line is only true for model, mode and session.
+   - Non-verbose `/status` now prints "provider · model" for a named provider where it printed the bare model before. That is a user-visible change the PR does not mention.
+   - Nothing newly shown needs redaction: only the local/cloud class, a boolean and token counts were added.
+3. **`calls === 3` to `calls === 2` in `sidecar.test.ts`:** legitimate. `emitSessionState` now calls `getAgent` once instead of twice. With `calls === 3` restored on head, the test goes red, and its assertions are unchanged.
+4. **FINDINGS:** only row I-3 changed, and there is no other mirror of I-3 in the docs.
+5. **Suites, head vs base:** the failing sets are identical, 32 failing tests (86 failure lines) in both, all existing host-environment failures such as doctor `--deep` and the journal worker. Head ran one more test than base, the new I-3 test, and it passes.
+6. **CI:** CodeQL, javascript-typescript, cloudflare-experiment (22 and 24) and CodeRabbit pass. CodeRabbit's pass is "review skipped", not a review. `test-matrix` (22 and 24) and Entire Gates were still pending when I checked.
+
+The review worktrees are `/home/mike/nexus-wt/rev-476` and `/home/mike/nexus-wt/rev-476-base`, both clean. I have not removed them.</result>
+<usage><subagent_tokens>85180</subagent_tokens><tool_uses>35</tool_uses><duration_ms>441875</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5418fe1389ac421e</task-id>
+<tool-use-id>toolu_014DtcJsdBMmWfJvDZnw1nj9</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a5418fe1389ac421e.output</output-file>
+<status>completed</status>
+<summary>Agent "I-3 surface agreement test" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've pushed the review fixes to PR #476; the new head is `81b7d153ee6dd909082704b1f60c9f54cecf6a94`. I did not merge it.
+
+1. **Session id.** The REPL side now resumes the session the sidecar saved, by id, and reports the id it holds itself. The test no longer sets the REPL's session id from the sidecar event. Setting the sidecar's `session` to `"zz"` turns both cases red: `session: REPL /status says session_…, sidecar session.state says zz`.
+2. **Provider case and model parse.** The test now runs two cases, one with no provider and one with provider `compatible`, where the model reads `compatible · m`. Both compare the model field. The model parse cuts only at the header's two-space `·` separator, so the `·` inside "provider · model" no longer breaks it. Setting the sidecar model to `"x"` turns both cases red.
+3. **Non-verbose `/status`.** It prints the bare model again, and only verbose prints "provider · model". The test pins the non-verbose line, and I added a line to the PR body.
+4. **FINDINGS I-3.** It now says the TUI status line renders only model, mode and session from `session.state`. The four new fields are carried on the event but not rendered by the TUI.
+
+After resuming, the REPL reloads the conversation into the shared agent, which shifts the token estimate by a few tokens. The test therefore has the sidecar emit a fresh `session.state` after the resume, and both surfaces measure the same state.
+
+The seven related suites pass (103 tests, 0 failures) and `tsc --noEmit` is clean. I reverted both mutations.</result>
+<usage><subagent_tokens>113535</subagent_tokens><tool_uses>5</tool_uses><duration_ms>114202</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<tool-use-id>toolu_01M4KCKCiqDMF3D3KiQLPJko</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>**Verdict: ACCEPT** at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516. The code is fine, but merge should wait for CI: `test-matrix` (22 and 24) and Entire Gates were still pending when I checked.
+
+All four earlier findings are fixed:
+- **Session id:** both session mutations (sidecar `session.state` and the REPL `session` line) now turn the test red. The REPL resumes the saved session by id and reports the id it holds, so the comparison is no longer circular.
+- **Model and provider:**
+  - A second test covers the provider case, where the model reads "compatible · m".
+  - The model parse regex no longer splits "provider · model" at the wrong place.
+  - Mutating the sidecar model or the REPL verbose model turns the test red.
+  - Dropping or ignoring the provider prefix in `surface_facts.ts` turns the provider test red.
+  - I reverted every mutation after each run.
+- **Non-verbose `/status`:** the MODEL line still prints the bare `config.model`, as on base, and a mutation making it print `facts.model` fails the test. The only output differences are the verbose-only RUNTIME `(local|cloud)`, READ-ONLY and CONTEXT lines.
+- **FINDINGS row I-3:** it now says the TUI renders only model, mode and session, and that the four new fields are carried on the event but not rendered. Only that row changed.
+
+**Related suites:** I compared 15 related suites at the merge-base 1afac62e against the PR head. I also ran `surface_agreement` on the head, which has no base counterpart. Base had 268 tests with 32 failing; the head had 270 with 32 failing. The two extra tests are the new I-3 tests, which pass. The failing set is identical, all pre-existing host-environment failures.
+
+**Optional follow-up:** the provider test has no credential, so its turn ends in an inference error instead of "Done." The comparison is still valid because the session is saved with the prompt. Setting `NEXUS_COMPATIBLE_API_KEY` in that test would avoid the logged error.
+
+**CI:** CodeQL, javascript-typescript, cloudflare-experiment (22 and 24) and CodeRabbit pass. CodeRabbit's pass is "review skipped", not a review.
+
+Both review worktrees were clean and are removed.</result>
+<usage><subagent_tokens>97264</subagent_tokens><tool_uses>42</tool_uses><duration_ms>794940</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That monitor notice is a stale timeout from the earlier wait, and nothing more is needed from it. The head-versus-base suite comparison it was watching has already finished, and the final verdict has been posted.
+
+**Final state:** ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516. `test-matrix` (22 and 24) and Entire Gates were still pending when I last checked, so merge should wait for them. Both review worktrees are removed.</result>
+<usage><subagent_tokens>97126</subagent_tokens><tool_uses>42</tool_uses><duration_ms>864212</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This is another stale monitor timeout from the earlier wait, so no action is needed. The review is complete: ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516. Merge should wait for `test-matrix` (22 and 24) and Entire Gates, which were still pending at my last check.</result>
+<usage><subagent_tokens>97559</subagent_tokens><tool_uses>42</tool_uses><duration_ms>867965</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This is also a stale timeout from the earlier waiting, so nothing needs doing. The review is finished with the verdict ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516.</result>
+<usage><subagent_tokens>97956</subagent_tokens><tool_uses>42</tool_uses><duration_ms>871627</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Another stale monitor timeout from the earlier wait, so no action is needed. The verdict stands: ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516.</result>
+<usage><subagent_tokens>98351</subagent_tokens><tool_uses>42</tool_uses><duration_ms>873335</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This is one more stale monitor timeout, and nothing needs doing. The review is complete: ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516.</result>
+<usage><subagent_tokens>98736</subagent_tokens><tool_uses>42</tool_uses><duration_ms>979369</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This is a stale monitor timeout, so I'm taking no action. The review is complete: ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516.</result>
+<usage><subagent_tokens>99119</subagent_tokens><tool_uses>42</tool_uses><duration_ms>984114</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bngr22vb0</task-id>
+<tool-use-id>toolu_016sT1RMGyobcz5mHQfDxU97</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/bngr22vb0.output</output-file>
+<status>completed</status>
+<summary>Background command "until [ "$(gh pr view 476 --json statusCheckRollup --jq '[.statusCheckRollup[]|select(.status=="IN_PROGRESS" or .status=="QUEUED" or .status=="PENDING")]|length')" = 0 ]; do sleep 120; done; gh pr view 476 --json mergeStateStatus,headRefOid,statusCheckRollup --jq '"\(.headRefOid[0:8]) \(.mergeStateStatus) fail=\([.statusCheckRollup[]|select(.conclusion=="FAILURE")|.name])"'" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+223 still has findings in Entire
+
+---
+
+<task-notification>
+<task-id>ac7e76adc54d2c175</task-id>
+<tool-use-id>toolu_01YSao9uDWSES3cuCpgBZy1X</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/ac7e76adc54d2c175.output</output-file>
+<status>completed</status>
+<summary>Agent "Extend TUI for I-3 fields" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both findings are fixed in code and pushed to `v1/v114-i3-surface-agreement`; new head is `83eb70374954490700adb5644d28f9323d48f20f`. I did not merge, and I did not resolve the Entire findings (`01M72ZHNPYCX` Low, `01M72ZHNPFPP` Medium). That is for the owner or reviewer.
+
+**LOW (REPL `/status`)**
+- In `cli/src/repl.ts`, `printStatus` now builds `facts` once and prints `mode:` and `session` from `facts.mode` and `facts.session`. Non-verbose output is unchanged.
+- The test is not circular again. It still takes the session id from the sidecar's own saved `session.state` event and compares the REPL against that.
+
+**MEDIUM (Rust TUI)**
+- **Protocol:** `Event::SessionState` in `protocol.rs` now parses optional `read_only`, `context_tokens`, `context_limit` and `endpoint_kind`. They default to `None`, so an older sidecar stays compatible.
+- **State:** `live_state.rs` stores them on `Session`.
+- **Status line:** `live_view.rs` `render_status` adds three segments: a "read-only" marker (kept at every width, priority 1), `context used/limit` (priority 6) and endpoint kind (priority 7). The last two are dropped first when the terminal is narrow. The diff is small and additive.
+- **Tests:** I extended `protocol::tests::parses_every_rendered_event_type` to cover the fields both present and absent. I also added `live_view` test `the_status_bar_renders_read_only_context_and_endpoint_kind_and_drops_them_when_narrow`. It checks all three render at 100 columns, read-only survives at 40 columns within the width bound, and an older sidecar shows nothing extra. I wrote the code and tests together, so I did not run a separate red step.
+- **Merge:** `origin/main` was already merged in. I have not checked how this diff sits against #469 and #472.
+
+**FINDINGS.md:** only row I-3 changed. It now says the TUI renders all six fields, names the Rust tests, and states that no PTY capture test was added. The repo has no cheap PTY pattern, and the render test uses the in-process test backend.
+
+**Test results**
+- `cargo test --bin nexus-tui` (package `harness-core`): 257 passed, 0 failed.
+- `cd cli &amp;&amp; CI=true node scripts/run_tests.mjs test/surface_agreement.test.ts test/sidecar.test.ts`: 58 passed, 0 failed.
+- `tsc --noEmit`: clean.
+- `cargo clippy --bin nexus-tui`: no issues.
+- `cargo fmt --check`: fails on files I did not touch (for example `composer.rs`), and it also fails on the base commit. I found no fmt or clippy step in the Makefile or workflows, so I did not reformat.
+
+**Not verified:** I did not run the real `nexus-tui` against a live sidecar end to end, only the unit and render tests. I did not run `make lint`, and the CI result for the new head is not checked yet.</result>
+<usage><subagent_tokens>71520</subagent_tokens><tool_uses>14</tool_uses><duration_ms>164888</duration_ms></usage>
+</task-notification>
+
+---
+
+There should never be any Entire findings left when merge
+
+---
+
+<task-notification>
+<task-id>a06b330e755e17312</task-id>
+<tool-use-id>toolu_01QErZVbK6pZMTUYyKSZMX29</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a06b330e755e17312.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476 TUI delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I posted ACCEPT on PR #476 at head 83eb70374954490700adb5644d28f9323d48f20f: https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6773495866. CI on that head is unconfirmed, because GitHub's PR API and checks still showed the old head db677386 when I looked. The Entire Gates and linux-x86_64 checks were pending there.
+
+Both worktrees are removed and the `rev-476b*` grep of `git worktree list` is clean.
+
+- **01M72ZHNPYCX (REPL status):** Addressed. `printStatus` now prints `mode:` and `session` from `facts`. I changed the sidecar session and the REPL session in turn and `surface_agreement` went red both times; I reverted both.
+- **01M72ZHNPFPP (TUI fields):** Addressed. The TUI parses and renders `read_only`, `context_tokens`, `context_limit` and `endpoint_kind`, and the names match `cli/src/sidecar.ts` exactly. I fed a real `session.state` line from the actual sidecar through the Rust parser and all four parsed. An older sidecar that omits them parses to `None` and nothing extra is drawn.
+- **Rust:** `cargo test --bin nexus-tui` gave 257 passed, 0 failed. Changing "context" to "ctx" in the render turned the new test red; I reverted it. In a width sweep from 10 to 200 columns with CJK and accented names there was no panic and no overflow.
+- **FINDINGS:** Only the I-3 row changed, and it now reads accurately, including the note that no PTY capture test was added.
+- **Open PRs:**
+  - **#472:** merges cleanly.
+  - **#469:** conflicts in `docs/v1.1.4/FINDINGS.md` and `docs/v1.1.4/TUI-AUDIT-STATUS.md`, but it already conflicts with current main on those same files, so #476 adds nothing new.
+- **Suites, head vs base:** The related sidecar, protocol, surface_agreement, repl and TUI suites have the same 6 failures on both, apparently from the host environment (they include the PTY test). Head has 2 more passing tests and no other difference.
+
+Non-blocking notes in the comment:
+- At 120 columns with a realistic state (long workspace, branch, posture), `context N/M` is dropped. It only shows at roughly 140 columns or more.
+- In read-only mode "read-only" appears twice on the status line.
+- At 40 columns with mode review, "read-only" was dropped while the endpoint kind stayed, so the code comment that read-only is kept at every width isn't strictly true.
+
+I did not resolve any Entire findings.</result>
+<usage><subagent_tokens>78516</subagent_tokens><tool_uses>22</tool_uses><duration_ms>385238</duration_ms></usage>
+</task-notification>
