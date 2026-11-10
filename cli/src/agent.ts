@@ -81,6 +81,7 @@ import {
 } from "./core/turn.js";
 import { createHash } from "node:crypto";
 import { HybridSearchEngine } from "./embeddings.js";
+import { comparableEndpoint, persistableEndpoint } from "./core/endpoint_identity.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
@@ -827,6 +828,19 @@ function gitIndexIdentity(workspace: string): string {
   return createHash("sha256").update(out).digest("hex").slice(0, 16);
 }
 
+/** A restored turn whose recorded endpoints are in their persistable form (origin and path), so a re-save leaks nothing. */
+function withPersistableEndpoints(turn: TurnResult): TurnResult {
+  if (!turn.providerRecovery?.some((r) => r.endpoint) && !turn.pendingProviderWindows?.some((w) => w.endpoint)) return turn;
+  return {
+    ...turn,
+    ...(turn.providerRecovery ? { providerRecovery: turn.providerRecovery.map((r) => (r.endpoint ? { ...r, endpoint: persistableEndpoint(r.endpoint) } : r)) } : {}),
+    ...(turn.pendingProviderWindows ? { pendingProviderWindows: turn.pendingProviderWindows.map((w) => (w.endpoint ? { ...w, endpoint: persistableEndpoint(w.endpoint) } : w)) } : {}),
+  };
+}
+
+/** Why work that would call the provider (a `/compact --llm`, a subagent) is not started while a resumed turn's provider window is open. */
+const RESUMED_WINDOW_REASON = "the provider is still inside the retry window it asked for";
+
 /** What an archive read means for a resumed conversation; undefined when the archive is whole. */
 function describeArchiveRead(read: ArchiveRead<ChatMessage>): string | undefined {
   const notes: string[] = [];
@@ -978,6 +992,19 @@ export class AutonomousAgent {
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
+  /**
+   * Provider windows owed by a restored turn: when each endpoint's provider may be asked again, and the recovery
+   * record of the wait (its real submissions, for the status shown while waiting). A step waits out the windows that
+   * cover its client; a step on another endpoint leaves the others pending. More than one can be owed (a planner
+   * recovery cancelled while the coder's window was pending).
+   */
+  private resumedProviderWaits: Array<{ eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord }> = [];
+  /** A resumed start kept the "local-model" placeholder and its record named no model: detect it after the wait. */
+  private modelDetectionDeferred = false;
+  /** Set while restoreConversation runs: no progress is saved part-way through a restore. */
+  private restoringConversation = false;
+  /** Detection started by a resume that found no session; the first request waits for it. */
+  private pendingModelDetection?: Promise<void>;
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
@@ -1181,6 +1208,8 @@ export class AutonomousAgent {
       this.coderClient = this.client;
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
+    this.gateEmbeddings();
+
     this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: verifierTimeoutSecs(config.verifierTimeoutSecs) }));
     this.browser = new BrowserDriver(ws);
     this.knowledge = new KnowledgeGraph(ws, { readOnly: initialReadOnly });
@@ -1554,6 +1583,7 @@ export class AutonomousAgent {
         workspacePath: this.workspacePathIdentity.value,
         workspace: this.workspacePathIdentity.value,
         model: this.config.model,
+        endpoint: persistableEndpoint(this.config.endpoint),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         status: "in_progress",
@@ -1586,6 +1616,7 @@ export class AutonomousAgent {
       workspacePath: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       workspace: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       model: this.config.model,
+      endpoint: persistableEndpoint(this.config.endpoint),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: turn ? lifecycleStatusForTurn(turn) : this.verifiedWorktreeCompletion ? "completed" : "in_progress",
@@ -1697,6 +1728,8 @@ export class AutonomousAgent {
     if (this.objective?.execution) this.objective.execution = normalizeTracking(this.objective.execution);
     this.activeProviderRecovery = state.providerRecovery ?? null;
     this.recoveredOperation = state.operation;
+    this.rememberResumedProviderWait(state.lastTurn);
+    this.adoptRecordedModel(state.model, state.endpoint);
     // Durable task state is writable by the same local user who can run candidate
     // commands. Never trust a saved baseline, nor capture a new one over a
     // resumed workspace with pending changes: an attacker could delete the field
@@ -2236,7 +2269,7 @@ export class AutonomousAgent {
   }
 
   private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
-    if (!this.durable) return;
+    if (!this.durable || this.restoringConversation) return;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
       else this.stateManager?.recordProgress(this.currentTaskId, {
@@ -2365,6 +2398,7 @@ export class AutonomousAgent {
   }
 
   public resetConversation(): void {
+    this.resumedProviderWaits = [];
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
     // A conversation reset in this process is not a durable recovery boundary. Keep
@@ -2484,6 +2518,7 @@ export class AutonomousAgent {
     // specimen worktree, not the repository manager's authority root.
     if (!this.managedWorktreeWorkspaceSwitch) this.worktreeManager = new WorktreeManager(newWorkspace);
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
+    this.gateEmbeddings();
     this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(newWorkspace);
     this.knowledge = new KnowledgeGraph(newWorkspace, { readOnly });
@@ -2557,6 +2592,8 @@ export class AutonomousAgent {
   }
 
   public setModel(newModel: string): void {
+    // A model chosen now (/model) is never replaced by a deferred or in-flight detection.
+    this.modelDetectionDeferred = false;
     this.config.model = newModel;
     this.client.setModel(newModel);
     // In planner/coder mode an explicit /model choice applies to both tiers.
@@ -2616,15 +2653,27 @@ export class AutonomousAgent {
       providerRecovery?: DurableTaskState["providerRecovery"];
       operation?: DurableTaskState["operation"];
       changeBaseline?: DurableTaskState["changeBaseline"];
+      lastTurn?: TurnResult | null;
+      model?: string;
+      endpoint?: string;
     },
     readArchive: (committed?: ReadonlySet<string>) => ArchiveRead<ChatMessage>,
   ): string | undefined {
-    this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
-    this.restoreHistory(session.history);
-    const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
-    const read = readArchive(committed);
-    this.restoreArchive(read.messages);
-    return describeArchiveRead(read);
+    // Nothing is saved until the whole record is restored: a save part-way (restoreSession marks changes pending)
+    // would write the session record without its last turn, history or model, poorer than the one being restored.
+    this.restoringConversation = true;
+    try {
+      this.rememberResumedProviderWait(session.lastTurn);
+      this.adoptRecordedModel(session.model, session.endpoint);
+      this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
+      this.restoreHistory(session.history);
+      const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
+      const read = readArchive(committed);
+      this.restoreArchive(read.messages);
+      return describeArchiveRead(read);
+    } finally {
+      this.restoringConversation = false;
+    }
   }
 
   /** Restores the compaction record of a resumed conversation (its saved `history`), so completeness stays truthful. */
@@ -4005,6 +4054,10 @@ export class AutonomousAgent {
 
   /** As compactConversation, returning the outcome instead of throwing (used by the queue and the hosts). */
   public async compactNow(useLlm: boolean, signal?: AbortSignal, step = 0): Promise<{ ok: boolean; durable: boolean; message: string; outcome?: CompactionOutcome }> {
+    // `/compact --llm` calls the provider: not inside the retry window a resumed turn is still waiting out.
+    if (useLlm && this.clientWindowOpen(this.client)) {
+      return { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_REASON}.` };
+    }
     const previousParent = this.activeTraceSpanId;
     const previousTrace = this.activeCompactionTrace;
     const span = this.safeStartTraceSpan("nexus.context.compaction", {
@@ -4118,9 +4171,25 @@ export class AutonomousAgent {
   }
 
   /** Runs (or, when `cancelReason` is given, cancels) the queued operator compactions, reporting each outcome. */
-  private async drainCompactionQueue(step: number, signal?: AbortSignal, cancelReason?: string): Promise<void> {
+  private async drainCompactionQueue(step: number, signal?: AbortSignal, cancelReason?: string, closing = false): Promise<void> {
+    // `/compact --llm` calls the main client's provider: held (kept queued, or cancelled when the turn is closing)
+    // while a restored window covers it. A plain `/compact` makes no provider request and runs.
+    const held: typeof this.compactionQueue = [];
+    try {
+      await this.drainCompactionEntries(step, signal, cancelReason, closing, held);
+    } finally {
+      this.compactionQueue.unshift(...held);
+    }
+  }
+
+  private async drainCompactionEntries(step: number, signal: AbortSignal | undefined, cancelReason: string | undefined, closing: boolean, held: typeof this.compactionQueue): Promise<void> {
     while (this.compactionQueue.length) {
       const request = this.compactionQueue.shift()!;
+      if (!cancelReason && request.llm && this.clientWindowOpen(this.client)) {
+        if (closing) this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_REASON}.` }, "cancelled");
+        else held.push(request);
+        continue;
+      }
       if (cancelReason) {
         this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${cancelReason}.` }, "cancelled");
         continue;
@@ -4603,6 +4672,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           output: "",
           error:
             "Error: Subagent depth limit reached. Solve the task directly without spawning additional subagents.",
+        };
+      }
+
+      // A helper's agent builds its own clients from this config, so its first request would reach the provider a
+      // resumed turn is still waiting out. Declined for now; the model can go on without it or ask again later.
+      if (this.helperWindowOpen()) {
+        return {
+          success: false,
+          output: "",
+          error: `Subagent not started: ${RESUMED_WINDOW_REASON}. Continue without it, or start it in a later step.`,
         };
       }
 
@@ -5522,6 +5601,201 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return this.lastTurnResult;
   }
 
+  /**
+   * A resumed start does not auto-detect the model (that is a request to the provider, possibly inside its window):
+   * while the model is still the "local-model" placeholder and no provider was chosen, the restored record's model
+   * replaces it, when the record says it was chosen on this endpoint; without one (or from another or an unknown
+   * endpoint), detection waits for the first step after the resumed wait.
+   * An explicit model is kept. An explicit `--model local-model` cannot be told from the placeholder and is replaced.
+   */
+  private adoptRecordedModel(recorded: string | undefined, recordedEndpoint?: string): void {
+    if (this.config.provider || this.config.model !== "local-model") {
+      this.modelDetectionDeferred = false;
+      return;
+    }
+    // "default" is what a record without a model is saved with. A record made on another endpoint names a model
+    // that may not exist on this one: detected after the wait instead.
+    const sameEndpoint = Boolean(recordedEndpoint) && this.clientEndpoints(this.client).some((e) => comparableEndpoint(e) === comparableEndpoint(recordedEndpoint!));
+    if (recorded && recorded !== "local-model" && recorded !== "default" && sameEndpoint) {
+      this.setDefaultModel(recorded);
+      this.modelDetectionDeferred = false;
+    } else {
+      this.modelDetectionDeferred = true;
+    }
+  }
+
+  /** The main model, without touching a tier whose own model the operator chose (plannerModel, coderModel). */
+  private setDefaultModel(model: string): void {
+    this.config.model = model;
+    this.client.setModel(model);
+    if (this.plannerClient !== this.client && !this.config.plannerModel) this.plannerClient.setModel(model);
+    if (this.coderClient !== this.client && !this.config.coderModel) this.coderClient.setModel(model);
+  }
+
+  /**
+   * A resume request that found nothing to restore behaves like a fresh start: the start-up detection it skipped
+   * runs now (one request, as autoDetectModel does), and the first request waits for it.
+   */
+  public detectPlaceholderModel(): Promise<void> {
+    if (this.config.provider || this.config.model !== "local-model") return Promise.resolve();
+    this.pendingModelDetection = (async () => {
+      try {
+        const models = await this.client.listModels();
+        if (models.length > 0 && this.config.model === "local-model") this.setDefaultModel(models[0]);
+      } catch {
+        // Keep the placeholder; the request will surface the connection problem.
+      }
+    })();
+    return this.pendingModelDetection;
+  }
+
+  /** The deferred detection, once the provider may be asked again: the first model the gateway lists. */
+  private async detectDeferredModel(): Promise<void> {
+    if (!this.modelDetectionDeferred || this.isProviderWindowOpen()) return;
+    this.modelDetectionDeferred = false;
+    try {
+      const models = await this.client.listModels();
+      if (models.length > 0 && this.config.model === "local-model") this.setDefaultModel(models[0]);
+    } catch {
+      // Keep the placeholder; the request will surface the connection problem.
+    }
+  }
+
+  /** Records the provider windows a restored turn still owed when it ended (see resumedProviderWaits). */
+  private rememberResumedProviderWait(lastTurn: TurnResult | null | undefined): void {
+    // The restored record's last turn replaces this agent's own (a /resume reuses the agent): checkpoints and saves
+    // written until the next turn ends describe the restored conversation, not an unrelated earlier turn.
+    // Endpoints in an older record may carry credentials (query string): re-saved only in their persistable form.
+    this.lastTurnResult = lastTurn ? withPersistableEndpoints(lastTurn) : undefined;
+    const windows: typeof this.resumedProviderWaits = [];
+    // Durable records are same-user writable: an unparseable time is ignored, and the wait is bounded where it is used.
+    const add = (eligibleAt: unknown, rawEndpoint: string | undefined, record?: ProviderRecoveryRecord) => {
+      if (typeof eligibleAt !== "string" || !Number.isFinite(Date.parse(eligibleAt))) return;
+      const endpoint = rawEndpoint ? persistableEndpoint(rawEndpoint) : undefined;
+      if (windows.some((w) => w.eligibleAt === eligibleAt && w.endpoint === endpoint)) return;
+      windows.push({ eligibleAt, ...(endpoint ? { endpoint } : {}), ...(record ? { record } : {}) });
+    };
+    // Owed by an interruption in provider_wait, and by the windows the turn left pending on other endpoints.
+    const interruption = lastTurn?.execution === "INTERRUPTED" ? lastTurn.interruption : null;
+    const recoveries = lastTurn?.providerRecovery ?? [];
+    const record = recoveries[recoveries.length - 1];
+    if (interruption?.phase === "provider_wait") add(interruption.providerEligibleAt, record?.endpoint, record);
+    for (const pending of lastTurn?.pendingProviderWindows ?? []) add(pending?.eligibleAt, pending?.endpoint);
+    this.resumedProviderWaits = windows;
+  }
+
+  /** Embedding requests go to the main client's provider: held back while a restored window for it is open. */
+  private gateEmbeddings(): void {
+    this.hybridSearch.setEmbeddingGate((client) => !this.clientWindowOpen(client));
+  }
+
+  /**
+   * True while a restored provider window is open for any endpoint the client may use: its failover endpoints
+   * included, since a request can be retried on any of them.
+   */
+  private clientWindowOpen(client: LocalLlmClient): boolean {
+    return this.windowsCovering(this.clientEndpoints(client)).length > 0;
+  }
+
+  /** When the latest restored window covering this client ends, if any is open. */
+  private latestCoveringWindow(client: LocalLlmClient): string | undefined {
+    return this.windowsCovering(this.clientEndpoints(client)).map((w) => w.eligibleAt).sort().at(-1);
+  }
+
+  /** The windows a turn leaves owed, for its result; empty once waited out or passed. */
+  private pendingWindowField(): { pendingProviderWindows?: Array<{ eligibleAt: string; endpoint?: string }> } {
+    const open = this.resumedProviderWaits.filter((w) => Date.parse(w.eligibleAt) > this.recoveryClock.now());
+    if (!open.length) return {};
+    return { pendingProviderWindows: open.map((w) => ({ eligibleAt: w.eligibleAt, ...(w.endpoint ? { endpoint: w.endpoint } : {}) })) };
+  }
+
+  /** True while a restored window covers any endpoint a helper's configuration may use (main, failover, planner, coder). */
+  private helperWindowOpen(): boolean {
+    const endpoints = [this.config.endpoint, ...(this.config.fallbackEndpoints ?? []), this.config.plannerEndpoint, this.config.coderEndpoint]
+      .filter((endpoint): endpoint is string => Boolean(endpoint));
+    return this.windowsCovering(endpoints).length > 0;
+  }
+
+  /** True while the main connection's provider is inside a window restored by a resume (hosts hold background requests). */
+  public isProviderWindowOpen(): boolean {
+    return this.clientWindowOpen(this.client);
+  }
+
+  /** The open restored windows that apply to any of these endpoints (a window without an endpoint applies to all). */
+  private windowsCovering(endpoints: readonly string[]): typeof this.resumedProviderWaits {
+    const now = this.recoveryClock.now();
+    return this.resumedProviderWaits.filter((w) => {
+      if (!(Date.parse(w.eligibleAt) > now)) return false;
+      return !w.endpoint || !endpoints.length || endpoints.some((endpoint) => comparableEndpoint(w.endpoint!) === comparableEndpoint(endpoint));
+    });
+  }
+
+  /** The endpoints a client may send a request to (its failover endpoints included). */
+  private clientEndpoints(client: LocalLlmClient): string[] {
+    return typeof client.getEndpoints === "function" ? client.getEndpoints() : [client.endpoint];
+  }
+
+  /**
+   * Before the first request of a resumed turn, waits until the provider's recorded eligible time.
+   * The wait is shown as the ordinary provider-wait status.
+   * It is skipped, and stays pending, for a step on another endpoint than the recorded one.
+   * As in live recovery, the advertised window is honoured in full: maxDelayMs caps only backoff.
+   * The wait is bounded by deadlineMs. Live recovery never plans a wait past it, so only a damaged or far-future
+   * record is cut.
+   * Each state of the wait (WAITING, then RESUMED or CANCELLED) is passed to `track` for the turn's recovery history.
+   * Cancellation throws RecoveryCancelled; the caller records the interruption with the same eligible time.
+   */
+  private async waitOutResumedProviderWindow(
+    policy: RecoveryPolicy,
+    step: number,
+    turn: NonNullable<AutonomousAgent["activeTurn"]>,
+    signal: AbortSignal | undefined,
+    client: LocalLlmClient,
+    track: (record: ProviderRecoveryRecord) => void,
+  ): Promise<void> {
+    const now = this.recoveryClock.now();
+    // Passed windows are dropped. The window is the recorded provider's: a step on another endpoint is not held back
+    // by it and leaves it pending, for a later step that routes back (planner/coder). Any endpoint the client may
+    // fail over to counts, since a request can be retried on it.
+    this.resumedProviderWaits = this.resumedProviderWaits.filter((w) => Date.parse(w.eligibleAt) > now);
+    const covering = this.windowsCovering(this.clientEndpoints(client));
+    if (!covering.length) return;
+    const pending = covering.reduce((a, b) => (Date.parse(b.eligibleAt) > Date.parse(a.eligibleAt) ? b : a));
+    const remaining = Date.parse(pending.eligibleAt) - now;
+    const delay = Math.min(remaining, policy.deadlineMs);
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const prior = pending.record;
+    const record: ProviderRecoveryRecord = {
+      state: "WAITING",
+      step,
+      startedAt: iso(now),
+      updatedAt: iso(now),
+      nextAttemptAt: iso(now + delay),
+      condition: prior?.condition ?? "TEMPORARILY_UNAVAILABLE",
+      reason: `resumed inside the provider's recorded window (eligible at ${pending.eligibleAt})`,
+      submissions: prior ? [...prior.submissions] : [],
+      probes: 0,
+      waitedMs: 0,
+      unknownReplays: 0,
+      ...(pending.endpoint ?? prior?.endpoint ? { endpoint: persistableEndpoint(pending.endpoint ?? prior?.endpoint) } : {}),
+      policy: { deadlineMs: policy.deadlineMs, maxDelayMs: policy.maxDelayMs, maxUnknownReplays: policy.maxUnknownReplays },
+    };
+    track(record);
+    // The windows stay pending through the sleep, so a checkpoint or save during it keeps the eligible times.
+    this.onProviderRecoveryState(record, turn, false);
+    try {
+      await this.recoveryClock.sleep(delay, signal);
+    } catch {
+      // Still inside the provider's window: the interrupted turn records it, and a later resume waits for the rest.
+      const at = this.recoveryClock.now();
+      track({ ...record, state: "CANCELLED", updatedAt: iso(at), waitedMs: at - now, reason: "cancelled while waiting out the recorded provider window" });
+      throw new RecoveryCancelled();
+    }
+    this.resumedProviderWaits = this.resumedProviderWaits.filter((w) => !covering.includes(w));
+    const at = iso(this.recoveryClock.now());
+    track({ ...record, state: "RESUMED", updatedAt: at, resumedAt: at, waitedMs: delay });
+  }
+
   /** Recovery of the current inference step; null when no provider failure is being waited out. */
   public getProviderRecovery(): ProviderRecoveryRecord | null {
     return this.activeProviderRecovery;
@@ -5533,6 +5807,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
    */
   public async probeStartupEndpoint(signal?: AbortSignal): Promise<string | undefined> {
     if (typeof this.client.probeAvailability !== "function") return undefined;
+    // After a resume the hosts probe right after restoring: inside the provider's window nothing is sent. The
+    // resumed turn waits it out and re-probes through live recovery, so no warning is lost.
+    if (this.isProviderWindowOpen()) return undefined;
     try {
       const probe = await this.client.probeAvailability(signal, { timeoutMs: 3_000 });
       if (probe.available && probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) {
@@ -5863,15 +6140,20 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           break;
         }
         // Operator /compact queued during the previous step runs here: its inference and tool batch have settled.
-        if (this.compactionQueue.length) {
+        // False when a compaction that is not durable ends the turn.
+        const drainQueuedCompactions = async (): Promise<boolean> => {
+          // A `/compact --llm` stays queued while a resumed window covers the provider it calls (see drainCompactionQueue).
+          if (!this.compactionQueue.length) return true;
           try {
             await this.drainCompactionQueue(currentStep, signal);
           } catch (err) {
             if (!(err instanceof CompactionCommitError)) throw err;
             persistenceFailure = err.outcome.message;
-            break;
+            return false;
           }
-        }
+          return true;
+        };
+        if (!(await drainQueuedCompactions())) break;
         if (budget && currentStep > 1 && (currentStep - 1) % segmentSteps === 0) {
           segment++;
           if (this.objective) this.objective.continuation.segments = segment;
@@ -6053,6 +6335,28 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
         const requestId = randomUUID();
         const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
+        // A resumed turn first waits out the provider window it was suspended in, before anything is sent to the
+        // provider: the capability read and compaction admission (which can make auxiliary requests) included.
+        const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+        // When the provider may be asked again, while this step waits for it (kept if the wait is interrupted).
+        let providerEligibleAt: string | undefined = this.latestCoveringWindow(activeClient);
+        let resumedWait: ProviderRecoveryRecord | undefined;
+        try {
+          await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal, activeClient, (r) => (resumedWait = r));
+        } catch (err) {
+          if (!(err instanceof RecoveryCancelled)) throw err;
+          this.ui.stopSpinner(false, "Stopped while waiting for the inference provider");
+          if (resumedWait) providerRecoveries.push(resumedWait);
+          turn.phase = "inference";
+          this.activeProviderRecovery = null;
+          markInterrupted("provider_wait", providerEligibleAt ? { providerEligibleAt } : {});
+          break;
+        }
+        providerEligibleAt = undefined;
+        if (resumedWait) providerRecoveries.push(resumedWait);
+        if (!(await drainQueuedCompactions())) break;
+        await this.pendingModelDetection;
+        await this.detectDeferredModel();
         // Provider limits for this step's connection (cached; re-read on change or after the TTL). Optional capability.
         await this.refreshCapabilities(activeClient, this.capabilitiesStale ?? "step", Boolean(this.capabilitiesStale), signal);
         this.capabilitiesStale = undefined;
@@ -6110,7 +6414,6 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         let streamedTokens = false;
         // Temporary provider failures are waited out here, at the inference boundary: history and tool state
         // are untouched while waiting, and a submission's output is used only once it is complete.
-        const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep, {
           everSucceeded: typeof activeClient.hasEverSucceeded === "function" ? activeClient.hasEverSucceeded() : true,
           endpoint: activeClient.endpoint,
@@ -6153,6 +6456,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 process.stdout.write(pc.dim("\n[partial response discarded: the provider failed before completing it]\n"));
                 streamedTokens = false;
               }
+              if (record.state === "WAITING" && record.nextAttemptAt) providerEligibleAt = record.nextAttemptAt;
               this.onProviderRecoveryState(record, turn, discarded);
             },
           }, signal);
@@ -6169,7 +6473,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (streamedTokens) process.stdout.write("\n");
           if (err instanceof RecoveryCancelled) {
             this.ui.stopSpinner(false, "Stopped while waiting for the inference provider");
-            markInterrupted("provider_wait");
+            markInterrupted("provider_wait", providerEligibleAt ? { providerEligibleAt } : {});
             break;
           }
           if (err instanceof InferenceError && err.kind === "aborted") {
@@ -6506,7 +6810,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // Queued /compact: run now that the last step has settled, or cancelled with the turn.
       if (this.compactionQueue.length) {
         try {
-          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : undefined);
+          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : undefined, true);
         } catch (err) {
           if (!(err instanceof CompactionCommitError)) throw err;
           persistenceFailure ??= err.outcome.message;
@@ -6736,6 +7040,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     };
     const base = {
       ...(recoveries.length ? { providerRecovery: recoveries } : {}),
+      ...this.pendingWindowField(),
       acceptance: "NOT_REQUESTED" as const,
       modelStop: input.modelStop,
       finalOutputComplete: input.finalOutputComplete,

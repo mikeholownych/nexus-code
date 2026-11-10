@@ -8,9 +8,10 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [v1.1.4] - Unreleased
 
-### Changed
+### Fixed
 
-- A turn whose commands leave the workspace exactly as they found it, and that carries no unverified changes in, now ends `NOT_REQUIRED` and `nexus run` exits 0 for it; before, any command latched the "unverified changes" obligation and the exit code was 2 (`UNVERIFIED`). A turn that writes a file (`write_file`, `edit_file`, `patch_file`, `delete_file`, or a command that changes the workspace) still ends `UNVERIFIED`, exit 2. A work unit (implementer or tester) that only ran such commands now takes the existing `no_change` path (retry, accept as no-op, stop) instead of completing `UNVERIFIED`. The verdict in the TUI and the REPL now describes the turn's own evidence (`turnEvidence` on the turn result): "no files changed this turn", "npm test ran before the change", "you denied 1 action". (TUI-AUDIT D-04)
+- A turn suspended while waiting out a provider's Retry-After (429/503) now resumes inside that window correctly: `nexus run --resume`, the TUI (`--resume`) and `nexus operation resume` wait until the recorded eligible time before the first request, shown as the usual provider-wait status, instead of sending it at once. The wait is skipped when you resume against a different endpoint, and bounded by the recovery deadline (`LOCAL_LLM_RECOVERY_DEADLINE_MS`, default 20 min); Ctrl-C during it suspends again with the same eligible time (#471).
+
 
 ## [v1.1.3] - Unreleased
 
