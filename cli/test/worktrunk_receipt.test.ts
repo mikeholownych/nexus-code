@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runWorktreeCommand } from "../src/worktrunk/command.js";
-import { recordVerification } from "../src/worktrunk/verification.js";
+import { recordVerification, captureVerificationState, recordVerificationIfEligible } from "../src/worktrunk/verification.js";
 import { readRegistry, writeRegistry } from "../src/worktrunk/registry.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -206,11 +206,50 @@ test("registry evicts oldest records when history approaches byte budget", () =>
   } finally { f.cleanup(); }
 });
 
-test("agent records verification only when verifier is deliverable-bound and independent or configured", () => {
-  const source = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "agent.ts"), "utf8");
-  // Check the recording condition in agent.ts
-  assert.match(source, /recordVerification\(this\.config\.workspace/);
-  assert.match(source, /isVerified/);
-  assert.match(source, /this\.verificationEvidence\?\.source === "configured" \|\| this\.verificationEvidence\?\.independent === true/);
-  assert.match(source, /this\.verificationEvidence\?\.command \|\| this\.config\.authoritativeVerifierCommand/);
+const eligible = { activeWorktree: false, dryRun: false, verifierSucceeded: true, hasExecuted: true, deliverableBound: true, verified: true, verifier: "npm test" };
+
+test("the agent's recording step writes a receipt only for a passing, deliverable-bound, configured-or-independent run in a linked worktree", () => {
+  const f = fixture();
+  try {
+    const made = runWorktreeCommand(["switch", "-c", "feat/hook", "--no-copy"], { cwd: f.repo, home: f.home, readOnly: false });
+    assert.equal(made.success, true, made.output);
+    const dir = path.join(f.repo, ".nexus", "worktrees", "feat-hook");
+    const common = path.join(f.repo, ".git");
+    const count = () => (readRegistry(common).registry.verifications ?? []).length;
+    const before = captureVerificationState(dir);
+    assert.ok(before, "a linked worktree has a state to capture");
+
+    for (const [name, override] of Object.entries({
+      activeWorktree: { activeWorktree: true }, dryRun: { dryRun: true }, failed: { verifierSucceeded: false },
+      noTests: { hasExecuted: false }, notDeliverableBound: { deliverableBound: false }, notConfiguredOrIndependent: { verified: false },
+    })) {
+      assert.equal(recordVerificationIfEligible(dir, { ...eligible, ...override, before }), false, name);
+      assert.equal(count(), 0, `${name}: nothing recorded`);
+    }
+    assert.equal(recordVerificationIfEligible(f.repo, { ...eligible, before: captureVerificationState(f.repo) }), false, "the main checkout is never recorded");
+    assert.equal(count(), 0);
+
+    assert.equal(recordVerificationIfEligible(dir, { ...eligible, before }), true);
+    const [record] = readRegistry(common).registry.verifications ?? [];
+    assert.equal(record.branch, "feat/hook");
+    assert.equal(record.head, git(dir, "rev-parse", "HEAD"));
+    assert.equal(record.verifier, "npm test");
+  } finally { f.cleanup(); }
+});
+
+test("an operator edit made while the verifier ran is not covered by the receipt", () => {
+  const f = fixture();
+  try {
+    runWorktreeCommand(["switch", "-c", "feat/race", "--no-copy"], { cwd: f.repo, home: f.home, readOnly: false });
+    const dir = path.join(f.repo, ".nexus", "worktrees", "feat-race");
+    const common = path.join(f.repo, ".git");
+    fs.writeFileSync(path.join(dir, "tested.txt"), "what the verifier saw\n");
+    const before = captureVerificationState(dir); // taken before the verifier starts
+    fs.writeFileSync(path.join(dir, "tested.txt"), "edited by the operator while the verifier ran\n");
+    assert.equal(recordVerificationIfEligible(dir, { ...eligible, before }), false, "the state changed: no receipt");
+    assert.equal((readRegistry(common).registry.verifications ?? []).length, 0);
+    // an unchanged state still records
+    const again = captureVerificationState(dir);
+    assert.equal(recordVerificationIfEligible(dir, { ...eligible, before: again }), true);
+  } finally { f.cleanup(); }
 });
