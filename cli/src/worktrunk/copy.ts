@@ -166,6 +166,23 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
     }
     return undefined;
   };
+  /**
+   * Whether the link `rel -> target` would resolve inside the destination, walking the destination's real layout: a
+   * directory the source has as a real directory can be a link out of the worktree there (also one that is kept).
+   */
+  const linkStaysInside = (rel: string, target: string): boolean => {
+    let current = path.join(destRoot, path.dirname(rel)); // its ancestors were verified to be real directories
+    for (const part of target.split("/")) {
+      if (!part || part === ".") continue;
+      current = part === ".." ? path.dirname(current) : path.join(current, part);
+      const stat = fs.lstatSync(current, { throwIfNoEntry: false });
+      if (stat?.isSymbolicLink()) {
+        try { current = fs.realpathSync(current); } catch { return false; }
+      }
+      if (!insideOrEqual(destRoot, current)) return false;
+    }
+    return true;
+  };
   type Step = { op: Exclude<Op, { kind: "dir" }>; replace: boolean };
   const steps: Step[] = [];
   const dirs: string[] = [];
@@ -179,6 +196,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
       continue;
     }
     if (op.kind === "dir") { dirs.push(op.rel); continue; }
+    if (op.kind === "symlink" && !linkStaysInside(op.rel, op.target)) { skipped.push(`${op.rel}: symbolic link leaves the tree in the destination`); continue; }
     if (tracked.has(op.rel)) { skipped.push(`${op.rel}: tracked in destination (never overwritten, even with --force)`); continue; }
     const present = fs.lstatSync(path.join(destRoot, op.rel), { throwIfNoEntry: false });
     if (present) {
@@ -260,31 +278,23 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   return { success: true, output: out.join("\n"), data: { copied, planned: files, bytes, skipped: skipped.length, existing } };
 }
 
-const STALE_STAGING_MS = 3600_000;
-
 /**
  * Removes staging files (`.nexus-copy-<pid>-<uuid>.tmp`) that a killed earlier run left in `dir`: only regular files and
- * links owned by this user, and only when their owner process is gone. A file in the older pid-less form is removed once
- * it is an hour old. A running copy's staging file is never touched.
+ * links owned by this user, and only when their owner process is gone. A running copy's staging file is never touched.
  */
 function sweepStaging(dir: string): void {
   const me = process.getuid?.();
   let names: string[];
   try { names = fs.readdirSync(dir); } catch { return; }
   for (const name of names) {
-    const match = /^\.nexus-copy-(?:(\d+)-)?[0-9a-f-]{36}\.tmp$/.exec(name);
+    const match = /^\.nexus-copy-(\d+)-[0-9a-f-]{36}\.tmp$/.exec(name);
     if (!match) continue;
     const file = path.join(dir, name);
     try {
       const stat = fs.lstatSync(file);
       if (!(stat.isFile() || stat.isSymbolicLink()) || (me !== undefined && stat.uid !== me)) continue;
-      const owner = match[1] ? Number(match[1]) : undefined;
       let ownerGone: boolean;
-      if (owner === undefined) {
-        ownerGone = Date.now() - stat.mtimeMs > STALE_STAGING_MS;
-      } else {
-        try { process.kill(owner, 0); ownerGone = false; } catch (err: any) { ownerGone = err?.code === "ESRCH"; }
-      }
+      try { process.kill(Number(match[1]), 0); ownerGone = false; } catch (err: any) { ownerGone = err?.code === "ESRCH"; }
       if (ownerGone) fs.unlinkSync(file);
     } catch { /* raced with another run */ }
   }

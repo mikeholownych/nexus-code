@@ -466,23 +466,23 @@ test("staging files left in the destination root by a killed run are swept too",
   } finally { f.cleanup(); }
 });
 
-test("a staging file that belongs to a running copy is not swept by a second run", () => {
+test("a staging file that belongs to a running copy is not swept by a second run, and only the pid-tagged name is swept", () => {
   const f = fixture();
   try {
     assert.equal(wt(f, f.repo, ["switch", "-c", "feat/live", "--no-copy"]).success, true);
     const dir = dirOf(f, "feat-live");
     fs.mkdirSync(path.join(dir, "target"), { recursive: true });
     const live = path.join(dir, "target", `.nexus-copy-${process.pid}-123e4567-e89b-12d3-a456-426614174002.tmp`); // this process is alive
-    const old = path.join(dir, `.nexus-copy-123e4567-e89b-12d3-a456-426614174003.tmp`); // old naming, but fresh
     fs.writeFileSync(live, "in progress");
-    fs.writeFileSync(old, "in progress");
     assert.equal(wt(f, f.repo, ["copy-ignored", "--to", "feat/live"]).success, true);
     assert.equal(fs.existsSync(live), true, "a live owner's staging file survives");
-    assert.equal(fs.existsSync(old), true, "a recent file of unknown owner survives");
+    // Only the pid-tagged name is ever produced; a pid-less name is not ours to sweep, however old.
+    const foreign = path.join(dir, `.nexus-copy-123e4567-e89b-12d3-a456-426614174003.tmp`);
+    fs.writeFileSync(foreign, "not ours");
     const ancient = new Date(Date.now() - 3 * 3600_000);
-    fs.utimesSync(old, ancient, ancient);
+    fs.utimesSync(foreign, ancient, ancient);
     assert.equal(wt(f, f.repo, ["copy-ignored", "--to", "feat/live"]).success, true);
-    assert.equal(fs.existsSync(old), false, "an unowned file older than the bound is swept");
+    assert.equal(fs.existsSync(foreign), true, "a pid-less name is left alone");
     assert.equal(fs.existsSync(live), true);
   } finally { f.cleanup(); }
 });
@@ -536,4 +536,26 @@ test("`nexus worktree --help` lists copy-ignored and --no-copy", () => {
   const out = execFileSync(path.join(cliRoot, "node_modules", ".bin", "tsx"), [path.join(cliRoot, "src", "index.ts"), "worktree", "--help"], { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
   assert.match(out, /copy-ignored/);
   assert.match(out, /--no-copy/);
+});
+
+test("a copied symbolic link whose target runs through a destination link that leaves the worktree is skipped", () => {
+  const f = customFixture("target/\ndata/\n", "target/\ndata/\n");
+  try {
+    fs.mkdirSync(path.join(f.repo, "data"));
+    fs.writeFileSync(path.join(f.repo, "data", "result"), "r");
+    fs.mkdirSync(path.join(f.repo, "target"));
+    fs.symlinkSync("../data/result", path.join(f.repo, "target", "out")); // inside the source tree
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/linkdest", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-linkdest");
+    const outside = path.join(f.root, "outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "result"), "secret");
+    fs.symlinkSync(outside, path.join(dir, "data")); // the destination's data is a link out of the worktree
+    const dry = wt(f, f.repo, ["copy-ignored", "--to", "feat/linkdest", "--dry-run"]);
+    const r = wt(f, f.repo, ["copy-ignored", "--to", "feat/linkdest"]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(fs.lstatSync(path.join(dir, "target", "out"), { throwIfNoEntry: false }), undefined, "the link is not installed");
+    assert.match(r.output, /target\/out.*symbolic link/);
+    assert.equal(Number(/Dry run: (\d+) file/.exec(dry.output)?.[1]), Number(/Copied (\d+) file/.exec(r.output)?.[1]), "preview and run agree");
+  } finally { f.cleanup(); }
 });
