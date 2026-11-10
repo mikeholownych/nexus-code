@@ -885,3 +885,40 @@ test("a revert stopped on a conflict (REVERT_HEAD, sequencer state) refuses the 
     assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore);
   } finally { f.cleanup(); }
 });
+
+test("tracked Nexus state under .nexus is neither backed up nor committed by the automatic merge commit", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/state");
+    fs.mkdirSync(path.join(dir, ".nexus"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".nexus", "knowledge.json"), '{"v":1}\n');
+    git(dir, "add", "-f", ".nexus/knowledge.json");
+    git(dir, "commit", "-q", "-m", "an old commit that tracked internal state");
+    fs.writeFileSync(path.join(dir, ".nexus", "knowledge.json"), '{"v":2,"edited by a session":true}\n');
+    fs.writeFileSync(path.join(dir, "real.txt"), "real work\n");
+    const r = wt(f, dir, ["merge"]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(git(f.repo, "show", "main:real.txt"), "real work");
+    assert.equal(git(f.repo, "show", "main:.nexus/knowledge.json"), '{"v":1}', "the state edit was not committed");
+    assert.equal(git(f.repo, "show", `${backupRef("feat/state")}:.nexus/knowledge.json`), '{"v":1}', "nor backed up");
+  } finally { f.cleanup(); }
+});
+
+test("a worktree reached through a symbolic link is recognised as removed after the merge deleted it", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/alias");
+    commitFile(dir, "b.txt", "b\n", "add b");
+    const alias = path.join(f.root, "alias-to-worktree");
+    fs.symlinkSync(dir, alias);
+    const merged = wt(f, alias, ["merge", "--no-remove"]);
+    assert.equal(merged.success, true, merged.output);
+    const removed = wt(f, f.repo, ["remove", "feat/alias"]);
+    assert.equal(removed.success, true, removed.output);
+    const afterMerge = { success: true, output: "", data: { removedPath: dir, targetPath: f.repo } };
+    assert.equal(fs.existsSync(dir), false);
+    assert.equal(relocationAfter(afterMerge as any, alias), f.repo, "the dangling alias resolves to the removed worktree");
+    assert.equal(relocationAfter(afterMerge as any, path.join(alias, "sub")), f.repo);
+    assert.equal(relocationAfter(afterMerge as any, f.repo), undefined);
+  } finally { f.cleanup(); }
+});
