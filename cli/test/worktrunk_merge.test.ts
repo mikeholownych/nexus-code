@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter, tokenizeWorktreeArgs } from "../src/worktrunk/command.js";
+import { runWorktreeCommand, isReadOnlyWorktreeArgs, isLegacyWorktreeArgs, relocationAfter, tokenizeWorktreeArgs, WORKTREE_USAGE } from "../src/worktrunk/command.js";
 import { readRegistry } from "../src/worktrunk/registry.js";
 import { backupRef } from "../src/worktrunk/merge.js";
 import { removeSeams } from "../src/worktrunk/core.js";
@@ -721,5 +721,80 @@ test("a quoted merge message survives the interactive tokenizer and becomes the 
     const r = wt(f, dir, tokenizeWorktreeArgs('merge ^ -m "feat: add login" --no-remove'));
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat: add login");
+  } finally { f.cleanup(); }
+});
+
+test("WORKTREE_USAGE advertises [-m message] for merge and [--discard-ignored] for prune", () => {
+  assert.match(WORKTREE_USAGE, /merge \[target\] \[--no-squash\] \[--no-rebase\] \[--no-remove\] \[-m message\]/);
+  assert.match(WORKTREE_USAGE, /prune \[--dry-run\] \[--min-age 1d\] \[--limit N\] \[--discard-ignored\]/);
+});
+
+test("fast-forward merge refuses to overwrite target ignored file with source tracked file", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.repo, ".gitignore"), "build.log\n");
+    git(f.repo, "add", ".gitignore");
+    git(f.repo, "commit", "-q", "-m", "ignore build.log");
+    fs.writeFileSync(path.join(f.repo, "build.log"), "target local ignored content\n");
+
+    const dir = feature(f, "feat/track-build-log");
+    fs.writeFileSync(path.join(dir, "build.log"), "source tracked build log\n");
+    git(dir, "add", "-f", "build.log");
+    git(dir, "commit", "-q", "-m", "track build.log");
+
+    const r = wt(f, dir, ["merge", "--no-remove"]);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /overwrit/i, r.output);
+    assert.equal(fs.readFileSync(path.join(f.repo, "build.log"), "utf8"), "target local ignored content\n", "target local ignored file must not be overwritten!");
+  } finally { f.cleanup(); }
+});
+
+test("merge rejects speculative task worktrees", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.repo, ".gitignore"), ".nexus/\n");
+    git(f.repo, "add", ".gitignore");
+    git(f.repo, "commit", "-q", "-m", "ignore .nexus");
+
+    const taskId = "task-spec-123";
+    const dir = path.join(f.repo, ".nexus", "worktrees", taskId);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "-b", `nexus/${taskId}`, dir);
+    commitFile(dir, "spec.txt", "speculative\n", "speculative work");
+
+    const r = wt(f, dir, ["merge", "^", "--no-remove"]);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /speculative task worktree/i, r.output);
+
+    const normalDir = feature(f, "feat/normal");
+    commitFile(normalDir, "norm.txt", "norm\n", "normal work");
+    const r2 = wt(f, normalDir, ["merge", `nexus/${taskId}`, "--no-remove"]);
+    assert.equal(r2.success, false, r2.output);
+    assert.match(r2.output, /speculative task worktree/i, r2.output);
+  } finally { f.cleanup(); }
+});
+
+test("merge with initialized submodule retains the worktree with an explanatory note", () => {
+  const f = fixture();
+  try {
+    const subrepo = path.join(f.root, "subrepo");
+    fs.mkdirSync(subrepo);
+    git(subrepo, "init", "-q", "-b", "main");
+    git(subrepo, "config", "user.email", "t@example.com");
+    git(subrepo, "config", "user.name", "T");
+    git(subrepo, "config", "commit.gpgsign", "false");
+    commitFile(subrepo, "s.txt", "sub\n", "sub init");
+    git(f.repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subrepo, "sub");
+    git(f.repo, "commit", "-q", "-m", "add submodule");
+
+    const dir = feature(f, "feat/clean-sub");
+    git(dir, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
+    commitFile(dir, "b.txt", "b\n", "add b");
+
+    const r = wt(f, dir, ["merge"]);
+    assert.equal(r.success, true, r.output);
+    assert.match(r.output, /submodule .* (is initialized|initialized here)/i, r.output);
+    assert.ok(fs.existsSync(dir), "worktree with initialized submodule must be retained without failing the merge");
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "add b", "target must be fast-forwarded");
   } finally { f.cleanup(); }
 });

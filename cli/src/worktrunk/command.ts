@@ -47,7 +47,7 @@ const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored", "prune"]);
  */
 const LEGACY = new Set(["", "status", "merge", "discard"]);
 
-export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove]|prune [--dry-run] [--min-age 1d] [--limit N]]";
+export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]|prune [--dry-run] [--min-age 1d] [--limit N] [--discard-ignored]]";
 
 /** The subcommand a token names, matched case-insensitively (the slash gates lowercase their input; the CLI does not). */
 function canonical(sub: string): string | undefined {
