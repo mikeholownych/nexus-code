@@ -13,7 +13,7 @@ import { redactSecrets } from "../ui.js";
 import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type Repo, type WorktreeEntry } from "./repo.js";
-import { readRegistry, updateRegistry, MAX_RECORDS } from "./registry.js";
+import { readRegistry, updateRegistry, MAX_RECORDS, MAX_BRANCH_LENGTH } from "./registry.js";
 import { hasVerification, workingState } from "./verification.js";
 
 export interface MergeOptions {
@@ -156,6 +156,9 @@ export function resolveMergeContext(ctx: WorktreeContext, options: MergeOptions 
   if (!source || source.isMain) throw new WorktreeError("run `worktree merge` from inside the worktree you want to merge, not the main checkout");
   if (!source.branch) throw new WorktreeError("the current worktree is on a detached HEAD; create a branch first");
   const branch = source.branch;
+  if (branch.length > MAX_BRANCH_LENGTH) {
+    throw new WorktreeError(`branch name is too long (${branch.length} characters; maximum ${MAX_BRANCH_LENGTH})`);
+  }
   if (isSpeculativeEntry(repo, source)) {
     throw new WorktreeError(`the current worktree is a speculative task worktree (${shownBranch(branch)}); speculative worktrees cannot be merged with \`worktree merge\``);
   }

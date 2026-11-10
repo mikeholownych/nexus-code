@@ -51,6 +51,8 @@ export interface Registry {
 }
 
 export const MAX_RECORDS = 100;
+export const MAX_FIELD_LENGTH = 400;
+export const MAX_BRANCH_LENGTH = 1024;
 
 function parseRecords<T extends object>(value: unknown, keys: readonly string[], name: string): T[] | undefined {
   if (value === undefined) return undefined;
@@ -59,7 +61,12 @@ function parseRecords<T extends object>(value: unknown, keys: readonly string[],
     if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`${name} record is not an object`);
     const record = item as Record<string, unknown>;
     for (const key of Object.keys(record)) if (!keys.includes(key)) throw new Error(`unexpected ${name} field '${key}'`);
-    for (const key of keys) if (typeof record[key] !== "string" || !(record[key] as string) || (record[key] as string).length > 400) throw new Error(`${name}.${key} must be a short non-empty string`);
+    for (const key of keys) {
+      const maxLen = key === "branch" ? MAX_BRANCH_LENGTH : MAX_FIELD_LENGTH;
+      if (typeof record[key] !== "string" || !(record[key] as string) || (record[key] as string).length > maxLen) {
+        throw new Error(`${name}.${key} must be a short non-empty string`);
+      }
+    }
     return record as unknown as T;
   });
 }
