@@ -43,6 +43,7 @@ import {
   DIFF_PREVIEW_CHARS,
   HistoryEntry,
   DIFF_PREVIEW_LINES,
+  MAX_PASTE,
   MAX_SLASH_OUTPUT,
   MAX_SUMMARY,
   TOOL_PREVIEW_LINES,
@@ -62,7 +63,6 @@ import {
 } from "./protocol.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
-import { MAX_PASTE } from "./slash/workspace_commands.js";
 import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
 

@@ -12,6 +12,8 @@ import { visibleControls } from "./file_diff.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
+/** Longest clipboard text `/paste` puts into the composer; also the limit of the `slash.result` composer field. */
+export const MAX_PASTE = 100_000;
 export const MAX_SUMMARY = 160;
 export const MAX_SLASH_OUTPUT = 32_000;
 
