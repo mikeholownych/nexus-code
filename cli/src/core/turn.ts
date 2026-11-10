@@ -214,6 +214,11 @@ export interface InterruptionRecord {
   outstandingToolSettled?: boolean;
   /** Tool calls the model asked for that were never dispatched. */
   undispatchedToolCalls: number;
+  /**
+   * phase `provider_wait` only: when the provider may be asked again (the planned next attempt, which honours its
+   * Retry-After). A resumed turn waits until then before its first request (bounded by the recovery deadline).
+   */
+  providerEligibleAt?: string;
 }
 
 /**
@@ -253,6 +258,11 @@ export interface TurnResult {
   capacity?: CapacityRecord | null;
   /** Steps of this turn whose inference had to recover the provider (resumed or not). */
   providerRecovery?: ProviderRecoveryRecord[];
+  /**
+   * Provider windows restored by a resume that this turn did not wait out (it ran on another endpoint, or was cancelled
+   * while waiting) and a later turn on those endpoints still owes. Persisted with the turn, so a restart keeps them.
+   */
+  pendingProviderWindows?: Array<{ eligibleAt: string; endpoint?: string }>;
   /** Workspace has changes that no passing verifier run covers (may predate this turn). */
   unverifiedChangesPending: boolean;
   finishedAt: string;
@@ -308,6 +318,11 @@ export interface TurnResult {
   toolCallSyntax?: ToolCallSyntaxCounts;
   /** True when the turn paused deterministically after one model/tool cycle under step mode. */
   stepPaused?: boolean;
+  /**
+   * What this turn itself did, so a verdict never reports earlier turns' changes or a pre-change verifier run as this
+   * turn's (TUI-AUDIT D-04). Absent on results built outside a turn.
+   */
+  turnEvidence?: TurnEvidence;
   /** Where the operator's objective stands: open requirements, the failed check and the next action. */
   objective?: {
     status: "completed" | "incomplete" | "blocked";
@@ -317,6 +332,17 @@ export interface TurnResult {
     failedCheck?: string;
     nextAction?: string;
   };
+}
+
+export interface TurnEvidence {
+  /** Whether workspace content differs from how this turn found it; "unknown" when the state could not be established. */
+  workspaceChanged: "yes" | "no" | "unknown";
+  /** Unverified changes from earlier turns were pending when this turn began. */
+  carriedChanges: boolean;
+  /** Tool calls the operator denied during this turn. */
+  denied: number;
+  /** Verifier runs during this turn, in order: the pre-change baseline or the completion check. */
+  verifierRuns: Array<{ command: string; phase: "before_change" | "completion"; passed: boolean }>;
 }
 
 export class TurnResultInvariantError extends Error {
@@ -395,6 +421,28 @@ function contextTail(t: TurnResult): string {
   return n ? `; ${n} tool output${n === 1 ? "" : "s"} it may rest on left context and ${n === 1 ? "was" : "were"} not read again` : "";
 }
 
+/** A verifier command shortened for a one-line verdict. */
+function shortCommand(command: string): string {
+  return command.length > 60 ? `${command.slice(0, 59)}…` : command;
+}
+
+/**
+ * What this turn did when it differs from what an UNVERIFIED outcome suggests (D-04); the TUI words the same facts
+ * (live_state.rs unverified_cause; the same facts and conditions, shorter phrasing). Only VERIFICATION_NOT_RUN is about verifier runs, so only it gets this text.
+ */
+function evidenceTail(t: TurnResult): string {
+  const e = t.turnEvidence;
+  if (!e || t.reason !== "VERIFICATION_NOT_RUN") return "";
+  if (e.workspaceChanged === "no" && e.carriedChanges) {
+    return `; no files changed this turn${e.denied ? ` (${e.denied} action${e.denied === 1 ? "" : "s"} denied)` : ""}, changes from an earlier turn are still unverified`;
+  }
+  const changed = e.workspaceChanged === "unknown" ? "; files may have changed" : "";
+  const last = e.verifierRuns.at(-1);
+  if (last?.phase === "before_change") return `${changed}; ${shortCommand(last.command)} ran before the change; nothing checked the change itself`;
+  if (last?.phase === "completion") return `${changed}; ${shortCommand(last.command)} ran, but the change was edited after it`;
+  return changed;
+}
+
 export function summarizeTurn(t: TurnResult): { heading: string; line: string } {
   const exec = t.execution;
   const tail = t.reason ? ` (${t.reason}${t.detail ? `: ${t.detail}` : ""})` : "";
@@ -446,7 +494,7 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     case "NOT_REQUIRED":
       return { heading: "TURN ENDED - NO CHANGES TO VERIFY", line: `execution=COMPLETED outcome=NOT_REQUIRED modelStop=${t.modelStop}` };
     case "UNVERIFIED":
-      return { heading: "TURN ENDED - UNVERIFIED", line: `execution=COMPLETED outcome=UNVERIFIED${tail}` };
+      return { heading: "TURN ENDED - UNVERIFIED", line: `execution=COMPLETED outcome=UNVERIFIED${tail}${evidenceTail(t)}` };
     default:
       if (t.reason === "REQUIREMENTS_INCOMPLETE") {
         return { heading: "TURN ENDED - REQUIREMENTS OPEN", line: `execution=COMPLETED outcome=NOT_ESTABLISHED${tail}` };

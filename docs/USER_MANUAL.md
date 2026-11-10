@@ -40,6 +40,14 @@ nexus -r
 nexus -r sess_1727668541234
 ```
 
+If the earlier turn was suspended when the provider asked for a wait (for example 429/503 with `Retry-After`) or a recovery wait was in progress, the resumed turn waits out the rest of that window before its first request.
+This applies to `nexus run --resume`, the TUI (`--resume` or `/resume`) and `nexus operation resume`.
+The wait is shown as the usual provider-wait status.
+It is bounded by `LOCAL_LLM_RECOVERY_DEADLINE_MS` (default 20 minutes), skipped when you resume against a different endpoint, and Ctrl-C during it suspends again with the same eligible time.
+Until the wait is over, a resumed session sends nothing else to that provider either: the startup reachability check, the model-list lookup, model auto-detection (a resumed start takes the model from the session record when you pass no `--model`, or detects it after the wait; a resume that finds no saved session detects it at once, like a fresh start), embedding requests for `hybrid_search` (the search stays lexical), `/compact --llm` and subagents are held back or declined.
+With failover endpoints configured, the window covers each of them.
+Endpoints are saved in session, task and flight records as origin and path only (no user, password, query string or fragment). A secret placed in the path itself (`/v1/KEY123`) is part of the path and is saved with it.
+
 ### Running Autonomous Non-Interactive Tasks
 To run a one-off objective and exit automatically when verified:
 ```bash
@@ -130,7 +138,24 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **Outcomes.** A turn ends with one line in words — `Done`, `Done · verified`, `Done · tests passed, change not
   covered`, `Done · not verified`, `Verification failed`, `Requirements still open` (with the open items),
   `Cancelled`, `Stopped at …` (a budget), `Model request failed`, `Context is full` — the cause, and the next action;
-  `v` opens the receipt with the raw fields. **Verified** means the passing test run — whether you configured the
+  `v` opens the receipt with the raw fields. The line describes this turn: `Done · not verified` says when no file changed in this turn
+  and the unverified changes are from an earlier one, and when the only verifier run was the baseline Nexus takes before
+  the change (`npm test ran before the change; nothing checked the change itself`). A turn whose actions you denied, or
+  whose commands left the workspace as they found it, ends `Done` (`No files changed: you denied 1 action.`; `nexus run`
+  exits 0). "As they found it" means the workspace files git does not ignore, the git index, and a fixed list of
+  ignored dependency and environment files (`node_modules/.package-lock.json`, `.venv/pyvenv.cfg`, `target/.rustc_info.json`,
+  `.env` and the like) are unchanged; a command that changes only other ignored files, empty directories, file modes other
+  than the executable bit, anything outside the workspace, or git refs and config is not noticed. Files marked `git update-index --assume-unchanged` or `--skip-worktree` are compared by content, so an edit to them is noticed. Where git is configured to ignore the executable bit (`core.filemode=false`), the executable bit of every tracked file is compared too. If a git command used for the comparison does not finish within 30 seconds (`NEXUS_GIT_TIMEOUT_MS`), or a file name is not valid UTF-8, the workspace state is unknown and the turn keeps its verification step. The same happens in a very large sparse-checkout or `--assume-unchanged` repository, where comparing the marked files takes longer than the 1.5 second budget for the comparison. A command that
+  keeps a process running after it returns can still change files later, so such a command is never treated as
+  "changed nothing": `run_command` with `background` or a `service_name`, and a command line that shows a lone `&`,
+  `nohup`, `setsid`, `disown`, `systemd-run` or `daemonize`. Nexus reads only the command line: a script or Makefile
+  target that backgrounds work internally, `coproc`, `tmux`, `screen`, `docker run -d`, `pm2`, `at` and `cron` are not
+  recognised. The check can also be wrongly cautious (a URL with `a=1&b=2`, `|&`, a quoted `&`, or the word `setsid`
+  in an `echo` keep the turn `UNVERIFIED`), which only keeps the verification step. A file-write tool
+  (`write_file`, `edit_file`, `patch_file`, `delete_file`) always counts as a change, so it still needs a verifier
+  (`UNVERIFIED`, exit code 2), as does a command that changes a file. Nexus's own `.nexus/` state is not part of that comparison, so a turn that only records knowledge (`manage_knowledge`, which writes `.nexus/knowledge.json`) also ends `Done`. The receipt's `turnEvidence`
+  records what the turn did: whether the workspace changed, changes carried in, actions denied and verifier runs.
+  **Verified** means the passing test run — whether you configured the
   verifier or Nexus found it — is evidence about the change: it
   ran tests (its output reports at least one), ran the whole suite (no name filter), and covers the changed files — a
   changed file is a test, the run names a changed file, a test imports a changed module, or the change has inline

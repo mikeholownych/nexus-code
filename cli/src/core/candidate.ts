@@ -336,6 +336,81 @@ export function computeMaterialDependenciesHash(
   return hashContent(canonical);
 }
 
+/** A git path that cannot be turned into a path string (not valid UTF-8): the identity is unknown. */
+class GitPathDecodeError extends Error {
+  constructor() {
+    super("a file name that is not valid UTF-8 cannot be decoded");
+    this.name = "GitPathDecodeError";
+  }
+}
+
+/** A git call of the identity that did not finish in time. `code` lets callers tell it from other failures. */
+export class GitTimeoutError extends Error {
+  readonly code = "ETIMEDOUT";
+  constructor(what: string, ms: number) {
+    super(`${what} timed out after ${ms} ms`);
+    this.name = "GitTimeoutError";
+  }
+}
+
+/**
+ * Splits NUL-delimited git output into path strings. `-z` output is never quoted, so a name with a space, a quote,
+ * a backslash, a newline, a tab or non-ASCII letters arrives exactly as stored. A name that is not valid UTF-8 cannot
+ * be turned into a path string without changing it, so it throws: the identity is unknown, never "equal".
+ */
+function decodeGitTokens(buffer: Buffer): string[] {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const out: string[] = [];
+  for (const raw of buffer.toString("latin1").split("\0")) {
+    if (raw.length === 0) continue;
+    try {
+      out.push(decoder.decode(Buffer.from(raw, "latin1")));
+    } catch {
+      throw new GitPathDecodeError();
+    }
+  }
+  return out;
+}
+
+/**
+ * How long one git call of the identity may run. A hung git (a stale lock, a network filesystem) must fail the identity,
+ * which callers treat as "state unknown", instead of blocking the turn. NEXUS_GIT_TIMEOUT_MS overrides the default.
+ */
+export function gitTimeoutMs(): number {
+  const configured = Number(process.env.NEXUS_GIT_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 30_000;
+}
+
+function isGitTimeout(err: unknown): boolean {
+  return (err as { code?: string } | undefined)?.code === "ETIMEDOUT";
+}
+
+/**
+ * Whether git ignores the executable bit here (`core.filemode=false`, common on WSL mounts, shared drives and exFAT).
+ * Unset means git honours it. A git that hangs or cannot run is an error, not "true".
+ */
+function gitFilemodeIsFalse(workspacePath: string): boolean {
+  try {
+    const value = execFileSync("git", ["config", "--type=bool", "--get", "core.filemode"], {
+      cwd: workspacePath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitTimeoutMs(),
+    }).trim();
+    return value === "false";
+  } catch (err: any) {
+    if (isGitTimeout(err)) throw new GitTimeoutError("git config", gitTimeoutMs());
+    // `git config --get` exits 1 when the key is unset: git then honours the executable bit.
+    if (err?.status === 1) return false;
+    throw err;
+  }
+}
+
+/** A manifest path with the characters the manifest uses as separators escaped (ordinary names are unchanged). */
+function manifestPath(p: string): string {
+  return /[\t\n\r\\]/.test(p) ? JSON.stringify(p) : p;
+}
+
 /**
  * Computes candidate identity for a workspace directory (git or non-git fallback).
  */
@@ -368,9 +443,12 @@ export function computeCandidateIdentitySyncForTesting(
       cwd: resolvedWorkspace,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitTimeoutMs(),
     }).trim();
     isGit = gitCheck === "true";
-  } catch {
+  } catch (err) {
+    // A git that hangs is not "not a repository": the weaker non-git identity must not stand in for it.
+    if (isGitTimeout(err)) throw new GitTimeoutError("git rev-parse", gitTimeoutMs());
     isGit = false;
   }
 
@@ -403,9 +481,11 @@ function computeGitCandidateIdentity(
         cwd: workspacePath,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
+        timeout: gitTimeoutMs(),
       }
     ).trim();
-  } catch {
+  } catch (err) {
+    if (isGitTimeout(err)) throw new GitTimeoutError("git rev-parse", gitTimeoutMs());
     rootBaseSha = "EMPTY_GIT_BASE";
   }
 
@@ -498,28 +578,37 @@ function computeGitCandidateIdentity(
 
   // 1. If baseRef is provided and differs from worktree HEAD, inspect committed differences on branch
   if (options.baseRef && options.baseRef !== "HEAD") {
-    let diffOut = "";
+    let diffTokens: string[] = [];
     try {
-      diffOut = execFileSync(
+      diffTokens = decodeGitTokens(execFileSync(
         "git",
-        ["diff", "--name-status", options.baseRef, "HEAD"],
+        ["diff", "--name-status", "-z", options.baseRef, "HEAD"],
         {
           cwd: workspacePath,
-          encoding: "utf-8",
           stdio: ["ignore", "pipe", "ignore"],
+          maxBuffer: 256 * 1024 * 1024,
+          timeout: gitTimeoutMs(),
         }
-      ).trim();
-
-    } catch {
-      // Diff command fallback
+      ));
+    } catch (err: any) {
+      // A name that cannot be decoded, or a git that hangs, makes the identity unknown; any other diff failure keeps the
+      // previous fallback.
+      if (err instanceof GitPathDecodeError) throw err;
+      if (isGitTimeout(err)) throw new GitTimeoutError("git diff", gitTimeoutMs());
     }
-    if (diffOut.trim().length > 0) {
-      const lines = diffOut.trim().split("\n");
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length < 2) continue;
-        const statusChar = parts[0][0];
-        const filePath = parts[parts.length - 1];
+    // `-z` records: STATUS NUL path NUL, and for a rename or copy STATUS NUL old NUL new NUL.
+    const diffEntries: Array<{ status: string; filePath: string }> = [];
+    for (let i = 0; i < diffTokens.length; ) {
+      const status = diffTokens[i++];
+      const pathCount = status[0] === "R" || status[0] === "C" ? 2 : 1;
+      const paths = diffTokens.slice(i, i + pathCount);
+      i += pathCount;
+      if (paths.length === pathCount) diffEntries.push({ status, filePath: paths[paths.length - 1] });
+    }
+    if (diffEntries.length > 0) {
+      for (const entry of diffEntries) {
+        const statusChar = entry.status[0];
+        const filePath = entry.filePath;
         const posixPath = filePath.split(path.sep).join("/");
         // Nexus session, checkpoint, and flight data are runtime state, not candidate input.
         if (posixPath === ".nexus" || posixPath.startsWith(".nexus/")) continue;
@@ -560,37 +649,89 @@ function computeGitCandidateIdentity(
     }
   }
 
+  // With core.filemode=false git ignores the executable bit, so a chmod of a clean tracked file is invisible to
+  // `git status`. The tracked files' type and executable bit are then digested from lstat (no hashing).
+  let modeDigest: string | undefined;
+
   // 2. Query git status for working tree modifications, type changes, and untracked files
   try {
-    const statusOut = execFileSync(
+    // `-z`: records are "XY path" NUL, and for a rename or copy "XY new" NUL "old" NUL. Never quoted, so every file name
+    // is read exactly as stored (the default quoting turned café.ts into "caf\303\251.ts", a path naming no file).
+    const statusTokens = decodeGitTokens(execFileSync(
       "git",
-      ["status", "--porcelain=v1", "--untracked-files=all"],
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
       {
         cwd: workspacePath,
-        encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
+        maxBuffer: 256 * 1024 * 1024,
+        timeout: gitTimeoutMs(),
       }
-    );
+    ));
 
-    if (statusOut.length > 0) {
-      const lines = statusOut.split(/\r?\n/);
-      for (const line of lines) {
-        if (!line || line.length < 3) continue;
-        const match = line.match(/^([ MADRCUT?!]{2})\s+(.*)$/);
-        if (!match) continue;
-        const code = match[1];
-        let rawFile = match[2].trim();
+    // `git status` does not report an edit to a tracked file marked assume-unchanged or skip-worktree (a sparse
+    // checkout marks everything outside its cone). Those files are hashed by path, so an edit behind git's back changes
+    // the identity. `ls-files -v` tags assume-unchanged entries with a lowercase letter and skip-worktree with `S`.
+    const flaggedTokens = decodeGitTokens(execFileSync("git", ["ls-files", "-v", "-z"], {
+      cwd: workspacePath,
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 256 * 1024 * 1024,
+      timeout: gitTimeoutMs(),
+    }));
+    for (const record of flaggedTokens) {
+      if (record.length < 3 || record[1] !== " ") throw new Error(`unrecognised git ls-files record: ${JSON.stringify(record.slice(0, 12))}`);
+      const tag = record[0];
+      if (tag !== "S" && !(tag >= "a" && tag <= "z")) continue;
+      const hiddenPath = record.slice(2);
+      const hiddenPosix = hiddenPath.split(path.sep).join("/");
+      if (hiddenPosix === ".nexus" || hiddenPosix.startsWith(".nexus/")) continue;
+      assertTrackedEntryAvailable(hiddenPosix);
+      // Absent files are the common case in a sparse checkout (everything outside the cone): one lstat of the full path
+      // instead of opening the directory chain.
+      try {
+        filesystem.lstatSync(path.join(workspacePath, hiddenPath));
+      } catch (err: any) {
+        if (err?.code === "ENOENT" || err?.code === "ENOTDIR") continue;
+        throw err;
+      }
+      let details: ReturnType<typeof resolveWorkspaceFileDetails>;
+      try {
+        details = resolveWorkspaceFileDetails(workspacePath, hiddenPath, remainingBytesForTrackedPath(hiddenPosix), filesystem);
+      } catch (err: any) {
+        // Outside a sparse cone even the parent directory is absent.
+        if (err?.code === "ENOENT" || err?.code === "ENOTDIR") continue;
+        throw err;
+      }
+      // Absent (outside a sparse cone, or deleted): nothing to hash; a later reappearance or deletion still changes the manifest.
+      if (details.isDeleted) continue;
+      setTrackedEntry({ path: hiddenPosix, mode: details.mode, contentHash: details.contentHash, size: details.size, status: "modified" });
+    }
 
-        // Handle rename syntax: "R  orig -> new"
-        if (rawFile.includes(" -> ")) {
-          const parts = rawFile.split(" -> ");
-          rawFile = parts[1];
+    if (gitFilemodeIsFalse(workspacePath)) {
+      const modeLines: string[] = [];
+      for (const record of flaggedTokens) {
+        const trackedPath = record.slice(2);
+        if (trackedPath === ".nexus" || trackedPath.startsWith(".nexus/")) continue;
+        let mode = "-";
+        try {
+          const st = filesystem.lstatSync(path.join(workspacePath, trackedPath));
+          mode = `${st.isSymbolicLink() ? "l" : st.isDirectory() ? "d" : "f"}${(st.mode & 0o111) !== 0 ? "x" : "-"}`;
+        } catch (err: any) {
+          if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") throw err;
         }
+        // Escaped like every other manifest path, so a name with a tab and a newline cannot read as two entries.
+        modeLines.push(`${manifestPath(trackedPath)}\t${mode}`);
+      }
+      modeDigest = hashContent(modeLines.join("\n"));
+    }
 
-        // Strip quotes if present
-        if (rawFile.startsWith('"') && rawFile.endsWith('"')) {
-          rawFile = rawFile.slice(1, -1);
-        }
+    if (statusTokens.length > 0) {
+      for (let i = 0; i < statusTokens.length; i++) {
+        const record = statusTokens[i];
+        if (record.length < 4 || record[2] !== " ") throw new Error(`unrecognised git status record: ${JSON.stringify(record.slice(0, 12))}`);
+        const code = record.slice(0, 2);
+        const rawFile = record.slice(3);
+        // The original name of a rename or copy follows as its own record; the new name is the candidate path.
+        if (code[0] === "R" || code[0] === "C" || code[1] === "R" || code[1] === "C") i++;
 
         const posixPath = rawFile.split(path.sep).join("/").replace(/\/+$/, "");
         // Match the non-Git identity path: managed Nexus state must not count as workspace progress.
@@ -616,7 +757,10 @@ function computeGitCandidateIdentity(
         } else {
           assertTrackedEntryAvailable(posixPath);
           // Tracked modification (staged or unstaged or typechange or deletion)
-          if (code.includes("D")) {
+          // An unmerged entry (DU, UD, DD, AA, UU, AU, UA) can name a file that still exists in the working tree even
+          // when one side deleted it; it is read like any other file, never assumed deleted.
+          const unmerged = code.includes("U") || code === "DD" || code === "AA";
+          if (code.includes("D") && !unmerged) {
             setTrackedEntry({
               path: posixPath,
               mode: "000000",
@@ -654,6 +798,9 @@ function computeGitCandidateIdentity(
       }
     }
   } catch (err: any) {
+    // A timeout keeps its type so callers can stop retrying a hung git (stateIdentityDisabled in agent.ts).
+    if (err instanceof GitTimeoutError) throw err;
+    if (isGitTimeout(err)) throw new GitTimeoutError("git", gitTimeoutMs());
     throw new Error(`Failed to query git status for candidate identity: ${err.message}`);
   }
 
@@ -675,11 +822,14 @@ function computeGitCandidateIdentity(
 
   const manifestLines: string[] = [];
   for (const entry of trackedChanges) {
-    manifestLines.push(`T\t${entry.path}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
+    manifestLines.push(`T\t${manifestPath(entry.path)}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
   }
   for (const entry of untrackedFiles) {
-    manifestLines.push(`U\t${entry.path}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
+    manifestLines.push(`U\t${manifestPath(entry.path)}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
   }
+
+  // Only present when core.filemode=false: identities of repositories that honour the executable bit are unchanged.
+  if (modeDigest !== undefined) manifestLines.push(`MODES\t${modeDigest}`);
 
   const manifestContent =
     manifestLines.length > 0 ? manifestLines.join("\n") : "CLEAN_TREE_NO_CANDIDATE_CHANGES";

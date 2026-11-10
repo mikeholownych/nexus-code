@@ -1,0 +1,40 @@
+ NEXUS   ws  ⎇ main ●2 changed  model fake-model  mode: review · sandbox: off · workspace: trusted
+› SC:write go
+  ✓ approved Write src/new.ts
+
+  ✓ Created src/new.ts  +2 −0
+    ▎   1 + export const a = 1;
+    ▎   2 + export const b = 2;
+  × denied verifier npm test
+
+Created the file.
+
+! Done · not verified  Files changed, but no verifier ran before the agent finished.
+  → next: run /test, or ask Nexus to verify the change · v receipt
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

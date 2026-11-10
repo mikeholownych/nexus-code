@@ -6,6 +6,7 @@ import type {
   ProviderRecoveryRecord,
   TransportCause,
 } from "./turn.js";
+import { persistableEndpoint } from "./endpoint_identity.js";
 
 /** Conditions the agent loop waits out instead of failing the turn. */
 export const TEMPORARY_CONDITIONS: ReadonlySet<ProviderCondition> = new Set([
@@ -292,10 +293,10 @@ export interface RecoveryControllerOptions {
 export function startupEndpointWarning(endpoint: string, probe: ProbeResult): string | undefined {
   if (!probe.available) {
     const cause = probe.detail ? ` (${probe.detail})` : "";
-    return `Endpoint ${endpoint} is unreachable${cause}. Run \`nexus doctor\`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.`;
+    return `Endpoint ${persistableEndpoint(endpoint)} is unreachable${cause}. Run \`nexus doctor\`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.`;
   }
   if (probe.httpStatus === 401 || probe.httpStatus === 403) {
-    return `Endpoint ${endpoint} rejected credentials (HTTP ${probe.httpStatus}). Run \`nexus doctor\`, check ~/.config/nexus/config.env, or use /connect.`;
+    return `Endpoint ${persistableEndpoint(endpoint)} rejected credentials (HTTP ${probe.httpStatus}). Run \`nexus doctor\`, check ~/.config/nexus/config.env, or use /connect.`;
   }
   return undefined;
 }
@@ -390,7 +391,7 @@ export class ProviderRecoveryController {
             stop("YIELDED", `${condition} (not executed); handed to the scheduler instead of waiting ${Math.round(delay / 1000)}s in place`);
           }
           if (elapsed + delay > this.effectiveDeadlineMs) {
-            const where = this.options.endpoint ? ` (${this.options.endpoint})` : "";
+            const where = this.options.endpoint ? ` (${persistableEndpoint(this.options.endpoint)})` : "";
             const guidance =
               this.options.everSucceeded === false
                 ? ` — run \`nexus doctor\`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect`
@@ -446,7 +447,7 @@ export class ProviderRecoveryController {
       probes: 0,
       waitedMs: 0,
       unknownReplays: 0,
-      ...(this.options.endpoint ? { endpoint: this.options.endpoint } : {}),
+      ...(this.options.endpoint ? { endpoint: persistableEndpoint(this.options.endpoint) } : {}),
       ...(this.options.everSucceeded !== undefined ? { everSucceeded: this.options.everSucceeded } : {}),
       policy: { deadlineMs: this.effectiveDeadlineMs, maxDelayMs: this.policy.maxDelayMs, maxUnknownReplays: this.policy.maxUnknownReplays },
     };
