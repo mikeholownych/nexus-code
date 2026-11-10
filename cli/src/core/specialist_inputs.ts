@@ -74,6 +74,24 @@ const LISTING_MAX_BUFFER = 256 * 1024 * 1024;
 /** Paths per `check-attr` call, so its output stays small whatever the repository's size. */
 const ATTR_BATCH = 1_000;
 
+/**
+ * Refuses (returns why) when a filter or diff driver still applies to any of `files` under the pinned attribute
+ * source, which only `$GIT_DIR/info/attributes` (or a worktree .gitattributes on Git before 2.40) can still assign.
+ * `run` is a pinned git call that takes stdin. Batched so a repository's size never becomes a failure.
+ */
+export function driverRefusal(run: (args: string[], input: string) => string, files: string[]): string | undefined {
+  for (let start = 0; start < files.length; start += ATTR_BATCH) {
+    const batch = files.slice(start, start + ATTR_BATCH);
+    const checked = run(["check-attr", "-z", "--stdin", "filter", "diff"], `${batch.join("\0")}\0`).split("\0");
+    for (let i = 0; i + 2 < checked.length; i += 3) {
+      const [file, name, value] = [checked[i], checked[i + 1], checked[i + 2]];
+      const safe = value === "unspecified" || value === "unset" || (name === "diff" && value === "set");
+      if (!safe) return `a ${name} driver ('${value}') applies to ${file.slice(0, 80)} outside the worktree's .gitattributes; it is not run`;
+    }
+  }
+  return undefined;
+}
+
 const SOURCE_FILE_MAX = 4 * 1024 * 1024;
 const SOURCE_TOTAL_MAX = 64 * 1024 * 1024;
 const ADDED_FILE_MAX = 16 * 1024 * 1024;
@@ -163,10 +181,14 @@ function attributesTree(root: string, scratch: string, files: string[]): { tree:
  * Untracked files are compared through a scratch index (the base tree plus intent-to-add entries for every untracked
  * file, never the repository's own index), so git's rename detection pairs an unstaged move of a protected file with
  * its new name instead of showing that name as an unrelated new file. Rename and copy detection stop at git's
- * similarity threshold, so when any protected path changed (moved, deleted, edited or added), every added file is
- * omitted too and counted in `omittedNew`: a protected file moved and rewritten, or one whose lines were copied out,
- * may otherwise reach the diff as an innocent new file. Limit: lines copied out of a protected file into a file that
- * already existed at the base are not recognised; credential redaction is the only guard for those.
+ * similarity threshold (and `--find-copies-harder` makes an untouched tracked protected file a copy source), so when
+ * any protected path changed (moved, deleted, edited or added), every added file is omitted too and counted in
+ * `omittedNew`: a protected file moved and rewritten, or one whose lines were copied out, may otherwise reach the diff
+ * as an innocent new file. Independently of git's heuristics, an added file is omitted (and counted the same way) when
+ * it equals a protected file present in the workspace, tracked, untracked or ignored, or shares a significant line
+ * with one (see `protectedContent`); that covers `cp .env notes.txt` and a partial copy of any size. Limit: lines
+ * pasted from a protected file into a file that already existed at the base are not recognised (modified files are not
+ * line-compared); credential redaction is the only guard for those.
  * Any git failure or an unmanageable path count returns an error: nothing is ever kept because it could not be
  * classified.
  */
@@ -227,16 +249,8 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     // diff driver the stripped attribute source did not neutralise ($GIT_DIR/info/attributes, or a worktree
     // .gitattributes on Git before 2.40); one that applies is refused, never run. The check is batched so the
     // repository's size never turns into a failure.
-    const indexed = listing([]);
-    for (let start = 0; start < indexed.length; start += ATTR_BATCH) {
-      const batch = indexed.slice(start, start + ATTR_BATCH);
-      const checked = git(["check-attr", "-z", "--stdin", "filter", "diff"], { input: `${batch.join("\0")}\0` }).split("\0");
-      for (let i = 0; i + 2 < checked.length; i += 3) {
-        const [file, name, value] = [checked[i], checked[i + 1], checked[i + 2]];
-        const safe = value === "unspecified" || value === "unset" || (name === "diff" && value === "set");
-        if (!safe) return { error: `a ${name} driver ('${value}') applies to ${file.slice(0, 80)} outside the worktree's .gitattributes; it is not run` };
-      }
-    }
+    const refusal = driverRefusal((args, input) => git(args, { input }), listing([]));
+    if (refusal) return { error: refusal };
     // name-status with rename detection (no limit on the exhaustive pass), only to learn which paths belong together.
     const tokens = git(["diff", "--name-status", "-z", "-M", "-C", "--find-copies-harder", "-l0", "--relative", "--no-ext-diff", "--no-textconv", "--end-of-options", commit, "--"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0");
     const groups: Array<{ status: string; paths: string[] }> = [];

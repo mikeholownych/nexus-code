@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ensureGitExclude } from "./git_exclude.js";
+import { GIT_SAFE, driverRefusal, safeGitEnv } from "./specialist_inputs.js";
 import { verifierTimeoutSecs } from "../tester.js";
 import type {
   IntegrationReceipt,
@@ -434,17 +435,21 @@ export class OperationGit {
     const entry = this.state.units[unitId];
     if (!entry || !fs.existsSync(entry.worktree)) throw new Error(`unit ${unitId}'s worktree is not available to snapshot`);
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-candidate-snapshot-"));
-    const run = (args: string[]) => execFileSync("git", args, {
-      cwd: entry.worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS,
-      env: { ...process.env, GIT_INDEX_FILE: path.join(scratch, "index") },
+    // Pinned like the candidate diff: nothing the (model-written) worktree configures may run here. No inherited GIT_*,
+    // no fsmonitor or hooks, no clean filter (attributes come from the empty tree), a filter assigned through
+    // $GIT_DIR/info/attributes refuses the snapshot instead of being run.
+    const run = (args: string[], options: { input?: string; ownIndex?: boolean } = {}) => execFileSync("git", [...GIT_SAFE, ...args], {
+      cwd: entry.worktree, encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS,
+      env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch, "index")), maxBuffer: 256 * 1024 * 1024,
+      ...(options.input === undefined ? {} : { input: options.input }),
     }).trim();
     try {
-      const { GIT_INDEX_FILE: _inherited, ...ownEnv } = process.env;
-      const ownIndex = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "index"], {
-        cwd: entry.worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS, env: ownEnv,
-      }).trim();
+      const ownIndex = run(["rev-parse", "--path-format=absolute", "--git-path", "index"], { ownIndex: true });
       if (fs.existsSync(ownIndex)) fs.copyFileSync(ownIndex, path.join(scratch, "index"));
       else run(["read-tree", "HEAD"]);
+      const files = [...run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0").filter(Boolean)];
+      const refusal = driverRefusal((args, input) => run(args, { input }), files);
+      if (refusal) throw new Error(refusal);
       run(["add", "-A"]);
       const tree = run(["write-tree"]);
       return run([...this.mechanicalGitConfig(), "commit-tree", tree, "-p", "HEAD", "-m", `nexus: snapshot of ${unitId}'s candidate for failure debugging`]);
