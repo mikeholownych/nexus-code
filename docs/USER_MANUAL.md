@@ -133,8 +133,13 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   `v` opens the receipt with the raw fields. The line describes this turn: `Done · not verified` says when no file changed in this turn
   and the unverified changes are from an earlier one, and when the only verifier run was the baseline Nexus takes before
   the change (`npm test ran before the change; nothing checked the change itself`). A turn whose actions you denied, or
-  whose commands left every file as they were, ends `Done` (`No files changed: you denied 1 action.`; `nexus run` exits 0);
-  a command that does write a file still needs a verifier (`UNVERIFIED`, exit code 2). The receipt's `turnEvidence`
+  whose commands left the workspace as they found it, ends `Done` (`No files changed: you denied 1 action.`; `nexus run`
+  exits 0). "As they found it" means the workspace files git does not ignore, the git index, and a fixed list of
+  ignored dependency and environment files (`node_modules/.package-lock.json`, `.venv/pyvenv.cfg`, `target/.rustc_info.json`,
+  `.env` and the like) are unchanged; a command that changes only other ignored files, empty directories, file modes other
+  than the executable bit, anything outside the workspace, or git refs and config is not noticed. A file-write tool
+  (`write_file`, `edit_file`, `patch_file`, `delete_file`) always counts as a change, so it still needs a verifier
+  (`UNVERIFIED`, exit code 2), as does a command that changes a file. The receipt's `turnEvidence`
   records what the turn did: whether the workspace changed, changes carried in, actions denied and verifier runs.
   **Verified** means the passing test run — whether you configured the
   verifier or Nexus found it — is evidence about the change: it
