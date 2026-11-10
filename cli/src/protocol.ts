@@ -12,7 +12,10 @@ import { visibleControls } from "./file_diff.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
-/** Longest clipboard text `/paste` puts into the composer; also the limit of the `slash.result` composer field. */
+/**
+ * Longest clipboard text `/paste` puts into the composer, and the limit of the `slash.result` composer field. It keeps
+ * the escaped `slash.result` line under the TUI's 1 MiB protocol line cap.
+ */
 export const MAX_PASTE = 100_000;
 export const MAX_SUMMARY = 160;
 export const MAX_SLASH_OUTPUT = 32_000;

@@ -251,8 +251,6 @@ function copy(ctx: SlashContext): SlashOutcome {
   return result.success ? reply("copy", `Copied ${label} to the clipboard.`) : reply("copy", `Clipboard error: ${result.error}`, false);
 }
 
-/** Keeps the escaped `slash.result` line under the TUI's 1 MiB protocol line cap. */
-
 function paste(): SlashOutcome {
   const result = readFromClipboard();
   if (!result.success || !result.text) return reply("paste", `Clipboard error: ${result.error || "the clipboard is empty"}`, false);

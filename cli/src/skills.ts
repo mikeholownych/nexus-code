@@ -79,13 +79,14 @@ function tokenize(text: string, keepShort: (word: string) => boolean = () => fal
 const CONTROL_MARKER = /\[\s*(?:nexus|operator|system|assistant|user|tool|git status|active plan|work unit)[^\]]*\]?/gi;
 /**
  * Chat-template control tokens a description could use to open its own turn once a local server renders the prompt
- * as text: ChatML and Llama 3 specials (`<|im_start|>`, `<|eot_id|>`, any `<|...|>`), `<system>` tags and the Llama 2
- * `[INST]` / `<<SYS>>` markers.
+ * as text: ChatML and Llama 3 specials (`<|im_start|>`, `<|eot_id|>`, any `<|...|>`), the DeepSeek fullwidth-bar
+ * specials (`<｜…｜>`), `<system>` tags, `<s>` / `</s>` (Llama, Mistral), `<start_of_turn>` / `<end_of_turn>` (Gemma)
+ * and the Llama 2 `[INST]` / `<<SYS>>` markers.
+ *
+ * Matching is linear-time on any input (CodeQL js/polynomial-redos): every alternative starts with a literal and has at
+ * most one bounded run, and each optional slash carries its own trailing whitespace (`\s*(?:\/\s*)?`), so a run of
+ * spaces has exactly one way to match.
  */
-// Each optional slash carries its own trailing whitespace (`\s*(?:\/\s*)?`), so a run of spaces has exactly one way to
-// match: no overlapping quantifiers, linear time on any input (CodeQL js/polynomial-redos).
-// Also `<s>` / `</s>` (Llama and Mistral), `<start_of_turn>` / `<end_of_turn>` (Gemma) and the fullwidth-bar specials
-// `<｜…｜>` (DeepSeek). Every alternative starts with a literal and has at most one bounded run, so matching stays linear.
 const TEMPLATE_TOKEN = /<\|[^|<>\n]{0,64}\|>|<｜[^｜<>\n]{0,64}｜>|<\s*(?:\/\s*)?system\s*>|<\/?s>|<(?:start|end)_of_turn>|\[\s*(?:\/\s*)?INST\s*\]|<<\s*(?:\/\s*)?SYS\s*>>/gi;
 /** A skill's text as one safe line: control markers, template tokens and secrets removed, whitespace collapsed (a trusted skill is still untrusted text). */
 export function oneLine(text: string): string {
