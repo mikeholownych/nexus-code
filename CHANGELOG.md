@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
+## [v1.1.4] - Unreleased
+
+### Changed
+
+- A turn whose commands leave the workspace exactly as they found it, and that carries no unverified changes in, now ends `NOT_REQUIRED` and `nexus run` exits 0 for it; before, any command latched the "unverified changes" obligation and the exit code was 2 (`UNVERIFIED`). A turn that writes a file (`write_file`, `edit_file`, `patch_file`, `delete_file`, or a command that changes the workspace) still ends `UNVERIFIED`, exit 2. A work unit (implementer or tester) that only ran such commands now takes the existing `no_change` path (retry, accept as no-op, stop) instead of completing `UNVERIFIED`. The verdict in the TUI and the REPL now describes the turn's own evidence (`turnEvidence` on the turn result): "no files changed this turn", "npm test ran before the change", "you denied 1 action". (TUI-AUDIT D-04)
+- `/diff`, `/git`, `/commit` and the header's changed-file count no longer count Nexus's own `.nexus/` state, and `--read-only` sessions no longer write `.nexus/inference_receipts.jsonl` into the workspace. (TUI-AUDIT D-03)
+
 ## [v1.1.3] - Unreleased
 
 See [`docs/releases/v1.1.3.md`](docs/releases/v1.1.3.md) (and candidate notes [`docs/releases/v1.1.3-rc.1.md`](docs/releases/v1.1.3-rc.1.md)). This release carries the whole v1.1.2 scope unchanged, with the same known limitations. The date is set when the release is tagged.
