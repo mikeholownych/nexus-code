@@ -1,0 +1,40 @@
+ NEXUS   ws  ⎇ main ●1 changed  model fake-model  mode: review · sandbox: off · workspace: trusted
+› hello
+
+Hello! This is the fake model reply.
+
+
+✓ Done  No files changed, so there was nothing to verify.
+
+› /git
+  ?? .nexus/
+
+› /diff
+  Working tree clean: no uncommitted changes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

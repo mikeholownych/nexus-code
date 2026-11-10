@@ -9,19 +9,52 @@ export interface GitInfo {
   formattedBadge: string;
 }
 
+/**
+ * Nexus's own state directories: the workspace's `.nexus` and the repository root's. Status reads the whole repository
+ * without them, and commitChanges unstages and excludes exactly the same set, so the header, the model's [Git Status]
+ * line, /git and /commit agree and Nexus's receipts never count as, or get committed with, a user change.
+ * A file the user deliberately tracks under `.nexus/` is therefore not reported or committed by Nexus either.
+ */
+const NEXUS_STATE = [".nexus", ":(top).nexus"];
+const NEXUS_STATE_EXCLUDED = [":(exclude).nexus", ":(exclude).nexus/**", ":(top,exclude).nexus", ":(top,exclude).nexus/**"];
+const WITHOUT_NEXUS_STATE = ["--", ":/", ...NEXUS_STATE_EXCLUDED];
+
+/** The environment for git calls that pass the pathspecs above: an inherited pathspec mode would make them literal. */
+function pathspecEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
+    delete env[key];
+  }
+  return env;
+}
+
+/** `git status` in `format` for the workspace's repository, without Nexus state. Throws when git fails. */
+export function workspaceStatus(workspace: string, format: "--porcelain" | "--short"): string {
+  return execFileSync("git", ["status", format, ...WITHOUT_NEXUS_STATE], {
+    cwd: workspace,
+    env: pathspecEnv(),
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
+}
+
+/** The current branch; on an unborn branch (no commit yet) `rev-parse` fails, so read the symbolic ref instead. */
+function currentBranch(workspace: string): string {
+  const run = (args: string[]) =>
+    execFileSync("git", args, { cwd: workspace, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  try {
+    return run(["rev-parse", "--abbrev-ref", "HEAD"]);
+  } catch {
+    return run(["symbolic-ref", "--short", "HEAD"]);
+  }
+}
+
 export function getGitInfo(workspace: string): GitInfo {
   try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
-      cwd: workspace,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    }).trim();
+    const branch = currentBranch(workspace);
 
-    const statusOut = execSync("git status --porcelain", {
-      cwd: workspace,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    }).trim();
+    const statusOut = workspaceStatus(workspace, "--porcelain").trim();
 
     const lines = statusOut ? statusOut.split("\n") : [];
     const dirtyCount = lines.length;
@@ -94,11 +127,7 @@ export function scaffoldProjectRules(workspace: string): string {
 
 export function generateConventionalCommit(workspace: string): { message: string; files: string[] } {
   try {
-    const statusOut = execSync("git status --porcelain", {
-      cwd: workspace,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    }).trimEnd();
+    const statusOut = workspaceStatus(workspace, "--porcelain").trimEnd();
 
     if (!statusOut) {
       return { message: "chore(repo): update repository", files: [] };
@@ -154,10 +183,7 @@ export function generateConventionalCommit(workspace: string): { message: string
 
 export function commitChanges(workspace: string, message: string): { success: boolean; hash?: string; error?: string } {
   try {
-    const gitEnv = { ...process.env };
-    for (const key of ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
-      delete gitEnv[key];
-    }
+    const gitEnv = pathspecEnv();
     // Exclusions in `git add` do not remove paths that were already staged.
     // Restore only the internal state entries in the index, leaving their working
     // tree contents untouched, before staging the user's workspace changes.
@@ -168,7 +194,7 @@ export function commitChanges(workspace: string, message: string): { success: bo
     });
     if (head.error) throw head.error;
     if (head.status === 0) {
-      execFileSync("git", ["reset", "--quiet", "HEAD", "--", ":(top).nexus"], {
+      execFileSync("git", ["reset", "--quiet", "HEAD", "--", ...NEXUS_STATE], {
         cwd: workspace,
         env: gitEnv,
         stdio: ["pipe", "pipe", "pipe"],
@@ -199,7 +225,7 @@ export function commitChanges(workspace: string, message: string): { success: bo
       }
       // There is no HEAD tree to restore from, so remove only staged .nexus paths
       // from the index. --cached preserves their workspace contents.
-      execFileSync("git", ["rm", "--cached", "-r", "-f", "--ignore-unmatch", "--", ":(top).nexus"], {
+      execFileSync("git", ["rm", "--cached", "-r", "-f", "--ignore-unmatch", "--", ...NEXUS_STATE], {
         cwd: workspace,
         env: gitEnv,
         stdio: ["pipe", "pipe", "pipe"],
@@ -207,7 +233,8 @@ export function commitChanges(workspace: string, message: string): { success: bo
     }
     // Internal Nexus state must never enter an automated workspace commit, even if a user's
     // .git/info/exclude contains a malformed rule or a later negation that exposes .nexus/.
-    execFileSync("git", ["add", "-A", "--", ":(top,exclude).nexus", ":(top,exclude).nexus/**"], {
+    // Same exclusion set as workspaceStatus(): what the dirty count leaves out is never staged.
+    execFileSync("git", ["add", "-A", "--", ...NEXUS_STATE_EXCLUDED], {
       cwd: workspace,
       env: gitEnv,
       stdio: ["pipe", "pipe", "pipe"],
