@@ -247,6 +247,39 @@ describe("a provider's Retry-After survives suspend, restart and resume outside 
   });
 });
 
+// ---------------------------------------------------------------- start-up model detection (no resume in flight)
+
+describe("start-up model detection outside a provider window", () => {
+  for (const [name, args] of [
+    ["a fresh start", [] as string[]],
+    ["a resume that finds no saved session", ["--resume", "no-such-session"]],
+  ] as const) {
+    test(`${name} detects the model once at start-up and sends it with the first request`, { timeout: 90_000 }, async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-detect-"));
+      const ws = makeWorkspace(home);
+      const models: string[] = [];
+      const gw = await startFixtureGateway((_n, body): Reply => {
+        models.push(String(body?.model));
+        return { kind: "text", content: "The answer is 42." };
+      }, { models: () => [{ id: "served-model" }] });
+      try {
+        const side = sidecar([...args, "-w", ws, "-e", gw.url, "-s", "4", "--yes"], { cwd: ws, home });
+        await until(() => gw.modelRequests >= 1, () => `the start-up model request (stderr: ${side.io.err.slice(-300)})`, 30_000);
+        await new Promise((r) => setTimeout(r, 1_000));
+        assert.equal(gw.modelRequests, 2, "the two GET /models of a start, as on main: model detection, then the reachability probe");
+        side.send({ type: "prompt.submit", id: "t1", text: "continue" });
+        await until(() => side.events.some((x) => x.e.type === "turn.result"), "the turn's result", 60_000);
+        assert.equal(models[0], "served-model", "the detected model is what the first request carries");
+        await side.shutdown();
+      } finally {
+        killChildren();
+        await gw.close();
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 // ---------------------------------------------------------------- operation path
 
 /**
@@ -681,8 +714,8 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     }
   });
 
-  test("an agent that kept the placeholder because the resume found no session still detects its model at the first step", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-nosession-"));
+  test("a start that is not a resume never defers detection: an agent holding the placeholder makes no /models request of its own", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-fresh-"));
     const gateway = await startRecoveryGateway(() => ({ kind: "text", content: "answered" }));
     const agent = new AutonomousAgent({ endpoint: gateway.url, model: "local-model", maxSteps: 2, temperature: 0, workspace: makeRepo(root), shell: "bash", approvalMode: "auto", fullAccess: true } as any);
     try {
@@ -694,8 +727,32 @@ describe("the resumed provider wait (fake recovery clock)", () => {
         return ["served-model"];
       };
       await agent.runTurn("hello");
-      assert.equal(lists, 1, "the placeholder is replaced at the first step");
+      assert.equal(lists, 0, "same requests as before this PR: detection happens at start-up (autoDetectModel), never at a step");
+      assert.equal(a.config.model, "local-model");
+    } finally {
+      agent.shutdown();
+      await gateway.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a resume that found no session detects the model like a fresh start, once, before the first request", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-nosession-"));
+    const gateway = await startRecoveryGateway(() => ({ kind: "text", content: "answered" }));
+    const agent = new AutonomousAgent({ endpoint: gateway.url, model: "local-model", maxSteps: 2, temperature: 0, workspace: makeRepo(root), shell: "bash", approvalMode: "auto", fullAccess: true } as any);
+    try {
+      const a = agent as any;
+      a.stateManager = new DurableStateManager({ baseDir: path.join(root, "state"), workspacePaths: [a.primaryWorkspacePathIdentity] });
+      let lists = 0;
+      a.client.listModels = async () => {
+        lists++;
+        return ["served-model"];
+      };
+      await agent.detectPlaceholderModel();
+      assert.equal(lists, 1, "one request, as the start-up detection a fresh start makes");
       assert.equal(a.config.model, "served-model");
+      await agent.runTurn("hello");
+      assert.equal(lists, 1, "and no further request at the step");
     } finally {
       agent.shutdown();
       await gateway.close();

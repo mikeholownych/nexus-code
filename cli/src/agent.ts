@@ -982,6 +982,8 @@ export class AutonomousAgent {
   private resumedProviderWaits: Array<{ eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord }> = [];
   /** A resumed start kept the "local-model" placeholder and its record named no model: detect it after the wait. */
   private modelDetectionDeferred = false;
+  /** Detection started by a resume that found no session; the first request waits for it. */
+  private pendingModelDetection?: Promise<void>;
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
@@ -1186,9 +1188,7 @@ export class AutonomousAgent {
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
     this.gateEmbeddings();
-    // The placeholder is replaced at the first step when no start-up detection did (a resume skips it; so does an
-    // unreachable gateway); a restored record's model replaces it first.
-    this.modelDetectionDeferred = !config.provider && config.model === "local-model";
+
     this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: verifierTimeoutSecs(config.verifierTimeoutSecs) }));
     this.browser = new BrowserDriver(ws);
     this.knowledge = new KnowledgeGraph(ws, { readOnly: initialReadOnly });
@@ -5578,6 +5578,23 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (this.coderClient !== this.client && !this.config.coderModel) this.coderClient.setModel(model);
   }
 
+  /**
+   * A resume request that found nothing to restore behaves like a fresh start: the start-up detection it skipped
+   * runs now (one request, as autoDetectModel does), and the first request waits for it.
+   */
+  public detectPlaceholderModel(): Promise<void> {
+    if (this.config.provider || this.config.model !== "local-model") return Promise.resolve();
+    this.pendingModelDetection = (async () => {
+      try {
+        const models = await this.client.listModels();
+        if (models.length > 0) this.setDefaultModel(models[0]);
+      } catch {
+        // Keep the placeholder; the request will surface the connection problem.
+      }
+    })();
+    return this.pendingModelDetection;
+  }
+
   /** The deferred detection, once the provider may be asked again: the first model the gateway lists. */
   private async detectDeferredModel(): Promise<void> {
     if (!this.modelDetectionDeferred || this.isProviderWindowOpen()) return;
@@ -6273,6 +6290,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         providerEligibleAt = undefined;
         if (resumedWait) providerRecoveries.push(resumedWait);
         if (!(await drainQueuedCompactions())) break;
+        await this.pendingModelDetection;
         await this.detectDeferredModel();
         // Provider limits for this step's connection (cached; re-read on change or after the TTL). Optional capability.
         await this.refreshCapabilities(activeClient, this.capabilitiesStale ?? "step", Boolean(this.capabilitiesStale), signal);

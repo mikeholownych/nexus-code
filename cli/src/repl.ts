@@ -168,10 +168,12 @@ export class InteractiveRepl {
         } else {
           console.log(pc.red(`Session not found: ${resumeSessionId}\n`));
           this.currentSessionId = this.sessionManager.generateSessionId();
+          void this.agent.detectPlaceholderModel();
         }
       } catch (err: any) {
         console.log(pc.red(`Failed to restore session ${resumeSessionId}: ${formatDiagnosticForOutput(err)}\n`));
         this.currentSessionId = this.sessionManager.generateSessionId();
+        void this.agent.detectPlaceholderModel();
       }
     } else {
       this.currentSessionId = this.sessionManager.generateSessionId();

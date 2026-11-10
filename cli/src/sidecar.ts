@@ -137,6 +137,8 @@ export class SidecarServer {
     } catch (err) {
       resumed = { ok: false, message: `Could not resume ${this.resume ?? "latest"}: ${errorText(err)}` };
     }
+    // A resume that found nothing to restore is a fresh start: the model detection it skipped runs now.
+    if (this.resume && !resumed?.ok) void this.app.getAgent().detectPlaceholderModel();
     this.emitSessionState();
     if (resumed) this.emit({ type: "notice", text: resumed.message });
     if (isNexusDirPermissive()) {
