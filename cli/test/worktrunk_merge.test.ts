@@ -905,6 +905,26 @@ test("tracked Nexus state under .nexus is neither backed up nor committed by the
   } finally { f.cleanup(); }
 });
 
+test("tracked Nexus state edited in the worktree does not stop the rebase when the target has advanced", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/state-rebase");
+    fs.mkdirSync(path.join(dir, ".nexus"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".nexus", "knowledge.json"), '{"v":1}\n');
+    git(dir, "add", "-f", ".nexus/knowledge.json");
+    git(dir, "commit", "-q", "-m", "an old commit that tracked internal state");
+    commitFile(f.repo, "other.txt", "target moved\n", "target advances");
+    fs.writeFileSync(path.join(dir, ".nexus", "knowledge.json"), '{"v":2}\n');
+    fs.writeFileSync(path.join(dir, "real.txt"), "real work\n");
+    const r = wt(f, dir, ["merge", ...W]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(git(f.repo, "show", "main:real.txt"), "real work");
+    assert.equal(git(f.repo, "show", "main:other.txt"), "target moved");
+    assert.equal(git(f.repo, "show", "main:.nexus/knowledge.json"), '{"v":1}', "the state edit was not committed");
+    assert.equal(fs.readFileSync(path.join(dir, ".nexus", "knowledge.json"), "utf8"), '{"v":2}\n', "and it is still in the worktree, which was kept");
+  } finally { f.cleanup(); }
+});
+
 test("a worktree reached through a symbolic link is recognised as removed after the merge deleted it", () => {
   const f = fixture();
   try {

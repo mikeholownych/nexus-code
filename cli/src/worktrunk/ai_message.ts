@@ -11,7 +11,7 @@ import type { ChatMessage } from "../types.js";
 import { redactSecrets } from "../ui.js";
 import { git } from "./git.js";
 import { WorktreeError } from "./core.js";
-import type { MergeContextInfo } from "./merge.js";
+import type { MergeContextInfo, MergeOptions } from "./merge.js";
 
 export type Completer = (messages: ChatMessage[], signal: AbortSignal) => Promise<string | undefined>;
 
@@ -25,9 +25,13 @@ function bounded(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}\n[... truncated: ${text.length - limit} more characters ...]`;
 }
 
-/** The prompt for the model: statistics and a bounded, redacted diff of exactly what the merge would commit. */
-export function buildPrompt(mctx: MergeContextInfo): ChatMessage[] {
-  const base = mctx.mergeBase;
+/**
+ * The prompt for the model: statistics and a bounded, redacted diff of exactly what the message will label. That is the
+ * whole branch, except with --no-squash on a dirty branch: the message then labels only the commit of the uncommitted
+ * changes (earlier commits keep their own messages), so only HEAD..working state is described.
+ */
+export function buildPrompt(mctx: MergeContextInfo, options: Pick<MergeOptions, "noSquash"> = {}): ChatMessage[] {
+  const base = mctx.state.total > 0 && options.noSquash ? mctx.gateState.head : mctx.mergeBase;
   const diffArgs = ["--no-ext-diff", "--no-textconv", "--no-color", "-M"];
   const stat = git(mctx.source.path, ["diff", ...diffArgs, "--stat", base, mctx.gateState.tree]).stdout;
   const diff = git(mctx.source.path, ["diff", ...diffArgs, base, mctx.gateState.tree]).stdout;
@@ -61,6 +65,7 @@ export async function generateMergeMessage(
   completer: Completer | undefined,
   timeoutMs: number = DEFAULT_AI_TIMEOUT_MS,
   cancel?: AbortSignal,
+  options: Pick<MergeOptions, "noSquash"> = {},
 ): Promise<{ message?: string; note: string }> {
   const fallback = (why: string) => ({ note: `note: ${why}; using the deterministic commit message.` });
   if (!completer) return fallback("no model provider is available for --ai-message");
@@ -69,7 +74,7 @@ export async function generateMergeMessage(
   cancel?.addEventListener("abort", onCancel, { once: true });
   let timer: NodeJS.Timeout | undefined;
   try {
-    const prompt = buildPrompt(mctx);
+    const prompt = buildPrompt(mctx, options);
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => { controller.abort(); reject(new Error("timed out")); }, timeoutMs);
     });

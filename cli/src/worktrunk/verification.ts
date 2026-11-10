@@ -12,7 +12,7 @@ import * as path from "node:path";
 import { redactSecrets } from "../ui.js";
 import { statusOf } from "./core.js";
 import { git, gitOut } from "./git.js";
-import { MAX_RECORDS, updateRegistry, type Registry } from "./registry.js";
+import { MAX_BRANCH_LENGTH, MAX_RECORDS, updateRegistry, type Registry } from "./registry.js";
 import { currentEntry, openRepo } from "./repo.js";
 
 export interface WorkingState { head: string; tree: string; dirty: boolean }
@@ -59,7 +59,7 @@ export function recordVerification(workspace: string, verifier: string, expected
   try {
     const repo = openRepo(workspace);
     const entry = currentEntry(repo);
-    if (!entry || entry.isMain || !entry.branch) return false;
+    if (!entry || entry.isMain || !entry.branch || entry.branch.length > MAX_BRANCH_LENGTH) return false;
     const state = workingState(entry.path, statusOf(entry.path).total > 0);
     if (expected && (expected.head !== state.head || expected.tree !== state.tree)) return false;
     const branch = entry.branch;

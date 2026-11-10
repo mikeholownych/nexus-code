@@ -266,7 +266,7 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
     return runWorktreeCommand(tokens, run); // nothing to describe: the ordinary path
   }
 
-  const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS, deps.signal)
+  const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS, deps.signal, mergeOptions)
     .catch(() => ({ message: undefined, note: "note: could not prepare the model request; using the deterministic commit message." }));
 
   if (deps.signal?.aborted) return { success: false, output: "Cancelled while the model was being asked: nothing was merged, committed or removed." };

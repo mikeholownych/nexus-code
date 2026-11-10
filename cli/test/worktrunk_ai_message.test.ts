@@ -197,6 +197,42 @@ test("clean branch exactly one commit ahead applies generated message from --ai-
   } finally { f.cleanup(); }
 });
 
+test("--no-squash on a dirty branch already ahead: the model sees only the uncommitted change", async () => {
+  const f = fixture();
+  try {
+    const made = await f.run(f.repo, ["switch", "-c", "feat/dirty", "--no-copy"]);
+    assert.equal(made.success, true, made.output);
+    const dir = path.join(f.repo, ".nexus", "worktrees", "feat-dirty");
+    fs.writeFileSync(path.join(dir, "earlier.txt"), "earlier\n");
+    git(dir, "add", "earlier.txt");
+    git(dir, "commit", "-m", "earlier commit");
+    fs.writeFileSync(path.join(dir, "later.txt"), "later\n");
+    let seen = "";
+    const r = await f.run(dir, [...MERGE, "--no-squash"], async (messages) => { seen = messages.map((m) => String(m.content)).join("\n"); return "feat: add later"; });
+    assert.equal(r.success, true, r.output);
+    assert.match(seen, /later\.txt/);
+    assert.doesNotMatch(seen, /earlier\.txt/);
+  } finally { f.cleanup(); }
+});
+
+test("a dirty branch already ahead that will be squashed: the model sees the whole branch", async () => {
+  const f = fixture();
+  try {
+    const made = await f.run(f.repo, ["switch", "-c", "feat/dirty2", "--no-copy"]);
+    assert.equal(made.success, true, made.output);
+    const dir = path.join(f.repo, ".nexus", "worktrees", "feat-dirty2");
+    fs.writeFileSync(path.join(dir, "earlier.txt"), "earlier\n");
+    git(dir, "add", "earlier.txt");
+    git(dir, "commit", "-m", "earlier commit");
+    fs.writeFileSync(path.join(dir, "later.txt"), "later\n");
+    let seen = "";
+    const r = await f.run(dir, MERGE, async (messages) => { seen = messages.map((m) => String(m.content)).join("\n"); return "feat: add both"; });
+    assert.equal(r.success, true, r.output);
+    assert.match(seen, /later\.txt/);
+    assert.match(seen, /earlier\.txt/);
+  } finally { f.cleanup(); }
+});
+
 test("reason option containing --ai-message as a value does not invoke the model", async () => {
   const f = fixture();
   try {
