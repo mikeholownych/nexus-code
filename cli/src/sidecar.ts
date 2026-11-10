@@ -1287,7 +1287,7 @@ async function main(argv: string[]): Promise<void> {
   const configLoadError = operatorConfigLoadError();
   if (configLoadError) throw new Error(`Configuration error: ${configLoadError.message}`);
   const options = program.opts();
-  const config = await autoDetectModel(buildConfig(options));
+  const config = await autoDetectModel(buildConfig(options), { resuming: Boolean(options.resume) });
   config.surface = "tui";
   const app = new ApplicationCore(config);
   const server = new SidecarServer({

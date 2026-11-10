@@ -20,11 +20,12 @@ import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DurableStateManager } from "../src/core/state.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
-import { startGateway, type Reply } from "./helpers/fixtures.js";
+import { startGateway, startGateway as startFixtureGateway, type Reply } from "./helpers/fixtures.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { DEFAULT_RECOVERY_POLICY, type RecoveryClock, type RecoveryPolicy } from "../src/core/provider_recovery.js";
 import type { TurnResult } from "../src/core/turn.js";
 import { fakeClock, startGateway as startRecoveryGateway } from "./helpers/provider_fixture.js";
+import { autoDetectModel } from "../src/config.js";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tsxLoader = import.meta.resolve("tsx");
@@ -193,7 +194,11 @@ describe("a provider's Retry-After survives suspend, restart and resume outside 
 
       const resumeStartedAt = Date.now();
       assert.ok(resumeStartedAt < eligibleAt - RESTART_MARGIN_MS, `precondition: the restart happens well inside the provider's window (${new Date(resumeStartedAt).toISOString()} vs ${new Date(eligibleAt).toISOString()})`);
-      const resumed = cli(["run", "--resume", taskId, "-w", ws, "-e", gw.url, "-m", "m", "-s", "4", "--yes", "continue"], { cwd: ws, home, env: { LOCAL_LLM_RECOVERY_MAX_DELAY_MS: "2000" } });
+      const modelRequestsBeforeRestart = gw.modelRequests;
+      // No -m: the task record's model is used, and no model auto-detection (GET /models) happens inside the window.
+      const resumed = cli(["run", "--resume", taskId, "-w", ws, "-e", gw.url, "-s", "4", "--yes", "continue"], { cwd: ws, home, env: { LOCAL_LLM_RECOVERY_MAX_DELAY_MS: "2000" } });
+      await new Promise((r) => setTimeout(r, 1_500));
+      assert.equal(gw.modelRequests, modelRequestsBeforeRestart, "no GET /models inside the window");
       const code = await resumed.exited;
       assert.equal(arrivals.length, 2, `one request after the resume: exit ${code}\n${resumed.io.err.slice(-400)}`);
       assert.ok(arrivals[1] >= eligibleAt, `the resumed request (${new Date(arrivals[1]).toISOString()}) did not reach the provider before ${new Date(eligibleAt).toISOString()}`);
@@ -219,7 +224,8 @@ describe("a provider's Retry-After survives suspend, restart and resume outside 
       const eligibleAt = Date.parse(String(session.lastTurn?.interruption?.providerEligibleAt));
       assert.ok(Number.isFinite(eligibleAt), `the session record carries providerEligibleAt: ${JSON.stringify(session.lastTurn?.interruption)}`);
 
-      const side = sidecar(["--resume", taskId, "-w", ws, "-e", gw.url, "-m", "m", "-s", "4", "--yes"], { cwd: ws, home });
+      // No -m: the session record's model is used, and no model auto-detection (GET /models) happens inside the window.
+      const side = sidecar(["--resume", taskId, "-w", ws, "-e", gw.url, "-s", "4", "--yes"], { cwd: ws, home });
       await until(() => side.notices().some((n) => /^(Resumed session|Session not found|Could not resume)/.test(String(n.e.text))), "the resume notice");
       assert.ok(side.notices().some((n) => String(n.e.text).startsWith(`Resumed session ${taskId}`)), side.notices().map((n) => n.e.text).join(" | "));
       // Resuming alone (no prompt yet) sends nothing to the provider: the startup reachability probe is held back too.
@@ -650,6 +656,68 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     } finally {
       await planner.cleanup();
       await ctx.cleanup();
+    }
+  });
+
+  test("a resumed agent with the placeholder model adopts the record's model without listing models; an explicit model wins", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      let lists = 0;
+      a.client.listModels = async () => {
+        lists++;
+        return ["detected"];
+      };
+      a.config.model = "local-model";
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model" }, noArchive);
+      assert.equal(a.config.model, "recorded-model", "the record's model replaces the placeholder");
+      assert.equal(a.client.getModel(), "recorded-model");
+      assert.equal(lists, 0);
+      a.config.model = "explicit-model";
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model" }, noArchive);
+      assert.equal(a.config.model, "explicit-model", "an explicit model is never replaced");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("a resumed agent whose record has no model detects it after the wait, not before", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      const listed: number[] = [];
+      a.client.listModels = async () => {
+        listed.push(ctx.resumedClock.now());
+        return ["detected-after-wait"];
+      };
+      a.config.model = "local-model";
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted }, noArchive);
+      assert.deepEqual(listed, [], "nothing is listed at restore");
+      const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      assert.deepEqual(listed, [eligibleAt], "the model is detected right after the resumed wait");
+      assert.equal(a.config.model, "detected-after-wait");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("startup auto-detection: a fresh start detects the model as before; a resumed start does not contact the provider", async () => {
+    const gateway = await startFixtureGateway(() => ({ kind: "text", content: "x" }), { models: () => [{ id: "served-model" }] });
+    try {
+      const base = { endpoint: gateway.url, model: "local-model" } as any;
+      const fresh = await autoDetectModel({ ...base });
+      assert.equal(fresh.model, "served-model", "regression: a non-resumed start still auto-detects");
+      assert.equal(gateway.modelRequests, 1);
+      const resumed = await autoDetectModel({ ...base }, { resuming: true });
+      assert.equal(resumed.model, "local-model", "a resumed start keeps the placeholder until the session record supplies the model");
+      assert.equal(gateway.modelRequests, 1, "and sends no GET /models");
+      const explicit = await autoDetectModel({ ...base, model: "chosen" });
+      assert.equal(explicit.model, "chosen", "an explicit model wins");
+      assert.equal(gateway.modelRequests, 1);
+    } finally {
+      await gateway.close();
     }
   });
 

@@ -978,6 +978,8 @@ export class AutonomousAgent {
    * again, and the recovery record of that wait (its real submissions, for the status shown while waiting). Consumed
    * by the first inference step of the next turn.
    */
+  /** A resumed start kept the "local-model" placeholder and its record named no model: detect it after the wait. */
+  private modelDetectionDeferred = false;
   private resumedProviderWait?: { eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord };
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
@@ -1699,6 +1701,7 @@ export class AutonomousAgent {
     this.activeProviderRecovery = state.providerRecovery ?? null;
     this.recoveredOperation = state.operation;
     this.rememberResumedProviderWait(state.lastTurn);
+    this.adoptRecordedModel(state.model);
     // Durable task state is writable by the same local user who can run candidate
     // commands. Never trust a saved baseline, nor capture a new one over a
     // resumed workspace with pending changes: an attacker could delete the field
@@ -2620,11 +2623,13 @@ export class AutonomousAgent {
       operation?: DurableTaskState["operation"];
       changeBaseline?: DurableTaskState["changeBaseline"];
       lastTurn?: TurnResult | null;
+      model?: string;
     },
     readArchive: (committed?: ReadonlySet<string>) => ArchiveRead<ChatMessage>,
   ): string | undefined {
     this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
     this.rememberResumedProviderWait(session.lastTurn);
+    this.adoptRecordedModel(session.model);
     this.restoreHistory(session.history);
     const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
     const read = readArchive(committed);
@@ -5543,6 +5548,36 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return this.lastTurnResult;
   }
 
+  /**
+   * A resumed start does not auto-detect the model (that is a request to the provider, possibly inside its window):
+   * while the model is still the "local-model" placeholder and no provider was chosen, the restored record's model
+   * replaces it; without one, detection waits for the first step after the resumed wait. An explicit model is kept.
+   */
+  private adoptRecordedModel(recorded: string | undefined): void {
+    if (this.config.provider || this.config.model !== "local-model") {
+      this.modelDetectionDeferred = false;
+      return;
+    }
+    if (recorded && recorded !== "local-model") {
+      this.setModel(recorded);
+      this.modelDetectionDeferred = false;
+    } else {
+      this.modelDetectionDeferred = true;
+    }
+  }
+
+  /** The deferred detection, once the provider may be asked again: the first model the gateway lists. */
+  private async detectDeferredModel(): Promise<void> {
+    if (!this.modelDetectionDeferred || this.isProviderWindowOpen()) return;
+    this.modelDetectionDeferred = false;
+    try {
+      const models = await this.client.listModels();
+      if (models.length > 0) this.setModel(models[0]);
+    } catch {
+      // Keep the placeholder; the request will surface the connection problem.
+    }
+  }
+
   /** Records the provider window a restored turn was waiting out when it ended, if any (see resumedProviderWait). */
   private rememberResumedProviderWait(lastTurn: TurnResult | null | undefined): void {
     // The restored record's last turn replaces this agent's own (a /resume reuses the agent): checkpoints and saves
@@ -6212,6 +6247,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         providerEligibleAt = undefined;
         if (resumedWait) providerRecoveries.push(resumedWait);
         if (!(await drainQueuedCompactions())) break;
+        await this.detectDeferredModel();
         // Provider limits for this step's connection (cached; re-read on change or after the TTL). Optional capability.
         await this.refreshCapabilities(activeClient, this.capabilitiesStale ?? "step", Boolean(this.capabilitiesStale), signal);
         this.capabilitiesStale = undefined;
