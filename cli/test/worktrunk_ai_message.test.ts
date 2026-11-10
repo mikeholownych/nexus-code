@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runWorktreeCommand, runWorktreeCommandAsync } from "../src/worktrunk/command.js";
+import { mergeSeams } from "../src/worktrunk/merge.js";
 import { lazyProviderCompleter } from "../src/worktrunk/provider.js";
 import type { Completer } from "../src/worktrunk/ai_message.js";
 
@@ -432,5 +433,45 @@ test("a `-` target is pinned to the branch it named when the merge began, not re
     });
     assert.equal(git(releaseDir, "rev-parse", "HEAD"), releaseBefore, `release was merged into: ${r.output}`);
     assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat(b): add b.txt", "main is where the merge was asked to go");
+  } finally { f.cleanup(); }
+});
+
+test("content staged by another terminal after the state snapshot is not swept into the message-only amend", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    git(dir, "add", "b.txt");
+    git(dir, "commit", "-q", "-m", "add b"); // a clean single commit: the AI path amends it to carry the model's message
+    mergeSeams.preMerge = () => { // after the final state snapshot, before the amend
+      fs.writeFileSync(path.join(dir, "staged-later.txt"), "unverified\n");
+      git(dir, "add", "staged-later.txt");
+    };
+    try {
+      await f.run(dir, MERGE, async () => "feat(b): add b.txt");
+    } finally { delete mergeSeams.preMerge; }
+    assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").includes("staged-later.txt"), false, "unverified staged content reached the target");
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat(b): add b.txt", "the message was still applied");
+  } finally { f.cleanup(); }
+});
+
+test("content staged after the state snapshot is not swept into the squash commit either", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    git(dir, "add", "b.txt");
+    git(dir, "commit", "-q", "-m", "add b");
+    fs.writeFileSync(path.join(dir, "c.txt"), "c\n");
+    git(dir, "add", "c.txt");
+    git(dir, "commit", "-q", "-m", "add c"); // two commits: the default squash
+    mergeSeams.preMerge = () => {
+      fs.writeFileSync(path.join(dir, "staged-later.txt"), "unverified\n");
+      git(dir, "add", "staged-later.txt");
+    };
+    let r;
+    try {
+      r = runWorktreeCommand(["merge", "--no-verify-receipt", "--reason", "test fixture"], { cwd: dir, home: f.home, readOnly: false });
+    } finally { delete mergeSeams.preMerge; }
+    assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").includes("staged-later.txt"), false, `unverified staged content reached the target: ${r.output}`);
+    assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").includes("c.txt"), true, "the verified commits were merged");
   } finally { f.cleanup(); }
 });
