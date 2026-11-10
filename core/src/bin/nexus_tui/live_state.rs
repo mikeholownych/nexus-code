@@ -2237,7 +2237,8 @@ fn steer_prefix() -> String {
 /// Why a turn that ends unverified is unverified, from what this turn itself did (D-04): a verifier that ran only before
 /// the change, or that a later edit made stale, is said to have run, and a turn that changed nothing does not claim that
 /// files changed. Only VERIFICATION_NOT_RUN is about verifier runs; every other reason, and a result without evidence
-/// (an older sidecar), keeps the previous wording. The REPL line (cli/src/core/turn.ts evidenceTail) says the same.
+/// (an older sidecar), keeps the previous wording. The REPL line (cli/src/core/turn.ts evidenceTail) reports the same
+/// facts under the same conditions, in shorter phrasing.
 fn unverified_cause(reason: &str, evidence: &Value) -> String {
     const PLAIN: &str = "Files changed, but no verifier ran before the agent finished.";
     if reason != "VERIFICATION_NOT_RUN" || !evidence.is_object() {

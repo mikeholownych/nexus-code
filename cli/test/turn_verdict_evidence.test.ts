@@ -104,7 +104,7 @@ describe("D-04: the verdict follows this turn's evidence", () => {
       assert.equal(r.reason, "VERIFICATION_NOT_RUN");
       assert.equal(r.turnEvidence?.workspaceChanged, "yes");
       assert.deepEqual(r.turnEvidence?.verifierRuns, [{ command: "npm test", phase: "before_change", passed: true }]);
-      assert.match(summarizeTurn(r).line, /npm test ran before the change only/);
+      assert.match(summarizeTurn(r).line, /npm test ran before the change; nothing checked the change itself/);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
@@ -292,6 +292,12 @@ describe("D-04: the verdict follows this turn's evidence", () => {
       assert.match(line(turn({}, carried)), /no files changed this turn/);
       assert.doesNotMatch(line(turn({ reason: "NO_TESTS_EXECUTED" }, carried)), /no files changed this turn/);
       assert.doesNotMatch(line(turn({ reason: "NO_APPLICABLE_VERIFIER" }, carried)), /no files changed this turn/);
+    });
+
+    test("an unknown workspace state does not claim that files changed, like the TUI", () => {
+      const l = line(turn({}, { workspaceChanged: "unknown" }));
+      assert.match(l, /files may have changed/);
+      assert.doesNotMatch(l, /no files changed this turn/);
     });
 
     test("a long verifier command is bounded in the line", () => {

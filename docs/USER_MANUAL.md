@@ -161,10 +161,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   `contextNotRetained` in the receipt): check such a result against the source.
 - **Scrolling.** Scrolled back, the view stays where you are while output arrives; the badge then says `new output`.
   PgDn or Ctrl+End returns to the newest line.
-- **Status.** The top line shows identity only: workspace, branch with the number of changed files (`●3 changed`,
-  the same count as `/git`, `/commit` and the model's git status; Nexus's own `.nexus/` state never counts and
-  carries its own `.gitignore`, so it stays out of your `git status` too; a file you deliberately track under `.nexus/`
-  is not counted either),
+- **Status.** The top line shows identity only: workspace, branch with the number of changed files (`●3 changed`),
   model, mode (`review mode` in review mode) and the session id (what `/resume` takes), dropping the least important
   on narrow terminals. Activity is shown once, on the composer line.
 - **Composer.** An empty composer says what Enter does (send, or steer while the agent works); a draft taller than

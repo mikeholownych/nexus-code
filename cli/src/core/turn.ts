@@ -418,7 +418,7 @@ function shortCommand(command: string): string {
 
 /**
  * What this turn did when it differs from what an UNVERIFIED outcome suggests (D-04); the TUI words the same facts
- * (live_state.rs unverified_cause). Only VERIFICATION_NOT_RUN is about verifier runs, so only it gets this text.
+ * (live_state.rs unverified_cause; the same facts and conditions, shorter phrasing). Only VERIFICATION_NOT_RUN is about verifier runs, so only it gets this text.
  */
 function evidenceTail(t: TurnResult): string {
   const e = t.turnEvidence;
@@ -426,10 +426,11 @@ function evidenceTail(t: TurnResult): string {
   if (e.workspaceChanged === "no" && e.carriedChanges) {
     return `; no files changed this turn${e.denied ? ` (${e.denied} action${e.denied === 1 ? "" : "s"} denied)` : ""}, changes from an earlier turn are still unverified`;
   }
+  const changed = e.workspaceChanged === "unknown" ? "; files may have changed" : "";
   const last = e.verifierRuns.at(-1);
-  if (last?.phase === "before_change") return `; ${shortCommand(last.command)} ran before the change only`;
-  if (last?.phase === "completion") return `; ${shortCommand(last.command)} ran, but the change was edited after it`;
-  return "";
+  if (last?.phase === "before_change") return `${changed}; ${shortCommand(last.command)} ran before the change; nothing checked the change itself`;
+  if (last?.phase === "completion") return `${changed}; ${shortCommand(last.command)} ran, but the change was edited after it`;
+  return changed;
 }
 
 export function summarizeTurn(t: TurnResult): { heading: string; line: string } {
