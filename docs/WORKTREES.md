@@ -34,7 +34,9 @@ for that branch, creating it from the default branch when it does not exist and 
 sandbox requirement as `--worktree`. The branch must not be the one checked out in the primary checkout (`--worktree-branch main`
 is refused: running there would not be isolated). Unlike the ephemeral task worktree, a named worktree is never auto-merged or
 discarded: when the task ends it stays, later runs and follow-up `repl`/`live` prompts in the same session continue inside it, and a
-passing verifier run inside it records the verification that `nexus worktree merge` needs. The
+passing verifier run inside it records the verification that `nexus worktree merge` needs. After an in-session merge
+of that branch removes the worktree, a later turn in a session still started with `--worktree-branch` creates the branch
+again (it is created when missing). The
 task state records a binding of kind `named` (binding version 1); builds that predate it ignore the kind and cannot merge or discard
 it, because their paths are derived from `nexus/<task-id>`.
 
