@@ -30,6 +30,7 @@ import {
   CandidateTracker,
   ValidationReceipt,
   computeCandidateIdentitySync,
+  gitTimeoutMs,
   hashContent,
 } from "./core/candidate.js";
 import {
@@ -820,6 +821,8 @@ function gitIndexIdentity(workspace: string): string {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "ignore"],
     maxBuffer: 64 * 1024 * 1024,
+    // A hung git must fail the state read (callers then treat the state as unknown), not block the turn.
+    timeout: gitTimeoutMs(),
   });
   return createHash("sha256").update(out).digest("hex").slice(0, 16);
 }
@@ -2791,7 +2794,10 @@ export class AutonomousAgent {
       let index = "no-git";
       try {
         index = gitIndexIdentity(workspace);
-      } catch {}
+      } catch (err: any) {
+        // Not a repository is "no-git"; a git that hangs leaves the state unknown (the outer catch), never "equal".
+        if (err?.code === "ETIMEDOUT") throw err;
+      }
       const id = combineState([candidate, index, externalInputsContentIdentity(workspace)]);
       const took = Date.now() - started;
       if (took > STATE_IDENTITY_BUDGET_MS) {

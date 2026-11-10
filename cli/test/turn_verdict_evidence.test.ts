@@ -273,6 +273,43 @@ describe("D-04: the verdict follows this turn's evidence", () => {
     }
   });
 
+  for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+    test(`a command that edits a tracked file marked ${flag} is UNVERIFIED`, async () => {
+      const edit = { kind: "tools" as const, calls: [{ name: "run_command", args: { command: "echo x >> base.txt" } }] };
+      const { results: [r], repo } = await turns([edit], [], (dir) => {
+        execSync(`git update-index ${flag} base.txt`, { cwd: dir, stdio: "ignore" });
+      });
+      try {
+        assert.match(fs.readFileSync(path.join(repo, "base.txt"), "utf-8"), /x/);
+        assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+      } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("a git that hangs while the workspace state is read leaves the state unknown and the obligation standing", async () => {
+    const wrapper = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-slowgit-"));
+    const realGit = execSync("which git", { encoding: "utf-8" }).trim();
+    fs.writeFileSync(path.join(wrapper, "git"), `#!/bin/sh\nfor a in "$@"; do [ "$a" = "--cached" ] && sleep 1; done\nexec ${realGit} "$@"\n`, { mode: 0o755 });
+    const saved = { PATH: process.env.PATH, ms: process.env.NEXUS_GIT_TIMEOUT_MS };
+    try {
+      process.env.PATH = `${wrapper}:${saved.PATH}`;
+      process.env.NEXUS_GIT_TIMEOUT_MS = "300";
+      const { results: [r], repo } = await turns([echo]);
+      try {
+        assert.equal(r.turnEvidence?.workspaceChanged, "unknown");
+        assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+      } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    } finally {
+      process.env.PATH = saved.PATH;
+      if (saved.ms === undefined) delete process.env.NEXUS_GIT_TIMEOUT_MS; else process.env.NEXUS_GIT_TIMEOUT_MS = saved.ms;
+      fs.rmSync(wrapper, { recursive: true, force: true });
+    }
+  });
+
   describe("a real file write the workspace identity cannot see is never reported as no change", () => {
     const ignored = { ".gitignore": "build/\n", "build/old.js": "x\n" };
     async function ignoredTurn(script: Reply | Reply[]): Promise<{ r: TurnResult; repo: string }> {
