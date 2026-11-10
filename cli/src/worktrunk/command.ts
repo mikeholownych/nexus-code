@@ -272,7 +272,7 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
   if (deps.signal?.aborted) return { success: false, output: "Cancelled while the model was being asked: nothing was merged, committed or removed." };
 
   try {
-    const options: MergeOptions = { ...aiOptions, expectedState: { branch: mctx.branch, head: mctx.gateState.head, tree: mctx.gateState.tree }, ...(generated.message ? { message: generated.message } : {}) };
+    const options: MergeOptions = { ...aiOptions, target: mctx.targetName, expectedState: { branch: mctx.branch, head: mctx.gateState.head, tree: mctx.gateState.tree }, ...(generated.message ? { message: generated.message } : {}) };
     const result = mergeWorktree(ctx, options);
     return { ...result, output: `${generated.note}\n${result.output}` };
   } catch (err) {
