@@ -92,6 +92,8 @@ export function driverRefusal(run: (args: string[], input: string) => string, fi
   return undefined;
 }
 
+/** Ignored trees (node_modules, build output) scale with the repository, not the change: about 6 s per 90k files. */
+const IGNORED_LISTING_TIMEOUT_MS = 180_000;
 const SOURCE_FILE_MAX = 4 * 1024 * 1024;
 const SOURCE_TOTAL_MAX = 64 * 1024 * 1024;
 const ADDED_FILE_MAX = 16 * 1024 * 1024;
@@ -186,9 +188,15 @@ function attributesTree(root: string, scratch: string, files: string[]): { tree:
  * `omittedNew`: a protected file moved and rewritten, or one whose lines were copied out, may otherwise reach the diff
  * as an innocent new file. Independently of git's heuristics, an added file is omitted (and counted the same way) when
  * it equals a protected file present in the workspace, tracked, untracked or ignored, or shares a significant line
- * with one (see `protectedContent`); that covers `cp .env notes.txt` and a partial copy of any size. Limit: lines
- * pasted from a protected file into a file that already existed at the base are not recognised (modified files are not
- * line-compared); credential redaction is the only guard for those.
+ * with one (see `protectedContent`); that covers `cp .env notes.txt` and a partial copy of any size.
+ * Limits of that comparison, where credential redaction is the only guard: lines pasted from a protected file into a
+ * file that already existed at the base (modified files are not line-compared); any re-formatting of a protected
+ * file's lines (quoting, a changed separator, values only, re-encoding), because a line matches only exactly once
+ * trimmed and is at least 8 characters; and a protected file whose lines are all shorter than that, which is caught
+ * only by an exact whole-file match. The trade-off is over-omission: a new file sharing a common line (such as
+ * NODE_ENV=development) with any protected file in the workspace, an ignored `.env*` included, is omitted and noted.
+ * The pass listing ignored files takes up to IGNORED_LISTING_TIMEOUT_MS (about 6 s per 90k ignored files); a tree too
+ * large for it fails closed with an error rather than being trusted.
  * Any git failure or an unmanageable path count returns an error: nothing is ever kept because it could not be
  * classified.
  */
@@ -198,11 +206,11 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
   let scratch: string | undefined;
   let attrs: { tree: string; objects: string } | undefined;
   // `ownIndex` reads the repository's own index (never written: only listed); everything else uses the scratch index.
-  const git = (args: string[], options: { okExit?: number[]; input?: string; maxBuffer?: number; ownIndex?: boolean } = {}): string => {
+  const git = (args: string[], options: { okExit?: number[]; input?: string; maxBuffer?: number; ownIndex?: boolean; timeoutMs?: number } = {}): string => {
     try {
       return execFileSync("git", [...GIT_SAFE, ...args], {
         cwd: root, env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch!, "index"), attrs), encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-        timeout: 30_000, maxBuffer: options.maxBuffer ?? GIT_MAX_BUFFER, ...(options.input === undefined ? {} : { input: options.input }),
+        timeout: options.timeoutMs ?? 30_000, maxBuffer: options.maxBuffer ?? GIT_MAX_BUFFER, ...(options.input === undefined ? {} : { input: options.input }),
       });
     } catch (err: any) {
       if (typeof err?.status === "number" && options.okExit?.includes(err.status) && typeof err.stdout === "string") return err.stdout;
@@ -217,7 +225,7 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     git(["read-tree", "--end-of-options", commit]);
-    const listing = (args: string[], ownIndex = false) => git(["ls-files", "-z", ...args], { maxBuffer: LISTING_MAX_BUFFER, ownIndex }).split("\0").filter(Boolean);
+    const listing = (args: string[], ownIndex = false, timeoutMs?: number) => git(["ls-files", "-z", ...args], { maxBuffer: LISTING_MAX_BUFFER, ownIndex, timeoutMs }).split("\0").filter(Boolean);
     // New paths: untracked files git does not ignore, plus files tracked now but not at the base (a force-added file
     // can match .gitignore and still be part of the candidate).
     const atBase = new Set(listing([]));
@@ -268,7 +276,7 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     const protectedChanged = groups.some(isProtected);
     // Git's copy detection stops at its similarity threshold and never sees an ignored protected file, so an added file
     // is also compared with the content of every protected file present in the workspace.
-    const ignored = listing(["--others", "--ignored", "--exclude-standard"]).filter((p) => !p.endsWith("/"));
+    const ignored = listing(["--others", "--ignored", "--exclude-standard"], false, IGNORED_LISTING_TIMEOUT_MS).filter((p) => !p.endsWith("/"));
     const sources = protectedContent(root, [...new Set([...atBase, ...ownIndex, ...untracked, ...ignored])].filter((p) => inputPathProtection(security, p) !== undefined));
     let omitted = 0;
     let omittedNew = 0;

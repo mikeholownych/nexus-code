@@ -381,7 +381,7 @@ export class OperationRunner {
       observeSuccess: () => this.registry.observeSuccess(resource),
       shouldYield: (_f, delay) => this.shouldYield(unit, resource, delay),
       ...(workspace ? { workspace } : {}),
-      ...(workspace && this.git?.isSnapshotUnit(unit.id) ? { diagnostic: true as const } : {}),
+      ...(workspace && unit.role === "failure_debugger" && this.git?.isSnapshotUnit(unit.id) ? { diagnostic: true as const } : {}),
     };
     try {
       if (recoverMerged) {
