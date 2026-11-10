@@ -28,7 +28,7 @@ import { protectArchivedMessages } from "./persistence_protection.js";
 import { updateTaskMessages, readTaskMessages, TaskMessageLogError, type TaskMessageCursor } from "./task_message_log.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
 
-import { CURRENT_STATE_SCHEMA_VERSION, normalizeWorktreeBinding } from "./state_schema.js";
+import { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION, normalizeWorktreeBinding } from "./state_schema.js";
 export { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION } from "./state_schema.js";
 
 interface StoredTaskRecord {
@@ -248,8 +248,10 @@ export class CorruptStateError extends TaskStateError {
 export class UnsupportedSchemaVersionError extends TaskStateError {
   public readonly version: number;
   public readonly maxSupported: number;
-  constructor(version: number, maxSupported: number = CURRENT_STATE_SCHEMA_VERSION) {
-    super(`State was created by a newer Nexus (schema ${version}); upgrade to load this state. (Highest supported version is ${maxSupported})`);
+  constructor(version: number, maxSupported: number = CURRENT_STATE_SCHEMA_VERSION, kind: "schema" | "binding" = "schema") {
+    super(kind === "binding"
+      ? `Worktree binding was created by a newer Nexus (binding version ${version}); upgrade to load this state. (Highest supported binding version is ${maxSupported})`
+      : `State was created by a newer Nexus (schema ${version}); upgrade to load this state. (Highest supported version is ${maxSupported})`);
     this.name = "UnsupportedSchemaVersionError";
     this.version = version;
     this.maxSupported = maxSupported;
@@ -547,7 +549,7 @@ export class DurableStateManager {
     if (state.worktreeBinding) {
       // The same rules as loadTaskState applies (state_schema.ts), so a record this build writes is one it can read.
       const problem = normalizeWorktreeBinding(state.worktreeBinding);
-      if (problem?.problem === "unsupported") throw new UnsupportedSchemaVersionError(problem.version);
+      if (problem?.problem === "unsupported") throw new UnsupportedSchemaVersionError(problem.version, WORKTREE_BINDING_VERSION, "binding");
       if (problem) throw new TaskStateWriteError(state.taskId, problem.reason);
     }
     state.updatedAt = new Date().toISOString();
@@ -1143,7 +1145,7 @@ export class DurableStateManager {
     if (!state.worktreeBinding) return;
     const problem = normalizeWorktreeBinding(state.worktreeBinding);
     if (!problem) return;
-    if (problem.problem === "unsupported") throw new UnsupportedSchemaVersionError(problem.version);
+    if (problem.problem === "unsupported") throw new UnsupportedSchemaVersionError(problem.version, WORKTREE_BINDING_VERSION, "binding");
     throw new CorruptStateError(taskId, problem.reason, this.quarantineFile(record.filePath));
   }
 

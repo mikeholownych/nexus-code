@@ -180,6 +180,28 @@ describe("named worktree binding", () => {
     } finally { f.cleanup(); }
   });
 
+  test("a future binding version is reported as a binding version, not as a contradictory state schema", () => {
+    const f = fixture();
+    try {
+      const manager = new DurableStateManager({ baseDir: f.tasks, workspacePaths: [WorkspacePath.fromSelectedWorkspace(f.repo), WorkspacePath.fromSelectedWorkspace(f.dir)] });
+      const future = WORKTREE_BINDING_VERSION + 1;
+      const expectMessage = (error: unknown) => {
+        const message = (error as Error).message;
+        assert.ok(error instanceof UnsupportedSchemaVersionError);
+        assert.match(message, new RegExp(`binding version ${future}`), message);
+        assert.match(message, new RegExp(`Highest supported binding version is ${WORKTREE_BINDING_VERSION}\\b`), message);
+        assert.doesNotMatch(message, /schema/i, "it must not talk about the state schema");
+        return true;
+      };
+      assert.throws(() => manager.saveTaskState(stateFor(f, "task-fv", { ...namedBinding(f), bindingVersion: future })), expectMessage);
+      manager.saveTaskState(stateFor(f, "task-fv2", namedBinding(f)));
+      const file = fs.readdirSync(f.tasks).map((n) => path.join(f.tasks, n)).find((n) => n.endsWith("task-fv2.json"))!;
+      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      raw.worktreeBinding.bindingVersion = future;
+      fs.writeFileSync(file, JSON.stringify(raw));
+      assert.throws(() => manager.loadTaskState("task-fv2"), expectMessage);
+    } finally { f.cleanup(); }
+  });
   test("save applies the same binding rules as load: a version without a kind is refused, not defaulted", () => {
     const f = fixture();
     try {
@@ -528,6 +550,47 @@ describe("entering the named worktree before the first turn keeps the conversati
       f.cleanup();
     }
   });
+});
+
+describe("entering the named worktree: the launch-directory cases", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
+  // launch cwd: where the process starts; sandbox: --sandbox is NOT given in any case (the bug was a bridge left unconfined)
+  const cases: Array<{ name: string; start: (f: ReturnType<typeof fixture>) => string; worktree: boolean; enters: boolean; keepsTranscript: boolean }> = [
+    { name: "launched in the primary checkout", start: (f) => f.repo, worktree: true, enters: true, keepsTranscript: false },
+    { name: "launched inside the named worktree itself", start: (f) => f.dir, worktree: true, enters: true, keepsTranscript: true },
+    { name: "launched inside another registered worktree", start: (f) => { git(f.repo, "branch", "feat/other"); runWorktreeCommand(["switch", "feat/other", "--no-copy"], { cwd: f.repo, home: f.home }); return path.join(f.repo, ".nexus", "worktrees", "feat-other"); }, worktree: true, enters: true, keepsTranscript: false },
+    { name: "flag absent", start: (f) => f.repo, worktree: false, enters: false, keepsTranscript: true },
+  ];
+  for (const c of cases) {
+    test(c.name, async () => {
+      const f = fixture(); // feat/bind exists at f.dir
+      const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+      const home = process.env.HOME;
+      process.env.HOME = f.home;
+      let agent: AutonomousAgent | undefined;
+      try {
+        const cwd = c.start(f);
+        agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: cwd, shell: "bash", worktree: c.worktree, ...(c.worktree ? { worktreeBranch: "feat/bind" } : {}) } as any);
+        agent.setMessages([...agent.getMessages(), { role: "user", content: "EARLIER-PROMPT" } as any]);
+        agent.enterNamedWorktreeBeforeTurn();
+        const bridge = (agent as any).bridge;
+        assert.equal(agent.getActiveWorktree()?.kind === "named", c.enters, "binding");
+        assert.equal(/EARLIER-PROMPT/.test(JSON.stringify(agent.getMessages())), c.keepsTranscript, "transcript");
+        if (c.enters) {
+          assert.equal(fs.realpathSync(agent.getConfig().workspace), fs.realpathSync(f.dir), "workspace is the named worktree");
+          assert.equal(bridge.requireSandbox, true, "run_command must be confined without --sandbox");
+          assert.equal(bridge.sandbox, "auto", "worktree isolation turns the sandbox on");
+          assert.equal(fs.realpathSync(bridge.workspace), fs.realpathSync(f.dir), "the bridge runs in the worktree");
+        } else {
+          assert.equal(bridge.requireSandbox, false);
+        }
+      } finally {
+        agent?.shutdown();
+        await gw.close();
+        if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+        f.cleanup();
+      }
+    });
+  }
 });
 
 describe("resuming inside the saved named worktree", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {

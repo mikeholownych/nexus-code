@@ -2568,6 +2568,28 @@ export class AutonomousAgent {
     this.resetConversation();
   }
 
+  /**
+   * The shell bridge built at startup knows nothing of the worktree binding: re-create it with the worktree's sandbox
+   * requirement. For a session that already stands in the worktree, where switching workspaces (which does this and
+   * more) would also reset the conversation and objective.
+   */
+  private rebuildBridgeForIsolation(): void {
+    const readOnly = this.isReadOnly();
+    this.bridge.shutdown();
+    this.bridge = new RustCoreBridge(
+      this.config.workspace,
+      this.config.shell,
+      this.config.coreBinaryPath,
+      this.config.dryRun,
+      readOnly,
+      this.bridgeSandboxSetting(),
+      Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
+    );
+    this.bridge.setVerifierTimeoutSecs(this.config.verifierTimeoutSecs);
+    this.applyReadOnlyAuthority(readOnly);
+    this.setupSpineHandlers();
+  }
+
   private bridgeSandboxSetting(): boolean | string | undefined {
     if (!this.activeWorktree) return this.config.sandbox;
     if (!this.config.sandbox || this.config.sandbox === "none") return "auto";
@@ -7328,6 +7350,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       try { return fs.realpathSync(this.config.workspace) === fs.realpathSync(named.path); } catch { return false; }
     })();
     if (!standingInIt) this.switchWorktreeWorkspace(named.path);
+    else this.rebuildBridgeForIsolation();
     console.log(pc.cyan(`🌲 ${named.created ? "Created" : "Reusing"} named git worktree: ${named.branch} at ${named.path}`));
   }
 
