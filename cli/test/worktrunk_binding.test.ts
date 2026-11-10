@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { DurableStateManager, CorruptStateError, TaskStateWriteError, UnsupportedSchemaVersionError, CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION, type DurableTaskState } from "../src/core/state.js";
-import { isManagedWorktreePath, isNamedWorktreePath } from "../src/core/persistence_protection.js";
+import { isManagedWorktreePath, isNamedWorktreePath, redactTaskStateForPersistence } from "../src/core/persistence_protection.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 import { runWorktreeCommand } from "../src/worktrunk/command.js";
 import { buildConfig } from "../src/config.js";
@@ -144,6 +144,23 @@ describe("named worktree binding", () => {
     } finally { f.cleanup(); }
   });
 
+  test("historical state is not trusted when the worktree directory still exists but Git does not list it", () => {
+    const f = fixture();
+    try {
+      const branch = "feature-async-job-12345";
+      const root = WorkspacePath.fromSelectedWorkspace(f.repo);
+      const stray = path.join(f.repo, ".nexus", "worktrees", "stray");
+      fs.mkdirSync(stray, { recursive: true });
+      const state = stateFor(f, "task-stray", { ...namedBinding(f), worktreePath: stray, branch });
+      assert.throws(() => redactTaskStateForPersistence(state, [root], { historical: true }), /no validated worktree identity/);
+      // Only a named binding whose directory is gone is tolerated.
+      fs.rmSync(stray, { recursive: true });
+      assert.doesNotThrow(() => redactTaskStateForPersistence(state, [root], { historical: true }));
+      const taskKind = stateFor(f, "task-kind", { ...namedBinding(f), kind: "task", worktreePath: stray, branch });
+      assert.throws(() => redactTaskStateForPersistence(taskKind, [root], { historical: true }), /no validated worktree identity/);
+    } finally { f.cleanup(); }
+  });
+
   test("save applies the same binding rules as load: a version without a kind is refused, not defaulted", () => {
     const f = fixture();
     try {
@@ -208,6 +225,29 @@ describe("host-side Git in a named worktree", () => {
       git(f.dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "work");
       assert.equal(git(f.dir, "status", "--porcelain"), "", "tree is clean after the commit");
       assert.equal(manager.hasChangesAt(f.dir, "feat/bind"), true, "a commit the primary checkout lacks is work to verify");
+    } finally { f.cleanup(); }
+  });
+
+  test("hasChangesAt compares against the primary checkout even when launched inside the named worktree", () => {
+    const f = fixture();
+    try {
+      fs.writeFileSync(path.join(f.dir, "b.txt"), "two\n");
+      git(f.dir, "add", "b.txt");
+      git(f.dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "work");
+      const inside = new WorktreeManager(f.dir);
+      assert.equal(inside.hasChangesAt(f.dir, "feat/bind"), true, "commits main lacks are work even when the session runs in the worktree");
+    } finally { f.cleanup(); }
+  });
+
+  test("hasChangesAt resolves the branch as a branch, not a same-named tag", () => {
+    const f = fixture();
+    try {
+      fs.writeFileSync(path.join(f.dir, "b.txt"), "two\n");
+      git(f.dir, "add", "b.txt");
+      git(f.dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "work");
+      git(f.repo, "tag", "feat/bind", "HEAD");
+      const manager = new WorktreeManager(f.repo);
+      assert.equal(manager.hasChangesAt(f.dir, "feat/bind"), true, "a tag at main's HEAD must not hide the branch's commits");
     } finally { f.cleanup(); }
   });
 

@@ -254,9 +254,11 @@ export function redactTaskStateForPersistence<T extends {
   // A binding Git lists on the recorded branch and Nexus manages (task) or registered (named). Computed once, lazily.
   let validatedBinding: boolean | undefined;
   const bindingValidated = (): boolean => {
-    // Historical state (a record being loaded again) may name a worktree that has since been removed: its binding is
-    // inactive, not invalid, and what was persisted is read back verbatim. Positively classified material is still refused.
-    validatedBinding ??= options.historical === true || worktreePath !== undefined && (
+    // Historical state (a record being loaded again) may name a named worktree that has since been removed: that binding
+    // is inactive, not invalid, and what was persisted is read back verbatim. Only that case is tolerated; every other
+    // binding must still validate. Positively classified material is refused either way.
+    validatedBinding ??= worktreePath !== undefined && (
+      (options.historical === true && value.worktreeBinding?.kind === "named" && !fs.existsSync(worktreePath)) ||
       isManagedWorktreePath(selectedWorkspace, worktreePath, value.taskId, value.worktreeBinding ?? {}) ||
       isNamedWorktreePath(selectedWorkspace, worktreePath, value.worktreeBinding ?? {}));
     return validatedBinding;

@@ -213,7 +213,7 @@ export class WorktreeManager {
 
   /** Returns whether a speculative worktree contains changes or commits to verify. */
   public hasChanges(taskId: string): boolean {
-    return this.hasChangesAt(path.join(this.getWorktreesBaseDir(), taskId), `nexus/${taskId}`);
+    return this.hasChangesAt(path.join(this.getWorktreesBaseDir(), taskId), `nexus/${taskId}`, this.checkoutRoot);
   }
 
   /**
@@ -258,12 +258,13 @@ export class WorktreeManager {
 
   /**
    * Whether the worktree at `worktreePath` holds work the primary checkout lacks: uncommitted, untracked or ignored
-   * output (Nexus's own `.nexus/` state excepted), or commits on `branch` ahead of the primary checkout's HEAD.
+   * output (Nexus's own `.nexus/` state excepted), or commits on `branch` ahead of `baseRoot`'s HEAD (default: the primary checkout, never the launching worktree;
+   * task worktrees pass the checkout they merge back into). `branch` is resolved as a branch, never as a same-named tag.
    * A missing directory holds nothing. Git runs with the worktree feature's pinned flags, and only after the
    * worktree's `.git` pointer has been verified; an unreadable or unverifiable worktree counts as changed, because
    * it is not safe to merge or complete as verified.
    */
-  public hasChangesAt(worktreePath: string, branch: string): boolean {
+  public hasChangesAt(worktreePath: string, branch: string, baseRoot: string = this.gitRoot): boolean {
     if (!fs.existsSync(worktreePath)) return false;
     try {
       if (!this.isLinkedWorktree(worktreePath)) return true;
@@ -273,7 +274,7 @@ export class WorktreeManager {
         .map((line) => line.trim())
         .some((line) => line.length > 0 && !/^(!!|\?\?) \.nexus(\/|$)/.test(line));
       if (dirty) return true;
-      const ahead = pinnedGit(this.checkoutRoot, ["rev-list", "--count", "--end-of-options", `HEAD..${branch}`]).stdout.trim();
+      const ahead = pinnedGit(baseRoot, ["rev-list", "--count", "--end-of-options", `HEAD..refs/heads/${branch}`]).stdout.trim();
       return Number(ahead) > 0;
     } catch {
       // An unreadable worktree is not safe to merge as verified.
