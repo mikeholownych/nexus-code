@@ -89,7 +89,7 @@ def main():
     s.pump(0.2)
     result["after_typing_across"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
     result["draft_kept"] = has(s.color.lines(), typed)
-    s.pump(0.5)
+    s.pump(1.4)  # every ignored key in the run restarted the one-second wait
     s.send("n", settle=0.5)
     result["after_typing_then_deny"] = decisions(commands)
     wait_events(events, "turn.result", 1, 30, s)
