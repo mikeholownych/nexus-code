@@ -62,6 +62,12 @@ function initializedSubmodules(dir: string): string[] {
   return found;
 }
 
+/** True when the entry is an automated task worktree (branch `nexus/<id>` under `.nexus/worktrees/`). */
+function isSpeculativeEntry(repo: Repo, entry: { branch?: string; path: string }): boolean {
+  const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;
+  return Boolean(entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase));
+}
+
 /** Paths `git status` reports for the worktree, read through the pinned helper (no shell, no fsmonitor, no hooks). */
 function changedFiles(dir: string): string[] {
   const records = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]).stdout.split("\0").filter(Boolean);
@@ -127,8 +133,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (!source || source.isMain) throw new WorktreeError("run `worktree merge` from inside the worktree you want to merge, not the main checkout");
   if (!source.branch) throw new WorktreeError("the current worktree is on a detached HEAD; create a branch first");
   const branch = source.branch;
-  const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;
-  if (branch.startsWith("nexus/") && source.path.startsWith(taskBase)) {
+  if (isSpeculativeEntry(repo, source)) {
     throw new WorktreeError(`the current worktree is a speculative task worktree (${shownBranch(branch)}); speculative worktrees cannot be merged with \`worktree merge\``);
   }
   const targetName = options.target ? resolveBranchName(repo, options.target) : defaultBranch(repo);
@@ -136,7 +141,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (targetName === branch) throw new WorktreeError("the target is the branch being merged");
   const targetEntry = repo.entries.find((entry) => entry.branch === targetName);
   if (!targetEntry || targetEntry.prunable) throw new WorktreeError(`target ${shownBranch(targetName)} is not checked out in any worktree; run \`worktree switch ${shownBranch(targetName)}\` first`);
-  if (targetName.startsWith("nexus/") && targetEntry.path.startsWith(taskBase)) {
+  if (isSpeculativeEntry(repo, targetEntry)) {
     throw new WorktreeError(`target ${shownBranch(targetName)} is a speculative task worktree; speculative worktrees cannot be merged into`);
   }
 
@@ -272,7 +277,6 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
   const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
   if (!targetSha) throw new WorktreeError("this repository has no default branch to compare against");
 
-  const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;
   const lines: string[] = [];
   const counts = { removed: 0, kept: 0, young: 0, stale: 0 };
   let limited = false;
@@ -303,7 +307,7 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
       continue;
     }
     if (entry.locked) { keep(entry, "locked"); continue; }
-    if (entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase)) { keep(entry, "speculative task worktree"); continue; }
+    if (isSpeculativeEntry(repo, entry)) { keep(entry, "speculative task worktree"); continue; }
     try {
       const touched = Math.max(fs.statSync(entry.path).mtimeMs, Number(gitOut(repo.cwd, ["log", "-1", "--format=%ct", "--end-of-options", entry.head], { timeoutMs: 5000 })) * 1000);
       if (now - touched < minAge) { counts.young++; continue; }

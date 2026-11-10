@@ -777,18 +777,7 @@ test("merge rejects speculative task worktrees", () => {
 test("merge with initialized submodule retains the worktree with an explanatory note", () => {
   const f = fixture();
   try {
-    const subrepo = path.join(f.root, "subrepo");
-    fs.mkdirSync(subrepo);
-    git(subrepo, "init", "-q", "-b", "main");
-    git(subrepo, "config", "user.email", "t@example.com");
-    git(subrepo, "config", "user.name", "T");
-    git(subrepo, "config", "commit.gpgsign", "false");
-    commitFile(subrepo, "s.txt", "sub\n", "sub init");
-    git(f.repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subrepo, "sub");
-    git(f.repo, "commit", "-q", "-m", "add submodule");
-
-    const dir = feature(f, "feat/clean-sub");
-    git(dir, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
+    const { dir } = withSubmodule(f, "feat/clean-sub");
     commitFile(dir, "b.txt", "b\n", "add b");
 
     const r = wt(f, dir, ["merge"]);
