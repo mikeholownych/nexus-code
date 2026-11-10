@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01WHs7UsaGTp47BC2phYz7S8",
+  "agent_id": "a386d9ea641106464",
+  "task_description": "Independent review of PR 449 checkpoint fix",
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 167810,
+    "cache_read_tokens": 2269034,
+    "output_tokens": 8906,
+    "api_call_count": 38
+  },
+  "started_at": "2026-11-10T19:27:39.568511941Z",
+  "completed_at": "2026-11-10T20:13:24.558281883Z"
+}

@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01TDWf7wwDrSyX17hhPTB55S",
+  "agent_id": "a0ac9f38f725b1166",
+  "task_description": "Fix new Entire findings up the stack",
+  "token_usage": {
+    "input_tokens": 340,
+    "cache_creation_tokens": 1031337,
+    "cache_read_tokens": 22612446,
+    "output_tokens": 75203,
+    "api_call_count": 160
+  },
+  "started_at": "2026-11-10T18:31:08.02345508Z",
+  "completed_at": "2026-11-10T18:42:19.489500339Z"
+}

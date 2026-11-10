@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_0143gZWEwRJUbBN3sBqkcvqJ",
+  "agent_id": "acd022fbb5d67d6d5",
+  "task_description": "Review PR 449 refactor delta",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 44500,
+    "cache_read_tokens": 1165162,
+    "output_tokens": 6578,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-10T20:23:45.890497675Z",
+  "completed_at": "2026-11-10T20:30:08.725630323Z"
+}

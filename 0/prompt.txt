@@ -1,0 +1,837 @@
+continue
+
+---
+
+<task-notification>
+<task-id>a5418fe1389ac421e</task-id>
+<tool-use-id>toolu_01SsiNtY5tdWaVaLD8vkB4Ru</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a5418fe1389ac421e.output</output-file>
+<status>completed</status>
+<summary>Agent "I-3 surface agreement test" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #476 is open and not merged: https://github.com/mikeholownych/nexus-code/pull/476
+
+**Real mismatch found and fixed.** The REPL and sidecar surfaces each assembled their own facts, and four of the six fields did not agree:
+- **Sidecar:** `session.state` had no read-only flag, context tokens used, context limit or endpoint kind.
+- **REPL:** `/status` had no read-only flag, context tokens used or endpoint kind. It also showed the bare model where `session.state` showed `provider · model`.
+- **REPL `/status` handler:** it is `printStatus` in `cli/src/repl.ts`, separate from the sidecar's slash `status` handler.
+
+**Fix.**
+- New `cli/src/surface_facts.ts` holds one `surfaceFacts()` that both surfaces now read.
+- `session.state` gains optional `read_only`, `context_tokens`, `context_limit` and `endpoint_kind`.
+- Verbose REPL `/status` gains `READ-ONLY` and `CONTEXT` lines and an endpoint-kind suffix.
+- I did not rebuild or run the Rust TUI. Its deserializer ignores unknown fields, so the added fields are safe, and its status line renders the `session.state` event.
+
+**Test.** `cli/test/surface_agreement.test.ts` drives one session through both surfaces and compares the six fields one by one:
+- **Setup:** a read-only session with one turn through a fake SSE gateway.
+- **Red first:** it failed with `REPL /status reports read_only`.
+- **Green after the fix:** passes.
+- **Mutation check:** inverting `read_only` in the sidecar turned it red with `read_only: REPL /status says yes, sidecar session.state says no`. I reverted the mutation.
+
+**Test run.** `CI=true node scripts/run_tests.mjs` over `surface_agreement`, `sidecar`, `protocol`, `sidecar_surface`, `app`, `repl_readonly_commands` and `sidecar_projection` gave 102 tests, 102 pass, 0 fail. `tsc --noEmit` is clean.
+
+**Existing test edited.** In `cli/test/sidecar.test.ts`, "an exception escaping runTurn" counts `getAgent()` calls to throw inside the turn. `emitSessionState` now calls `getAgent()` once instead of twice, so I changed the index from `calls === 3` to `calls === 2`. It passed at base before my change.
+
+**FINDINGS.** Row I-3 in `docs/v1.1.4/FINDINGS.md` now reads FIXED with the test name. No other row was touched, and no status table mirrors it.
+
+**Setup.**
+- **`core/target`:** the worktree has none. I did not create the symlink or build it, because no test I ran needs the native core.
+- **`cli/node_modules`:** the main checkout has none either. I ran `npm ci` inside the worktree's `cli/`, which is gitignored.</result>
+<usage><subagent_tokens>106010</subagent_tokens><tool_uses>35</tool_uses><duration_ms>359100</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<tool-use-id>toolu_01KXMcvLkKQfhM7qMhyNi8kQ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The head-side run is still going. I'll continue once the monitor fires.</result>
+<usage><subagent_tokens>80695</subagent_tokens><tool_uses>32</tool_uses><duration_ms>390404</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>**Verdict: REQUEST CHANGES** on head 82197fa7a6f3c452e48599b8b3497a5a2108ef8d, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6770878034. The I-3 test is genuine for six of the seven fields, but session id is not really compared.
+
+1. **I-3 mutations:** I mutated the sidecar side, the REPL side and `surface_facts.ts` one field at a time, then reverted each.
+   - Red for mode, read_only, context_tokens, context_limit, model and endpoint_kind on both surfaces.
+   - A sidecar `session: "zz"` mutation stays green. The test sets the REPL's `currentSessionId` from the sidecar event, so the comparison is circular, yet FINDINGS marks I-3 FIXED including session id.
+   - Only the no-provider model case is tested. The model parse regex would cut "prov · model" at the first " · ", so a provider session would fail for the wrong reason.
+2. **`surface_facts.ts`:**
+   - The new protocol fields are optional, and the Rust `SessionState` deserializer has no `deny_unknown_fields`, so unknown keys are ignored.
+   - The TUI does not render the four new fields, so the FINDINGS wording about the TUI status line is only true for model, mode and session.
+   - Non-verbose `/status` now prints "provider · model" for a named provider where it printed the bare model before. That is a user-visible change the PR does not mention.
+   - Nothing newly shown needs redaction: only the local/cloud class, a boolean and token counts were added.
+3. **`calls === 3` to `calls === 2` in `sidecar.test.ts`:** legitimate. `emitSessionState` now calls `getAgent` once instead of twice. With `calls === 3` restored on head, the test goes red, and its assertions are unchanged.
+4. **FINDINGS:** only row I-3 changed, and there is no other mirror of I-3 in the docs.
+5. **Suites, head vs base:** the failing sets are identical, 32 failing tests (86 failure lines) in both, all existing host-environment failures such as doctor `--deep` and the journal worker. Head ran one more test than base, the new I-3 test, and it passes.
+6. **CI:** CodeQL, javascript-typescript, cloudflare-experiment (22 and 24) and CodeRabbit pass. CodeRabbit's pass is "review skipped", not a review. `test-matrix` (22 and 24) and Entire Gates were still pending when I checked.
+
+The review worktrees are `/home/mike/nexus-wt/rev-476` and `/home/mike/nexus-wt/rev-476-base`, both clean. I have not removed them.</result>
+<usage><subagent_tokens>85180</subagent_tokens><tool_uses>35</tool_uses><duration_ms>441875</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5418fe1389ac421e</task-id>
+<tool-use-id>toolu_014DtcJsdBMmWfJvDZnw1nj9</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a5418fe1389ac421e.output</output-file>
+<status>completed</status>
+<summary>Agent "I-3 surface agreement test" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've pushed the review fixes to PR #476; the new head is `81b7d153ee6dd909082704b1f60c9f54cecf6a94`. I did not merge it.
+
+1. **Session id.** The REPL side now resumes the session the sidecar saved, by id, and reports the id it holds itself. The test no longer sets the REPL's session id from the sidecar event. Setting the sidecar's `session` to `"zz"` turns both cases red: `session: REPL /status says session_…, sidecar session.state says zz`.
+2. **Provider case and model parse.** The test now runs two cases, one with no provider and one with provider `compatible`, where the model reads `compatible · m`. Both compare the model field. The model parse cuts only at the header's two-space `·` separator, so the `·` inside "provider · model" no longer breaks it. Setting the sidecar model to `"x"` turns both cases red.
+3. **Non-verbose `/status`.** It prints the bare model again, and only verbose prints "provider · model". The test pins the non-verbose line, and I added a line to the PR body.
+4. **FINDINGS I-3.** It now says the TUI status line renders only model, mode and session from `session.state`. The four new fields are carried on the event but not rendered by the TUI.
+
+After resuming, the REPL reloads the conversation into the shared agent, which shifts the token estimate by a few tokens. The test therefore has the sidecar emit a fresh `session.state` after the resume, and both surfaces measure the same state.
+
+The seven related suites pass (103 tests, 0 failures) and `tsc --noEmit` is clean. I reverted both mutations.</result>
+<usage><subagent_tokens>113535</subagent_tokens><tool_uses>5</tool_uses><duration_ms>114202</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<tool-use-id>toolu_01M4KCKCiqDMF3D3KiQLPJko</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>**Verdict: ACCEPT** at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516. The code is fine, but merge should wait for CI: `test-matrix` (22 and 24) and Entire Gates were still pending when I checked.
+
+All four earlier findings are fixed:
+- **Session id:** both session mutations (sidecar `session.state` and the REPL `session` line) now turn the test red. The REPL resumes the saved session by id and reports the id it holds, so the comparison is no longer circular.
+- **Model and provider:**
+  - A second test covers the provider case, where the model reads "compatible · m".
+  - The model parse regex no longer splits "provider · model" at the wrong place.
+  - Mutating the sidecar model or the REPL verbose model turns the test red.
+  - Dropping or ignoring the provider prefix in `surface_facts.ts` turns the provider test red.
+  - I reverted every mutation after each run.
+- **Non-verbose `/status`:** the MODEL line still prints the bare `config.model`, as on base, and a mutation making it print `facts.model` fails the test. The only output differences are the verbose-only RUNTIME `(local|cloud)`, READ-ONLY and CONTEXT lines.
+- **FINDINGS row I-3:** it now says the TUI renders only model, mode and session, and that the four new fields are carried on the event but not rendered. Only that row changed.
+
+**Related suites:** I compared 15 related suites at the merge-base 1afac62e against the PR head. I also ran `surface_agreement` on the head, which has no base counterpart. Base had 268 tests with 32 failing; the head had 270 with 32 failing. The two extra tests are the new I-3 tests, which pass. The failing set is identical, all pre-existing host-environment failures.
+
+**Optional follow-up:** the provider test has no credential, so its turn ends in an inference error instead of "Done." The comparison is still valid because the session is saved with the prompt. Setting `NEXUS_COMPATIBLE_API_KEY` in that test would avoid the logged error.
+
+**CI:** CodeQL, javascript-typescript, cloudflare-experiment (22 and 24) and CodeRabbit pass. CodeRabbit's pass is "review skipped", not a review.
+
+Both review worktrees were clean and are removed.</result>
+<usage><subagent_tokens>97264</subagent_tokens><tool_uses>42</tool_uses><duration_ms>794940</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That monitor notice is a stale timeout from the earlier wait, and nothing more is needed from it. The head-versus-base suite comparison it was watching has already finished, and the final verdict has been posted.
+
+**Final state:** ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516. `test-matrix` (22 and 24) and Entire Gates were still pending when I last checked, so merge should wait for them. Both review worktrees are removed.</result>
+<usage><subagent_tokens>97126</subagent_tokens><tool_uses>42</tool_uses><duration_ms>864212</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This is another stale monitor timeout from the earlier wait, so no action is needed. The review is complete: ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516. Merge should wait for `test-matrix` (22 and 24) and Entire Gates, which were still pending at my last check.</result>
+<usage><subagent_tokens>97559</subagent_tokens><tool_uses>42</tool_uses><duration_ms>867965</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This is also a stale timeout from the earlier waiting, so nothing needs doing. The review is finished with the verdict ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516.</result>
+<usage><subagent_tokens>97956</subagent_tokens><tool_uses>42</tool_uses><duration_ms>871627</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Another stale monitor timeout from the earlier wait, so no action is needed. The verdict stands: ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516.</result>
+<usage><subagent_tokens>98351</subagent_tokens><tool_uses>42</tool_uses><duration_ms>873335</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This is one more stale monitor timeout, and nothing needs doing. The review is complete: ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516.</result>
+<usage><subagent_tokens>98736</subagent_tokens><tool_uses>42</tool_uses><duration_ms>979369</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a10052a86b8ce6e05</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a10052a86b8ce6e05.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This is a stale monitor timeout, so I'm taking no action. The review is complete: ACCEPT at head 81b7d153ee6dd909082704b1f60c9f54cecf6a94, posted at https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6771031516.</result>
+<usage><subagent_tokens>99119</subagent_tokens><tool_uses>42</tool_uses><duration_ms>984114</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bngr22vb0</task-id>
+<tool-use-id>toolu_016sT1RMGyobcz5mHQfDxU97</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/bngr22vb0.output</output-file>
+<status>completed</status>
+<summary>Background command "until [ "$(gh pr view 476 --json statusCheckRollup --jq '[.statusCheckRollup[]|select(.status=="IN_PROGRESS" or .status=="QUEUED" or .status=="PENDING")]|length')" = 0 ]; do sleep 120; done; gh pr view 476 --json mergeStateStatus,headRefOid,statusCheckRollup --jq '"\(.headRefOid[0:8]) \(.mergeStateStatus) fail=\([.statusCheckRollup[]|select(.conclusion=="FAILURE")|.name])"'" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+223 still has findings in Entire
+
+---
+
+<task-notification>
+<task-id>ac7e76adc54d2c175</task-id>
+<tool-use-id>toolu_01YSao9uDWSES3cuCpgBZy1X</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/ac7e76adc54d2c175.output</output-file>
+<status>completed</status>
+<summary>Agent "Extend TUI for I-3 fields" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both findings are fixed in code and pushed to `v1/v114-i3-surface-agreement`; new head is `83eb70374954490700adb5644d28f9323d48f20f`. I did not merge, and I did not resolve the Entire findings (`01M72ZHNPYCX` Low, `01M72ZHNPFPP` Medium). That is for the owner or reviewer.
+
+**LOW (REPL `/status`)**
+- In `cli/src/repl.ts`, `printStatus` now builds `facts` once and prints `mode:` and `session` from `facts.mode` and `facts.session`. Non-verbose output is unchanged.
+- The test is not circular again. It still takes the session id from the sidecar's own saved `session.state` event and compares the REPL against that.
+
+**MEDIUM (Rust TUI)**
+- **Protocol:** `Event::SessionState` in `protocol.rs` now parses optional `read_only`, `context_tokens`, `context_limit` and `endpoint_kind`. They default to `None`, so an older sidecar stays compatible.
+- **State:** `live_state.rs` stores them on `Session`.
+- **Status line:** `live_view.rs` `render_status` adds three segments: a "read-only" marker (kept at every width, priority 1), `context used/limit` (priority 6) and endpoint kind (priority 7). The last two are dropped first when the terminal is narrow. The diff is small and additive.
+- **Tests:** I extended `protocol::tests::parses_every_rendered_event_type` to cover the fields both present and absent. I also added `live_view` test `the_status_bar_renders_read_only_context_and_endpoint_kind_and_drops_them_when_narrow`. It checks all three render at 100 columns, read-only survives at 40 columns within the width bound, and an older sidecar shows nothing extra. I wrote the code and tests together, so I did not run a separate red step.
+- **Merge:** `origin/main` was already merged in. I have not checked how this diff sits against #469 and #472.
+
+**FINDINGS.md:** only row I-3 changed. It now says the TUI renders all six fields, names the Rust tests, and states that no PTY capture test was added. The repo has no cheap PTY pattern, and the render test uses the in-process test backend.
+
+**Test results**
+- `cargo test --bin nexus-tui` (package `harness-core`): 257 passed, 0 failed.
+- `cd cli &amp;&amp; CI=true node scripts/run_tests.mjs test/surface_agreement.test.ts test/sidecar.test.ts`: 58 passed, 0 failed.
+- `tsc --noEmit`: clean.
+- `cargo clippy --bin nexus-tui`: no issues.
+- `cargo fmt --check`: fails on files I did not touch (for example `composer.rs`), and it also fails on the base commit. I found no fmt or clippy step in the Makefile or workflows, so I did not reformat.
+
+**Not verified:** I did not run the real `nexus-tui` against a live sidecar end to end, only the unit and render tests. I did not run `make lint`, and the CI result for the new head is not checked yet.</result>
+<usage><subagent_tokens>71520</subagent_tokens><tool_uses>14</tool_uses><duration_ms>164888</duration_ms></usage>
+</task-notification>
+
+---
+
+There should never be any Entire findings left when merge
+
+---
+
+<task-notification>
+<task-id>a06b330e755e17312</task-id>
+<tool-use-id>toolu_01QErZVbK6pZMTUYyKSZMX29</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a06b330e755e17312.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 476 TUI delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I posted ACCEPT on PR #476 at head 83eb70374954490700adb5644d28f9323d48f20f: https://github.com/mikeholownych/nexus-code/pull/476#issuecomment-6773495866. CI on that head is unconfirmed, because GitHub's PR API and checks still showed the old head db677386 when I looked. The Entire Gates and linux-x86_64 checks were pending there.
+
+Both worktrees are removed and the `rev-476b*` grep of `git worktree list` is clean.
+
+- **01M72ZHNPYCX (REPL status):** Addressed. `printStatus` now prints `mode:` and `session` from `facts`. I changed the sidecar session and the REPL session in turn and `surface_agreement` went red both times; I reverted both.
+- **01M72ZHNPFPP (TUI fields):** Addressed. The TUI parses and renders `read_only`, `context_tokens`, `context_limit` and `endpoint_kind`, and the names match `cli/src/sidecar.ts` exactly. I fed a real `session.state` line from the actual sidecar through the Rust parser and all four parsed. An older sidecar that omits them parses to `None` and nothing extra is drawn.
+- **Rust:** `cargo test --bin nexus-tui` gave 257 passed, 0 failed. Changing "context" to "ctx" in the render turned the new test red; I reverted it. In a width sweep from 10 to 200 columns with CJK and accented names there was no panic and no overflow.
+- **FINDINGS:** Only the I-3 row changed, and it now reads accurately, including the note that no PTY capture test was added.
+- **Open PRs:**
+  - **#472:** merges cleanly.
+  - **#469:** conflicts in `docs/v1.1.4/FINDINGS.md` and `docs/v1.1.4/TUI-AUDIT-STATUS.md`, but it already conflicts with current main on those same files, so #476 adds nothing new.
+- **Suites, head vs base:** The related sidecar, protocol, surface_agreement, repl and TUI suites have the same 6 failures on both, apparently from the host environment (they include the PTY test). Head has 2 more passing tests and no other difference.
+
+Non-blocking notes in the comment:
+- At 120 columns with a realistic state (long workspace, branch, posture), `context N/M` is dropped. It only shows at roughly 140 columns or more.
+- In read-only mode "read-only" appears twice on the status line.
+- At 40 columns with mode review, "read-only" was dropped while the endpoint kind stayed, so the code comment that read-only is kept at every width isn't strictly true.
+
+I did not resolve any Entire findings.</result>
+<usage><subagent_tokens>78516</subagent_tokens><tool_uses>22</tool_uses><duration_ms>385238</duration_ms></usage>
+</task-notification>
+
+---
+
+what about PRs 447 and 448?
+
+---
+
+take over both
+
+---
+
+<task-notification>
+<task-id>ac7e301dc8a5d30f4</task-id>
+<tool-use-id>toolu_018RUFTao75V8oCRdAYGjUXr</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/ac7e301dc8a5d30f4.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix #448 Entire finding red-first" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Finding 01M722RZVJFM is fixed and pushed. The new head of `v1/v114-wp1317-merge-ai-message` is `c6e9275a20b290eb1eaeb56e472ed4f4bdfe18a2`, a fast-forward from `06ebad25`.
+
+**Pre-checks:** the worktree was clean, on the right branch, and HEAD matched origin before I started.
+
+**Fix:** I took the smaller option and kept the model call. When the working tree is dirty and `--no-squash` is set, the message only labels the commit of the uncommitted changes. In that case `buildPrompt` in `cli/src/worktrunk/ai_message.ts` now diffs `gateState.head` to the working state instead of `mergeBase` to the working state. In every other case it still diffs the whole branch. `generateMergeMessage` takes an optional `noSquash` option, and `cli/src/worktrunk/command.ts` passes the merge options through. The commit also touches `cli/test/worktrunk_ai_message.test.ts`.
+
+**Tests, in `cli/test/worktrunk_ai_message.test.ts`:**
+- **Red first:** the new `--no-squash` dirty-branch test failed because the prompt contained `earlier.txt`.
+- **Green after the fix:** that file now passes 21 of 21, `cli/test/worktrunk_merge.test.ts` passes 41 of 41, and `tsc --noEmit` is clean.
+- **Squash guard:** I added a second test confirming that a dirty branch that will be squashed still sends the whole branch to the model.
+
+**Entire findings:** `entire trail finding list` for this branch now returns "No findings found". I did not resolve or dismiss anything.
+
+**FINDINGS wording:** the `merge --ai-message` row (WP-1312b) in `docs/v1.1.4/FINDINGS.md` makes no claim about the diff range, so I left it unchanged.
+
+**Deviations from your brief:**
+- **No wrappers:** `scripts/commit-reviewed.sh` and `scripts/push-reviewed.sh` do not exist in this worktree, and no hook blocked plain git. I used plain `git commit` and `git push`.
+- **Rule 5:** `docs/v1.0.0/CONCURRENCY.md` rule 5 says pushing is an owner-approved action. I pushed on your relayed instruction to do so.
+- **`core/target` symlink:** I created it so the tests could run. It does not show in `git status`, so it is ignored or untracked.
+- **Left alone:** I did not touch other worktrees, rebase, or merge anything.</result>
+<usage><subagent_tokens>64910</subagent_tokens><tool_uses>11</tool_uses><duration_ms>120315</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>afe95c5eea6a0bb30</task-id>
+<tool-use-id>toolu_01NsQjx85VvqUT4GNNs8VhUt</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/afe95c5eea6a0bb30.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 448 delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**ACCEPT** at c6e9275a. I posted the verdict as a PR #448 comment (https://github.com/mikeholownych/nexus-code/pull/448#issuecomment-6775154468) and removed the rev-448 worktree.
+
+1. **Logic:** The new condition `state.total &gt; 0 &amp;&amp; noSquash` matches what `mergeWorktree` actually does.
+   - With a dirty tree, `options.message` goes on the dirty commit.
+   - The squash commit reuses it only when `!noSquash &amp;&amp; count &gt; 1`.
+   - The single-commit amend runs only when `!dirty`.
+   - So `gateState.head..gateState.tree` is the diff of exactly that dirty commit. The tree is the `git add -A` tree minus `.nexus`: untracked files are included and ignored files are excluded.
+   - I walked clean/dirty × squash/no-squash, already-ahead and target-advanced, and each picks the right base. Detached HEAD is refused earlier.
+   - Two edge cases do not block this:
+     - A dirty change touching only a submodule or ignored files gives an empty diff, but the merge then commits nothing, so the message is unused.
+     - A dirty squash merge whose edit exactly reverts the earlier commits gets an empty whole-branch diff while the dirty commit still takes the message. That was already the case before this delta.
+2. **Tests:**
+   - **Base:** On the 06ebad25 source with the new tests, `worktrunk_ai_message` fails the new no-squash test (20 pass, 1 fail).
+   - **Head:** `worktrunk_ai_message`, merge, receipt, review, core and `slash_router` give 162 tests with 161 passing.
+   - **The one failure** is `slash_router` "! runs a shell command". It is a Rust core handshake failure from the unbuilt core, and it fails the same way on base, so it is not a regression.
+   - **Mutations that go red:** `&amp;&amp; false`, always using head as the base, and `command.ts` not passing `mergeOptions`. Each fails one test.
+   - **Mutation that stays green:** dropping the `state.total &gt; 0` guard (clean branch, `--no-squash`) passes. That guard is untested; a clean one-commit-ahead `--no-squash --ai-message` test would pin it. This is a nit.
+   - **Real behaviour:** The tests run the real `mergeWorktree` on real git repos with a capturing completer, not a mock of the condition.
+   - **Types:** `tsc --noEmit` is clean.
+3. **Plumbing:** `command.ts` passes `mergeOptions`, whose `noSquash` comes from `parsed.flags.has("no-squash")`. Both new parameters default to `{}`, so existing callers behave as before.
+4. **Entire:** `entire trail finding list` for the branch returns "No findings found.", so there are no open findings and nothing new. I did not resolve anything.
+
+`gh pr checks 448` showed test-matrix (22) and (24) and Entire Gates still pending at review time. cloudflare-experiment passed and CodeRabbit skipped. I did not wait for the pending checks, so merge only once they are green.</result>
+<usage><subagent_tokens>67466</subagent_tokens><tool_uses>14</tool_uses><duration_ms>277731</duration_ms></usage>
+</task-notification>
+
+---
+
+yes
+
+---
+
+<task-notification>
+<task-id>wjry7nbci</task-id>
+<tool-use-id>toolu_01NugsCtqHNmqpMf1X1WKYBF</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/wjry7nbci.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Fix open Entire findings on stacked PRs 445, 446, 449" completed</summary>
+<result>["Both findings on #445 are fixed and pushed, but CI on the new head is still running and Entire has not re-reviewed it yet. I did not resolve or dismiss either finding.\n\n**New head:** `d19278f8e694627258ec29d9e2b064e4fb66e659` on `v1/v114-wp1311-copy-ignored`. It is pushed as `fad3e22a..d19278f8` with plain `git push origin HEAD:v1/v114-wp1311-copy-ignored`. I worked in `/home/mike/nexus-wt/takeover-445` on branch `takeover-445`.\n\n**01M721EBXGTK (Medium, symlink target bypass): real, fixed.**\n- **Reproduced:** the source has a real `data/` directory and `target/out -&gt; ../data/result`. The destination has `data -&gt; /outside`. Before the fix, the link was copied into `target/out` and resolved outside the worktree.\n- **Red:** the new test \"a copied symbolic link whose target runs through a destination link that leaves the worktree is skipped\" failed with \"the link is not installed\" (the link was installed).\n- **Fix:** `cli/src/worktrunk/copy.ts` now has a `linkStaysInside` check in the shared plan step, so the dry run and the real run agree. It walks the link's target through the destination's real layout and skips the link if any step leaves the worktree. Existing destination links that would be kept are covered, as are dangling ones.\n- **Green:** the same test now passes. It also checks that the dry-run count equals the real-run count.\n\n**01M72184R806 (Low, pid-less staging name): real, fixed.**\n- **Reproduced:** `sweepStaging` still accepted the never-released `.nexus-copy-&lt;uuid&gt;.tmp` form and swept it after an hour.\n- **Red:** I changed the existing \"running copy\" test to expect that an hour-old pid-less file survives. It failed against the old code.\n- **Fix:** the regex now matches only `.nexus-copy-&lt;pid&gt;-&lt;uuid&gt;.tmp`, and `STALE_STAGING_MS` and the age rule are removed.\n- **Green:** the updated test passes.\n\n**Docs:** I updated the two WP-1311 rows in `docs/v1.1.4/FINDINGS.md`. One no longer mentions a pid-less form, and the other now says link targets are checked against the destination's real layout.\n\n**Local verification:**\n- `cli/test/worktrunk_copy.test.ts`: 26 pass, 0 fail (it was 24 pass, 2 fail before the fix).\n- `worktrunk_core`: 12 pass, 0 fail.\n- `worktrunk_review`: 36 pass, 0 fail.\n- `npx tsc --noEmit` is clean.\n- `worktrunk_copy.test.ts` is the only test that touches `copy.ts`.\n\n**CI on the exact head (`gh pr checks 445 --repo mikeholownych/nexus-code`):**\n- Entire Gates, cloudflare-experiment (22 and 24), javascript-typescript (CodeQL), and test-matrix (22 and 24) were all pending right after the push.\n- The previous head's CI and CodeQL runs succeeded.\n- I did not wait for these runs to finish, so CI pass is not yet confirmed. Someone should re-run `gh pr checks 445 --repo mikeholownych/nexus-code` and quote the conclusions.\n- Plain `gh pr checks 445` from the main checkout fails with \"no checks reported on the 'v1/v114-wp1311-copy-ignored' branch\", so pass `--repo`.\n\n**Findings re-listed after the push:** only the same two, both still `open` and `current`. That is expected until Entire re-reviews the new head. No new findings are visible yet.\n\n**Not checked:** I did not look at any other PR in the stack.","**New head: `272720f289b5200b72856063daf4298069f492e5`**, pushed to `v1/v114-wp1312-merge-prune` with a plain `git push`. My worktree is `/home/mike/nexus-wt/takeover-446`.\n\nTests and typecheck, all run at the new head:\n- `worktrunk_merge` 42/42, `worktrunk_review` 36/36, `worktrunk_core` 12/12, `worktrunk_copy` 25/25.\n- `egress` 29/29, `slash_router` 37/37.\n- `tsc --noEmit` is clean.\n\n**Open items**\n- GitHub now shows PR #446 as `CONFLICTING` against its base `v1/v114-wp1311-copy-ignored`. The base has advanced, and I did not merge it in.\n- When I re-listed findings after the push, `entire trail finding list` returned \"No findings found\". Entire has not necessarily re-reviewed the new head yet, so that may only mean nothing is listed so far.\n- CI has not run on the new head yet. I did not run the full CI suite locally.\n- The 1-in-700 figure for the flake is my own estimate. I generated 2000 random guard-branch names and 3 were redacted.\n\n**01M721NM14J7 (Medium, merge.ts:204): real, fixed.**\n- Red test: \"tracked Nexus state edited in the worktree does not stop the rebase when the target has advanced\". It failed with `rebase onto main failed: error: cannot rebase: You have unstaged changes.`\n- Fix: the rebase now runs with `--autostash`, so the tracked `.nexus` edit stays in the worktree.\n- Green: the new test passes and the 42 merge tests pass. The test also asserts the edit is not committed and is still present in the kept worktree.\n- One edge I did not test: if the target also changed that same `.nexus` file, reapplying the stash could conflict.\n\n**01M720QHMYWA (Medium, merge.ts:176): already fixed in e6d20021.**\n- The merge's `add -A` is followed by `reset -q HEAD -- :(top).nexus`, in both the commit and the backup.\n- The existing test \"tracked Nexus state under .nexus is neither backed up nor committed\" covers it and passes. I made no code change for this one.\n\n**01M721GPESM4 (Low, FINDINGS.md:131): real, fixed.**\n- The WP-1310 row had lost \"commander options merging, serialization of switch and removal\". I restored it exactly from the #445 base.\n- The second \"WP-1312 review 6\" row is now \"review 7\".\n- I added a \"review 8\" row for this round. I did not touch the WP-1311 rows, since the #445 agent is editing them.\n\n**01M720J5QRPV (Low, merge.ts:40-63): partly real, fixed.**\n- At e6d20021 the parsing loop already exists only once, in `initializedSubmodules`, which `unpublishedSubmodules` accepts as a parameter. What remained was that the post-merge block called `git submodule status` twice.\n- It now reads the status once and passes the list to `unpublishedSubmodules`. I added no new test; the existing submodule tests still pass.\n\n**CI failure on e6d20021 (run 42767114933): flaky, now fixed.**\n- The failing test was `worktrunk_review.test.ts:684`, \"when the detached HEAD cannot be restored after a refused removal the message names the branch the worktree is left on\". It expected `/nexus-removed\\//` in the output, but the log shows the branch name replaced by `[REDACTED:HIGH_ENTROPY_STRING]`.\n- Cause: the guard branch name is `nexus-removed/&lt;10 hex of sha1(path)&gt;-&lt;8 hex of head&gt;`. Both parts vary per run, and the entropy classifier occasionally scores the name as a secret.\n- This is a product bug as well as a test flake. A redacted name makes the \"To undo: `git branch -D …`\" recovery message unusable.\n- Red test in `cli/test/egress.test.ts`, using a name that reproduced the redaction (`nexus-removed/af715c8d65-ba294078`). It fails without the fix.\n- Fix in `cli/src/core/egress.ts`: the classifier now exempts exactly that shape, next to the existing exemption for session ids. A random value under the same prefix is still flagged, and the test asserts that.\n- Green: `egress` 29/29 with the fix.\n- The `egress.ts` change is outside `copy.ts`, so it should not collide with the #445 agent.","New head on `v1/v114-wp1318-run-worktree-branch` (PR #449) is `35d38b947033d56528f000817af3dd313df7c19f`, pushed with plain `git push` from `/home/mike/nexus-wt/takeover-449`. All three findings were real and are fixed with RED-then-GREEN tests. They still show open and \"current\" on re-list; I haven't dismissed anything and Entire has not yet re-reviewed the new head. No new findings appeared.\n\nFiles changed are `cli/src/worktree.ts`, `cli/src/core/persistence_protection.ts` and `cli/test/worktrunk_binding.test.ts`. No `FINDINGS.md` rows needed changing; `docs/v1.1.4/FINDINGS.md` and `docs/WORKTREES.md` make no claim about either behaviour.\n\n**01M7226SDJZQ (Medium): range was empty when the run starts inside the named worktree**\n- **Cause:** `hasChangesAt` counted commits against the launching checkout's HEA
+... (truncated 2294 chars, full result in /tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/wjry7nbci.output)</result>
+<diagnostics>Per-agent results: /home/mike/.claude/projects/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/subagents/workflows/wf_862354ce-bdb/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/home/mike/.claude/projects/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/workflows/scripts/takeover-stack-wf_862354ce-bdb.js', resumeFromRunId: 'wf_862354ce-bdb'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>3</agent_count><agents_done>3</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>232750</subagent_tokens><tool_uses>55</tool_uses><duration_ms>412594</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>wi07027sw</task-id>
+<tool-use-id>toolu_01LikmdKMw1dSqHZ3t9WSSJi</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/wi07027sw.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Independent reviews of the fixed stacked PRs" completed</summary>
+<result>["Verdict: ACCEPT at d19278f8e694627258ec29d9e2b064e4fb66e659, posted as a comment on PR #445. Merge readiness depends on test-matrix going green and Entire clearing 01M721EBXGTK on this head. Neither had happened at review time. Because the fix agent didn't have to resolve anything, I read the comment's \"ACCEPT\" as code-correctness only.\n\n- **01M721EBXGTK (linkStaysInside):** The fix is correct and complete for the cases I checked.\n  - The target is walked through the destination's real layout, with lstat per component, realpath on links, and a containment check at each step. Chains, kept links, dangling links, `..` after a resolved link and absolute targets are all rejected correctly.\n  - It runs inside the shared plan, so dry-run and real run agree, and the new test asserts equal counts.\n  - Disabling the check turns the new test red. I reverted it afterwards.\n  - Non-blocking nits:\n    - The new test covers one case, with no chain or kept-link case.\n    - The check happens at plan time, so a destination changed between plan and install is not covered. The other ancestry checks have the same limit.\n    - Splitting on \"/\" is POSIX-only, consistent with the existing uid use.\n- **01M72184R806 (pid-less staging names):** The legacy branch, `STALE_STAGING_MS` and the age rule are gone. The regex matches only the pid-tagged name. The updated test shows a live pid file survives and a pid-less name is left alone. I did not mutate this one.\n- **FINDINGS.md:** The delta is two rows, and both are accurate.\n- **Tests:** `worktrunk_copy`, `worktrunk_core` and `worktrunk_review` pass 74/74 at this head, and `tsc --noEmit` is clean. I did not compare failing sets against the previous head, since there were no failures.\n- **Merge commits (b):** I only reviewed the `fad3e22a..d19278f8` delta, not the merge commits' diffs against both parents. For #445 the delta touches only the FINDINGS.md rows noted above.\n- **Entire findings (d):** 01M721EBXGTK still shows open/current, and no new findings appeared. Entire Gates was still pending on this head, so it likely has not re-run yet. 01M72184R806 is resolved.\n- **CI (e):** CodeQL, javascript-typescript and both cloudflare-experiment jobs pass. test-matrix (22) and (24) and Entire Gates were still in progress. CodeRabbit shows \"pass\" only because it skipped the review.\n\nThe review worktree is removed.","**ACCEPT** for PR #446 at head 0d01d10099e7131aa70944855b4d7029b783b437. The verdict comment is posted at https://github.com/mikeholownych/nexus-code/pull/446#issuecomment-6775790113. My worktree is removed.\n\n**Entire findings:**\n- **01M721NM14J7 (`--autostash`):** the fix is correct and the red test is genuine. Removing the flag turns the new test red.\n  - A refused rebase (merge commits in range) throws before anything is stashed.\n  - An aborted or conflicted rebase leaves no stash, and `git rebase --abort` restores the `.nexus` edit.\n- **01M720QHMYWA:** already fixed in review 6, by unstaging `.nexus` after `add -A` in both the commit and the backup. Removing the commit-side reset turns the \"neither backed up nor committed\" test red.\n- **01M721GPESM4:** the WP-1310 ledger row now matches the #445 head, and reviews 6, 7 and 8 have distinct labels.\n- **01M720J5QRPV:** the submodule status is now parsed once.\n\n**Non-blocking follow-up (not a regression):** if the target changed the same line of the same tracked `.nexus` file the worktree has edited, the rebase succeeds but the autostash pop conflicts. Git exits 0 and the merge completes, with the real work on main. The worktree is kept with conflict markers in `.nexus/knowledge.json` and an `autostash` entry in the stash. The note only says \"1 uncommitted change(s) remain\" and never mentions the stash. A rerun refuses with a clear \"unresolved conflicts\" message. Nothing is lost, since the edit is in the stash, and no test covers this case.\n\n**CI flake:**\n- **Cause:** the run 42767114933 log shows the guard branch redacted as `[REDACTED:HIGH_ENTROPY_STRING]`, so `worktrunk_review.test.ts:684` could not match `/nexus-removed\\//`.\n- **Fix:** over 20000 random guard names, the entropy classifier flagged 82 before the fix and 0 after, so it should not recur.\n- **Leak bypass:** I see no practical one. The exemption matches only the whole token (`nexus-removed/` plus exactly 18 hex digits), and a longer secret, different case, extra prefix or suffix, or a random value under that prefix is still flagged. Only the entropy check is skipped, and 18 hex characters would not trip it unprefixed either.\n- **Test:** `egress.test.ts` fails without the exemption and asserts the random value is still flagged.\n\n**Merge commit 0d01d100:** its diff against the #446 parent is only the #445 delta (`copy.ts`, its test, 4 ledger lines). Its diff against the #445 parent is only the #446 content. The FINDINGS.md rows are true: the WP-1312 OPEN row became FIXED, and each review row appears once, with no losses or duplicates.\n\n**Tests:** at this head, `tsc --noEmit` is clean and the six related files pass 182/182 (`worktrunk_copy/core/merge/review`, `egress`, `slash_router`). I did not compare against the previous head's failing set, since nothing fails here.\n\n**Open Entire findings:** one is still listed, 01M720QHMYWA (open, current). It is already fixed as above, and I did not resolve or dismiss it. I saw no new findings.\n\n**CI:** test-matrix 22 and 24 and Entire Gates were still in progress when I checked. cloudflare-experiment passed, and CodeRabbit skipped.","ACCEPT for #447 at head 9925738426da565d3c52a72b395768f6da2eff37. I posted the verdict as a PR comment and removed my worktree.\n\n- **Merge f69f7ab9:** its source diff against the #446 parent is exactly the receipt-gate change. Against the 35dab48a parent it is only the #446 delta.\n- **FINDINGS.md rows:** none lost or duplicated. The #446 rows (review 7, review 8, updated WP-1311) and both #447 rows (WP-1316b, WP-1316b review) are each present once. The 8 WP-1310 rows are unchanged from the previous head, and the row text matches the code.\n- **Receipt gate:** it still blocks in the merged tree. With the `hasVerification` check disabled, 4 of 15 `worktrunk_receipt` tests go red; I reverted that.\n- **Test change:** adding the receipt bypass to the rebase-state test doesn't hide receipt behaviour. That test is about tracked `.nexus` state under rebase. With `--autostash` removed it still fails, and receipt behaviour stays covered by `worktrunk_receipt.test.ts`.\n- **Tests and types:** 197 pass, 0 fail across the worktrunk_receipt, merge, copy, core and review files plus egress and slash_router. `tsc --noEmit` is clean.\n- **Entire findings:** one is still open, low severity: `01M73B3B2ZNS`.\n  - It says `workingState` hardcodes `\":(top).nexus\"` while `merge.ts` keeps its own `NEXUS_STATE_PATH`, and the doc comment on that constant is stale.\n  - It isn't blocking, since the two values match today. I left it unresolved.\n- **CI at this SHA:** cloudflare-experiment 22 and 24 succeeded. test-matrix 22 and 24 and Entire Gates were still in_progress when I checked, so those are not yet success.","**#449 at 87f6e3672ae529fac101bc9008b2330178f6de61: REQUEST CHANGES, comment posted.**\n- **Named findings:** the fixes for 01M7226SDJZQ, 01M7212HYSYP and 01M720ZPHP5A are correct and complete. Mutating the base-root default, the `refs/heads/` resolution, the historical bypass, and the `existsSync` check each turned a new test red. I reverted each mutation.\n- **Merge of #448:** FINDINGS.md matches the #448 side, with no lost or duplicated rows. The only #449-side rows missing are four superseded older versions of existing rows (WP-1311 x3, WP-1312 review 6). WP-1310b is present.\n- **Tests:** `tsc --noEmit` is clean. The worktrunk test files and egress test pass, 201 of 201.\n- **Blocking, new open Entire finding 01M73ATJJT9J (Medium):** it is real.\n  - **Cause:** `cli/src/agent.ts:4290` calls 
+... (truncated 1196 chars, full result in /tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/wi07027sw.output)</result>
+<diagnostics>Per-agent results: /home/mike/.claude/projects/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/subagents/workflows/wf_2315fc8c-73f/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/home/mike/.claude/projects/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/workflows/scripts/review-stack-wf_2315fc8c-73f.js', resumeFromRunId: 'wf_2315fc8c-73f'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>4</agent_count><agents_done>4</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>299222</subagent_tokens><tool_uses>70</tool_uses><duration_ms>429549</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<tool-use-id>toolu_01TDWf7wwDrSyX17hhPTB55S</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All the findings you listed are fixed in code and pushed bottom-up. Entire has not yet re-reviewed the new heads, so every finding still shows `open`. I haven't merged or dismissed anything.
+
+**New heads**
+
+| PR | Branch | Head |
+|---|---|---|
+| #447 | `v1/v114-wp1316-merge-receipt-gate` | `b4e63e79` |
+| #448 | `v1/v114-wp1317-merge-ai-message` | `0c57504f` |
+| #449 | `v1/v114-wp1318-run-worktree-branch` | `76108a9c` |
+
+#445 and #446 are untouched. Their only listed findings (`01M721EBXGTK`, `01M720QHMYWA`) are the ones you said were already fixed.
+
+**#447**
+- `01M73B8C5ZPG` (Medium, receipt over a dirty submodule):
+  - Red: a new test in `worktrunk_receipt.test.ts` showed `captureVerificationState` still returned a state with an uncommitted edit inside a nested submodule.
+  - Fix: `hasDirtySubmodule` in `verification.ts` walks `git submodule status --recursive` and runs a pinned `git status --porcelain` in each initialised submodule. If any has changes or untracked files, `captureVerificationState` returns `undefined` and `recordVerification` returns `false`.
+  - Green: the test also covers an untracked file in a submodule, and all 16 receipt tests pass.
+- `01M73B3B2ZNS` (Low, duplicated `.nexus` pathspec): one exported `NEXUS_STATE_PATH` in `verification.ts`, used by `merge.ts`, with a correct comment. This is a refactor with no behaviour change, so it has no separate test.
+- I added a `FINDINGS.md` row for both.
+
+**#448**
+- `01M73B9B88TW` (Medium, shutdown signal dropped):
+  - Red: with `/worktree merge ^ --ai-message` and a pre-aborted signal, the merge still fast-forwarded and removed the worktree.
+  - Fix: the slash handler in `workspace_commands.ts` now passes `signal: ctx.signal`.
+  - Green: the same test now fails the command with "Cancelled", leaves the target branch unchanged and keeps the worktree. I added it to `slash_router.test.ts`.
+- `01M73B5ZV827` (Low, unreachable `.catch`): removed from `command.ts`.
+- Two new Low findings appeared on this branch while I worked, `01M73C18GG0H` and `01M73C18G1AK`. Both were unused imports (`generateMergeMessage` in the test, `WorktreeError` in `ai_message.ts`), so I removed them in a follow-up commit.
+- I added a `FINDINGS.md` row.
+
+**#449**
+- `01M73ATJJT9J` (Medium, no-edit task worktree compared against the wrong checkout):
+  - Red: a test with a launcher inside a feature checkout ahead of main showed `hasChangesAt(task, branch)` returning `true` for a no-edit task worktree. The new `bindingHasChanges` method did not exist yet, so the test failed with "not a function".
+  - Fix: `WorktreeManager.bindingHasChanges` in `worktree.ts` uses `hasChanges(taskId)` for task bindings and the primary-checkout comparison for named ones. `agent.ts:4290` now calls it.
+  - Green: the no-edit task worktree reports no changes, a real edit counts, and a named worktree still counts its commits. I added it to `worktrunk_binding.test.ts`.
+- I added a `FINDINGS.md` row.
+- There was no other open finding on this branch when I listed.
+
+**Merges and conflicts**
+- Each upper branch merged in the one below it. The only conflicts were in `FINDINGS.md`.
+- I kept every row. On the second #448-into-#449 merge, the review 3 row conflicted. I kept the updated wording and dropped the older copy of that same row.
+
+**Tests run**
+- The `worktrunk_*` tests, `egress.test.ts`, `slash_router.test.ts`, `recover_worktree_conversation.test.ts` and `npx tsc --noEmit` pass at each step.
+- At #449 the combined worktrunk, egress and slash tests ran 241 pass, 0 fail.
+- I did not run the full CLI suite.
+
+**Unresolved**
+- Re-run `entire trail finding list` on each branch once Entire re-reviews, since more findings may follow.
+- My final listing came after pushing #447 and #449 but before the #448 follow-up and the #449 re-merge, so it shows only what Entire had seen at that point:
+  - #445, #446 and #449 showed only their old findings.
+  - #447 showed only `01M73B8C5ZPG` (the Low `01M73B3B2ZNS` was no longer listed).
+  - #448 showed the two new Lows above.</result>
+<usage><subagent_tokens>107396</subagent_tokens><tool_uses>43</tool_uses><duration_ms>671730</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>wriapnv54</task-id>
+<tool-use-id>toolu_011B9W6EeqLirEaBiNAk1PMS</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/wriapnv54.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Second independent review round on #447 #448 #449" completed</summary>
+<result>["PR #447, head b4e63e793c84805dc68d1a5b6593659ac56e4e57 (expanded from origin): **ACCEPT**, posted as a PR comment. CI was still running when I posted the verdict, so it needs a recheck before merge.\n\n- **01M73B8C5ZPG (Medium):** the fix is real and complete.\n  - `hasDirtySubmodule` runs in both `captureVerificationState` and `recordVerification`.\n  - Uninitialised submodules are skipped.\n  - A git failure inside a submodule throws into the existing catch, so it fails closed.\n  - `recordVerificationIfEligible` returns false when the captured \"before\" state is undefined, so the agent caller handles the refusal.\n  - The cost is one `git status` per initialised submodule, twice per verification.\n- **Red test:** genuine. With both guards removed the new test fails (15 pass, 1 fail); I reverted the mutation.\n- **01M73B3B2ZNS (Low):** `NEXUS_STATE_PATH` is now exported once and used by `verification.ts` and `merge.ts`.\n- **Notes, non-blocking:**\n  - A non-recursive `submodule status` mutant still passes the test, because `status --ignore-submodules=none` already reports nested dirt. So the `--recursive` flag is redundant for detection.\n  - A submodule path containing \" (\" could be mis-parsed, but that fails closed.\n- **FINDINGS.md and merge commits:** exactly one row added, nothing lost or duplicated. The delta has no merge commits.\n- **Tests at this head:** `worktrunk_copy`, `worktrunk_core`, `worktrunk_merge`, `worktrunk_receipt`, `worktrunk_review`, `egress` and `slash_router`: 198 pass, 0 fail. `tsc --noEmit` is clean.\n- **Entire:** `01M73B8C5ZPG` still shows open/current on the branch, probably not yet re-evaluated against the new head. I did not resolve or dismiss it. No other findings are listed.\n- **CI:**\n  - Passed: `cloudflare-experiment` (22, 24).\n  - Still in progress: `test-matrix` (22, 24) and Entire Gates.\n- **Worktree:** removed; `/home/mike/nexus-code` untouched.","REQUEST CHANGES on PR #448 at head 0c57504f. The verdict comment is posted at https://github.com/mikeholownych/nexus-code/pull/448#issuecomment-6776178259, and my worktree is removed.\n\n**Blocking: 01M73C641RC1 (Medium, open, new, confidence 0.99).**\n- `/worktree` is not marked `cancellable` in `catalog.ts:109`, so `sidecar.ts:365-369` rejects Esc/Ctrl-C in the TUI/sidecar route before the forwarded signal can fire. I confirmed this in the source.\n- The model request and the merge therefore continue after the operator cancels in that route, which is the route you asked me to check.\n\n**Also open on this head: 01M73C6427ZZ (Medium, new).**\n- The Entire text says that with a receipt waiver, a `git switch -c` in the source worktree while inference waits lets the second context resolution adopt the new branch.\n- The merge can then rewrite that branch and delete its branch and worktree.\n- Entire's suggested fix is to include the original source branch in the expected state and refuse if it changes.\n\n**Verified fine:**\n- 01M73B9B88TW is fixed for the slash path. The handler now passes `ctx.signal`, and the abort check runs after the model call and before the merge with no await between them. A signal that fires mid-call is covered too.\n- I removed `signal: ctx.signal` as a mutation and the new `slash_router.test.ts` test went red; it is green again after reverting. The test asserts the head is unchanged and the worktree still exists, but it uses a pre-aborted signal rather than one that fires mid-call.\n- The `.catch` in `command.ts` was unreachable, and the two unused imports are gone (01M73B5ZV827, 01M73C18GG0H, 01M73C18G1AK).\n- The non-slash CLI path passes no signal and installs no SIGINT handler for `worktree`, so Ctrl-C kills the process before any merge. The REPL route already forwarded `worktreeAbort.signal`.\n- Merge commit c990735b (merging #447) has no lost or duplicated rows in `FINDINGS.md`, no conflict markers, and no semantic breakage.\n- `worktrunk_*`, `egress*`, `slash_router` and `recover_worktree_conversation` pass (264 tests), and `tsc --noEmit` is clean. One `slash_router` test failed until I symlinked the Rust core, then passed.\n\n**Minor, non-blocking:** a signal that is already aborted at entry still sends the model request. An early `signal.aborted` check before `generateMergeMessage` would avoid that.\n\n**CI:** at this SHA both `cloudflare-experiment` runs succeeded. Both `test-matrix` runs and Entire Gates were still in progress, so CI is not shown as passing yet.\n\nI did not resolve or dismiss any Entire findings.","ACCEPT for PR #449 at head 76108a9c, posted as a PR comment. CI on that SHA is not finished, so the accept rests on my local runs.\n\n- **Finding 01M73ATJJT9J:** the fix is real and complete. `bindingHasChanges` keeps `hasChanges(taskId)` (launching-checkout base) for task bindings and `hasChangesAt` (primary checkout) for named ones, and `agent.ts:4290` now uses it.\n- **Call sites:** the only other `hasChanges` caller, `agent.ts:7016`, is on the task-only path because the named case is handled first. Nothing outside `worktree.ts` calls `hasChangesAt`.\n- **Red test:** it is genuine. With `bindingHasChanges` mutated to always call `hasChangesAt`, `worktrunk_binding` failed (actual true, expected false). After reverting, it passed.\n- **Earlier #449 fixes:** the three fixes still hold in the merged tree. The `FINDINGS.md` rows for 01M73ATJJT9J, 01M73B9B88TW and 01M73B8C5ZPG each appear once, with no conflict markers.\n- **Merged-in #448 (0c57504f):** no semantic breakage found. It removes the dead `.catch` and two unused imports, and forwards `ctx.signal` in the slash handler.\n- **Tests:** I ran all 7 `worktrunk_*` files, `egress`, `egress_persistence_equivalence`, `slash_router` and `recover_worktree_conversation`: 247 pass, 0 fail. `tsc --noEmit` is clean.\n- **Open Entire finding:** 01M73CFT4QCY (Medium, `agent.ts`). The `isRetainedNamedWorktree` check is still gated on `config.worktree`. A `nexus run --resume` without the worktree flag skips validation of a restored named binding. For example, a saved `feat/a` binding is kept after the checkout switches to `feat/b`. It concerns restore code outside this delta and needs owner triage. I did not resolve or dismiss it.\n- **CI:** `cloudflare-experiment` 22 and 24 succeeded. `test-matrix` 22 and 24 and `Entire Gates` were still `in_progress` with no conclusion when I checked.\n\nMy worktree is removed."]</result>
+<diagnostics>Per-agent results: /home/mike/.claude/projects/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/subagents/workflows/wf_05e95831-72a/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/home/mike/.claude/projects/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/workflows/scripts/review-stack-2-wf_05e95831-72a.js', resumeFromRunId: 'wf_05e95831-72a'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>3</agent_count><agents_done>3</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>193403</subagent_tokens><tool_uses>41</tool_uses><duration_ms>323764</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<tool-use-id>toolu_017Gq4GxHNSbYmFBPx8WEg9o</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The second-round findings (#448 and #449) and one more that appeared mid-round on #448 are fixed in code and pushed, bottom-up. Entire's lists are not final: the first set of findings showed `open` after my pushes, and a new one turned up on #448 while I worked. I did not merge or resolve anything.
+
+**New heads**
+- #447: `b4e63e79`, unchanged. #448 and #449 both contain it.
+- #448: `c19ce5ca`.
+- #449: `c569cbe9`, which includes #448 at `c19ce5ca`.
+- #445 and #446 are untouched.
+
+**#448**
+- `01M73C641RC1` (Medium, `/worktree` not cancellable):
+  - Red: a new sidecar test sent Esc/Ctrl-C during `/worktree merge ^ --ai-message` and got "cannot be cancelled", then the merge finished anyway.
+  - Fix: `/worktree` is now `cancellable: true` in `catalog.ts`, with a comment explaining why. `merge --ai-message` is the only form that awaits the model request. Every other form (legacy discard, switch, remove, copy-ignored, prune, plain merge) is synchronous and finishes before a cancel can be read, so they stay safe.
+  - Green: the test now shows no "cannot be cancelled" notice, a failed slash result, an unchanged HEAD and the worktree kept.
+- `01M73C6427ZZ` (Medium, branch switched during inference):
+  - Red: with a waiver, a `git switch -c next-task` inside the completer made the merge back up and commit the new branch.
+  - Fix: `expectedState` now includes the source branch, and `mergeWorktree` refuses with "changed while the commit message was being written" if the branch, HEAD or content changed.
+  - Green: the test shows the merge refused, the target untouched, `next-task` and the worktree kept.
+- Reviewer's note on an already-aborted signal:
+  - Red: the completer was called once.
+  - Fix: `runWorktreeCommandAsync` returns "Cancelled before the model was asked" before calling `generateMergeMessage`.
+  - Green: zero calls.
+- `01M73D1M5JT9` (Medium, appeared on #448 mid-round: a `-` merge target was re-read after inference):
+  - Red: `worktree switch main` from a `release` worktree during inference moved the `-` shortcut, and the merge landed in `release`.
+  - Fix: the target is pinned to `mctx.targetName`, resolved when the command began.
+  - Green: `release` is unchanged and the merge goes to `main`.
+
+**#449**
+- `01M73CFT4QCY` (Medium, restored named binding not validated without `--worktree`):
+  - Red: with `config.worktree = false`, `run("second", { resume: true })` after the checkout switched from `feat/a` to `feat/b` was not rejected ("Missing expected rejection").
+  - Fix: a new `assertNamedBindingCurrent` in `agent.ts` runs at the start of `run` and in `runTurnImpl` whenever the worktree flag is off. The flagged path in `run` now calls the same helper.
+  - Green: both `run` and `runTurn` reject with the `feat/a` error, and no inference request is sent.
+- I added `FINDINGS.md` rows for all of these. The merges up the stack had no conflicts this time.
+
+**Tests run**
+- Final run at #449 head (`c569cbe9`): `worktrunk_*`, `egress`, `slash_router` and `recover_worktree_conversation` all pass, 248 pass and 0 fail. `npx tsc --noEmit` reported no errors on the earlier runs, but printed nothing on the last two; I did not re-run it.
+- The last full run that included `sidecar.test.ts` was before the target-pinning change: 304 pass, 0 fail across `worktrunk_*`, egress, `slash_router`, `sidecar` and `recover_worktree_conversation`. I did not re-run `sidecar.test.ts` after pinning the target.
+
+**Entire findings, listed after the pushes**
+- #445 and #446: still only the two earlier findings (`01M721EBXGTK`, `01M720QHMYWA`), which you said are already fixed.
+- #447: `01M73B8C5ZPG`, still `open` at the time I listed it (before the final pushes).
+- #448 and #449: both lists came back empty at the end, but Entire had not re-reviewed `c19ce5ca` and `c569cbe9` yet.
+- Please re-run the listing after Entire's next pass, since new findings may follow.</result>
+<usage><subagent_tokens>150001</subagent_tokens><tool_uses>32</tool_uses><duration_ms>702530</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>wkch3eb5k</task-id>
+<tool-use-id>toolu_01Ms8LWzh1c4NNywWcWNu16S</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/wkch3eb5k.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Third independent review round on #448 and #449" completed</summary>
+<result>["ACCEPT posted on PR #448 at head c19ce5ca3eefe9be61db30815f567d3c7a5c6b17. CI was still running, so the comment tells the owner not to merge on it alone.\n\n- **`/worktree` cancellable (01M73C641RC1):**\n  - Every other subcommand (switch, copy-ignored, list, path, prune, remove, plain merge, legacy speculative merge/discard) runs git synchronously.\n  - The only `await` is the model request in `merge --ai-message`.\n  - A cancel is only read after a synchronous command has finished, so it cannot interrupt one mid-way.\n  - After the model request, an aborted check runs before `mergeWorktree`, which has no further awaits. A cancel therefore cannot leave a half-done merge.\n- **Red tests (01M73C641RC1, 01M73C6427ZZ, 01M73D1M5JT9):** each fix was mutated, went red, and was reverted.\n\n  | Mutation | Test that went red |\n  |---|---|\n  | Drop `cancellable` on `/worktree` | the sidecar cancel test |\n  | Remove the branch from the `expectedState` compare | \"a branch switched in the source worktree...\" |\n  | Remove the already-aborted early return | \"an already-aborted signal never sends the model request\" |\n  | Remove the pinned target | \"a `-` target is pinned...\" |\n\n- **Remaining TOCTOU:** only another process acting during the synchronous window inside `mergeWorktree` (the final check through the merge steps). That is inherent and not fixable here. If the target moves during model inference, it is re-resolved and re-checked, and the fast-forward fails safe.\n- **Non-blocking:** a completer that ignores its abort signal delays the cancel result until it settles or the timeout fires. The real `providerCompleter` passes the signal.\n- **Merge commits and FINDINGS.md:** there are no merge commits in `0c57504f..head`. The `FINDINGS.md` diff adds two rows and removes none.\n- **Tests:** 286 pass, 0 fail across worktrunk_*, egress*, slash_router, sidecar and recover_worktree_conversation. I ran them through `scripts/run_tests.mjs` because the plain run hit a host git config error on tag creation (\"no tag message?\").\n- **tsc:** `tsc --noEmit` printed \"TypeScript: No errors found\", exit 0.\n- **Entire findings for the branch:** \"No findings found.\" No open or new ones.\n- **CI:** test-matrix (22), test-matrix (24) and Entire Gates were in_progress. Both cloudflare-experiment checks succeeded.\n- **Cleanup:** the worktree `/home/mike/nexus-wt/rev3-448` is removed.","ACCEPT for the #449 fix delta (Entire 01M73CFT4QCY) at head c569cbe95def640e52477e8d20c749a18393d079. The verdict is posted on the PR. CI was still running when I checked.\n\n- **Fix is real:** `assertNamedBindingCurrent` now runs in both `run()` and `runTurnImpl` when `config.worktree` is false. The flagged path uses the same helper.\n- **Red test is genuine:** with both guards removed, the `worktrunk_binding` test \"a restored named binding is validated…\" fails (21 pass, 1 fail). Restoring the fix turns it green. The test also asserts the gateway request count is unchanged.\n- **Legitimate flows (temporary probe test, deleted):**\n  - A resume with a matching branch and no flag completes through both `run` and `runTurn`.\n  - A removed worktree and a detached HEAD each refuse with \"no longer the registered linked worktree for feat/a\". Neither sends an inference request.\n  - The `config.worktree` true path still refuses a branch switch with no request.\n  - A task (non-named) binding returns early by construction. I could not exercise it in a probe, because an unchanged task worktree is cleaned up after the run.\n- **No inference before validation:** confirmed by the request-count assertions above.\n- **Cost:** one `git worktree list` plus a registry read and realpath per turn, only when a named binding exists.\n- **Merge commits:** the delta adds 3 rows to `FINDINGS.md`, none lost or duplicated.\n- **Tests at the exact head:** the `worktrunk_*` tests, egress, slash_router, sidecar and recover_worktree_conversation gave 305 pass, 0 fail. `tsc --noEmit` printed no output and exited 0, so it reports no errors.\n- **Entire:** 01M73CFT4QCY is resolved. One finding is open on the branch: 01M73DGKDEES (Medium, `cli/src/agent.ts`). The REPL/live checkpoint manager stays bound to the launch directory after switching into the named workspace, so `/undo` targets the wrong checkout. It is outside this delta, and I did not resolve it.\n- **CI at head:** Entire Gates and test-matrix (22) and (24) were in_progress with no conclusion yet. cloudflare-experiment (22) and (24) succeeded. Re-check before merge.\n- **Non-blocking note:** after an external merge removes a named worktree, the binding persists until `setWorkspace`. The error text then says to restore it or start a new session.\n\nMy worktree `/home/mike/nexus-wt/rev3-449` is removed."]</result>
+<diagnostics>Per-agent results: /home/mike/.claude/projects/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/subagents/workflows/wf_0534e8eb-78e/journal.jsonl — one {"type":"result",...} line per completed agent with its full return value.
+If the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.
+To re-run with edited post-processing: Workflow({scriptPath: '/home/mike/.claude/projects/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/workflows/scripts/review-stack-3-wf_0534e8eb-78e.js', resumeFromRunId: 'wf_0534e8eb-78e'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>
+<usage><agent_count>2</agent_count><agents_done>2</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>154154</subagent_tokens><tool_uses>40</tool_uses><duration_ms>396676</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<tool-use-id>toolu_01EVNXcx2zzkM3QnihDiqhEW</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The test run is still in progress; I'll resume when the background task reports.</result>
+<usage><subagent_tokens>172833</subagent_tokens><tool_uses>22</tool_uses><duration_ms>666555</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The full run (including the tsc check) is in the background. I'll commit and push once it reports clean.</result>
+<usage><subagent_tokens>179113</subagent_tokens><tool_uses>31</tool_uses><duration_ms>878052</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The full test run and tsc check are still going. I'll commit and push once they report clean.</result>
+<usage><subagent_tokens>180461</subagent_tokens><tool_uses>33</tool_uses><duration_ms>1064069</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>`01M73DGKDEES` on #449 is fixed in code and pushed; the new head is `9d84ec28`. Entire still lists it as `open` because it has not re-reviewed that head. I touched only the #449 branch and did not merge or resolve anything.
+
+**Red and green**
+- **Red:** a new sidecar test moves the agent into another workspace with `agent.setWorkspace(moved)`, which is what a run does when it enters a named worktree. It then runs a turn and `/undo`. The turn's snapshot was missing from the new workspace (`0 !== 1`).
+- **Fix:** the REPL, the sidecar and `ApplicationCore.getCheckpointManager` now hand out a checkpoint manager for the workspace the agent is in. They rebuild it whenever its workspace differs from `config.workspace`. The REPL's checkpoint calls and the sidecar's turn snapshots and `/undo` host go through the new accessor.
+- **Green:** the test now shows the snapshot in the worktree, none in the launch checkout, `/undo` restoring the worktree edit, and an unrelated file in the launch checkout left alone.
+- **Test fakes:** two existing REPL tests (`repl_checkpoint_choices.test.ts`, `restore_mode_checkpoint_free_turn.test.ts`) use fake checkpoint managers. They needed a `getWorkspace` method, because without it my change made `repl_checkpoint_choices` hang. Both pass again.
+- **`FINDINGS.md`:** I added the row for this finding, including the limitation below.
+
+**Not covered**
+- The very first turn of a run that creates the worktree is still snapshotted in the launch checkout, before the switch. `/undo` of that turn finds no snapshot in the worktree. It never touches the launch checkout, so nothing is overwritten.
+
+**Tests run**
+- The full set came back 434 pass and 5 fail out of 439: `worktrunk_*`, `egress`, `slash_router`, `sidecar`, `recover_worktree_conversation`, `checkpoint_*`, `repl_*`, `restore_mode_checkpoint_free_turn` and `retention_checkpoint_confinement`.
+- All 5 failures were "missing `cli/dist/index.js`", a host problem. I ran `npm run build` and re-ran the two affected files (`repl_approval_e2e`, `repl_readonly_e2e`): 5 pass, 0 fail.
+- `npx tsc --noEmit` printed "TypeScript: No errors found".</result>
+<usage><subagent_tokens>186307</subagent_tokens><tool_uses>40</tool_uses><duration_ms>1224772</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That notification is a leftover watcher from an earlier wait expiring. It reports nothing new. The work was already reported: #449 is at `9d84ec28`, with `01M73DGKDEES` fixed in code and still listed `open` by Entire until it re-reviews the head.</result>
+<usage><subagent_tokens>186102</subagent_tokens><tool_uses>40</tool_uses><duration_ms>1379332</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a386d9ea641106464</task-id>
+<tool-use-id>toolu_01WHs7UsaGTp47BC2phYz7S8</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a386d9ea641106464.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 449 checkpoint fix" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the background test run to report.</result>
+<usage><subagent_tokens>70184</subagent_tokens><tool_uses>30</tool_uses><duration_ms>2745215</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a386d9ea641106464</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a386d9ea641106464.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 449 checkpoint fix" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>ACCEPT posted on PR #449 at head 9d84ec28, with a note not to merge until CI finishes. At my last check `linux-x86_64` and `Entire Gates` were still `in_progress`. `test-matrix` and `cloudflare-experiment` (Node 22 and 24) had completed with success.
+
+- **Fix coverage:** Every checkpoint call site in `cli/src` now follows the agent's workspace. That covers the REPL, the sidecar and `ApplicationCore`, including its `/checkpoint` command. The remaining direct assignments are explicit workspace moves, and `index.ts` is a standalone listing command. No turn or `/undo` path still uses the launch-dir manager.
+- **Lifecycle and concurrency:** A rebuilt manager holds no handles, and each operation fetches one fresh, so there is no leak. No manager is held across a workspace switch.
+- **Red test:** Reverting the sidecar to the cached manager makes only the new sidecar test fail; with the fix restored it is green again.
+- **Test edits:** The fake-manager changes only add `getWorkspace` and a workspace field, and no assertions changed.
+- **Documented limitation:** `docs/v1.1.4/FINDINGS.md` states it honestly, and it is safe. Checkpoints are keyed per workspace, so `/undo` of the first turn finds nothing in the worktree and never writes to the launch checkout or loses data.
+- **Tests:** 494/494 pass across the requested suites, and `npx tsc --noEmit` reports "No errors found".
+
+Entire findings for the branch, two open Low ones, both left unresolved:
+- **`01M73EYQE694`:** `sidecar.ts:904-909`. The rebuild logic is copied in three places. The sidecar could delegate to `app.getCheckpointManager()` instead of keeping a second cached manager that can drift.
+- **`01M73EYQDPNW`:** `repl.ts:197-203`. The new `checkpoints()` helper sits under `runInteractiveTurn`'s JSDoc, so that comment no longer documents the method below it.
+
+The worktree is removed.</result>
+<usage><subagent_tokens>74806</subagent_tokens><tool_uses>34</tool_uses><duration_ms>2895170</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a386d9ea641106464</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a386d9ea641106464.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 449 checkpoint fix" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That monitor expired without delivering an event, and I don't need it any more. The review is finished. The verdict (ACCEPT at head 9d84ec28) is posted on PR #449, and the worktree is removed.
+
+`linux-x86_64` and `Entire Gates` were still running when I last checked, so the PR should not merge until both finish with success.</result>
+<usage><subagent_tokens>74619</subagent_tokens><tool_uses>34</tool_uses><duration_ms>3306320</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a386d9ea641106464</task-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a386d9ea641106464.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent review of PR 449 checkpoint fix" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That's the second monitor expiring without events. Nothing is waiting on it. The review is complete, ACCEPT at 9d84ec28 is posted on PR #449, and the worktree is removed.
+
+`linux-x86_64` and `Entire Gates` were still `in_progress` at my last check, so the PR should not merge until both conclude with success.</result>
+<usage><subagent_tokens>75017</subagent_tokens><tool_uses>34</tool_uses><duration_ms>3311511</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<tool-use-id>toolu_01Kz6HsjqjNXhAXV4xex9grb</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Both Low findings on #449 are fixed in code and pushed; the new head is `2d718984`. Entire still lists `01M73EYQE694` and `01M73EYQDPNW` as `open`, because it has not re-reviewed that head yet. I touched only the #449 branch and did not merge or resolve anything.
+
+- **`01M73EYQE694`, duplicated rebuild logic:**
+  - The sidecar no longer keeps its own `checkpointManager` field or `checkpoints()` helper. The turn snapshot and the `/undo` host both call `this.app.getCheckpointManager()`, and `setWorkspace` just updates the agent and config. The now-unused `CheckpointManager` import is gone.
+  - The sidecar test from the previous round is unchanged and still passes (57 pass, 0 fail in `sidecar.test.ts`).
+  - To show it would catch a regression, I temporarily disabled the rebuild in `ApplicationCore.getCheckpointManager`. That one test went red and the rest passed. I then restored the file, and `git diff` shows no change to it.
+- **`01M73EYQDPNW`, misplaced doc comment:** in `repl.ts` the `checkpoints()` helper now has its own JSDoc, and the "Runs one agent turn…" comment is back directly above `runInteractiveTurn`.
+- **`FINDINGS.md`:** I updated the existing WP-1310b review 3 row to name both findings and to say the sidecar delegates to the app's manager.
+
+**Tests**
+- Run together: `checkpoint_*`, `repl_*`, `sidecar`, `recover_worktree_conversation`, `worktrunk_binding`, `slash_router`, `retention_checkpoint_confinement` and `restore_mode_checkpoint_free_turn`. That is 254 pass and 0 fail.
+- `npx tsc --noEmit` printed "TypeScript: No errors found".</result>
+<usage><subagent_tokens>195300</subagent_tokens><tool_uses>47</tool_uses><duration_ms>4589521</duration_ms></usage>
+</task-notification>
+
+---
+
+You are to ensure that all gates reach desired end state
+
+---
+
+<task-notification>
+<task-id>acd022fbb5d67d6d5</task-id>
+<tool-use-id>toolu_0143gZWEwRJUbBN3sBqkcvqJ</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/acd022fbb5d67d6d5.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 449 refactor delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I posted REQUEST CHANGES on PR #449 at head 2d718984e6892cb0d972b1225b74aa2e1fef108f, because one Entire finding is open and CI has no conclusion yet. The delta itself is correct.
+
+**Delta (9d84ec28 to 2d718984):**
+- **Behaviour:** the sidecar now delegates to `app.getCheckpointManager()` for the turn snapshot (`sidecar.ts:567`) and as the `/undo` host (`sidecar.ts:821`). No references to the removed field or helper are left. `setWorkspace` still updates the agent workspace and `config.workspace`, and the app's manager rebuilds when the workspace changes, so behaviour is unchanged.
+- **Regression guard:** I stubbed out the rebuild in `ApplicationCore.getCheckpointManager`. The sidecar test "after the agent moves into another workspace ... /undo targets it" went red, and I reverted the change.
+- **Docs and comments:** the JSDoc in `repl.ts` now sits on `runInteractiveTurn`, and the FINDINGS row is accurate.
+- **Tests:** the 22 test files you listed ran 306 pass, 0 fail, and `tsc --noEmit` reported "No errors found".
+
+**Entire findings:** the two findings from this delta (`01M73EYQE694`, `01M73EYQDPNW`) no longer appear in the list. One finding is still open:
+- **`01M73J9KNV2T`**, Medium, current, in `cli/src/agent.ts`. When a new REPL or live session reuses a named worktree, its first prompt is checkpointed in the launch checkout before the switch (`repl.ts` around line 1941, `sidecar.ts` 567/633). `/undo` then picks the named worktree's latest checkpoint, which can be from an earlier session, and can overwrite edits made before this launch. Entire suggests establishing the named workspace before creating the turn's checkpoint.
+- This is not in the previously accepted delta. FINDINGS only lists the case where the run itself creates the worktree as "not covered".
+
+**CI:** Entire Gates and test-matrix 22 and 24 were still `in_progress` with no conclusion when I checked. cloudflare-experiment 22 and 24 were `completed` with conclusion `success`.
+
+I didn't resolve or dismiss any findings. The worktree is removed, no background monitors are left, and `/home/mike/nexus-code` wasn't touched.</result>
+<usage><subagent_tokens>67380</subagent_tokens><tool_uses>21</tool_uses><duration_ms>383049</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>btvkodtk2</task-id>
+<tool-use-id>toolu_01RfeLJDg8csm9XGQfMJ4NFw</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/btvkodtk2.output</output-file>
+<status>completed</status>
+<summary>Background command "cd /home/mike/nexus-wt/takeover-chain/cli &amp;&amp; rtk tsc --noEmit | tail -1; CI=true node scripts/run_tests.mjs test/worktrunk_ai_message.test.ts test/worktrunk_receipt.test.ts test/worktrunk_merge.test.ts test/worktrunk_copy.test.ts test/worktrunk_core.test.ts test/worktrunk_review.test.ts test/egress.test.ts test/slash_router.test.ts test/sidecar.test.ts 2&gt;&amp;1 | grep -E '^ℹ (tests|pass|fail)|^✖'; cd .. &amp;&amp; rtk git push -q origin HEAD:v1/v114-wp1317-merge-ai-message 2&gt;&amp;1 | tail -1; git rev-parse --short HEAD; git checkout -q --detach origin/v1/v114-wp1318-run-worktree-branch &amp;&amp; git merge --no-edit origin/v1/v114-wp1317-merge-ai-message 2&gt;&amp;1 | tail -1; rtk git diff --name-only --diff-filter=U" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<tool-use-id>toolu_01MnEFWSoNh1NVpeVXfYQ6Rt</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>`01M73J9KNV2T` is fixed in code and pushed to #449's branch; the new head is `6eaef21c`. Entire still lists it as `open` because it has not re-reviewed that head yet. I touched only #449's branch and did not merge or resolve anything.
+
+**Fix**
+- `AutonomousAgent.enterNamedWorktreeBeforeTurn()` in `agent.ts` does what `run()` already does to enter the `--worktree-branch` worktree. I pulled that code out of `run()` into shared helpers so `run()` and the new method use the same path. It does nothing when the flag is absent, the session is already in the worktree, or the mode is read-only or dry-run.
+- The REPL calls it at the top of `prepareTurnCheckpoint`, and the sidecar calls it at the start of `turn()`. Both call it before the turn's snapshot. A sidecar failure emits an INTERNAL error instead of starting the turn.
+- This covers both a reused worktree and one the first prompt creates.
+- I removed the "Not covered" limitation from the `FINDINGS.md` row. The row now names `01M73J9KNV2T` and describes the fix.
+
+**Red and green**
+- **Sidecar, reused worktree:** a new session whose worktree already holds an earlier session's checkpoint and a pre-launch edit. Red: the first turn's snapshot went to the launch checkout (1 checkpoint in the worktree where 2 were expected). Green: two checkpoints in the worktree, none in the launch checkout, and the pre-launch file survives `/undo`.
+- **Sidecar, created worktree:** red with 0 checkpoints in the worktree, green with 1 in the worktree and 0 in the launch checkout.
+- **REPL:** a new test in `worktrunk_binding.test.ts` covers both the reused and the created case through `prepareTurnCheckpoint`. Red with the REPL call disabled, green with it restored. The reused case also checks that `/undo` keeps the pre-launch work.
+- **Test fake:** I added a no-op `enterNamedWorktreeBeforeTurn` stub to the fake agent in `repl_checkpoint_choices.test.ts`, otherwise its tests hit "is not a function".
+
+**Behaviour change**
+- Because the session is already inside the named worktree when `run()` starts, `run()` treats the first prompt as a continuation and skips its usual conversation reset. The conversation there holds only the system prompt, or a resumed transcript that should not be wiped, so I think that is correct, but it is a change.
+
+**Tests**
+- One foreground run: `checkpoint_*`, `repl_*`, `sidecar`, `recover_worktree_conversation`, `slash_router`, `retention_checkpoint_confinement`, `restore_mode_checkpoint_free_turn` and `egress`. That is 263 pass, 0 fail.
+- Separately: `worktrunk_*` 179 pass, 0 fail.
+- `npx tsc --noEmit` printed "TypeScript: No errors found".
+- The harness moved the long run to the background after 180 seconds, so I polled it to completion; no watchers are left running.
+
+**Entire findings on the branch now**
+- `01M73J9KNV2T` (Medium, `agent.ts`), the one fixed here, still `open`.
+- `01M73JKD50YD` (Low, `repl.ts:200-205`): `InteractiveRepl.checkpoints()` copies the rebuild-on-workspace-change logic. It is open and unaddressed; it is the REPL counterpart of the sidecar duplication I removed earlier. The REPL keeps its own manager field because several existing tests inject a fake one. Do you want me to make the REPL delegate to the app's manager too and update those tests?</result>
+<usage><subagent_tokens>215488</subagent_tokens><tool_uses>59</tool_uses><duration_ms>5738303</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0ac9f38f725b1166</task-id>
+<tool-use-id>toolu_01PhiHyDEJmYEaAm198vH2U6</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/tasks/a0ac9f38f725b1166.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix new Entire findings up the stack" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>`01M73JKD50YD` is fixed in code and pushed to #449's branch; the new head is `96f2f2d3`. Entire still lists it as `open` because it has not re-reviewed that head yet. I touched only #449's branch and did not merge or resolve anything.
+
+**Fix**
+- `InteractiveRepl` no longer has its own checkpoint manager field or `checkpoints()` helper, and the duplicated rebuild logic is gone. Every use goes through `this.app.getCheckpointManager()`, which already rebuilds when the workspace changes. The assignments after `--resume`, `/cd` and a merge relocation are removed, because each already updates `config.workspace` first.
+- **Tests that injected a fake manager:** `repl_checkpoint_choices.test.ts` and `restore_mode_checkpoint_free_turn.test.ts` now inject through the app seam (`repl.app = { getCheckpointManager }`). `worktrunk_binding.test.ts` passes the real app and runs `/undo` through `app.getCheckpointManager()`. No assertion was weakened or removed.
+- I updated the existing `FINDINGS.md` row to name `01M73JKD50YD` and say the sidecar and REPL both delegate.
+
+**Conversation-reset question**
+I found no behaviour change, and the earlier "skips conversation reset" claim in my last report was wrong:
+- Moving the session into the worktree calls `setWorkspace`, which resets the conversation anyway. So a fresh first prompt starts clean whether or not the early entry ran, and `{ resume: true }` gives the same result either way.
+- A genuinely resumed transcript comes from restoring a saved binding. That sets the active worktree up front, so `enterNamedWorktreeBeforeTurn` does nothing for it and the transcript is kept, as before.
+- Two new tests in `worktrunk_binding.test.ts` check this with a real agent:
+  - **Fresh versus resume:** early entry and no early entry give identical conversations for a fresh prompt and for `resume: true`, and a fresh first prompt has no earlier messages.
+  - **Same session:** a second prompt after entering the worktree keeps the transcript of the first.
+- The existing follow-up test covers the resumed-binding side.
+
+**Tests**
+- Run in two foreground chunks:
+  - `checkpoint_*`, `repl_*`, `recover_worktree_conversation`, `slash_router`, `retention_checkpoint_confinement`, `restore_mode_checkpoint_free_turn` and `egress`: 203 pass, 0 fail.
+  - `sidecar` plus `worktrunk_*`: 241 pass, 0 fail.
+- `npx tsc --noEmit` printed "TypeScript: No errors found" on the final runs.
+
+The branch's Entire list now shows only that same `01M73JKD50YD`, which refers to the old head. The Medium `01M73J9KNV2T` no longer appears.</result>
+<usage><subagent_tokens>229785</subagent_tokens><tool_uses>72</tool_uses><duration_ms>6184841</duration_ms></usage>
+</task-notification>
+
+---
+
+you can action the Entire approval when all reviews are "ACCEPT" and 0 findings remain in Entire.
