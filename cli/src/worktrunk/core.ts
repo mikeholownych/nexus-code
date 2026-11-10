@@ -191,7 +191,6 @@ function ownerOf(repo: Repo): string {
 
 export function switchWorktree(ctx: WorktreeContext, branchToken: string, options: SwitchOptions = {}): CommandResult {
   const repo = openRepo(ctx.cwd);
-  const registry = loadRegistry(repo);
   const name = resolveBranchName(repo, branchToken);
   const existing = repo.entries.find((entry) => entry.branch === name);
   const here = currentEntry(repo);
@@ -371,6 +370,7 @@ export const removeSeams: {
   beforeLock?: (entry: WorktreeEntry) => void;
   beforeRemove?: (entry: WorktreeEntry) => void;
   afterGuardSwitch?: (entry: WorktreeEntry) => void;
+  beforeGuardSwitch?: (entry: WorktreeEntry) => void;
   beforeGitRemove?: (entry: WorktreeEntry) => void;
   beforeBranchDeletion?: (entry: WorktreeEntry) => void;
 } = {};
@@ -469,14 +469,25 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
           guardBranch = "";
           throw new WorktreeError(`the branch ${name} already exists at another commit; inspect it, delete it with \`git branch -D ${name}\` if it is not needed, and run the command again. Nothing was removed`);
         }
-        // A guard branch left by an interrupted earlier attempt for this worktree and commit is reused.
-        const switched = git(entry.path, leaked ? ["switch", "--end-of-options", guardBranch] : ["switch", "-c", guardBranch, "--end-of-options"], { allowFailure: true });
+        // A guard branch left by an interrupted earlier attempt for this worktree and commit is reused. It is moved to
+        // wherever HEAD is at the moment of the switch (`switch -C`), never switched onto: a plain switch would reset a
+        // detached HEAD that another session advanced to B back to the old commit A and lose B. The old commit is kept on
+        // a second branch until the switch is verified.
+        const previous = `${guardBranch}-prev`;
+        if (leaked) git(repo.cwd, ["update-ref", "--end-of-options", `refs/heads/${previous}`, leaked]);
+        removeSeams.beforeGuardSwitch?.(entry);
+        const switched = git(entry.path, ["switch", leaked ? "-C" : "-c", guardBranch, "--end-of-options"], { allowFailure: true });
         if (switched.status !== 0) {
           guardBranch = "";
           throw new WorktreeError("could not protect the detached HEAD before removing it; nothing was removed");
         }
         removeSeams.afterGuardSwitch?.(entry);
         const nowHead = git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim();
+        if (leaked) {
+          // The guard moved with HEAD. The old commit needs its own branch only if the new head does not contain it.
+          const contained = git(repo.cwd, ["merge-base", "--is-ancestor", leaked, nowHead], { allowFailure: true }).status === 0;
+          if (contained) deleteBranchAt(repo, previous, leaked);
+        }
         if (nowHead !== guardHead) {
           const name = guardBranch;
           guardBranch = ""; // kept: it now holds the commit that landed
