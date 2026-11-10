@@ -56,6 +56,8 @@ export interface GitOptions {
   /** Extra environment (applied after scrubbing); never the repository selectors. */
   env?: Record<string, string>;
   maxBuffer?: number;
+  /** Text for the child's standard input (for `--stdin` forms). */
+  input?: string;
 }
 
 let hookEnvCache: { key: string; env: NodeJS.ProcessEnv } | undefined;
@@ -78,7 +80,8 @@ export function git(cwd: string, args: readonly string[], options: GitOptions = 
   const result = spawnSync("git", [...PINNED_GIT_FLAGS, ...args], {
     cwd,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
+    input: options.input ?? "",
     env: { ...baseEnv(), ...(options.env ?? {}) },
     timeout: options.timeoutMs ?? 30_000,
     maxBuffer: options.maxBuffer ?? 32 * 1024 * 1024,
