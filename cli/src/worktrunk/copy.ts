@@ -92,7 +92,6 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   const skipped: string[] = [];
   let files = 0;
   let bytes = 0;
-  const perRoot = new Map<string, number>();
 
   const walk = (rel: string, root: string): void => {
     const abs = path.join(sourceRoot, rel);
@@ -102,9 +101,12 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
     if (only && !(stat.isDirectory() ? only.dirs.has(rel) : only.files.has(rel))) return;
     if (stat.isSymbolicLink()) {
       const target = fs.readlinkSync(abs);
-      const resolved = path.resolve(path.dirname(abs), target);
-      if (path.isAbsolute(target) || !insideOrEqual(sourceRoot, resolved)) { skipped.push(`${rel}: symbolic link leaves the tree`); return; }
-      count(root, 0);
+      // Resolve through the real file system, not lexically: `self -> .` followed by `self/../..` leaves the tree although
+      // the normalised text stays inside. A target that cannot be resolved (dangling) is not copied either.
+      let real: string | undefined;
+      try { real = fs.realpathSync(`${fs.realpathSync(path.dirname(abs))}${path.sep}${target}`); } catch { real = undefined; }
+      if (path.isAbsolute(target) || real === undefined || !insideOrEqual(sourceRoot, real)) { skipped.push(`${rel}: symbolic link leaves the tree`); return; }
+      count(0);
       ops.push({ kind: "symlink", rel, root, target });
       return;
     }
@@ -115,13 +117,12 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
       return;
     }
     if (!stat.isFile()) { skipped.push(`${rel}: not a regular file`); return; }
-    count(root, stat.size);
+    count(stat.size);
     ops.push({ kind: "file", rel, root, size: stat.size, atimeMs: stat.atimeMs, mtimeMs: stat.mtimeMs });
   };
-  const count = (root: string, size: number): void => {
+  const count = (size: number): void => {
     files++;
     bytes += size;
-    perRoot.set(root, (perRoot.get(root) ?? 0) + 1);
     if (files > limits.maxFiles) throw new CopyLimitError(`refusing to copy: more than ${limits.maxFiles} files match (file limit); narrow ${INCLUDE_FILE}`);
     if (bytes > limits.maxBytes) throw new CopyLimitError(`refusing to copy: the files exceed the ${limits.maxBytes} byte limit; narrow ${INCLUDE_FILE}`);
   };
@@ -139,25 +140,56 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   const lines: string[] = [];
   let copied = 0;
   let existing = 0;
-  let dryBytes = 0;
-  if (options.dryRun) {
-    // The same destination test as the real run: without --force an entry that is already there is kept, so it is not
-    // part of the preview or of the counts.
-    const pending = new Map<string, number>();
-    let pendingBytes = 0;
-    for (const op of ops) {
-      if (op.kind === "dir") continue;
-      if (!options.force && fs.lstatSync(path.join(destRoot, op.rel), { throwIfNoEntry: false })) { existing++; continue; }
-      pending.set(op.root, (pending.get(op.root) ?? 0) + 1);
-      pendingBytes += op.kind === "file" ? op.size : 0;
-      copied++;
+  let plannedBytes = 0;
+
+  // One plan for the preview and the real run, so the two cannot diverge. Nothing here writes.
+  const tracked = ops.some((op) => op.kind !== "dir") ? new Set(nul(git(destRoot, ["ls-files", "-z", "--cached"]).stdout)) : new Set<string>();
+  const unsafe = (rel: string, problem: string) => `${rel}: destination is not safe (${problem})`;
+  /** The first existing ancestor of `rel` under the destination that is not a real directory, if any (missing ones are fine: they get created). */
+  const ancestryProblem = (rel: string): string | undefined => {
+    let current = destRoot;
+    for (const part of path.dirname(rel).split(path.sep).filter((p) => p && p !== ".")) {
+      current = path.join(current, part);
+      const stat = fs.lstatSync(current, { throwIfNoEntry: false });
+      if (!stat) return undefined;
+      if (stat.isSymbolicLink()) return "a symbolic link in the way";
+      if (!stat.isDirectory()) return "a file in the way";
     }
+    return undefined;
+  };
+  type Step = { op: Exclude<Op, { kind: "dir" }>; replace: boolean };
+  const steps: Step[] = [];
+  const dirs: string[] = [];
+  const blocked: string[] = [];
+  for (const op of ops) {
+    if (blocked.some((b) => op.rel === b || op.rel.startsWith(b + path.sep))) continue;
+    const problem = ancestryProblem(op.rel);
+    if (problem) {
+      skipped.push(unsafe(op.rel, problem));
+      if (op.kind === "dir") blocked.push(op.rel);
+      continue;
+    }
+    if (op.kind === "dir") { dirs.push(op.rel); continue; }
+    if (tracked.has(op.rel)) { skipped.push(`${op.rel}: tracked in destination (never overwritten, even with --force)`); continue; }
+    const present = fs.lstatSync(path.join(destRoot, op.rel), { throwIfNoEntry: false });
+    if (present) {
+      if (!options.force) { existing++; continue; }
+      if (!present.isFile() && !present.isSymbolicLink()) { skipped.push(`${op.rel}: a directory is in the way`); continue; }
+      const me = process.getuid?.();
+      if (me !== undefined && present.uid !== me) { skipped.push(unsafe(op.rel, `owned by uid ${present.uid}, not ${me}`)); continue; }
+    }
+    steps.push({ op, replace: Boolean(present) });
+    plannedBytes += op.kind === "file" ? op.size : 0;
+  }
+
+  if (options.dryRun) {
+    const pending = new Map<string, number>();
+    for (const { op } of steps) pending.set(op.root, (pending.get(op.root) ?? 0) + 1);
     for (const [root, n] of pending) lines.push(`would copy ${shownPath(ctx.home, root)} (${n} file${n === 1 ? "" : "s"})`);
-    dryBytes = pendingBytes;
+    copied = steps.length;
   } else {
-    const blocked = new Set<string>();
-    const unsafe = (rel: string, problem: string) => `${rel}: destination is not safe (${problem.includes("symbolic link") ? "a symbolic link in the way" : problem.replace(destRoot, "")})`;
-    // Directories already proven to be real, user-owned entries under the destination: each is verified once.
+    // Directories already proven to be real, user-owned entries under the destination: each is verified once, and any
+    // staging file a killed run left in it is removed.
     const ensured = new Set<string>([destRoot]);
     const ensureDir = (dir: string): string | undefined => {
       if (ensured.has(dir)) return undefined;
@@ -167,61 +199,70 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
         if (err instanceof SafePathError) return err.message;
         throw err;
       }
+      sweepStaging(dir);
       ensured.add(dir);
       return undefined;
     };
-    for (const op of ops) {
-      if ([...blocked].some((b) => op.rel === b || op.rel.startsWith(b + path.sep))) continue;
+    for (const dir of dirs) {
+      const problem = ensureDir(path.join(destRoot, dir));
+      if (problem) skipped.push(unsafe(dir, problem.includes("symbolic link") ? "a symbolic link in the way" : problem.replace(destRoot, "")));
+    }
+    for (const { op, replace } of steps) {
       const dst = path.join(destRoot, op.rel);
-      if (op.kind === "dir") {
-        const problem = ensureDir(dst);
-        if (problem) {
-          skipped.push(unsafe(op.rel, problem));
-          blocked.add(op.rel);
-        }
-        continue;
-      }
       // A file or link selected on its own has no directory operation above it: its parents are created and verified here.
       const parentProblem = ensureDir(path.dirname(dst));
-      if (parentProblem) {
-        skipped.push(unsafe(op.rel, parentProblem));
-        continue;
-      }
-      // Only the ancestors must be real directories: the entry itself may be a stale file or link that --force replaces,
-      // and it is never followed (lstat here, exclusive create or rename below).
-      const present = fs.lstatSync(dst, { throwIfNoEntry: false });
-      if (present) {
-        if (!options.force) { existing++; continue; }
-        if (!present.isFile() && !present.isSymbolicLink()) { skipped.push(`${op.rel}: a directory is in the way`); continue; }
-        const me = process.getuid?.();
-        if (me !== undefined && present.uid !== me) { skipped.push(unsafe(op.rel, `owned by uid ${present.uid}, not ${me}`)); continue; }
-      }
-      if (!present) {
-        place(sourceRoot, op, dst);
-      } else {
-        // Replace through a staged sibling and a rename, so a copy that fails (an unreadable source) leaves the old entry.
-        const staged = path.join(path.dirname(dst), `.nexus-copy-${randomUUID()}.tmp`);
-        try {
-          place(sourceRoot, op, staged);
+      if (parentProblem) { skipped.push(unsafe(op.rel, parentProblem.includes("symbolic link") ? "a symbolic link in the way" : parentProblem.replace(destRoot, ""))); continue; }
+      // Always stage under a temporary name in the same directory: a run killed mid-copy leaves a `.nexus-copy-*.tmp`
+      // (swept by the next run), never a truncated file under its final name. A new entry is linked into place, which
+      // cannot replace anything; a replaced entry is renamed over.
+      const staged = path.join(path.dirname(dst), `.nexus-copy-${randomUUID()}.tmp`);
+      try {
+        place(sourceRoot, op, staged);
+        if (replace) {
           fs.renameSync(staged, dst);
-        } catch (err) {
-          try { fs.unlinkSync(staged); } catch { /* never created */ }
-          throw err;
+        } else {
+          try {
+            fs.linkSync(staged, dst);
+          } catch (err: any) {
+            if (err?.code !== "EEXIST") throw err;
+            existing++; // it appeared since the plan: kept
+            continue;
+          } finally {
+            try { fs.unlinkSync(staged); } catch { /* already renamed or gone */ }
+          }
         }
+      } catch (err) {
+        try { fs.unlinkSync(staged); } catch { /* never created */ }
+        throw err;
       }
       copied++;
     }
   }
 
   const head = options.dryRun
-    ? `Dry run: ${copied} file(s), ${dryBytes} byte(s) would be copied from ${shownPath(ctx.home, sourceRoot)} to ${shownPath(ctx.home, destRoot)}`
-    : `Copied ${copied} file(s) (${bytes} byte(s) planned) from ${shownPath(ctx.home, sourceRoot)} to ${shownPath(ctx.home, destRoot)}`;
+    ? `Dry run: ${copied} file(s), ${plannedBytes} byte(s) would be copied from ${shownPath(ctx.home, sourceRoot)} to ${shownPath(ctx.home, destRoot)}`
+    : `Copied ${copied} file(s) (${plannedBytes} byte(s) planned) from ${shownPath(ctx.home, sourceRoot)} to ${shownPath(ctx.home, destRoot)}`;
   const out = [head, ...lines];
   if (existing) out.push(`kept ${existing} existing file(s) (use --force to overwrite)`);
   for (const note of skipped.slice(0, REPORT_LINES)) out.push(`skipped ${redactSecrets(note)}`);
   if (skipped.length > REPORT_LINES) out.push(`... ${skipped.length - REPORT_LINES} more skipped`);
   if (options.allIgnored) out.push("warning: --all-ignored copies every ignored file, including secrets such as .env, into the destination");
   return { success: true, output: out.join("\n"), data: { copied, planned: files, bytes, skipped: skipped.length, existing } };
+}
+
+/** Removes `.nexus-copy-<uuid>.tmp` files a killed earlier run left in `dir` (only regular files and links owned by this user). */
+function sweepStaging(dir: string): void {
+  const me = process.getuid?.();
+  let names: string[];
+  try { names = fs.readdirSync(dir); } catch { return; }
+  for (const name of names) {
+    if (!/^\.nexus-copy-[0-9a-f-]{36}\.tmp$/.test(name)) continue;
+    const file = path.join(dir, name);
+    try {
+      const stat = fs.lstatSync(file);
+      if ((stat.isFile() || stat.isSymbolicLink()) && (me === undefined || stat.uid === me)) fs.unlinkSync(file);
+    } catch { /* raced with another run */ }
+  }
 }
 
 /** Creates the entry for `op` at `at`, exclusively (never through a link), with the source's modification time. */
