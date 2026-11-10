@@ -743,7 +743,7 @@ test("fast-forward merge refuses to overwrite target ignored file with source tr
     git(dir, "add", "-f", "build.log");
     git(dir, "commit", "-q", "-m", "track build.log");
 
-    const r = wt(f, dir, ["merge", "--no-remove"]);
+    const r = wt(f, dir, ["merge", "--no-remove", ...W]);
     assert.equal(r.success, false, r.output);
     assert.match(r.output, /overwrit/i, r.output);
     assert.equal(fs.readFileSync(path.join(f.repo, "build.log"), "utf8"), "target local ignored content\n", "target local ignored file must not be overwritten!");
@@ -781,7 +781,7 @@ test("merge with initialized submodule retains the worktree with an explanatory 
     const { dir } = withSubmodule(f, "feat/clean-sub");
     commitFile(dir, "b.txt", "b\n", "add b");
 
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, true, r.output);
     assert.match(r.output, /submodule .* (is initialized|initialized here)/i, r.output);
     assert.ok(fs.existsSync(dir), "worktree with initialized submodule must be retained without failing the merge");
@@ -897,7 +897,7 @@ test("tracked Nexus state under .nexus is neither backed up nor committed by the
     git(dir, "commit", "-q", "-m", "an old commit that tracked internal state");
     fs.writeFileSync(path.join(dir, ".nexus", "knowledge.json"), '{"v":2,"edited by a session":true}\n');
     fs.writeFileSync(path.join(dir, "real.txt"), "real work\n");
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "show", "main:real.txt"), "real work");
     assert.equal(git(f.repo, "show", "main:.nexus/knowledge.json"), '{"v":1}', "the state edit was not committed");
@@ -912,7 +912,7 @@ test("a worktree reached through a symbolic link is recognised as removed after 
     commitFile(dir, "b.txt", "b\n", "add b");
     const alias = path.join(f.root, "alias-to-worktree");
     fs.symlinkSync(dir, alias);
-    const merged = wt(f, alias, ["merge", "--no-remove"]);
+    const merged = wt(f, alias, ["merge", "--no-remove", ...W]);
     assert.equal(merged.success, true, merged.output);
     const removed = wt(f, f.repo, ["remove", "feat/alias"]);
     assert.equal(removed.success, true, removed.output);
