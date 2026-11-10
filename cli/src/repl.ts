@@ -13,6 +13,7 @@ import { LocalLlmClient } from "./client.js";
 import { HarnessConfig, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { isNexusDirPermissive } from "./doctor.js";
+import { surfaceFacts } from "./surface_facts.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges, workspaceStatus } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import { formatDiagnosticForOutput } from "./ui.js";
@@ -367,8 +368,13 @@ export class InteractiveRepl {
     console.log(pc.dim(`mode: ${this.approvalMode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
 
     console.log(`${pc.bold(pc.cyan("WORKSPACE"))}  ${pc.white(wsName)}${gitBadge}  ${pc.dim(this.config.workspace)}`);
-    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(this.config.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
-    if (verbose) console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint}  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
+    const facts = surfaceFacts(this.app, this.currentSessionId);
+    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(facts.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
+    if (verbose) {
+      console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint} (${facts.endpoint_kind})  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
+      console.log(`${pc.bold(pc.cyan("READ-ONLY"))}  ${facts.read_only ? "yes" : "no"}`);
+      console.log(`${pc.bold(pc.cyan("CONTEXT"))}    ${facts.context_tokens} of ${facts.context_limit} tokens`);
+    }
     console.log(`${pc.dim(`session ${this.currentSessionId} · ${this.agent.getHistoryCount()} messages · ${this.config.shell}`)}\n`);
   }
 

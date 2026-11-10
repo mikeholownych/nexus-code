@@ -127,7 +127,7 @@ describe("SidecarServer: session and turns", () => {
       let calls = 0;
       app.getAgent = () => {
         calls += 1;
-        if (calls === 3) {
+        if (calls === 2) {
           app.getAgent = getAgent;
           throw new Error("agent exploded token=supersecretvalue");
         }

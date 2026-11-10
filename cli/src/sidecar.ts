@@ -64,6 +64,7 @@ import {
 } from "./protocol.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
+import { surfaceFacts } from "./surface_facts.js";
 import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
 
@@ -1022,6 +1023,7 @@ export class SidecarServer {
 
   private emitSessionState(): void {
     const config = this.app.getConfig();
+    const facts = surfaceFacts(this.app, this.sessionId);
     const git = getGitInfo(config.workspace);
     const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
     const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
@@ -1029,13 +1031,17 @@ export class SidecarServer {
       type: "session.state",
       workspace: config.workspace,
       workspace_name: path.basename(config.workspace),
-      model: config.provider ? `${config.provider} · ${config.model}` : config.model,
-      mode: this.app.getAgent().getApprovalMode(),
+      model: facts.model,
+      mode: facts.mode,
       git: git.isRepo ? { branch: git.branch, dirty: git.dirtyCount } : null,
       busy: Boolean(this.activeTurn),
-      session: this.sessionId,
+      session: facts.session,
+      read_only: facts.read_only,
+      context_tokens: facts.context_tokens,
+      context_limit: facts.context_limit,
+      endpoint_kind: facts.endpoint_kind,
       posture: {
-        mode: this.app.getAgent().getApprovalMode(),
+        mode: facts.mode,
         sandbox: sandboxStatus,
         trusted,
       },
