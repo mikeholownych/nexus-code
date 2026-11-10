@@ -150,7 +150,7 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
         return pathOf(ctx, parsed.positionals[0]);
       }
       case "merge": {
-        if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]");
+        if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message] [--ai-message] [--no-verify-receipt --reason why]");
         return mergeWorktree(ctx, mergeOptionsFrom(parsed));
       }
       case "prune": {
@@ -225,6 +225,8 @@ export interface AsyncDeps {
   /** Asks the configured model; absent when no provider is available. */
   completer?: Completer;
   aiTimeoutMs?: number;
+  /** An operator cancel (Ctrl-C) while the model is being asked: the merge does not start. */
+  signal?: AbortSignal;
 }
 
 /** Like `runWorktreeCommand`, plus the opt-in `merge --ai-message`. Read-only mode never reaches the model. */
@@ -234,9 +236,7 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
   let parsed: Parsed;
   try { parsed = parse(SPECS.merge, tokens.slice(1)); } catch { return runWorktreeCommand(tokens, run); }
   if (!parsed.flags.has("ai-message") || parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
-  if (parsed.positionals.length > 1) {
-    return formatCommandError(new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]"));
-  }
+  if (parsed.positionals.length > 1) return runWorktreeCommand(tokens, run); // the one place that owns the merge usage
   const ctx: WorktreeContext = { cwd: run.cwd, home: run.home ?? homeDir(), readOnly: false };
 
   const mergeOptions = mergeOptionsFrom(parsed);
@@ -249,15 +249,13 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
 
   const willWriteCommit = mctx.state.total > 0 || (!mergeOptions.noSquash && mctx.ahead > 1) || (mctx.ahead === 1);
   if (!willWriteCommit) {
-    try {
-      return mergeWorktree(ctx, mergeOptions);
-    } catch (err) {
-      return formatCommandError(err);
-    }
+    return runWorktreeCommand(tokens, run); // nothing to describe: the ordinary path
   }
 
-  const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS)
+  const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS, deps.signal)
     .catch(() => ({ message: undefined, note: "note: could not prepare the model request; using the deterministic commit message." }));
+
+  if (deps.signal?.aborted) return { success: false, output: "Cancelled while the model was being asked: nothing was merged, committed or removed." };
 
   try {
     const options: MergeOptions = { ...mergeOptions, ...(generated.message ? { message: generated.message } : {}) };
