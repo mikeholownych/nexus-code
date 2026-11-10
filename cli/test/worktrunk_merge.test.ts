@@ -452,28 +452,28 @@ test("in-progress operations report readable operation names and matching contin
 
     // MERGE_HEAD
     fs.writeFileSync(path.join(gitDir, "MERGE_HEAD"), git(dir, "rev-parse", "HEAD") + "\n");
-    let r = wt(f, dir, ["merge"]);
+    let r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, false);
     assert.match(r.output, /a merge is already in progress in this worktree; finish it \(git merge --continue \/ --abort\)/);
     fs.rmSync(path.join(gitDir, "MERGE_HEAD"));
 
     // CHERRY_PICK_HEAD
     fs.writeFileSync(path.join(gitDir, "CHERRY_PICK_HEAD"), git(dir, "rev-parse", "HEAD") + "\n");
-    r = wt(f, dir, ["merge"]);
+    r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, false);
     assert.match(r.output, /a cherry-pick is already in progress in this worktree; finish it \(git cherry-pick --continue \/ --abort\)/);
     fs.rmSync(path.join(gitDir, "CHERRY_PICK_HEAD"));
 
     // REVERT_HEAD
     fs.writeFileSync(path.join(gitDir, "REVERT_HEAD"), git(dir, "rev-parse", "HEAD") + "\n");
-    r = wt(f, dir, ["merge"]);
+    r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, false);
     assert.match(r.output, /a revert is already in progress in this worktree; finish it \(git revert --continue \/ --abort\)/);
     fs.rmSync(path.join(gitDir, "REVERT_HEAD"));
 
     // sequencer directory
     fs.mkdirSync(path.join(gitDir, "sequencer"));
-    r = wt(f, dir, ["merge"]);
+    r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, false);
     assert.match(r.output, /a revert is already in progress in this worktree; finish it \(git revert --continue \/ --abort\)/);
     fs.rmdirSync(path.join(gitDir, "sequencer"));
@@ -533,7 +533,7 @@ test("a submodule with an unpublished local topic branch or stash keeps the work
     git(path.join(dir, "sub"), "checkout", "-q", "main"); // checked out commit is on remote! But topic is not!
     fs.writeFileSync(path.join(dir, "change.txt"), "superproject change\n");
 
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.ok(fs.existsSync(dir), `the worktree holding an unpublished submodule branch must be kept: ${r.output}`);
     assert.match(r.output, /submodule/i);
   } finally { f.cleanup(); }
@@ -558,7 +558,7 @@ test("a submodule with submodule.<name>.ignore=dirty still prevents removal when
     fs.writeFileSync(path.join(dir, "sub", "s.txt"), "dirty edit ignored by config\n");
     fs.writeFileSync(path.join(dir, "a.txt"), "superproject change\n");
 
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.ok(fs.existsSync(dir), `worktree with dirty submodule must be kept despite ignore=dirty: ${r.output}`);
     assert.match(r.output, /uncommitted|submodule|kept/i);
   } finally { f.cleanup(); }
@@ -579,7 +579,7 @@ test("discardIgnored preserves Git final dirty check when an uncommitted file la
       fs.writeFileSync(path.join(entry.path, "late.txt"), "late file\n");
     };
 
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.ok(fs.existsSync(dir), `worktree must be kept when late untracked file appeared: ${r.output}`);
     assert.ok(fs.existsSync(path.join(dir, "late.txt")), "late.txt must survive!");
   } finally {
@@ -774,7 +774,7 @@ test("uncommitted submodule edits are seen even when the submodule is configured
     git(dir, "config", "submodule.sub.ignore", "dirty");
     fs.writeFileSync(path.join(sub, "s.txt"), "uncommitted inside the submodule\n");
     fs.writeFileSync(path.join(dir, "a.txt"), "superproject change\n");
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.ok(fs.existsSync(dir), `the worktree must be kept: ${r.output}`);
     assert.equal(fs.readFileSync(path.join(sub, "s.txt"), "utf8"), "uncommitted inside the submodule\n");
   } finally { f.cleanup(); }
@@ -794,7 +794,7 @@ test("a submodule with an unpublished topic branch or a stash keeps the worktree
         git(sub, "stash", "push", "-q");
       }
       fs.writeFileSync(path.join(dir, "a.txt"), "superproject change\n");
-      const r = wt(f, dir, ["merge"]);
+      const r = wt(f, dir, ["merge", ...W]);
       assert.ok(fs.existsSync(dir), `${kind}: the worktree must be kept: ${r.output}`);
       assert.match(r.output, /submodule/i);
     } finally { f.cleanup(); }
@@ -810,14 +810,14 @@ test("a revert stopped on a conflict (REVERT_HEAD, sequencer state) refuses the 
     fs.writeFileSync(path.join(gitDir, "REVERT_HEAD"), git(dir, "rev-parse", "HEAD") + "\n");
     fs.mkdirSync(path.join(gitDir, "sequencer"));
     const head = git(dir, "rev-parse", "HEAD");
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, false, r.output);
     assert.match(r.output, /revert/i);
     assert.equal(git(dir, "rev-parse", "HEAD"), head);
     assert.ok(fs.existsSync(dir));
     const mainBefore = git(f.repo, "rev-parse", "refs/heads/main");
     fs.rmSync(path.join(gitDir, "REVERT_HEAD"));
-    const seqOnly = wt(f, dir, ["merge"]);
+    const seqOnly = wt(f, dir, ["merge", ...W]);
     assert.equal(seqOnly.success, false, "outstanding sequencer state alone also refuses: " + seqOnly.output);
     assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore);
   } finally { f.cleanup(); }
