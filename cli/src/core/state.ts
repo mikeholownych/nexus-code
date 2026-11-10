@@ -530,11 +530,11 @@ export class DurableStateManager {
    * Atomically saves task state to disk using write-to-temp and atomic rename.
    * Prevents partially written or corrupted state from being seen on disk (PERS-001, PERS-003).
    */
-  public saveTaskState(state: DurableTaskState, workspacePaths: WorkspacePath[] = this.workspacePaths): void {
-    withStateStoreGuard(this.baseDir, () => this.saveTaskStateLocked(state, workspacePaths));
+  public saveTaskState(state: DurableTaskState, workspacePaths: WorkspacePath[] = this.workspacePaths, options: { historical?: boolean } = {}): void {
+    withStateStoreGuard(this.baseDir, () => this.saveTaskStateLocked(state, workspacePaths, options));
   }
 
-  private saveTaskStateLocked(state: DurableTaskState, workspacePaths: WorkspacePath[]): DurableTaskState {
+  private saveTaskStateLocked(state: DurableTaskState, workspacePaths: WorkspacePath[], options: { historical?: boolean } = {}): DurableTaskState {
     if (!state.taskId) {
       throw new TaskStateWriteError("unknown", "Missing required taskId");
     }
@@ -561,7 +561,7 @@ export class DurableStateManager {
     let changedIdentityFields: string[] = [];
     try {
       const authorizedPaths = this.authorizeWorkspacePaths(workspacePaths);
-      protectedState = redactTaskStateForPersistence(state, authorizedPaths);
+      protectedState = redactTaskStateForPersistence(state, authorizedPaths, options);
       protectionPhase = "identity validation";
       changedIdentityFields = (["taskId", "sessionId", "id", "workspacePath"] as const).filter(
         (field) => protectedState[field] !== state[field]
@@ -676,7 +676,7 @@ export class DurableStateManager {
     if (!protectOnLoad) return state;
     try {
       selectedPaths = this.authorizeWorkspacePaths(selectedPaths);
-      const protectedState = redactTaskStateForPersistence(state, selectedPaths);
+      const protectedState = redactTaskStateForPersistence(state, selectedPaths, { historical: true });
       const changedIdentityFields: string[] = (["taskId", "sessionId", "id", "workspacePath"] as const).filter(
         (field) => protectedState[field] !== state[field]
       );
@@ -688,7 +688,7 @@ export class DurableStateManager {
       }
       if (record.version < CURRENT_STATE_SCHEMA_VERSION || normalizedLegacyWorkspace || JSON.stringify(protectedState) !== JSON.stringify(state)) {
         // Migrate older plaintext state on disk before reporting a successful load.
-        this.saveTaskState(protectedState, selectedPaths);
+        this.saveTaskState(protectedState, selectedPaths, { historical: true });
         return protectedState;
       }
     } catch (error) {
@@ -1002,7 +1002,9 @@ export class DurableStateManager {
     // Live execution is governed strictly by current runtime configuration.
 
     // 6. Persist the reconciled state atomically
-    this.saveTaskState(state, recoveryWorkspacePaths);
+    // A recovered record may describe a worktree that has since been removed (an inactive binding): persisting the
+    // reconciled state must not require that worktree to still be registered.
+    this.saveTaskState(state, recoveryWorkspacePaths, { historical: true });
 
     return {
       success: true,
