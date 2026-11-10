@@ -681,6 +681,99 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     }
   });
 
+  test("an agent that kept the placeholder because the resume found no session still detects its model at the first step", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-nosession-"));
+    const gateway = await startRecoveryGateway(() => ({ kind: "text", content: "answered" }));
+    const agent = new AutonomousAgent({ endpoint: gateway.url, model: "local-model", maxSteps: 2, temperature: 0, workspace: makeRepo(root), shell: "bash", approvalMode: "auto", fullAccess: true } as any);
+    try {
+      const a = agent as any;
+      a.stateManager = new DurableStateManager({ baseDir: path.join(root, "state"), workspacePaths: [a.primaryWorkspacePathIdentity] });
+      let lists = 0;
+      a.client.listModels = async () => {
+        lists++;
+        return ["served-model"];
+      };
+      await agent.runTurn("hello");
+      assert.equal(lists, 1, "the placeholder is replaced at the first step");
+      assert.equal(a.config.model, "served-model");
+    } finally {
+      agent.shutdown();
+      await gateway.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("adopting or detecting the model keeps explicit planner and coder models", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      a.config.model = "local-model";
+      a.config.plannerModel = "planner-model";
+      a.plannerClient = Object.assign(Object.create(a.client), { setModel: (m: string) => { a.plannerSet = m; }, getModel: () => a.plannerSet ?? "planner-model" });
+      a.plannerSet = "planner-model";
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model" }, noArchive);
+      assert.equal(a.client.getModel(), "recorded-model", "the main client takes the recorded model");
+      assert.equal(a.plannerSet, "planner-model", "an explicit planner model is not overwritten");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("a window recorded for a failover endpoint is waited out although the client starts on the primary", async () => {
+    const primary = await plannerSide(() => ({ kind: "http", status: 503, body: JSON.stringify({ error: { message: "unavailable" } }) }));
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      // The recorded provider is a failover endpoint; the client starts on the primary and fails over on a 503.
+      a.client.endpoints = [primary.gateway.url, ...a.client.endpoints];
+      a.client.activeEndpointIndex = 0;
+      const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      assert.ok(primary.gateway.requests.length >= 1, "precondition: the primary was tried first");
+      assert.deepEqual(ctx.requestedAt.filter((at) => at < eligibleAt), [], "the recorded provider was not asked before its window ended");
+    } finally {
+      await primary.cleanup();
+      await ctx.cleanup();
+    }
+  });
+
+  test("cancelling a planner recovery while the coder's window is pending keeps both windows across a restart", async () => {
+    const planner = await plannerSide((n) => (n === 1 ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] } : { kind: "text", content: "planner done" }));
+    const ctx = await interruptedThenRestored({});
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-two-windows-"));
+    let restarted: AutonomousAgent | undefined;
+    try {
+      const coderWindow = eligibleAtOf(ctx.interrupted);
+      const coderEndpoint = String(ctx.interrupted.providerRecovery?.at(-1)?.endpoint);
+      const start = ctx.resumedClock.now();
+      const plannerWindow = start + 5_000;
+      // What a checkpoint holds after a planner recovery was cancelled while the coder's window was still pending.
+      const prior = ctx.interrupted.providerRecovery!.at(-1)!;
+      const stored = JSON.parse(JSON.stringify({
+        ...ctx.interrupted,
+        interruption: { ...ctx.interrupted.interruption, providerEligibleAt: new Date(plannerWindow).toISOString() },
+        providerRecovery: [{ ...prior, endpoint: planner.gateway.url }],
+        pendingProviderWindows: [{ eligibleAt: new Date(coderWindow).toISOString(), endpoint: coderEndpoint }],
+      })) as TurnResult;
+      const clock = fakeClock();
+      restarted = agentFor(ctx.gw.url, makeRepo(root), path.join(root, "state"), clock);
+      const a = restarted as any;
+      a.cognitiveRoutingEnabled = true;
+      a.plannerClient = planner.client;
+      a.coderClient = a.client;
+      restarted.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: stored }, noArchive);
+      const r = await restarted.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      assert.deepEqual(clock.sleeps, [5_000, coderWindow - (start + 5_000)], "the planner waits its shorter window, then the coder waits its own");
+    } finally {
+      restarted?.shutdown();
+      fs.rmSync(root, { recursive: true, force: true });
+      await planner.cleanup();
+      await ctx.cleanup();
+    }
+  });
+
   test("a resumed agent whose record has no model detects it after the wait, not before", async () => {
     const ctx = await interruptedThenRestored({});
     try {

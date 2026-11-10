@@ -974,11 +974,12 @@ export class AutonomousAgent {
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
   /**
-   * A turn that ended while waiting out a provider failure, restored by a resume: when the provider may be asked
-   * again, and the recovery record of that wait (its real submissions, for the status shown while waiting). Consumed
-   * by the first inference step on that endpoint (a step on another endpoint leaves it pending).
+   * Provider windows owed by a restored turn: when each endpoint's provider may be asked again, and the recovery
+   * record of the wait (its real submissions, for the status shown while waiting). A step waits out the windows that
+   * cover its client; a step on another endpoint leaves the others pending. More than one can be owed (a planner
+   * recovery cancelled while the coder's window was pending).
    */
-  private resumedProviderWait?: { eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord };
+  private resumedProviderWaits: Array<{ eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord }> = [];
   /** A resumed start kept the "local-model" placeholder and its record named no model: detect it after the wait. */
   private modelDetectionDeferred = false;
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
@@ -1185,6 +1186,9 @@ export class AutonomousAgent {
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
     this.gateEmbeddings();
+    // The placeholder is replaced at the first step when no start-up detection did (a resume skips it; so does an
+    // unreachable gateway); a restored record's model replaces it first.
+    this.modelDetectionDeferred = !config.provider && config.model === "local-model";
     this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: verifierTimeoutSecs(config.verifierTimeoutSecs) }));
     this.browser = new BrowserDriver(ws);
     this.knowledge = new KnowledgeGraph(ws, { readOnly: initialReadOnly });
@@ -2369,7 +2373,7 @@ export class AutonomousAgent {
   }
 
   public resetConversation(): void {
-    this.resumedProviderWait = undefined;
+    this.resumedProviderWaits = [];
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
     // A conversation reset in this process is not a durable recovery boundary. Keep
@@ -5559,11 +5563,19 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       return;
     }
     if (recorded && recorded !== "local-model") {
-      this.setModel(recorded);
+      this.setDefaultModel(recorded);
       this.modelDetectionDeferred = false;
     } else {
       this.modelDetectionDeferred = true;
     }
+  }
+
+  /** The main model, without touching a tier whose own model the operator chose (plannerModel, coderModel). */
+  private setDefaultModel(model: string): void {
+    this.config.model = model;
+    this.client.setModel(model);
+    if (this.plannerClient !== this.client && !this.config.plannerModel) this.plannerClient.setModel(model);
+    if (this.coderClient !== this.client && !this.config.coderModel) this.coderClient.setModel(model);
   }
 
   /** The deferred detection, once the provider may be asked again: the first model the gateway lists. */
@@ -5572,30 +5584,31 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.modelDetectionDeferred = false;
     try {
       const models = await this.client.listModels();
-      if (models.length > 0) this.setModel(models[0]);
+      if (models.length > 0) this.setDefaultModel(models[0]);
     } catch {
       // Keep the placeholder; the request will surface the connection problem.
     }
   }
 
-  /** Records the provider window a restored turn was waiting out when it ended, if any (see resumedProviderWait). */
+  /** Records the provider windows a restored turn still owed when it ended (see resumedProviderWaits). */
   private rememberResumedProviderWait(lastTurn: TurnResult | null | undefined): void {
     // The restored record's last turn replaces this agent's own (a /resume reuses the agent): checkpoints and saves
     // written until the next turn ends describe the restored conversation, not an unrelated earlier turn.
     this.lastTurnResult = lastTurn ?? undefined;
-    // The window is owed either by an interruption in provider_wait or, when the turn ran on another endpoint,
-    // by the pending window it recorded.
+    const windows: typeof this.resumedProviderWaits = [];
+    // Durable records are same-user writable: an unparseable time is ignored, and the wait is bounded where it is used.
+    const add = (eligibleAt: unknown, endpoint: string | undefined, record?: ProviderRecoveryRecord) => {
+      if (typeof eligibleAt !== "string" || !Number.isFinite(Date.parse(eligibleAt))) return;
+      if (windows.some((w) => w.eligibleAt === eligibleAt && w.endpoint === endpoint)) return;
+      windows.push({ eligibleAt, ...(endpoint ? { endpoint } : {}), ...(record ? { record } : {}) });
+    };
+    // Owed by an interruption in provider_wait, and by the windows the turn left pending on other endpoints.
     const interruption = lastTurn?.execution === "INTERRUPTED" ? lastTurn.interruption : null;
     const recoveries = lastTurn?.providerRecovery ?? [];
     const record = recoveries[recoveries.length - 1];
-    const eligibleAt = interruption?.phase === "provider_wait" ? interruption.providerEligibleAt : lastTurn?.pendingProviderWindow?.eligibleAt;
-    const endpoint = interruption?.phase === "provider_wait" ? record?.endpoint : lastTurn?.pendingProviderWindow?.endpoint;
-    // Durable records are same-user writable: an unparseable time is ignored, and the wait is bounded where it is used.
-    if (!eligibleAt || !Number.isFinite(Date.parse(eligibleAt))) {
-      this.resumedProviderWait = undefined;
-      return;
-    }
-    this.resumedProviderWait = { eligibleAt, ...(endpoint ? { endpoint } : {}), record };
+    if (interruption?.phase === "provider_wait") add(interruption.providerEligibleAt, record?.endpoint, record);
+    for (const pending of lastTurn?.pendingProviderWindows ?? []) add(pending?.eligibleAt, pending?.endpoint);
+    this.resumedProviderWaits = windows;
   }
 
   /** Embedding requests go to the main client's provider: held back while a restored window for it is open. */
@@ -5608,15 +5621,19 @@ ${NEXUS_RUNTIME_IDENTITY}`;
    * included, since a request can be retried on any of them.
    */
   private clientWindowOpen(client: LocalLlmClient): boolean {
-    const endpoints = typeof client.getEndpoints === "function" ? client.getEndpoints() : [client.endpoint];
-    return endpoints.some((endpoint) => this.resumedWindowCovers(endpoint));
+    return this.windowsCovering(this.clientEndpoints(client)).length > 0;
   }
 
-  /** The window a turn leaves owed (it ran on another endpoint), for its result; empty once waited out or passed. */
-  private pendingWindowField(): { pendingProviderWindow?: { eligibleAt: string; endpoint?: string } } {
-    const pending = this.resumedProviderWait;
-    if (!pending || !(Date.parse(pending.eligibleAt) > this.recoveryClock.now())) return {};
-    return { pendingProviderWindow: { eligibleAt: pending.eligibleAt, ...(pending.endpoint ? { endpoint: pending.endpoint } : {}) } };
+  /** When the latest restored window covering this client ends, if any is open. */
+  private latestCoveringWindow(client: LocalLlmClient): string | undefined {
+    return this.windowsCovering(this.clientEndpoints(client)).map((w) => w.eligibleAt).sort().at(-1);
+  }
+
+  /** The windows a turn leaves owed, for its result; empty once waited out or passed. */
+  private pendingWindowField(): { pendingProviderWindows?: Array<{ eligibleAt: string; endpoint?: string }> } {
+    const open = this.resumedProviderWaits.filter((w) => Date.parse(w.eligibleAt) > this.recoveryClock.now());
+    if (!open.length) return {};
+    return { pendingProviderWindows: open.map((w) => ({ eligibleAt: w.eligibleAt, ...(w.endpoint ? { endpoint: w.endpoint } : {}) })) };
   }
 
   /** True while the main connection's provider is inside a window restored by a resume (hosts hold background requests). */
@@ -5626,10 +5643,21 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
   /** True while a restored provider window is still open and applies to this endpoint (or to any, when none was recorded). */
   private resumedWindowCovers(endpoint: string | undefined): boolean {
-    const pending = this.resumedProviderWait;
-    if (!pending || !(Date.parse(pending.eligibleAt) > this.recoveryClock.now())) return false;
-    const recorded = pending.endpoint;
-    return !recorded || !endpoint || comparableEndpoint(recorded) === comparableEndpoint(endpoint);
+    return this.windowsCovering(endpoint ? [endpoint] : []).length > 0;
+  }
+
+  /** The open restored windows that apply to any of these endpoints (a window without an endpoint applies to all). */
+  private windowsCovering(endpoints: readonly string[]): typeof this.resumedProviderWaits {
+    const now = this.recoveryClock.now();
+    return this.resumedProviderWaits.filter((w) => {
+      if (!(Date.parse(w.eligibleAt) > now)) return false;
+      return !w.endpoint || !endpoints.length || endpoints.some((endpoint) => comparableEndpoint(w.endpoint!) === comparableEndpoint(endpoint));
+    });
+  }
+
+  /** The endpoints a client may send a request to (its failover endpoints included). */
+  private clientEndpoints(client: LocalLlmClient): string[] {
+    return typeof client.getEndpoints === "function" ? client.getEndpoints() : [client.endpoint];
   }
 
   /**
@@ -5647,20 +5675,18 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     step: number,
     turn: NonNullable<AutonomousAgent["activeTurn"]>,
     signal: AbortSignal | undefined,
-    endpoint: string | undefined,
+    client: LocalLlmClient,
     track: (record: ProviderRecoveryRecord) => void,
   ): Promise<void> {
-    const pending = this.resumedProviderWait;
-    if (!pending) return;
     const now = this.recoveryClock.now();
+    // Passed windows are dropped. The window is the recorded provider's: a step on another endpoint is not held back
+    // by it and leaves it pending, for a later step that routes back (planner/coder). Any endpoint the client may
+    // fail over to counts, since a request can be retried on it.
+    this.resumedProviderWaits = this.resumedProviderWaits.filter((w) => Date.parse(w.eligibleAt) > now);
+    const covering = this.windowsCovering(this.clientEndpoints(client));
+    if (!covering.length) return;
+    const pending = covering.reduce((a, b) => (Date.parse(b.eligibleAt) > Date.parse(a.eligibleAt) ? b : a));
     const remaining = Date.parse(pending.eligibleAt) - now;
-    if (!(remaining > 0)) {
-      this.resumedProviderWait = undefined;
-      return;
-    }
-    // The window is the recorded provider's: a step on another endpoint is not held back by it.
-    // It stays pending, for a later step that routes back to the recorded endpoint (planner/coder).
-    if (!this.resumedWindowCovers(endpoint)) return;
     const delay = Math.min(remaining, policy.deadlineMs);
     const iso = (ms: number) => new Date(ms).toISOString();
     const prior = pending.record;
@@ -5676,11 +5702,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       probes: 0,
       waitedMs: 0,
       unknownReplays: 0,
-      ...(prior?.endpoint ? { endpoint: prior.endpoint } : {}),
+      ...(pending.endpoint ?? prior?.endpoint ? { endpoint: pending.endpoint ?? prior?.endpoint } : {}),
       policy: { deadlineMs: policy.deadlineMs, maxDelayMs: policy.maxDelayMs, maxUnknownReplays: policy.maxUnknownReplays },
     };
     track(record);
-    // The restored turn stays pending through the sleep, so a checkpoint or save during it keeps the eligible time.
+    // The windows stay pending through the sleep, so a checkpoint or save during it keeps the eligible times.
     this.onProviderRecoveryState(record, turn, false);
     try {
       await this.recoveryClock.sleep(delay, signal);
@@ -5690,7 +5716,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       track({ ...record, state: "CANCELLED", updatedAt: iso(at), waitedMs: at - now, reason: "cancelled while waiting out the recorded provider window" });
       throw new RecoveryCancelled();
     }
-    this.resumedProviderWait = undefined;
+    this.resumedProviderWaits = this.resumedProviderWaits.filter((w) => !covering.includes(w));
     const at = iso(this.recoveryClock.now());
     track({ ...record, state: "RESUMED", updatedAt: at, resumedAt: at, waitedMs: delay });
   }
@@ -6231,10 +6257,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // provider: the capability read and compaction admission (which can make auxiliary requests) included.
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         // When the provider may be asked again, while this step waits for it (kept if the wait is interrupted).
-        let providerEligibleAt: string | undefined = this.resumedProviderWait?.eligibleAt;
+        let providerEligibleAt: string | undefined = this.latestCoveringWindow(activeClient);
         let resumedWait: ProviderRecoveryRecord | undefined;
         try {
-          await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal, activeClient.endpoint, (r) => (resumedWait = r));
+          await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal, activeClient, (r) => (resumedWait = r));
         } catch (err) {
           if (!(err instanceof RecoveryCancelled)) throw err;
           this.ui.stopSpinner(false, "Stopped while waiting for the inference provider");

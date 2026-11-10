@@ -259,10 +259,10 @@ export interface TurnResult {
   /** Steps of this turn whose inference had to recover the provider (resumed or not). */
   providerRecovery?: ProviderRecoveryRecord[];
   /**
-   * A provider window restored by a resume that this turn did not need to wait out (it ran on another endpoint) and
-   * the next turn on that endpoint still owes. Persisted with the turn, so a restart keeps it.
+   * Provider windows restored by a resume that this turn did not wait out (it ran on another endpoint, or was cancelled
+   * while waiting) and a later turn on those endpoints still owes. Persisted with the turn, so a restart keeps them.
    */
-  pendingProviderWindow?: { eligibleAt: string; endpoint?: string };
+  pendingProviderWindows?: Array<{ eligibleAt: string; endpoint?: string }>;
   /** Workspace has changes that no passing verifier run covers (may predate this turn). */
   unverifiedChangesPending: boolean;
   finishedAt: string;
