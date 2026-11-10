@@ -10,3 +10,19 @@ export function providerCompleter(config: HarnessConfig): Completer {
     return typeof reply.content === "string" ? reply.content : "";
   };
 }
+
+/**
+ * A completer whose configuration is built on first use. Only building the configuration is guarded (no provider or an
+ * invalid setting means "no model": undefined); a failing request is not swallowed, so the caller can say it failed.
+ */
+export function lazyProviderCompleter(build: () => HarnessConfig, make: (config: HarnessConfig) => Completer = providerCompleter): Completer {
+  return async (messages, signal) => {
+    let completer: Completer;
+    try {
+      completer = make(build());
+    } catch {
+      return undefined;
+    }
+    return completer(messages, signal);
+  };
+}

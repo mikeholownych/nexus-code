@@ -15,7 +15,7 @@ import { PluginManager } from "./plugins.js";
 import { HarnessConfig } from "./types.js";
 import { FlightPlayer } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
-import { providerCompleter } from "./worktrunk/provider.js";
+import { lazyProviderCompleter } from "./worktrunk/provider.js";
 import { HunkStager } from "./stager.js";
 import { BenchmarkEvaluator } from "./evaluator.js";
 import { SynthesizerEngine } from "./synthesizer.js";
@@ -1030,16 +1030,7 @@ program
     const { runWorktreeCommandAsync } = await import("./worktrunk/command.js");
     const cwd = options.workspace ? path.resolve(options.workspace) : process.cwd();
     const result = await runWorktreeCommandAsync(args, { cwd, readOnly: Boolean(options.readOnly) }, {
-      completer: async (prompt, opts) => {
-        try {
-          const cfg = buildConfigOrThrow({ ...options, workspace: cwd });
-          const comp = providerCompleter(cfg);
-          if (!comp) return undefined;
-          return await comp(prompt, opts);
-        } catch {
-          return undefined;
-        }
-      },
+      completer: lazyProviderCompleter(() => buildConfigOrThrow({ ...options, workspace: cwd })),
     });
     (result.success ? console.log : console.error)(result.output);
     if (!result.success) process.exitCode = 1;

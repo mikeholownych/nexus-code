@@ -121,6 +121,8 @@ export class InteractiveRepl {
   private exitResolve?: () => void;
   /** Cancels a running /team operation (Ctrl-C). */
   private teamAbort?: AbortController;
+  /** Set while `/worktree merge --ai-message` awaits the model: Ctrl-C cancels it instead of ending the session. */
+  private worktreeAbort?: AbortController;
 
   constructor(appOrConfig: ApplicationCore | HarnessConfig, modeOrAutoApprove?: ApprovalMode | boolean, resumeSessionId?: string) {
     if ("getAgent" in appOrConfig && typeof (appOrConfig as any).getAgent === "function") {
@@ -709,6 +711,11 @@ export class InteractiveRepl {
     // cancellation (no new inference or tool dispatch is admitted); a second press terminates the process.
     // While idle it keeps its deliberate-exit meaning.
     this.rl.on("SIGINT", () => {
+      if (this.worktreeAbort && !this.worktreeAbort.signal.aborted) {
+        this.worktreeAbort.abort();
+        console.log(pc.yellow("\n⏹  Cancel requested: the merge stops before it changes anything."));
+        return;
+      }
       if (this.teamAbort && !this.teamAbort.signal.aborted) {
         this.teamAbort.abort();
         console.log(pc.yellow("\n⏹  Stop requested: the team operation is cancelled after its current step; its state is preserved."));
@@ -1065,7 +1072,13 @@ export class InteractiveRepl {
             }
             continue;
           } else if (cmd === "worktree" && !isLegacyWorktreeArgs(arg)) {
-            const result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(arg), { cwd: this.config.workspace, readOnly: Boolean(this.config.readOnly) || this.agent.getApprovalMode() === "read-only" }, { completer: providerCompleter(this.config) });
+            this.worktreeAbort = new AbortController();
+            let result: Awaited<ReturnType<typeof runWorktreeCommandAsync>>;
+            try {
+              result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(arg), { cwd: this.config.workspace, readOnly: Boolean(this.config.readOnly) || this.agent.getApprovalMode() === "read-only" }, { completer: providerCompleter(this.config), signal: this.worktreeAbort.signal });
+            } finally {
+              this.worktreeAbort = undefined;
+            }
             console.log((result.success ? result.output : pc.red(result.output)) + "\n");
             // A merge removes the worktree the session may be standing in: move it to the branch it was merged into.
             const moveTo = relocationAfter(result, this.config.workspace);

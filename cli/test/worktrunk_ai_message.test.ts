@@ -5,7 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { runWorktreeCommandAsync } from "../src/worktrunk/command.js";
+import { runWorktreeCommand, runWorktreeCommandAsync } from "../src/worktrunk/command.js";
+import { lazyProviderCompleter } from "../src/worktrunk/provider.js";
+import { generateMergeMessage } from "../src/worktrunk/ai_message.js";
 import type { Completer } from "../src/worktrunk/ai_message.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -192,5 +194,105 @@ test("clean branch exactly one commit ahead applies generated message from --ai-
     const r = await f.run(dir, MERGE, async () => "feat: updated single commit message");
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat: updated single commit message");
+  } finally { f.cleanup(); }
+});
+
+test("reason option containing --ai-message as a value does not invoke the model", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    let called = false;
+    const r = await f.run(
+      dir,
+      ["merge", "--no-verify-receipt", "--reason", "--ai-message", "main"],
+      async () => { called = true; return "feat: ai commit"; },
+    );
+    assert.equal(r.success, true, r.output);
+    assert.equal(called, false, "model should not have been called");
+  } finally { f.cleanup(); }
+});
+
+test("extra positional arguments fail with usage error before calling the model", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    let called = false;
+    const r = await f.run(
+      dir,
+      ["merge", "main", "extra", "--ai-message"],
+      async () => { called = true; return "feat: ai commit"; },
+    );
+    assert.equal(r.success, false);
+    assert.match(r.output, /usage: worktree merge/);
+    assert.equal(called, false, "model should not have been called when usage is invalid");
+  } finally { f.cleanup(); }
+});
+
+test("merge --no-squash with multiple clean commits does not call the model", async () => {
+  const f = fixture();
+  try {
+    const made = await f.run(f.repo, ["switch", "-c", "feat/multi", "--no-copy"]);
+    assert.equal(made.success, true, made.output);
+    const dir = path.join(f.repo, ".nexus", "worktrees", "feat-multi");
+    fs.writeFileSync(path.join(dir, "f1.txt"), "1\n");
+    git(dir, "add", "f1.txt");
+    git(dir, "commit", "-m", "commit one");
+    fs.writeFileSync(path.join(dir, "f2.txt"), "2\n");
+    git(dir, "add", "f2.txt");
+    git(dir, "commit", "-m", "commit two");
+
+    let called = false;
+    const r = await f.run(
+      dir,
+      ["merge", "--no-squash", "--ai-message", "--no-verify-receipt", "--reason", "waiver"],
+      async () => { called = true; return "feat: should not be used"; },
+    );
+    assert.equal(r.success, true, r.output);
+    assert.equal(called, false, "model should not be called when --no-squash preserves multiple commits");
+    assert.doesNotMatch(r.output, /commit message written by the configured model/);
+  } finally { f.cleanup(); }
+});
+
+test("a cancel requested while the model is being asked stops the merge before anything changes", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    const mainBefore = git(f.repo, "rev-parse", "refs/heads/main");
+    const controller = new AbortController();
+    const r = await runWorktreeCommandAsync(MERGE, { cwd: dir, home: f.home, readOnly: false }, {
+      completer: async () => { controller.abort(); return "feat(b): never used"; },
+      signal: controller.signal,
+    });
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /cancel/i);
+    assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore, "the target is untouched");
+    assert.ok(fs.existsSync(dir), "the worktree is kept");
+    assert.equal(git(dir, "status", "--porcelain").includes("b.txt"), true, "the uncommitted work is still uncommitted");
+  } finally { f.cleanup(); }
+});
+
+test("lazyProviderCompleter only guards building the configuration; a failing request surfaces as the model's failure note", async () => {
+  assert.equal(await lazyProviderCompleter(() => { throw new Error("no provider configured"); })([], new AbortController().signal), undefined);
+  const failing = lazyProviderCompleter(() => ({} as any), () => async () => { throw new Error("connection refused"); });
+  await assert.rejects(() => failing([], new AbortController().signal), /connection refused/);
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    const r = await f.run(dir, MERGE, failing);
+    assert.equal(r.success, true, r.output);
+    assert.match(r.output, /request failed/i, "the user is told the request failed, not that the reply was unusable");
+    assert.doesNotMatch(r.output, /unusable/i);
+  } finally { f.cleanup(); }
+});
+
+test("the merge usage is the same text whether or not --ai-message is given", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    const sync = runWorktreeCommand(["merge", "a", "b", "--ai-message"], { cwd: dir, home: f.home, readOnly: false });
+    const viaAsync = await f.run(dir, ["merge", "a", "b", "--ai-message"], async () => "x");
+    assert.equal(sync.success, false);
+    assert.equal(viaAsync.output, sync.output);
+    assert.match(viaAsync.output, /--ai-message/);
   } finally { f.cleanup(); }
 });

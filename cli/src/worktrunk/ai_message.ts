@@ -60,10 +60,13 @@ export async function generateMergeMessage(
   mctx: MergeContextInfo,
   completer: Completer | undefined,
   timeoutMs: number = DEFAULT_AI_TIMEOUT_MS,
+  cancel?: AbortSignal,
 ): Promise<{ message?: string; note: string }> {
   const fallback = (why: string) => ({ note: `note: ${why}; using the deterministic commit message.` });
   if (!completer) return fallback("no model provider is available for --ai-message");
   const controller = new AbortController();
+  const onCancel = () => controller.abort();
+  cancel?.addEventListener("abort", onCancel, { once: true });
   let timer: NodeJS.Timeout | undefined;
   try {
     const prompt = buildPrompt(mctx);
@@ -74,9 +77,9 @@ export async function generateMergeMessage(
     const message = cleanReply(reply);
     return message ? { message, note: "note: commit message written by the configured model." } : fallback("the model's reply was unusable");
   } catch (err) {
-    if (err instanceof WorktreeError) throw err;
     return fallback(`the model request failed (${redactSecrets((err as Error).message).slice(0, 80)})`);
   } finally {
     if (timer) clearTimeout(timer);
+    cancel?.removeEventListener("abort", onCancel);
   }
 }

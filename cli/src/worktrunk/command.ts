@@ -70,7 +70,10 @@ export function isLegacyWorktreeArgs(args: string): boolean {
   return LEGACY.has(first);
 }
 
-/** True when `args` (the text after `/worktree` or `nexus worktree`) only inspects. Empty means list. */
+/**
+ * True when `args` (the text after `/worktree` or `nexus worktree`) only inspects. Empty args are the legacy speculative
+ * `status` form that the slash entry points run (read-only); only the `nexus worktree` command maps no subcommand to `list`.
+ */
 export function isReadOnlyWorktreeArgs(args: string): boolean {
   const sub = firstWord(args);
   if (isLegacyWorktreeArgs(sub)) return sub === "" || sub === "status";
@@ -147,7 +150,7 @@ export function runWorktreeCommand(tokens: string[], run: RunContext): CommandRe
         return pathOf(ctx, parsed.positionals[0]);
       }
       case "merge": {
-        if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]");
+        if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message] [--ai-message] [--no-verify-receipt --reason why]");
         return mergeWorktree(ctx, mergeOptionsFrom(parsed));
       }
       case "prune": {
@@ -222,15 +225,18 @@ export interface AsyncDeps {
   /** Asks the configured model; absent when no provider is available. */
   completer?: Completer;
   aiTimeoutMs?: number;
+  /** An operator cancel (Ctrl-C) while the model is being asked: the merge does not start. */
+  signal?: AbortSignal;
 }
 
 /** Like `runWorktreeCommand`, plus the opt-in `merge --ai-message`. Read-only mode never reaches the model. */
 export async function runWorktreeCommandAsync(tokens: string[], run: RunContext, deps: AsyncDeps = {}): Promise<CommandResult> {
   const name = tokens[0] ? canonical(tokens[0]) : undefined;
-  if (name !== "merge" || run.readOnly || !tokens.includes("--ai-message")) return runWorktreeCommand(tokens, run);
+  if (name !== "merge" || run.readOnly) return runWorktreeCommand(tokens, run);
   let parsed: Parsed;
   try { parsed = parse(SPECS.merge, tokens.slice(1)); } catch { return runWorktreeCommand(tokens, run); }
-  if (parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
+  if (!parsed.flags.has("ai-message") || parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
+  if (parsed.positionals.length > 1) return runWorktreeCommand(tokens, run); // the one place that owns the merge usage
   const ctx: WorktreeContext = { cwd: run.cwd, home: run.home ?? homeDir(), readOnly: false };
 
   const mergeOptions = mergeOptionsFrom(parsed);
@@ -241,11 +247,17 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
     return formatCommandError(err);
   }
 
-  const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS)
+  const willWriteCommit = mctx.state.total > 0 || (!mergeOptions.noSquash && mctx.ahead > 1) || (mctx.ahead === 1);
+  if (!willWriteCommit) {
+    return runWorktreeCommand(tokens, run); // nothing to describe: the ordinary path
+  }
+
+  const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS, deps.signal)
     .catch(() => ({ message: undefined, note: "note: could not prepare the model request; using the deterministic commit message." }));
 
+  if (deps.signal?.aborted) return { success: false, output: "Cancelled while the model was being asked: nothing was merged, committed or removed." };
+
   try {
-    if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]");
     const options: MergeOptions = { ...mergeOptions, ...(generated.message ? { message: generated.message } : {}) };
     const result = mergeWorktree(ctx, options);
     return { ...result, output: `${generated.note}\n${result.output}` };

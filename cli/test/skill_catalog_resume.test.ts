@@ -50,8 +50,8 @@ const cfg = (endpoint: string, workspace: string): HarnessConfig => ({
   continuation: { ...DEFAULT_CONTINUATION }, approvalMode: "auto", fullAccess: true,
 });
 
-async function withAgent<T>(replies: (n: number) => Reply, fn: (agent: AutonomousAgent, gw: Awaited<ReturnType<typeof startGateway>>) => Promise<T>, contextLength = 65_536): Promise<T> {
-  const repo = makeRepo();
+async function withAgent<T>(replies: (n: number) => Reply, fn: (agent: AutonomousAgent, gw: Awaited<ReturnType<typeof startGateway>>) => Promise<T>, contextLength = 65_536, files: Record<string, string> = {}): Promise<T> {
+  const repo = makeRepo(files);
   const gw = await startGateway(replies, { models: () => [{ id: "m", context_length: contextLength, max_model_len: contextLength, max_completion_tokens: 1_024 }] });
   const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
   try {
@@ -127,5 +127,30 @@ describe("catalog re-size (PR #409 review items)", () => {
       internals.resizeSkillCatalog();
       assert.doesNotMatch(system(agent), /Specialized Agent Skills Available/);
     });
+  });
+
+  test("review item 7: a resumed catalog is found after a workspace rules file that quotes its heading; the rules stay", { timeout: 60_000 }, async () => {
+    const rules = `Skill READMEs in this repo start with\n${SKILL_CATALOG_HEADING}\nKEEP-THIS-RULE: never edit generated files.`;
+    const previous = process.env.NEXUS_TRUST_WORKSPACE;
+    process.env.NEXUS_TRUST_WORKSPACE = "1";
+    try {
+      await withAgent(done, async (agent, gw) => {
+        const internals = agent as any;
+        const built = system(agent);
+        assert.ok(built.includes("KEEP-THIS-RULE"), "setup: the rules are in the system prompt");
+        const catalogAt = built.lastIndexOf(`${SKILL_CATALOG_HEADING}\nYou have access`);
+        assert.ok(catalogAt > built.indexOf("KEEP-THIS-RULE"), "setup: the catalog comes after the rules");
+        const full = internals.skillManager.getPromptSection(10_000_000) as string;
+        const catalogEnd = catalogAt + (internals.skillCatalog.text as string).length;
+        internals.messages[0] = { ...internals.messages[0], content: built.slice(0, catalogAt) + full + built.slice(catalogEnd) };
+        await agent.runTurn("Say done.");
+        const sent = (gw.requests[0] as any).messages[0].content as string;
+        assert.equal(sent.slice(0, catalogAt), built.slice(0, catalogAt), "the rules section is unchanged");
+        assert.ok(sent.length < 60_000, `the resumed catalog was cut (${sent.length} chars sent)`);
+      }, 65_536, { "AGENTS.md": rules });
+    } finally {
+      if (previous === undefined) delete process.env.NEXUS_TRUST_WORKSPACE;
+      else process.env.NEXUS_TRUST_WORKSPACE = previous;
+    }
   });
 });
