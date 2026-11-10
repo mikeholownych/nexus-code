@@ -38,13 +38,29 @@ export function workingState(dir: string, dirty: boolean): WorkingState {
   }
 }
 
-/** Records that `verifier` passed on the current state of the linked worktree containing `workspace`. Never throws. */
-export function recordVerification(workspace: string, verifier: string): boolean {
+/** The linked worktree containing `workspace` and its working state, or undefined (main checkout, detached, not a repository). Never throws. */
+export function captureVerificationState(workspace: string): WorkingState | undefined {
+  try {
+    const entry = currentEntry(openRepo(workspace));
+    if (!entry || entry.isMain || !entry.branch) return undefined;
+    return workingState(entry.path, statusOf(entry.path).total > 0);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Records that `verifier` passed on the current state of the linked worktree containing `workspace`. With `expected`
+ * (the state captured before the verifier started) nothing is recorded if the working state is no longer that state:
+ * an edit made while the verifier ran was not tested. Never throws.
+ */
+export function recordVerification(workspace: string, verifier: string, expected?: WorkingState): boolean {
   try {
     const repo = openRepo(workspace);
     const entry = currentEntry(repo);
     if (!entry || entry.isMain || !entry.branch) return false;
     const state = workingState(entry.path, statusOf(entry.path).total > 0);
+    if (expected && (expected.head !== state.head || expected.tree !== state.tree)) return false;
     const branch = entry.branch;
     updateRegistry(repo.commonDir, (reg) => {
       const list = (reg.verifications ?? []).filter((item) => !(item.branch === branch && item.tree === state.tree && item.head === state.head));
@@ -55,6 +71,26 @@ export function recordVerification(workspace: string, verifier: string): boolean
   } catch {
     return false;
   }
+}
+
+export interface RecordRequest {
+  activeWorktree: boolean;
+  dryRun: boolean;
+  verifierSucceeded: boolean;
+  hasExecuted: boolean;
+  deliverableBound: boolean;
+  /** The verifier is the configured authoritative one or an independent one (never a discovered generic command). */
+  verified: boolean;
+  verifier: string;
+  /** The working state captured before the verifier ran. */
+  before?: WorkingState;
+}
+
+/** The agent's recording step: a receipt only for a passing, deliverable-bound, configured-or-independent run on the state that was tested. */
+export function recordVerificationIfEligible(workspace: string, request: RecordRequest): boolean {
+  if (request.activeWorktree || request.dryRun || !request.verifierSucceeded || !request.hasExecuted || !request.deliverableBound || !request.verified) return false;
+  if (!request.before) return false;
+  return recordVerification(workspace, request.verifier, request.before);
 }
 
 /** Whether the registry holds a verification matching this exact state (head when clean, tree when dirty). */

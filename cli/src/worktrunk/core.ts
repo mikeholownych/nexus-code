@@ -131,9 +131,10 @@ function kindOf(repo: Repo, entry: WorktreeEntry, registry: Registry): "main" | 
 export interface Dirty { staged: number; modified: number; untracked: number; conflicted: number; ignored: number; total: number }
 
 /** One `git status --porcelain=v2 -z` call. `ignored` counts ignored paths only when asked (removal safety). */
-export function statusOf(dir: string, options: { ignored?: boolean } = {}): Dirty {
+export function statusOf(dir: string, options: { ignored?: boolean; ignoreSubmodules?: string } = {}): Dirty {
   const args = ["status", "--porcelain=v2", "-z", options.ignored ? "--untracked-files=all" : "--untracked-files=normal"];
   if (options.ignored) args.push("--ignored=matching");
+  if (options.ignoreSubmodules) args.push(`--ignore-submodules=${options.ignoreSubmodules}`);
   const out = git(dir, args, { timeoutMs: PER_CALL_MS }).stdout;
   const dirty: Dirty = { staged: 0, modified: 0, untracked: 0, conflicted: 0, ignored: 0, total: 0 };
   const records = out.split("\0");
@@ -191,7 +192,6 @@ function ownerOf(repo: Repo): string {
 
 export function switchWorktree(ctx: WorktreeContext, branchToken: string, options: SwitchOptions = {}): CommandResult {
   const repo = openRepo(ctx.cwd);
-  const registry = loadRegistry(repo);
   const name = resolveBranchName(repo, branchToken);
   const existing = repo.entries.find((entry) => entry.branch === name);
   const here = currentEntry(repo);
@@ -381,6 +381,7 @@ export const removeSeams: {
   beforeLock?: (entry: WorktreeEntry) => void;
   beforeRemove?: (entry: WorktreeEntry) => void;
   afterGuardSwitch?: (entry: WorktreeEntry) => void;
+  beforeGuardSwitch?: (entry: WorktreeEntry) => void;
   beforeGitRemove?: (entry: WorktreeEntry) => void;
   beforeBranchDeletion?: (entry: WorktreeEntry) => void;
 } = {};
@@ -447,7 +448,7 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
     } else {
       const before = verifiedWorktreeDir(repo, entry);
       if (!options.force) {
-        const dirty = statusOf(entry.path, { ignored: true });
+        const dirty = statusOf(entry.path, { ignored: true, ignoreSubmodules: "none" });
         if (dirty.total + (options.discardIgnored ? 0 : dirty.ignored) > 0) {
           throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
         }
@@ -473,30 +474,39 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
         // The commit the guard must protect is the one verified above, never one read after the switch: a commit that
         // lands in between would otherwise be adopted as "expected" and the branch deleted over it.
         guardHead = entry.head;
+        // A guard branch that already exists was left by an interrupted attempt (or is someone's branch with that name).
+        // It is never reused, moved or deleted: the user decides, before anything here is changed.
         const existing = git(repo.cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `refs/heads/${guardBranch}`], { allowFailure: true });
-        const leaked = existing.status === 0 ? existing.stdout.trim() : "";
-        if (leaked && leaked !== entry.head) {
+        if (existing.status === 0) {
           const name = guardBranch;
+          const tip = existing.stdout.trim();
           guardBranch = "";
-          throw new WorktreeError(`the branch ${name} already exists at another commit; inspect it, delete it with \`git branch -D ${name}\` if it is not needed, and run the command again. Nothing was removed`);
+          throw new WorktreeError(`the branch ${name} already exists (at ${tip.slice(0, 12)}), left by an earlier interrupted removal of this worktree or created by someone else. Nothing was removed. Inspect it with \`git log ${name}\` and, once it holds nothing you need, delete it with \`git branch -D ${name}\`, then run the command again`);
         }
-        // A guard branch left by an interrupted earlier attempt for this worktree and commit is reused.
-        const switched = git(entry.path, leaked ? ["switch", "--end-of-options", guardBranch] : ["switch", "-c", guardBranch, "--end-of-options"], { allowFailure: true });
+        removeSeams.beforeGuardSwitch?.(entry);
+        const switched = git(entry.path, ["switch", "-c", guardBranch, "--end-of-options"], { allowFailure: true });
         if (switched.status !== 0) {
           guardBranch = "";
           throw new WorktreeError("could not protect the detached HEAD before removing it; nothing was removed");
         }
         removeSeams.afterGuardSwitch?.(entry);
         const nowHead = git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim();
-        if (nowHead !== guardHead) {
+        // `git switch` is not atomic with a concurrent `git commit`: a commit can be written to the HEAD reflog while HEAD
+        // ends up back at the checked commit. The reflog entry before the switch must be that commit too.
+        const before = git(entry.path, ["rev-parse", "--verify", "--quiet", "HEAD@{1}"], { allowFailure: true });
+        const reflogMismatch = before.status === 0 && before.stdout.trim() !== guardHead;
+        if (nowHead !== guardHead || reflogMismatch) {
           const name = guardBranch;
           guardBranch = ""; // kept: it now holds the commit that landed
-          throw new WorktreeError(`a commit landed while the detached HEAD was being protected; it is kept on the branch ${name} in ${shownPath(ctx.home, entry.path)} and nothing was removed. Merge or delete that branch, then run the command again`);
+          throw new WorktreeError(`a commit landed while the detached HEAD was being protected (HEAD or its reflog moved); it is kept on the branch ${name} in ${shownPath(ctx.home, entry.path)}, with its reflog, and nothing was removed. Merge or delete that branch, then run the command again`);
         }
       }
       try {
+        if (options.discardIgnored && !options.force) {
+          git(entry.path, ["clean", "-f", "-X", "-d"], { allowFailure: true });
+        }
         removeSeams.beforeGitRemove?.(entry);
-        git(repo.cwd, ["worktree", "remove", ...(options.force || options.discardIgnored ? ["--force"] : []), "--end-of-options", entry.path]);
+        git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
       } catch (err) {
         // Git refused (an initialised submodule, a file that appeared): the worktree stays, so put it back on its
         // detached HEAD and drop the guard branch (unless a commit already moved it, then it is the only reference).
@@ -505,7 +515,7 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
           if (back.status === 0) {
             deleteBranchAt(repo, guardBranch, git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim());
           } else {
-            throw new WorktreeError(`${(err as Error).message}; could not restore the detached HEAD, so ${shownPath(ctx.home, entry.path)} stays on the temporary branch ${guardBranch} (nothing is lost). To undo: git -C <that path> switch --detach, then git branch -D ${guardBranch}. A retry reuses it`);
+            throw new WorktreeError(`${(err as Error).message}; could not restore the detached HEAD, so ${shownPath(ctx.home, entry.path)} stays on the temporary branch ${guardBranch} (nothing is lost). To undo: git -C <that path> switch --detach, then git branch -D ${guardBranch}. Do that before running the command again, because a retry refuses while the branch exists`);
           }
         }
         throw err;
