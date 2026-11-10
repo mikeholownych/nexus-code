@@ -1,4 +1,5 @@
 import { LocalLlmClient } from "../client.js";
+import { autoDetectModel } from "../config.js";
 import type { HarnessConfig } from "../types.js";
 import type { Completer } from "./ai_message.js";
 
@@ -14,12 +15,14 @@ export function providerCompleter(config: HarnessConfig): Completer {
 /**
  * A completer whose configuration is built on first use. Only building the configuration is guarded (no provider or an
  * invalid setting means "no model": undefined); a failing request is not swallowed, so the caller can say it failed.
+ * The `local-model` placeholder is resolved to the server's loaded model first, as the run and interactive entry points
+ * do, because servers such as vLLM reject the placeholder.
  */
 export function lazyProviderCompleter(build: () => HarnessConfig, make: (config: HarnessConfig) => Completer = providerCompleter): Completer {
   return async (messages, signal) => {
     let completer: Completer;
     try {
-      completer = make(build());
+      completer = make(await autoDetectModel(build()));
     } catch {
       return undefined;
     }

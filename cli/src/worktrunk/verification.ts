@@ -20,68 +20,78 @@ export const NEXUS_STATE_PATH = ":(top).nexus";
 
 export interface WorkingState { head: string; tree: string; dirty: boolean }
 
-/** HEAD, and the tree of the working state: HEAD^{tree} when clean, else a snapshot via a temporary index. */
-export function workingState(dir: string, dirty: boolean): WorkingState {
-  const head = gitOut(dir, ["rev-parse", "--verify", "HEAD"]);
-  if (!dirty) return { head, tree: gitOut(dir, ["rev-parse", "--verify", "HEAD^{tree}"]), dirty };
+/**
+ * Configuration and index flags that make Git skip or misread a modification, overridden for the strict snapshot:
+ * stat caching (`core.ignoreStat`), the executable bit (`core.fileMode`), symlinks, sparse checkout and the untracked
+ * cache. Content conversion (`core.autocrlf`, filters, `.gitattributes`) is left alone: a merge's own `git add -A`
+ * applies it too, so both sides agree on what the bytes become.
+ */
+const STRICT_CONFIG = [
+  "-c", "core.fileMode=true", "-c", "core.symlinks=true", "-c", "core.ignoreStat=false",
+  "-c", "core.sparseCheckout=false", "-c", "core.sparseCheckoutCone=false", "-c", "core.untrackedCache=false",
+  "-c", "core.splitIndex=false", "-c", "status.showUntrackedFiles=all",
+];
+
+/**
+ * The tree `git add -A` would commit (minus `.nexus`), via a temporary index. `fresh`: the index starts as
+ * `read-tree HEAD` with the strict configuration, so nothing the repository's index or configuration says (an
+ * `--assume-unchanged` or `--skip-worktree` flag, a stale stat entry, `core.fileMode=false`, a sparse checkout) can
+ * hide an edit: every file is compared with HEAD by content and mode. Otherwise the user's own index is the start,
+ * which is what a merge's `add -A` uses.
+ */
+function snapshotTree(dir: string, fresh: boolean): string {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tree-"));
   try {
     const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
+    const config = fresh ? STRICT_CONFIG : [];
     const gitDir = gitOut(dir, ["rev-parse", "--path-format=absolute", "--git-dir"]);
     const realIndex = path.join(gitDir, "index");
-    if (fs.existsSync(realIndex)) {
+    if (!fresh && fs.existsSync(realIndex)) {
       fs.copyFileSync(realIndex, path.join(scratch, "index"));
     } else {
-      git(dir, ["read-tree", "HEAD"], { env });
+      git(dir, [...config, "read-tree", "HEAD"], { env });
     }
-    git(dir, ["add", "-A"], { env });
+    git(dir, [...config, "add", "-A"], { env });
     git(dir, ["reset", "-q", "HEAD", "--", NEXUS_STATE_PATH], { env, allowFailure: true }); // internal state is never part of a merge
-    return { head, tree: gitOut(dir, ["write-tree"], { env }), dirty };
+    return gitOut(dir, ["write-tree"], { env });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
 }
 
+/** HEAD, and the tree of the working state: HEAD^{tree} when clean, else a snapshot via a temporary index. */
+export function workingState(dir: string, dirty: boolean): WorkingState {
+  const head = gitOut(dir, ["rev-parse", "--verify", "HEAD"]);
+  if (!dirty) return { head, tree: gitOut(dir, ["rev-parse", "--verify", "HEAD^{tree}"]), dirty };
+  return { head, tree: snapshotTree(dir, false), dirty };
+}
+
 /**
  * Whether any initialised submodule of `dir`, nested ones included, holds uncommitted content (changes or untracked
- * files). The tree of the working state records only the submodule's gitlink, so such content would be tested by a
- * verifier yet never be part of what a receipt authorises and a merge carries.
+ * files), judged by the strict snapshot. The tree of the working state records only the submodule's gitlink, so such
+ * content would be tested by a verifier yet never be part of what a receipt authorises and a merge carries.
  */
 export function hasDirtySubmodule(dir: string): boolean {
   const listing = gitOut(dir, ["submodule", "status", "--recursive"]);
   for (const line of listing.split("\n")) {
     const m = /^(.)[0-9a-f]{40,64} (.*?)(?: \(.*\))?$/.exec(line);
     if (!m || m[1] === "-") continue; // not initialised: no content to differ
-    if (gitOut(path.join(dir, m[2]), ["status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"]) !== "") return true;
+    const sub = path.join(dir, m[2]);
+    if (snapshotTree(sub, true) !== gitOut(sub, ["rev-parse", "--verify", "HEAD^{tree}"])) return true;
   }
   return false;
 }
 
 /**
- * Whether a tracked file the index is told to ignore (`--assume-unchanged`, `--skip-worktree`) differs from its
- * recorded blob. `git status` and `git add -A` both skip such files, so an edit to one would be tested by a verifier
- * yet absent from the state a receipt records and a merge carries. A skip-worktree file that is simply not checked
- * out (sparse checkout) holds nothing and is fine.
+ * The working state of `dir` for a receipt, or undefined when it cannot be certified: a submodule holds uncommitted
+ * content, or the strict snapshot (see `snapshotTree`) differs from the state a merge would commit, meaning something
+ * in the repository's index or configuration hides an edit from `status` and `add -A`. Whatever a verifier saw, the
+ * receipt must cover exactly what a merge carries.
  */
-export function hasHiddenModification(dir: string): boolean {
-  const flagged = gitOut(dir, ["ls-files", "-v", "-z"]).split("\0").filter((entry) => /^[a-zS] /.test(entry));
-  for (const entry of flagged) {
-    const file = entry.slice(2);
-    const absolute = path.join(dir, file);
-    let stat: fs.Stats | undefined;
-    try { stat = fs.lstatSync(absolute); } catch { stat = undefined; }
-    if (!stat) {
-      if (entry[0] === "S") continue; // sparse checkout
-      return true; // deleted behind the index's back
-    }
-    const recorded = gitOut(dir, ["ls-files", "-s", "-z", "--", file]).split("\0")[0]?.split(/\s+/)[1];
-    // A symlink's blob is its target text; `hash-object <path>` would hash the file it points at.
-    const actual = stat.isSymbolicLink()
-      ? gitOut(dir, ["hash-object", "--stdin"], { input: fs.readlinkSync(absolute) })
-      : gitOut(dir, ["hash-object", "--", file]);
-    if (recorded !== actual) return true;
-  }
-  return false;
+function certifiableState(dir: string): WorkingState | undefined {
+  if (hasDirtySubmodule(dir)) return undefined;
+  const state = workingState(dir, statusOf(dir).total > 0);
+  return snapshotTree(dir, true) === state.tree ? state : undefined;
 }
 
 /** The linked worktree containing `workspace` and its working state, or undefined (main checkout, detached, not a repository). Never throws. */
@@ -89,8 +99,7 @@ export function captureVerificationState(workspace: string): WorkingState | unde
   try {
     const entry = currentEntry(openRepo(workspace));
     if (!entry || entry.isMain || !entry.branch) return undefined;
-    if (hasDirtySubmodule(entry.path) || hasHiddenModification(entry.path)) return undefined;
-    return workingState(entry.path, statusOf(entry.path).total > 0);
+    return certifiableState(entry.path);
   } catch {
     return undefined;
   }
@@ -106,8 +115,8 @@ export function recordVerification(workspace: string, verifier: string, expected
     const repo = openRepo(workspace);
     const entry = currentEntry(repo);
     if (!entry || entry.isMain || !entry.branch || entry.branch.length > MAX_BRANCH_LENGTH) return false;
-    if (hasDirtySubmodule(entry.path) || hasHiddenModification(entry.path)) return false;
-    const state = workingState(entry.path, statusOf(entry.path).total > 0);
+    const state = certifiableState(entry.path);
+    if (!state) return false;
     if (expected && (expected.head !== state.head || expected.tree !== state.tree)) return false;
     const branch = entry.branch;
     updateRegistry(repo.commonDir, (reg) => {

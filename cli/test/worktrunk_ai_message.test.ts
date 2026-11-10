@@ -8,6 +8,8 @@ import { execFileSync } from "node:child_process";
 import { runWorktreeCommand, runWorktreeCommandAsync } from "../src/worktrunk/command.js";
 import { mergeSeams } from "../src/worktrunk/merge.js";
 import { lazyProviderCompleter } from "../src/worktrunk/provider.js";
+import { buildConfig } from "../src/config.js";
+import { startGateway } from "./helpers/fixtures.js";
 import type { Completer } from "../src/worktrunk/ai_message.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -474,4 +476,25 @@ test("content staged after the state snapshot is not swept into the squash commi
     assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").includes("staged-later.txt"), false, `unverified staged content reached the target: ${r.output}`);
     assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").includes("c.txt"), true, "the verified commits were merged");
   } finally { f.cleanup(); }
+});
+
+test("the lazy provider completer resolves the local-model placeholder to the server's loaded model before asking", async () => {
+  const gw = await startGateway(() => ({ kind: "text", content: "feat: message from the real model" }), { models: () => [{ id: "real-model" }] });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lazy-home-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  const previousModel = process.env.LOCAL_LLM_MODEL;
+  delete process.env.LOCAL_LLM_MODEL;
+  try {
+    const completer = lazyProviderCompleter(() => buildConfig({ endpoint: gw.url, workspace: home }));
+    const reply = await completer([{ role: "user", content: "write a commit message" }] as any, new AbortController().signal);
+    assert.match(String(reply), /real model/);
+    const asked = (gw.requests as any[]).find((r) => Array.isArray(r?.messages));
+    assert.equal(asked?.model, "real-model", "the request names the loaded model, not the placeholder");
+  } finally {
+    await gw.close();
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousModel !== undefined) process.env.LOCAL_LLM_MODEL = previousModel;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
