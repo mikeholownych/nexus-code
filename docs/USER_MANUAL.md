@@ -170,18 +170,20 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
     you are in a run of typing (a key within about 0.3 seconds of the previous one), a `y`, `n` or `a` is a letter of
     your text and goes to the draft, Enter is ignored, and the panel says `ignored: you were typing`; after a pause the
     same key answers.
-  - Guards against accidents, and what they do not cover: when a key was pressed in the second before the panel was
-    drawn (the Enter that sent the prompt, a letter you were typing, the `y` that answered the previous request),
-    decision keys are ignored with `ignored: panel just opened` until that key has been quiet for 0.6 seconds, and each
-    ignored key restarts the wait, so a held key (whose auto-repeat starts after an initial delay) stays inert until
-    you let go. So a request that opens right after a key needs a pause of about a second before it answers; one that
-    opens after you were idle answers at once. Not covered: typing that starts when no key was pressed in the second
-    before the panel appeared and runs slower than about 0.3 seconds per key; and a held key whose first repeat comes
-    more than 0.6 seconds after the press. Terminals that do not report key release cannot tell a held key from fast
-    presses.
+  - Guards against accidents, and what they do not cover: when a key, Tab or paste was pressed in the second before the
+    panel was drawn (the Enter that sent the prompt, a letter you were typing, the `y` that answered the previous
+    request), decision keys are ignored with `ignored: panel just opened` until that input has been quiet for 1 second,
+    and each ignored key restarts the wait, so a held key (whose auto-repeat starts after an initial delay, 0.66
+    seconds by default on X11) stays inert until you let go. So a request that opens right after a key needs a pause of
+    about a second before it answers; one that opens after you were idle answers at once. Not covered: typing slower
+    than about 0.3 seconds per key that starts when no key was pressed in the second before the panel appeared; and a
+    held key whose first repeat comes more than 1 second after the press (a long repeat delay set for accessibility).
+    Terminals that do not report key release cannot tell a held key from fast presses.
   - A command or script longer than the panel shows `↓ n more rows below`. Approve and Approve all are refused (with a
     notice) until you have scrolled to its end with ↓ or End; Deny never waits. Control characters and bidirectional
-    overrides in a command are shown as visible stand-ins (`␍`, `␛`, `<U+202E>`), and long lines wrap.
+    overrides in a command are shown as visible stand-ins (`␍`, `␛`, `<U+202E>`), and long lines wrap. Zero-width
+    characters show as `<U+200D>` and the like too, also inside emoji and right-to-left text: that is deliberate, since
+    an invisible character in a command is something to see before approving.
   The panel is answerable only while its change is visible — on a window too small to show it, it asks you to enlarge
   the terminal (Esc still denies). Approvals that arrive while another panel or approval is open wait in order; the
   panel title shows how many are waiting.
