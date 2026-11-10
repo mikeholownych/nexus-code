@@ -40,7 +40,7 @@ How Nexus Code safely isolates speculative work in clean git worktree checkouts:
 
 | Document | Focus Area |
 |---|---|
-| [Worktrees Reference](WORKTREES.md) | Isolated named worktrees, `.worktreeinclude` cache copying, receipt verification gates, and fast-forward squashes |
+| [Worktrees Reference](WORKTREES.md) | Isolated named worktrees, branch switching, worktree lifecycle, and receipt verification |
 
 ---
 
