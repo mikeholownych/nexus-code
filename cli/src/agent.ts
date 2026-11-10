@@ -820,6 +820,16 @@ function gitIndexIdentity(workspace: string): string {
   return createHash("sha256").update(out).digest("hex").slice(0, 16);
 }
 
+/** A restored turn whose recorded endpoints are in their persistable form (origin and path), so a re-save leaks nothing. */
+function withPersistableEndpoints(turn: TurnResult): TurnResult {
+  if (!turn.providerRecovery?.some((r) => r.endpoint) && !turn.pendingProviderWindows?.some((w) => w.endpoint)) return turn;
+  return {
+    ...turn,
+    ...(turn.providerRecovery ? { providerRecovery: turn.providerRecovery.map((r) => (r.endpoint ? { ...r, endpoint: persistableEndpoint(r.endpoint) } : r)) } : {}),
+    ...(turn.pendingProviderWindows ? { pendingProviderWindows: turn.pendingProviderWindows.map((w) => (w.endpoint ? { ...w, endpoint: persistableEndpoint(w.endpoint) } : w)) } : {}),
+  };
+}
+
 /** Why work that would call the provider (a `/compact --llm`, a subagent) is not started while a resumed turn's provider window is open. */
 const RESUMED_WINDOW_REASON = "the provider is still inside the retry window it asked for";
 
@@ -5620,11 +5630,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   private rememberResumedProviderWait(lastTurn: TurnResult | null | undefined): void {
     // The restored record's last turn replaces this agent's own (a /resume reuses the agent): checkpoints and saves
     // written until the next turn ends describe the restored conversation, not an unrelated earlier turn.
-    this.lastTurnResult = lastTurn ?? undefined;
+    // Endpoints in an older record may carry credentials (query string): re-saved only in their persistable form.
+    this.lastTurnResult = lastTurn ? withPersistableEndpoints(lastTurn) : undefined;
     const windows: typeof this.resumedProviderWaits = [];
     // Durable records are same-user writable: an unparseable time is ignored, and the wait is bounded where it is used.
-    const add = (eligibleAt: unknown, endpoint: string | undefined, record?: ProviderRecoveryRecord) => {
+    const add = (eligibleAt: unknown, rawEndpoint: string | undefined, record?: ProviderRecoveryRecord) => {
       if (typeof eligibleAt !== "string" || !Number.isFinite(Date.parse(eligibleAt))) return;
+      const endpoint = rawEndpoint ? persistableEndpoint(rawEndpoint) : undefined;
       if (windows.some((w) => w.eligibleAt === eligibleAt && w.endpoint === endpoint)) return;
       windows.push({ eligibleAt, ...(endpoint ? { endpoint } : {}), ...(record ? { record } : {}) });
     };
@@ -5730,7 +5742,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       probes: 0,
       waitedMs: 0,
       unknownReplays: 0,
-      ...(pending.endpoint ?? prior?.endpoint ? { endpoint: pending.endpoint ?? prior?.endpoint } : {}),
+      ...(pending.endpoint ?? prior?.endpoint ? { endpoint: persistableEndpoint(pending.endpoint ?? prior?.endpoint) } : {}),
       policy: { deadlineMs: policy.deadlineMs, maxDelayMs: policy.maxDelayMs, maxUnknownReplays: policy.maxUnknownReplays },
     };
     track(record);

@@ -412,6 +412,8 @@ describe("a provider wait interrupted inside an operation", () => {
 // ---------------------------------------------------------------- in process, fake recovery clock
 
 const RETRY_AFTER_MS = 60_000;
+/** The endpoint an interrupted turn recorded (its last recovery record). */
+const ctx0Endpoint = (t: TurnResult): string => String(t.providerRecovery?.at(-1)?.endpoint);
 const noArchive = () => ({ messages: [], unreadableLines: 0, uncommittedLines: 0, missingCompactions: [] });
 
 function makeRepo(root: string): string {
@@ -979,6 +981,21 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       persistableEndpoint(hostile);
       comparableEndpoint(hostile);
       assert.ok(Date.now() - started < 300, `took ${Date.now() - started} ms`);
+    }
+  });
+
+  test("a restored window recorded with a raw endpoint is re-persisted without its credentials", async () => {
+    const ctx = await interruptedThenRestored({}, (t) => ({
+      ...t,
+      pendingProviderWindows: [{ eligibleAt: new Date(Date.parse(t.interruption!.providerEligibleAt!) + 1_000).toISOString(), endpoint: `${ctx0Endpoint(t)}?api_key=SECRET#frag` }],
+    }));
+    try {
+      const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      assert.ok(r.providerRecovery?.some((x) => x.state === "RESUMED"), "precondition: the restored window was waited out");
+      assert.ok(!JSON.stringify(r).includes("SECRET"), `the saved turn carries no credential: ${JSON.stringify(r.providerRecovery)}`);
+    } finally {
+      await ctx.cleanup();
     }
   });
 
