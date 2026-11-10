@@ -976,11 +976,11 @@ export class AutonomousAgent {
   /**
    * A turn that ended while waiting out a provider failure, restored by a resume: when the provider may be asked
    * again, and the recovery record of that wait (its real submissions, for the status shown while waiting). Consumed
-   * by the first inference step of the next turn.
+   * by the first inference step on that endpoint (a step on another endpoint leaves it pending).
    */
+  private resumedProviderWait?: { eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord };
   /** A resumed start kept the "local-model" placeholder and its record named no model: detect it after the wait. */
   private modelDetectionDeferred = false;
-  private resumedProviderWait?: { eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord };
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
