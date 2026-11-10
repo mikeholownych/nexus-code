@@ -2433,6 +2433,12 @@ export class AutonomousAgent {
     if (this.inheritedWorktreeScope && path.resolve(newWorkspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
       throw new Error("Cannot change workspace outside the inherited worktree authority.");
     }
+    // A named worktree that an explicit `nexus worktree merge` removed is no longer a binding: the session has to be
+    // able to leave it for the branch it was merged into.
+    if (this.activeWorktree?.kind === "named" && !fs.existsSync(this.activeWorktree.worktreePath)) {
+      this.activeWorktree = undefined;
+      this.originalWorkspace = undefined;
+    }
     if (this.activeWorktree && !this.managedWorktreeWorkspaceSwitch) {
       throw new Error("Cannot switch workspaces while a speculative worktree is unresolved; merge or discard it first.");
     }
