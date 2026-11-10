@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ensureGitExclude } from "./git_exclude.js";
-import { GIT_SAFE, driverRefusal, safeGitEnv } from "./specialist_inputs.js";
+import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv } from "./specialist_inputs.js";
 import { verifierTimeoutSecs } from "../tester.js";
 import type {
   IntegrationReceipt,
@@ -438,9 +438,10 @@ export class OperationGit {
     // Pinned like the candidate diff: nothing the (model-written) worktree configures may run here. No inherited GIT_*,
     // no fsmonitor or hooks, no clean filter (attributes come from the empty tree), a filter assigned through
     // $GIT_DIR/info/attributes refuses the snapshot instead of being run.
+    let attrs: ReturnType<typeof attributesTree>;
     const run = (args: string[], options: { input?: string; ownIndex?: boolean } = {}) => execFileSync("git", [...GIT_SAFE, ...args], {
       cwd: entry.worktree, encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS,
-      env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch, "index")), maxBuffer: 256 * 1024 * 1024,
+      env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch, "index"), attrs), maxBuffer: 256 * 1024 * 1024,
       ...(options.input === undefined ? {} : { input: options.input }),
     }).trim();
     try {
@@ -448,6 +449,9 @@ export class OperationGit {
       if (fs.existsSync(ownIndex)) fs.copyFileSync(ownIndex, path.join(scratch, "index"));
       else run(["read-tree", "HEAD"]);
       const files = [...run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0").filter(Boolean)];
+      // The worktree's own .gitattributes without filter and diff assignments, as for the candidate diff, so text/eol
+      // normalization applies to the snapshot exactly as it would to the tester's own commit.
+      attrs = attributesTree(entry.worktree, scratch, files);
       const refusal = driverRefusal((args, input) => run(args, { input }), files);
       if (refusal) throw new Error(refusal);
       run(["add", "-A"]);
