@@ -96,6 +96,14 @@ export function oneLine(text: string): string {
 /** First line of every per-prompt skill note Nexus writes. */
 const SKILL_NOTE_HEAD = `${SKILL_NOTE_PREFIX} Installed skills that may fit this request. Descriptions only; nothing is activated. Call \`activate_skill\` with a name to load one.\n`;
 
+/** One entry line of a note: `- **name**: description` (the description may be empty when the budget cut it). */
+const NOTE_ENTRY = /^- \*\*[^\n]+\*\*:/;
+/** Whether everything after the header is note entries, at least one. */
+function noteShaped(content: string): boolean {
+  const lines = content.slice(SKILL_NOTE_HEAD.length).split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines.length > 0 && lines.every((line) => NOTE_ENTRY.test(line));
+}
 /**
  * A saved conversation with its skill notes marked. Sessions saved before the `harness` marker existed hold notes
  * recognisable only by their text; on restore, a user message without a marker is marked only when it starts with the
@@ -104,12 +112,6 @@ const SKILL_NOTE_HEAD = `${SKILL_NOTE_PREFIX} Installed skills that may fit this
  * a note follows the model's reply, and a hand-typed header with other text after it is not entry-shaped: both stay
  * the operator's.
  */
-const NOTE_ENTRY = /^- \*\*[^\n]+\*\*:/;
-function noteShaped(content: string): boolean {
-  const lines = content.slice(SKILL_NOTE_HEAD.length).split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  return lines.length > 0 && lines.every((line) => NOTE_ENTRY.test(line));
-}
 export function withSkillNoteProvenance<T extends { role: string; content?: unknown; harness?: string }>(messages: readonly T[]): T[] {
   return messages.map((message, i) =>
     message.role === "user" &&
