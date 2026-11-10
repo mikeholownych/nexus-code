@@ -514,6 +514,30 @@ describe("entering the named worktree before the first turn keeps the conversati
   });
 });
 
+describe("resuming inside the saved named worktree", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
+  test("entering the worktree the session already stands in keeps the restored transcript", async () => {
+    const f = fixture(); // feat/bind exists at f.dir
+    const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+    const home = process.env.HOME;
+    process.env.HOME = f.home;
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.dir, shell: "bash", worktree: true, worktreeBranch: "feat/bind" } as any);
+    try {
+      // `--resume <id>` restored an interactive save (which carries no binding) while launched inside the worktree.
+      agent.setMessages([...agent.getMessages(), { role: "user", content: "RESTORED-PROMPT" } as any, { role: "assistant", content: "RESTORED-REPLY" } as any]);
+      agent.enterNamedWorktreeBeforeTurn();
+      assert.equal(agent.getActiveWorktree()?.kind, "named", "the binding is established");
+      assert.match(JSON.stringify(agent.getMessages()), /RESTORED-PROMPT/, "the restored transcript survives the entry");
+      await agent.run("next", undefined, { resume: true });
+      assert.match(JSON.stringify(agent.getMessages()), /RESTORED-PROMPT/, "and the turn that follows");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+      f.cleanup();
+    }
+  });
+});
+
 describe("REPL turn checkpoint with a named worktree", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
   test("the first prompt's snapshot is taken in the named worktree (reused or created), not the launch checkout", async () => {
     for (const reuse of [true, false]) {

@@ -7322,7 +7322,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     // The binding belongs to this durable task; the worktree itself is addressed by its branch.
     this.activeWorktree = { taskId: this.currentTaskId, worktreePath: named.path, branch: named.branch, kind: "named" };
     this.originalWorkspace = this.config.workspace;
-    this.switchWorktreeWorkspace(named.path);
+    // Already standing in it (`--resume` launched inside the saved worktree): switching to the same directory would reset
+    // the conversation and objective that were just restored.
+    const standingInIt = (() => {
+      try { return fs.realpathSync(this.config.workspace) === fs.realpathSync(named.path); } catch { return false; }
+    })();
+    if (!standingInIt) this.switchWorktreeWorkspace(named.path);
     console.log(pc.cyan(`🌲 ${named.created ? "Created" : "Reusing"} named git worktree: ${named.branch} at ${named.path}`));
   }
 
