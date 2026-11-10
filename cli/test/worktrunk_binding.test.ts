@@ -368,6 +368,30 @@ describe("agent run with a named worktree", { skip: !isSandboxAvailable("auto") 
     }
   });
 
+  test("a restored named binding is validated even when the run is not launched with the worktree flag", async () => {
+    const f = fixture();
+    const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+    const home = process.env.HOME;
+    process.env.HOME = f.home;
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.repo, shell: "bash", worktree: true, worktreeBranch: "feat/a" } as any);
+    try {
+      await agent.run("first");
+      const dir = agent.getActiveWorktree()!.worktreePath;
+      git(f.repo, "branch", "feat/b");
+      git(dir, "switch", "-q", "feat/b"); // the checkout moves while the task is stopped
+      agent.getConfig().worktree = false; // `nexus run --resume <id>` does not repeat --worktree
+      const before = gw.requests.length;
+      await assert.rejects(agent.run("second", undefined, { resume: true }), /feat\/a/);
+      await assert.rejects(agent.runTurn("third"), /feat\/a/);
+      assert.equal(gw.requests.length, before, "no inference ran against the wrong branch");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+      f.cleanup();
+    }
+  });
+
   test("a retained named worktree switched to another branch between turns is refused, not edited", async () => {
     const f = fixture();
     const gw = await startGateway(() => ({ kind: "text", content: "done" }));

@@ -5634,6 +5634,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (this.config.worktree && !this.worktreeRunTurnAuthorized) {
       return await this.run(taskPrompt, onConfirm, options);
     }
+    if (!this.config.worktree) this.assertNamedBindingCurrent();
     if (this.activeTurn) throw new Error("A turn is already active; wait for it to finish or cancel it.");
     const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
     if (authoritativeVerifier && this.changeBaseline === undefined) {
@@ -6917,7 +6918,20 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     };
   }
 
+  /**
+   * A named binding (restored by `--resume` or kept between turns) must still be the registered linked worktree on its
+   * recorded branch, whatever flags this launch has: another terminal can switch its branch or replace it while stopped.
+   */
+  private assertNamedBindingCurrent(): void {
+    const retained = this.activeWorktree;
+    if (retained?.kind !== "named") return;
+    if (!this.worktreeManager.isRetainedNamedWorktree(retained.worktreePath, retained.branch)) {
+      throw new Error(`Cannot continue: ${retained.worktreePath} is no longer the registered linked worktree for ${retained.branch} (its branch may have been switched); restore it or start a new session.`);
+    }
+  }
+
   async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; step?: boolean }): Promise<TurnResult> {
+    if (!this.config.worktree) this.assertNamedBindingCurrent();
     this.ui.banner();
     console.log(`🎯 Task: ${safeTerminal(typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]")}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
@@ -6950,9 +6964,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (retained) {
         // Still the worktree it was: another terminal can switch its branch or replace it between turns, so the same
         // validation as the durable binding (Git lists it on the recorded branch, pointer, registry) runs again.
-        if (!this.worktreeManager.isRetainedNamedWorktree(retained.worktreePath, retained.branch)) {
-          throw new Error(`Cannot continue: ${retained.worktreePath} is no longer the registered linked worktree for ${retained.branch} (its branch may have been switched); restore it or start a new session.`);
-        }
+        this.assertNamedBindingCurrent();
         console.log(pc.cyan(`🌲 Continuing in named git worktree: ${retained.branch} at ${retained.worktreePath}`));
       } else if (this.config.worktreeBranch) {
         if (this.isReadOnly() || this.config.dryRun) {
