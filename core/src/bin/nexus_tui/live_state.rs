@@ -377,8 +377,8 @@ pub const APPROVAL_GUARD: Duration = Duration::from_millis(250);
 /// after a pause is not affected.
 pub const APPROVAL_TYPING_RUN: Duration = Duration::from_millis(300);
 /// A decision key must come this long after the last key before the panel opened (a held key's first auto-repeat
-/// arrives after the initial repeat delay, typically 250 to 500 ms).
-pub const APPROVAL_REPEAT_QUIET: Duration = Duration::from_millis(600);
+/// arrives after the initial repeat delay, typically 250 to 660 ms; X11's default is 660 ms, accessibility settings can be longer).
+pub const APPROVAL_REPEAT_QUIET: Duration = Duration::from_millis(1000);
 /// The confirming key of the approve-all question is ignored this soon after the question was asked (and after each
 /// ignored press, so a held or auto-repeating key stays inert until it is released).
 pub const APPROVAL_CONFIRM_DELAY: Duration = Duration::from_millis(400);
@@ -1221,6 +1221,12 @@ impl LiveState {
     }
 
     pub fn on_paste(&mut self, text: &str) {
+        self.on_paste_at(text, Instant::now());
+    }
+
+    pub fn on_paste_at(&mut self, text: &str, now: Instant) {
+        // A paste is input just like typing: an approval panel that appears right after it starts with its guard on.
+        self.last_key = Some(now);
         if matches!(self.overlay, Some(Overlay::Paste { .. })) {
             return;
         }
@@ -1566,9 +1572,9 @@ impl LiveState {
     pub fn on_key_at(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
         let before = self.scroll_back;
         let action = self.handle_key(key, now);
-        // Typing keys (characters, Enter, Backspace, Delete), including the Enter that sent a prompt and the key that
+        // Typing keys (characters, Enter, Tab, Backspace, Delete), including the Enter that sent a prompt and the key that
         // answered an approval: an approval panel that appears right after them starts with its guard on.
-        if matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Backspace | KeyCode::Delete) {
+        if matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace | KeyCode::Delete) {
             self.last_key = Some(now);
         }
         self.promote_pending_approval();
@@ -4179,9 +4185,11 @@ mod tests {
 
         #[test]
         fn y_right_after_the_panel_shows_approves() {
-            // A fast model: the panel appears 400 ms after the prompt was sent; `y` 300 ms later answers it.
+            // A fast model: the panel appears 400 ms after the prompt was sent. The Enter may still be held, so a `y`
+            // within a second of it is ignored; one after that answers.
             let (mut state, t0) = panel(1000);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 1300)), approve("approval-1", false));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 1300)), None);
+            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 2700)), approve("approval-1", false));
             assert_eq!(state.overlay, None);
             // A slow model: `y` 100 ms after the panel appears answers it too (nothing was in flight).
             let (mut state, t0) = panel(5000);
@@ -4191,7 +4199,7 @@ mod tests {
         #[test]
         fn n_denies_at_once() {
             let (mut state, t0) = panel(1000);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('n')), at(t0, 1300)), deny("approval-1"));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('n')), at(t0, 2700)), deny("approval-1"));
             assert!(matches!(state.transcript.last(), Some(Entry::Decision { verdict: Verdict::Denied, .. })));
         }
 
@@ -4386,6 +4394,39 @@ mod tests {
             assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 530)), None);
             // A fresh press once the key has been quiet answers.
             assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 1300)), approve("approval-1", false));
+        }
+
+        #[test]
+        fn a_held_enter_repeating_at_the_x11_default_delay_does_not_approve() {
+            let t0 = Instant::now();
+            let mut state = ready();
+            type_text(&mut state, "go");
+            assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some());
+            state.apply(ev(APPROVAL));
+            state.note_approval_shown(at(t0, 100));
+            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 620)), None, "repeat after 620 ms");
+            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 660)), None, "repeat after 660 ms (X11 default)");
+            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 1800)), approve("approval-1", false), "a fresh press after the key was quiet");
+        }
+
+        #[test]
+        fn a_tab_or_a_paste_just_before_the_panel_counts_as_a_prior_key() {
+            for paste in [false, true] {
+                let t0 = Instant::now();
+                let mut state = ready();
+                type_text(&mut state, "go");
+                assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some());
+                // Idle for a long while, then a Tab or a paste, then the panel and an Enter 50 ms after it.
+                if paste {
+                    state.on_paste_at("x", at(t0, 50_000));
+                } else {
+                    state.on_key_at(key(KeyCode::Tab), at(t0, 50_000));
+                }
+                state.apply(ev(APPROVAL));
+                state.note_approval_shown(at(t0, 50_100));
+                assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 50_150)), None, "paste={paste}: Enter 50 ms after the panel");
+                assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 52_000)), approve("approval-1", false), "paste={paste}: a later press answers");
+            }
         }
 
         #[test]

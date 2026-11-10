@@ -34,13 +34,13 @@ def main():
     s.send("Write the two files.\r", settle=0.1)
     wait_events(events, "approval.request", 1, 20, s)
     s.wait_screen(lambda lines: has(lines, "Approval needed"), 10, "the first approval panel")
-    s.pump(1.0)  # a key just before the panel opened (the previous answer) keeps decision keys inert for 0.6 s
+    s.pump(1.4)  # a key just before the panel opened (the previous answer) keeps decision keys inert for 1 s
     result = {"panel": [line for line in s.color.lines() if line.strip()]}
     s.send("y", settle=0.5)
     result["after_first_y"] = decisions(commands)
     wait_events(events, "approval.request", 2, 20, s)
     s.wait_screen(lambda lines: has(lines, "Approval needed"), 10, "the second approval panel")
-    s.pump(1.0)  # a key just before the panel opened (the previous answer) keeps decision keys inert for 0.6 s
+    s.pump(1.4)  # a key just before the panel opened (the previous answer) keeps decision keys inert for 1 s
     s.send("y", settle=0.5)
     result["after_second_y"] = decisions(commands)
     wait_events(events, "turn.result", 1, 30, s)

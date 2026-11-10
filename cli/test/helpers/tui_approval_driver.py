@@ -72,7 +72,7 @@ def main():
     result["after_deny"] = decisions(commands)
     wait_events(events, "approval.request", 2, 20, s)
     s.wait_screen(lambda lines: has(lines, "Approval needed"), 10, "the second approval panel")
-    s.pump(1.0)  # a key just before the panel opened (the previous answer) keeps decision keys inert for 0.6 s
+    s.pump(1.4)  # a key just before the panel opened (the previous answer) keeps decision keys inert for 1 s
     s.send("y", settle=0.5)
     result["after_approve"] = decisions(commands)
 
