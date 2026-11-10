@@ -691,10 +691,13 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
   };
 }
 
-/** Replaces the "local-model" placeholder with the first model the gateway lists; unchanged if the gateway is unreachable. */
-export async function autoDetectModel(config: HarnessConfig): Promise<HarnessConfig> {
+/** Replaces the "local-model" placeholder with the first model the gateway lists; unchanged if the gateway is unreachable or the start is a resume. */
+export async function autoDetectModel(config: HarnessConfig, options: { resuming?: boolean } = {}): Promise<HarnessConfig> {
   // A provider's catalog lists billable models; one is never chosen on the operator's behalf.
   if (config.provider || config.model !== "local-model") return config;
+  // A resumed start sends nothing before the agent knows whether the provider asked it to wait: the session record
+  // supplies the model (AutonomousAgent.adoptRecordedModel), else the first step detects it after the wait.
+  if (options.resuming) return config;
   try {
     const models = await new LocalLlmClient(config).listModels();
     if (models.length > 0) return { ...config, model: models[0] };
