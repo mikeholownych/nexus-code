@@ -34,8 +34,9 @@ Copies use a reflink where the file system has one, keep modification times so i
 stop with an error beyond 50,000 files or 4 GiB (under `switch -c`, a warning: the worktree is still created). `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
 (absolute paths) are never copied, and a symbolic link is copied only if its real target (resolved through other links, not just
 as text) is inside the tree. `--force` never overwrites a file that is tracked in the destination (it is reported and skipped).
-Every file is staged under `.nexus-copy-<id>.tmp` in its directory and moved into place, so a killed run never leaves a
-truncated file under its real name; leftover staging files are removed by the next run. `--dry-run` runs the same checks as the
+Every file is staged under `.nexus-copy-<pid>-<id>.tmp` in its directory and moved into place, so a killed run never leaves a
+truncated file under its real name; the next run removes leftovers whose owner process is gone (a running copy's staging file is never touched), including those in the destination root. Nothing is written at or below a submodule or a nested repository
+of the destination, and a destination file where a source directory would go skips that subtree with a report. `--dry-run` runs the same checks as the
 real run (kept files, tracked files, a symbolic link or directory in the way), so its counts match. Hard links, including pnpm
 store links, are copied as ordinary files: the bytes are counted per file and can reach the size limit sooner than the disk use
 suggests. `--all-ignored` copies every
