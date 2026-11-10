@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01NsQjx85VvqUT4GNNs8VhUt",
+  "agent_id": "afe95c5eea6a0bb30",
+  "task_description": "Independent review of PR 448 delta",
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 44559,
+    "cache_read_tokens": 775589,
+    "output_tokens": 6329,
+    "api_call_count": 14
+  },
+  "started_at": "2026-11-10T17:59:22.62237133Z",
+  "completed_at": "2026-11-10T18:04:00.078491263Z"
+}
