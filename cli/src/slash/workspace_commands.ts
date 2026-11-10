@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { copyToClipboard, readFromClipboard } from "../clipboard.js";
-import { commitChanges, generateConventionalCommit, getGitInfo } from "../git.js";
+import { commitChanges, generateConventionalCommit, getGitInfo, workspaceStatus } from "../git.js";
 import { HunkStager } from "../stager.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "../tester.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
@@ -24,7 +24,14 @@ function diff(ctx: SlashContext): SlashOutcome {
   if (!getGitInfo(cwd).isRepo) return reply("diff", NOT_A_REPO, false);
   try {
     const out = git(cwd, ["diff", "--no-color"]);
-    return out.trim() ? reply("diff", out.trimEnd(), true, { format: "diff" }) : reply("diff", "Working tree clean: no uncommitted changes.");
+    if (out.trim()) return reply("diff", out.trimEnd(), true, { format: "diff" });
+    // `git diff` shows unstaged edits to tracked files only; say what else is uncommitted rather than calling it clean.
+    const lines = workspaceStatus(cwd, "--porcelain").split("\n").filter(Boolean);
+    const untracked = lines.filter((l) => l.startsWith("??")).length;
+    const staged = lines.filter((l) => l[0] !== " " && l[0] !== "?").length;
+    if (!untracked && !staged) return reply("diff", "Working tree clean: no uncommitted changes.");
+    const parts = [untracked ? `${untracked} untracked` : "", staged ? `${staged} staged` : ""].filter(Boolean).join(", ");
+    return reply("diff", `No unstaged changes to tracked files; ${parts} (see /git).`);
   } catch (err) {
     return reply("diff", `git diff failed: ${errorText(err)}`, false);
   }
@@ -34,7 +41,7 @@ function gitStatus(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
   if (!getGitInfo(cwd).isRepo) return reply("git", NOT_A_REPO, false);
   try {
-    return reply("git", git(cwd, ["status", "--short"]).trimEnd() || "Working tree clean.");
+    return reply("git", workspaceStatus(cwd, "--short").trimEnd() || "Working tree clean.");
   } catch (err) {
     return reply("git", `git status failed: ${errorText(err)}`, false);
   }
