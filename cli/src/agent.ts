@@ -30,6 +30,7 @@ import {
   CandidateTracker,
   ValidationReceipt,
   computeCandidateIdentitySync,
+  gitTimeoutMs,
   hashContent,
 } from "./core/candidate.js";
 import {
@@ -63,8 +64,6 @@ import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } 
 import { judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
-/** File-edit tools that can change the workspace before the verifier baseline is captured. */
-const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
 import { credentialOriginOf, InferenceError, type TruncatedCall, TokenCountError } from "./client.js";
 import {
   TurnResult,
@@ -156,11 +155,18 @@ import {
   isCondensedFinding,
   readFindings,
 } from "./core/findings.js";
-import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
-import type { TurnReason } from "./core/turn.js";
+import { FILE_EDIT_TOOLS, FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
+import type { TurnEvidence, TurnReason } from "./core/turn.js";
 import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
+
+/**
+ * A shell command that may leave a process running after it returns: a lone `&` (not `&&`, `&>` or `2>&1`), nohup,
+ * setsid, disown, systemd-run, or a daemonizing tool. Such a process can still write after the turn ends, so the turn
+ * is never lifted to "no change" (conservative: a false match only keeps the previous UNVERIFIED).
+ */
+const MAY_OUTLIVE_COMMAND = /(?<![&>])&(?![&>])|\b(?:nohup|setsid|disown|systemd-run|daemonize)\b/;
 
 /** Default deadline for the completion verifier (seconds); override with HarnessConfig.verifierTimeoutSecs / NEXUS_VERIFIER_TIMEOUT_SECS. */
 export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
@@ -816,6 +822,8 @@ function gitIndexIdentity(workspace: string): string {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "ignore"],
     maxBuffer: 64 * 1024 * 1024,
+    // A hung git must fail the state read (callers then treat the state as unknown), not block the turn.
+    timeout: gitTimeoutMs(),
   });
   return createHash("sha256").update(out).digest("hex").slice(0, 16);
 }
@@ -935,6 +943,17 @@ export class AutonomousAgent {
   }
   /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
   private turnCarriedChanges = false;
+  /** Evidence about this turn alone for its verdict (TUI-AUDIT D-04): operator denials and verifier runs. */
+  private turnDenials = 0;
+  /** Successful file-write tool calls this turn (write_file, edit_file, patch_file, delete_file). */
+  private turnFileWrites = 0;
+  /** run_command calls this turn that may leave a process running after the command returned (a trailing `&`, nohup, a named service). */
+  private turnBackgroundCommands = 0;
+  /** The no-change decision made for this turn: a rebuilt verdict (a failed final checkpoint) must reach the same outcome. */
+  private turnLatchLifted = false;
+  private turnVerifierRuns: TurnEvidence["verifierRuns"] = [];
+  /** Workspace state identity when this turn began ("unknown" when it could not be established). */
+  private turnStartState: string | undefined;
   /** The operator-configured verifier's latest result in this turn (FAILED: it refused a completion and has not passed since). */
   private turnConfiguredVerifier: "NOT_RUN" | "PASSED" | "FAILED" = "NOT_RUN";
   /** Key for the durable operation record of each tool call (provider call ids may be redacted on disk). */
@@ -1309,6 +1328,7 @@ export class AutonomousAgent {
           this.setUnverifiedChanges(true);
           this.verificationEvidence = undefined;
           this.turnMutations++;
+          if (FILE_EDIT_TOOLS.has(event.toolName)) this.turnFileWrites++;
           await this.candidateTracker.createMutationHook()(event, context);
         },
       },
@@ -2214,6 +2234,7 @@ export class AutonomousAgent {
       const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
       const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
       this.changeBaseline = { command, failed: !run.success, tests, verifier, trustedDeliverables, at: new Date().toISOString() };
+      this.turnVerifierRuns.push({ command, phase: "before_change", passed: run.success });
       if (this.durable) {
         try {
           this.checkpointDurableState("baseline captured");
@@ -2822,7 +2843,11 @@ export class AutonomousAgent {
       let index = "no-git";
       try {
         index = gitIndexIdentity(workspace);
-      } catch {}
+      } catch (err: any) {
+        // Only git exiting non-zero (not a repository) is "no-git". A git that hangs (ETIMEDOUT) or whose output
+        // overflows the buffer (ENOBUFS) did not report: the state is unknown (the outer catch), never "equal".
+        if (typeof err?.status !== "number") throw err;
+      }
       const id = combineState([candidate, index, externalInputsContentIdentity(workspace)]);
       const took = Date.now() - started;
       if (took > STATE_IDENTITY_BUDGET_MS) {
@@ -2832,6 +2857,8 @@ export class AutonomousAgent {
       return id;
     } catch (err: any) {
       this.stateIdentityUncertainty = `the workspace state could not be established (${String(err?.message ?? err).slice(0, 160)})`;
+      // A git that hangs would cost another full timeout on every later read: stop trying for the rest of the turn.
+      if (err?.code === "ETIMEDOUT") this.stateIdentityDisabled = true;
       return "unknown";
     }
   }
@@ -4501,6 +4528,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             };
             this.verificationEvidence = evidence;
             this.verificationEvidenceRawOutput = testRes.rawOutput || "";
+            this.turnVerifierRuns.push({ command: verifierCommand, phase: "completion", passed: testRes.success });
             if (configured) this.turnConfiguredVerifier = testRes.success ? "PASSED" : "FAILED";
             if (this.objective && candidateId) {
               recordAttempt(this.objective, {
@@ -4719,6 +4747,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (childMutations > 0 || subagent.turnCarriedChanges) {
             this.mutationSeq += subagent.mutationSeq;
             this.turnMutations += childMutations;
+            this.turnFileWrites += subagent.turnFileWrites;
+            this.turnBackgroundCommands += subagent.turnBackgroundCommands;
             this.verificationEvidence = undefined;
             if (this.objective) {
               invalidateVerified(this.objective, `subagent changed workspace`);
@@ -5254,6 +5284,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (approved && egressOrigin) this.approvedEgressOrigins.add(egressOrigin);
       if (approved) this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
       if (!approved) {
+        this.turnDenials++;
         console.log(`⚠️ Tool execution cancelled by user.`);
         const cancelMsg =
           "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.";
@@ -5325,6 +5356,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (typeof (this.plannerClient as any)?.setTaskId === "function") this.plannerClient.setTaskId(effectiveTaskId);
     if (typeof (this.coderClient as any)?.setTaskId === "function") this.coderClient.setTaskId(effectiveTaskId);
     const operationSeq = ++this.operationSeq;
+    // A run_command that may run work past the call: its own `background` or `service_name`, or a command that
+    // backgrounds itself. Counted here, after approval (a denied call returned earlier and counts nothing): the turn is
+    // then never lifted to "no change", because the process can still write after the turn ends.
+    if (toolName === "run_command" && (args.background || args.service_name || MAY_OUTLIVE_COMMAND.test(String(args.command ?? "")))) this.turnBackgroundCommands++;
     // The file as it is right before this operation (after any approval wait), so the reported diff is this
     // operation's change only and never includes edits already in the working tree.
     const diffTarget = this.observer?.onFileChange && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
@@ -5916,6 +5951,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0 };
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnCarriedChanges = this.hasPendingModifications;
+    this.turnDenials = 0;
+    this.turnFileWrites = 0;
+    this.turnBackgroundCommands = 0;
+    this.turnLatchLifted = false;
+    this.turnVerifierRuns = [];
+    this.turnStartState = undefined;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
     this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
     this.findingsOutgrown = false;
@@ -6058,6 +6099,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
       }
       let stateNow = this.workspaceStateIdentity();
+      this.turnStartState = stateNow;
       tracker.noteState(stateNow);
       tracker.noteLedgerState(this.ledgerProgressIdentity());
       const noticedPolls = new Set<string>();
@@ -6924,6 +6966,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return !this.runningAsSubagent && !nonMutatingTeamRole && Boolean(this.config.authoritativeVerifierCommand?.trim());
   }
 
+  /** Whether workspace content differs from how this turn found it (D-04); "unknown" when either state is unknown. */
+  private turnWorkspaceChanged(): TurnEvidence["workspaceChanged"] {
+    // A file-write tool that succeeded is a change whatever the identity could see (a gitignored target).
+    if (this.turnFileWrites > 0) return "yes";
+    if (!this.turnStartState || this.turnStartState === "unknown") return "unknown";
+    const now = this.workspaceStateIdentity();
+    if (now === "unknown") return "unknown";
+    return now === this.turnStartState ? "no" : "yes";
+  }
+
   /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
   private buildTurnResult(input: {
     /** A compaction the next action depended on could not be committed: the turn stopped (PERSISTENCE_FAILED). */
@@ -6961,6 +7013,31 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           ...(ledger?.nextAction ? { nextAction: ledger.nextAction } : {}),
         }
       : undefined;
+    const workspaceChanged = this.turnWorkspaceChanged();
+    // Running a command latches the verification obligation, because a command can change files. When the turn ended
+    // normally, nothing was pending before it, no worktree holds its work, no verifier result is held (a verifier that
+    // ran is the evidence), and the workspace is exactly as the turn found it, the latch caught nothing: there is no
+    // change to verify (TUI-AUDIT D-04). A command that changed any file leaves the identity different.
+    const endedNormally = !input.interruption && !input.unhandledError && !input.persistenceFailure && !input.inferenceFailure &&
+      !input.capacityBlock && !input.limitReached;
+    // A file-write tool (write_file, edit_file, patch_file, delete_file) that succeeded is a change by definition, even
+    // when the workspace identity cannot see its target (a gitignored build/ directory): never lifted.
+    // The decision is kept for the turn: lifting clears the pending flag, and a rebuilt verdict must not flip to UNVERIFIED.
+    // A command that may have left a process running is never lifted: the process can still write after the turn.
+    const latchCaughtNothing = this.turnLatchLifted || (endedNormally && this.hasPendingModifications && !this.turnCarriedChanges &&
+      !this.activeWorktree && !evidence && this.turnFileWrites === 0 && this.turnBackgroundCommands === 0 && workspaceChanged === "no");
+    if (latchCaughtNothing) this.turnLatchLifted = true;
+    if (latchCaughtNothing) {
+      this.setUnverifiedChanges(false);
+      // A later change takes a fresh pre-change baseline: the workspace may change between turns.
+      this.changeBaseline = undefined;
+    }
+    const turnEvidence: TurnEvidence = {
+      workspaceChanged,
+      carriedChanges: this.turnCarriedChanges,
+      denied: this.turnDenials,
+      verifierRuns: [...this.turnVerifierRuns],
+    };
     const base = {
       ...(recoveries.length ? { providerRecovery: recoveries } : {}),
       ...this.pendingWindowField(),
@@ -6978,6 +7055,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       ...(this.turnPersistenceFailures.length ? { persistence: { durable: false as const, failures: [...new Set(this.turnPersistenceFailures)].slice(0, 8) } } : {}),
       ...(this.durable ? { tokenAccounting: this.tokenAccounting() } : {}),
       ...(Object.values(this.turnToolCallSyntax).some((n) => n > 0) ? { toolCallSyntax: { ...this.turnToolCallSyntax } } : {}),
+      turnEvidence,
     };
 
     if (input.interruption) {
@@ -7094,7 +7172,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (requirementsIncomplete) {
       return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "REQUIREMENTS_INCOMPLETE", detail: incompleteDetail() }));
     }
-    if (this.turnMutations > 0 || this.turnCarriedChanges) {
+    if ((this.turnMutations > 0 && !latchCaughtNothing) || this.turnCarriedChanges) {
       if (evidence?.status === "PASSED") {
         if (evidence.hasExecutedTests === false) {
           return deepFreezeTurn(assertTurnResultInvariants({
