@@ -1277,7 +1277,8 @@ impl LiveState {
             approval.shown = true;
             approval.opened = now;
             // A key held down when the panel opened (the Enter that sent the prompt) starts auto-repeating after a
-            // delay of up to about half a second: decision keys stay inert until that key has been quiet that long.
+            // delay (660 ms by default on X11, longer with some accessibility settings): decision keys stay inert until that key
+            // has been quiet for `APPROVAL_REPEAT_QUIET` (1 s).
             let quiet = self.last_key.map_or(now, |at| at + APPROVAL_REPEAT_QUIET);
             approval.guard_until = in_flight.then(|| (now + APPROVAL_GUARD).max(quiet));
         }
@@ -4198,7 +4199,7 @@ mod tests {
         }
 
         #[test]
-        fn y_right_after_the_panel_shows_approves() {
+        fn y_answers_at_once_when_idle_and_a_fast_model_waits_out_the_held_enter() {
             // A fast model: the panel appears 400 ms after the prompt was sent. The Enter may still be held, so a `y`
             // within a second of it is ignored; one after that answers.
             let (mut state, t0) = panel(1000);
