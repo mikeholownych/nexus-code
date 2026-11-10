@@ -171,8 +171,8 @@ Every command executed by the agent runs in an isolated sandbox:
 ### 🌲 Git Worktree Isolation
 Eliminate uncommitted workspace pollution with native named worktrees (see [docs/WORKTREES.md](docs/WORKTREES.md)):
 - Run speculative features under `.nexus/worktrees/<branch>` (or configured sibling directories) with zero risk to your checked-out files.
-- Command `nexus worktree switch -c <branch>` (or session `/worktree switch -c <branch>`) creates an isolated branch checkout with dependency caching.
-- Fast-forward verified changes, prune integrated worktrees, and inspect status with `nexus worktree list --json`.
+- Command `nexus worktree switch -c <branch>` (or session `/worktree switch -c <branch>`) creates an isolated branch checkout.
+- Fast-forward verified changes, remove completed worktrees with `nexus worktree remove <branch>`, and inspect status with `nexus worktree list --json`.
 
 ### 🤝 Human-in-the-Loop (HITL) Approvals
 Stay in complete control of changes:
