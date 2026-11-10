@@ -916,7 +916,7 @@ test("tracked Nexus state edited in the worktree does not stop the rebase when t
     commitFile(f.repo, "other.txt", "target moved\n", "target advances");
     fs.writeFileSync(path.join(dir, ".nexus", "knowledge.json"), '{"v":2}\n');
     fs.writeFileSync(path.join(dir, "real.txt"), "real work\n");
-    const r = wt(f, dir, ["merge"]);
+    const r = wt(f, dir, ["merge", ...W]);
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "show", "main:real.txt"), "real work");
     assert.equal(git(f.repo, "show", "main:other.txt"), "target moved");
