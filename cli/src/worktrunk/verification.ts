@@ -57,12 +57,36 @@ export function hasDirtySubmodule(dir: string): boolean {
   return false;
 }
 
+/**
+ * Whether a tracked file the index is told to ignore (`--assume-unchanged`, `--skip-worktree`) differs from its
+ * recorded blob. `git status` and `git add -A` both skip such files, so an edit to one would be tested by a verifier
+ * yet absent from the state a receipt records and a merge carries. A skip-worktree file that is simply not checked
+ * out (sparse checkout) holds nothing and is fine.
+ */
+export function hasHiddenModification(dir: string): boolean {
+  const flagged = gitOut(dir, ["ls-files", "-v", "-z"]).split("\0").filter((entry) => /^[a-zS] /.test(entry));
+  for (const entry of flagged) {
+    const file = entry.slice(2);
+    const absolute = path.join(dir, file);
+    let exists = true;
+    try { fs.lstatSync(absolute); } catch { exists = false; }
+    if (!exists) {
+      if (entry[0] === "S") continue; // sparse checkout
+      return true; // deleted behind the index's back
+    }
+    const recorded = gitOut(dir, ["ls-files", "-s", "-z", "--", file]).split("\0")[0]?.split(/\s+/)[1];
+    const actual = gitOut(dir, ["hash-object", "--", file]);
+    if (recorded !== actual) return true;
+  }
+  return false;
+}
+
 /** The linked worktree containing `workspace` and its working state, or undefined (main checkout, detached, not a repository). Never throws. */
 export function captureVerificationState(workspace: string): WorkingState | undefined {
   try {
     const entry = currentEntry(openRepo(workspace));
     if (!entry || entry.isMain || !entry.branch) return undefined;
-    if (hasDirtySubmodule(entry.path)) return undefined;
+    if (hasDirtySubmodule(entry.path) || hasHiddenModification(entry.path)) return undefined;
     return workingState(entry.path, statusOf(entry.path).total > 0);
   } catch {
     return undefined;
@@ -79,7 +103,7 @@ export function recordVerification(workspace: string, verifier: string, expected
     const repo = openRepo(workspace);
     const entry = currentEntry(repo);
     if (!entry || entry.isMain || !entry.branch || entry.branch.length > MAX_BRANCH_LENGTH) return false;
-    if (hasDirtySubmodule(entry.path)) return false;
+    if (hasDirtySubmodule(entry.path) || hasHiddenModification(entry.path)) return false;
     const state = workingState(entry.path, statusOf(entry.path).total > 0);
     if (expected && (expected.head !== state.head || expected.tree !== state.tree)) return false;
     const branch = entry.branch;

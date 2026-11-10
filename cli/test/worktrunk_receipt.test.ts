@@ -363,3 +363,21 @@ test("an untracked submodule file still blocks the receipt when status.showUntra
     f.cleanup();
   }
 });
+
+test("an edit hidden by assume-unchanged or skip-worktree blocks the receipt; an unmodified flagged file does not", () => {
+  const f = fixture();
+  try {
+    assert.ok(captureVerificationState(f.dir), "baseline: capturable");
+    git(f.dir, "update-index", "--assume-unchanged", "a.txt");
+    assert.ok(captureVerificationState(f.dir), "a flagged file that equals its recorded blob is fine");
+    fs.writeFileSync(path.join(f.dir, "a.txt"), "a verifier passed thanks to this hidden edit\n");
+    assert.equal(captureVerificationState(f.dir), undefined, "assume-unchanged hides the edit from status: no state to record");
+    assert.equal(recordVerification(f.dir, "npm test"), false, "assume-unchanged: no receipt");
+    git(f.dir, "update-index", "--no-assume-unchanged", "a.txt");
+    git(f.dir, "checkout", "--", "a.txt");
+    git(f.dir, "update-index", "--skip-worktree", "b.txt");
+    assert.ok(captureVerificationState(f.dir), "skip-worktree and unmodified: fine");
+    fs.writeFileSync(path.join(f.dir, "b.txt"), "hidden skip-worktree edit\n");
+    assert.equal(recordVerification(f.dir, "npm test"), false, "skip-worktree: no receipt");
+  } finally { f.cleanup(); }
+});
