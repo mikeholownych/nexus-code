@@ -1,3 +1,4 @@
+import { isReadOnlyWorktreeArgs } from "./worktrunk/command.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -27,13 +28,13 @@ const HISTORY_ENTRIES = 60;
 const HISTORY_CHARS = 4000;
 type CheckpointChoice = "read_only" | "without_checkpoint" | "retry" | "allow_sensitive" | "cancel" | "other";
 
-function readOnlySlashAllowed(command: string, args: string): boolean {
+export function readOnlySlashAllowed(command: string, args: string): boolean {
   const spec = findSlash(command);
   const name = spec?.name ?? command.trim().replace(/^\//, "").toLowerCase();
   const value = args.trim().toLowerCase();
   if (["help", "status", "tokens", "diff", "git", "checkpoints", "audit", "receipt", "sessions", "exit", "mode", "clear", "history", "skills"].includes(name)) return true;
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
-  if (name === "worktree") return !value || value === "status";
+  if (name === "worktree") return isReadOnlyWorktreeArgs(value);
   if (name === "plan" || name === "requirements" || name === "knowledge") return !value;
   if (name === "skill") return !value || !/^(init)(?:\s|$)/.test(value);
   if (name === "theme") return !value;
