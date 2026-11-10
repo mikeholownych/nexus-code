@@ -194,7 +194,6 @@ export class InteractiveRepl {
     this.agent.setApprovalMode(mode);
   }
 
-  /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
   /** The checkpoint manager for the workspace the agent is in now: a named worktree entered by a run moves the workspace after the frontend started. */
   private checkpoints(): CheckpointManager {
     const workspace = path.resolve(this.config.workspace);
@@ -202,6 +201,7 @@ export class InteractiveRepl {
     return this.checkpointManager;
   }
 
+  /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
   private async runInteractiveTurn(prompt: string | any[], titlePrompt?: string, options?: { step?: boolean; resume?: boolean }): Promise<TurnResult> {
     const label = titlePrompt ?? (typeof prompt === "string" && prompt ? prompt : "[step]");
     let result: TurnResult;

@@ -7,7 +7,6 @@ import { format as formatDiagnostic } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
-import { CheckpointManager } from "./checkpoint.js";
 import { autoDetectModel, buildConfig, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
 import { isNexusDirPermissive } from "./doctor.js";
@@ -95,7 +94,6 @@ export class SidecarServer {
   private readonly resume?: string;
   private readonly history: string[];
   private sessionId: string;
-  private checkpointManager: CheckpointManager;
   /** The running slash command; undefined for prompt turns and for commands that became turns. */
   private activeSpec?: SlashSpec;
   private readonly evidence = new EvidenceLedger();
@@ -120,7 +118,6 @@ export class SidecarServer {
     this.app.getAgent().setApprovalMode(this.mode);
     this.onShutdown = options.onShutdown ?? (() => {});
     this.resume = options.resume;
-    this.checkpointManager = this.app.getCheckpointManager();
     this.sessionId = this.app.getSessionManager().generateSessionId();
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.app.getAgent().setArchiveSink((compactionId, messages) => this.app.getSessionManager().appendArchivedHistory(this.sessionId, messages, compactionId));
@@ -567,7 +564,7 @@ export class SidecarServer {
       let checkpointReady = false;
       while (!checkpointReady) {
         try {
-          this.checkpoints().createCheckpoint(
+          this.app.getCheckpointManager().createCheckpoint(
             checkpoint,
             allowSensitiveCheckpoint ? { allowSensitive: true } : undefined,
           );
@@ -821,7 +818,7 @@ export class SidecarServer {
       setSessionId: (sessionId) => {
         this.sessionId = sessionId;
       },
-      checkpoints: () => this.checkpoints(),
+      checkpoints: () => this.app.getCheckpointManager(),
       setWorkspace: (dir) => this.setWorkspace(dir),
       saveSession: (title) => this.saveSession(title),
       resumeSession: (sessionId) => this.resumeSession(sessionId),
@@ -901,17 +898,9 @@ export class SidecarServer {
     return receiptSections(this.lastTurn, this.app.getActiveValidationReceipt() ?? null, this.app.getAgent().getObjective());
   }
 
-  /** The checkpoint manager for the workspace the agent is in now: a named worktree entered by a run moves the workspace after the frontend started. */
-  private checkpoints(): CheckpointManager {
-    const workspace = path.resolve(this.app.getConfig().workspace);
-    if (this.checkpointManager.getWorkspace() !== workspace) this.checkpointManager = new CheckpointManager(workspace);
-    return this.checkpointManager;
-  }
-
   private setWorkspace(dir: string): void {
     this.app.getAgent().setWorkspace(dir);
-    this.app.getConfig().workspace = dir;
-    this.checkpointManager = new CheckpointManager(dir);
+    this.app.getConfig().workspace = dir; // the app's checkpoint manager follows the workspace
   }
 
   /** Same record the REPL saves after each turn. Skipped while the conversation holds only the system prompt. */
