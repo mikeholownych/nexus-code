@@ -26,40 +26,44 @@ function replSurface(output: string) {
     read_only: pick(/^READ-ONLY\s+(yes|no)$/m),
     context_tokens: tokens === undefined ? undefined : Number(tokens),
     context_limit: limit === undefined ? undefined : Number(limit),
-    model: pick(/^MODEL\s+(.+?)(?:\s+·\s.*)?$/m),
+    model: pick(/^MODEL\s+(.+?)(?:\s{2}·\s.*)?$/m),
     endpoint_kind: pick(/^RUNTIME\s+\S+\s+\((local|cloud)\)/m),
     session: pick(/^session (\S+) ·/m),
   };
 }
 
-test("I-3: REPL /status and sidecar session.state agree on the six fields for one session", async () => {
+async function agree(provider: string | undefined, expectedModel: string) {
   const gw = await startGateway(() => ({ kind: "text", content: "Done." }));
   const repo = makeRepo();
   const home = makeHome();
   const previousHome = process.env.HOME;
   process.env.HOME = home;
-  const logs: string[] = [];
   const realLog = console.log;
+  const capture = (fn: () => void): string => {
+    const logs: string[] = [];
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try { fn(); } finally { console.log = realLog; }
+    return logs.join("\n");
+  };
   try {
-    const app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, approvalMode: "read-only", readOnly: true } as HarnessConfig);
+    const app = new ApplicationCore({ endpoint: gw.url, model: "m", ...(provider ? { provider } : {}), maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, approvalMode: "read-only", readOnly: true } as HarnessConfig);
     const events: any[] = [];
     const server = new SidecarServer({ app, mode: "read-only", write: (line) => events.push(JSON.parse(line)), historyFile: path.join(home, "history") });
     server.start();
-    // Some conversation, so context tokens are not just the empty-session baseline.
+    // Some conversation (saved under the sidecar's session), so context tokens are not just the empty-session baseline.
     await server.handleLine(JSON.stringify({ v: 1, type: "prompt.submit", id: "t1", text: "Say done." }));
     await server.idle();
 
     // The same session through the sidecar: its latest session.state event.
-    const state = events.filter((e) => e.type === "session.state").at(-1);
-    assert.ok(state, "the sidecar emitted a session.state event");
+    const saved = events.filter((e) => e.type === "session.state").at(-1);
+    assert.ok(saved?.session, "the sidecar emitted a session.state event naming its session");
 
-    // The same session through the REPL: its /status over the same application core and session id.
-    const repl = new InteractiveRepl(app, "read-only");
-    (repl as any).currentSessionId = state.session;
-    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
-    (repl as any).printStatus(true);
-    console.log = realLog;
-    const repl_ = replSurface(logs.join("\n"));
+    // The same session through the REPL: it resumes the saved session by id and reports the id it holds itself.
+    const repl = new InteractiveRepl(app, "read-only", saved.session);
+    // Resuming reloads the conversation into the shared agent, so the sidecar reports again over what the REPL now holds.
+    (server as any).emitSessionState();
+    const state = events.filter((e) => e.type === "session.state").at(-1);
+    const repl_ = replSurface(capture(() => (repl as any).printStatus(true)));
 
     const sidecar_ = {
       mode: state.mode,
@@ -81,8 +85,11 @@ test("I-3: REPL /status and sidecar session.state agree on the six fields for on
     assert.equal(sidecar_.read_only, "yes");
     assert.ok((sidecar_.context_tokens as number) > 0, "a conversation has taken context");
     assert.ok((sidecar_.context_limit as number) >= (sidecar_.context_tokens as number));
-    assert.equal(sidecar_.model, "m");
+    assert.equal(sidecar_.model, expectedModel);
     assert.equal(sidecar_.endpoint_kind, "local");
+    assert.ok(typeof sidecar_.session === "string" && sidecar_.session.length > 0);
+    // The non-verbose header keeps the bare model it always printed.
+    assert.match(capture(() => (repl as any).printStatus(false)).replace(ANSI, ""), /^MODEL\s+m(?:\s{2}·.*)?$/m);
 
     await server.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
     await server.idle();
@@ -95,4 +102,12 @@ test("I-3: REPL /status and sidecar session.state agree on the six fields for on
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(repo, { recursive: true, force: true });
   }
+}
+
+test("I-3: REPL /status and sidecar session.state agree on the six fields for one session", async () => {
+  await agree(undefined, "m");
+});
+
+test("I-3: the same holds for a provider session, whose model reads \"provider · model\"", async () => {
+  await agree("compatible", "compatible · m");
 });

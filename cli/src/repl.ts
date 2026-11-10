@@ -369,7 +369,7 @@ export class InteractiveRepl {
 
     console.log(`${pc.bold(pc.cyan("WORKSPACE"))}  ${pc.white(wsName)}${gitBadge}  ${pc.dim(this.config.workspace)}`);
     const facts = surfaceFacts(this.app, this.currentSessionId);
-    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(facts.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
+    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(verbose ? facts.model : this.config.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
     if (verbose) {
       console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint} (${facts.endpoint_kind})  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
       console.log(`${pc.bold(pc.cyan("READ-ONLY"))}  ${facts.read_only ? "yes" : "no"}`);
