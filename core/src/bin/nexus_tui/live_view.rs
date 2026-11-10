@@ -3200,8 +3200,22 @@ mod tests {
             .filter(|(_, line)| line.contains('╰') || line.contains("Select model"))
             .collect();
         assert!(!border_lines.is_empty(), "modal borders must be present in screen: {screen}");
+        let top_y = border_lines.iter().map(|(y, _)| *y).min().unwrap();
         let bottom_y = border_lines.iter().map(|(y, _)| *y).max().unwrap();
-        assert!(bottom_y < 25, "modal bottom border should be < 25 on 40-row terminal, found at {bottom_y}");
+        let height = bottom_y - top_y + 1;
+        let expected_height = match &state.overlay {
+            Some(Overlay::Models(picker)) => {
+                let row_count = picker.rows().len() as u16;
+                (row_count + 5).clamp(8, 24) as usize
+            }
+            _ => panic!("expected Overlay::Models"),
+        };
+        assert_eq!(expected_height, 11, "catalog should produce 6 rows -> height 11");
+        assert_eq!(
+            height,
+            expected_height,
+            "modal height must follow (rows().len() + 5).clamp(8, 24)"
+        );
     }
 
 }

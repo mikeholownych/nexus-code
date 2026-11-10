@@ -347,10 +347,18 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     app.handle(Action::Quit);
     drop(terminal);
     drop(guard);
-    if let Some(session_id) = app.state.session.session_id.as_deref() {
-        println!("{}", format_exit_breadcrumb(session_id));
+    if let Some(breadcrumb) = maybe_format_exit_breadcrumb(&app.state) {
+        println!("{breadcrumb}");
     }
     result
+}
+
+pub fn maybe_format_exit_breadcrumb(state: &LiveState) -> Option<String> {
+    if state.session_saved {
+        state.session.session_id.as_deref().map(format_exit_breadcrumb)
+    } else {
+        None
+    }
 }
 
 pub fn format_exit_breadcrumb(session_id: &str) -> String {
@@ -808,6 +816,23 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
         assert_eq!(
             format_exit_breadcrumb("sess-1234"),
             "Nexus session sess-1234 saved. Resume with: nexus --resume sess-1234"
+        );
+    }
+
+    #[test]
+    fn exit_breadcrumb_only_shown_when_session_was_saved() {
+        let mut state = LiveState::new();
+        state.session.session_id = Some("sess-1234".into());
+        assert_eq!(
+            maybe_format_exit_breadcrumb(&state),
+            None,
+            "fresh session without turns or history must not print breadcrumb"
+        );
+
+        state.session_saved = true;
+        assert_eq!(
+            maybe_format_exit_breadcrumb(&state),
+            Some("Nexus session sess-1234 saved. Resume with: nexus --resume sess-1234".into())
         );
     }
 
