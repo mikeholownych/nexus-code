@@ -1014,6 +1014,25 @@ program
   });
 
 program
+  .command("worktree")
+  .description("Named git worktrees: switch [-c] <branch> [--base B], list [--json] [--limit N], path <branch>, remove <branch>... [--force] [--delete-unmerged]")
+  .argument("[args...]", "Subcommand and its arguments")
+  .option("-w, --workspace <path>", "Directory inside the repository", process.cwd())
+  .option("--read-only", "Refuse every subcommand that changes the repository")
+  .allowUnknownOption()
+  .helpOption("-h, --help", "Show help")
+  .action(async (args: string[], _options: { workspace?: string; readOnly?: boolean }, cmd: Command) => {
+    const options = commandOptions(cmd);
+    const { runWorktreeCommand } = await import("./worktrunk/command.js");
+    const result = runWorktreeCommand(args, {
+      cwd: options.workspace ? path.resolve(options.workspace) : process.cwd(),
+      readOnly: Boolean(options.readOnly),
+    });
+    (result.success ? console.log : console.error)(result.output);
+    if (!result.success) process.exitCode = 1;
+  });
+
+program
   .command("stage")
   .description("Inspect and manage granular git diff hunks")
   .option("-w, --workspace <path>", "Workspace directory", process.cwd())
