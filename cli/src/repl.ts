@@ -291,6 +291,7 @@ export class InteractiveRepl {
       updatedAt: new Date().toISOString(),
       workspace: this.config.workspace,
       model: this.config.model,
+      endpoint: this.config.endpoint,
       messages,
       unverifiedChangesPending: this.agent.hasUnverifiedChanges(),
       tokenStats: this.agent.getTokenStats(),

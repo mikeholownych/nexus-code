@@ -280,6 +280,38 @@ describe("start-up model detection outside a provider window", () => {
   }
 });
 
+describe("an idle sidecar resume keeps what it restored", () => {
+  test("resume idle, shut down, resume again: the session record keeps the window and the model, and nothing reaches the provider inside the window", { timeout: 150_000 }, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-idle-"));
+    const ws = makeWorkspace(home);
+    const { gw, arrivals } = await provider(RETRY_AFTER_SECS);
+    try {
+      const { taskId } = await suspendDuringProviderWait(ws, home, gw, arrivals, RETRY_AFTER_SECS);
+      const before = readers(home, ws).session(taskId);
+      const eligibleAt = Date.parse(String(before.lastTurn?.interruption?.providerEligibleAt));
+      assert.ok(Number.isFinite(eligibleAt), "precondition: the session record carries the window");
+      const modelRequestsBefore = gw.modelRequests;
+      for (const attempt of [1, 2]) {
+        // No -m: the model comes from the record; no prompt: the sidecar only restores.
+        const side = sidecar(["--resume", taskId, "-w", ws, "-e", gw.url, "-s", "4", "--yes"], { cwd: ws, home });
+        await until(() => side.notices().some((n) => /^Resumed session/.test(String(n.e.text))), `resume ${attempt}'s notice (stderr: ${side.io.err.slice(-300)})`);
+        await new Promise((r) => setTimeout(r, 2_000));
+        await side.shutdown();
+        const record = readers(home, ws).session(taskId);
+        assert.equal(Date.parse(String(record.lastTurn?.interruption?.providerEligibleAt)), eligibleAt, `after idle resume ${attempt} the session record still carries the window: ${JSON.stringify(record.lastTurn?.interruption ?? null)}`);
+        assert.equal(record.model, "m", `after idle resume ${attempt} the session record keeps its model`);
+        assert.ok(Date.now() < eligibleAt - 2_000, `precondition: still inside the window after resume ${attempt}`);
+        assert.equal(gw.modelRequests, modelRequestsBefore, `no GET /models inside the window after resume ${attempt}`);
+      }
+      assert.equal(arrivals.length, 1, "no chat request either");
+    } finally {
+      killChildren();
+      await gw.close();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 // ---------------------------------------------------------------- operation path
 
 /**
@@ -827,6 +859,41 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       restarted?.shutdown();
       fs.rmSync(root, { recursive: true, force: true });
       await planner.cleanup();
+      await ctx.cleanup();
+    }
+  });
+
+  test("restoring a conversation saves nothing mid-restore, so no record is ever poorer than the one being restored", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      let saves = 0;
+      (ctx.resumed as any).durable = true; // as in the sidecar and the REPL, whose agents persist progress
+      (ctx.resumed as any).hasPendingModifications = false; // a fresh agent: the restore marks changes pending and saves
+      (ctx.resumed as any).setProgressListener(() => { saves++; });
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model" }, noArchive);
+      assert.equal(saves, 0, "a progress save during the restore would write the record without its last turn, history or model");
+      assert.equal(eligibleAtOf(ctx.resumed.getLastTurnResult()!), eligibleAtOf(ctx.interrupted), "and the restored turn is in place afterwards");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("a recorded model of \"default\" or empty is no model; a record from another endpoint does not supply one", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      for (const recorded of ["default", "", undefined]) {
+        a.config.model = "local-model";
+        ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: recorded as string }, noArchive);
+        assert.equal(a.config.model, "local-model", `${JSON.stringify(recorded)} is not adopted`);
+      }
+      a.config.model = "local-model";
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model", endpoint: "http://elsewhere.invalid:9/v1" }, noArchive);
+      assert.equal(a.config.model, "local-model", "the model of another endpoint may not exist here: detected after the wait instead");
+      a.config.model = "local-model";
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model", endpoint: a.client.endpoint + "/" }, noArchive);
+      assert.equal(a.config.model, "recorded-model", "the same endpoint (spelled differently) supplies it");
+    } finally {
       await ctx.cleanup();
     }
   });

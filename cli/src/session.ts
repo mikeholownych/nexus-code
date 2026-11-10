@@ -129,6 +129,7 @@ export class SessionManager {
       workspacePath: workspace,
       workspace,
       model: session.model || "default",
+      ...(session.endpoint ? { endpoint: session.endpoint } : {}),
       createdAt: session.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: session.status || "in_progress",

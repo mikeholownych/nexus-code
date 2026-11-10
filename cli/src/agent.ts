@@ -982,6 +982,8 @@ export class AutonomousAgent {
   private resumedProviderWaits: Array<{ eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord }> = [];
   /** A resumed start kept the "local-model" placeholder and its record named no model: detect it after the wait. */
   private modelDetectionDeferred = false;
+  /** Set while restoreConversation runs: no progress is saved part-way through a restore. */
+  private restoringConversation = false;
   /** Detection started by a resume that found no session; the first request waits for it. */
   private pendingModelDetection?: Promise<void>;
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
@@ -1561,6 +1563,7 @@ export class AutonomousAgent {
         workspacePath: this.workspacePathIdentity.value,
         workspace: this.workspacePathIdentity.value,
         model: this.config.model,
+        endpoint: this.config.endpoint,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         status: "in_progress",
@@ -1593,6 +1596,7 @@ export class AutonomousAgent {
       workspacePath: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       workspace: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       model: this.config.model,
+      endpoint: this.config.endpoint,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: turn ? lifecycleStatusForTurn(turn) : this.verifiedWorktreeCompletion ? "completed" : "in_progress",
@@ -1705,7 +1709,7 @@ export class AutonomousAgent {
     this.activeProviderRecovery = state.providerRecovery ?? null;
     this.recoveredOperation = state.operation;
     this.rememberResumedProviderWait(state.lastTurn);
-    this.adoptRecordedModel(state.model);
+    this.adoptRecordedModel(state.model, state.endpoint);
     // Durable task state is writable by the same local user who can run candidate
     // commands. Never trust a saved baseline, nor capture a new one over a
     // resumed workspace with pending changes: an attacker could delete the field
@@ -2244,7 +2248,7 @@ export class AutonomousAgent {
   }
 
   private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
-    if (!this.durable) return;
+    if (!this.durable || this.restoringConversation) return;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
       else this.stateManager?.recordProgress(this.currentTaskId, {
@@ -2628,17 +2632,25 @@ export class AutonomousAgent {
       changeBaseline?: DurableTaskState["changeBaseline"];
       lastTurn?: TurnResult | null;
       model?: string;
+      endpoint?: string;
     },
     readArchive: (committed?: ReadonlySet<string>) => ArchiveRead<ChatMessage>,
   ): string | undefined {
-    this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
-    this.rememberResumedProviderWait(session.lastTurn);
-    this.adoptRecordedModel(session.model);
-    this.restoreHistory(session.history);
-    const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
-    const read = readArchive(committed);
-    this.restoreArchive(read.messages);
-    return describeArchiveRead(read);
+    // Nothing is saved until the whole record is restored: a save part-way (restoreSession marks changes pending)
+    // would write the session record without its last turn, history or model, poorer than the one being restored.
+    this.restoringConversation = true;
+    try {
+      this.rememberResumedProviderWait(session.lastTurn);
+      this.adoptRecordedModel(session.model, session.endpoint);
+      this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
+      this.restoreHistory(session.history);
+      const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
+      const read = readArchive(committed);
+      this.restoreArchive(read.messages);
+      return describeArchiveRead(read);
+    } finally {
+      this.restoringConversation = false;
+    }
   }
 
   /** Restores the compaction record of a resumed conversation (its saved `history`), so completeness stays truthful. */
@@ -5555,14 +5567,18 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   /**
    * A resumed start does not auto-detect the model (that is a request to the provider, possibly inside its window):
    * while the model is still the "local-model" placeholder and no provider was chosen, the restored record's model
-   * replaces it; without one, detection waits for the first step after the resumed wait. An explicit model is kept.
+   * replaces it; without one (or from another endpoint), detection waits for the first step after the resumed wait.
+   * An explicit model is kept. An explicit `--model local-model` cannot be told from the placeholder and is replaced.
    */
-  private adoptRecordedModel(recorded: string | undefined): void {
+  private adoptRecordedModel(recorded: string | undefined, recordedEndpoint?: string): void {
     if (this.config.provider || this.config.model !== "local-model") {
       this.modelDetectionDeferred = false;
       return;
     }
-    if (recorded && recorded !== "local-model") {
+    // "default" is what a record without a model is saved with. A record made on another endpoint names a model
+    // that may not exist on this one: detected after the wait instead.
+    const sameEndpoint = !recordedEndpoint || this.clientEndpoints(this.client).some((e) => comparableEndpoint(e) === comparableEndpoint(recordedEndpoint));
+    if (recorded && recorded !== "local-model" && recorded !== "default" && sameEndpoint) {
       this.setDefaultModel(recorded);
       this.modelDetectionDeferred = false;
     } else {

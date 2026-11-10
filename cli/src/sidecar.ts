@@ -931,6 +931,7 @@ export class SidecarServer {
         updatedAt: now,
         workspace: config.workspace,
         model: config.model,
+        endpoint: config.endpoint,
         messages,
         unverifiedChangesPending: agent.hasUnverifiedChanges(),
         tokenStats: agent.getTokenStats(),
