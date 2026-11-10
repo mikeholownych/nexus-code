@@ -40,24 +40,52 @@ export interface WorktreeMergeResult {
  */
 export class WorktreeManager {
   private workspace: string;
+  /** Storage anchor: the main checkout, where `.nexus/worktrees/` and the git exclude live. */
   private gitRoot: string;
+  /** The checkout the session runs in: tasks start from its HEAD and merge back into its branch. */
+  private checkoutRoot: string;
 
   constructor(workspace: string) {
     this.workspace = path.resolve(workspace);
+    this.checkoutRoot = this.resolveCheckoutRoot();
     this.gitRoot = this.resolveGitRoot();
   }
 
-  private resolveGitRoot(): string {
+  /** The top level of the checkout that contains the workspace (a linked worktree stays itself). */
+  private resolveCheckoutRoot(): string {
     try {
-      const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      return execFileSync("git", ["rev-parse", "--show-toplevel"], {
         cwd: this.workspace,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
-      return out;
     } catch {
       return this.workspace;
     }
+  }
+
+  /**
+   * The main checkout, found from the git common dir so that a manager created inside a linked worktree (including
+   * one of its own `.nexus/worktrees/<id>` directories) still stores its worktrees with the repository that owns them.
+   * Git operations that depend on "the current branch" use checkoutRoot instead.
+   *
+   * Known limit: this needs the common dir to be `<main checkout>/.git`. With `git init --separate-git-dir` (or any
+   * other layout) Git records no way back from the git directory to the main checkout, and `git worktree list` itself
+   * names the git directory, so the manager anchors on the checkout it runs in. `nexus worktree` refuses such
+   * repositories (docs/WORKTREES.md).
+   */
+  private resolveGitRoot(): string {
+    try {
+      const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+        cwd: this.workspace,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (path.basename(common) === ".git") return fs.realpathSync(path.dirname(common));
+    } catch {
+      // fall through to the checkout root
+    }
+    return this.checkoutRoot;
   }
 
   public isGitRepo(): boolean {
@@ -109,9 +137,9 @@ export class WorktreeManager {
     }
 
     try {
-      // Add worktree branching from startPoint (default HEAD)
+      // Add worktree branching from startPoint (default HEAD): HEAD is the originating checkout's, not the main one's
       execFileSync("git", ["worktree", "add", "-b", branch, worktreePath, startPoint || "HEAD"], {
-        cwd: this.gitRoot,
+        cwd: this.checkoutRoot,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -195,7 +223,7 @@ export class WorktreeManager {
         : [];
       if (statusLines.length > 0) return true;
       const ahead = execFileSync("git", ["rev-list", "--count", `HEAD..nexus/${taskId}`], {
-        cwd: this.gitRoot,
+        cwd: this.checkoutRoot,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
@@ -224,11 +252,11 @@ export class WorktreeManager {
     }
   }
 
-  /** Dirty developer state prevents an automatic merge from disturbing the root checkout. */
+  /** Dirty developer state prevents an automatic merge from disturbing the originating checkout. */
   public rootHasChanges(): boolean {
     try {
       return execFileSync("git", ["status", "--porcelain"], {
-        cwd: this.gitRoot,
+        cwd: this.checkoutRoot,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim().length > 0;
@@ -341,17 +369,17 @@ export class WorktreeManager {
       let commitCount = hasCommits ? 1 : 0;
       try {
         const countOut = execFileSync("git", ["rev-list", "--count", `HEAD..${branch}`], {
-          cwd: this.gitRoot,
+          cwd: this.checkoutRoot,
           encoding: "utf-8",
           stdio: ["ignore", "pipe", "ignore"],
         }).trim();
         commitCount = Math.max(commitCount, parseInt(countOut, 10) || 0);
       } catch {}
 
-      // 2. Merge speculative branch into active branch
+      // 2. Merge speculative branch into the active branch of the originating checkout
       if (commitCount > 0) {
         execFileSync("git", ["merge", "--no-ff", branch, "-m", commitMessage], {
-          cwd: this.gitRoot,
+          cwd: this.checkoutRoot,
           encoding: "utf-8",
         });
       }
