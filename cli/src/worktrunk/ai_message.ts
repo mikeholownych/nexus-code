@@ -74,7 +74,6 @@ export async function generateMergeMessage(
     const message = cleanReply(reply);
     return message ? { message, note: "note: commit message written by the configured model." } : fallback("the model's reply was unusable");
   } catch (err) {
-    if (err instanceof WorktreeError) throw err;
     return fallback(`the model request failed (${redactSecrets((err as Error).message).slice(0, 80)})`);
   } finally {
     if (timer) clearTimeout(timer);

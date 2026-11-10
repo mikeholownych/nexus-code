@@ -128,7 +128,6 @@ export function resolveMergeContext(ctx: WorktreeContext, options: MergeOptions 
   const targetEntry = repo.entries.find((entry) => entry.branch === targetName);
   if (!targetEntry || targetEntry.prunable) throw new WorktreeError(`target ${shownBranch(targetName)} is not checked out in any worktree; run \`worktree switch ${shownBranch(targetName)}\` first`);
 
-
   const gitDir = gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
   const busy = inProgress(gitDir);
   if (busy) throw new WorktreeError(`a ${busy.op} is already in progress in this worktree; finish it (${busy.cmd}) and run merge again`);

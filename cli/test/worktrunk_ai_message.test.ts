@@ -194,3 +194,59 @@ test("clean branch exactly one commit ahead applies generated message from --ai-
     assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat: updated single commit message");
   } finally { f.cleanup(); }
 });
+
+test("reason option containing --ai-message as a value does not invoke the model", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    let called = false;
+    const r = await f.run(
+      dir,
+      ["merge", "--no-verify-receipt", "--reason", "--ai-message", "main"],
+      async () => { called = true; return "feat: ai commit"; },
+    );
+    assert.equal(r.success, true, r.output);
+    assert.equal(called, false, "model should not have been called");
+  } finally { f.cleanup(); }
+});
+
+test("extra positional arguments fail with usage error before calling the model", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    let called = false;
+    const r = await f.run(
+      dir,
+      ["merge", "main", "extra", "--ai-message"],
+      async () => { called = true; return "feat: ai commit"; },
+    );
+    assert.equal(r.success, false);
+    assert.match(r.output, /usage: worktree merge/);
+    assert.equal(called, false, "model should not have been called when usage is invalid");
+  } finally { f.cleanup(); }
+});
+
+test("merge --no-squash with multiple clean commits does not call the model", async () => {
+  const f = fixture();
+  try {
+    const made = await f.run(f.repo, ["switch", "-c", "feat/multi", "--no-copy"]);
+    assert.equal(made.success, true, made.output);
+    const dir = path.join(f.repo, ".nexus", "worktrees", "feat-multi");
+    fs.writeFileSync(path.join(dir, "f1.txt"), "1\n");
+    git(dir, "add", "f1.txt");
+    git(dir, "commit", "-m", "commit one");
+    fs.writeFileSync(path.join(dir, "f2.txt"), "2\n");
+    git(dir, "add", "f2.txt");
+    git(dir, "commit", "-m", "commit two");
+
+    let called = false;
+    const r = await f.run(
+      dir,
+      ["merge", "--no-squash", "--ai-message", "--no-verify-receipt", "--reason", "waiver"],
+      async () => { called = true; return "feat: should not be used"; },
+    );
+    assert.equal(r.success, true, r.output);
+    assert.equal(called, false, "model should not be called when --no-squash preserves multiple commits");
+    assert.doesNotMatch(r.output, /commit message written by the configured model/);
+  } finally { f.cleanup(); }
+});

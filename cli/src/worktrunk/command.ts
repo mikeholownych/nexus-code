@@ -227,10 +227,13 @@ export interface AsyncDeps {
 /** Like `runWorktreeCommand`, plus the opt-in `merge --ai-message`. Read-only mode never reaches the model. */
 export async function runWorktreeCommandAsync(tokens: string[], run: RunContext, deps: AsyncDeps = {}): Promise<CommandResult> {
   const name = tokens[0] ? canonical(tokens[0]) : undefined;
-  if (name !== "merge" || run.readOnly || !tokens.includes("--ai-message")) return runWorktreeCommand(tokens, run);
+  if (name !== "merge" || run.readOnly) return runWorktreeCommand(tokens, run);
   let parsed: Parsed;
   try { parsed = parse(SPECS.merge, tokens.slice(1)); } catch { return runWorktreeCommand(tokens, run); }
-  if (parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
+  if (!parsed.flags.has("ai-message") || parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
+  if (parsed.positionals.length > 1) {
+    return formatCommandError(new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]"));
+  }
   const ctx: WorktreeContext = { cwd: run.cwd, home: run.home ?? homeDir(), readOnly: false };
 
   const mergeOptions = mergeOptionsFrom(parsed);
@@ -241,11 +244,19 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
     return formatCommandError(err);
   }
 
+  const willWriteCommit = mctx.state.total > 0 || (!mergeOptions.noSquash && mctx.ahead > 1) || (mctx.ahead === 1);
+  if (!willWriteCommit) {
+    try {
+      return mergeWorktree(ctx, mergeOptions);
+    } catch (err) {
+      return formatCommandError(err);
+    }
+  }
+
   const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS)
     .catch(() => ({ message: undefined, note: "note: could not prepare the model request; using the deterministic commit message." }));
 
   try {
-    if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message]");
     const options: MergeOptions = { ...mergeOptions, ...(generated.message ? { message: generated.message } : {}) };
     const result = mergeWorktree(ctx, options);
     return { ...result, output: `${generated.note}\n${result.output}` };
