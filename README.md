@@ -2,10 +2,10 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/mikeholownych/nexus-code?include_prereleases&style=flat-square&color=blue)](https://github.com/mikeholownych/nexus-code/releases)
 [![CI Status](https://img.shields.io/github/actions/workflow/status/mikeholownych/nexus-code/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/mikeholownych/nexus-code/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT%20%7C%20Apache--2.0-yellow.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20x86__64-orange?style=flat-square)](docs/DEVELOPMENT.md#release-package)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-brightgreen?style=flat-square)](https://nodejs.org/)
-[![Rust](https://img.shields.io/badge/Rust-2021%20Stable-red?style=flat-square)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-2024%20%7C%201.85%2B-red?style=flat-square)](https://www.rust-lang.org/)
 
 **Nexus Code** is an open-source, local-first AI coding agent and execution harness. Designed for developers who demand high performance, rigorous security sandboxing, transparent human-in-the-loop control, and seamless Git worktree isolation, Nexus Code pairs a high-level TypeScript agent with native Rust workspace tooling and a rich Ratatui terminal user interface (TUI).
 
@@ -169,10 +169,10 @@ Every command executed by the agent runs in an isolated sandbox:
 - **Network Egress Guard:** Unauthorized network calls from within the sandbox are blocked unless explicitly permitted by policy.
 
 ### 🌲 Git Worktree Isolation
-Eliminate uncommitted workspace pollution with native worktree branches:
-- Run speculative features in `.nexus/worktrees/<branch>` with zero risk to your checked-out files.
-- Command `/worktree switch -c feat/auth` creates an isolated checkout with selected cached dependencies.
-- `/worktree merge` fast-forwards verified work with automated verification receipts and amend squash messages.
+Eliminate uncommitted workspace pollution with native named worktrees (see [docs/WORKTREES.md](docs/WORKTREES.md)):
+- Run speculative features under `.nexus/worktrees/<branch>` (or configured sibling directories) with zero risk to your checked-out files.
+- Command `nexus worktree switch -c <branch>` (or session `/worktree switch -c <branch>`) creates an isolated branch checkout with dependency caching.
+- Fast-forward verified changes, prune integrated worktrees, and inspect status with `nexus worktree list --json`.
 
 ### 🤝 Human-in-the-Loop (HITL) Approvals
 Stay in complete control of changes:
@@ -186,9 +186,9 @@ Stay in complete control of changes:
 - Enforces strict cloud cost ceilings via `NEXUS_CLOUD_MAX_COST_USD`.
 
 ### 🔌 Universal Model Support & MCP
-- Compatible with all standard local engines: llama.cpp, Ollama, vLLM, LM Studio, and Jan.
-- Direct cloud API support: Anthropic Claude 3.5 Sonnet / Haiku, OpenAI GPT-4o / o1.
-- Full support for Model Context Protocol (MCP) clients and servers to expose external tools and database access.
+- Local inference: native support for llama.cpp, Ollama, and vLLM (see [docs/LOCAL_SERVERS.md](docs/LOCAL_SERVERS.md)).
+- Cloud provider support with secret redaction and configurable cost governance (see [docs/CLOUD_PROVIDERS.md](docs/CLOUD_PROVIDERS.md)).
+- Full support for Model Context Protocol (MCP) clients and servers to expose external tools and resource context.
 
 ---
 
@@ -196,16 +196,17 @@ Stay in complete control of changes:
 
 | Command | Shortcut | Description |
 |---|---|---|
-| `/help` | `?` | Displays available slash commands and keyboard shortcuts |
-| `/model` | `Ctrl+P` | Opens the model picker and provider connection dialog |
-| `/worktree` | — | Manages isolated git worktree branches (`list`, `switch`, `merge`, `prune`) |
-| `/diff` | — | Inspects pending and uncommitted workspace changes |
-| `/commit` | — | Generates an AI commit message and stages changes |
-| `/status` | — | Shows active workspace, branch, model, and approval posture |
-| `/tokens` | — | Displays current context window consumption and headroom |
-| `/receipt` | — | Inspects verification receipts for the last completed turn |
-| `/clear` | `Ctrl+L` | Resets conversation history for a fresh task turn |
-| `/exit` | `Ctrl+C` | Restores terminal screen and prints session resume command |
+| `/help` | `?` | List the slash commands and keybindings |
+| `/model` | `Ctrl+P` | Choose a model from any connected provider (Ctrl+P connects one) |
+| `/status` | — | Show workspace, model, mode, endpoint, and session info |
+| `/worktree` | — | Manage speculative and named git worktrees (`status`, `merge`, `discard`, `list`, `switch`, `remove`) |
+| `/diff` | — | Show uncommitted changes as a syntax-highlighted unified diff |
+| `/commit` | — | Commit changes; suggests a conventional commit message if omitted |
+| `/doctor` | — | Diagnose configuration, endpoint, engine, shell, and session state |
+| `/tokens` | — | Display context window use and session token totals |
+| `/receipt` | — | Show turn outcome, verifier evidence, and validation receipt |
+| `/clear` | — | Reset conversation context for a clean task turn |
+| `/exit` | `Ctrl+C` | Cleanly exit session and print session resume command |
 
 ---
 
@@ -214,7 +215,7 @@ Stay in complete control of changes:
 ### Prerequisites
 - **Linux x86-64** with glibc 2.35+
 - **Node.js** 22.0.0 or higher & `npm`
-- **Rust** 1.80+ & `cargo`
+- **Rust** 2024 edition (MSRV 1.85.0+, pinned toolchain 1.95.0 in `rust-toolchain.toml`) & `cargo`
 - **C compiler & linker** (`gcc` or `clang`), `make`, `pkg-config`
 
 ### Build Steps
@@ -288,4 +289,6 @@ We welcome contributions from the community! Nexus Code is built with rigorous e
 
 ## License
 
-Nexus Code is open-source software licensed under the [MIT License](LICENSE).
+Nexus Code is dual-licensed open-source software:
+- The TypeScript agent, CLI, and sidecar (`cli/`) and root repository files are licensed under the **[MIT License](LICENSE)**.
+- The Rust workspace tools and native terminal UI (`core/`) are licensed under the **[Apache-2.0 License](https://www.apache.org/licenses/LICENSE-2.0)** (see `core/Cargo.toml`).
