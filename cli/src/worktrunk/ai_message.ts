@@ -10,7 +10,6 @@
 import type { ChatMessage } from "../types.js";
 import { redactSecrets } from "../ui.js";
 import { git } from "./git.js";
-import { WorktreeError } from "./core.js";
 import type { MergeContextInfo, MergeOptions } from "./merge.js";
 
 export type Completer = (messages: ChatMessage[], signal: AbortSignal) => Promise<string | undefined>;

@@ -7,7 +7,6 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runWorktreeCommand, runWorktreeCommandAsync } from "../src/worktrunk/command.js";
 import { lazyProviderCompleter } from "../src/worktrunk/provider.js";
-import { generateMergeMessage } from "../src/worktrunk/ai_message.js";
 import type { Completer } from "../src/worktrunk/ai_message.js";
 
 function git(cwd: string, ...args: string[]): string {
