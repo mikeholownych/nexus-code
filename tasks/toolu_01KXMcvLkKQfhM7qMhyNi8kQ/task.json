@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01KXMcvLkKQfhM7qMhyNi8kQ",
+  "agent_id": "a10052a86b8ce6e05",
+  "task_description": "Independent review of PR 476",
+  "token_usage": {
+    "input_tokens": 116,
+    "cache_creation_tokens": 77945,
+    "cache_read_tokens": 3787757,
+    "output_tokens": 17500,
+    "api_call_count": 50
+  },
+  "started_at": "2026-11-10T14:59:00.863704096Z",
+  "completed_at": "2026-11-10T15:05:30.960643544Z"
+}
