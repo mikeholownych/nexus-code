@@ -92,7 +92,6 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
   const skipped: string[] = [];
   let files = 0;
   let bytes = 0;
-  const perRoot = new Map<string, number>();
 
   const walk = (rel: string, root: string): void => {
     const abs = path.join(sourceRoot, rel);
@@ -104,7 +103,7 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
       const target = fs.readlinkSync(abs);
       const resolved = path.resolve(path.dirname(abs), target);
       if (path.isAbsolute(target) || !insideOrEqual(sourceRoot, resolved)) { skipped.push(`${rel}: symbolic link leaves the tree`); return; }
-      count(root, 0);
+      count(0);
       ops.push({ kind: "symlink", rel, root, target });
       return;
     }
@@ -115,13 +114,12 @@ function copyIgnoredUnchecked(ctx: WorktreeContext, options: CopyOptions): Comma
       return;
     }
     if (!stat.isFile()) { skipped.push(`${rel}: not a regular file`); return; }
-    count(root, stat.size);
+    count(stat.size);
     ops.push({ kind: "file", rel, root, size: stat.size, atimeMs: stat.atimeMs, mtimeMs: stat.mtimeMs });
   };
-  const count = (root: string, size: number): void => {
+  const count = (size: number): void => {
     files++;
     bytes += size;
-    perRoot.set(root, (perRoot.get(root) ?? 0) + 1);
     if (files > limits.maxFiles) throw new CopyLimitError(`refusing to copy: more than ${limits.maxFiles} files match (file limit); narrow ${INCLUDE_FILE}`);
     if (bytes > limits.maxBytes) throw new CopyLimitError(`refusing to copy: the files exceed the ${limits.maxBytes} byte limit; narrow ${INCLUDE_FILE}`);
   };
