@@ -436,8 +436,9 @@ export class OperationGit {
     if (!entry || !fs.existsSync(entry.worktree)) throw new Error(`unit ${unitId}'s worktree is not available to snapshot`);
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-candidate-snapshot-"));
     // Pinned like the candidate diff: nothing the (model-written) worktree configures may run here. No inherited GIT_*,
-    // no fsmonitor or hooks, no clean filter (attributes come from the empty tree), a filter assigned through
-    // $GIT_DIR/info/attributes refuses the snapshot instead of being run.
+    // no fsmonitor or hooks, and attributes from a stripped copy of the worktree's own .gitattributes (filter and diff
+    // drivers removed, text/eol kept), so no clean filter runs; a driver assigned through $GIT_DIR/info/attributes
+    // refuses the snapshot instead of being run.
     let attrs: ReturnType<typeof attributesTree>;
     const run = (args: string[], options: { input?: string; ownIndex?: boolean } = {}) => execFileSync("git", [...GIT_SAFE, ...args], {
       cwd: entry.worktree, encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS,
