@@ -125,6 +125,25 @@ describe("named worktree binding", () => {
     } finally { f.cleanup(); }
   });
 
+  test("a saved task whose entropy-looking branch worktree was removed afterwards still loads, with the binding reported as missing", () => {
+    const f = fixture();
+    try {
+      const branch = "feature-async-job-12345";
+      assert.equal(runWorktreeCommand(["switch", "-c", branch, "--no-copy"], { cwd: f.repo, home: f.home }).success, true);
+      const dir = path.join(f.repo, ".nexus", "worktrees", branch);
+      const manager = new DurableStateManager({ baseDir: f.tasks, workspacePaths: [WorkspacePath.fromSelectedWorkspace(f.repo), WorkspacePath.fromSelectedWorkspace(dir)] });
+      manager.saveTaskState(stateFor(f, "task-removed", { ...namedBinding(f), worktreePath: dir, branch }));
+      const removed = runWorktreeCommand(["remove", branch, "--delete-unmerged"], { cwd: f.repo, home: f.home });
+      assert.equal(removed.success, true, removed.output);
+      assert.equal(fs.existsSync(dir), false);
+      const reader = new DurableStateManager({ baseDir: f.tasks, workspacePaths: [WorkspacePath.fromSelectedWorkspace(f.repo)] });
+      const loaded = reader.loadTaskState("task-removed"); // used to throw: the removed worktree no longer validates the branch
+      assert.equal(loaded.worktreeBinding?.branch, branch);
+      const recovered = reader.recoverTaskState("task-removed", { expectedWorkspace: f.repo });
+      assert.notEqual(recovered.worktreeStatus, "consistent");
+    } finally { f.cleanup(); }
+  });
+
   test("save applies the same binding rules as load: a version without a kind is refused, not defaulted", () => {
     const f = fixture();
     try {
@@ -331,5 +350,27 @@ describe("agent run with a named worktree", { skip: !isSandboxAvailable("auto") 
       if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
       f.cleanup();
     }
+  });
+});
+
+describe("relocating after an explicit merge", () => {
+  test("the named binding is released when its worktree was merged away, so the session can move to the target", () => {
+    const f = fixture();
+    try {
+      const config = buildConfig({ workspace: f.dir, endpoint: "http://127.0.0.1:9/v1", model: "m" } as any);
+      const agent = new AutonomousAgent(config as any);
+      try {
+        (agent as any).activeWorktree = { taskId: "task-named", worktreePath: f.dir, branch: "feat/bind", kind: "named" };
+        fs.writeFileSync(path.join(f.dir, "w.txt"), "w\n");
+        git(f.dir, "add", "w.txt");
+        git(f.dir, "commit", "-q", "-m", "w");
+        const merged = runWorktreeCommand(["merge", "--no-verify-receipt", "--reason", "test"], { cwd: f.dir, home: f.home });
+        assert.equal(merged.success, true, merged.output);
+        assert.equal(fs.existsSync(f.dir), false);
+        agent.setWorkspace(f.repo); // used to throw: "Cannot switch workspaces while a speculative worktree is unresolved"
+        assert.equal(agent.getActiveWorktree(), undefined);
+        assert.equal(fs.realpathSync(agent.getConfig().workspace), fs.realpathSync(f.repo));
+      } finally { agent.shutdown(); }
+    } finally { f.cleanup(); }
   });
 });
