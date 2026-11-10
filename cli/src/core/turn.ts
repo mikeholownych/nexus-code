@@ -214,6 +214,11 @@ export interface InterruptionRecord {
   outstandingToolSettled?: boolean;
   /** Tool calls the model asked for that were never dispatched. */
   undispatchedToolCalls: number;
+  /**
+   * phase `provider_wait` only: when the provider may be asked again (the planned next attempt, which honours its
+   * Retry-After). A resumed turn waits until then before its first request (bounded by the recovery deadline).
+   */
+  providerEligibleAt?: string;
 }
 
 /**
@@ -253,6 +258,11 @@ export interface TurnResult {
   capacity?: CapacityRecord | null;
   /** Steps of this turn whose inference had to recover the provider (resumed or not). */
   providerRecovery?: ProviderRecoveryRecord[];
+  /**
+   * Provider windows restored by a resume that this turn did not wait out (it ran on another endpoint, or was cancelled
+   * while waiting) and a later turn on those endpoints still owes. Persisted with the turn, so a restart keeps them.
+   */
+  pendingProviderWindows?: Array<{ eligibleAt: string; endpoint?: string }>;
   /** Workspace has changes that no passing verifier run covers (may predate this turn). */
   unverifiedChangesPending: boolean;
   finishedAt: string;

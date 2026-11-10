@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 import { ensureGitExclude } from "./core/git_exclude.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 export type FlightEventType =
   | "session_start"
@@ -136,7 +137,7 @@ export class FlightRecorder {
       recordedAt: new Date().toISOString(),
       workspace: this.workspace,
       model: config.model,
-      endpoint: config.endpoint,
+      endpoint: persistableEndpoint(config.endpoint),
       initialCommit,
       initialBranch,
       taskPrompt: config.taskPrompt,
