@@ -8,6 +8,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
 import { CheckpointManager } from "../src/checkpoint.js";
+import { runWorktreeCommand } from "../src/worktrunk/command.js";
+import { isSandboxAvailable } from "../src/sandbox.js";
 import { hasPendingStateRestore, restoreFromSources } from "../src/core/state_restore.js";
 import { SidecarOptions, SidecarServer } from "../src/sidecar.js";
 import { slashCatalog } from "../src/slash/catalog.js";
@@ -1190,5 +1192,68 @@ describe("sidecar process", () => {
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("SidecarServer: a named worktree is established before the first turn's checkpoint", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
+  async function withNamedSession(
+    prepare: (repo: string, home: string) => void,
+    fn: (rig: { server: SidecarServer; send: Rig["send"]; repo: string; dir: string }) => Promise<void>,
+  ): Promise<void> {
+    const gw = await startGateway(readOnlyTurn);
+    const repo = makeRepo();
+    const home = makeHome();
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    const dir = path.join(repo, ".nexus", "worktrees", "feat-named");
+    let app: ApplicationCore | undefined;
+    try {
+      prepare(repo, home);
+      app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true, worktree: true, worktreeBranch: "feat/named" } as any);
+      const server = new SidecarServer({ app, mode: "auto", write: () => {} });
+      server.start();
+      try {
+        await fn({ server, send: (msg) => server.handleLine(JSON.stringify({ v: 1, ...msg })), repo, dir });
+      } finally {
+        await server.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
+        await server.idle();
+      }
+    } finally {
+      app?.shutdown();
+      await gw.close();
+      if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  test("a reused worktree: the first prompt is snapshotted in it, so /undo cannot reach back to an earlier session's checkpoint", async () => {
+    const created = (repo: string, home: string) => {
+      const made = runWorktreeCommand(["switch", "-c", "feat/named", "--no-copy"], { cwd: repo, home });
+      assert.equal(made.success, true, made.output);
+      const dir = path.join(repo, ".nexus", "worktrees", "feat-named");
+      fs.writeFileSync(path.join(dir, "early.txt"), "early session\n");
+      new CheckpointManager(dir).createCheckpoint("earlier session");
+      fs.writeFileSync(path.join(dir, "prelaunch.txt"), "edited between the sessions\n");
+    };
+    await withNamedSession(created, async ({ server, send, repo, dir }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+      await server.idle();
+      const inDir = new CheckpointManager(dir).listCheckpoints();
+      assert.equal(inDir.length, 2, "this session's first turn has its own snapshot in the worktree");
+      assert.equal(new CheckpointManager(repo).listCheckpoints().length, 0, "the launch checkout is not snapshotted");
+      await send({ type: "slash", id: "u1", command: "undo" });
+      await server.idle();
+      assert.equal(fs.readFileSync(path.join(dir, "prelaunch.txt"), "utf8"), "edited between the sessions\n", "work from before this launch survives /undo");
+    });
+  });
+
+  test("a worktree the first prompt creates: that prompt is snapshotted in it, not in the launch checkout", async () => {
+    await withNamedSession(() => {}, async ({ server, repo, dir, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+      await server.idle();
+      assert.equal(new CheckpointManager(dir).listCheckpoints().length, 1);
+      assert.equal(new CheckpointManager(repo).listCheckpoints().length, 0);
+    });
   });
 });

@@ -13,6 +13,9 @@ import { buildConfig } from "../src/config.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { isSandboxAvailable } from "../src/sandbox.js";
 import { WorktreeManager } from "../src/worktree.js";
+import { ApplicationCore } from "../src/core/app.js";
+import { CheckpointManager } from "../src/checkpoint.js";
+import { InteractiveRepl } from "../src/repl.js";
 import { startGateway } from "./helpers/fixtures.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -453,5 +456,41 @@ describe("relocating after an explicit merge", () => {
         assert.equal(fs.realpathSync(agent.getConfig().workspace), fs.realpathSync(f.repo));
       } finally { agent.shutdown(); }
     } finally { f.cleanup(); }
+  });
+});
+
+describe("REPL turn checkpoint with a named worktree", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
+  test("the first prompt's snapshot is taken in the named worktree (reused or created), not the launch checkout", async () => {
+    for (const reuse of [true, false]) {
+      const f = fixture(); // feat/bind exists
+      const home = process.env.HOME;
+      process.env.HOME = f.home;
+      const branch = reuse ? "feat/bind" : "feat/fresh";
+      const dir = path.join(f.repo, ".nexus", "worktrees", branch.replace("/", "-"));
+      const app = new ApplicationCore({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 4, temperature: 0, workspace: f.repo, shell: "bash", worktree: true, worktreeBranch: branch } as any);
+      try {
+        if (reuse) {
+          fs.writeFileSync(path.join(dir, "early.txt"), "early session\n");
+          new CheckpointManager(dir).createCheckpoint("earlier session");
+          fs.writeFileSync(path.join(dir, "prelaunch.txt"), "edited between the sessions\n");
+        }
+        const repl = Object.create(InteractiveRepl.prototype) as any;
+        repl.config = app.getConfig();
+        repl.agent = app.getAgent();
+        repl.checkpointManager = app.getCheckpointManager();
+        assert.equal(await repl.prepareTurnCheckpoint("Turn: first"), true);
+        assert.equal(new CheckpointManager(dir).listCheckpoints().length, reuse ? 2 : 1, `${branch}: snapshot in the worktree`);
+        assert.equal(new CheckpointManager(f.repo).listCheckpoints().length, 0, `${branch}: launch checkout not snapshotted`);
+        if (reuse) {
+          const undone = repl.checkpoints().rollbackLast();
+          assert.equal(undone.success, true, undone.message);
+          assert.equal(fs.readFileSync(path.join(dir, "prelaunch.txt"), "utf8"), "edited between the sessions\n", "pre-launch work survives /undo");
+        }
+      } finally {
+        app.shutdown();
+        if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+        f.cleanup();
+      }
+    }
   });
 });

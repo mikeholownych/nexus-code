@@ -560,6 +560,12 @@ export class SidecarServer {
   private async turn(turnId: string, prompt: string | any[], label: string, checkpoint: string, signal: AbortSignal, step = false): Promise<void> {
     const agent = this.app.getAgent();
     let allowSensitiveCheckpoint = false;
+    try {
+      agent.enterNamedWorktreeBeforeTurn(); // the snapshot is of the worktree the turn edits
+    } catch (err) {
+      this.emit({ type: "error", id: turnId, code: "INTERNAL", message: formatSafeSidecarText(errorText(err)) });
+      return;
+    }
     if (this.app.getConfig().readOnly) {
       // Read-only turns cannot change the workspace, so a workspace rollback snapshot is unnecessary.
       agent.setCheckpointReadOnlyFallback(false);

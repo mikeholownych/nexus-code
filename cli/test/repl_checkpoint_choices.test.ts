@@ -25,6 +25,7 @@ function makeRepl(choice: string, checkpoint: (allowSensitive: boolean) => void 
     },
   };
   repl.agent = {
+    enterNamedWorktreeBeforeTurn: () => {},
     setCheckpointReadOnlyFallback: (value: boolean) => fallback.push(value),
     setApprovalMode: () => {},
   };

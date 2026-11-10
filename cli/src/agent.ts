@@ -7301,6 +7301,42 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     };
   }
 
+  private assertWorktreeRunnable(): void {
+    if (!this.worktreeManager.isGitRepo()) {
+      throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
+    }
+    const configuredSandbox = this.config.sandbox === "bwrap" || this.config.sandbox === "docker"
+      ? this.config.sandbox
+      : "auto";
+    if (!isSandboxAvailable(configuredSandbox)) {
+      throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
+    }
+  }
+
+  /** Creates or reuses the `--worktree-branch` worktree and moves the session into it. */
+  private establishNamedWorktree(): void {
+    if (this.isReadOnly() || this.config.dryRun) {
+      throw new Error("Cannot create or reuse a named worktree in read-only or dry-run mode.");
+    }
+    const named = this.worktreeManager.ensureNamedWorktree(this.config.worktreeBranch!, process.env.HOME || os.homedir());
+    // The binding belongs to this durable task; the worktree itself is addressed by its branch.
+    this.activeWorktree = { taskId: this.currentTaskId, worktreePath: named.path, branch: named.branch, kind: "named" };
+    this.originalWorkspace = this.config.workspace;
+    this.switchWorktreeWorkspace(named.path);
+    console.log(pc.cyan(`🌲 ${named.created ? "Created" : "Reusing"} named git worktree: ${named.branch} at ${named.path}`));
+  }
+
+  /**
+   * For a frontend that snapshots the workspace before a turn: moves the session into the `--worktree-branch` worktree
+   * first, so that snapshot (and a later `/undo`) is of the worktree the turn edits, not the launch checkout. Does
+   * nothing once the session is in it, without the flag, or where `run` would refuse anyway (read-only, dry run).
+   */
+  public enterNamedWorktreeBeforeTurn(): void {
+    if (!this.config.worktree || !this.config.worktreeBranch || this.activeWorktree || this.isReadOnly() || this.config.dryRun) return;
+    this.assertWorktreeRunnable();
+    this.establishNamedWorktree();
+  }
+
   /**
    * A named binding (restored by `--resume` or kept between turns) must still be the registered linked worktree on its
    * recorded branch, whatever flags this launch has: another terminal can switch its branch or replace it while stopped.
@@ -7335,30 +7371,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (retained && this.config.worktreeBranch && this.config.worktreeBranch !== retained.branch) {
         throw new Error(`Cannot start a new task: this session runs in the named worktree ${retained.branch} at ${retained.worktreePath}; start a new session for ${this.config.worktreeBranch}.`);
       }
-      if (!this.worktreeManager.isGitRepo()) {
-        throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
-      }
-      const configuredSandbox = this.config.sandbox === "bwrap" || this.config.sandbox === "docker"
-        ? this.config.sandbox
-        : "auto";
-      if (!isSandboxAvailable(configuredSandbox)) {
-        throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
-      }
+      this.assertWorktreeRunnable();
       if (retained) {
         // Still the worktree it was: another terminal can switch its branch or replace it between turns, so the same
         // validation as the durable binding (Git lists it on the recorded branch, pointer, registry) runs again.
         this.assertNamedBindingCurrent();
         console.log(pc.cyan(`🌲 Continuing in named git worktree: ${retained.branch} at ${retained.worktreePath}`));
       } else if (this.config.worktreeBranch) {
-        if (this.isReadOnly() || this.config.dryRun) {
-          throw new Error("Cannot create or reuse a named worktree in read-only or dry-run mode.");
-        }
-        const named = this.worktreeManager.ensureNamedWorktree(this.config.worktreeBranch, process.env.HOME || os.homedir());
-        // The binding belongs to this durable task; the worktree itself is addressed by its branch.
-        this.activeWorktree = { taskId: this.currentTaskId, worktreePath: named.path, branch: named.branch, kind: "named" };
-        this.originalWorkspace = this.config.workspace;
-        this.switchWorktreeWorkspace(named.path);
-        console.log(pc.cyan(`🌲 ${named.created ? "Created" : "Reusing"} named git worktree: ${named.branch} at ${named.path}`));
+        this.establishNamedWorktree();
       } else {
         const wt = this.worktreeManager.createWorktree();
         this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch, kind: "task" };

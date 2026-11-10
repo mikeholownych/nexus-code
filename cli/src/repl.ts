@@ -222,6 +222,7 @@ export class InteractiveRepl {
 
   /** Ask before a turn when a rollback checkpoint would persist sensitive workspace content. */
   private async prepareTurnCheckpoint(name: string): Promise<boolean> {
+    this.agent.enterNamedWorktreeBeforeTurn(); // the snapshot is of the worktree the turn edits
     if (this.config.readOnly) {
       this.agent.setCheckpointReadOnlyFallback(false);
       return true;
