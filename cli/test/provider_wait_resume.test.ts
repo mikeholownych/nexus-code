@@ -976,6 +976,7 @@ describe("the resumed provider wait (fake recovery clock)", () => {
   test("persisted endpoints carry origin and path only: no userinfo, query or fragment; comparison ignores them", async () => {
     const url = "https://u:p@host.example:8443/v1/?api_key=SECRET#frag";
     assert.equal(persistableEndpoint(url), "https://host.example:8443/v1");
+    assert.equal(persistableEndpoint(undefined), undefined, "a missing endpoint stays missing (partial configurations)");
     assert.equal(comparableEndpoint(url), comparableEndpoint("HTTPS://host.example:8443/v1"));
     const ctx = await interruptedThenRestored({});
     try {

@@ -14,8 +14,14 @@ function parse(endpoint: string): URL | undefined {
   }
 }
 
-/** Origin and path of an endpoint, without userinfo, query or fragment (an unparseable value is returned trimmed of those parts as far as possible). */
-export function persistableEndpoint(endpoint: string): string {
+/**
+ * Origin and path of an endpoint, without userinfo, query or fragment. An unparseable value is cut of those parts as
+ * far as it can be; a missing endpoint (a test or partial configuration) stays missing.
+ */
+export function persistableEndpoint(endpoint: string): string;
+export function persistableEndpoint(endpoint: string | undefined): string | undefined;
+export function persistableEndpoint(endpoint: string | undefined): string | undefined {
+  if (typeof endpoint !== "string") return undefined;
   const url = parse(endpoint);
   if (!url) return endpoint.trim().replace(/[?#].*$/, "").replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1").replace(/\/+$/, "");
   return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
