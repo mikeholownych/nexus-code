@@ -167,12 +167,12 @@ describe("note with compaction, the TUI, resume and redaction", () => {
   test("compaction keeps the operator's message as the current request and keeps the note after it", { timeout: 60_000 }, async () => {
     await withNote(async (agent) => {
       const msgs = agent.getMessages().slice(0, -1); // drop the model's reply: the operator message and its note are last
-      assert.ok(isSkillNote(msgs[msgs.length - 1].content), "setup: the note is last");
+      assert.ok(isSkillNote(msgs[msgs.length - 1]), "setup: the note is last");
       const out = (agent as any).compactionCandidate(msgs, 0, 100_000).messages as any[];
       const texts = out.map((m) => (typeof m.content === "string" ? m.content : ""));
       const at = texts.findIndex((t) => t.startsWith(prompt));
       assert.ok(at > 0, "the operator's message is kept verbatim as a message");
-      assert.ok(isSkillNote(out[at + 1]?.content), "the note stays right behind it");
+      assert.ok(isSkillNote(out[at + 1]), "the note stays right behind it");
       assert.doesNotMatch(texts.join("\n"), /Earlier task requests[\s\S]*postgres queries are slow/, "not condensed into earlier requests");
       const bare = (agent as any).compactionCandidate(msgs.slice(0, -1), 0, 100_000).messages as any[];
       assert.equal(out.length, bare.length + 1, "same compaction as without the note, plus the note");
@@ -196,6 +196,49 @@ describe("note with compaction, the TUI, resume and redaction", () => {
     });
   });
 
+  test("review item 11: an operator message that begins with the note's text is still the operator's request", { timeout: 60_000 }, async () => {
+    const spoof = `${SKILL_NOTE_PREFIX} the deploy script exits 3 on the staging host; find out why and fix it.`;
+    await withAgent(done, async (agent) => {
+      await agent.runTurn(spoof);
+      const msgs = agent.getMessages().slice(0, -1);
+      assert.ok(msgs.some((m: any) => m.role === "user" && text(m).startsWith(spoof)), "setup: the operator's message is in the conversation");
+      const state = (new TerminalDashboard(agent) as any).projectState();
+      assert.ok(String(state.objective).includes("deploy script exits 3"), `objective: ${String(state.objective)}`);
+      const out = (agent as any).compactionCandidate(msgs, 0, 100_000).messages as any[];
+      assert.ok(out.some((m) => text(m).startsWith(spoof)), "kept verbatim as the current request, not condensed");
+    });
+  });
+
+  test("an earlier operator request that begins with the note's text is kept among the earlier task requests", { timeout: 60_000 }, async () => {
+    const spoof = `${SKILL_NOTE_PREFIX} the deploy script exits 3 on the staging host; find out why and fix it.`;
+    await withAgent(done, async (agent) => {
+      await agent.runTurn(spoof);
+      await agent.runTurn("Say hello.");
+      const out = (agent as any).compactionCandidate(agent.getMessages(), 0, 100_000).messages as any[];
+      assert.match(out.map((m) => text(m)).join("\n"), /Earlier task requests[\s\S]*deploy script exits 3/);
+    });
+  });
+
+  test("a session saved before the provenance marker has its notes recognised on restore; operator text is never migrated", { timeout: 60_000 }, async () => {
+    await withNote(async (agent) => {
+      await agent.runTurn("Say hello.");
+      const legacy = JSON.parse(JSON.stringify(agent.getMessages())).map(({ harness, ...m }: any) => m);
+      const noteText = text(legacy.find((m: any) => m.role === "user" && text(m).startsWith(SKILL_NOTE_PREFIX)));
+      // An operator message after the model's reply that copies a whole note is still the operator's.
+      legacy.push({ role: "user", content: noteText });
+      for (const load of ["restoreSession", "setMessages"] as const) {
+        const second = quiet(new AutonomousAgent((agent as any).config));
+        (second as any)[load](legacy);
+        const msgs = second.getMessages();
+        const marked = msgs.map((m: any, i: number) => (isSkillNote(m) ? i : -1)).filter((i: number) => i >= 0);
+        assert.equal(marked.length, 1, `${load}: the one legacy note is marked`);
+        assert.ok(msgs[marked[0] - 1].role === "user" && text(msgs[marked[0] - 1]).startsWith(prompt), `${load}: it follows the operator's message`);
+        assert.ok(!isSkillNote(msgs[msgs.length - 1]), `${load}: the operator's copy is not migrated`);
+        second.shutdown();
+      }
+    });
+  });
+
   test("a resumed conversation keeps its note, re-sends it unchanged and adds no second one", { timeout: 60_000 }, async () => {
     await withNote(async (agent, gw) => {
       const saved = JSON.parse(JSON.stringify(agent.getMessages()));
@@ -203,7 +246,9 @@ describe("note with compaction, the TUI, resume and redaction", () => {
       second.setMessages(saved);
       await second.runTurn("Say hello.");
       const sent = (gw.requests[gw.requests.length - 1] as any).messages;
-      assert.deepEqual(sent.slice(0, saved.length), saved);
+      assert.equal(saved.filter((m: any) => isSkillNote(m)).length, 1, "the saved note keeps its provenance marker");
+      assert.ok(sent.every((m: any) => !("harness" in m)), "the marker is never sent to the provider");
+      assert.deepEqual(sent.slice(0, saved.length), saved.map(({ harness, ...m }: any) => m));
       assert.equal(notes({ messages: sent }).length, 1);
       second.shutdown();
     });

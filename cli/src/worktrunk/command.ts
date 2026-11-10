@@ -59,7 +59,10 @@ export function isLegacyWorktreeArgs(args: string): boolean {
   return LEGACY.has(firstWord(args));
 }
 
-/** True when `args` (the text after `/worktree` or `nexus worktree`) only inspects. Empty means list. */
+/**
+ * True when `args` (the text after `/worktree` or `nexus worktree`) only inspects. Empty args are the legacy speculative
+ * `status` form that the slash entry points run (read-only); only the `nexus worktree` command maps no subcommand to `list`.
+ */
 export function isReadOnlyWorktreeArgs(args: string): boolean {
   const sub = firstWord(args);
   if (isLegacyWorktreeArgs(sub)) return sub === "" || sub === "status";

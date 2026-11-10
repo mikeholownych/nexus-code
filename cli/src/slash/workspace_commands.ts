@@ -10,6 +10,7 @@ import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { PolicyContext } from "../core/approval_policy.js";
 import { isLegacyWorktreeArgs, runWorktreeCommand, tokenizeWorktreeArgs } from "../worktrunk/command.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
+import { MAX_PASTE } from "../protocol.js";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
@@ -249,9 +250,6 @@ function copy(ctx: SlashContext): SlashOutcome {
   const result = copyToClipboard(text);
   return result.success ? reply("copy", `Copied ${label} to the clipboard.`) : reply("copy", `Clipboard error: ${result.error}`, false);
 }
-
-/** Keeps the escaped `slash.result` line under the TUI's 1 MiB protocol line cap. */
-const MAX_PASTE = 100_000;
 
 function paste(): SlashOutcome {
   const result = readFromClipboard();
