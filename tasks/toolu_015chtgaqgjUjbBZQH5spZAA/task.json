@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_015chtgaqgjUjbBZQH5spZAA",
+  "agent_id": "a3249bc817fdff1a3",
+  "task_description": "Review #446 head after main merge",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 62792,
+    "cache_read_tokens": 676366,
+    "output_tokens": 5020,
+    "api_call_count": 13
+  },
+  "started_at": "2026-11-10T22:10:28.194494888Z",
+  "completed_at": "2026-11-10T22:16:13.511108131Z"
+}
