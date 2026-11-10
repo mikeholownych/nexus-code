@@ -44,7 +44,7 @@ function unpublishedSubmodules(dir: string): string[] {
     if (line[0] === "-") continue; // not initialised here: no objects of its own
     const sub = line.slice(1).trim().split(/\s+/)[1];
     if (!sub) continue;
-    const local = git(path.join(dir, sub), ["rev-list", "-n", "1", "HEAD", "--not", "--remotes"], { allowFailure: true });
+    const local = git(path.join(dir, sub), ["rev-list", "-n", "1", "HEAD", "--branches", "--tags", "--glob=refs/stash*", "--not", "--remotes"], { allowFailure: true });
     if (local.status !== 0 || local.stdout.trim()) found.push(sub);
   }
   return found;
@@ -73,6 +73,9 @@ function inProgress(gitDir: string): InProgressOp | undefined {
   }
   if (fs.existsSync(path.join(gitDir, "CHERRY_PICK_HEAD"))) {
     return { op: "cherry-pick", cmd: "git cherry-pick --continue / --abort" };
+  }
+  if (fs.existsSync(path.join(gitDir, "REVERT_HEAD")) || fs.existsSync(path.join(gitDir, "sequencer"))) {
+    return { op: "revert", cmd: "git revert --continue / --abort" };
   }
   return undefined;
 }
@@ -201,7 +204,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (!options.noRemove) {
     // The merged work is on the target. Only ignored output (build caches) may still be in the worktree; it goes with
     // it. Anything else left (edits inside a submodule cannot be committed from here, for one) is never forced away.
-    const left = statusOf(source.path);
+    const left = statusOf(source.path, { ignoreSubmodules: "none" });
     const unpublished = left.total > 0 ? [] : unpublishedSubmodules(source.path);
     if (unpublished.length > 0) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${unpublished.map((sub) => redactSecrets(sub)).join(", ")} has a commit that is on no remote branch, and removing the worktree would delete its only copy. Push it from there, then run \`worktree remove\`. The merge itself is done.`);
@@ -275,7 +278,7 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
       if (now - touched < minAge) { counts.young++; continue; }
       const reason = integratedReason(repo, entry.head, targetSha);
       if (!reason) { keep(entry, `not merged into ${shownBranch(target!)}`); continue; }
-      const dirty = statusOf(entry.path, { ignored: true });
+      const dirty = statusOf(entry.path, { ignored: true, ignoreSubmodules: "none" });
       if (dirty.total > 0) { keep(entry, `dirty (${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked)`); continue; }
       if (dirty.ignored > 0 && !options.discardIgnored) { keep(entry, `${dirty.ignored} ignored path(s); pass --discard-ignored to prune it anyway`); continue; }
       if (options.dryRun) {

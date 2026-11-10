@@ -131,9 +131,10 @@ function kindOf(repo: Repo, entry: WorktreeEntry, registry: Registry): "main" | 
 export interface Dirty { staged: number; modified: number; untracked: number; conflicted: number; ignored: number; total: number }
 
 /** One `git status --porcelain=v2 -z` call. `ignored` counts ignored paths only when asked (removal safety). */
-export function statusOf(dir: string, options: { ignored?: boolean } = {}): Dirty {
+export function statusOf(dir: string, options: { ignored?: boolean; ignoreSubmodules?: string } = {}): Dirty {
   const args = ["status", "--porcelain=v2", "-z", options.ignored ? "--untracked-files=all" : "--untracked-files=normal"];
   if (options.ignored) args.push("--ignored=matching");
+  if (options.ignoreSubmodules) args.push(`--ignore-submodules=${options.ignoreSubmodules}`);
   const out = git(dir, args, { timeoutMs: PER_CALL_MS }).stdout;
   const dirty: Dirty = { staged: 0, modified: 0, untracked: 0, conflicted: 0, ignored: 0, total: 0 };
   const records = out.split("\0");
@@ -447,7 +448,7 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
     } else {
       const before = verifiedWorktreeDir(repo, entry);
       if (!options.force) {
-        const dirty = statusOf(entry.path, { ignored: true });
+        const dirty = statusOf(entry.path, { ignored: true, ignoreSubmodules: "none" });
         if (dirty.total + (options.discardIgnored ? 0 : dirty.ignored) > 0) {
           throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
         }
@@ -495,8 +496,11 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
         }
       }
       try {
+        if (options.discardIgnored && !options.force) {
+          git(entry.path, ["clean", "-f", "-X", "-d"], { allowFailure: true });
+        }
         removeSeams.beforeGitRemove?.(entry);
-        git(repo.cwd, ["worktree", "remove", ...(options.force || options.discardIgnored ? ["--force"] : []), "--end-of-options", entry.path]);
+        git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
       } catch (err) {
         // Git refused (an initialised submodule, a file that appeared): the worktree stays, so put it back on its
         // detached HEAD and drop the guard branch (unless a commit already moved it, then it is the only reference).
