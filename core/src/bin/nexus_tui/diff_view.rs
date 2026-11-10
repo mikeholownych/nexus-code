@@ -402,13 +402,13 @@ struct Cell {
 }
 
 /// The visible stand-in for a character a terminal would interpret: control pictures for C0 controls (`␛` for ESC),
-/// `␡` for DEL, `<U+XXXX>` for C1 controls and bidirectional overrides. `None` for ordinary characters.
+/// `␡` for DEL, `<U+XXXX>` for C1 controls, bidirectional overrides, zero-width and soft-hyphen characters and line/paragraph separators. `None` for ordinary characters.
 pub fn visible_control(c: char) -> Option<String> {
     let code = c as u32;
     match code {
         0x00..=0x1f => char::from_u32(0x2400 + code).map(String::from),
         0x7f => Some("␡".to_string()),
-        0x80..=0x9f | 0x61c | 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069 => Some(format!("<U+{code:04X}>")),
+        0x80..=0x9f | 0xad | 0x61c | 0x200b..=0x200f | 0x2028..=0x202e | 0x2060 | 0x2066..=0x2069 | 0xfeff => Some(format!("<U+{code:04X}>")),
         _ => None,
     }
 }
@@ -1242,6 +1242,16 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
         // A run with no space in reach still breaks at the edge.
         let solid = DLine { kind: Kind::Added, old: None, new: Some(6), text: "x".repeat(80), no_eol: false };
         assert!(line_rows(&solid, geo, Fit::Wrap, &pal, None).len() > 2);
+    }
+
+    #[test]
+    fn invisible_and_line_separator_characters_get_visible_stand_ins() {
+        for c in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{2028}', '\u{2029}', '\u{feff}', '\u{ad}'] {
+            let shown = visible_control(c).unwrap_or_else(|| panic!("{:04X} is invisible and has no stand-in", c as u32));
+            assert_eq!(shown, format!("<U+{:04X}>", c as u32));
+            assert!(!safe_text(&format!("a{c}b")).contains(c));
+        }
+        assert_eq!(visible_control('é'), None);
     }
 
     #[test]

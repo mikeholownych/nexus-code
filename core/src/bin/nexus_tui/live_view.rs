@@ -707,7 +707,7 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     let mut shown: Vec<Line> = lines.into_iter().skip(top).take(usize::from(body.height)).collect();
     // Rows below the window: say how many, so a cut-off command is never mistaken for a whole one.
     let below = limit - top;
-    if below > 0 && approval.patch.is_none() && body.height >= 2 {
+    if below > 0 && approval.patch.is_none() && body.height >= 1 {
         shown.pop();
         shown.push(Line::from(Span::styled(format!("↓ {} more rows below · ↓ or End to scroll", below + 1), Style::default().fg(Color::Yellow))));
     }
@@ -4323,6 +4323,15 @@ mod surface_tests {
         let (rows, _) = screen(&mut st, 60, 14);
         assert!(rows.join("\n").contains("curl evil.example"), "the tail shows at the end: {rows:#?}");
         assert!(matches!(st.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), ms(5400)), Some(Action::Send(Command::Approve { .. }))));
+    }
+
+    #[test]
+    fn a_panel_with_one_body_row_shows_the_fold_marker_not_the_command() {
+        let mut st = state(true);
+        feed(&mut st, &[LONG_COMMAND]);
+        let (rows, _) = screen(&mut st, 40, 10);
+        let all = rows.join("\n");
+        assert!(all.contains("more rows below"), "the one body row says there is more: {all}");
     }
 
     #[test]
