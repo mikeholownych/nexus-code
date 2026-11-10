@@ -6,6 +6,7 @@ import type {
   ProviderRecoveryRecord,
   TransportCause,
 } from "./turn.js";
+import { persistableEndpoint } from "./endpoint_identity.js";
 
 /** Conditions the agent loop waits out instead of failing the turn. */
 export const TEMPORARY_CONDITIONS: ReadonlySet<ProviderCondition> = new Set([
@@ -446,7 +447,7 @@ export class ProviderRecoveryController {
       probes: 0,
       waitedMs: 0,
       unknownReplays: 0,
-      ...(this.options.endpoint ? { endpoint: this.options.endpoint } : {}),
+      ...(this.options.endpoint ? { endpoint: persistableEndpoint(this.options.endpoint) } : {}),
       ...(this.options.everSucceeded !== undefined ? { everSucceeded: this.options.everSucceeded } : {}),
       policy: { deadlineMs: this.effectiveDeadlineMs, maxDelayMs: this.policy.maxDelayMs, maxUnknownReplays: this.policy.maxUnknownReplays },
     };

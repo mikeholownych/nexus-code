@@ -82,6 +82,7 @@ import {
 } from "./core/turn.js";
 import { createHash } from "node:crypto";
 import { HybridSearchEngine } from "./embeddings.js";
+import { comparableEndpoint, persistableEndpoint } from "./core/endpoint_identity.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
@@ -822,17 +823,6 @@ function gitIndexIdentity(workspace: string): string {
 /** Why work that would call the provider (a `/compact --llm`, a subagent) is not started while a resumed turn's provider window is open. */
 const RESUMED_WINDOW_REASON = "the provider is still inside the retry window it asked for";
 
-/** An endpoint URL for equality: scheme and host lower-cased, trailing slashes dropped. */
-function comparableEndpoint(endpoint: string): string {
-  const trimmed = endpoint.trim();
-  try {
-    const url = new URL(trimmed);
-    return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}${url.search}`;
-  } catch {
-    return trimmed.replace(/\/+$/, "");
-  }
-}
-
 /** What an archive read means for a resumed conversation; undefined when the archive is whole. */
 function describeArchiveRead(read: ArchiveRead<ChatMessage>): string | undefined {
   const notes: string[] = [];
@@ -1563,7 +1553,7 @@ export class AutonomousAgent {
         workspacePath: this.workspacePathIdentity.value,
         workspace: this.workspacePathIdentity.value,
         model: this.config.model,
-        endpoint: this.config.endpoint,
+        endpoint: persistableEndpoint(this.config.endpoint),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         status: "in_progress",
@@ -1596,7 +1586,7 @@ export class AutonomousAgent {
       workspacePath: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       workspace: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       model: this.config.model,
-      endpoint: this.config.endpoint,
+      endpoint: persistableEndpoint(this.config.endpoint),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: turn ? lifecycleStatusForTurn(turn) : this.verifiedWorktreeCompletion ? "completed" : "in_progress",
@@ -2571,6 +2561,8 @@ export class AutonomousAgent {
   }
 
   public setModel(newModel: string): void {
+    // A model chosen now (/model) is never replaced by a deferred or in-flight detection.
+    this.modelDetectionDeferred = false;
     this.config.model = newModel;
     this.client.setModel(newModel);
     // In planner/coder mode an explicit /model choice applies to both tiers.
@@ -4647,7 +4639,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
       // A helper's agent builds its own clients from this config, so its first request would reach the provider a
       // resumed turn is still waiting out. Declined for now; the model can go on without it or ask again later.
-      if ([this.config.endpoint, ...(this.config.fallbackEndpoints ?? []), this.config.plannerEndpoint, this.config.coderEndpoint].some((endpoint) => this.resumedWindowCovers(endpoint))) {
+      if (this.helperWindowOpen()) {
         return {
           success: false,
           output: "",
@@ -5567,7 +5559,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   /**
    * A resumed start does not auto-detect the model (that is a request to the provider, possibly inside its window):
    * while the model is still the "local-model" placeholder and no provider was chosen, the restored record's model
-   * replaces it; without one (or from another endpoint), detection waits for the first step after the resumed wait.
+   * replaces it, when the record says it was chosen on this endpoint; without one (or from another or an unknown
+   * endpoint), detection waits for the first step after the resumed wait.
    * An explicit model is kept. An explicit `--model local-model` cannot be told from the placeholder and is replaced.
    */
   private adoptRecordedModel(recorded: string | undefined, recordedEndpoint?: string): void {
@@ -5577,7 +5570,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     }
     // "default" is what a record without a model is saved with. A record made on another endpoint names a model
     // that may not exist on this one: detected after the wait instead.
-    const sameEndpoint = !recordedEndpoint || this.clientEndpoints(this.client).some((e) => comparableEndpoint(e) === comparableEndpoint(recordedEndpoint));
+    const sameEndpoint = Boolean(recordedEndpoint) && this.clientEndpoints(this.client).some((e) => comparableEndpoint(e) === comparableEndpoint(recordedEndpoint!));
     if (recorded && recorded !== "local-model" && recorded !== "default" && sameEndpoint) {
       this.setDefaultModel(recorded);
       this.modelDetectionDeferred = false;
@@ -5603,7 +5596,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.pendingModelDetection = (async () => {
       try {
         const models = await this.client.listModels();
-        if (models.length > 0) this.setDefaultModel(models[0]);
+        if (models.length > 0 && this.config.model === "local-model") this.setDefaultModel(models[0]);
       } catch {
         // Keep the placeholder; the request will surface the connection problem.
       }
@@ -5617,7 +5610,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.modelDetectionDeferred = false;
     try {
       const models = await this.client.listModels();
-      if (models.length > 0) this.setDefaultModel(models[0]);
+      if (models.length > 0 && this.config.model === "local-model") this.setDefaultModel(models[0]);
     } catch {
       // Keep the placeholder; the request will surface the connection problem.
     }
@@ -5667,6 +5660,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     const open = this.resumedProviderWaits.filter((w) => Date.parse(w.eligibleAt) > this.recoveryClock.now());
     if (!open.length) return {};
     return { pendingProviderWindows: open.map((w) => ({ eligibleAt: w.eligibleAt, ...(w.endpoint ? { endpoint: w.endpoint } : {}) })) };
+  }
+
+  /** True while a restored window covers any endpoint a helper's configuration may use (main, failover, planner, coder). */
+  private helperWindowOpen(): boolean {
+    const endpoints = [this.config.endpoint, ...(this.config.fallbackEndpoints ?? []), this.config.plannerEndpoint, this.config.coderEndpoint]
+      .filter((endpoint): endpoint is string => Boolean(endpoint));
+    return this.windowsCovering(endpoints).length > 0;
   }
 
   /** True while the main connection's provider is inside a window restored by a resume (hosts hold background requests). */

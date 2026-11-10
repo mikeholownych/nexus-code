@@ -26,6 +26,7 @@ import { DEFAULT_RECOVERY_POLICY, type RecoveryClock, type RecoveryPolicy } from
 import type { TurnResult } from "../src/core/turn.js";
 import { fakeClock, startGateway as startRecoveryGateway } from "./helpers/provider_fixture.js";
 import { autoDetectModel } from "../src/config.js";
+import { comparableEndpoint, persistableEndpoint } from "../src/core/endpoint_identity.js";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tsxLoader = import.meta.resolve("tsx");
@@ -278,6 +279,37 @@ describe("start-up model detection outside a provider window", () => {
       }
     });
   }
+});
+
+describe("a record written by `nexus run` and resumed against another endpoint", () => {
+  test("carries its endpoint, and a resume on a different endpoint without -m detects instead of adopting the model", { timeout: 150_000 }, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-otherep-"));
+    const ws = makeWorkspace(home);
+    const { gw, arrivals } = await provider(RETRY_AFTER_SECS);
+    const used: string[] = [];
+    const other = await startFixtureGateway((_n, body): Reply => {
+      used.push(String(body?.model));
+      return { kind: "text", content: "The answer is 42." };
+    }, { models: () => [{ id: "other" }] });
+    try {
+      const { taskId } = await suspendDuringProviderWait(ws, home, gw, arrivals, RETRY_AFTER_SECS);
+      const session = readers(home, ws).session(taskId);
+      const task = readers(home, ws).task(taskId);
+      assert.equal(session.endpoint, gw.url, "the session record written by `nexus run` names its endpoint");
+      assert.equal(task.endpoint, gw.url, "and so does the task record");
+      const side = sidecar(["--resume", taskId, "-w", ws, "-e", other.url, "-s", "4", "--yes"], { cwd: ws, home });
+      await until(() => side.notices().some((n) => /^Resumed session/.test(String(n.e.text))), "the resume notice");
+      side.send({ type: "prompt.submit", id: "t1", text: "continue" });
+      await until(() => side.events.some((x) => x.e.type === "turn.result"), "the turn's result", 60_000);
+      assert.equal(used[0], "other", "the model served on the new endpoint was detected, not the old record's `m`");
+      await side.shutdown();
+    } finally {
+      killChildren();
+      await gw.close();
+      await other.close();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("an idle sidecar resume keeps what it restored", () => {
@@ -734,12 +766,12 @@ describe("the resumed provider wait (fake recovery clock)", () => {
         return ["detected"];
       };
       a.config.model = "local-model";
-      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model" }, noArchive);
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model", endpoint: a.client.endpoint }, noArchive);
       assert.equal(a.config.model, "recorded-model", "the record's model replaces the placeholder");
       assert.equal(a.client.getModel(), "recorded-model");
       assert.equal(lists, 0);
       a.config.model = "explicit-model";
-      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model" }, noArchive);
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model", endpoint: a.client.endpoint }, noArchive);
       assert.equal(a.config.model, "explicit-model", "an explicit model is never replaced");
     } finally {
       await ctx.cleanup();
@@ -800,7 +832,7 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       a.config.plannerModel = "planner-model";
       a.plannerClient = Object.assign(Object.create(a.client), { setModel: (m: string) => { a.plannerSet = m; }, getModel: () => a.plannerSet ?? "planner-model" });
       a.plannerSet = "planner-model";
-      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model" }, noArchive);
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model", endpoint: a.client.endpoint }, noArchive);
       assert.equal(a.client.getModel(), "recorded-model", "the main client takes the recorded model");
       assert.equal(a.plannerSet, "planner-model", "an explicit planner model is not overwritten");
     } finally {
@@ -870,7 +902,7 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       (ctx.resumed as any).durable = true; // as in the sidecar and the REPL, whose agents persist progress
       (ctx.resumed as any).hasPendingModifications = false; // a fresh agent: the restore marks changes pending and saves
       (ctx.resumed as any).setProgressListener(() => { saves++; });
-      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model" }, noArchive);
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model", endpoint: (ctx.resumed as any).client.endpoint }, noArchive);
       assert.equal(saves, 0, "a progress save during the restore would write the record without its last turn, history or model");
       assert.equal(eligibleAtOf(ctx.resumed.getLastTurnResult()!), eligibleAtOf(ctx.interrupted), "and the restored turn is in place afterwards");
     } finally {
@@ -891,8 +923,70 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model", endpoint: "http://elsewhere.invalid:9/v1" }, noArchive);
       assert.equal(a.config.model, "local-model", "the model of another endpoint may not exist here: detected after the wait instead");
       a.config.model = "local-model";
-      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model", endpoint: a.client.endpoint + "/" }, noArchive);
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model" }, noArchive);
+      assert.equal(a.config.model, "local-model", "a record that does not say where its model was chosen (older, or written by a path that did not record it) is not trusted either");
+      a.config.model = "local-model";
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted, model: "recorded-model", endpoint: a.client.endpoint + "/?x=1" }, noArchive);
       assert.equal(a.config.model, "recorded-model", "the same endpoint (spelled differently) supplies it");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("an explicit /model chosen after a resume that deferred detection is never replaced by the lookup", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      let release: (m: string[]) => void = () => {};
+      a.client.listModels = () => new Promise<string[]>((resolve) => { release = resolve; });
+      a.config.model = "local-model";
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted }, noArchive);
+      assert.equal(a.modelDetectionDeferred, true, "precondition: detection is deferred");
+      ctx.resumed.setModel("chosen");
+      assert.equal(a.modelDetectionDeferred, false, "choosing a model cancels the deferred detection");
+      // And a lookup already in flight does not apply its result over a model chosen meanwhile.
+      a.config.model = "local-model";
+      const detecting = ctx.resumed.detectPlaceholderModel();
+      ctx.resumed.setModel("chosen-meanwhile");
+      release(["served-model"]);
+      await detecting;
+      assert.equal(a.config.model, "chosen-meanwhile");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("a subagent is allowed when the restored window belongs to an endpoint this configuration does not use", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      assert.equal(a.helperWindowOpen(), true, "precondition: the recorded endpoint is the configured one");
+      a.config.endpoint = "http://elsewhere.invalid:9/v1";
+      a.client.endpoints = ["http://elsewhere.invalid:9/v1"];
+      a.config.plannerEndpoint = undefined;
+      a.config.coderEndpoint = undefined;
+      assert.equal(a.helperWindowOpen(), false, "unset planner/coder endpoints do not make every window apply");
+      a.config.coderEndpoint = ctx.interrupted.providerRecovery?.at(-1)?.endpoint;
+      assert.equal(a.helperWindowOpen(), true, "but a coder endpoint that is the recorded provider still does");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("persisted endpoints carry origin and path only: no userinfo, query or fragment; comparison ignores them", async () => {
+    const url = "https://u:p@host.example:8443/v1/?api_key=SECRET#frag";
+    assert.equal(persistableEndpoint(url), "https://host.example:8443/v1");
+    assert.equal(comparableEndpoint(url), comparableEndpoint("HTTPS://host.example:8443/v1"));
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      a.config.endpoint = url;
+      a.client.endpoints = [url];
+      const state = ctx.resumed.checkpointDurableState();
+      assert.equal(state.endpoint, "https://host.example:8443/v1");
+      assert.ok(!JSON.stringify(state).includes("SECRET"), "no secret from the query string in the checkpoint");
+      const recovery = a.stateManager.loadTaskState(a.currentTaskId)?.lastTurn?.providerRecovery ?? [];
+      for (const record of recovery) assert.ok(!String(record.endpoint ?? "").includes("SECRET"));
     } finally {
       await ctx.cleanup();
     }

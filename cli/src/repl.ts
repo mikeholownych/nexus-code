@@ -35,6 +35,7 @@ import { HunkStager } from "./stager.js";
 import { TurnResult, lifecycleStatusForTurn } from "./core/turn.js";
 import { buildSessionExport } from "./session_export.js";
 import { SensitivePersistenceError } from "./core/persistence_protection.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 interface PatchHunk {
   header: string;
@@ -291,7 +292,7 @@ export class InteractiveRepl {
       updatedAt: new Date().toISOString(),
       workspace: this.config.workspace,
       model: this.config.model,
-      endpoint: this.config.endpoint,
+      endpoint: persistableEndpoint(this.config.endpoint),
       messages,
       unverifiedChangesPending: this.agent.hasUnverifiedChanges(),
       tokenStats: this.agent.getTokenStats(),

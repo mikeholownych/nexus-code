@@ -16,6 +16,7 @@ import { withStateStoreGuard } from "./core/state_store_guard.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
 import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 // Re-export core state primitives
 export * from "./core/state.js";
@@ -129,7 +130,7 @@ export class SessionManager {
       workspacePath: workspace,
       workspace,
       model: session.model || "default",
-      ...(session.endpoint ? { endpoint: session.endpoint } : {}),
+      ...(session.endpoint ? { endpoint: persistableEndpoint(session.endpoint) } : {}),
       createdAt: session.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: session.status || "in_progress",

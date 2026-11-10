@@ -66,6 +66,7 @@ import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog 
 import { routeSlash } from "./slash/router.js";
 import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -931,7 +932,7 @@ export class SidecarServer {
         updatedAt: now,
         workspace: config.workspace,
         model: config.model,
-        endpoint: config.endpoint,
+        endpoint: persistableEndpoint(config.endpoint),
         messages,
         unverifiedChangesPending: agent.hasUnverifiedChanges(),
         tokenStats: agent.getTokenStats(),
