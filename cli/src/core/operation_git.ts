@@ -440,20 +440,25 @@ export class OperationGit {
     // drivers removed, text/eol kept), so no clean filter runs; a driver assigned through $GIT_DIR/info/attributes
     // refuses the snapshot instead of being run.
     let attrs: ReturnType<typeof attributesTree>;
-    const run = (args: string[], options: { input?: string; ownIndex?: boolean } = {}) => execFileSync("git", [...GIT_SAFE, ...args], {
-      cwd: entry.worktree, encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS,
-      env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch, "index"), attrs), maxBuffer: 256 * 1024 * 1024,
-      ...(options.input === undefined ? {} : { input: options.input }),
-    }).trim();
+    // `raw` keeps the output verbatim (NUL-separated listings: a path may start or end with whitespace); scalar results
+    // are trimmed.
+    const run = (args: string[], options: { input?: string; ownIndex?: boolean; raw?: boolean } = {}) => {
+      const out = execFileSync("git", [...GIT_SAFE, ...args], {
+        cwd: entry.worktree, encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS,
+        env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch, "index"), attrs), maxBuffer: 256 * 1024 * 1024,
+        ...(options.input === undefined ? {} : { input: options.input }),
+      });
+      return options.raw ? out : out.trim();
+    };
     try {
       const ownIndex = run(["rev-parse", "--path-format=absolute", "--git-path", "index"], { ownIndex: true });
       if (fs.existsSync(ownIndex)) fs.copyFileSync(ownIndex, path.join(scratch, "index"));
       else run(["read-tree", "HEAD"]);
-      const files = [...run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0").filter(Boolean)];
+      const files = [...run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { raw: true }).split("\0").filter(Boolean)];
       // The worktree's own .gitattributes without filter and diff assignments, as for the candidate diff, so text/eol
       // normalization applies to the snapshot exactly as it would to the tester's own commit.
       attrs = attributesTree(entry.worktree, scratch, files);
-      const refusal = driverRefusal((args, input) => run(args, { input }), files);
+      const refusal = driverRefusal((args, input) => run(args, { input, raw: true }), files);
       if (refusal) throw new Error(refusal);
       run(["add", "-A"]);
       const tree = run(["write-tree"]);
