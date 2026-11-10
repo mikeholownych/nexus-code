@@ -153,7 +153,7 @@ function significantLines(data: Buffer): string[] {
  * The attribute source for a diff: the worktree's .gitattributes files with filter and diff assignments removed, as a
  * tree in a private object directory (nothing is written to the repository). Undefined when there are none.
  */
-function attributesTree(root: string, scratch: string, files: string[]): { tree: string; objects: string } | undefined {
+export function attributesTree(root: string, scratch: string, files: string[]): { tree: string; objects: string } | undefined {
   const sources = files.filter((f) => path.posix.basename(f) === ".gitattributes").flatMap((f) => {
     try {
       const full = path.join(root, f);
@@ -245,6 +245,21 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     if (removed.length) {
       git(["--literal-pathspecs", "rm", "--cached", "--force", "--quiet", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${removed.join("\0")}\0` });
     }
+    // The real index can hold a mode the base lacks while the file's mode on disk is not trusted (core.filemode=false,
+    // `git update-index --chmod=+x`). The scratch index only knows the base's, so carry over each tracked path's current
+    // executable bit (the mode is read from the real index; nothing the repository configures runs to read it).
+    const modeOf = (entries: string[]) => new Map(entries.filter(Boolean).flatMap((e) => {
+      const m = /^(\d{6}) ([0-9a-f]+) (\d)\t([\s\S]*)$/.exec(e);
+      return m && m[3] === "0" ? [[m[4], { mode: m[1], oid: m[2] }] as const] : [];
+    }));
+    const baseModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"));
+    const modeChanges: string[] = [];
+    for (const [file, own] of modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER, ownIndex: true }).split("\0"))) {
+      const atBaseEntry = baseModes.get(file);
+      const exec = (m: string) => m === "100644" || m === "100755";
+      if (atBaseEntry && atBaseEntry.mode !== own.mode && exec(atBaseEntry.mode) && exec(own.mode)) modeChanges.push(`${own.mode} ${atBaseEntry.oid}\t${file}\0`);
+    }
+    if (modeChanges.length) git(["update-index", "-z", "--index-info"], { input: modeChanges.join("") });
     const removedSet = new Set(removed);
     const added = new Set([
       ...untracked.filter((p) => !removedSet.has(p)),
