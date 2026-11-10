@@ -14,6 +14,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { envWithoutConfiguredHooks } from "../core/git_hook_guard.js";
+import { PATHSPEC_MODE_ENV } from "../git.js";
 import { redactSecrets } from "../ui.js";
 
 /** Hook events Nexus-initiated worktree commands must never fire. */
@@ -32,11 +33,12 @@ export const PINNED_GIT_FLAGS: readonly string[] = [
   "-c", "core.quotePath=false",
 ];
 
-/** Variables that would redirect Git at another repository, object store, diff driver or ref namespace. */
-const SCRUBBED_ENV = [
+/** Variables that would redirect Git at another repository, object store, diff driver or ref namespace, or change how pathspecs are read. */
+export const SCRUBBED_ENV = [
   "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_EXTERNAL_DIFF", "GIT_REPLACE_REF_BASE", "GIT_PAGER", "GIT_SSH_COMMAND",
   "GIT_ASKPASS", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_PREFIX", "GIT_CEILING_DIRECTORIES",
+  ...PATHSPEC_MODE_ENV,
 ];
 
 export class GitError extends Error {

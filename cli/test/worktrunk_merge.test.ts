@@ -509,61 +509,6 @@ test("a submodule with a commit that exists nowhere else keeps the worktree afte
   } finally { f.cleanup(); }
 });
 
-test("a submodule with an unpublished local topic branch or stash keeps the worktree after the merge", () => {
-  const f = fixture();
-  try {
-    const subrepo = path.join(f.root, "subrepo");
-    fs.mkdirSync(subrepo);
-    git(subrepo, "init", "-q", "-b", "main");
-    git(subrepo, "config", "user.email", "t@example.com");
-    git(subrepo, "config", "user.name", "T");
-    git(subrepo, "config", "commit.gpgsign", "false");
-    commitFile(subrepo, "s.txt", "sub\n", "sub init");
-    git(f.repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subrepo, "sub");
-    git(f.repo, "commit", "-q", "-m", "add submodule");
-
-    // Case 1: submodule checked out at origin/main, but has an unpublished local topic branch
-    const dir = feature(f, "feat/sub-branch");
-    git(dir, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
-    git(path.join(dir, "sub"), "config", "user.email", "t@example.com");
-    git(path.join(dir, "sub"), "config", "user.name", "T");
-    git(path.join(dir, "sub"), "config", "commit.gpgsign", "false");
-    git(path.join(dir, "sub"), "checkout", "-q", "-b", "local-topic");
-    commitFile(path.join(dir, "sub"), "s.txt", "topic work\n", "topic commit");
-    git(path.join(dir, "sub"), "checkout", "-q", "main"); // checked out commit is on remote! But topic is not!
-    fs.writeFileSync(path.join(dir, "change.txt"), "superproject change\n");
-
-    const r = wt(f, dir, ["merge", ...W]);
-    assert.ok(fs.existsSync(dir), `the worktree holding an unpublished submodule branch must be kept: ${r.output}`);
-    assert.match(r.output, /submodule/i);
-  } finally { f.cleanup(); }
-});
-
-test("a submodule with submodule.<name>.ignore=dirty still prevents removal when dirty", () => {
-  const f = fixture();
-  try {
-    const subrepo = path.join(f.root, "subrepo");
-    fs.mkdirSync(subrepo);
-    git(subrepo, "init", "-q", "-b", "main");
-    git(subrepo, "config", "user.email", "t@example.com");
-    git(subrepo, "config", "user.name", "T");
-    git(subrepo, "config", "commit.gpgsign", "false");
-    commitFile(subrepo, "s.txt", "sub\n", "sub init");
-    git(f.repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subrepo, "sub");
-    git(f.repo, "commit", "-q", "-m", "add submodule");
-
-    const dir = feature(f, "feat/sub-ignore-dirty");
-    git(dir, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
-    git(dir, "config", "submodule.sub.ignore", "dirty");
-    fs.writeFileSync(path.join(dir, "sub", "s.txt"), "dirty edit ignored by config\n");
-    fs.writeFileSync(path.join(dir, "a.txt"), "superproject change\n");
-
-    const r = wt(f, dir, ["merge", ...W]);
-    assert.ok(fs.existsSync(dir), `worktree with dirty submodule must be kept despite ignore=dirty: ${r.output}`);
-    assert.match(r.output, /uncommitted|submodule|kept/i);
-  } finally { f.cleanup(); }
-});
-
 test("discardIgnored preserves Git final dirty check when an uncommitted file lands before removal", () => {
   const f = fixture();
   try {

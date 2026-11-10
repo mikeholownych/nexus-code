@@ -19,12 +19,13 @@ const NEXUS_STATE = [".nexus", ":(top).nexus"];
 const NEXUS_STATE_EXCLUDED = [":(exclude).nexus", ":(exclude).nexus/**", ":(top,exclude).nexus", ":(top,exclude).nexus/**"];
 const WITHOUT_NEXUS_STATE = ["--", ":/", ...NEXUS_STATE_EXCLUDED];
 
+/** Variables that change how Git reads pathspecs; an inherited one would turn a `:(top)` magic pathspec literal or case-insensitive. */
+export const PATHSPEC_MODE_ENV: readonly string[] = ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"];
+
 /** The environment for git calls that pass the pathspecs above: an inherited pathspec mode would make them literal. */
 function pathspecEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  for (const key of ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
-    delete env[key];
-  }
+  for (const key of PATHSPEC_MODE_ENV) delete env[key];
   return env;
 }
 
