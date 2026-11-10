@@ -112,3 +112,9 @@ Severity set by the fixing agent; the reviewer did not rate these. Each needs it
 |---|---|---|---|
 | PR #440 review | medium | A key whose `/` or `+` is percent-encoded (`%2F`, `%2B`) or written as a look-alike (`∕`, U+2215) is not redacted whole: the patterns and the tokenizer stop at the encoded character, so the rest of the key stays in clear | OPEN |
 | PR #440 review | medium | Key material after a dot that directly follows an `sk-` key (`sk-…RtBq.Xo2RtBq`) is left in clear: the `sk-` patterns and the scanner stop at "." and the entropy tokenizer does not take dotted tokens | OPEN |
+
+## G. WP-1317 TUI audit follow-ups (docs/v1.1.4/TUI-AUDIT.md)
+
+| Source | Sev | Finding | Status |
+|---|---|---|---|
+| D-03 PR | low | REPL `/git` (`cli/src/repl.ts`) ran plain `git status --short`, so a `.nexus/` left by an older version showed as `?? .nexus/` there. Surfaces that read through `workspaceStatus()` (`cli/src/git.ts`): `getGitInfo` (TUI header via `session.state`, the model's `[Git Status]` line, the REPL prompt badge and the `/commit` dirty checks), TUI and REPL `/git`, the untracked/staged count in TUI `/diff`, and the `/commit` message file list. Not through it, by design: REPL `/diff` (plain `git diff`, which never lists untracked files) and the `git status` calls in `worktree.ts`, `core/candidate.ts` and `ceri/runner.ts`, which serve other purposes. | FIXED in `8a5b29cc`. Test `REPL /git on a repository whose only change is Nexus state reports it clean` |
