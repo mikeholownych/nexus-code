@@ -4003,7 +4003,7 @@ export class AutonomousAgent {
   /** As compactConversation, returning the outcome instead of throwing (used by the queue and the hosts). */
   public async compactNow(useLlm: boolean, signal?: AbortSignal, step = 0): Promise<{ ok: boolean; durable: boolean; message: string; outcome?: CompactionOutcome }> {
     // `/compact --llm` calls the provider: not inside the retry window a resumed turn is still waiting out.
-    if (useLlm && this.resumedWindowCovers(this.client.endpoint)) {
+    if (useLlm && this.clientWindowOpen(this.client)) {
       return { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_REASON}.` };
     }
     const previousParent = this.activeTraceSpanId;
@@ -4133,7 +4133,7 @@ export class AutonomousAgent {
   private async drainCompactionEntries(step: number, signal: AbortSignal | undefined, cancelReason: string | undefined, closing: boolean, held: typeof this.compactionQueue): Promise<void> {
     while (this.compactionQueue.length) {
       const request = this.compactionQueue.shift()!;
-      if (!cancelReason && request.llm && this.resumedWindowCovers(this.client.endpoint)) {
+      if (!cancelReason && request.llm && this.clientWindowOpen(this.client)) {
         if (closing) this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_REASON}.` }, "cancelled");
         else held.push(request);
         continue;
@@ -4624,7 +4624,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
       // A helper's agent builds its own clients from this config, so its first request would reach the provider a
       // resumed turn is still waiting out. Declined for now; the model can go on without it or ask again later.
-      if (this.resumedWindowCovers(this.config.endpoint)) {
+      if ([this.config.endpoint, ...(this.config.fallbackEndpoints ?? []), this.config.plannerEndpoint, this.config.coderEndpoint].some((endpoint) => this.resumedWindowCovers(endpoint))) {
         return {
           success: false,
           output: "",
@@ -5560,7 +5560,21 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
   /** Embedding requests go to the main client's provider: held back while a restored window for it is open. */
   private gateEmbeddings(): void {
-    this.hybridSearch.setEmbeddingGate((endpoint) => !this.resumedWindowCovers(endpoint));
+    this.hybridSearch.setEmbeddingGate((client) => !this.clientWindowOpen(client));
+  }
+
+  /**
+   * True while a restored provider window is open for any endpoint the client may use: its failover endpoints
+   * included, since a request can be retried on any of them.
+   */
+  private clientWindowOpen(client: LocalLlmClient): boolean {
+    const endpoints = typeof client.getEndpoints === "function" ? client.getEndpoints() : [client.endpoint];
+    return endpoints.some((endpoint) => this.resumedWindowCovers(endpoint));
+  }
+
+  /** True while the main connection's provider is inside a window restored by a resume (hosts hold background requests). */
+  public isProviderWindowOpen(): boolean {
+    return this.clientWindowOpen(this.client);
   }
 
   /** True while a restored provider window is still open and applies to this endpoint (or to any, when none was recorded). */
@@ -5645,6 +5659,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
    */
   public async probeStartupEndpoint(signal?: AbortSignal): Promise<string | undefined> {
     if (typeof this.client.probeAvailability !== "function") return undefined;
+    // After a resume the hosts probe right after restoring: inside the provider's window nothing is sent. The
+    // resumed turn waits it out and re-probes through live recovery, so no warning is lost.
+    if (this.isProviderWindowOpen()) return undefined;
     try {
       const probe = await this.client.probeAvailability(signal, { timeoutMs: 3_000 });
       if (probe.available && probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) {

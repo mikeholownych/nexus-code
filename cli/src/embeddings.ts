@@ -209,8 +209,8 @@ export class HybridSearchEngine {
   private vectorIndex: VectorIndex;
   private client?: LocalLlmClient;
   private indexed: boolean = false;
-  /** Asked before every embedding request, with the client's endpoint; false keeps the search lexical for now. */
-  private embeddingsAllowed: (endpoint: string) => boolean = () => true;
+  /** Asked before every embedding request, with the client; false keeps the search lexical for now. */
+  private embeddingsAllowed: (client: LocalLlmClient) => boolean = () => true;
   /** The index was built while embeddings were held back; it is rebuilt with them once they are allowed. */
   private lexicalOnly: boolean = false;
 
@@ -222,12 +222,12 @@ export class HybridSearchEngine {
   }
 
   /** Lets the owner hold embedding requests back (for example while a provider's retry window is open). */
-  public setEmbeddingGate(allowed: (endpoint: string) => boolean): void {
+  public setEmbeddingGate(allowed: (client: LocalLlmClient) => boolean): void {
     this.embeddingsAllowed = allowed;
   }
 
   private canEmbed(): boolean {
-    return Boolean(this.client) && this.embeddingsAllowed(this.client!.endpoint);
+    return Boolean(this.client) && this.embeddingsAllowed(this.client!);
   }
 
   private isIgnored(relPath: string): boolean {

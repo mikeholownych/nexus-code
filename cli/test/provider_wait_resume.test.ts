@@ -214,6 +214,7 @@ describe("a provider's Retry-After survives suspend, restart and resume outside 
     const { gw, arrivals } = await provider(RETRY_AFTER_SECS);
     try {
       const { taskId } = await suspendDuringProviderWait(ws, home, gw, arrivals, RETRY_AFTER_SECS);
+      const modelRequestsBeforeRestart = gw.modelRequests;
       const session = readers(home, ws).session(taskId);
       const eligibleAt = Date.parse(String(session.lastTurn?.interruption?.providerEligibleAt));
       assert.ok(Number.isFinite(eligibleAt), `the session record carries providerEligibleAt: ${JSON.stringify(session.lastTurn?.interruption)}`);
@@ -221,6 +222,10 @@ describe("a provider's Retry-After survives suspend, restart and resume outside 
       const side = sidecar(["--resume", taskId, "-w", ws, "-e", gw.url, "-m", "m", "-s", "4", "--yes"], { cwd: ws, home });
       await until(() => side.notices().some((n) => /^(Resumed session|Session not found|Could not resume)/.test(String(n.e.text))), "the resume notice");
       assert.ok(side.notices().some((n) => String(n.e.text).startsWith(`Resumed session ${taskId}`)), side.notices().map((n) => n.e.text).join(" | "));
+      // Resuming alone (no prompt yet) sends nothing to the provider: the startup reachability probe is held back too.
+      assert.ok(Date.now() < eligibleAt - RESTART_MARGIN_MS / 2, "precondition: still well inside the window");
+      await new Promise((r) => setTimeout(r, 1_500));
+      assert.equal(gw.modelRequests, modelRequestsBeforeRestart, "no GET /models inside the window");
       side.send({ type: "prompt.submit", id: "t1", text: "continue" });
       await until(() => side.events.some((x) => x.e.type === "turn.result"), "the resumed turn's result", 60_000);
       assert.equal(arrivals.length, 2, "one request after the resume");
@@ -644,6 +649,48 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       assert.deepEqual(ctx.requestedAt.filter((at) => at < eligibleAt), [], "nothing reached the coder's provider inside its window");
     } finally {
       await planner.cleanup();
+      await ctx.cleanup();
+    }
+  });
+
+  test("the startup reachability probe is skipped inside the window and runs after it", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      let probes = 0;
+      a.client.probeAvailability = async () => {
+        probes++;
+        return { available: true, condition: "AVAILABLE", httpStatus: 200 };
+      };
+      assert.equal(await ctx.resumed.probeStartupEndpoint(), undefined, "a skipped probe warns about nothing");
+      assert.equal(probes, 0, "no GET /models inside the window");
+      assert.equal(ctx.resumed.isProviderWindowOpen(), true, "the REPL's model-list request is held back on the same condition");
+      ctx.resumedClock.advance(eligibleAt - ctx.resumedClock.now() + 1);
+      assert.equal(ctx.resumed.isProviderWindowOpen(), false);
+      await ctx.resumed.probeStartupEndpoint();
+      assert.equal(probes, 1, "after the window the probe runs");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  test("with failover endpoints configured, embeddings stay held while the window covers any of them", async () => {
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      // The active endpoint differs from the recorded one, but a failover endpoint is the recorded provider.
+      a.client.endpoints = ["http://other.invalid:9/v1", ...a.client.endpoints];
+      a.client.activeEndpointIndex = 0;
+      const embeddings: number[] = [];
+      a.client.generateEmbedding = async () => {
+        embeddings.push(ctx.resumedClock.now());
+        throw new Error("embedding endpoint unavailable");
+      };
+      fs.writeFileSync(path.join(a.config.workspace, "notes.md"), "base notes about the answer\n");
+      await a.hybridSearch.search("base");
+      assert.deepEqual(embeddings, [], "no embedding request while any configured endpoint is inside its window");
+    } finally {
       await ctx.cleanup();
     }
   });

@@ -731,7 +731,10 @@ export class InteractiveRepl {
     });
 
     // Populate /model completion from the endpoint's real model list (best effort, never blocks the prompt).
-    new LocalLlmClient(this.config).listModels().then((models) => { this.knownModels = models; }).catch(() => {});
+    // Not inside the provider window a resume restored (a later `/model` still lists them on request).
+    if (!this.agent.isProviderWindowOpen()) {
+      new LocalLlmClient(this.config).listModels().then((models) => { this.knownModels = models; }).catch(() => {});
+    }
 
     this.agent.getSkillManager().startWatcher((skills) => {
       console.log(pc.dim(`\n🔄 [Hot-Reload] Skills library updated (${skills.length} available).`));
