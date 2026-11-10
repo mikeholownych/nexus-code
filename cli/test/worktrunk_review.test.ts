@@ -735,3 +735,27 @@ test("a lock whose holder died before writing its pid is taken over after a shor
     } finally { lockSettings.waitMs = before; fs.rmSync(lock, { force: true }); }
   } finally { f.cleanup(); }
 });
+
+test("a commit that lands on the detached HEAD before it is switched onto a leaked guard branch is kept, not reset away", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-leak-race");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    const head = git(dir, "rev-parse", "HEAD");
+    const name = `nexus-removed/${crypto.createHash("sha1").update(fs.realpathSync(dir)).digest("hex").slice(0, 10)}-${head.slice(0, 8)}`;
+    git(f.repo, "branch", name, head); // left by an interrupted attempt: the guard is at A
+    let landed = "";
+    core.removeSeams.beforeGuardSwitch = () => { landed = commitFile(dir, "b.txt", "B\n", "B lands on the detached HEAD"); };
+    let result;
+    try { result = wt(f, f.repo, ["remove", dir]); } finally { delete core.removeSeams.beforeGuardSwitch; }
+    assert.ok(landed, "the seam must have run");
+    assert.equal(result.success, false, result.output);
+    assert.equal(fs.existsSync(dir), true, "nothing is removed");
+    assert.equal(git(dir, "rev-parse", "HEAD"), landed, "HEAD was not reset to the old guard commit");
+    const holders = git(f.repo, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/nexus-removed").split("\n").filter(Boolean);
+    assert.ok(holders.some((line) => line.endsWith(landed)), `the new commit is on a branch: ${holders.join(";")}`);
+    assert.match(result.output, /nexus-removed\//);
+  } finally { f.cleanup(); }
+});
