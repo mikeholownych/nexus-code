@@ -12,7 +12,7 @@ import { conventionalCommitMessage } from "../git.js";
 import { redactSecrets } from "../ui.js";
 import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut } from "./git.js";
-import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type WorktreeEntry } from "./repo.js";
+import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type Repo, type WorktreeEntry } from "./repo.js";
 import { readRegistry, updateRegistry, MAX_RECORDS } from "./registry.js";
 import { hasVerification, workingState } from "./verification.js";
 
@@ -27,6 +27,9 @@ export interface MergeOptions {
   reason?: string;
 }
 
+/** Pathspec of `.nexus/` (sessions, knowledge, worktrees): unstaged after `add -A` so it never reaches a backup or an automatic commit. */
+const NEXUS_STATE_PATH = ":(top).nexus";
+
 const NON_INTERACTIVE = { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" };
 
 /**
@@ -36,22 +39,33 @@ const NON_INTERACTIVE = { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" };
  */
 export const mergeSeams: { preMerge?: (info: { branch: string; target: string }) => void } = {};
 
-/**
- * Initialised submodules of the worktree whose checked-out commit is on no remote-tracking branch of that submodule.
- * Their objects live in this worktree's own administrative directory, so removing the worktree would delete the only
- * copy of such a commit while the target keeps pointing at it.
- */
-function unpublishedSubmodules(dir: string): string[] {
-  const status = git(dir, ["submodule", "status", "--recursive"], { allowFailure: true }).stdout.split("\n").filter(Boolean);
+/** The initialised submodules of the worktree (one `git submodule status --recursive` call). */
+function initializedSubmodules(dir: string): string[] {
   const found: string[] = [];
-  for (const line of status) {
+  for (const line of git(dir, ["submodule", "status", "--recursive"], { allowFailure: true }).stdout.split("\n").filter(Boolean)) {
     if (line[0] === "-") continue; // not initialised here: no objects of its own
     const sub = line.slice(1).trim().split(/\s+/)[1];
-    if (!sub) continue;
-    const local = git(path.join(dir, sub), ["rev-list", "-n", "1", "HEAD", "--branches", "--tags", "--glob=refs/stash*", "--not", "--remotes"], { allowFailure: true });
-    if (local.status !== 0 || local.stdout.trim()) found.push(sub);
+    if (sub) found.push(sub);
   }
   return found;
+}
+
+/**
+ * Of the initialised submodules, those with a local commit (HEAD, branch, tag or stash) that is on no remote-tracking branch
+ * of that submodule. Their objects live in this worktree's own administrative directory, so removing the worktree would
+ * delete the only copy while the target keeps pointing at it.
+ */
+function unpublishedSubmodules(dir: string, initialised: string[] = initializedSubmodules(dir)): string[] {
+  return initialised.filter((sub) => {
+    const local = git(path.join(dir, sub), ["rev-list", "-n", "1", "HEAD", "--branches", "--tags", "--glob=refs/stash*", "--not", "--remotes"], { allowFailure: true });
+    return local.status !== 0 || Boolean(local.stdout.trim());
+  });
+}
+
+/** True when the entry is an automated task worktree (branch `nexus/<id>` under `.nexus/worktrees/`). */
+function isSpeculativeEntry(repo: Repo, entry: { branch?: string | null; path: string }): boolean {
+  const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;
+  return Boolean(entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase));
 }
 
 /** Paths `git status` reports for the worktree, read through the pinned helper (no shell, no fsmonitor, no hooks). */
@@ -111,11 +125,17 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (!source || source.isMain) throw new WorktreeError("run `worktree merge` from inside the worktree you want to merge, not the main checkout");
   if (!source.branch) throw new WorktreeError("the current worktree is on a detached HEAD; create a branch first");
   const branch = source.branch;
+  if (isSpeculativeEntry(repo, source)) {
+    throw new WorktreeError(`the current worktree is a speculative task worktree (${shownBranch(branch)}); speculative worktrees cannot be merged with \`worktree merge\``);
+  }
   const targetName = options.target ? resolveBranchName(repo, options.target) : defaultBranch(repo);
   if (!targetName) throw new WorktreeError("this repository has no default branch to merge into; pass a target");
   if (targetName === branch) throw new WorktreeError("the target is the branch being merged");
   const targetEntry = repo.entries.find((entry) => entry.branch === targetName);
   if (!targetEntry || targetEntry.prunable) throw new WorktreeError(`target ${shownBranch(targetName)} is not checked out in any worktree; run \`worktree switch ${shownBranch(targetName)}\` first`);
+  if (isSpeculativeEntry(repo, targetEntry)) {
+    throw new WorktreeError(`target ${shownBranch(targetName)} is a speculative task worktree; speculative worktrees cannot be merged into`);
+  }
 
   const gitDir = gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
   const busy = inProgress(gitDir);
@@ -165,13 +185,25 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
 
   if (dirty) {
     const message = options.message ?? conventionalCommitMessage(changedFiles(source.path));
+    // Internal Nexus state is never committed by the merge (the same exclusion `/commit` applies).
     git(source.path, ["add", "-A"]);
+    git(source.path, ["reset", "-q", "HEAD", "--", NEXUS_STATE_PATH], { allowFailure: true });
+    // The receipt covers the state that was checked. A save that landed since (an editor, another session) is not part of
+    // it: nothing is committed on its strength. A waiver covers whatever is there.
+    if (waiver === undefined && gitOut(source.path, ["write-tree"]) !== gateState.tree) {
+      git(source.path, ["reset", "-q"], { allowFailure: true });
+      throw new WorktreeError("the working tree changed after the verification receipt was checked; nothing was committed or merged. Verify the current state (or review it and merge with --no-verify-receipt --reason \"why\")");
+    }
     if (git(source.path, ["diff", "--cached", "--quiet"], { allowFailure: true }).status === 0) {
       notes.push("Nothing the superproject can commit was changed (for example only edits inside a submodule).");
     } else {
       git(source.path, ["commit", "-m", message], { env: NON_INTERACTIVE });
       notes.push("Committed the uncommitted changes.");
     }
+  }
+
+  if (waiver === undefined && !dirty && gitOut(source.path, ["rev-parse", "--verify", "HEAD"]) !== gateState.head) {
+    throw new WorktreeError("a commit landed in the worktree after the verification receipt was checked; nothing was merged. Verify the current state and run the command again");
   }
 
   const count = Number(gitOut(source.path, ["rev-list", "--count", `${mergeBase}..HEAD`]));
@@ -210,8 +242,13 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
 
   if (!cancelled) {
     // `refs/heads/<branch>`, not the short name: a tag of the same name would otherwise be what gets merged.
-    const ff = git(targetEntry.path, ["merge", "--ff-only", "--no-edit", "--end-of-options", `refs/heads/${branch}`], { allowFailure: true, env: NON_INTERACTIVE });
+    // `--no-overwrite-ignore` prevents fast-forwarding over an untracked ignored file in the target.
+    const ff = git(targetEntry.path, ["merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", "--end-of-options", `refs/heads/${branch}`], { allowFailure: true, env: NON_INTERACTIVE });
     if (ff.status !== 0) {
+      const errDetail = ff.stderr ? redactSecrets(ff.stderr.trim().split("\n")[0] ?? "") : "";
+      if (errDetail && (errDetail.toLowerCase().includes("overwrite") || errDetail.toLowerCase().includes("untracked working tree file"))) {
+        throw new WorktreeError(`could not fast-forward ${shownBranch(targetName)} to ${shownBranch(branch)}: ${errDetail}`);
+      }
       throw new WorktreeError(`could not fast-forward ${shownBranch(targetName)} to ${shownBranch(branch)}: ${options.noRebase ? "the branch is not a descendant of the target (merge without --no-rebase)" : "the target moved while merging; run merge again"}`);
     }
     notes.push(`Fast-forwarded ${shownBranch(targetName)}.`);
@@ -229,12 +266,19 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     // it. Anything else left (edits inside a submodule cannot be committed from here, for one) is never forced away.
     const left = statusOf(source.path, { ignoreSubmodules: "none" });
     const unpublished = left.total > 0 ? [] : unpublishedSubmodules(source.path);
+    const initialized = left.total > 0 || unpublished.length > 0 ? [] : initializedSubmodules(source.path);
     if (unpublished.length > 0) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${unpublished.map((sub) => redactSecrets(sub)).join(", ")} has a commit that is on no remote branch, and removing the worktree would delete its only copy. Push it from there, then run \`worktree remove\`. The merge itself is done.`);
     } else if (left.total > 0) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: ${left.total} uncommitted change(s) remain that the merge could not carry (check \`git status\` there, submodules included). Nothing was deleted.`);
+    } else if (initialized.length > 0) {
+      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${initialized.map((sub) => redactSecrets(sub)).join(", ")} is initialized here; removing it requires \`worktree remove --force\` after verifying submodule state. The merge itself is done.`);
     } else {
-      notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { discardIgnored: true, target: targetName }));
+      try {
+        notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { discardIgnored: true, target: targetName }));
+      } catch (err) {
+        notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: removal failed (${redactSecrets((err as Error).message).slice(0, 150)}). The merge itself is done.`);
+      }
     }
   }
 
@@ -265,7 +309,6 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
   const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
   if (!targetSha) throw new WorktreeError("this repository has no default branch to compare against");
 
-  const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;
   const lines: string[] = [];
   const counts = { removed: 0, kept: 0, young: 0, stale: 0 };
   let limited = false;
@@ -296,7 +339,7 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
       continue;
     }
     if (entry.locked) { keep(entry, "locked"); continue; }
-    if (entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase)) { keep(entry, "speculative task worktree"); continue; }
+    if (isSpeculativeEntry(repo, entry)) { keep(entry, "speculative task worktree"); continue; }
     try {
       const touched = Math.max(fs.statSync(entry.path).mtimeMs, Number(gitOut(repo.cwd, ["log", "-1", "--format=%ct", "--end-of-options", entry.head], { timeoutMs: 5000 })) * 1000);
       if (now - touched < minAge) { counts.young++; continue; }

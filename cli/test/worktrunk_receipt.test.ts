@@ -253,3 +253,22 @@ test("an operator edit made while the verifier ran is not covered by the receipt
     assert.equal(recordVerificationIfEligible(dir, { ...eligible, before: again }), true);
   } finally { f.cleanup(); }
 });
+
+test("an edit saved after the receipt check but before the commit is not merged on the strength of that receipt", async () => {
+  const f = fixture();
+  try {
+    const { mergeSeams } = await import("../src/worktrunk/merge.js") as any;
+    fs.writeFileSync(path.join(f.dir, "c.txt"), "verified content\n"); // dirty source
+    assert.equal(recordVerification(f.dir, "npm test"), true);
+    const mainBefore = git(f.repo, "rev-parse", "refs/heads/main");
+    mergeSeams.preMerge = () => { fs.writeFileSync(path.join(f.dir, "c.txt"), "an unverified edit saved by an editor\n"); };
+    let r;
+    try { r = f.wt(f.dir, ["merge"]); } finally { delete mergeSeams.preMerge; }
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /changed after|verification/i);
+    assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore, "the target is untouched");
+    assert.ok(fs.existsSync(f.dir), "the worktree and the edit are kept");
+    assert.equal(fs.readFileSync(path.join(f.dir, "c.txt"), "utf8"), "an unverified edit saved by an editor\n");
+    assert.equal(git(f.dir, "diff", "--cached", "--name-only"), "", "nothing is left staged");
+  } finally { f.cleanup(); }
+});

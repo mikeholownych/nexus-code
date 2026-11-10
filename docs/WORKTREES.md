@@ -36,8 +36,9 @@ Copies use a reflink where the file system has one, keep modification times so i
 stop with an error beyond 50,000 files or 4 GiB (under `switch -c`, a warning: the worktree is still created). `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
 (absolute paths) are never copied, and a symbolic link is copied only if its real target (resolved through other links, not just
 as text) is inside the tree. `--force` never overwrites a file that is tracked in the destination (it is reported and skipped).
-Every file is staged under `.nexus-copy-<id>.tmp` in its directory and moved into place, so a killed run never leaves a
-truncated file under its real name; leftover staging files are removed by the next run. `--dry-run` runs the same checks as the
+Every file is staged under `.nexus-copy-<pid>-<id>.tmp` in its directory and moved into place, so a killed run never leaves a
+truncated file under its real name; the next run removes leftovers whose owner process is gone (a running copy's staging file is never touched), including those in the destination root. Nothing is written at or below a submodule or a nested repository
+of the destination, and a destination file where a source directory would go skips that subtree with a report. `--dry-run` runs the same checks as the
 real run (kept files, tracked files, a symbolic link or directory in the way), so its counts match. Hard links, including pnpm
 store links, are copied as ordinary files: the bytes are counted per file and can reach the size limit sooner than the disk use
 suggests. `--all-ignored` copies every
@@ -55,7 +56,7 @@ reason) is recorded in the registry. Before history is rewritten the branch, inc
 `refs/nexus-backup/<name>-<hash>`: one flat ref per branch, where `<name>` is the branch name with every character outside
 `A-Za-z0-9._-` turned into `-` (at most 40 characters) and `<hash>` is the first 12 hex digits of the SHA-1 of the
 branch name, so `foo` and `foo/bar` never collide (Git cannot hold both as refs). Find yours with
-`git for-each-ref refs/nexus-backup`. A submodule is backed up as its recorded commit only, so a worktree whose submodule holds a commit that is on no remote branch is kept after the merge (its objects live in the worktree and would go with it); push it, then run `remove`. `--no-squash` with merge commits in the branch and a moved target is refused, because a plain rebase would drop edits only the merge commits carry. The source branch is merged as `refs/heads/<branch>`, never as a same-named tag. A rebase conflict stops the
+`git for-each-ref refs/nexus-backup`. Tracked Nexus state under `.nexus/` is left out of both the backup and the automatic commit, as `/commit` does. A submodule is backed up as its recorded commit only, so a worktree whose submodule holds a commit that is on no remote branch is kept after the merge (its objects live in the worktree and would go with it); push it, then run `remove`. `--no-squash` with merge commits in the branch and a moved target is refused, because a plain rebase would drop edits only the merge commits carry. The source branch is merged as `refs/heads/<branch>`, never as a same-named tag. A rebase conflict stops the
 command and leaves the rebase open in the worktree. Ignored leftovers (build caches) are deleted with the worktree after
 a successful merge, but never while tracked, staged, untracked or submodule changes remain: then the worktree is kept
 and the command says so. When `merge` removes the worktree an interactive session (`/worktree merge ^` in the REPL or the TUI) is standing in, the session moves to the worktree of the branch it was merged into and its checkpoints and session saves keep working.
