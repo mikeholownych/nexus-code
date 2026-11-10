@@ -157,3 +157,69 @@ describe("unmerged entries", () => {
     });
   }
 });
+
+describe("core.filemode=false does not hide a change of the executable bit", () => {
+  function scriptRepo(mode: number, filemode: "false" | "true"): string {
+    const repo = repoWith(["base.txt"]);
+    fs.writeFileSync(path.join(repo, "script.sh"), "#!/bin/sh\n");
+    fs.chmodSync(path.join(repo, "script.sh"), mode);
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "script");
+    git(repo, "config", "core.fileMode", filemode);
+    return repo;
+  }
+
+  test("filemode=false: chmod +x of a clean tracked file changes the identity", () => {
+    const repo = scriptRepo(0o644, "false");
+    try {
+      const before = id(repo);
+      fs.chmodSync(path.join(repo, "script.sh"), 0o755);
+      assert.equal(git(repo, "status", "--porcelain").trim(), "", "git itself sees nothing, which is the point");
+      assert.notEqual(id(repo), before);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("filemode=false: chmod -x of a tracked 0755 file changes the identity", () => {
+    const repo = scriptRepo(0o755, "false");
+    try {
+      const before = id(repo);
+      fs.chmodSync(path.join(repo, "script.sh"), 0o644);
+      assert.notEqual(id(repo), before);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("filemode=false and no change: the identity is stable (a filesystem without exec bits is not a false red)", () => {
+    const repo = scriptRepo(0o644, "false");
+    try {
+      assert.equal(id(repo), id(repo));
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("filemode=true: no change is stable and chmod +x is seen by git status as before", () => {
+    const repo = scriptRepo(0o644, "true");
+    try {
+      const before = id(repo);
+      assert.equal(id(repo), before);
+      fs.chmodSync(path.join(repo, "script.sh"), 0o755);
+      assert.notEqual(id(repo), before);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("filemode=true: the identity of a clean tree does not change with this feature (existing ids stay valid)", () => {
+    const repo = scriptRepo(0o644, "true");
+    try {
+      const identity = computeCandidateIdentitySync(repo);
+      assert.match(JSON.stringify(identity), /"trackedChanges":\[\]/);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});

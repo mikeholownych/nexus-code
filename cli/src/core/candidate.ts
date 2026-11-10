@@ -385,6 +385,27 @@ function isGitTimeout(err: unknown): boolean {
   return (err as { code?: string } | undefined)?.code === "ETIMEDOUT";
 }
 
+/**
+ * Whether git ignores the executable bit here (`core.filemode=false`, common on WSL mounts, shared drives and exFAT).
+ * Unset means git honours it. A git that hangs or cannot run is an error, not "true".
+ */
+function gitFilemodeIsFalse(workspacePath: string): boolean {
+  try {
+    const value = execFileSync("git", ["config", "--type=bool", "--get", "core.filemode"], {
+      cwd: workspacePath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitTimeoutMs(),
+    }).trim();
+    return value === "false";
+  } catch (err: any) {
+    if (isGitTimeout(err)) throw new GitTimeoutError("git config", gitTimeoutMs());
+    // `git config --get` exits 1 when the key is unset: git then honours the executable bit.
+    if (err?.status === 1) return false;
+    throw err;
+  }
+}
+
 /** A manifest path with the characters the manifest uses as separators escaped (ordinary names are unchanged). */
 function manifestPath(p: string): string {
   return /[\t\n\r\\]/.test(p) ? JSON.stringify(p) : p;
@@ -628,6 +649,10 @@ function computeGitCandidateIdentity(
     }
   }
 
+  // With core.filemode=false git ignores the executable bit, so a chmod of a clean tracked file is invisible to
+  // `git status`. The tracked files' type and executable bit are then digested from lstat (no hashing).
+  let modeDigest: string | undefined;
+
   // 2. Query git status for working tree modifications, type changes, and untracked files
   try {
     // `-z`: records are "XY path" NUL, and for a rename or copy "XY new" NUL "old" NUL. Never quoted, so every file name
@@ -679,6 +704,23 @@ function computeGitCandidateIdentity(
       // Absent (outside a sparse cone, or deleted): nothing to hash; a later reappearance or deletion still changes the manifest.
       if (details.isDeleted) continue;
       setTrackedEntry({ path: hiddenPosix, mode: details.mode, contentHash: details.contentHash, size: details.size, status: "modified" });
+    }
+
+    if (gitFilemodeIsFalse(workspacePath)) {
+      const modeLines: string[] = [];
+      for (const record of flaggedTokens) {
+        const trackedPath = record.slice(2);
+        if (trackedPath === ".nexus" || trackedPath.startsWith(".nexus/")) continue;
+        let mode = "-";
+        try {
+          const st = filesystem.lstatSync(path.join(workspacePath, trackedPath));
+          mode = `${st.isSymbolicLink() ? "l" : st.isDirectory() ? "d" : "f"}${(st.mode & 0o111) !== 0 ? "x" : "-"}`;
+        } catch (err: any) {
+          if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") throw err;
+        }
+        modeLines.push(`${trackedPath}\t${mode}`);
+      }
+      modeDigest = hashContent(modeLines.join("\n"));
     }
 
     if (statusTokens.length > 0) {
@@ -784,6 +826,9 @@ function computeGitCandidateIdentity(
   for (const entry of untrackedFiles) {
     manifestLines.push(`U\t${manifestPath(entry.path)}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
   }
+
+  // Only present when core.filemode=false: identities of repositories that honour the executable bit are unchanged.
+  if (modeDigest !== undefined) manifestLines.push(`MODES\t${modeDigest}`);
 
   const manifestContent =
     manifestLines.length > 0 ? manifestLines.join("\n") : "CLEAN_TREE_NO_CANDIDATE_CHANGES";

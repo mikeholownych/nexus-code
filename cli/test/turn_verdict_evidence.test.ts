@@ -362,6 +362,27 @@ describe("D-04: the verdict follows this turn's evidence", () => {
     }
   });
 
+  test("core.filemode=false: a command that chmod +x a clean tracked script is UNVERIFIED, and an echo is still NOT_REQUIRED", async () => {
+    const setup = (dir: string) => {
+      fs.writeFileSync(path.join(dir, "script.sh"), "#!/bin/sh\n");
+      execSync("git add . && git commit -qm script && git config core.fileMode false", { cwd: dir, stdio: "ignore" });
+    };
+    const chmod = { kind: "tools" as const, calls: [{ name: "run_command", args: { command: "chmod +x script.sh" } }] };
+    const changed = await turns([chmod], [], setup);
+    try {
+      assert.equal(fs.statSync(path.join(changed.repo, "script.sh")).mode & 0o111, 0o111);
+      assert.equal(changed.results[0].outcome, "UNVERIFIED", `got ${changed.results[0].outcome}/${changed.results[0].reason}`);
+    } finally {
+      fs.rmSync(changed.repo, { recursive: true, force: true });
+    }
+    const same = await turns([echo], [], setup);
+    try {
+      assert.equal(same.results[0].outcome, "NOT_REQUIRED", `got ${same.results[0].outcome}/${same.results[0].reason}`);
+    } finally {
+      fs.rmSync(same.repo, { recursive: true, force: true });
+    }
+  });
+
   describe("a real file write the workspace identity cannot see is never reported as no change", () => {
     const ignored = { ".gitignore": "build/\n", "build/old.js": "x\n" };
     async function ignoredTurn(script: Reply | Reply[]): Promise<{ r: TurnResult; repo: string }> {
