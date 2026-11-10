@@ -68,14 +68,17 @@ export function hasHiddenModification(dir: string): boolean {
   for (const entry of flagged) {
     const file = entry.slice(2);
     const absolute = path.join(dir, file);
-    let exists = true;
-    try { fs.lstatSync(absolute); } catch { exists = false; }
-    if (!exists) {
+    let stat: fs.Stats | undefined;
+    try { stat = fs.lstatSync(absolute); } catch { stat = undefined; }
+    if (!stat) {
       if (entry[0] === "S") continue; // sparse checkout
       return true; // deleted behind the index's back
     }
     const recorded = gitOut(dir, ["ls-files", "-s", "-z", "--", file]).split("\0")[0]?.split(/\s+/)[1];
-    const actual = gitOut(dir, ["hash-object", "--", file]);
+    // A symlink's blob is its target text; `hash-object <path>` would hash the file it points at.
+    const actual = stat.isSymbolicLink()
+      ? gitOut(dir, ["hash-object", "--stdin"], { input: fs.readlinkSync(absolute) })
+      : gitOut(dir, ["hash-object", "--", file]);
     if (recorded !== actual) return true;
   }
   return false;
