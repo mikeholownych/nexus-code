@@ -132,6 +132,7 @@ async function worktree(ctx: SlashContext): Promise<SlashOutcome> {
     const cwd = workspace(ctx);
     const result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(ctx.args), { cwd, readOnly: ctx.host.mode() === "read-only" }, {
       completer: providerCompleter(ctx.host.app.getConfig()),
+      signal: ctx.signal,
     });
     // A merge removes the worktree this session may be standing in: move it to the branch it was merged into.
     const moveTo = relocationAfter(result, cwd);
