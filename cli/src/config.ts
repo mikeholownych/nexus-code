@@ -412,8 +412,9 @@ export function buildConfig(options: any): HarnessConfig {
   const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : (effectiveSetting("NEXUS_CONTEXT_LIMIT") ? parseInt(effectiveSetting("NEXUS_CONTEXT_LIMIT")!, 10) : undefined);
   const strictTokenCount = Boolean(options.strictTokenCount) || effectiveSetting("NEXUS_STRICT_TOKEN_COUNT") === "1";
-  const worktreeBranch = options.worktreeBranch ? String(options.worktreeBranch) : undefined;
-  if (worktreeBranch) {
+  // Presence, not truthiness: `--worktree-branch ""` (an unset shell variable) must not quietly become "no worktree".
+  const worktreeBranch = options.worktreeBranch !== undefined && options.worktreeBranch !== null ? String(options.worktreeBranch) : undefined;
+  if (worktreeBranch !== undefined) {
     const problem = validateBranchName(worktreeBranch);
     if (problem) throw new Error(`Invalid --worktree-branch: ${problem}.`);
   }

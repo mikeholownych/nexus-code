@@ -54,6 +54,22 @@ const namedBinding = (f: ReturnType<typeof fixture>) => ({
   taskId: "task-named", worktreePath: f.dir, branch: "feat/bind", createdAt: new Date().toISOString(), kind: "named" as const, bindingVersion: 1,
 });
 
+describe("--worktree-branch option validation", () => {
+  const base = { endpoint: "http://127.0.0.1:9/v1", model: "m", workspace: os.tmpdir() };
+  test("an empty or blank branch is an error, never a silent no-worktree run", () => {
+    for (const value of ["", "   "]) {
+      assert.throws(() => buildConfig({ ...base, worktreeBranch: value } as any), /--worktree-branch/, JSON.stringify(value));
+    }
+  });
+  test("an absent option is fine; a valid one turns the worktree on; an invalid one is refused", () => {
+    assert.equal(buildConfig({ ...base } as any).worktree, false);
+    const named = buildConfig({ ...base, worktreeBranch: "feat/x" } as any);
+    assert.equal(named.worktree, true);
+    assert.equal(named.worktreeBranch, "feat/x");
+    assert.throws(() => buildConfig({ ...base, worktreeBranch: "bad..name" } as any), /--worktree-branch/);
+  });
+});
+
 describe("named worktree binding", () => {
   test("a named binding round-trips and recovers as consistent", () => {
     const f = fixture();
