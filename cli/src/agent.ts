@@ -156,6 +156,9 @@ import {
 } from "./core/findings.js";
 import { FILE_EDIT_TOOLS, FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnEvidence, TurnReason } from "./core/turn.js";
+import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
+import pc from "picocolors";
+import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 
 /**
  * A shell command that may leave a process running after it returns: a lone `&` (not `&&`, `&>` or `2>&1`), nohup,
@@ -163,9 +166,6 @@ import type { TurnEvidence, TurnReason } from "./core/turn.js";
  * is never lifted to "no change" (conservative: a false match only keeps the previous UNVERIFIED).
  */
 const MAY_OUTLIVE_COMMAND = /(?<![&>])&(?![&>])|\b(?:nohup|setsid|disown|systemd-run|daemonize)\b/;
-import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
-import pc from "picocolors";
-import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 
 /** Default deadline for the completion verifier (seconds); override with HarnessConfig.verifierTimeoutSecs / NEXUS_VERIFIER_TIMEOUT_SECS. */
 export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
@@ -2795,8 +2795,9 @@ export class AutonomousAgent {
       try {
         index = gitIndexIdentity(workspace);
       } catch (err: any) {
-        // Not a repository is "no-git"; a git that hangs leaves the state unknown (the outer catch), never "equal".
-        if (err?.code === "ETIMEDOUT") throw err;
+        // Only git exiting non-zero (not a repository) is "no-git". A git that hangs (ETIMEDOUT) or whose output
+        // overflows the buffer (ENOBUFS) did not report: the state is unknown (the outer catch), never "equal".
+        if (typeof err?.status !== "number") throw err;
       }
       const id = combineState([candidate, index, externalInputsContentIdentity(workspace)]);
       const took = Date.now() - started;
@@ -2807,6 +2808,8 @@ export class AutonomousAgent {
       return id;
     } catch (err: any) {
       this.stateIdentityUncertainty = `the workspace state could not be established (${String(err?.message ?? err).slice(0, 160)})`;
+      // A git that hangs would cost another full timeout on every later read: stop trying for the rest of the turn.
+      if (err?.code === "ETIMEDOUT") this.stateIdentityDisabled = true;
       return "unknown";
     }
   }

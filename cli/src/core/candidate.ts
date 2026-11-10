@@ -336,11 +336,7 @@ export function computeMaterialDependenciesHash(
   return hashContent(canonical);
 }
 
-/**
- * Splits NUL-delimited git output into path strings. `-z` output is never quoted, so a name with a space, a quote,
- * a backslash, a newline, a tab or non-ASCII letters arrives exactly as stored. A name that is not valid UTF-8 cannot
- * be turned into a path string without changing it, so it throws: the identity is unknown, never "equal".
- */
+/** A git path that cannot be turned into a path string (not valid UTF-8): the identity is unknown. */
 class GitPathDecodeError extends Error {
   constructor() {
     super("a file name that is not valid UTF-8 cannot be decoded");
@@ -348,6 +344,20 @@ class GitPathDecodeError extends Error {
   }
 }
 
+/** A git call of the identity that did not finish in time. `code` lets callers tell it from other failures. */
+export class GitTimeoutError extends Error {
+  readonly code = "ETIMEDOUT";
+  constructor(what: string, ms: number) {
+    super(`${what} timed out after ${ms} ms`);
+    this.name = "GitTimeoutError";
+  }
+}
+
+/**
+ * Splits NUL-delimited git output into path strings. `-z` output is never quoted, so a name with a space, a quote,
+ * a backslash, a newline, a tab or non-ASCII letters arrives exactly as stored. A name that is not valid UTF-8 cannot
+ * be turned into a path string without changing it, so it throws: the identity is unknown, never "equal".
+ */
 function decodeGitTokens(buffer: Buffer): string[] {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const out: string[] = [];
@@ -417,7 +427,7 @@ export function computeCandidateIdentitySyncForTesting(
     isGit = gitCheck === "true";
   } catch (err) {
     // A git that hangs is not "not a repository": the weaker non-git identity must not stand in for it.
-    if (isGitTimeout(err)) throw new Error(`git rev-parse timed out after ${gitTimeoutMs()} ms`);
+    if (isGitTimeout(err)) throw new GitTimeoutError("git rev-parse", gitTimeoutMs());
     isGit = false;
   }
 
@@ -454,7 +464,7 @@ function computeGitCandidateIdentity(
       }
     ).trim();
   } catch (err) {
-    if (isGitTimeout(err)) throw new Error(`git rev-parse timed out after ${gitTimeoutMs()} ms`);
+    if (isGitTimeout(err)) throw new GitTimeoutError("git rev-parse", gitTimeoutMs());
     rootBaseSha = "EMPTY_GIT_BASE";
   }
 
@@ -563,7 +573,7 @@ function computeGitCandidateIdentity(
       // A name that cannot be decoded, or a git that hangs, makes the identity unknown; any other diff failure keeps the
       // previous fallback.
       if (err instanceof GitPathDecodeError) throw err;
-      if (isGitTimeout(err)) throw new Error(`git diff timed out after ${gitTimeoutMs()} ms`);
+      if (isGitTimeout(err)) throw new GitTimeoutError("git diff", gitTimeoutMs());
     }
     // `-z` records: STATUS NUL path NUL, and for a rename or copy STATUS NUL old NUL new NUL.
     const diffEntries: Array<{ status: string; filePath: string }> = [];
@@ -650,6 +660,14 @@ function computeGitCandidateIdentity(
       const hiddenPosix = hiddenPath.split(path.sep).join("/");
       if (hiddenPosix === ".nexus" || hiddenPosix.startsWith(".nexus/")) continue;
       assertTrackedEntryAvailable(hiddenPosix);
+      // Absent files are the common case in a sparse checkout (everything outside the cone): one lstat of the full path
+      // instead of opening the directory chain.
+      try {
+        filesystem.lstatSync(path.join(workspacePath, hiddenPath));
+      } catch (err: any) {
+        if (err?.code === "ENOENT" || err?.code === "ENOTDIR") continue;
+        throw err;
+      }
       let details: ReturnType<typeof resolveWorkspaceFileDetails>;
       try {
         details = resolveWorkspaceFileDetails(workspacePath, hiddenPath, remainingBytesForTrackedPath(hiddenPosix), filesystem);
@@ -737,6 +755,9 @@ function computeGitCandidateIdentity(
       }
     }
   } catch (err: any) {
+    // A timeout keeps its type so callers can stop retrying a hung git (stateIdentityDisabled in agent.ts).
+    if (err instanceof GitTimeoutError) throw err;
+    if (isGitTimeout(err)) throw new GitTimeoutError("git", gitTimeoutMs());
     throw new Error(`Failed to query git status for candidate identity: ${err.message}`);
   }
 

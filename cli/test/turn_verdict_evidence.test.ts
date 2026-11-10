@@ -310,6 +310,58 @@ describe("D-04: the verdict follows this turn's evidence", () => {
     }
   });
 
+  /** A PATH git that appends a line to `log` whenever it is run as `git diff --cached`, then behaves as `mode`. */
+  function slowOrHugeGit(mode: "sleep" | "huge"): { dir: string; log: string; restore: () => void } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-fakegit-"));
+    const log = path.join(dir, "calls.log");
+    const realGit = execSync("which git", { encoding: "utf-8" }).trim();
+    const effect = mode === "sleep" ? "sleep 1" : "head -c 70000000 /dev/zero; exit 0";
+    fs.writeFileSync(path.join(dir, "git"), `#!/bin/sh\nfor a in "$@"; do if [ "$a" = "--cached" ]; then echo call >> ${log}; ${effect}; fi; done\nexec ${realGit} "$@"\n`, { mode: 0o755 });
+    const saved = { PATH: process.env.PATH, ms: process.env.NEXUS_GIT_TIMEOUT_MS };
+    process.env.PATH = `${dir}:${saved.PATH}`;
+    process.env.NEXUS_GIT_TIMEOUT_MS = "300";
+    return {
+      dir, log,
+      restore: () => {
+        process.env.PATH = saved.PATH;
+        if (saved.ms === undefined) delete process.env.NEXUS_GIT_TIMEOUT_MS; else process.env.NEXUS_GIT_TIMEOUT_MS = saved.ms;
+        fs.rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  }
+  const stateAgent = (repo: string) => new AutonomousAgent({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto" } as any);
+
+  test("a hung git costs one timeout, not one per read: the second state read does not call git again", () => {
+    const repo = auditRepo();
+    const fake = slowOrHugeGit("sleep");
+    const agent = stateAgent(repo);
+    try {
+      const first = (agent as any).workspaceStateIdentity();
+      const second = (agent as any).workspaceStateIdentity();
+      assert.equal(first, "unknown");
+      assert.equal(second, "unknown");
+      const calls = fs.existsSync(fake.log) ? fs.readFileSync(fake.log, "utf-8").trim().split("\n").length : 0;
+      assert.equal(calls, 1, `git was called ${calls} times`);
+    } finally {
+      agent.shutdown();
+      fake.restore();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a git whose output overflows the buffer leaves the state unknown, not 'no-git'", () => {
+    const repo = auditRepo();
+    const fake = slowOrHugeGit("huge");
+    const agent = stateAgent(repo);
+    try {
+      assert.equal((agent as any).workspaceStateIdentity(), "unknown");
+    } finally {
+      agent.shutdown();
+      fake.restore();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   describe("a real file write the workspace identity cannot see is never reported as no change", () => {
     const ignored = { ".gitignore": "build/\n", "build/old.js": "x\n" };
     async function ignoredTurn(script: Reply | Reply[]): Promise<{ r: TurnResult; repo: string }> {
