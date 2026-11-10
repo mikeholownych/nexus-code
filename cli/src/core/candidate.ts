@@ -718,7 +718,8 @@ function computeGitCandidateIdentity(
         } catch (err: any) {
           if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") throw err;
         }
-        modeLines.push(`${trackedPath}\t${mode}`);
+        // Escaped like every other manifest path, so a name with a tab and a newline cannot read as two entries.
+        modeLines.push(`${manifestPath(trackedPath)}\t${mode}`);
       }
       modeDigest = hashContent(modeLines.join("\n"));
     }

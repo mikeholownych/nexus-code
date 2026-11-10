@@ -213,13 +213,39 @@ describe("core.filemode=false does not hide a change of the executable bit", () 
     }
   });
 
-  test("filemode=true: the identity of a clean tree does not change with this feature (existing ids stay valid)", () => {
+  // sha256("CLEAN_TREE_NO_CANDIDATE_CHANGES"): the manifest hash of a clean tree before the MODES digest existed. Pinned
+  // as a literal so the test fails if a repository that honours the executable bit gets any extra manifest line.
+  const CLEAN_TREE_MANIFEST_HASH = "dbb1879a325e8f3898c56b4be5cd15826c2f1aa0d3da4e47687a328404012b0e";
+
+  test("filemode=true: a clean tree keeps its pre-existing manifest hash (existing ids stay valid)", () => {
     const repo = scriptRepo(0o644, "true");
     try {
-      const identity = computeCandidateIdentitySync(repo);
-      assert.match(JSON.stringify(identity), /"trackedChanges":\[\]/);
+      assert.equal(computeCandidateIdentitySync(repo).manifestHash, CLEAN_TREE_MANIFEST_HASH);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("filemode=false: the manifest hash of the same clean tree differs (the MODES digest is present)", () => {
+    const repo = scriptRepo(0o644, "false");
+    try {
+      assert.notEqual(computeCandidateIdentitySync(repo).manifestHash, CLEAN_TREE_MANIFEST_HASH);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("filemode=false: a tracked file name containing a tab and a newline cannot imitate two other tracked files", () => {
+    // Same mode text either way unless the paths are escaped: "a\tf-\nb\tf-" is both two files and one file name.
+    const two = repoWith(["a", "b"]);
+    const one = repoWith(["a\tf-\nb"]);
+    try {
+      git(two, "config", "core.fileMode", "false");
+      git(one, "config", "core.fileMode", "false");
+      assert.notEqual(computeCandidateIdentitySync(two).manifestHash, computeCandidateIdentitySync(one).manifestHash);
+    } finally {
+      fs.rmSync(two, { recursive: true, force: true });
+      fs.rmSync(one, { recursive: true, force: true });
     }
   });
 });
