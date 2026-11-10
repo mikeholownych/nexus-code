@@ -150,7 +150,7 @@ One row per clause of PLAN.md section 5 "Production bar". A row closes only with
 | I-5 | G1.1-4 measured with counts: 200 attempts per live endpoint, pass = `native_valid * 1000 >= attempts * 995`, zero invalid (`docs/v1.1.4/G1.1-4-LIVE-MATRIX.md`); cross-reference the section B WP-1107 G1.1-4 row | WP-1303 | OPEN; not run (needs the shared `GATEWAY` claim) |
 | I-6 | GBNF live smoke on the owner's llama.cpp host passes, then `toolGrammarDefault` is flipped on in a one-line commit citing the evidence | WP-1303 | OPEN; `toolGrammarDefault` is `false` (see `01M6KXHHJ3VQ`) |
 
-## I. Follow-ups from the PR #469 (WP-1317 D-01) independent review, 2026-11-09
+## J. Follow-ups from the PR #469 (WP-1317 D-01) independent review, 2026-11-09
 
 | Item | Sev | Finding | Status |
 |---|---|---|---|
