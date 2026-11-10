@@ -67,6 +67,7 @@ import { routeSlash } from "./slash/router.js";
 import { surfaceFacts } from "./surface_facts.js";
 import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -138,6 +139,8 @@ export class SidecarServer {
     } catch (err) {
       resumed = { ok: false, message: `Could not resume ${this.resume ?? "latest"}: ${errorText(err)}` };
     }
+    // A resume that found nothing to restore is a fresh start: the model detection it skipped runs now.
+    if (this.resume && !resumed?.ok) void this.app.getAgent().detectPlaceholderModel();
     this.emitSessionState();
     if (resumed) this.emit({ type: "notice", text: resumed.message });
     if (isNexusDirPermissive()) {
@@ -930,6 +933,7 @@ export class SidecarServer {
         updatedAt: now,
         workspace: config.workspace,
         model: config.model,
+        endpoint: persistableEndpoint(config.endpoint),
         messages,
         unverifiedChangesPending: agent.hasUnverifiedChanges(),
         tokenStats: agent.getTokenStats(),
@@ -1293,7 +1297,7 @@ async function main(argv: string[]): Promise<void> {
   const configLoadError = operatorConfigLoadError();
   if (configLoadError) throw new Error(`Configuration error: ${configLoadError.message}`);
   const options = program.opts();
-  const config = await autoDetectModel(buildConfig(options));
+  const config = await autoDetectModel(buildConfig(options), { resuming: Boolean(options.resume) });
   config.surface = "tui";
   const app = new ApplicationCore(config);
   const server = new SidecarServer({

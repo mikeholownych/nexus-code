@@ -1,0 +1,40 @@
+ NEXUS   ws  ⎇ main ●1 changed  model fake-model  mode: review · sandbox: off · workspace: trusted
+› SC:write go
+  ✓ approved Write src/new.ts
+
+  ✓ Created src/new.ts  +2 −0
+    ▎   1 + export const a = 1;
+    ▎   2 + export const b = 2;
+  ✓ approved verifier npm test
+
+Created the file.
+
+! Done · not verified  Files changed. npm test ran before the change; nothing checked the change itself.
+  → next: run /test, or ask Nexus to verify the change · v receipt
+
+› /git
+  ?? src/
+
+› /diff
+  No unstaged changes to tracked files; 1 untracked (see /git).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
