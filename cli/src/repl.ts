@@ -35,6 +35,7 @@ import { HunkStager } from "./stager.js";
 import { TurnResult, lifecycleStatusForTurn } from "./core/turn.js";
 import { buildSessionExport } from "./session_export.js";
 import { SensitivePersistenceError } from "./core/persistence_protection.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 interface PatchHunk {
   header: string;
@@ -168,10 +169,12 @@ export class InteractiveRepl {
         } else {
           console.log(pc.red(`Session not found: ${resumeSessionId}\n`));
           this.currentSessionId = this.sessionManager.generateSessionId();
+          void this.agent.detectPlaceholderModel();
         }
       } catch (err: any) {
         console.log(pc.red(`Failed to restore session ${resumeSessionId}: ${formatDiagnosticForOutput(err)}\n`));
         this.currentSessionId = this.sessionManager.generateSessionId();
+        void this.agent.detectPlaceholderModel();
       }
     } else {
       this.currentSessionId = this.sessionManager.generateSessionId();
@@ -289,6 +292,7 @@ export class InteractiveRepl {
       updatedAt: new Date().toISOString(),
       workspace: this.config.workspace,
       model: this.config.model,
+      endpoint: persistableEndpoint(this.config.endpoint),
       messages,
       unverifiedChangesPending: this.agent.hasUnverifiedChanges(),
       tokenStats: this.agent.getTokenStats(),
@@ -731,7 +735,10 @@ export class InteractiveRepl {
     });
 
     // Populate /model completion from the endpoint's real model list (best effort, never blocks the prompt).
-    new LocalLlmClient(this.config).listModels().then((models) => { this.knownModels = models; }).catch(() => {});
+    // Not inside the provider window a resume restored (a later `/model` still lists them on request).
+    if (!this.agent.isProviderWindowOpen()) {
+      new LocalLlmClient(this.config).listModels().then((models) => { this.knownModels = models; }).catch(() => {});
+    }
 
     this.agent.getSkillManager().startWatcher((skills) => {
       console.log(pc.dim(`\n🔄 [Hot-Reload] Skills library updated (${skills.length} available).`));
