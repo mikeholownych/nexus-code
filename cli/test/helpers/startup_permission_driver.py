@@ -73,7 +73,7 @@ def main():
                 if os.path.exists(os.path.join(plan["cwd"], "started")):
                     raise AssertionError("verifier began before approval")
                 # The verifier approval uses the same panel as every other: one `y` approves.
-                session.pump(0.5)  # let the panel render
+                session.pump(1.5)  # let the panel render; the Enter that sent /test keeps decision keys inert for 1 s
                 session.send(b"y", settle=0.2)
                 if plan.get("cancel"):
                     deadline = time.monotonic() + 15
