@@ -92,7 +92,7 @@ export class TerminalDashboard {
     const messages = this.agent.getMessages() as ChatMessage[];
     let objective = "";
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "user" && !isSkillNote(messages[i].content)) {
+      if (messages[i].role === "user" && !isSkillNote(messages[i])) {
         objective = redactSecrets(this.messageText(messages[i])).replace(/\s+/g, " ").trim();
         break;
       }

@@ -48,7 +48,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine } from "./skills.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine, withSkillNoteProvenance } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -1669,7 +1669,7 @@ export class AutonomousAgent {
       this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
     }
     this.activePlan = state.activePlan || [];
-    this.messages = state.messages || [];
+    this.messages = withSkillNoteProvenance(state.messages || []);
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
     // A ledger written by an earlier version lacks newer tracking fields (recovery, coverage): complete it now, before
@@ -1997,7 +1997,7 @@ export class AutonomousAgent {
   }
 
   public setMessages(msgs: ChatMessage[]): void {
-    this.messages = [...msgs];
+    this.messages = withSkillNoteProvenance(msgs);
   }
 
   /**
@@ -2037,7 +2037,7 @@ export class AutonomousAgent {
   ): void {
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
-    this.messages = [...msgs];
+    this.messages = withSkillNoteProvenance(msgs);
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
     if (this.objective) {
@@ -2734,11 +2734,13 @@ export class AutonomousAgent {
   }
 
   /**
-   * Whether a user-role message is Nexus's own note (continuation, recovery, step and empty-reply notes are sent in
-   * the user role, prefixed `[Nexus …]`), not something the operator asked for.
+   * Whether a user-role message is Nexus's own note, not something the operator asked for. The skill note is
+   * recognised by its provenance marker only, so operator text that begins with its prefix stays a request.
+   * Continuation, recovery, step and empty-reply notes are still recognised by their `[Nexus …]` text prefix
+   * (FINDINGS section E: moving them to provenance needs a migration for sessions saved by v1.1.3).
    */
-  private harnessNote(text: string): boolean {
-    return /^\[Nexus[ :]/.test(text);
+  private harnessNote(message: ChatMessage, text: string): boolean {
+    return isSkillNote(message) || (/^\[Nexus[ :]/.test(text) && !text.startsWith(SKILL_NOTE_PREFIX));
   }
 
   /** User messages the pinned ledger already carries (the objective and steering); compaction does not repeat them. */
@@ -3173,7 +3175,7 @@ export class AutonomousAgent {
         }
       }
       // Earlier requests are the operator's: Nexus's own notes are not tasks (CTX-06).
-      if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !this.harnessNote(contentText)) {
+      if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !this.harnessNote(message, contentText)) {
         if (!priorTasks.includes(contentText)) priorTasks.push(contentText);
       }
       if (message.role === "assistant" && message.tool_calls) {
@@ -3452,8 +3454,8 @@ export class AutonomousAgent {
   private compactionCandidate(source: ChatMessage[], recentToolTurns: number, detailBudgetChars: number, unseenOutputChars?: number): { messages: ChatMessage[]; removedObservations: string[] } {
     const system = source[0];
     // The operator's latest request; a skill note written after it is a hint, not the request.
-    const currentUserIndex = source.map((message, index) => message.role === "user" && !isSkillNote(message.content) ? index : -1).filter((index) => index >= 0).at(-1);
-    const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]?.content) ? currentUserIndex + 1 : -1;
+    const currentUserIndex = source.map((message, index) => message.role === "user" && !isSkillNote(message) ? index : -1).filter((index) => index >= 0).at(-1);
+    const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]) ? currentUserIndex + 1 : -1;
     const toolTurnStarts = source
       .map((message, index) => message.role === "assistant" && message.tool_calls?.length ? index : -1)
       .filter((index) => index >= 0);
@@ -3579,7 +3581,7 @@ export class AutonomousAgent {
     let recorded = false;
 
     // The request the findings serve is the operator's latest, not a note Nexus added (CTX-06).
-    const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(normalizeMessageContent(message.content ?? "").text.join("")));
+    const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(message, normalizeMessageContent(message.content ?? "").text.join("")));
     const request = normalizeMessageContent(lastUser?.content ?? "").text.join("").slice(0, 8_000);
     const contextLimit = this.contextLimit();
     const inputBudget = contextLimit - this.getContextReserves().completion - countTokens(FINDINGS_INSTRUCTIONS) - countTokens(request) - 1_000;
@@ -4168,7 +4170,7 @@ export class AutonomousAgent {
   /** Whether everything after `from` is the operator's submission: the message, then at most its skill note. */
   private isSubmissionTail(from: number): boolean {
     const tail = this.messages.slice(from);
-    return tail.length === 1 || (tail.length === 2 && typeof tail[1].content === "string" && tail[1].content.startsWith(SKILL_NOTE_PREFIX));
+    return tail.length === 1 || (tail.length === 2 && isSkillNote(tail[1]));
   }
 
   private buildSystemPrompt(): string {
@@ -4799,7 +4801,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           return {
             success: false,
             output: "",
-            error: `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
+            error: `Error: Skill '${oneLine(String(skillName ?? "").slice(0, 200))}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
           };
         }
         // No skill has that name: treat the text as a search. Matching advertises descriptions and activates nothing.
@@ -4815,7 +4817,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
       return {
         success: true,
-        output: `[Activated Skill: ${skill.name}] [source: ${skill.path}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n[Host application: Nexus Code. Provider/model identity does not change the host; select host-specific instructions for Nexus Code.]\n\n${skill.content}`,
+        output: `[Activated Skill: ${skill.name}] [source: ${oneLine(skill.path)}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n[Host application: Nexus Code. Provider/model identity does not change the host; select host-specific instructions for Nexus Code.]\n\n${skill.content}`,
       };
     });
 
@@ -5104,7 +5106,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (toolName === "activate_skill") {
       const skillName = args?.name;
       if (skillName && this.skillManager.getUntrustedSkill(skillName)) {
-        const cancelMsg = `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`;
+        const cancelMsg = `Error: Skill '${oneLine(String(skillName ?? "").slice(0, 200))}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`;
         const receipt: ExecutionReceipt = {
           invocationId: call.id,
           taskId: this.activeWorktree?.taskId || this.currentTaskId,
@@ -5724,7 +5726,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Skills whose descriptions fit this message, written once right after it and never moved: every later
         // request extends the earlier ones, so the provider's prefix cache survives each new prompt.
         const skillNote = this.skillNoteFor(taskPrompt);
-        if (skillNote) this.messages.push({ role: "user", content: skillNote });
+        if (skillNote) this.messages.push({ role: "user", content: skillNote, harness: "skill-note" });
         // The objective is durable before anything acts on it.
         this.persistProgress({ messages: true });
       }
