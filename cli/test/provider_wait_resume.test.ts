@@ -323,6 +323,22 @@ function agentFor(url: string, repo: string, stateDir: string, clock: RecoveryCl
   return agent;
 }
 
+/** A second provider for the planner tier, with its own repo and state directory, all removed by `cleanup`. */
+async function plannerSide(script: Parameters<typeof startRecoveryGateway>[0]) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-planner-"));
+  const gateway = await startRecoveryGateway(script);
+  const host = agentFor(gateway.url, makeRepo(root), path.join(root, "state"), fakeClock());
+  return {
+    gateway,
+    client: (host as any).client,
+    cleanup: async () => {
+      host.shutdown();
+      await gateway.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
 describe("the resumed provider wait (fake recovery clock)", () => {
   /**
    * The first request is answered 429 + Retry-After 60 s and the turn is cancelled while it waits; a second agent
@@ -475,18 +491,17 @@ describe("the resumed provider wait (fake recovery clock)", () => {
   test("planner/coder routing: step 1 on the planner does not wait, step 2 on the coder (the recorded endpoint) waits until the eligible time", async () => {
     const ctx = await interruptedThenRestored({});
     const plannerRequests: number[] = [];
-    const plannerGateway = await startRecoveryGateway((n) => {
+    const planner = await plannerSide((n) => {
       plannerRequests.push(ctx.resumedClock.now());
       return n === 1 ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] } : { kind: "text", content: "planner done" };
     });
-    const plannerHost = agentFor(plannerGateway.url, makeRepo(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-planner-"))), fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-planner-state-")), fakeClock());
     try {
       const a = ctx.resumed as any;
       const eligibleAt = eligibleAtOf(ctx.interrupted);
       const start = ctx.resumedClock.now();
       // Distinct endpoints: the planner serves step 1 (and plan updates), the coder (the recorded provider) the other steps.
       a.cognitiveRoutingEnabled = true;
-      a.plannerClient = (plannerHost as any).client;
+      a.plannerClient = planner.client;
       a.coderClient = a.client;
       const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
       assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
@@ -495,8 +510,7 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       assert.equal(ctx.requestedAt[0], eligibleAt, "the coder's request waited for the recorded eligible time");
       assert.equal(ctx.resumedClock.sleeps.length, 1, "one wait, at the coder step");
     } finally {
-      plannerHost.shutdown();
-      await plannerGateway.close();
+      await planner.cleanup();
       await ctx.cleanup();
     }
   });
@@ -524,19 +538,17 @@ describe("the resumed provider wait (fake recovery clock)", () => {
 
   test("with planner/coder routing, a queued /compact --llm stays held while the window covers the client it would use", async () => {
     const ctx = await interruptedThenRestored({});
-    const plannerGateway = await startRecoveryGateway(() => ({ kind: "text", content: "planner answer" }));
-    const plannerHost = agentFor(plannerGateway.url, makeRepo(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-planner-"))), fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-planner-state-")), fakeClock());
+    const planner = await plannerSide(() => ({ kind: "text", content: "planner answer" }));
     try {
-      const eligibleAt = eligibleAtOf(ctx.interrupted);
       const a = ctx.resumed as any;
       // Step 1 runs on the planner (another endpoint, so it does not wait); `compactNow` uses `this.client`, the recorded endpoint.
       a.cognitiveRoutingEnabled = true;
-      a.plannerClient = (plannerHost as any).client;
-      const ran: number[] = [];
+      a.plannerClient = planner.client;
+      const ran: boolean[] = [];
       const reports: Array<{ ids: string[]; message: string; status: string }> = [];
       const original = a.compactNow.bind(a);
       a.compactNow = (...args: unknown[]) => {
-        ran.push(ctx.resumedClock.now());
+        ran.push(args[0] as boolean);
         return original(...args);
       };
       const report = a.reportCompaction.bind(a);
@@ -544,16 +556,95 @@ describe("the resumed provider wait (fake recovery clock)", () => {
         reports.push({ ids, message: result.message, status });
         return report(ids, result, status);
       };
+      a.compactionQueue.push({ ids: ["plain-1"], llm: false, at: new Date().toISOString() });
       a.compactionQueue.push({ ids: ["queued-1"], llm: true, at: new Date().toISOString() });
       await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
-      assert.ok(plannerGateway.requests.length >= 1, "precondition: step 1 ran on the planner endpoint");
-      assert.deepEqual(ran, [], "the queued compaction never reached the provider inside the window");
-      assert.deepEqual(reports.map((x) => [x.ids, x.status]), [[["queued-1"], "cancelled"]], "it was reported once, as not run");
-      assert.match(reports[0].message, /\/compact was not run: the provider is still inside the retry window it asked for\./);
-      assert.deepEqual(a.compactionQueue, [], "and is not left queued");
+      assert.ok(planner.gateway.requests.length >= 1, "precondition: step 1 ran on the planner endpoint");
+      assert.deepEqual(ran, [false], "only the plain /compact ran (it makes no provider request); the --llm one never reached the provider inside the window");
+      const plain = reports.find((x) => x.ids[0] === "plain-1");
+      assert.ok(plain && plain.status !== "cancelled", `the plain /compact is not cancelled: ${JSON.stringify(reports)}`);
+      const held = reports.filter((x) => x.ids[0] === "queued-1");
+      assert.deepEqual(held.map((x) => x.status), ["cancelled"], "the --llm one was reported once, as not run");
+      assert.match(held[0].message, /\/compact was not run: the provider is still inside the retry window it asked for\./);
+      assert.deepEqual(a.compactionQueue, [], "and nothing is left queued");
     } finally {
-      plannerHost.shutdown();
-      await plannerGateway.close();
+      await planner.cleanup();
+      await ctx.cleanup();
+    }
+  });
+
+  test("/resume into a session with a pending wait replaces the agent's earlier last turn: the checkpoint during the sleep carries the eligible time", async () => {
+    const earlier = await plannerSide(() => ({ kind: "text", content: "an earlier answer" }));
+    let seen: any;
+    const ctx = await interruptedThenRestored({}, undefined, (agent) => {
+      const a = agent as any;
+      seen = { checkpoint: a.stateManager.loadTaskState(a.currentTaskId)?.lastTurn, host: agent.getLastTurnResult() };
+    });
+    try {
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      const a = ctx.resumed as any;
+      // The same agent had completed an unrelated turn before the operator ran /resume (the sidecar reuses its agent).
+      const host = agentFor(earlier.gateway.url, makeRepo(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-earlier-"))), fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-earlier-state-")), fakeClock());
+      const completed = await host.runTurn("an earlier turn");
+      host.shutdown();
+      assert.equal(completed.execution, "COMPLETED", "precondition");
+      a.lastTurnResult = completed;
+      ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted }, noArchive);
+      await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(Date.parse(String(seen.checkpoint?.interruption?.providerEligibleAt)), eligibleAt, `the checkpoint written during the sleep: ${JSON.stringify(seen.checkpoint?.execution)} ${JSON.stringify(seen.checkpoint?.interruption ?? null)}`);
+      assert.equal(eligibleAtOf(seen.host), eligibleAt, "and the host's last turn during the sleep");
+    } finally {
+      await earlier.cleanup();
+      await ctx.cleanup();
+    }
+  });
+
+  test("hybrid_search on a planner step inside the coder's window makes no embedding request before the eligible time", async () => {
+    const planner = await plannerSide((n) => (n === 1 ? { kind: "tools", calls: [{ name: "hybrid_search", args: { query: "base" } }] } : { kind: "text", content: "planner done" }));
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      a.cognitiveRoutingEnabled = true;
+      a.plannerClient = planner.client;
+      a.coderClient = a.client;
+      fs.writeFileSync(path.join(a.config.workspace, "notes.md"), "base notes about the answer\n");
+      const embeddings: number[] = [];
+      a.client.generateEmbedding = async () => {
+        embeddings.push(ctx.resumedClock.now());
+        throw new Error("embedding endpoint unavailable");
+      };
+      const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      const searched = ctx.resumed.getMessages().find((m: any) => m.role === "tool" && m.name === "hybrid_search");
+      assert.ok(searched && JSON.stringify(searched.content).includes("notes.md"), `precondition: the search ran lexically on the planner step: ${JSON.stringify(searched)}`);
+      assert.deepEqual(embeddings.filter((at) => at < eligibleAt), [], "no embedding request reached the coder's provider inside its window");
+      // Once the window has passed, the same engine uses embeddings again (the lexical-only index is rebuilt).
+      ctx.resumedClock.advance(eligibleAt - ctx.resumedClock.now() + 1);
+      await a.hybridSearch.search("base");
+      assert.ok(embeddings.length > 0, "after the window, embeddings are requested again");
+    } finally {
+      await planner.cleanup();
+      await ctx.cleanup();
+    }
+  });
+
+  test("a subagent spawned on a planner step is not started inside the coder's window", async () => {
+    const planner = await plannerSide((n) => (n === 1 ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "look around" } }] } : { kind: "text", content: "planner done" }));
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      a.cognitiveRoutingEnabled = true;
+      a.plannerClient = planner.client;
+      a.coderClient = a.client;
+      const r = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+      const spawned = ctx.resumed.getMessages().find((m: any) => m.role === "tool" && m.name === "spawn_subagent");
+      assert.match(JSON.stringify(spawned?.content ?? null), /Subagent not started: the provider is still inside the retry window it asked for/);
+      assert.deepEqual(ctx.requestedAt.filter((at) => at < eligibleAt), [], "nothing reached the coder's provider inside its window");
+    } finally {
+      await planner.cleanup();
       await ctx.cleanup();
     }
   });

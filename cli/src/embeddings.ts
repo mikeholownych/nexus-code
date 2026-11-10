@@ -209,12 +209,25 @@ export class HybridSearchEngine {
   private vectorIndex: VectorIndex;
   private client?: LocalLlmClient;
   private indexed: boolean = false;
+  /** Asked before every embedding request, with the client's endpoint; false keeps the search lexical for now. */
+  private embeddingsAllowed: (endpoint: string) => boolean = () => true;
+  /** The index was built while embeddings were held back; it is rebuilt with them once they are allowed. */
+  private lexicalOnly: boolean = false;
 
   constructor(workspace: string, client?: LocalLlmClient) {
     this.workspace = path.resolve(workspace);
     this.bm25 = new BM25Index();
     this.vectorIndex = new VectorIndex();
     this.client = client;
+  }
+
+  /** Lets the owner hold embedding requests back (for example while a provider's retry window is open). */
+  public setEmbeddingGate(allowed: (endpoint: string) => boolean): void {
+    this.embeddingsAllowed = allowed;
+  }
+
+  private canEmbed(): boolean {
+    return Boolean(this.client) && this.embeddingsAllowed(this.client!.endpoint);
   }
 
   private isIgnored(relPath: string): boolean {
@@ -295,8 +308,10 @@ export class HybridSearchEngine {
           this.bm25.addDocument(chunkId, chunkText, meta);
           totalChunks++;
 
-          // Attempt embedding if client configured
-          if (this.client) {
+          // Attempt embedding if client configured (and its provider may be asked)
+          if (this.client && !this.canEmbed()) {
+            this.lexicalOnly = true;
+          } else if (this.client) {
             try {
               const emb = await this.client.generateEmbedding(chunkText);
               this.vectorIndex.addVector(chunkId, emb, meta);
@@ -318,7 +333,13 @@ export class HybridSearchEngine {
     query: string,
     options: { mode?: "hybrid" | "semantic" | "lexical"; path?: string; limit?: number } = {},
   ): Promise<SearchMatch[]> {
+    if (this.indexed && this.lexicalOnly && this.canEmbed()) {
+      this.bm25 = new BM25Index();
+      this.vectorIndex = new VectorIndex();
+      this.indexed = false;
+    }
     if (!this.indexed) {
+      this.lexicalOnly = false;
       await this.indexWorkspace();
     }
 
@@ -329,7 +350,7 @@ export class HybridSearchEngine {
     const lexicalMatches = this.bm25.search(query, limit * 2);
 
     let semanticMatches: Array<{ id: string; score: number; metadata: ChunkMetadata }> = [];
-    if (this.client && (mode === "hybrid" || mode === "semantic")) {
+    if (this.client && this.canEmbed() && (mode === "hybrid" || mode === "semantic")) {
       try {
         const queryEmb = await this.client.generateEmbedding(query);
         semanticMatches = this.vectorIndex.search(queryEmb, limit * 2);

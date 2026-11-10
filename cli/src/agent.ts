@@ -978,7 +978,7 @@ export class AutonomousAgent {
    * again, and the recovery record of that wait (its real submissions, for the status shown while waiting). Consumed
    * by the first inference step of the next turn.
    */
-  private resumedProviderWait?: { eligibleAt: string; record?: ProviderRecoveryRecord; lastTurn: TurnResult };
+  private resumedProviderWait?: { eligibleAt: string; record?: ProviderRecoveryRecord };
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
@@ -1182,6 +1182,7 @@ export class AutonomousAgent {
       this.coderClient = this.client;
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
+    this.gateEmbeddings();
     this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: verifierTimeoutSecs(config.verifierTimeoutSecs) }));
     this.browser = new BrowserDriver(ws);
     this.knowledge = new KnowledgeGraph(ws, { readOnly: initialReadOnly });
@@ -1589,7 +1590,7 @@ export class AutonomousAgent {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: turn ? lifecycleStatusForTurn(turn) : this.verifiedWorktreeCompletion ? "completed" : "in_progress",
-      lastTurn: turn ?? this.getLastTurnResult() ?? null,
+      lastTurn: turn ?? this.lastTurnResult ?? null,
       activePlan: this.activePlan,
       milestones: [],
       worktreeBinding: this.activeWorktree
@@ -2485,6 +2486,7 @@ export class AutonomousAgent {
     // specimen worktree, not the repository manager's authority root.
     if (!this.managedWorktreeWorkspaceSwitch) this.worktreeManager = new WorktreeManager(newWorkspace);
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
+    this.gateEmbeddings();
     this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(newWorkspace);
     this.knowledge = new KnowledgeGraph(newWorkspace, { readOnly });
@@ -4117,9 +4119,25 @@ export class AutonomousAgent {
   }
 
   /** Runs (or, when `cancelReason` is given, cancels) the queued operator compactions, reporting each outcome. */
-  private async drainCompactionQueue(step: number, signal?: AbortSignal, cancelReason?: string): Promise<void> {
+  private async drainCompactionQueue(step: number, signal?: AbortSignal, cancelReason?: string, closing = false): Promise<void> {
+    // `/compact --llm` calls the main client's provider: held (kept queued, or cancelled when the turn is closing)
+    // while a restored window covers it. A plain `/compact` makes no provider request and runs.
+    const held: typeof this.compactionQueue = [];
+    try {
+      await this.drainCompactionEntries(step, signal, cancelReason, closing, held);
+    } finally {
+      this.compactionQueue.unshift(...held);
+    }
+  }
+
+  private async drainCompactionEntries(step: number, signal: AbortSignal | undefined, cancelReason: string | undefined, closing: boolean, held: typeof this.compactionQueue): Promise<void> {
     while (this.compactionQueue.length) {
       const request = this.compactionQueue.shift()!;
+      if (!cancelReason && request.llm && this.resumedWindowCovers(this.client.endpoint)) {
+        if (closing) this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_COMPACT_REASON}.` }, "cancelled");
+        else held.push(request);
+        continue;
+      }
       if (cancelReason) {
         this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${cancelReason}.` }, "cancelled");
         continue;
@@ -4601,6 +4619,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           output: "",
           error:
             "Error: Subagent depth limit reached. Solve the task directly without spawning additional subagents.",
+        };
+      }
+
+      // A helper's agent builds its own clients from this config, so its first request would reach the provider a
+      // resumed turn is still waiting out. Declined for now; the model can go on without it or ask again later.
+      if (this.resumedWindowCovers(this.config.endpoint)) {
+        return {
+          success: false,
+          output: "",
+          error: `Subagent not started: ${RESUMED_WINDOW_COMPACT_REASON}. Continue without it, or start it in a later step.`,
         };
       }
 
@@ -5510,12 +5538,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   }
 
   public getLastTurnResult(): TurnResult | undefined {
-    // Until the next turn ends, a restored turn still waiting out its provider window is the last one: saves keep it.
-    return this.lastTurnResult ?? this.resumedProviderWait?.lastTurn;
+    return this.lastTurnResult;
   }
 
   /** Records the provider window a restored turn was waiting out when it ended, if any (see resumedProviderWait). */
   private rememberResumedProviderWait(lastTurn: TurnResult | null | undefined): void {
+    // The restored record's last turn replaces this agent's own (a /resume reuses the agent): checkpoints and saves
+    // written until the next turn ends describe the restored conversation, not an unrelated earlier turn.
+    this.lastTurnResult = lastTurn ?? undefined;
     const turn = lastTurn?.execution === "INTERRUPTED" ? lastTurn : undefined;
     const interruption = turn?.interruption;
     const eligibleAt = interruption?.phase === "provider_wait" ? interruption.providerEligibleAt : undefined;
@@ -5525,7 +5555,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       return;
     }
     const recoveries = turn.providerRecovery ?? [];
-    this.resumedProviderWait = { eligibleAt, record: recoveries[recoveries.length - 1], lastTurn: turn };
+    this.resumedProviderWait = { eligibleAt, record: recoveries[recoveries.length - 1] };
+  }
+
+  /** Embedding requests go to the main client's provider: held back while a restored window for it is open. */
+  private gateEmbeddings(): void {
+    this.hybridSearch.setEmbeddingGate((endpoint) => !this.resumedWindowCovers(endpoint));
   }
 
   /** True while a restored provider window is still open and applies to this endpoint (or to any, when none was recorded). */
@@ -5935,8 +5970,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Operator /compact queued during the previous step runs here: its inference and tool batch have settled.
         // False when a compaction that is not durable ends the turn.
         const drainQueuedCompactions = async (): Promise<boolean> => {
-          // `/compact --llm` calls the provider through this.client: held while a resumed window still covers it.
-          if (!this.compactionQueue.length || this.resumedWindowCovers(this.client.endpoint)) return true;
+          // A `/compact --llm` stays queued while a resumed window covers the provider it calls (see drainCompactionQueue).
+          if (!this.compactionQueue.length) return true;
           try {
             await this.drainCompactionQueue(currentStep, signal);
           } catch (err) {
@@ -6601,7 +6636,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // Queued /compact: run now that the last step has settled, or cancelled with the turn.
       if (this.compactionQueue.length) {
         try {
-          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : this.resumedWindowCovers(this.client.endpoint) ? RESUMED_WINDOW_COMPACT_REASON : undefined);
+          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : undefined, true);
         } catch (err) {
           if (!(err instanceof CompactionCommitError)) throw err;
           persistenceFailure ??= err.outcome.message;
