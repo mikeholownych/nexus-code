@@ -28,7 +28,7 @@ export interface MergeOptions {
   /** Rewrite the message of a lone clean commit with `message` (the model path only; a plain `-m` leaves it alone). */
   amendSingleCommit?: boolean;
   /** The working state the message was written for: the merge refuses if the state is no longer exactly this. */
-  expectedState?: { head: string; tree: string };
+  expectedState?: { branch: string; head: string; tree: string };
 }
 
 const NON_INTERACTIVE = { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" };
@@ -219,8 +219,8 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   const mctx = resolveMergeContext(ctx, options);
   const { repo, source, branch, targetName, targetEntry, targetSha, state, gateState, waiver, mergeBase, ahead } = mctx;
 
-  if (options.expectedState && (options.expectedState.head !== gateState.head || options.expectedState.tree !== gateState.tree)) {
-    throw new WorktreeError("the worktree changed while the commit message was being written; nothing was merged. Run the command again");
+  if (options.expectedState && (options.expectedState.branch !== branch || options.expectedState.head !== gateState.head || options.expectedState.tree !== gateState.tree)) {
+    throw new WorktreeError("the worktree (its branch, HEAD or content) changed while the commit message was being written; nothing was merged. Run the command again");
   }
 
   const notes: string[] = [];

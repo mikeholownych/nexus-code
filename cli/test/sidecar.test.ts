@@ -727,6 +727,29 @@ describe("SidecarServer: sessions and slash commands", () => {
     });
   });
 
+  test("cancelling /worktree merge --ai-message while the model is asked is accepted and merges nothing", async () => {
+    await withSidecar(() => ({ kind: "text", content: "feat: model message", delayMs: 3000 }), "auto", async ({ server, events, send, repo }) => {
+      const sh = (cwd: string, cmd: string) => execFileSync("sh", ["-c", cmd], { cwd, encoding: "utf8" }).trim();
+      await send({ type: "slash", id: "w1", command: "worktree", args: "switch -c feature/sidecar-cancel --no-copy" });
+      await server.idle();
+      const dir = path.join(repo, ".nexus", "worktrees", "feature-sidecar-cancel");
+      fs.writeFileSync(path.join(dir, "c.txt"), "c\n");
+      sh(dir, "git add c.txt && git commit -q -m c");
+      await send({ type: "slash", id: "w2", command: "cd", args: dir });
+      await server.idle();
+      const before = sh(repo, "git rev-parse HEAD");
+      await send({ type: "slash", id: "w3", command: "worktree", args: "merge ^ --ai-message --no-verify-receipt --reason sidecar-cancel" });
+      await new Promise((r) => setTimeout(r, 300)); // the model request is in flight
+      await send({ type: "cancel" });
+      await server.idle();
+      assert.equal(events.some((e) => e.type === "notice" && /cannot be cancelled/.test(e.text)), false, "the merge route is cancellable");
+      const reply = events.filter((e) => e.type === "slash.result").find((e) => e.id === "w3");
+      assert.equal(reply.success, false, reply.output);
+      assert.equal(sh(repo, "git rev-parse HEAD"), before, "nothing was merged");
+      assert.ok(fs.existsSync(dir), "the worktree was not removed");
+    });
+  });
+
   test("cancelling /tdd stops it with an honest result", async () => {
     await withSidecar(() => ({ kind: "text", content: "slow answer", delayMs: 3000 }), "auto", async ({ server, events, send }) => {
       const started = Date.now();

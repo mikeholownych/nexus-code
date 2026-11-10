@@ -384,3 +384,35 @@ test("a state that changed while the model was writing the message is not merged
     assert.ok(fs.existsSync(dir));
   } finally { f.cleanup(); }
 });
+
+test("a branch switched in the source worktree while the model was writing is not merged, rewritten or removed", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    const r = await f.run(dir, MERGE, async () => {
+      git(dir, "switch", "-q", "-c", "next-task"); // same HEAD and same working tree, different branch
+      return "feat(b): add b.txt";
+    });
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /changed while/i);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "init", "the target is untouched");
+    assert.ok(fs.existsSync(dir), "the worktree is kept");
+    assert.equal(git(dir, "branch", "--show-current"), "next-task");
+    assert.match(git(f.repo, "branch", "--list", "next-task"), /next-task/, "the new branch is not deleted");
+  } finally { f.cleanup(); }
+});
+
+test("an already-aborted signal never sends the model request", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    const stop = new AbortController();
+    stop.abort();
+    let calls = 0;
+    const r = await runWorktreeCommandAsync(MERGE, { cwd: dir, home: f.home, readOnly: false }, { completer: async () => { calls++; return "feat: x"; }, signal: stop.signal });
+    assert.equal(calls, 0, "no request is sent");
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /Cancelled/);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "init");
+  } finally { f.cleanup(); }
+});
