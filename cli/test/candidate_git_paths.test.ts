@@ -133,3 +133,27 @@ describe("git state that hides edits from `git status` cannot hide them from the
     }
   });
 });
+
+describe("unmerged entries", () => {
+  for (const side of ["ours-deleted", "theirs-deleted"] as const) {
+    test(`an edit to the surviving file of a modify/delete conflict (${side}) changes the identity`, () => {
+      const repo = repoWith(["f.txt", "keep.txt"]);
+      try {
+        const main = git(repo, "rev-parse", "--abbrev-ref", "HEAD").trim();
+        git(repo, "checkout", "-q", "-b", "other");
+        if (side === "theirs-deleted") { git(repo, "rm", "-q", "f.txt"); } else { fs.writeFileSync(path.join(repo, "f.txt"), "other change\n"); }
+        git(repo, "commit", "-qam", "other");
+        git(repo, "checkout", "-q", main);
+        if (side === "theirs-deleted") { fs.writeFileSync(path.join(repo, "f.txt"), "main change\n"); } else { git(repo, "rm", "-q", "f.txt"); }
+        git(repo, "commit", "-qam", "main");
+        try { git(repo, "merge", "other"); } catch { /* the conflict is the point */ }
+        assert.match(git(repo, "status", "--porcelain"), /^(DU|UD) f\.txt/m);
+        const before = id(repo);
+        fs.writeFileSync(path.join(repo, "f.txt"), "edited without staging\n");
+        assert.notEqual(id(repo), before);
+      } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  }
+});

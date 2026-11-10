@@ -341,6 +341,13 @@ export function computeMaterialDependenciesHash(
  * a backslash, a newline, a tab or non-ASCII letters arrives exactly as stored. A name that is not valid UTF-8 cannot
  * be turned into a path string without changing it, so it throws: the identity is unknown, never "equal".
  */
+class GitPathDecodeError extends Error {
+  constructor() {
+    super("a file name that is not valid UTF-8 cannot be decoded");
+    this.name = "GitPathDecodeError";
+  }
+}
+
 function decodeGitTokens(buffer: Buffer): string[] {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const out: string[] = [];
@@ -349,7 +356,7 @@ function decodeGitTokens(buffer: Buffer): string[] {
     try {
       out.push(decoder.decode(Buffer.from(raw, "latin1")));
     } catch {
-      throw new Error("a file name that is not valid UTF-8 cannot be decoded");
+      throw new GitPathDecodeError();
     }
   }
   return out;
@@ -555,7 +562,7 @@ function computeGitCandidateIdentity(
     } catch (err: any) {
       // A name that cannot be decoded, or a git that hangs, makes the identity unknown; any other diff failure keeps the
       // previous fallback.
-      if (/cannot be decoded/.test(String(err?.message))) throw err;
+      if (err instanceof GitPathDecodeError) throw err;
       if (isGitTimeout(err)) throw new Error(`git diff timed out after ${gitTimeoutMs()} ms`);
     }
     // `-z` records: STATUS NUL path NUL, and for a rename or copy STATUS NUL old NUL new NUL.
@@ -689,7 +696,10 @@ function computeGitCandidateIdentity(
         } else {
           assertTrackedEntryAvailable(posixPath);
           // Tracked modification (staged or unstaged or typechange or deletion)
-          if (code.includes("D")) {
+          // An unmerged entry (DU, UD, DD, AA, UU, AU, UA) can name a file that still exists in the working tree even
+          // when one side deleted it; it is read like any other file, never assumed deleted.
+          const unmerged = code.includes("U") || code === "DD" || code === "AA";
+          if (code.includes("D") && !unmerged) {
             setTrackedEntry({
               path: posixPath,
               mode: "000000",
