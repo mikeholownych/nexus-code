@@ -266,12 +266,13 @@ export async function runWorktreeCommandAsync(tokens: string[], run: RunContext,
     return runWorktreeCommand(tokens, run); // nothing to describe: the ordinary path
   }
 
+  if (deps.signal?.aborted) return { success: false, output: "Cancelled before the model was asked: nothing was merged, committed or removed." };
   const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS, deps.signal, mergeOptions);
 
   if (deps.signal?.aborted) return { success: false, output: "Cancelled while the model was being asked: nothing was merged, committed or removed." };
 
   try {
-    const options: MergeOptions = { ...aiOptions, expectedState: { head: mctx.gateState.head, tree: mctx.gateState.tree }, ...(generated.message ? { message: generated.message } : {}) };
+    const options: MergeOptions = { ...aiOptions, expectedState: { branch: mctx.branch, head: mctx.gateState.head, tree: mctx.gateState.tree }, ...(generated.message ? { message: generated.message } : {}) };
     const result = mergeWorktree(ctx, options);
     return { ...result, output: `${generated.note}\n${result.output}` };
   } catch (err) {
