@@ -14,7 +14,7 @@ import { LocalLlmClient } from "./client.js";
 import { HarnessConfig, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { isNexusDirPermissive } from "./doctor.js";
-import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges } from "./git.js";
+import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges, workspaceStatus } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import { formatDiagnosticForOutput } from "./ui.js";
 import {
@@ -1229,11 +1229,8 @@ export class InteractiveRepl {
               continue;
             }
             try {
-              const status = execSync("git status --short", {
-                cwd: this.config.workspace,
-                encoding: "utf-8",
-                stdio: ["pipe", "pipe", "pipe"],
-              }).trim();
+              // Same status as the header, /commit and the TUI /git: Nexus's own .nexus state is not a change.
+              const status = workspaceStatus(this.config.workspace, "--short").trim();
               console.log(pc.bold(pc.white("\nGit Status:")));
               console.log(status ? status : pc.green("Working tree clean"));
             } catch (err: any) {
