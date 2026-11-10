@@ -231,6 +231,19 @@ describe("D-04: the verdict follows this turn's evidence", () => {
     }
   });
 
+  test("run_command with background: true (no service_name, no shell &) keeps the obligation", async () => {
+    // The documented way to run a managed process without blocking the turn: the text of the command shows nothing.
+    const bg = { kind: "tools" as const, calls: [{ name: "run_command", args: { command: "sleep 2; echo late > late.txt", background: true } }] };
+    const { results: [r], repo } = await turns([bg]);
+    try {
+      assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+      assert.equal(r.unverifiedChangesPending, true);
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 2600));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   describe("a real file write the workspace identity cannot see is never reported as no change", () => {
     const ignored = { ".gitignore": "build/\n", "build/old.js": "x\n" };
     async function ignoredTurn(script: Reply | Reply[]): Promise<{ r: TurnResult; repo: string }> {

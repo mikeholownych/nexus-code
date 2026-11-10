@@ -5268,7 +5268,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     const operationSeq = ++this.operationSeq;
     // The file as it is right before this operation (after any approval wait), so the reported diff is this
     // operation's change only and never includes edits already in the working tree.
-    if (toolName === "run_command" && (args.service_name || MAY_OUTLIVE_COMMAND.test(String(args.command ?? "")))) this.turnBackgroundCommands++;
+    // run_command's own ways to run work past the call (`background`, `service_name`) and a command that backgrounds
+    // itself. Counted before the approval wait: a denied call changes nothing, so the extra count can only keep the
+    // previous UNVERIFIED, never lift one wrongly (conservative).
+    if (toolName === "run_command" && (args.background || args.service_name || MAY_OUTLIVE_COMMAND.test(String(args.command ?? "")))) this.turnBackgroundCommands++;
     const diffTarget = this.observer?.onFileChange && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
     const before = diffTarget ? snapshot(diffTarget) : undefined;
     if (this.durable && this.stateManager && durableTaskId) {
