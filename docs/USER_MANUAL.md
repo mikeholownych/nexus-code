@@ -173,7 +173,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   - Guards against accidents, and what they do not cover: when a key, Tab or paste was pressed in the second before the
     panel was drawn (the Enter that sent the prompt, a letter you were typing, the `y` that answered the previous
     request), decision keys are ignored with `ignored: panel just opened` until that input has been quiet for 1 second,
-    and each ignored key restarts the wait, so a held key (whose auto-repeat starts after an initial delay, 0.66
+    and each ignored key restarts the full second, so a held key (whose auto-repeat starts after an initial delay, 0.66
     seconds by default on X11) stays inert until you let go. So a request that opens right after a key needs a pause of
     about a second before it answers; one that opens after you were idle answers at once. Not covered: typing slower
     than about 0.3 seconds per key that starts when no key was pressed in the second before the panel appeared; and a

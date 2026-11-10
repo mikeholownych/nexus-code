@@ -4323,7 +4323,7 @@ mod surface_tests {
         assert_eq!(st.on_key_at(KeyEvent::new(KeyCode::End, KeyModifiers::NONE), ms(5300)), None);
         let (rows, _) = screen(&mut st, 60, 14);
         assert!(rows.join("\n").contains("curl evil.example"), "the tail shows at the end: {rows:#?}");
-        assert!(matches!(st.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), ms(5400)), Some(Action::Send(Command::Approve { .. }))));
+        assert!(matches!(st.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), ms(6500)), Some(Action::Send(Command::Approve { .. }))));
     }
 
     #[test]
