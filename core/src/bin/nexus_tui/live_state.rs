@@ -206,6 +206,11 @@ pub struct Session {
     /// The saved session's id, when the sidecar reports it.
     pub session_id: Option<String>,
     pub posture: Option<crate::protocol::PostureInfo>,
+    /// Surface facts the sidecar reports (v1.1.4 I-3); `None` from an older sidecar.
+    pub read_only: Option<bool>,
+    pub context_tokens: Option<u64>,
+    pub context_limit: Option<u64>,
+    pub endpoint_kind: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -780,7 +785,7 @@ impl LiveState {
                 None,
                 Vec::new(),
             ),
-            Event::SessionState { workspace_name, model, mode, git, busy, session, posture } => {
+            Event::SessionState { workspace_name, model, mode, git, busy, session, posture, read_only, context_tokens, context_limit, endpoint_kind } => {
                 self.session = Session {
                     session_id: session,
                     workspace_name,
@@ -790,6 +795,10 @@ impl LiveState {
                     dirty: git.map_or(0, |git| git.dirty),
                     busy,
                     posture,
+                    read_only,
+                    context_tokens,
+                    context_limit,
+                    endpoint_kind,
                 };
                 self.cancel_requested &= busy;
                 if !self.cancel_requested {
@@ -2763,6 +2772,10 @@ mod tests {
                 busy: false,
                 session_id: None,
                 posture: None,
+                read_only: None,
+                context_tokens: None,
+                context_limit: None,
+                endpoint_kind: None,
             }
         );
     }

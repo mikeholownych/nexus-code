@@ -366,20 +366,20 @@ export class InteractiveRepl {
       ? pc.cyan(` [git: ${pc.bold(gitInfo.formattedBadge)}]`)
       : "";
 
+    const facts = surfaceFacts(this.app, this.currentSessionId);
     const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
     const sandboxStatus = this.config.sandbox ? (typeof this.config.sandbox === "string" ? this.config.sandbox : "on") : "off";
     const trustStatus = trusted ? "trusted" : "untrusted (nexus trust .)";
-    console.log(pc.dim(`mode: ${this.approvalMode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
+    console.log(pc.dim(`mode: ${facts.mode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
 
     console.log(`${pc.bold(pc.cyan("WORKSPACE"))}  ${pc.white(wsName)}${gitBadge}  ${pc.dim(this.config.workspace)}`);
-    const facts = surfaceFacts(this.app, this.currentSessionId);
     console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(verbose ? facts.model : this.config.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
     if (verbose) {
       console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint} (${facts.endpoint_kind})  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
       console.log(`${pc.bold(pc.cyan("READ-ONLY"))}  ${facts.read_only ? "yes" : "no"}`);
       console.log(`${pc.bold(pc.cyan("CONTEXT"))}    ${facts.context_tokens} of ${facts.context_limit} tokens`);
     }
-    console.log(`${pc.dim(`session ${this.currentSessionId} · ${this.agent.getHistoryCount()} messages · ${this.config.shell}`)}\n`);
+    console.log(`${pc.dim(`session ${facts.session} · ${this.agent.getHistoryCount()} messages · ${this.config.shell}`)}\n`);
   }
 
   private printHelp(): void {
