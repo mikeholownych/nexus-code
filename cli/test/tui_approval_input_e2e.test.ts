@@ -92,7 +92,7 @@ function twoWrites(_n: number, body: any): Reply {
   return { kind: "text", content: "Done." };
 }
 
-ptyTest("a single y approves a write, and the next approval takes a single y with no lock-out (D-01)", { timeout: 120_000 }, async () => {
+ptyTest("a single y approves a write, and the next approval takes a single y after the repeat window (D-01)", { timeout: 120_000 }, async () => {
   const gw = await startGateway(twoWrites);
   const repo = makeRepo();
   const home = makeHome();

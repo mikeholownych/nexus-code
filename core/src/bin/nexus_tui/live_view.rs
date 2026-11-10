@@ -3988,7 +3988,7 @@ mod surface_tests {
         let (rows, _) = screen(&mut panel, 100, 24);
         assert!(rows.join("\n").contains("approve this and every later action (switches to auto)?"), "{rows:#?}");
         assert_eq!(panel.on_key_at(k(KeyCode::Enter, none), ms(3200)), None, "a second Enter 100 ms later is a double tap");
-        assert_eq!(panel.on_key_at(k(KeyCode::Enter, none), ms(3700)), Some(Action::Send(Command::Approve { id: "a1".into(), always: true })));
+        assert_eq!(panel.on_key_at(k(KeyCode::Enter, none), ms(4300)), Some(Action::Send(Command::Approve { id: "a1".into(), always: true })));
     }
 
     #[test]
@@ -4005,14 +4005,15 @@ mod surface_tests {
         queued.note_approval_shown(ms(3016));
         assert_eq!(queued.on_key_at(k(KeyCode::Char('y')), ms(3100)), None, "a double-pressed `y` did not answer a2");
         assert!(matches!(&queued.overlay, Some(Overlay::Approval(a)) if a.id == "a2"));
-        assert_eq!(queued.on_key_at(k(KeyCode::Char('y')), ms(3400)), Some(Action::Send(Command::Approve { id: "a2".into(), always: false })), "no lock-out after a decision");
+        assert_eq!(queued.on_key_at(k(KeyCode::Char('y')), ms(3400)), None, "still inside the previous answer's repeat window");
+        assert_eq!(queued.on_key_at(k(KeyCode::Char('y')), ms(4500)), Some(Action::Send(Command::Approve { id: "a2".into(), always: false })), "a fresh press after it answers");
         // Delete just before the panel appears is typing too.
         let mut deleting = state(true);
         deleting.on_key_at(k(KeyCode::Delete), ms(10_000));
         feed(&mut deleting, &[WRITE_APPROVAL]);
         deleting.note_approval_shown(ms(10_050));
         assert_eq!(deleting.on_key_at(k(KeyCode::Enter), ms(10_100)), None, "Delete counts as typing");
-        assert_eq!(deleting.on_key_at(k(KeyCode::Enter), ms(10_400)), Some(Action::Send(Command::Approve { id: "a1".into(), always: false })));
+        assert_eq!(deleting.on_key_at(k(KeyCode::Enter), ms(11_400)), Some(Action::Send(Command::Approve { id: "a1".into(), always: false })));
     }
 
     #[test]
@@ -4033,7 +4034,7 @@ mod surface_tests {
             panel.note_approval_shown(ms(0));
             assert_eq!(panel.on_key_at(k(KeyCode::Char('a')), ms(3000)), None);
             assert!(matches!(&panel.overlay, Some(Overlay::Approval(a)) if a.confirming));
-            assert_eq!(panel.on_key_at(k(other), ms(3600)), expected, "{other:?} in the confirmation");
+            assert_eq!(panel.on_key_at(k(other), ms(4100)), expected, "{other:?} in the confirmation");
             if expected.is_none() {
                 assert!(matches!(&panel.overlay, Some(Overlay::Approval(a)) if !a.confirming && a.focus == Verdict::Approved), "{other:?} went back");
             }

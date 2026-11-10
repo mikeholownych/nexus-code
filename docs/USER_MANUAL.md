@@ -161,8 +161,8 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   - `y` approves and `n` denies. Enter takes the highlighted option, which is Approve when the panel opens; ←/→ (and
     Tab/Shift+Tab) move the highlight across all three options.
   - **Approve all later actions** (switches to auto mode) is never one key: `a`, or Enter on it, asks
-    `approve this and every later action?`. Enter or `a` confirms, but only 0.4 seconds or more after the question
-    (and after any ignored press), so a double tap or a held key does not. ←/→ go back, and other answers (`y`, `n`,
+    `approve this and every later action?`. Enter or `a` confirms, but only 1 second or more after the question
+    (and after any ignored press), so a double tap or a held key does not, including a held key's first repeat. ←/→ go back, and other answers (`y`, `n`,
     Esc) still answer.
   - Esc denies, at any time. Keys with Ctrl, Alt, Super or Meta never answer, nor do bursts of keys or pastes (their
     text goes to your draft, with its line breaks).

@@ -367,10 +367,13 @@ pub struct DiffReview {
     pub wrap: bool,
 }
 
-/// The one anti-misclick guard on the approval panel: a decision key (Enter, `y`, `n`, `a`) that arrives this soon
-/// after the panel first appears is ignored, with a notice, when the operator's typing was in flight as it appeared
-/// (the Enter that sent the prompt pressed twice, the next letter of a word, a repeated `y` meant for the previous
-/// request). Nobody reads a new panel and decides faster than this.
+/// Minimum length of the opening guard: a decision key within this long of the panel first being drawn is ignored,
+/// with a notice, when typing was in flight as it appeared. The guard actually lasts until
+/// `max(this after the panel is drawn, APPROVAL_REPEAT_QUIET after the last key)`, and every ignored key restarts it
+/// for this long. Related windows: `APPROVAL_IN_FLIGHT` decides whether typing was in flight (a key, Tab or paste
+/// within it before the panel is drawn), `APPROVAL_REPEAT_QUIET` keeps a held key's auto-repeat from answering,
+/// `APPROVAL_TYPING_RUN` keeps typing from the open panel from answering, and `APPROVAL_CONFIRM_DELAY` applies the
+/// same quiet period to the approve-all confirmation.
 pub const APPROVAL_GUARD: Duration = Duration::from_millis(250);
 /// A decision key this soon after text typed into the draft from the open panel is part of that typing (people type
 /// several keys a second), not an answer: its letter goes to the draft and the panel says so. A deliberate answer
@@ -381,7 +384,7 @@ pub const APPROVAL_TYPING_RUN: Duration = Duration::from_millis(300);
 pub const APPROVAL_REPEAT_QUIET: Duration = Duration::from_millis(1000);
 /// The confirming key of the approve-all question is ignored this soon after the question was asked (and after each
 /// ignored press, so a held or auto-repeating key stays inert until it is released).
-pub const APPROVAL_CONFIRM_DELAY: Duration = Duration::from_millis(400);
+pub const APPROVAL_CONFIRM_DELAY: Duration = APPROVAL_REPEAT_QUIET;
 const APPROVAL_CONFIRM_JUST_OPENED: &str = "ignored: confirm question just opened — press again to approve all later actions";
 const APPROVAL_UNSEEN: &str = "not approved: scroll to the end (↓ or End) first — part of this command was never shown";
 /// What the panel says when it ignores a key typed before the operator could see it.
@@ -1241,7 +1244,7 @@ impl LiveState {
             Some(Overlay::Approval(approval)) => {
                 approval.notice = Some("text went to your draft — pasted or typed too fast to be an answer");
                 approval.confirming = false;
-                approval.last_text = Some(Instant::now());
+                approval.last_text = Some(now);
                 if !text.is_empty() {
                     self.composer.paste(text);
                 }
@@ -1330,8 +1333,19 @@ impl LiveState {
     /// Input typed before the approval panel could be seen was dropped (the event loop found it queued as the panel
     /// opened): the panel says so.
     pub fn note_approval_input_ignored(&mut self) {
+        self.note_approval_input_ignored_at(Instant::now());
+    }
+
+    pub fn note_approval_input_ignored_at(&mut self, now: Instant) {
+        // The discarded input was typing in flight: it arms the guards exactly as a typed key does (the panel's
+        // opening guard reads `last_key` when it is first drawn; one already drawn is re-guarded here).
+        self.last_key = Some(now);
         if let Some(Overlay::Approval(approval)) = &mut self.overlay {
             approval.notice = Some(APPROVAL_IGNORED);
+            approval.last_text = Some(now);
+            if approval.shown {
+                approval.guard_until = Some(now + APPROVAL_REPEAT_QUIET);
+            }
         }
     }
 
@@ -1443,7 +1457,7 @@ impl LiveState {
         if approval.guard_until.is_some_and(|until| now < until) {
             approval.notice = Some(APPROVAL_IGNORED);
             // Re-armed by every ignored key: a held Enter or letter stays inert until it is released.
-            approval.guard_until = Some(now + APPROVAL_GUARD);
+            approval.guard_until = Some(approval.guard_until.unwrap_or(now).max(now + APPROVAL_GUARD));
             // The key was typing in flight: its letter is kept in the draft and starts the typing run, so the rest of
             // the word (an `a`, `n` and then `y` of "any") is text too.
             if let KeyCode::Char(c) = key.code {
@@ -3202,7 +3216,7 @@ mod tests {
         assert_eq!(state.composer, "draynay", "ignored letters are kept in the draft");
         // Once the guard has passed, the same key answers.
         assert_eq!(
-            state.on_key_at(key(KeyCode::Char('y')), opened + APPROVAL_GUARD + APPROVAL_TYPING_RUN),
+            state.on_key_at(key(KeyCode::Char('y')), opened + APPROVAL_REPEAT_QUIET + APPROVAL_TYPING_RUN),
             Some(Action::Send(Command::Approve { id: "approval-1".into(), always: false }))
         );
     }
@@ -3243,7 +3257,7 @@ mod tests {
         let later = opened + Duration::from_secs(1);
         assert_eq!(state.on_key_at(key(KeyCode::Enter), later), None);
         assert_eq!(
-            state.on_key_at(key(KeyCode::Char('a')), later + Duration::from_millis(500)),
+            state.on_key_at(key(KeyCode::Char('a')), later + Duration::from_millis(1100)),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: true
@@ -3322,7 +3336,7 @@ mod tests {
         state.note_approval_shown(base);
         assert_eq!(state.on_key_at(key(KeyCode::Char('a')), base), None, "`a` asks before approving every later action");
         assert_eq!(
-            state.on_key_at(key(KeyCode::Enter), base + Duration::from_millis(500)),
+            state.on_key_at(key(KeyCode::Enter), base + Duration::from_millis(1100)),
             Some(Action::Send(Command::Approve {
                 id: "approval-1".into(),
                 always: true
@@ -4236,11 +4250,11 @@ mod tests {
             assert_eq!(state.on_key_at(key(KeyCode::Right), at(t0, 5100)), None);
             assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5200)), None, "the first Enter asks to confirm");
             assert!(screen(&mut state).contains("every later action"), "the confirmation says what it approves");
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5700)), approve("approval-1", true));
+            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 6300)), approve("approval-1", true));
             // `a` asks the same confirmation; `a` again confirms.
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5100)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5600)), approve("approval-1", true));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 6200)), approve("approval-1", true));
         }
 
         #[test]
@@ -4254,11 +4268,11 @@ mod tests {
             assert!(shown.contains("▸y Approve"), "the focus is not reset: {shown}");
             assert_eq!(state.composer, "y", "the ignored `y` is kept as typing in the draft; the Enter is not");
             // A moment later the same key answers.
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 1200)), approve("approval-1", false));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 2000)), approve("approval-1", false));
         }
 
         #[test]
-        fn back_to_back_approvals_answer_without_a_lockout() {
+        fn back_to_back_approvals_wait_out_the_previous_answers_repeat_window() {
             let t0 = Instant::now();
             let mut state = ready();
             state.apply(ev(APPROVAL));
@@ -4342,7 +4356,7 @@ mod tests {
             assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5000)), None, "`a` asks");
             assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5030)), None, "a double tap does not confirm");
             assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.confirming && a.notice.is_some_and(|n| n.contains("confirm question just opened"))));
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5530)), approve("approval-1", true), "500 ms after the last press it confirms");
+            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 6130)), approve("approval-1", true), "1.1 s after the last press it confirms");
         }
 
         #[test]
@@ -4355,7 +4369,7 @@ mod tests {
                 assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5100 + i * 30)), None, "repeat {i}");
             }
             assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5100 + 33 * 30 + 500)), approve("approval-1", true), "a fresh press after a pause confirms");
+            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5100 + 33 * 30 + 1100)), approve("approval-1", true), "a fresh press after a pause confirms");
         }
 
         #[test]
@@ -4427,6 +4441,55 @@ mod tests {
                 assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 50_150)), None, "paste={paste}: Enter 50 ms after the panel");
                 assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 52_000)), approve("approval-1", false), "paste={paste}: a later press answers");
             }
+        }
+
+        #[test]
+        fn a_held_a_asks_and_its_first_repeat_does_not_confirm_approve_all() {
+            let (mut state, t0) = panel(5000);
+            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5000)), None, "asks");
+            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5660)), None, "first repeat at the X11 default delay");
+            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5700)), None, "repeats");
+            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5700 + 1100)), approve("approval-1", true), "a fresh press 1.1 s after the last key confirms");
+        }
+
+        #[test]
+        fn input_discarded_as_the_panel_opens_arms_the_guards() {
+            let t0 = Instant::now();
+            let mut state = ready();
+            type_text(&mut state, "go");
+            assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some());
+            // Idle for 5 s; the `m` of "my" arrives as the approval opens and is discarded; the panel is drawn.
+            state.apply(ev(APPROVAL));
+            state.note_approval_input_ignored_at(at(t0, 5000));
+            state.note_approval_shown(at(t0, 5010));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 5130)), None, "the `y` of \"my\" 120 ms later is text");
+            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 7000)), approve("approval-1", false), "a later deliberate `y` answers");
+        }
+
+        #[test]
+        fn a_paste_starts_the_typing_run_at_its_own_time() {
+            let (mut state, t0) = panel(5000);
+            state.on_paste_at("x", at(t0, 20_000));
+            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 20_100)), None, "100 ms after the paste");
+            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.last_text == Some(at(t0, 20_100))));
+            let (mut state, t0) = panel(5000);
+            state.on_paste_at("x", at(t0, 20_000));
+            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.last_text == Some(at(t0, 20_000))), "stamped with the injected time");
+        }
+
+        #[test]
+        fn an_ignored_tap_does_not_shorten_the_wait_a_held_keys_first_repeat_must_still_meet() {
+            let t0 = Instant::now();
+            let mut state = ready();
+            type_text(&mut state, "go");
+            assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some(), "Enter sends the prompt and stays held");
+            state.apply(ev(APPROVAL));
+            state.note_approval_shown(at(t0, 100));
+            assert_eq!(state.on_key_at(key(KeyCode::Tab), at(t0, 300)), None);
+            assert_eq!(state.on_key_at(key(KeyCode::Char('n')), at(t0, 320)), None, "a tap inside the wait is ignored");
+            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 660)), None, "the held key's first repeat is still inside the wait");
         }
 
         #[test]

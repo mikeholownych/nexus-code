@@ -8,7 +8,7 @@ sidecar's command log.
 2. A burst `yyy` typed at once, long after the panel appeared, must not decide (its text goes to the draft).
 3. A bracketed paste of `y⏎` must not decide.
 4. One deliberate `n` then denies that panel (typing into it did not disarm its letters). The next approval is
-   answered by one `y` shortly after it appears (no lock-out after a decision).
+   answered by one `y` shortly after it appears (after the previous answer's repeat window).
 5. Text containing answer letters (y, a, n), typed across the third panel's appearance, goes to the draft and
    decides nothing; `n` after a pause then denies.
 
@@ -72,7 +72,7 @@ def main():
     result["after_deny"] = decisions(commands)
     wait_events(events, "approval.request", 2, 20, s)
     s.wait_screen(lambda lines: has(lines, "Approval needed"), 10, "the second approval panel")
-    s.pump(1.4)  # a key just before the panel opened (the previous answer) keeps decision keys inert for 1 s
+    s.pump(1.4)  # the previous answer (n) keeps decision keys inert for 1 s
     s.send("y", settle=0.5)
     result["after_approve"] = decisions(commands)
 
