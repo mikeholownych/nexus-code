@@ -337,6 +337,30 @@ export function computeMaterialDependenciesHash(
 }
 
 /**
+ * Splits NUL-delimited git output into path strings. `-z` output is never quoted, so a name with a space, a quote,
+ * a backslash, a newline, a tab or non-ASCII letters arrives exactly as stored. A name that is not valid UTF-8 cannot
+ * be turned into a path string without changing it, so it throws: the identity is unknown, never "equal".
+ */
+function decodeGitTokens(buffer: Buffer): string[] {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const out: string[] = [];
+  for (const raw of buffer.toString("latin1").split("\0")) {
+    if (raw.length === 0) continue;
+    try {
+      out.push(decoder.decode(Buffer.from(raw, "latin1")));
+    } catch {
+      throw new Error("a file name that is not valid UTF-8 cannot be decoded");
+    }
+  }
+  return out;
+}
+
+/** A manifest path with the characters the manifest uses as separators escaped (ordinary names are unchanged). */
+function manifestPath(p: string): string {
+  return /[\t\n\r\\]/.test(p) ? JSON.stringify(p) : p;
+}
+
+/**
  * Computes candidate identity for a workspace directory (git or non-git fallback).
  */
 export function computeCandidateIdentitySync(
@@ -498,28 +522,34 @@ function computeGitCandidateIdentity(
 
   // 1. If baseRef is provided and differs from worktree HEAD, inspect committed differences on branch
   if (options.baseRef && options.baseRef !== "HEAD") {
-    let diffOut = "";
+    let diffTokens: string[] = [];
     try {
-      diffOut = execFileSync(
+      diffTokens = decodeGitTokens(execFileSync(
         "git",
-        ["diff", "--name-status", options.baseRef, "HEAD"],
+        ["diff", "--name-status", "-z", options.baseRef, "HEAD"],
         {
           cwd: workspacePath,
-          encoding: "utf-8",
           stdio: ["ignore", "pipe", "ignore"],
+          maxBuffer: 256 * 1024 * 1024,
         }
-      ).trim();
-
-    } catch {
-      // Diff command fallback
+      ));
+    } catch (err: any) {
+      // A name that cannot be decoded makes the identity unknown; any other diff failure keeps the previous fallback.
+      if (/cannot be decoded/.test(String(err?.message))) throw err;
     }
-    if (diffOut.trim().length > 0) {
-      const lines = diffOut.trim().split("\n");
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length < 2) continue;
-        const statusChar = parts[0][0];
-        const filePath = parts[parts.length - 1];
+    // `-z` records: STATUS NUL path NUL, and for a rename or copy STATUS NUL old NUL new NUL.
+    const diffEntries: Array<{ status: string; filePath: string }> = [];
+    for (let i = 0; i < diffTokens.length; ) {
+      const status = diffTokens[i++];
+      const pathCount = status[0] === "R" || status[0] === "C" ? 2 : 1;
+      const paths = diffTokens.slice(i, i + pathCount);
+      i += pathCount;
+      if (paths.length === pathCount) diffEntries.push({ status, filePath: paths[paths.length - 1] });
+    }
+    if (diffEntries.length > 0) {
+      for (const entry of diffEntries) {
+        const statusChar = entry.status[0];
+        const filePath = entry.filePath;
         const posixPath = filePath.split(path.sep).join("/");
         // Nexus session, checkpoint, and flight data are runtime state, not candidate input.
         if (posixPath === ".nexus" || posixPath.startsWith(".nexus/")) continue;
@@ -562,35 +592,26 @@ function computeGitCandidateIdentity(
 
   // 2. Query git status for working tree modifications, type changes, and untracked files
   try {
-    const statusOut = execFileSync(
+    // `-z`: records are "XY path" NUL, and for a rename or copy "XY new" NUL "old" NUL. Never quoted, so every file name
+    // is read exactly as stored (the default quoting turned café.ts into "caf\303\251.ts", a path naming no file).
+    const statusTokens = decodeGitTokens(execFileSync(
       "git",
-      ["status", "--porcelain=v1", "--untracked-files=all"],
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
       {
         cwd: workspacePath,
-        encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
+        maxBuffer: 256 * 1024 * 1024,
       }
-    );
+    ));
 
-    if (statusOut.length > 0) {
-      const lines = statusOut.split(/\r?\n/);
-      for (const line of lines) {
-        if (!line || line.length < 3) continue;
-        const match = line.match(/^([ MADRCUT?!]{2})\s+(.*)$/);
-        if (!match) continue;
-        const code = match[1];
-        let rawFile = match[2].trim();
-
-        // Handle rename syntax: "R  orig -> new"
-        if (rawFile.includes(" -> ")) {
-          const parts = rawFile.split(" -> ");
-          rawFile = parts[1];
-        }
-
-        // Strip quotes if present
-        if (rawFile.startsWith('"') && rawFile.endsWith('"')) {
-          rawFile = rawFile.slice(1, -1);
-        }
+    if (statusTokens.length > 0) {
+      for (let i = 0; i < statusTokens.length; i++) {
+        const record = statusTokens[i];
+        if (record.length < 4 || record[2] !== " ") throw new Error(`unrecognised git status record: ${JSON.stringify(record.slice(0, 12))}`);
+        const code = record.slice(0, 2);
+        const rawFile = record.slice(3);
+        // The original name of a rename or copy follows as its own record; the new name is the candidate path.
+        if (code[0] === "R" || code[0] === "C" || code[1] === "R" || code[1] === "C") i++;
 
         const posixPath = rawFile.split(path.sep).join("/").replace(/\/+$/, "");
         // Match the non-Git identity path: managed Nexus state must not count as workspace progress.
@@ -675,10 +696,10 @@ function computeGitCandidateIdentity(
 
   const manifestLines: string[] = [];
   for (const entry of trackedChanges) {
-    manifestLines.push(`T\t${entry.path}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
+    manifestLines.push(`T\t${manifestPath(entry.path)}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
   }
   for (const entry of untrackedFiles) {
-    manifestLines.push(`U\t${entry.path}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
+    manifestLines.push(`U\t${manifestPath(entry.path)}\t${entry.status}\t${entry.mode}\t${entry.contentHash}\t${entry.size}`);
   }
 
   const manifestContent =

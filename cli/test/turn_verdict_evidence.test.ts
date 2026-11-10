@@ -244,6 +244,35 @@ describe("D-04: the verdict follows this turn's evidence", () => {
     }
   });
 
+  test("a command that edits an already-dirty tracked café.ts is UNVERIFIED (git's default path quoting must not hide it)", async () => {
+    const edit = { kind: "tools" as const, calls: [{ name: "run_command", args: { command: "echo changed >> café.ts" } }] };
+    const { results: [r], repo } = await turns([edit], [], (dir) => {
+      fs.writeFileSync(path.join(dir, "café.ts"), "one\n");
+      execSync("git add . && git commit -qm cafe", { cwd: dir, stdio: "ignore" });
+      fs.writeFileSync(path.join(dir, "café.ts"), "dirty before the turn\n");
+    });
+    try {
+      assert.match(fs.readFileSync(path.join(repo, "café.ts"), "utf-8"), /changed/);
+      assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+      assert.equal(r.turnEvidence?.workspaceChanged, "yes");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a file name that is not valid UTF-8 makes the workspace state unknown: the turn stays UNVERIFIED", async () => {
+    const edit = { kind: "tools" as const, calls: [{ name: "run_command", args: { command: "printf 'x' >> \"$(printf 'bad\\377.txt')\"" } }] };
+    const { results: [r], repo } = await turns([edit], [], (dir) => {
+      fs.writeFileSync(Buffer.concat([Buffer.from(dir + "/"), Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74])]), "one\n");
+    });
+    try {
+      assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+      assert.equal(r.turnEvidence?.workspaceChanged, "unknown");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   describe("a real file write the workspace identity cannot see is never reported as no change", () => {
     const ignored = { ".gitignore": "build/\n", "build/old.js": "x\n" };
     async function ignoredTurn(script: Reply | Reply[]): Promise<{ r: TurnResult; repo: string }> {
