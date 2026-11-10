@@ -396,3 +396,28 @@ test("an unchanged tracked symlink flagged assume-unchanged does not block the r
     assert.equal(captureVerificationState(f.dir), undefined, "a retargeted flagged link is a hidden edit");
   } finally { f.cleanup(); }
 });
+
+test("no configuration or index flag hides an edit from the receipt: mode bits, assume-unchanged, core.fileMode=false", () => {
+  const f = fixture();
+  try {
+    assert.ok(captureVerificationState(f.dir), "a clean tree is certifiable");
+    fs.writeFileSync(path.join(f.dir, "b.txt"), "an ordinary edit\n");
+    assert.ok(captureVerificationState(f.dir), "an ordinary uncommitted edit is certifiable (the state records it)");
+    git(f.dir, "checkout", "--", "b.txt");
+
+    // chmod +x on a flagged helper: the blob is unchanged, only the mode differs.
+    git(f.dir, "update-index", "--assume-unchanged", "b.txt");
+    fs.chmodSync(path.join(f.dir, "b.txt"), 0o755);
+    assert.equal(captureVerificationState(f.dir), undefined, "assume-unchanged + chmod +x");
+    assert.equal(recordVerification(f.dir, "npm test"), false);
+    git(f.dir, "update-index", "--no-assume-unchanged", "b.txt");
+
+    // core.fileMode=false makes status blind to the executable bit.
+    git(f.dir, "config", "core.fileMode", "false");
+    assert.equal(git(f.dir, "status", "--porcelain"), "", "precondition: status does not see the chmod");
+    assert.equal(captureVerificationState(f.dir), undefined, "core.fileMode=false + chmod +x");
+    git(f.dir, "config", "--unset", "core.fileMode");
+    fs.chmodSync(path.join(f.dir, "b.txt"), 0o644);
+    assert.ok(captureVerificationState(f.dir), "back to the recorded mode: certifiable again");
+  } finally { f.cleanup(); }
+});
