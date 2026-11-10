@@ -302,3 +302,37 @@ test("a branch name exceeding MAX_BRANCH_LENGTH is rejected before writing to re
     assert.equal(reg.registry.verifications, undefined);
   } finally { f.cleanup(); }
 });
+
+test("no receipt is captured or recorded while a submodule (nested too) holds uncommitted content", () => {
+  const f = fixture();
+  try {
+    const mk = (name: string) => {
+      const d = path.join(f.root, name);
+      fs.mkdirSync(d);
+      git(d, "init", "-q", "-b", "main");
+      git(d, "config", "user.email", "t@example.com");
+      git(d, "config", "user.name", "T");
+      git(d, "config", "commit.gpgsign", "false");
+      return d;
+    };
+    const inner = mk("inner");
+    fs.writeFileSync(path.join(inner, "i.txt"), "i\n");
+    git(inner, "add", "."); git(inner, "commit", "-q", "-m", "inner");
+    const outer = mk("outer");
+    fs.writeFileSync(path.join(outer, "o.txt"), "o\n");
+    git(outer, "add", "."); git(outer, "commit", "-q", "-m", "outer");
+    git(outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", inner, "inner");
+    git(outer, "commit", "-q", "-m", "add inner");
+    git(f.dir, "-c", "protocol.file.allow=always", "submodule", "add", "-q", outer, "sub");
+    git(f.dir, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "-q");
+    git(f.dir, "commit", "-q", "-m", "add sub");
+
+    assert.ok(captureVerificationState(f.dir), "a clean submodule tree can be captured");
+    fs.writeFileSync(path.join(f.dir, "sub", "inner", "i.txt"), "uncommitted fix inside a nested submodule\n");
+    assert.equal(captureVerificationState(f.dir), undefined, "dirty nested submodule: no state to record");
+    assert.equal(recordVerification(f.dir, "npm test"), false, "dirty nested submodule: no receipt");
+    git(path.join(f.dir, "sub", "inner"), "checkout", "--", "i.txt");
+    fs.writeFileSync(path.join(f.dir, "sub", "untracked.txt"), "x\n");
+    assert.equal(recordVerification(f.dir, "npm test"), false, "an untracked file in a submodule is untested content too");
+  } finally { f.cleanup(); }
+});

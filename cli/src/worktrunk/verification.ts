@@ -15,6 +15,9 @@ import { git, gitOut } from "./git.js";
 import { MAX_BRANCH_LENGTH, MAX_RECORDS, updateRegistry, type Registry } from "./registry.js";
 import { currentEntry, openRepo } from "./repo.js";
 
+/** Pathspec of `.nexus/` (sessions, knowledge, worktrees): unstaged after `add -A` so it never reaches a backup, a receipt or an automatic commit. */
+export const NEXUS_STATE_PATH = ":(top).nexus";
+
 export interface WorkingState { head: string; tree: string; dirty: boolean }
 
 /** HEAD, and the tree of the working state: HEAD^{tree} when clean, else a snapshot via a temporary index. */
@@ -32,11 +35,26 @@ export function workingState(dir: string, dirty: boolean): WorkingState {
       git(dir, ["read-tree", "HEAD"], { env });
     }
     git(dir, ["add", "-A"], { env });
-    git(dir, ["reset", "-q", "HEAD", "--", ":(top).nexus"], { env, allowFailure: true }); // internal state is never part of a merge
+    git(dir, ["reset", "-q", "HEAD", "--", NEXUS_STATE_PATH], { env, allowFailure: true }); // internal state is never part of a merge
     return { head, tree: gitOut(dir, ["write-tree"], { env }), dirty };
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * Whether any initialised submodule of `dir`, nested ones included, holds uncommitted content (changes or untracked
+ * files). The tree of the working state records only the submodule's gitlink, so such content would be tested by a
+ * verifier yet never be part of what a receipt authorises and a merge carries.
+ */
+export function hasDirtySubmodule(dir: string): boolean {
+  const listing = gitOut(dir, ["submodule", "status", "--recursive"]);
+  for (const line of listing.split("\n")) {
+    const m = /^(.)[0-9a-f]{40,64} (.*?)(?: \(.*\))?$/.exec(line);
+    if (!m || m[1] === "-") continue; // not initialised: no content to differ
+    if (gitOut(path.join(dir, m[2]), ["status", "--porcelain", "--ignore-submodules=none"]) !== "") return true;
+  }
+  return false;
 }
 
 /** The linked worktree containing `workspace` and its working state, or undefined (main checkout, detached, not a repository). Never throws. */
@@ -44,6 +62,7 @@ export function captureVerificationState(workspace: string): WorkingState | unde
   try {
     const entry = currentEntry(openRepo(workspace));
     if (!entry || entry.isMain || !entry.branch) return undefined;
+    if (hasDirtySubmodule(entry.path)) return undefined;
     return workingState(entry.path, statusOf(entry.path).total > 0);
   } catch {
     return undefined;
@@ -60,6 +79,7 @@ export function recordVerification(workspace: string, verifier: string, expected
     const repo = openRepo(workspace);
     const entry = currentEntry(repo);
     if (!entry || entry.isMain || !entry.branch || entry.branch.length > MAX_BRANCH_LENGTH) return false;
+    if (hasDirtySubmodule(entry.path)) return false;
     const state = workingState(entry.path, statusOf(entry.path).total > 0);
     if (expected && (expected.head !== state.head || expected.tree !== state.tree)) return false;
     const branch = entry.branch;
