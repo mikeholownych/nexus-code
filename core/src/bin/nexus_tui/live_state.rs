@@ -2235,11 +2235,12 @@ fn steer_prefix() -> String {
 }
 
 /// Why a turn that ends unverified is unverified, from what this turn itself did (D-04): a verifier that ran only before
-/// the change is said to have run, and a turn that changed nothing does not claim that files changed. Without evidence
-/// (an older sidecar) the previous wording stands.
-fn unverified_cause(evidence: &Value) -> String {
+/// the change, or that a later edit made stale, is said to have run, and a turn that changed nothing does not claim that
+/// files changed. Only VERIFICATION_NOT_RUN is about verifier runs; every other reason, and a result without evidence
+/// (an older sidecar), keeps the previous wording. The REPL line (cli/src/core/turn.ts evidenceTail) says the same.
+fn unverified_cause(reason: &str, evidence: &Value) -> String {
     const PLAIN: &str = "Files changed, but no verifier ran before the agent finished.";
-    if !evidence.is_object() {
+    if reason != "VERIFICATION_NOT_RUN" || !evidence.is_object() {
         return PLAIN.into();
     }
     if evidence["workspaceChanged"] == "no" && evidence["carriedChanges"] == Value::Bool(true) {
@@ -2247,10 +2248,22 @@ fn unverified_cause(evidence: &Value) -> String {
         let denial = if denied > 0 { format!(" ({denied} action{} denied)", if denied == 1 { "" } else { "s" }) } else { String::new() };
         return format!("No files changed this turn{denial}; changes from an earlier turn are still unverified.");
     }
-    let before_change_only = evidence["verifierRuns"].as_array().and_then(|runs| runs.last()).filter(|run| run["phase"] == "before_change");
-    match before_change_only.and_then(|run| run["command"].as_str()) {
-        Some(command) => format!("Files changed. {command} ran before the change; nothing checked the change itself."),
-        None => PLAIN.into(),
+    let changed = if evidence["workspaceChanged"] == "unknown" { "Files may have changed" } else { "Files changed" };
+    let last = evidence["verifierRuns"].as_array().and_then(|runs| runs.last());
+    let command = last.and_then(|run| run["command"].as_str()).map(short_command);
+    match (last.and_then(|run| run["phase"].as_str()), command) {
+        (Some("before_change"), Some(c)) => format!("{changed}. {c} ran before the change; nothing checked the change itself."),
+        (Some("completion"), Some(c)) => format!("{changed}. {c} ran, but the change was edited after it."),
+        _ => format!("{changed}, but no verifier ran before the agent finished."),
+    }
+}
+
+/// A verifier command shortened for a one-line cause.
+fn short_command(command: &str) -> String {
+    if command.chars().count() > 60 {
+        format!("{}…", command.chars().take(59).collect::<String>())
+    } else {
+        command.to_string()
     }
 }
 
@@ -2321,7 +2334,7 @@ pub fn outcome_for(turn: &Value) -> Outcome {
         ),
         ("COMPLETED", "UNVERIFIED", _) => (
             "Done · not verified".to_string(),
-            text(&unverified_cause(&turn["turnEvidence"])),
+            text(&unverified_cause(reason, &turn["turnEvidence"])),
             text("run /test, or ask Nexus to verify the change"),
         ),
         ("COMPLETED", "NOT_ESTABLISHED", "VERIFIER_FAILED") => (
@@ -2457,6 +2470,31 @@ mod tests {
             cause(r#"{"execution":"COMPLETED","outcome":"NOT_REQUIRED"}"#).as_deref(),
             Some("No files changed, so there was nothing to verify.")
         );
+    }
+
+    #[test]
+    fn the_unverified_cause_stays_true_when_the_verifier_ran_stale_or_the_state_is_unknown() {
+        let cause = |json: &str| outcome_for(&serde_json::from_str::<Value>(json).unwrap()).cause.unwrap();
+        // A completion run followed by a later edit is a run, not "no verifier ran" (review of #473).
+        assert_eq!(
+            cause(r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{"workspaceChanged":"yes","carriedChanges":false,"denied":0,"verifierRuns":[{"command":"npm test","phase":"before_change","passed":true},{"command":"npm test","phase":"completion","passed":true}]}}"#),
+            "Files changed. npm test ran, but the change was edited after it."
+        );
+        // The workspace comparison failed: do not claim files changed.
+        assert_eq!(
+            cause(r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{"workspaceChanged":"unknown","carriedChanges":false,"denied":0,"verifierRuns":[]}}"#),
+            "Files may have changed, but no verifier ran before the agent finished."
+        );
+        // Other unverified reasons keep their own wording; the carried-change text is for VERIFICATION_NOT_RUN only.
+        assert_eq!(
+            cause(r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"NO_TESTS_EXECUTED","turnEvidence":{"workspaceChanged":"no","carriedChanges":true,"denied":0,"verifierRuns":[]}}"#),
+            "Files changed, but no verifier ran before the agent finished."
+        );
+        // A long verifier command does not push the cause past a screenful.
+        let long = "x".repeat(400);
+        let cause_long = cause(&format!(r#"{{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{{"workspaceChanged":"yes","carriedChanges":false,"denied":0,"verifierRuns":[{{"command":"{long}","phase":"before_change","passed":true}}]}}}}"#));
+        assert!(cause_long.chars().count() < 140, "{} chars", cause_long.chars().count());
+        assert!(cause_long.contains('…') && cause_long.ends_with("nothing checked the change itself."), "{cause_long}");
     }
 
     use crate::protocol::parse_event;
