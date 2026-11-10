@@ -1162,3 +1162,17 @@ test("a debugger retried after its dependency failed again starts a new conversa
   assert.equal(debuggerSaw[0].diagnostic, true, "the debugger is told its workspace is a diagnostic snapshot");
   assert.equal(debuggerSaw[1].diagnostic, true);
 });
+
+test("only a failure_debugger is ever told its workspace is diagnostic, whatever a hand-edited state file records", async () => {
+  const root = repo();
+  const state = newOperation("op-dbg4", "fix it", [{ id: "t", title: "t", role: "tester", prompt: "test" }], [resource()], Date.now());
+  const p = plan(root, state.id);
+  state.git = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state.git);
+  new OperationGit(p, state.git).prepareUnit(unit("t", { role: "tester" }));
+  state.git.units.t.snapshotOf = "elsewhere"; // a hand-edited state file
+  let diagnostic: boolean | undefined = true;
+  const executor: WorkUnitExecutor = { async run(_u, _r, ctx) { diagnostic = ctx.diagnostic; return completed({}); } };
+  await new OperationRunner(state, { executor, clock: clock(), persist: () => {} }).run();
+  assert.equal(diagnostic, undefined, "a tester must keep its completion oracle");
+});
