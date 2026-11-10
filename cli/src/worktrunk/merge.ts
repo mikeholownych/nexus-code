@@ -196,12 +196,13 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   }
 
   if (!cancelled && !options.noRebase && mergeBase !== targetSha) {
+    // `--autostash`: tracked `.nexus` state stays edited (and uncommitted) in the worktree, which a rebase otherwise refuses.
     // A plain rebase linearises the range and drops merge commits together with any edit only they carry (a conflict
     // resolution, for one). Squashing (the default) keeps the tree; without it such a history is refused.
     if (Number(gitOut(source.path, ["rev-list", "--merges", "--count", `${mergeBase}..HEAD`])) > 0) {
       throw new WorktreeError(`${shownBranch(branch)} contains merge commits and the target has moved, so rebasing without squashing would drop edits that only the merge commits carry; merge without --no-squash, or rebase ${shownBranch(branch)} onto ${shownBranch(targetName)} yourself first. Nothing was merged`);
     }
-    const rebase = git(source.path, ["rebase", targetSha], { allowFailure: true, env: NON_INTERACTIVE });
+    const rebase = git(source.path, ["rebase", "--autostash", targetSha], { allowFailure: true, env: NON_INTERACTIVE });
     if (rebase.status !== 0) {
       const open = inProgress(gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]));
       if (!open) throw new WorktreeError(`rebase onto ${shownBranch(targetName)} failed: ${redactSecrets(rebase.stderr.trim().split("\n")[0] ?? "")}`);
@@ -233,8 +234,8 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     // The merged work is on the target. Only ignored output (build caches) may still be in the worktree; it goes with
     // it. Anything else left (edits inside a submodule cannot be committed from here, for one) is never forced away.
     const left = statusOf(source.path, { ignoreSubmodules: "none" });
-    const unpublished = left.total > 0 ? [] : unpublishedSubmodules(source.path);
-    const initialized = left.total > 0 || unpublished.length > 0 ? [] : initializedSubmodules(source.path);
+    const initialized = left.total > 0 ? [] : initializedSubmodules(source.path); // one `git submodule status` for both notes
+    const unpublished = unpublishedSubmodules(source.path, initialized);
     if (unpublished.length > 0) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${unpublished.map((sub) => redactSecrets(sub)).join(", ")} has a commit that is on no remote branch, and removing the worktree would delete its only copy. Push it from there, then run \`worktree remove\`. The merge itself is done.`);
     } else if (left.total > 0) {

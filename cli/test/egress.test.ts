@@ -823,4 +823,14 @@ describe("Nexus identifiers are not secrets", () => {
     }
     assert.ok(boundary.classifyText("token Zx9Qp2Lm7Rt4Vb8Nc1Kd6Hs3Jf5Gw0Ya").length > 0, "a random token is still flagged");
   });
+
+  test("the temporary guard branch `worktree remove` names in its recovery message is never classified", () => {
+    const boundary = new InformationFlowBoundary();
+    // `nexus-removed/<10 hex of sha1(path)>-<8 hex of the head>`: this value scored as high-entropy, which made the
+    // message's undo commands unusable (and a worktrunk test fail about once in 700 runs).
+    for (const name of ["nexus-removed/af715c8d65-ba294078", "nexus-removed/0123456789-abcdef01"]) {
+      assert.deepEqual(boundary.classifyText(`stays on the temporary branch ${name} (nothing is lost)`), [], name);
+    }
+    assert.ok(boundary.classifyText("branch nexus-removed/Zx9Qp2Lm7Rt4Vb8Nc1Kd6Hs3Jf5Gw0Ya").length > 0, "a random value under that prefix is still flagged");
+  });
 });
