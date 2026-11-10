@@ -239,6 +239,23 @@ describe("host-side Git in a named worktree", () => {
     } finally { f.cleanup(); }
   });
 
+  test("a no-edit task worktree forked from a feature checkout ahead of main holds no changes; a named one still counts its commits", () => {
+    const f = fixture();
+    try {
+      fs.writeFileSync(path.join(f.dir, "b.txt"), "two\n");
+      git(f.dir, "add", "b.txt");
+      git(f.dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "feature work");
+      const launched = new WorktreeManager(f.dir); // the run starts inside the linked feature checkout
+      const task = launched.createWorktree("task-noedit");
+      const binding = { taskId: task.taskId, worktreePath: task.worktreePath, branch: task.branch, kind: "task" as const };
+      assert.equal(launched.bindingHasChanges(binding), false, "inherited commits of the launching checkout are not task work");
+      assert.equal(launched.hasChangesAt(task.worktreePath, task.branch), true, "(the primary-checkout default would call them work)");
+      fs.writeFileSync(path.join(task.worktreePath, "c.txt"), "edit\n");
+      assert.equal(launched.bindingHasChanges(binding), true, "a real edit still counts");
+      assert.equal(launched.bindingHasChanges({ taskId: "n", worktreePath: f.dir, branch: "feat/bind", kind: "named" }), true, "named: commits main lacks");
+    } finally { f.cleanup(); }
+  });
+
   test("hasChangesAt resolves the branch as a branch, not a same-named tag", () => {
     const f = fixture();
     try {

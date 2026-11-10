@@ -217,6 +217,15 @@ export class WorktreeManager {
   }
 
   /**
+   * Whether a run's bound worktree holds work to verify. A task worktree forks the checkout the run was launched from,
+   * so its commits are counted against that checkout (`hasChanges`); a named worktree is compared with the primary
+   * checkout.
+   */
+  public bindingHasChanges(binding: { taskId: string; worktreePath: string; branch: string; kind?: "task" | "named" }): boolean {
+    return binding.kind === "named" ? this.hasChangesAt(binding.worktreePath, binding.branch) : this.hasChanges(binding.taskId);
+  }
+
+  /**
    * The named worktree for `branch` (`run --worktree-branch`): reused when it exists, created from the default branch
    * otherwise. A branch checked out in the primary checkout is refused (running there would not be isolated and
    * `nexus worktree merge` refuses the primary checkout), and the result is accepted only when it passes the same

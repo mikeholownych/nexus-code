@@ -4287,7 +4287,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
 
       const worktreeHasChanges = this.activeWorktree
-        ? this.worktreeManager.hasChangesAt(this.activeWorktree.worktreePath, this.activeWorktree.branch)
+        ? this.worktreeManager.bindingHasChanges(this.activeWorktree)
         : false;
       let verifierSucceeded = false;
       let hasExecuted = false;
