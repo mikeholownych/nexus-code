@@ -118,3 +118,9 @@ Severity set by the fixing agent; the reviewer did not rate these. Each needs it
 | Source | Sev | Finding | Status |
 |---|---|---|---|
 | D-03 PR | low | REPL `/git` (`cli/src/repl.ts`) ran plain `git status --short`, so a `.nexus/` left by an older version showed as `?? .nexus/` there. Surfaces that read through `workspaceStatus()` (`cli/src/git.ts`): `getGitInfo` (TUI header via `session.state`, the model's `[Git Status]` line, the REPL prompt badge and the `/commit` dirty checks), TUI and REPL `/git`, the untracked/staged count in TUI `/diff`, and the `/commit` message file list. Not through it, by design: REPL `/diff` (plain `git diff`, which never lists untracked files) and the `git status` calls in `worktree.ts`, `core/candidate.ts` and `ceri/runner.ts`, which serve other purposes. | FIXED in `8a5b29cc`. Test `REPL /git on a repository whose only change is Nexus state reports it clean` |
+
+## H. WP-1317 D-04 follow-ups (docs/v1.1.4/TUI-AUDIT.md)
+
+| Source | Sev | Finding | Status |
+|---|---|---|---|
+| D-04 PR | low | `turnEvidence.workspaceChanged` compares the workspace state identity (workspace content, git index, content of ignored dependency/environment inputs, PATH) at turn start and end. A command that changes only something that identity does not cover leaves the turn `NOT_REQUIRED` with no pending obligation, although it ran a command. When either identity is unknown the latch stands (the turn stays `UNVERIFIED`). | OPEN, accepted: the previous behaviour was to call every command turn unverified; this narrows it to commands that provably left the workspace as found |

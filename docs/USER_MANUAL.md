@@ -130,7 +130,13 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **Outcomes.** A turn ends with one line in words — `Done`, `Done · verified`, `Done · tests passed, change not
   covered`, `Done · not verified`, `Verification failed`, `Requirements still open` (with the open items),
   `Cancelled`, `Stopped at …` (a budget), `Model request failed`, `Context is full` — the cause, and the next action;
-  `v` opens the receipt with the raw fields. **Verified** means the passing test run — whether you configured the
+  `v` opens the receipt with the raw fields. The line describes this turn: `Done · not verified` says when no file changed in this turn
+  and the unverified changes are from an earlier one, and when the only verifier run was the baseline Nexus takes before
+  the change (`npm test ran before the change; nothing checked the change itself`). A turn whose actions you denied, or
+  whose commands left every file as they were, ends `Done` (`No files changed: you denied 1 action.`; `nexus run` exits 0);
+  a command that does write a file still needs a verifier (`UNVERIFIED`, exit code 2). The receipt's `turnEvidence`
+  records what the turn did: whether the workspace changed, changes carried in, actions denied and verifier runs.
+  **Verified** means the passing test run — whether you configured the
   verifier or Nexus found it — is evidence about the change: it
   ran tests (its output reports at least one), ran the whole suite (no name filter), and covers the changed files — a
   changed file is a test, the run names a changed file, a test imports a changed module, or the change has inline
@@ -150,7 +156,10 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   `contextNotRetained` in the receipt): check such a result against the source.
 - **Scrolling.** Scrolled back, the view stays where you are while output arrives; the badge then says `new output`.
   PgDn or Ctrl+End returns to the newest line.
-- **Status.** The top line shows identity only: workspace, branch with the number of changed files (`●3 changed`),
+- **Status.** The top line shows identity only: workspace, branch with the number of changed files (`●3 changed`,
+  the same count as `/git`, `/commit` and the model's git status; Nexus's own `.nexus/` state never counts and
+  carries its own `.gitignore`, so it stays out of your `git status` too; a file you deliberately track under `.nexus/`
+  is not counted either),
   model, mode (`review mode` in review mode) and the session id (what `/resume` takes), dropping the least important
   on narrow terminals. Activity is shown once, on the composer line.
 - **Composer.** An empty composer says what Enter does (send, or steer while the agent works); a draft taller than
