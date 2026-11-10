@@ -973,6 +973,15 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     }
   });
 
+  test("endpoint normalisation is linear on hostile input (no polynomial regular expressions)", () => {
+    for (const hostile of [`https://host/${"/".repeat(80_000)}x`, `host${"/".repeat(80_000)}x`, `https://host/v1?${"#".repeat(80_000)}`, `${"https://u@".repeat(5_000)}h/${"/".repeat(80_000)}x`]) {
+      const started = Date.now();
+      persistableEndpoint(hostile);
+      comparableEndpoint(hostile);
+      assert.ok(Date.now() - started < 300, `took ${Date.now() - started} ms`);
+    }
+  });
+
   test("persisted endpoints carry origin and path only: no userinfo, query or fragment; comparison ignores them", async () => {
     const url = "https://u:p@host.example:8443/v1/?api_key=SECRET#frag";
     assert.equal(persistableEndpoint(url), "https://host.example:8443/v1");

@@ -5674,11 +5674,6 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return this.clientWindowOpen(this.client);
   }
 
-  /** True while a restored provider window is still open and applies to this endpoint (or to any, when none was recorded). */
-  private resumedWindowCovers(endpoint: string | undefined): boolean {
-    return this.windowsCovering(endpoint ? [endpoint] : []).length > 0;
-  }
-
   /** The open restored windows that apply to any of these endpoints (a window without an endpoint applies to all). */
   private windowsCovering(endpoints: readonly string[]): typeof this.resumedProviderWaits {
     const now = this.recoveryClock.now();
