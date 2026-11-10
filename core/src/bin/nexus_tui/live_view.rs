@@ -1195,7 +1195,7 @@ fn render_empty(frame: &mut Frame, area: Rect) {
             Span::styled("/model", Style::default().fg(ACCENT)),
             Span::styled(" switch model  ·  ", Style::default().fg(MUTED)),
             Span::styled("/worktree", Style::default().fg(ACCENT)),
-            Span::styled(" isolate work", Style::default().fg(MUTED)),
+            Span::styled(" manage worktree", Style::default().fg(MUTED)),
         ]));
         lines.push(Line::from(Span::styled(
             "Type a prompt to begin · Esc cancels · Ctrl+C quits",
@@ -2056,6 +2056,18 @@ mod tests {
                 "›",
             ],
         );
+    }
+
+    #[test]
+    fn model_picker_on_a_40x10_terminal_does_not_panic() {
+        let mut state = ready();
+        state.overlay = Some(crate::live_state::Overlay::Models(crate::models::Picker::new("m1".into())));
+        feed(
+            &mut state,
+            &[r#"{"v":1,"type":"models.catalog","id":"m1","providers":[{"id":"anthropic","label":"Anthropic","disclosure":"cloud","connected":true,"methods":[],"status":"ok"}],"models":[{"provider":"anthropic","id":"claude-3-5-sonnet"}],"current":{"provider":"anthropic","model":"claude-3-5-sonnet"},"recent":[]}"#],
+        );
+        let rendered = draw(&state, 40, 10);
+        assert!(!rendered.is_empty());
     }
 
     #[test]
@@ -3227,7 +3239,7 @@ fn render_models(frame: &mut Frame, area: Rect, picker: &Picker) {
         Fetch::Waiting | Fetch::Failed(_) => 8,
         Fetch::Ready(_) => {
             let row_count = picker.rows().len() as u16;
-            (row_count + 5).clamp(8, area.height.min(24))
+            (row_count + 5).clamp(8, 24)
         }
     };
     let rect = modal(area, 96, wanted);

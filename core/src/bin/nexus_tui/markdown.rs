@@ -442,7 +442,7 @@ mod tests {
         let all = texts(&lines);
         assert!(all[0].starts_with("• a list") && all[1].starts_with("  "), "{all:#?}");
         assert!(all.iter().all(|l| UnicodeWidthStr::width(l.as_str()) <= 40), "{all:#?}");
-        assert!(all.iter().any(|l| l.contains("▎↪") || l.contains("▎ ↪")), "continuation rows are marked: {all:#?}");
+        assert!(all.iter().any(|l| l.contains("▎↪")), "continuation rows are marked: {all:#?}");
     }
 
     #[test]
