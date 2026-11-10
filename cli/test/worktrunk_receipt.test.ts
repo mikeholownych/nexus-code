@@ -336,3 +336,30 @@ test("no receipt is captured or recorded while a submodule (nested too) holds un
     assert.equal(recordVerification(f.dir, "npm test"), false, "an untracked file in a submodule is untested content too");
   } finally { f.cleanup(); }
 });
+
+test("an untracked submodule file still blocks the receipt when status.showUntrackedFiles=no is configured", () => {
+  const f = fixture();
+  const globalConfig = path.join(f.root, "gitconfig-global");
+  const previous = process.env.GIT_CONFIG_GLOBAL;
+  try {
+    const sub = path.join(f.root, "subsrc");
+    fs.mkdirSync(sub);
+    git(sub, "init", "-q", "-b", "main");
+    git(sub, "config", "user.email", "t@example.com");
+    git(sub, "config", "user.name", "T");
+    git(sub, "config", "commit.gpgsign", "false");
+    fs.writeFileSync(path.join(sub, "s.txt"), "s\n");
+    git(sub, "add", "."); git(sub, "commit", "-q", "-m", "sub");
+    git(f.dir, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub");
+    git(f.dir, "commit", "-q", "-m", "add sub");
+    fs.writeFileSync(globalConfig, "[status]\n\tshowUntrackedFiles = no\n");
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    git(path.join(f.dir, "sub"), "config", "status.showUntrackedFiles", "no");
+    fs.writeFileSync(path.join(f.dir, "sub", "untracked-fix.txt"), "a verifier passed thanks to this\n");
+    assert.equal(captureVerificationState(f.dir), undefined, "untracked submodule content: no state to record");
+    assert.equal(recordVerification(f.dir, "npm test"), false, "untracked submodule content: no receipt");
+  } finally {
+    if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous;
+    f.cleanup();
+  }
+});

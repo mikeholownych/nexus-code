@@ -270,11 +270,14 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (!cancelled && count > 1 && !options.noSquash) {
     const subjects = gitOut(source.path, ["log", "--reverse", "--format=%s", `${mergeBase}..HEAD`]).split("\n").filter(Boolean);
     const message = options.message ?? `${subjects[0]}\n\nSquashed ${count} commits from ${branch}:\n${subjects.map((s) => `- ${s}`).join("\n")}`;
+    // Unstage first: the soft reset keeps the index, and anything another terminal staged since the snapshot would be committed.
+    git(source.path, ["reset", "-q", "HEAD"]);
     git(source.path, ["reset", "--soft", mergeBase]);
     git(source.path, ["commit", "-m", message], { env: NON_INTERACTIVE });
     notes.push(`Squashed ${count} commits.`);
   } else if (!cancelled && !dirty && count === 1 && options.message && options.amendSingleCommit) {
-    git(source.path, ["commit", "--amend", "-m", options.message], { env: NON_INTERACTIVE });
+    // `--only`: a message-only amend. Without it the amend would commit whatever another terminal staged since the snapshot.
+    git(source.path, ["commit", "--amend", "--only", "-m", options.message], { env: NON_INTERACTIVE });
   }
 
   if (!cancelled && !options.noRebase && mergeBase !== targetSha) {
