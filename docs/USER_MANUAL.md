@@ -139,7 +139,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   `.env` and the like) are unchanged; a command that changes only other ignored files, empty directories, file modes other
   than the executable bit, anything outside the workspace, or git refs and config is not noticed. A file-write tool
   (`write_file`, `edit_file`, `patch_file`, `delete_file`) always counts as a change, so it still needs a verifier
-  (`UNVERIFIED`, exit code 2), as does a command that changes a file. The receipt's `turnEvidence`
+  (`UNVERIFIED`, exit code 2), as does a command that changes a file. Nexus's own `.nexus/` state is not part of that comparison, so a turn that only records knowledge (`manage_knowledge`, which writes `.nexus/knowledge.json`) also ends `Done`. The receipt's `turnEvidence`
   records what the turn did: whether the workspace changed, changes carried in, actions denied and verifier runs.
   **Verified** means the passing test run — whether you configured the
   verifier or Nexus found it — is evidence about the change: it
