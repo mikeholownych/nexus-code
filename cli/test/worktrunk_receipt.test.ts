@@ -272,3 +272,33 @@ test("an edit saved after the receipt check but before the commit is not merged 
     assert.equal(git(f.dir, "diff", "--cached", "--name-only"), "", "nothing is left staged");
   } finally { f.cleanup(); }
 });
+
+test("a worktree with a branch name longer than 400 chars does not corrupt the registry", () => {
+  const f = fixture();
+  try {
+    const common = path.join(f.repo, ".git");
+    const longBranch = "feat/" + Array.from({ length: 45 }, (_, i) => `subpath${i}`).join("/") + "/branch";
+    assert.ok(longBranch.length > 400, `branch length ${longBranch.length} should be > 400`);
+    git(f.dir, "checkout", "-b", longBranch);
+    assert.equal(recordVerification(f.dir, "npm test"), true);
+    const reg = readRegistry(common);
+    assert.equal(reg.warning, undefined);
+    assert.equal(reg.registry.verifications?.length, 1);
+    assert.equal(reg.registry.verifications?.[0].branch, longBranch);
+  } finally { f.cleanup(); }
+});
+
+test("a branch name exceeding MAX_BRANCH_LENGTH is rejected before writing to registry", () => {
+  const f = fixture();
+  try {
+    const common = path.join(f.repo, ".git");
+    // 120 path components of length 9 = ~1080 chars (> 1024)
+    const tooLongBranch = "feat/" + Array.from({ length: 120 }, (_, i) => `subpath${i}`).join("/") + "/branch";
+    assert.ok(tooLongBranch.length > 1024, `branch length ${tooLongBranch.length} should be > 1024`);
+    git(f.dir, "checkout", "-b", tooLongBranch);
+    assert.equal(recordVerification(f.dir, "npm test"), false, "recordVerification must reject branch > MAX_BRANCH_LENGTH");
+    const reg = readRegistry(common);
+    assert.equal(reg.warning, undefined);
+    assert.equal(reg.registry.verifications, undefined);
+  } finally { f.cleanup(); }
+});
