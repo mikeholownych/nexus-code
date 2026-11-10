@@ -13,7 +13,7 @@ import { conventionalCommitMessage } from "../git.js";
 import { redactSecrets } from "../ui.js";
 import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut } from "./git.js";
-import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type WorktreeEntry } from "./repo.js";
+import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type Repo, type WorktreeEntry } from "./repo.js";
 
 export interface MergeOptions {
   target?: string;
@@ -22,6 +22,9 @@ export interface MergeOptions {
   noRemove?: boolean;
   message?: string;
 }
+
+/** Pathspec of `.nexus/` (sessions, knowledge, worktrees): unstaged after `add -A` so it never reaches a backup or an automatic commit. */
+const NEXUS_STATE_PATH = ":(top).nexus";
 
 const NON_INTERACTIVE = { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" };
 
@@ -32,38 +35,31 @@ const NON_INTERACTIVE = { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" };
  */
 export const mergeSeams: { preMerge?: (info: { branch: string; target: string }) => void } = {};
 
-/**
- * Initialised submodules of the worktree whose checked-out commit is on no remote-tracking branch of that submodule.
- * Their objects live in this worktree's own administrative directory, so removing the worktree would delete the only
- * copy of such a commit while the target keeps pointing at it.
- */
-function unpublishedSubmodules(dir: string): string[] {
-  const status = git(dir, ["submodule", "status", "--recursive"], { allowFailure: true }).stdout.split("\n").filter(Boolean);
-  const found: string[] = [];
-  for (const line of status) {
-    if (line[0] === "-") continue; // not initialised here: no objects of its own
-    const sub = line.slice(1).trim().split(/\s+/)[1];
-    if (!sub) continue;
-    const local = git(path.join(dir, sub), ["rev-list", "-n", "1", "HEAD", "--branches", "--tags", "--glob=refs/stash*", "--not", "--remotes"], { allowFailure: true });
-    if (local.status !== 0 || local.stdout.trim()) found.push(sub);
-  }
-  return found;
-}
-
-/** Initialised submodules present in the worktree. */
+/** The initialised submodules of the worktree (one `git submodule status --recursive` call). */
 function initializedSubmodules(dir: string): string[] {
-  const status = git(dir, ["submodule", "status", "--recursive"], { allowFailure: true }).stdout.split("\n").filter(Boolean);
   const found: string[] = [];
-  for (const line of status) {
-    if (line[0] === "-") continue;
+  for (const line of git(dir, ["submodule", "status", "--recursive"], { allowFailure: true }).stdout.split("\n").filter(Boolean)) {
+    if (line[0] === "-") continue; // not initialised here: no objects of its own
     const sub = line.slice(1).trim().split(/\s+/)[1];
     if (sub) found.push(sub);
   }
   return found;
 }
 
+/**
+ * Of the initialised submodules, those with a local commit (HEAD, branch, tag or stash) that is on no remote-tracking branch
+ * of that submodule. Their objects live in this worktree's own administrative directory, so removing the worktree would
+ * delete the only copy while the target keeps pointing at it.
+ */
+function unpublishedSubmodules(dir: string, initialised: string[] = initializedSubmodules(dir)): string[] {
+  return initialised.filter((sub) => {
+    const local = git(path.join(dir, sub), ["rev-list", "-n", "1", "HEAD", "--branches", "--tags", "--glob=refs/stash*", "--not", "--remotes"], { allowFailure: true });
+    return local.status !== 0 || Boolean(local.stdout.trim());
+  });
+}
+
 /** True when the entry is an automated task worktree (branch `nexus/<id>` under `.nexus/worktrees/`). */
-function isSpeculativeEntry(repo: Repo, entry: { branch?: string; path: string }): boolean {
+function isSpeculativeEntry(repo: Repo, entry: { branch?: string | null; path: string }): boolean {
   const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;
   return Boolean(entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase));
 }
@@ -117,6 +113,7 @@ function backup(dir: string, branch: string, dirty: boolean): string {
       const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
       git(dir, ["read-tree", "HEAD"], { env });
       git(dir, ["add", "-A"], { env });
+      git(dir, ["reset", "-q", "HEAD", "--", NEXUS_STATE_PATH], { env, allowFailure: true });
       const tree = gitOut(dir, ["write-tree"], { env });
       sha = gitOut(dir, ["commit-tree", tree, "-p", sha, "-m", `nexus backup of ${branch} before merge`], { env });
     } finally {
@@ -173,7 +170,9 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
 
   if (dirty) {
     const message = options.message ?? conventionalCommitMessage(changedFiles(source.path));
+    // Internal Nexus state is never committed by the merge (the same exclusion `/commit` applies).
     git(source.path, ["add", "-A"]);
+    git(source.path, ["reset", "-q", "HEAD", "--", NEXUS_STATE_PATH], { allowFailure: true });
     if (git(source.path, ["diff", "--cached", "--quiet"], { allowFailure: true }).status === 0) {
       notes.push("Nothing the superproject can commit was changed (for example only edits inside a submodule).");
     } else {

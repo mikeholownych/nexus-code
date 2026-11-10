@@ -199,8 +199,22 @@ export function tokenizeWorktreeArgs(args: string): string[] {
 export function relocationAfter(result: CommandResult, cwd: string): string | undefined {
   const data = result.data as { removedPath?: string; targetPath?: string } | undefined;
   if (!result.success || !data?.removedPath || !data.targetPath) return undefined;
-  let here = cwd;
-  try { here = fs.realpathSync(cwd); } catch { /* the directory is already gone: compare as given */ }
   const removed = data.removedPath;
-  return here === removed || here.startsWith(removed + path.sep) || cwd === removed || cwd.startsWith(removed + path.sep) ? data.targetPath : undefined;
+  const inside = (candidate: string) => candidate === removed || candidate.startsWith(removed + path.sep);
+  return inside(cwd) || inside(canonicalAfterRemoval(cwd)) ? data.targetPath : undefined;
+}
+
+/** `realpath` for a path whose tail may be gone: resolves links (also dangling ones) and the deepest existing ancestor. */
+function canonicalAfterRemoval(file: string, depth = 0): string {
+  const absolute = path.resolve(file);
+  try {
+    return fs.realpathSync(absolute);
+  } catch {
+    if (depth > 20) return absolute;
+    try {
+      if (fs.lstatSync(absolute).isSymbolicLink()) return canonicalAfterRemoval(path.resolve(path.dirname(absolute), fs.readlinkSync(absolute)), depth + 1);
+    } catch { /* not there at all */ }
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(canonicalAfterRemoval(parent, depth + 1), path.basename(absolute));
+  }
 }
