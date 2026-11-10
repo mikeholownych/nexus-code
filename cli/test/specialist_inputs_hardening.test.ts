@@ -206,3 +206,28 @@ test("a debugger snapshot normalizes line endings as the tester's own commit wou
   const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
   assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "edited\nsecond\n");
 });
+
+test("a new script staged with --chmod=+x under core.filemode=false keeps its executable mode in the diff", () => {
+  const d = mk((r) => { sh(r, "config", "core.filemode", "false"); put(r, "new.sh", "echo new\n"); sh(r, "add", "new.sh"); sh(r, "update-index", "--chmod=+x", "new.sh"); });
+  const out = diffOf(d);
+  assert.match(out.diff, /new file mode 100755/);
+});
+
+test("a snapshot checks the real name of a file whose name starts with a space, so a quoted info/attributes rule for it refuses the snapshot", () => {
+  const root = mk(() => {}, { "file.txt": "base\n" });
+  const markers = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-hard-markers-"));
+  const p = planOperationGit(root, "op-space");
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const tester = ops.prepareUnit({ ...unit("tester"), id: "verify" } as WorkUnit).workspace;
+  put(tester, " probe.txt", "candidate\n"); // sorts first in the listing: its leading space must survive
+  sh(tester, "config", "filter.evil.clean", `sh -c 'touch ${markers}/filter; cat'`);
+  const info = path.join(sh(tester, "rev-parse", "--git-common-dir").trim().replace(/^(?!\/)/, `${tester}/`), "info");
+  fs.mkdirSync(info, { recursive: true });
+  fs.writeFileSync(path.join(info, "attributes"), "\" probe.txt\" filter=evil\n");
+  let threw: unknown;
+  try { ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }); } catch (e) { threw = e; }
+  assert.equal(fs.existsSync(path.join(markers, "filter")), false, "the clean filter ran while snapshotting");
+  assert.ok(threw, "the filter that applies to the real name refuses the snapshot");
+});
