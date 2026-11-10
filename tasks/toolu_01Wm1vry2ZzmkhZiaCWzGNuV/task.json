@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01Wm1vry2ZzmkhZiaCWzGNuV",
+  "agent_id": "a78f123a92e9e2c67",
+  "task_description": "Review PR 449 head 96f2f2d3",
+  "token_usage": {
+    "input_tokens": 62,
+    "cache_creation_tokens": 76452,
+    "cache_read_tokens": 2324869,
+    "output_tokens": 12499,
+    "api_call_count": 31
+  },
+  "started_at": "2026-11-10T20:50:21.834900996Z",
+  "completed_at": "2026-11-10T20:59:51.641725347Z"
+}
