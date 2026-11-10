@@ -76,6 +76,7 @@ const del = { kind: "tools" as const, calls: [{ name: "delete_file", args: { pat
 const echo = { kind: "tools" as const, calls: [{ name: "run_command", args: { command: "for i in 1 2 3; do echo step $i; done" } }] };
 const touch = { kind: "tools" as const, calls: [{ name: "run_command", args: { command: "echo made > made.txt" } }] };
 const hello = { kind: "text" as const, content: "Hello." };
+const knowledge = { kind: "tools" as const, calls: [{ name: "manage_knowledge", args: { action: "set", key: "k", value: "v" } }] };
 
 /** Runs one turn per prompt; `deny` names the tools the operator denies (everything else, verifier included, is approved). */
 async function turns(firsts: Array<Reply | Reply[]>, deny: string[] = []): Promise<{ results: TurnResult[]; repo: string }> {
@@ -150,6 +151,17 @@ describe("D-04: the verdict follows this turn's evidence", () => {
       assert.equal(r.outcome, "UNVERIFIED");
       assert.equal(r.unverifiedChangesPending, true);
       assert.equal(r.turnEvidence?.workspaceChanged, "yes");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("3c. a turn that only records knowledge writes .nexus/knowledge.json, which is outside the comparison: NOT_REQUIRED", async () => {
+    const { results: [r], repo } = await turns([knowledge]);
+    try {
+      assert.ok(fs.existsSync(path.join(repo, ".nexus", "knowledge.json")), "the knowledge file was written");
+      assert.equal(r.outcome, "NOT_REQUIRED", `got ${r.outcome}/${r.reason}`);
+      assert.equal(r.turnEvidence?.workspaceChanged, "no");
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

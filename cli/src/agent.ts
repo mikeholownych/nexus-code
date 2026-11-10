@@ -63,8 +63,6 @@ import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } 
 import { judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
-/** File-edit tools that can change the workspace before the verifier baseline is captured. */
-const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
 import { credentialOriginOf, InferenceError, type TruncatedCall, TokenCountError } from "./client.js";
 import {
   TurnResult,
@@ -155,7 +153,7 @@ import {
   isCondensedFinding,
   readFindings,
 } from "./core/findings.js";
-import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
+import { FILE_EDIT_TOOLS, FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnEvidence, TurnReason } from "./core/turn.js";
 import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
