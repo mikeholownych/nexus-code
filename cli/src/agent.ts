@@ -819,8 +819,8 @@ function gitIndexIdentity(workspace: string): string {
   return createHash("sha256").update(out).digest("hex").slice(0, 16);
 }
 
-/** Why an operator /compact --llm is not run while a resumed turn's provider window is open. */
-const RESUMED_WINDOW_COMPACT_REASON = "the provider is still inside the retry window it asked for";
+/** Why work that would call the provider (a `/compact --llm`, a subagent) is not started while a resumed turn's provider window is open. */
+const RESUMED_WINDOW_REASON = "the provider is still inside the retry window it asked for";
 
 /** An endpoint URL for equality: scheme and host lower-cased, trailing slashes dropped. */
 function comparableEndpoint(endpoint: string): string {
@@ -4004,7 +4004,7 @@ export class AutonomousAgent {
   public async compactNow(useLlm: boolean, signal?: AbortSignal, step = 0): Promise<{ ok: boolean; durable: boolean; message: string; outcome?: CompactionOutcome }> {
     // `/compact --llm` calls the provider: not inside the retry window a resumed turn is still waiting out.
     if (useLlm && this.resumedWindowCovers(this.client.endpoint)) {
-      return { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_COMPACT_REASON}.` };
+      return { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_REASON}.` };
     }
     const previousParent = this.activeTraceSpanId;
     const previousTrace = this.activeCompactionTrace;
@@ -4134,7 +4134,7 @@ export class AutonomousAgent {
     while (this.compactionQueue.length) {
       const request = this.compactionQueue.shift()!;
       if (!cancelReason && request.llm && this.resumedWindowCovers(this.client.endpoint)) {
-        if (closing) this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_COMPACT_REASON}.` }, "cancelled");
+        if (closing) this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_REASON}.` }, "cancelled");
         else held.push(request);
         continue;
       }
@@ -4628,7 +4628,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         return {
           success: false,
           output: "",
-          error: `Subagent not started: ${RESUMED_WINDOW_COMPACT_REASON}. Continue without it, or start it in a later step.`,
+          error: `Subagent not started: ${RESUMED_WINDOW_REASON}. Continue without it, or start it in a later step.`,
         };
       }
 

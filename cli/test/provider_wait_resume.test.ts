@@ -330,6 +330,7 @@ async function plannerSide(script: Parameters<typeof startRecoveryGateway>[0]) {
   const host = agentFor(gateway.url, makeRepo(root), path.join(root, "state"), fakeClock());
   return {
     gateway,
+    host,
     client: (host as any).client,
     cleanup: async () => {
       host.shutdown();
@@ -584,9 +585,7 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       const eligibleAt = eligibleAtOf(ctx.interrupted);
       const a = ctx.resumed as any;
       // The same agent had completed an unrelated turn before the operator ran /resume (the sidecar reuses its agent).
-      const host = agentFor(earlier.gateway.url, makeRepo(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-earlier-"))), fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-earlier-state-")), fakeClock());
-      const completed = await host.runTurn("an earlier turn");
-      host.shutdown();
+      const completed = await earlier.host.runTurn("an earlier turn");
       assert.equal(completed.execution, "COMPLETED", "precondition");
       a.lastTurnResult = completed;
       ctx.resumed.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: ctx.interrupted }, noArchive);
