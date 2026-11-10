@@ -1,3 +1,4 @@
+import { isLegacyWorktreeArgs, isReadOnlyWorktreeArgs, runWorktreeCommand, tokenizeWorktreeArgs } from "./worktrunk/command.js";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import * as path from "node:path";
@@ -93,7 +94,7 @@ export function replReadOnlyAllowed(command: string, args: string): boolean {
     return true;
   }
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
-  if (name === "worktree") return !value || value === "status";
+  if (name === "worktree") return isReadOnlyWorktreeArgs(value);
   if (name === "plan" || name === "knowledge") {
     return !value || value === "list" || value === "show" || value === "get";
   }
@@ -382,7 +383,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/mode [auto|review]"))} Toggle autonomous execution vs human review approval`);
     console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
     console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
-    console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard]"))} Manage isolated ephemeral git worktrees`);
+    console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard|list|path|switch|remove]"))} Manage isolated ephemeral and named git worktrees`);
     console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         [experimental] Execute strict RED-GREEN-REFACTOR TDD cycle`);
     console.log(`  ${pc.bold(pc.yellow("/knowledge [set|del]"))} Manage persistent project knowledge graph`);
     console.log(`  ${pc.bold(pc.yellow("/browse <url>"))}        Verify URL in headless browser driver`);
@@ -1061,6 +1062,10 @@ export class InteractiveRepl {
                 console.log(pc.dim("Use '/stage reset' to unstage, or '/commit' to create a commit.\n"));
               }
             }
+            continue;
+          } else if (cmd === "worktree" && !isLegacyWorktreeArgs(arg)) {
+            const result = runWorktreeCommand(tokenizeWorktreeArgs(arg), { cwd: this.config.workspace, readOnly: Boolean(this.config.readOnly) || this.agent.getApprovalMode() === "read-only" });
+            console.log((result.success ? result.output : pc.red(result.output)) + "\n");
             continue;
           } else if (cmd === "worktree") {
             const mgr = this.agent.getWorktreeManager();
