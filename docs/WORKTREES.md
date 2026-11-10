@@ -34,7 +34,13 @@ syntax, for example `target/` or `node_modules/`) into the new worktree; `--no-c
 demand (`--from`/`--to` default to the main checkout and the current worktree). Existing files are kept unless `--force`.
 Copies use a reflink where the file system has one, keep modification times so incremental builds do not restart, and
 stop with an error beyond 50,000 files or 4 GiB (under `switch -c`, a warning: the worktree is still created). `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
-(absolute paths) are never copied, and a symbolic link that leaves the tree is skipped. `--all-ignored` copies every
+(absolute paths) are never copied, and a symbolic link is copied only if its real target (resolved through other links, not just
+as text) is inside the tree. `--force` never overwrites a file that is tracked in the destination (it is reported and skipped).
+Every file is staged under `.nexus-copy-<id>.tmp` in its directory and moved into place, so a killed run never leaves a
+truncated file under its real name; leftover staging files are removed by the next run. `--dry-run` runs the same checks as the
+real run (kept files, tracked files, a symbolic link or directory in the way), so its counts match. Hard links, including pnpm
+store links, are copied as ordinary files: the bytes are counted per file and can reach the size limit sooner than the disk use
+suggests. `--all-ignored` copies every
 ignored file and can therefore carry secrets such as `.env` into each worktree; it is never the default.
 
 ## Merge and prune

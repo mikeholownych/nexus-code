@@ -373,3 +373,82 @@ test("copy-ignored --dry-run previews only what a real run would write, and coun
     assert.match(forced.output, /Dry run: 3 file\(s\)/);
   } finally { f.cleanup(); }
 });
+
+test("copy-ignored --force never overwrites a file that is tracked in the destination", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/tracked", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-tracked");
+    fs.mkdirSync(path.join(dir, "target", "debug"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "target", "debug", "app.o"), "tracked in the destination");
+    git(dir, "add", "-f", "target/debug/app.o");
+    git(dir, "commit", "-q", "-m", "track a build file");
+    const forced = wt(f, f.repo, ["copy-ignored", "--to", "feat/tracked", "--force"]);
+    assert.equal(forced.success, true, forced.output);
+    assert.equal(fs.readFileSync(path.join(dir, "target", "debug", "app.o"), "utf8"), "tracked in the destination");
+    assert.equal(git(dir, "status", "--porcelain"), "", "the destination stays clean");
+    assert.match(forced.output, /tracked in destination/);
+    assert.equal(fs.readFileSync(path.join(dir, "target", "CACHEDIR.TAG"), "utf8"), "tag", "other files are still copied");
+    const dry = wt(f, f.repo, ["copy-ignored", "--to", "feat/tracked", "--force", "--dry-run"]);
+    assert.match(dry.output, /tracked in destination/, "the preview says so too");
+  } finally { f.cleanup(); }
+});
+
+test("a leftover staging file from a killed run is swept, and copied files are placed through a staging name", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/sweep", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-sweep");
+    fs.mkdirSync(path.join(dir, "target"), { recursive: true });
+    const stale = path.join(dir, "target", ".nexus-copy-123e4567-e89b-12d3-a456-426614174000.tmp");
+    fs.writeFileSync(stale, "half a file");
+    const r = wt(f, f.repo, ["copy-ignored", "--to", "feat/sweep"]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(fs.existsSync(stale), false, "the stale staging file is removed");
+    assert.deepEqual(fs.readdirSync(path.join(dir, "target")).filter((n) => n.startsWith(".nexus-copy-")), [], "no staging file is left behind");
+    assert.equal(fs.readFileSync(path.join(dir, "target", "debug", "app.o"), "utf8"), "object");
+  } finally { f.cleanup(); }
+});
+
+test("the dry-run preview and the real run agree when a destination ancestor is a symbolic link or a directory is in the way", () => {
+  const f = fixture();
+  try {
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/ancestor", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-ancestor");
+    const elsewhere = path.join(f.root, "elsewhere");
+    fs.mkdirSync(elsewhere);
+    fs.symlinkSync(elsewhere, path.join(dir, "target")); // the destination's target/ is a link
+    const dry = wt(f, f.repo, ["copy-ignored", "--to", "feat/ancestor", "--dry-run"]);
+    const real = wt(f, f.repo, ["copy-ignored", "--to", "feat/ancestor"]);
+    assert.equal(real.success, true, real.output);
+    const copiedReal = Number(/Copied (\d+) file/.exec(real.output)?.[1]);
+    const copiedDry = Number(/Dry run: (\d+) file/.exec(dry.output)?.[1]);
+    assert.equal(copiedDry, copiedReal, `dry-run said ${copiedDry}, the real run copied ${copiedReal}\n${dry.output}\n${real.output}`);
+    assert.match(dry.output, /not safe|symbolic link/);
+    assert.deepEqual(fs.readdirSync(elsewhere), [], "nothing is written through the link");
+
+    // --force with a directory where a file would go
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/dirway", "--no-copy"]).success, true);
+    const d2 = dirOf(f, "feat-dirway");
+    fs.mkdirSync(path.join(d2, "notes.log")); // notes.log is a file in the source
+    const dry2 = wt(f, f.repo, ["copy-ignored", "--to", "feat/dirway", "--force", "--dry-run"]);
+    const real2 = wt(f, f.repo, ["copy-ignored", "--to", "feat/dirway", "--force"]);
+    assert.equal(Number(/Dry run: (\d+) file/.exec(dry2.output)?.[1]), Number(/Copied (\d+) file/.exec(real2.output)?.[1]), `${dry2.output}\n${real2.output}`);
+  } finally { f.cleanup(); }
+});
+
+test("a symbolic link whose target only leaves the tree through another link is not copied", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.root, "zz"), "outside the repository");
+    fs.symlinkSync(".", path.join(f.repo, "target", "self"));
+    fs.symlinkSync("self/../../zz", path.join(f.repo, "target", "chain")); // lexically repo/zz, really ../zz
+    assert.equal(wt(f, f.repo, ["switch", "-c", "feat/links", "--no-copy"]).success, true);
+    const dir = dirOf(f, "feat-links");
+    const r = wt(f, f.repo, ["copy-ignored", "--to", "feat/links"]);
+    assert.equal(r.success, true, r.output);
+    assert.equal(fs.lstatSync(path.join(dir, "target", "chain"), { throwIfNoEntry: false }), undefined, "the escaping link is not copied");
+    assert.match(r.output, /chain.*symbolic link/);
+    assert.ok(fs.lstatSync(path.join(dir, "target", "self")).isSymbolicLink(), "a link that stays inside the tree is copied");
+  } finally { f.cleanup(); }
+});
