@@ -923,6 +923,8 @@ export class AutonomousAgent {
   private turnCarriedChanges = false;
   /** Evidence about this turn alone for its verdict (TUI-AUDIT D-04): operator denials and verifier runs. */
   private turnDenials = 0;
+  /** Successful file-write tool calls this turn (write_file, edit_file, patch_file, delete_file). */
+  private turnFileWrites = 0;
   private turnVerifierRuns: TurnEvidence["verifierRuns"] = [];
   /** Workspace state identity when this turn began ("unknown" when it could not be established). */
   private turnStartState: string | undefined;
@@ -1285,6 +1287,7 @@ export class AutonomousAgent {
           this.setUnverifiedChanges(true);
           this.verificationEvidence = undefined;
           this.turnMutations++;
+          if (FILE_EDIT_TOOLS.has(event.toolName)) this.turnFileWrites++;
           await this.candidateTracker.createMutationHook()(event, context);
         },
       },
@@ -4645,6 +4648,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (childMutations > 0 || subagent.turnCarriedChanges) {
             this.mutationSeq += subagent.mutationSeq;
             this.turnMutations += childMutations;
+            this.turnFileWrites += subagent.turnFileWrites;
             this.verificationEvidence = undefined;
             if (this.objective) {
               invalidateVerified(this.objective, `subagent changed workspace`);
@@ -5646,6 +5650,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnCarriedChanges = this.hasPendingModifications;
     this.turnDenials = 0;
+    this.turnFileWrites = 0;
     this.turnVerifierRuns = [];
     this.turnStartState = undefined;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
@@ -6682,8 +6687,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     // change to verify (TUI-AUDIT D-04). A command that changed any file leaves the identity different.
     const endedNormally = !input.interruption && !input.unhandledError && !input.persistenceFailure && !input.inferenceFailure &&
       !input.capacityBlock && !input.limitReached;
+    // A file-write tool (write_file, edit_file, patch_file, delete_file) that succeeded is a change by definition, even
+    // when the workspace identity cannot see its target (a gitignored build/ directory): never lifted.
     const latchCaughtNothing = endedNormally && this.hasPendingModifications && !this.turnCarriedChanges &&
-      !this.activeWorktree && !evidence && workspaceChanged === "no";
+      !this.activeWorktree && !evidence && this.turnFileWrites === 0 && workspaceChanged === "no";
     if (latchCaughtNothing) {
       this.setUnverifiedChanges(false);
       // A later change takes a fresh pre-change baseline: the workspace may change between turns.

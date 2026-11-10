@@ -32,8 +32,9 @@ function stream(r: Reply): string {
 }
 
 /** Scripted like the audit's fake model: the first request of each turn gets `first`, every later one plain text. */
-async function gateway(firsts: Reply[]): Promise<{ url: string; close(): Promise<void> }> {
+async function gateway(firsts: Array<Reply | Reply[]>): Promise<{ url: string; close(): Promise<void> }> {
   let turn = -1;
+  let step = 0;
   const server = http.createServer((req, res) => {
     if (req.url?.endsWith("/models")) {
       res.setHeader("content-type", "application/json");
@@ -46,8 +47,10 @@ async function gateway(firsts: Reply[]): Promise<{ url: string; close(): Promise
       const body = JSON.parse(raw || "{}");
       const last = body.messages?.at(-1);
       // A new operator prompt starts a turn; tool results continue it.
-      if (last?.role === "user" && !String(last.content).startsWith("[Nexus")) turn++;
-      const reply = last?.role === "tool" ? { kind: "text" as const, content: "Done." } : firsts[turn] ?? { kind: "text" as const, content: "Done." };
+      if (last?.role === "user" && !String(last.content).startsWith("[Nexus")) { turn++; step = 0; } else step++;
+      // A turn's script is one reply, or a list of replies by step; after the script the model says "Done.".
+      const script = firsts[turn];
+      const reply = (Array.isArray(script) ? script[step] : step === 0 ? script : undefined) ?? { kind: "text" as const, content: "Done." };
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.end(stream(reply));
     });
@@ -75,7 +78,7 @@ const touch = { kind: "tools" as const, calls: [{ name: "run_command", args: { c
 const hello = { kind: "text" as const, content: "Hello." };
 
 /** Runs one turn per prompt; `deny` names the tools the operator denies (everything else, verifier included, is approved). */
-async function turns(firsts: Reply[], deny: string[] = []): Promise<{ results: TurnResult[]; repo: string }> {
+async function turns(firsts: Array<Reply | Reply[]>, deny: string[] = []): Promise<{ results: TurnResult[]; repo: string }> {
   const gw = await gateway(firsts);
   const repo = auditRepo();
   const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: "review" } as any);
@@ -161,5 +164,87 @@ describe("D-04: the verdict follows this turn's evidence", () => {
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
+  });
+
+  describe("a real file write the workspace identity cannot see is never reported as no change", () => {
+    const ignored = { ".gitignore": "build/\n", "build/old.js": "x\n" };
+    async function ignoredTurn(script: Reply | Reply[]): Promise<{ r: TurnResult; repo: string }> {
+      const gw = await gateway([script]);
+      const repo = auditRepo();
+      for (const [name, content] of Object.entries(ignored)) {
+        fs.mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+        fs.writeFileSync(path.join(repo, name), content);
+      }
+      execSync("git add .gitignore && git commit -qm ignore", { cwd: repo, stdio: "ignore" });
+      const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto" } as any);
+      try {
+        return { r: await agent.runTurn("go"), repo };
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    }
+
+    test("write_file into a gitignored directory stays UNVERIFIED", async () => {
+      const { r, repo } = await ignoredTurn({ kind: "tools", calls: [{ name: "write_file", args: { path: "build/new.js", content: "y\n" } }] });
+      try {
+        assert.ok(fs.existsSync(path.join(repo, "build", "new.js")));
+        assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+        assert.equal(r.unverifiedChangesPending, true);
+      } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+
+    test("delete_file of a gitignored file stays UNVERIFIED", async () => {
+      const { r, repo } = await ignoredTurn({ kind: "tools", calls: [{ name: "delete_file", args: { path: "build/old.js" } }] });
+      try {
+        assert.equal(fs.existsSync(path.join(repo, "build", "old.js")), false);
+        assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+      } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+
+    test("deleting a file and writing it back unchanged still stays UNVERIFIED (a write happened)", async () => {
+      const { r, repo } = await ignoredTurn([
+        { kind: "tools", calls: [{ name: "delete_file", args: { path: "base.txt" } }] },
+        { kind: "tools", calls: [{ name: "write_file", args: { path: "base.txt", content: "base\n" } }] },
+      ]);
+      try {
+        assert.equal(fs.readFileSync(path.join(repo, "base.txt"), "utf-8"), "base\n");
+        assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+      } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("the REPL verdict line words the same facts as the TUI", () => {
+    const turn = (over: Partial<TurnResult>, evidence: Partial<NonNullable<TurnResult["turnEvidence"]>>): TurnResult => ({
+      execution: "COMPLETED", outcome: "UNVERIFIED", reason: "VERIFICATION_NOT_RUN", acceptance: "NOT_REQUESTED", modelStop: "FINAL_TEXT",
+      finalOutputComplete: true, verification: null, interruption: null, inferenceFailure: null, steps: { used: 1, max: 6, limitReached: false },
+      unverifiedChangesPending: true, finishedAt: "2026-11-10T00:00:00Z",
+      turnEvidence: { workspaceChanged: "yes", carriedChanges: false, denied: 0, verifierRuns: [], ...evidence }, ...over,
+    }) as TurnResult;
+    const line = (t: TurnResult) => summarizeTurn(t).line;
+
+    test("a completion run followed by a later edit is a run, not 'no verifier ran'", () => {
+      const l = line(turn({}, { verifierRuns: [{ command: "npm test", phase: "before_change", passed: true }, { command: "npm test", phase: "completion", passed: true }] }));
+      assert.match(l, /npm test ran, but the change was edited after it/);
+    });
+
+    test("the carried-change text appears only for VERIFICATION_NOT_RUN", () => {
+      const carried = { workspaceChanged: "no" as const, carriedChanges: true };
+      assert.match(line(turn({}, carried)), /no files changed this turn/);
+      assert.doesNotMatch(line(turn({ reason: "NO_TESTS_EXECUTED" }, carried)), /no files changed this turn/);
+      assert.doesNotMatch(line(turn({ reason: "NO_APPLICABLE_VERIFIER" }, carried)), /no files changed this turn/);
+    });
+
+    test("a long verifier command is bounded in the line", () => {
+      const l = line(turn({}, { verifierRuns: [{ command: "x".repeat(400), phase: "before_change", passed: true }] }));
+      assert.ok(l.length < 260, `${l.length} chars`);
+      assert.match(l, /…/);
+    });
   });
 });
