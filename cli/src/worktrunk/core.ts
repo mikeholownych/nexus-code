@@ -462,36 +462,31 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
         // The commit the guard must protect is the one verified above, never one read after the switch: a commit that
         // lands in between would otherwise be adopted as "expected" and the branch deleted over it.
         guardHead = entry.head;
+        // A guard branch that already exists was left by an interrupted attempt (or is someone's branch with that name).
+        // It is never reused, moved or deleted: the user decides, before anything here is changed.
         const existing = git(repo.cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `refs/heads/${guardBranch}`], { allowFailure: true });
-        const leaked = existing.status === 0 ? existing.stdout.trim() : "";
-        if (leaked && leaked !== entry.head) {
+        if (existing.status === 0) {
           const name = guardBranch;
+          const tip = existing.stdout.trim();
           guardBranch = "";
-          throw new WorktreeError(`the branch ${name} already exists at another commit; inspect it, delete it with \`git branch -D ${name}\` if it is not needed, and run the command again. Nothing was removed`);
+          throw new WorktreeError(`the branch ${name} already exists (at ${tip.slice(0, 12)}), left by an earlier interrupted removal of this worktree or created by someone else. Nothing was removed. Inspect it with \`git log ${name}\` and, once it holds nothing you need, delete it with \`git branch -D ${name}\`, then run the command again`);
         }
-        // A guard branch left by an interrupted earlier attempt for this worktree and commit is reused. It is moved to
-        // wherever HEAD is at the moment of the switch (`switch -C`), never switched onto: a plain switch would reset a
-        // detached HEAD that another session advanced to B back to the old commit A and lose B. The old commit is kept on
-        // a second branch until the switch is verified.
-        const previous = `${guardBranch}-prev`;
-        if (leaked) git(repo.cwd, ["update-ref", "--end-of-options", `refs/heads/${previous}`, leaked]);
         removeSeams.beforeGuardSwitch?.(entry);
-        const switched = git(entry.path, ["switch", leaked ? "-C" : "-c", guardBranch, "--end-of-options"], { allowFailure: true });
+        const switched = git(entry.path, ["switch", "-c", guardBranch, "--end-of-options"], { allowFailure: true });
         if (switched.status !== 0) {
           guardBranch = "";
           throw new WorktreeError("could not protect the detached HEAD before removing it; nothing was removed");
         }
         removeSeams.afterGuardSwitch?.(entry);
         const nowHead = git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim();
-        if (leaked) {
-          // The guard moved with HEAD. The old commit needs its own branch only if the new head does not contain it.
-          const contained = git(repo.cwd, ["merge-base", "--is-ancestor", leaked, nowHead], { allowFailure: true }).status === 0;
-          if (contained) deleteBranchAt(repo, previous, leaked);
-        }
-        if (nowHead !== guardHead) {
+        // `git switch` is not atomic with a concurrent `git commit`: a commit can be written to the HEAD reflog while HEAD
+        // ends up back at the checked commit. The reflog entry before the switch must be that commit too.
+        const before = git(entry.path, ["rev-parse", "--verify", "--quiet", "HEAD@{1}"], { allowFailure: true });
+        const reflogMismatch = before.status === 0 && before.stdout.trim() !== guardHead;
+        if (nowHead !== guardHead || reflogMismatch) {
           const name = guardBranch;
           guardBranch = ""; // kept: it now holds the commit that landed
-          throw new WorktreeError(`a commit landed while the detached HEAD was being protected; it is kept on the branch ${name} in ${shownPath(ctx.home, entry.path)} and nothing was removed. Merge or delete that branch, then run the command again`);
+          throw new WorktreeError(`a commit landed while the detached HEAD was being protected (HEAD or its reflog moved); it is kept on the branch ${name} in ${shownPath(ctx.home, entry.path)}, with its reflog, and nothing was removed. Merge or delete that branch, then run the command again`);
         }
       }
       try {
