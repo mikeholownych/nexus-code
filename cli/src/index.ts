@@ -232,7 +232,8 @@ async function startRepl(options: any): Promise<void> {
   if (trustDecision === "exit") return;
   triggerBackgroundGc();
   const config = buildConfig(options);
-  if (config.model === "local-model") {
+  // A resumed start takes the model from the session record (or detects it after the resumed wait): no request now.
+  if (config.model === "local-model" && !options.resume) {
     try {
       const client = new LocalLlmClient(config);
       const models = await client.listModels();
@@ -453,8 +454,9 @@ program
     config.surface = "headless";
     const isJson = Boolean(options.json);
 
-    // Auto-detect loaded model if model is 'local-model'
-    if (config.model === "local-model") {
+    // Auto-detect loaded model if model is 'local-model' (not on a resume: the task record supplies it, or the first
+    // step detects it after the resumed provider wait)
+    if (config.model === "local-model" && (options.resume === undefined || options.resume === false)) {
       try {
         const client = new LocalLlmClient(config);
         const models = await client.listModels();

@@ -979,6 +979,20 @@ describe("BLOCKED decision application", () => {
     });
   });
 
+  test("36b. D-04: an implementer that only ran a command which changed nothing is BLOCKED(no_change), not completed UNVERIFIED", async () => {
+    // Before D-04 the command latched the verification obligation, so a command-only unit ended UNVERIFIED and completed.
+    // A command that leaves the workspace exactly as found made no change: the unit takes the no_change path
+    // (retry, accept as no-op, stop) like a prose-only unit.
+    const gw = await startGateway((n) => (n === 1 ? { kind: "tools", calls: [{ name: "run_command", args: { command: "echo checked" } }] } : { kind: "text", text: "I ran a command and changed nothing." }));
+    await withTeam([gw], async (env) => {
+      const out = await env.team([resource("primary", gw)], { id: "team-command-only" }).run("implementer", "write a feature");
+      assert.equal(out.operation.status, "BLOCKED", out.report);
+      const unit = env.store.load("team-command-only").units[0];
+      assert.ok(unit.blocked?.reason.startsWith("no_change"), unit.blocked?.reason);
+      assert.deepEqual(unit.blocked!.decision.options.map((o) => o.action.kind), ["retry", "accept_no_change", "cancel_operation"]);
+    });
+  });
+
   test("REQ-AGT-107: implementer and tester task_completed no-ops are blocked", async () => {
     for (const role of ["implementer", "tester"] as const) {
       const gw = await startGateway(() => complete(`${role} reported done without work`));

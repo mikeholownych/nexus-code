@@ -121,6 +121,8 @@ export interface DurableTaskState {
   workspacePath: string;
   workspace: string; // Compatibility alias for workspacePath
   model?: string;
+  /** The inference endpoint the model was chosen on (a resume without --model adopts the model only on the same one). */
+  endpoint?: string;
   createdAt: string;
   updatedAt: string;
   status: TaskLifecycleStatus;
