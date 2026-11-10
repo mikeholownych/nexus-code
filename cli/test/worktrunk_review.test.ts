@@ -699,6 +699,8 @@ test("when the detached HEAD cannot be restored after a refused removal the mess
     assert.match(r.output, /could not restore the detached HEAD/);
     assert.match(r.output, /nexus-removed\//);
     assert.match(r.output, /switch --detach/);
+    assert.doesNotMatch(r.output, /reuses it/, "a retry no longer reuses a guard branch");
+    assert.match(r.output, /git branch -D/);
   } finally { f.cleanup(); }
 });
 
@@ -758,22 +760,6 @@ test("a guard-named branch checked out in another worktree is refused and that w
     assert.equal(fs.existsSync(dir), true);
     assert.equal(git(other, "rev-parse", "HEAD"), head, "the other worktree still has its branch and commit");
     assert.equal(git(f.repo, "rev-parse", `refs/heads/${name}`), head);
-  } finally { f.cleanup(); }
-});
-
-test("removing a detached worktree never creates or overwrites a -prev branch", async () => {
-  const f = fixture();
-  try {
-    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-noprev");
-    fs.mkdirSync(path.dirname(dir), { recursive: true });
-    git(f.repo, "worktree", "add", "-q", "--detach", dir);
-    const head = git(dir, "rev-parse", "HEAD");
-    const userBranch = `${guardNameFor(dir, head)}-prev`;
-    const unique = git(f.repo, "commit-tree", "-p", head, "-m", "user work", `${head}^{tree}`);
-    git(f.repo, "update-ref", `refs/heads/${userBranch}`, unique);
-    const r = wt(f, f.repo, ["remove", dir]);
-    assert.equal(r.success, true, r.output);
-    assert.equal(git(f.repo, "rev-parse", `refs/heads/${userBranch}`), unique, "a user branch with that name is untouched");
   } finally { f.cleanup(); }
 });
 

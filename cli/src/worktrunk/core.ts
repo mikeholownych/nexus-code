@@ -500,7 +500,7 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
           if (back.status === 0) {
             deleteBranchAt(repo, guardBranch, git(entry.path, ["rev-parse", "--verify", "HEAD"]).stdout.trim());
           } else {
-            throw new WorktreeError(`${(err as Error).message}; could not restore the detached HEAD, so ${shownPath(ctx.home, entry.path)} stays on the temporary branch ${guardBranch} (nothing is lost). To undo: git -C <that path> switch --detach, then git branch -D ${guardBranch}. A retry reuses it`);
+            throw new WorktreeError(`${(err as Error).message}; could not restore the detached HEAD, so ${shownPath(ctx.home, entry.path)} stays on the temporary branch ${guardBranch} (nothing is lost). To undo: git -C <that path> switch --detach, then git branch -D ${guardBranch}. Do that before running the command again, because a retry refuses while the branch exists`);
           }
         }
         throw err;
