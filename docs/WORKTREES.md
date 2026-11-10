@@ -34,7 +34,13 @@ syntax, for example `target/` or `node_modules/`) into the new worktree; `--no-c
 demand (`--from`/`--to` default to the main checkout and the current worktree). Existing files are kept unless `--force`.
 Copies use a reflink where the file system has one, keep modification times so incremental builds do not restart, and
 stop with an error beyond 50,000 files or 4 GiB (under `switch -c`, a warning: the worktree is still created). `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
-(absolute paths) are never copied, and a symbolic link that leaves the tree is skipped. `--all-ignored` copies every
+(absolute paths) are never copied, and a symbolic link is copied only if its real target (resolved through other links, not just
+as text) is inside the tree. `--force` never overwrites a file that is tracked in the destination (it is reported and skipped).
+Every file is staged under `.nexus-copy-<id>.tmp` in its directory and moved into place, so a killed run never leaves a
+truncated file under its real name; leftover staging files are removed by the next run. `--dry-run` runs the same checks as the
+real run (kept files, tracked files, a symbolic link or directory in the way), so its counts match. Hard links, including pnpm
+store links, are copied as ordinary files: the bytes are counted per file and can reach the size limit sooner than the disk use
+suggests. `--all-ignored` copies every
 ignored file and can therefore carry secrets such as `.env` into each worktree; it is never the default.
 
 ## Merge and prune
@@ -105,9 +111,12 @@ can never change it:
   detached worktree is first put on a temporary branch `nexus-removed/<id>`, so a commit that lands after that check
   advances the branch instead of vanishing with the worktree; the branch is deleted again unless it moved, in which case
   the command names it. The protected commit is the one verified under the lock: if `HEAD` differs right after the switch, the
-  branch is kept with the new commit and nothing is removed. A guard branch left by an interrupted attempt for the same worktree
-  and commit is reused by the retry; if the detached HEAD cannot be restored after a refused removal, the message names the
-  branch and how to undo it. What was read before waiting for the lock is re-read under it: a worktree that changed
+  branch is kept with the new commit and nothing is removed. A guard branch (`nexus-removed/<id>`) that already exists is never reused, moved or deleted: removal refuses
+  before changing anything and prints the branch, its commit and the commands to inspect (`git log`) and delete
+  (`git branch -D`) it. `git switch` is not atomic with a concurrent `git commit`, so after the switch the `HEAD` reflog
+  is checked as well: a commit that is in the reflog but not on the branch keeps the worktree and the branch and removes
+  nothing. If the detached HEAD cannot be restored after a refused removal, the message names the branch and how to
+  undo it. What was read before waiting for the lock is re-read under it: a worktree that changed
   meanwhile (a stale registration recreated by `switch`, for example) is not removed.
 * **Deleted and detached worktrees.** A worktree whose directory was deleted by hand is listed as prunable. `remove`
   accepts its absolute path (a detached one has no branch name) and drops that one registration, never the other stale
