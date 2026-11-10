@@ -79,16 +79,17 @@ const hello = { kind: "text" as const, content: "Hello." };
 const knowledge = { kind: "tools" as const, calls: [{ name: "manage_knowledge", args: { action: "set", key: "k", value: "v" } }] };
 
 /** Runs one turn per prompt; `deny` names the tools the operator denies (everything else, verifier included, is approved). */
-async function turns(firsts: Array<Reply | Reply[]>, deny: string[] = []): Promise<{ results: TurnResult[]; repo: string }> {
+async function turns(firsts: Array<Reply | Reply[]>, deny: string[] = [], setup?: (repo: string) => void): Promise<{ results: TurnResult[]; repo: string; agent: AutonomousAgent }> {
   const gw = await gateway(firsts);
   const repo = auditRepo();
+  setup?.(repo);
   const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: "review" } as any);
   const results: TurnResult[] = [];
   try {
     for (let i = 0; i < firsts.length; i++) {
       results.push(await agent.runTurn(`go ${i}`, async (tool) => !deny.includes(tool)));
     }
-    return { results, repo };
+    return { results, repo, agent };
   } finally {
     agent.shutdown();
     await gw.close();
@@ -178,6 +179,58 @@ describe("D-04: the verdict follows this turn's evidence", () => {
     }
   });
 
+  test("deleting a tracked file and writing it back unchanged still ends UNVERIFIED (a write tool ran)", async () => {
+    const { results: [r], repo } = await turns([[
+      { kind: "tools", calls: [{ name: "delete_file", args: { path: "base.txt" } }] },
+      { kind: "tools", calls: [{ name: "write_file", args: { path: "base.txt", content: "base\n" } }] },
+    ]]);
+    try {
+      assert.equal(fs.readFileSync(path.join(repo, "base.txt"), "utf-8"), "base\n");
+      assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a gitignored write in a turn that carried changes in is not reported as 'no files changed this turn'", async () => {
+    const write2 = { kind: "tools" as const, calls: [{ name: "write_file", args: { path: "build/new.js", content: "y\n" } }] };
+    const { results: [, r], repo } = await turns([write, write2], [], (dir) => {
+      fs.writeFileSync(path.join(dir, ".gitignore"), "build/\n");
+    });
+    try {
+      assert.ok(fs.existsSync(path.join(repo, "build", "new.js")));
+      assert.equal(r.turnEvidence?.carriedChanges, true);
+      assert.equal(r.turnEvidence?.workspaceChanged, "yes", "a file-write tool ran, whatever the identity saw");
+      assert.doesNotMatch(summarizeTurn(r).line, /no files changed this turn/);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("building the verdict again (a failed final checkpoint rebuilds it) does not change the engineering outcome", async () => {
+    const { results: [r], repo, agent } = await turns([echo]);
+    try {
+      assert.equal(r.outcome, "NOT_REQUIRED");
+      const again = (agent as any).buildTurnResult({ modelStop: "FINAL_TEXT", finalOutputComplete: true, inferenceFailure: null, interruption: null, limitReached: false, stepsUsed: 2 }) as TurnResult;
+      assert.equal(again.outcome, r.outcome, `rebuilt as ${again.outcome}/${again.reason}`);
+      assert.equal(again.unverifiedChangesPending, false);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a command that leaves a background process running keeps the obligation (the process may still write)", async () => {
+    const bg = { kind: "tools" as const, calls: [{ name: "run_command", args: { command: "(sleep 2; echo late > late.txt) &" } }] };
+    const { results: [r], repo } = await turns([bg]);
+    try {
+      assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
+      assert.equal(r.unverifiedChangesPending, true);
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 2600));
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   describe("a real file write the workspace identity cannot see is never reported as no change", () => {
     const ignored = { ".gitignore": "build/\n", "build/old.js": "x\n" };
     async function ignoredTurn(script: Reply | Reply[]): Promise<{ r: TurnResult; repo: string }> {
@@ -218,18 +271,6 @@ describe("D-04: the verdict follows this turn's evidence", () => {
       }
     });
 
-    test("deleting a file and writing it back unchanged still stays UNVERIFIED (a write happened)", async () => {
-      const { r, repo } = await ignoredTurn([
-        { kind: "tools", calls: [{ name: "delete_file", args: { path: "base.txt" } }] },
-        { kind: "tools", calls: [{ name: "write_file", args: { path: "base.txt", content: "base\n" } }] },
-      ]);
-      try {
-        assert.equal(fs.readFileSync(path.join(repo, "base.txt"), "utf-8"), "base\n");
-        assert.equal(r.outcome, "UNVERIFIED", `got ${r.outcome}/${r.reason}`);
-      } finally {
-        fs.rmSync(repo, { recursive: true, force: true });
-      }
-    });
   });
 
   describe("the REPL verdict line words the same facts as the TUI", () => {

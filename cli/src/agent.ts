@@ -155,6 +155,13 @@ import {
 } from "./core/findings.js";
 import { FILE_EDIT_TOOLS, FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnEvidence, TurnReason } from "./core/turn.js";
+
+/**
+ * A shell command that may leave a process running after it returns: a lone `&` (not `&&`, `&>` or `2>&1`), nohup,
+ * setsid, disown, systemd-run, or a daemonizing tool. Such a process can still write after the turn ends, so the turn
+ * is never lifted to "no change" (conservative: a false match only keeps the previous UNVERIFIED).
+ */
+const MAY_OUTLIVE_COMMAND = /(?<![&>])&(?![&>])|\b(?:nohup|setsid|disown|systemd-run|daemonize)\b/;
 import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
@@ -923,6 +930,10 @@ export class AutonomousAgent {
   private turnDenials = 0;
   /** Successful file-write tool calls this turn (write_file, edit_file, patch_file, delete_file). */
   private turnFileWrites = 0;
+  /** run_command calls this turn that may leave a process running after the command returned (a trailing `&`, nohup, a named service). */
+  private turnBackgroundCommands = 0;
+  /** The no-change decision made for this turn: a rebuilt verdict (a failed final checkpoint) must reach the same outcome. */
+  private turnLatchLifted = false;
   private turnVerifierRuns: TurnEvidence["verifierRuns"] = [];
   /** Workspace state identity when this turn began ("unknown" when it could not be established). */
   private turnStartState: string | undefined;
@@ -4647,6 +4658,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             this.mutationSeq += subagent.mutationSeq;
             this.turnMutations += childMutations;
             this.turnFileWrites += subagent.turnFileWrites;
+            this.turnBackgroundCommands += subagent.turnBackgroundCommands;
             this.verificationEvidence = undefined;
             if (this.objective) {
               invalidateVerified(this.objective, `subagent changed workspace`);
@@ -5256,6 +5268,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     const operationSeq = ++this.operationSeq;
     // The file as it is right before this operation (after any approval wait), so the reported diff is this
     // operation's change only and never includes edits already in the working tree.
+    if (toolName === "run_command" && (args.service_name || MAY_OUTLIVE_COMMAND.test(String(args.command ?? "")))) this.turnBackgroundCommands++;
     const diffTarget = this.observer?.onFileChange && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
     const before = diffTarget ? snapshot(diffTarget) : undefined;
     if (this.durable && this.stateManager && durableTaskId) {
@@ -5649,6 +5662,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.turnCarriedChanges = this.hasPendingModifications;
     this.turnDenials = 0;
     this.turnFileWrites = 0;
+    this.turnBackgroundCommands = 0;
+    this.turnLatchLifted = false;
     this.turnVerifierRuns = [];
     this.turnStartState = undefined;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
@@ -6635,6 +6650,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
   /** Whether workspace content differs from how this turn found it (D-04); "unknown" when either state is unknown. */
   private turnWorkspaceChanged(): TurnEvidence["workspaceChanged"] {
+    // A file-write tool that succeeded is a change whatever the identity could see (a gitignored target).
+    if (this.turnFileWrites > 0) return "yes";
     if (!this.turnStartState || this.turnStartState === "unknown") return "unknown";
     const now = this.workspaceStateIdentity();
     if (now === "unknown") return "unknown";
@@ -6687,8 +6704,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       !input.capacityBlock && !input.limitReached;
     // A file-write tool (write_file, edit_file, patch_file, delete_file) that succeeded is a change by definition, even
     // when the workspace identity cannot see its target (a gitignored build/ directory): never lifted.
-    const latchCaughtNothing = endedNormally && this.hasPendingModifications && !this.turnCarriedChanges &&
-      !this.activeWorktree && !evidence && this.turnFileWrites === 0 && workspaceChanged === "no";
+    // The decision is kept for the turn: lifting clears the pending flag, and a rebuilt verdict must not flip to UNVERIFIED.
+    // A command that may have left a process running is never lifted: the process can still write after the turn.
+    const latchCaughtNothing = this.turnLatchLifted || (endedNormally && this.hasPendingModifications && !this.turnCarriedChanges &&
+      !this.activeWorktree && !evidence && this.turnFileWrites === 0 && this.turnBackgroundCommands === 0 && workspaceChanged === "no");
+    if (latchCaughtNothing) this.turnLatchLifted = true;
     if (latchCaughtNothing) {
       this.setUnverifiedChanges(false);
       // A later change takes a fresh pre-change baseline: the workspace may change between turns.
