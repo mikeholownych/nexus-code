@@ -27,7 +27,9 @@ export function skillNoteBudget(contextLimit: number): number {
 export const MAX_SKILL_MATCHES = 5;
 /** Heading of the catalog section in the system prompt. */
 export const SKILL_CATALOG_HEADING = "### Specialized Agent Skills Available:";
-/** Prefix of the per-prompt skill note; `[Nexus ` marks it as a harness note, never an operator request. */
+/** First line under the heading, unchanged since v1.0: with the heading it marks the catalog (rules may quote the heading). */
+const SKILL_CATALOG_INTRO = "You have access to specialized skills.";
+/** Prefix of the per-prompt skill note's text, for the model; the note is recognised by its `harness` marker, not by this. */
 export const SKILL_NOTE_PREFIX = "[Nexus skill note]";
 /** Descriptions shorter than this stop helping the model pick a skill; below it the catalog lists names only. */
 const MIN_DESCRIPTION_CHARS = 40;
@@ -39,6 +41,8 @@ const STOPWORDS = new Set(
     // common request verbs and fillers: they say what the operator wants done, not which domain it is in
     "write writes wrote read reads add adds create creates build builds run runs fix fixes update updates change changes check checks help get gets set sets show find list look give take new now see tell explain implement make test tests try let can't dont does did done say hello thanks thank").split(" "),
 );
+/** Two-letter words that never name a domain, even inside a skill name (`pdf-to-text`). */
+const SHORT_STOPWORDS = new Set("to of in on an at by is it be do as or if we my me up so no us am he".split(" "));
 /** Longest operator text (characters) and number of distinct terms the ranker will look at. */
 export const MAX_QUERY_CHARS = 2_000;
 const MAX_QUERY_TERMS = 200;
@@ -46,8 +50,10 @@ const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hang
 /**
  * Lower-case word stems of `text`: Unicode letters and digits (accents folded: u-umlaut to u), short words and stop
  * words dropped, English plural/-ing/-ed folded. Runs of CJK text, which have no spaces, become character bigrams.
+ * Two-character words (`go`, `ci`, `db`, `ml`, `ui`) are kept only when `keepShort` accepts them: they carry meaning
+ * when a skill is named after them and are noise otherwise.
  */
-function tokenize(text: string): string[] {
+function tokenize(text: string, keepShort: (word: string) => boolean = () => false): string[] {
   const out: string[] = [];
   const folded = text.toLowerCase().normalize("NFKD").replace(/\p{M}+/gu, "");
   for (const raw of folded.split(/[^\p{L}\p{N}]+/u)) {
@@ -56,6 +62,10 @@ function tokenize(text: string): string[] {
       const chars = Array.from(raw);
       if (chars.length === 1) out.push(raw);
       for (let i = 0; i + 1 < chars.length; i++) out.push(chars[i] + chars[i + 1]);
+      continue;
+    }
+    if (raw.length === 2 && !SHORT_STOPWORDS.has(raw) && keepShort(raw)) {
+      out.push(raw);
       continue;
     }
     if (raw.length < 3 || STOPWORDS.has(raw)) continue;
@@ -67,14 +77,62 @@ function tokenize(text: string): string[] {
 
 /** Bracketed markers a description could use to pose as a Nexus, operator or tool message. */
 const CONTROL_MARKER = /\[\s*(?:nexus|operator|system|assistant|user|tool|git status|active plan|work unit)[^\]]*\]?/gi;
-/** A skill's text as one safe line: control markers and secrets removed, whitespace collapsed (a trusted skill is still untrusted text). */
+/**
+ * Chat-template control tokens a description could use to open its own turn once a local server renders the prompt
+ * as text: ChatML and Llama 3 specials (`<|im_start|>`, `<|eot_id|>`, any `<|...|>`), the DeepSeek fullwidth-bar
+ * specials (`<｜…｜>`), `<system>` tags, `<s>` / `</s>` (Llama, Mistral), `<start_of_turn>` / `<end_of_turn>` (Gemma)
+ * and the Llama 2 `[INST]` / `<<SYS>>` markers.
+ *
+ * Matching is linear-time on any input (CodeQL js/polynomial-redos): every alternative starts with a literal and has at
+ * most one bounded run, and each optional slash carries its own trailing whitespace (`\s*(?:\/\s*)?`), so a run of
+ * spaces has exactly one way to match.
+ */
+const TEMPLATE_TOKEN = /<\|[^|<>\n]{0,64}\|>|<｜[^｜<>\n]{0,64}｜>|<\s*(?:\/\s*)?system\s*>|<\/?s>|<(?:start|end)_of_turn>|\[\s*(?:\/\s*)?INST\s*\]|<<\s*(?:\/\s*)?SYS\s*>>/gi;
+/** A skill's text as one safe line: control markers, template tokens and secrets removed, whitespace collapsed (a trusted skill is still untrusted text). */
 export function oneLine(text: string): string {
-  return redactSecrets(text.replace(CONTROL_MARKER, " ")).replace(/\s+/g, " ").trim();
+  return redactSecrets(text.replace(TEMPLATE_TOKEN, " ").replace(CONTROL_MARKER, " ")).replace(/\s+/g, " ").trim();
 }
 
-/** Whether a user-role message is a per-prompt skill note (never an operator request). */
-export function isSkillNote(content: unknown): boolean {
-  return typeof content === "string" && content.startsWith(SKILL_NOTE_PREFIX);
+/** First line of every per-prompt skill note Nexus writes. */
+const SKILL_NOTE_HEAD = `${SKILL_NOTE_PREFIX} Installed skills that may fit this request. Descriptions only; nothing is activated. Call \`activate_skill\` with a name to load one.\n`;
+
+/** One entry line of a note: `- **name**: description` (the description may be empty when the budget cut it). */
+const NOTE_ENTRY = /^- \*\*[^\n]+\*\*:/;
+/** Whether everything after the header is note entries, at least one. */
+function noteShaped(content: string): boolean {
+  const lines = content.slice(SKILL_NOTE_HEAD.length).split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines.length > 0 && lines.every((line) => NOTE_ENTRY.test(line));
+}
+/**
+ * A saved conversation with its skill notes marked. Sessions saved before the `harness` marker existed hold notes
+ * recognisable only by their text; on restore, a user message without a marker is marked only when it starts with the
+ * exact note header, is made of nothing but note entries (`- **name**: description`, at least one) and directly follows
+ * another user message (the operator's request), which is where Nexus writes the note. An operator message that copies
+ * a note follows the model's reply, and a hand-typed header with other text after it is not entry-shaped: both stay
+ * the operator's.
+ */
+export function withSkillNoteProvenance<T extends { role: string; content?: unknown; harness?: string }>(messages: readonly T[]): T[] {
+  return messages.map((message, i) =>
+    message.role === "user" &&
+    message.harness === undefined &&
+    typeof message.content === "string" &&
+    message.content.startsWith(SKILL_NOTE_HEAD) &&
+    noteShaped(message.content) &&
+    messages[i - 1]?.role === "user"
+      ? { ...message, harness: "skill-note" }
+      : message,
+  );
+}
+
+/**
+ * Whether a message is a per-prompt skill note (never an operator request). Recognised by provenance (the `harness`
+ * marker Nexus sets when it writes the note), so an operator message that begins with the note's text stays a request.
+ */
+export function isSkillNote(message: unknown): boolean {
+  if (!message || typeof message !== "object") return false;
+  const { role, harness } = message as { role?: unknown; harness?: unknown };
+  return role === "user" && harness === "skill-note";
 }
 
 /**
@@ -82,11 +140,11 @@ export function isSkillNote(content: unknown): boolean {
  * when nothing fits). It advertises descriptions only; it never activates a skill or loads a body.
  */
 export function formatSkillNote(matches: Skill[], maxChars: number): string {
-  const head = `${SKILL_NOTE_PREFIX} Installed skills that may fit this request. Descriptions only; nothing is activated. Call \`activate_skill\` with a name to load one.\n`;
+  const head = SKILL_NOTE_HEAD;
   const lines = new Map<Skill, string>();
   const line = (s: Skill): string => lines.get(s) ?? (lines.set(s, oneLine(s.description)), lines.get(s)!);
   const fit = (shown: Skill[], per: number) =>
-    head + shown.map((s) => `- **${oneLine(s.name)}**: ${line(s).length <= per ? line(s) : `${line(s).slice(0, Math.max(0, per - 1)).trimEnd()}…`}\n`).join("");
+    head + shown.map((s) => `- **${s.name}**: ${line(s).length <= per ? line(s) : `${line(s).slice(0, Math.max(0, per - 1)).trimEnd()}…`}\n`).join("");
   for (let n = matches.length; n > 0; n--) {
     const shown = matches.slice(0, n);
     // Longest uniform description length that fits, down to the bare name.
@@ -104,11 +162,12 @@ export function formatSkillNote(matches: Skill[], maxChars: number): string {
 }
 
 /**
- * The catalog section of a system prompt written by any release: from its heading to the next `###` section or the
+ * The catalog section of a system prompt written by any release: its heading directly followed by the catalog's intro
+ * line (workspace rules, placed before the catalog, may quote the heading alone), to the next `###` section or the
  * end, ending after the catalog's own final newline (the blank lines that separate sections are not part of it).
  */
 export function findCatalogSpan(content: string): { start: number; end: number } | null {
-  const start = content.indexOf(SKILL_CATALOG_HEADING);
+  const start = content.indexOf(`${SKILL_CATALOG_HEADING}\n${SKILL_CATALOG_INTRO}`);
   if (start < 0) return null;
   const next = content.indexOf("\n### ", start + 1);
   const stop = next < 0 ? content.length : next;
@@ -251,7 +310,10 @@ export class SkillManager {
       const content = fs.readFileSync(filePath, "utf-8");
       const { metadata, body } = this.parseFrontmatter(content);
 
-      const name = metadata.name || fallbackName;
+      // The name is sanitised once, here, so the catalog, the note, the ranker and `activate_skill` all use the same
+      // key; a name that is nothing but template tokens or control markers falls back to its directory, else is skipped.
+      const name = oneLine(metadata.name || "") || oneLine(fallbackName);
+      if (!name) return;
       const description = metadata.description || "Specialized skill instructions";
 
       const skillItem: Skill = {
@@ -342,9 +404,10 @@ export class SkillManager {
    * number of installed skills and that are within reach of the best match; an unrelated text returns nothing.
    */
   public findSkills(text: string, limit: number = MAX_SKILL_MATCHES): Skill[] {
-    const query = new Set(tokenize(text.slice(0, MAX_QUERY_CHARS)).slice(0, MAX_QUERY_TERMS));
     const index = this.rankIndex();
-    if (query.size === 0 || !index) return [];
+    if (!index) return [];
+    const query = new Set(tokenize(text.slice(0, MAX_QUERY_CHARS), (w) => index.shortNames.has(w)).slice(0, MAX_QUERY_TERMS));
+    if (query.size === 0) return [];
     const { skills, docs, df, avg } = index;
     const N = docs.length;
     const scored = skills.map((skill, i) => {
@@ -359,7 +422,10 @@ export class SkillManager {
       }
       return { skill, score };
     });
-    const threshold = Math.max(0.5, Math.min(2, 0.35 * Math.log(N + 1)));
+    // The floor never exceeds what one name term found in this skill alone scores at average length (f = 2, d = 1):
+    // with one or two skills installed, idf is small and a fixed 0.5 floor would refuse even an exact name.
+    const uniqueNameScore = (Math.log(1 + (N - 0.5) / 1.5) * 2 * (BM25_K1 + 1)) / (2 + BM25_K1);
+    const threshold = Math.min(Math.max(0.5, Math.min(2, 0.35 * Math.log(N + 1))), uniqueNameScore);
     const best = Math.max(...scored.map((m) => m.score));
     if (best < threshold) return [];
     return scored
@@ -369,24 +435,26 @@ export class SkillManager {
       .map((m) => m.skill);
   }
 
-  private rankCache?: { skills: Skill[]; docs: Array<{ tf: Map<string, number>; len: number }>; df: Map<string, number>; avg: number };
+  private rankCache?: { skills: Skill[]; docs: Array<{ tf: Map<string, number>; len: number }>; df: Map<string, number>; avg: number; shortNames: Set<string> };
   /** The term statistics of the trusted skills, built once per catalog (`refresh` drops it). */
   private rankIndex() {
     if (this.rankCache) return this.rankCache;
     const skills = this.listSkills();
     if (skills.length === 0) return undefined;
     const df = new Map<string, number>();
+    // Two-character words that occur in some skill's name: the only short words worth scoring.
+    const shortNames = new Set(skills.flatMap((s) => tokenize(s.name, () => true).filter((t) => t.length === 2)));
     const docs = skills.map((s) => {
       const tf = new Map<string, number>();
-      for (const t of tokenize(s.name)) tf.set(t, (tf.get(t) ?? 0) + 2);
-      for (const t of tokenize(s.description)) tf.set(t, (tf.get(t) ?? 0) + 1);
+      for (const t of tokenize(s.name, () => true)) tf.set(t, (tf.get(t) ?? 0) + 2);
+      for (const t of tokenize(s.description, (w) => shortNames.has(w))) tf.set(t, (tf.get(t) ?? 0) + 1);
       let len = 0;
       for (const n of tf.values()) len += n;
       for (const t of tf.keys()) df.set(t, (df.get(t) ?? 0) + 1);
       return { tf, len };
     });
     const avg = docs.reduce((n, d) => n + d.len, 0) / docs.length || 1;
-    return (this.rankCache = { skills, docs, df, avg });
+    return (this.rankCache = { skills, docs, df, avg, shortNames });
   }
 
   public getUntrustedSkill(name: string): Skill | null {
@@ -401,14 +469,18 @@ export class SkillManager {
    */
   public getPromptSection(maxChars: number = SKILL_CATALOG_MAX_CHARS): string {
     // Workspace skills first: they are the most specific to the task and survive any cut.
-    const skills = this.listSkills().sort((a, b) => Number(Boolean(b.isWorkspaceSkill)) - Number(Boolean(a.isWorkspaceSkill)));
+    // Descriptions and source paths as one safe line each (template tokens, control markers and secrets removed), as in
+    // the per-prompt note: they are untrusted text whether or not the skill is trusted. Names were sanitised at load.
+    const skills = this.listSkills()
+      .sort((a, b) => Number(Boolean(b.isWorkspaceSkill)) - Number(Boolean(a.isWorkspaceSkill)))
+      .map((s) => ({ ...s, description: oneLine(s.description), path: oneLine(s.path) }));
     if (skills.length === 0) {
       return "";
     }
 
     const head =
-      `${SKILL_CATALOG_HEADING}\n` +
-      "You have access to specialized skills. If a user task matches a skill's description, call the `activate_skill` tool with the skill's name to load its specialized workflows and guidelines into context.\n";
+      `${SKILL_CATALOG_HEADING}\n${SKILL_CATALOG_INTRO}` +
+      " If a user task matches a skill's description, call the `activate_skill` tool with the skill's name to load its specialized workflows and guidelines into context.\n";
 
     const full = head + "\n" + skills.map((s) => `- **${s.name}** [source: ${s.path}] [trust: ${s.trusted ? "trusted" : "untrusted"}]: ${s.description}\n`).join("");
     if (full.length <= maxChars) return full;
