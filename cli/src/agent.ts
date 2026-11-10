@@ -57,14 +57,8 @@ import { calculateContextBudget, countTokens, isContextAdmissible, isContextPres
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
-<<<<<<< HEAD
-import { recordVerification } from "./worktrunk/verification.js";
-import { WORKTREE_BINDING_VERSION } from "./core/state.js";
-||||||| 07e04525
-import { recordVerification } from "./worktrunk/verification.js";
-=======
 import { captureVerificationState, recordVerificationIfEligible } from "./worktrunk/verification.js";
->>>>>>> origin/v1/v114-wp1317-merge-ai-message
+import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
@@ -2429,6 +2423,12 @@ export class AutonomousAgent {
     return this.workspacePathIdentity;
   }
 
+  /** True outside a worktree-isolated task, or inside a named linked worktree: where a verification receipt may be recorded. */
+  private isRecordableWorktree(): boolean {
+    return !this.activeWorktree ||
+      (this.activeWorktree.kind === "named" && this.worktreeManager.isLinkedWorktree(this.activeWorktree.worktreePath));
+  }
+
   public setWorkspace(newWorkspace: string): void {
     if (this.inheritedWorktreeScope && path.resolve(newWorkspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
       throw new Error("Cannot change workspace outside the inherited worktree authority.");
@@ -4408,7 +4408,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             // The oracle owns the verifier's deadline (never an incidental bridge default); the runner enforces it.
             const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
             this.activity("verifying", { tool: verifierCommand });
-            verificationStateBefore = !this.activeWorktree && !this.config.dryRun ? captureVerificationState(this.config.workspace) : undefined;
+            verificationStateBefore = this.isRecordableWorktree() && !this.config.dryRun ? captureVerificationState(this.config.workspace) : undefined;
             const testRes = await runTestSuiteWithExecutor(
               this.config.workspace,
               (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }),
@@ -4530,20 +4530,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // A passing deliverable-bound run inside a named (linked) worktree is recorded for `nexus worktree merge`, which
       // needs a verification for the exact state it merges. Recording never affects the task outcome. Recording runs
       // host-side Git in the worktree, so its `.git` pointer is verified first (the agent could have rewritten it).
-      const recordableWorktree = !this.activeWorktree ||
-        (this.activeWorktree.kind === "named" && this.worktreeManager.isLinkedWorktree(this.activeWorktree.worktreePath));
+      const recordableWorktree = this.isRecordableWorktree();
       const isVerified = this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true;
-<<<<<<< HEAD
-      if (recordableWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound && isVerified) {
-        recordVerification(this.config.workspace, this.verificationEvidence?.command || this.config.authoritativeVerifierCommand?.trim() || "verifier");
-      }
-||||||| 07e04525
-      if (!this.activeWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound && isVerified) {
-        recordVerification(this.config.workspace, this.verificationEvidence?.command || this.config.authoritativeVerifierCommand?.trim() || "verifier");
-      }
-=======
       recordVerificationIfEligible(this.config.workspace, {
-        activeWorktree: Boolean(this.activeWorktree),
+        activeWorktree: !recordableWorktree,
         dryRun: Boolean(this.config.dryRun),
         verifierSucceeded,
         hasExecuted,
@@ -4552,7 +4542,6 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         verifier: this.verificationEvidence?.command || this.config.authoritativeVerifierCommand?.trim() || "verifier",
         before: verificationStateBefore,
       });
->>>>>>> origin/v1/v114-wp1317-merge-ai-message
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
       if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {
         this.modifiedFiles.clear();
