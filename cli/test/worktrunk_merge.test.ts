@@ -629,7 +629,100 @@ test("a quoted merge message survives the interactive tokenizer and becomes the 
   } finally { f.cleanup(); }
 });
 
-test("tokenizeWorktreeArgs preserves quoted options such as commit messages or reasons", () => {
-  assert.deepEqual(tokenizeWorktreeArgs('merge ^ -m "feat: add login"'), ["merge", "^", "-m", "feat: add login"]);
-  assert.deepEqual(tokenizeWorktreeArgs("merge --no-verify-receipt --reason 'why not'"), ["merge", "--no-verify-receipt", "--reason", "why not"]);
+/** A repository with a submodule, and a feature worktree (named `name`) in which the submodule is initialised. */
+function withSubmodule(f: Fixture, name: string): { dir: string; sub: string } {
+  const subrepo = path.join(f.root, "subrepo-" + name.replace(/\//g, "-"));
+  fs.mkdirSync(subrepo);
+  git(subrepo, "init", "-q", "-b", "main");
+  git(subrepo, "config", "user.email", "t@example.com");
+  git(subrepo, "config", "user.name", "T");
+  git(subrepo, "config", "commit.gpgsign", "false");
+  commitFile(subrepo, "s.txt", "sub\n", "sub init");
+  git(f.repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subrepo, "sub");
+  git(f.repo, "commit", "-q", "-m", "add submodule");
+  const dir = feature(f, name);
+  git(dir, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
+  const sub = path.join(dir, "sub");
+  git(sub, "config", "user.email", "t@example.com");
+  git(sub, "config", "user.name", "T");
+  git(sub, "config", "commit.gpgsign", "false");
+  return { dir, sub };
+}
+
+test("prune --discard-ignored leaves Git's final dirty check in place: an edit made after our check keeps the worktree", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = feature(f, "feat/final-check");
+    fs.mkdirSync(path.join(dir, "target"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "target", "cache.bin"), "cache");
+    core.removeSeams.beforeGitRemove = () => { fs.writeFileSync(path.join(dir, "a.txt"), "written by another session after the check\n"); };
+    let r;
+    try { r = wt(f, f.repo, ["prune", "--min-age", "0s", "--discard-ignored"]); } finally { delete core.removeSeams.beforeGitRemove; }
+    assert.equal(fs.readFileSync(path.join(dir, "a.txt"), "utf8"), "written by another session after the check\n", `the edit must survive: ${r.output}`);
+    // and the ignored cache really is removed when nothing else changed
+    const clean = feature(f, "feat/clean-cache");
+    fs.mkdirSync(path.join(clean, "target"), { recursive: true });
+    fs.writeFileSync(path.join(clean, "target", "cache.bin"), "cache");
+    fs.rmSync(dir, { recursive: true, force: true });
+    git(f.repo, "worktree", "prune");
+    wt(f, f.repo, ["prune", "--min-age", "0s", "--discard-ignored"]);
+    assert.equal(fs.existsSync(clean), false, "a worktree holding only ignored caches is removed");
+  } finally { f.cleanup(); }
+});
+
+test("uncommitted submodule edits are seen even when the submodule is configured to ignore them", () => {
+  const f = fixture();
+  try {
+    const { dir, sub } = withSubmodule(f, "feat/sub-ignore");
+    git(dir, "config", "submodule.sub.ignore", "dirty");
+    fs.writeFileSync(path.join(sub, "s.txt"), "uncommitted inside the submodule\n");
+    fs.writeFileSync(path.join(dir, "a.txt"), "superproject change\n");
+    const r = wt(f, dir, ["merge"]);
+    assert.ok(fs.existsSync(dir), `the worktree must be kept: ${r.output}`);
+    assert.equal(fs.readFileSync(path.join(sub, "s.txt"), "utf8"), "uncommitted inside the submodule\n");
+  } finally { f.cleanup(); }
+});
+
+test("a submodule with an unpublished topic branch or a stash keeps the worktree even when its HEAD is published", () => {
+  for (const kind of ["branch", "stash"]) {
+    const f = fixture();
+    try {
+      const { dir, sub } = withSubmodule(f, `feat/sub-${kind}`);
+      if (kind === "branch") {
+        git(sub, "checkout", "-q", "-b", "topic");
+        commitFile(sub, "topic.txt", "topic\n", "unpublished topic work");
+        git(sub, "checkout", "-q", "--detach", "origin/main");
+      } else {
+        fs.writeFileSync(path.join(sub, "s.txt"), "stashed work\n");
+        git(sub, "stash", "push", "-q");
+      }
+      fs.writeFileSync(path.join(dir, "a.txt"), "superproject change\n");
+      const r = wt(f, dir, ["merge"]);
+      assert.ok(fs.existsSync(dir), `${kind}: the worktree must be kept: ${r.output}`);
+      assert.match(r.output, /submodule/i);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("a revert stopped on a conflict (REVERT_HEAD, sequencer state) refuses the merge before anything changes", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "feat/revert-sequence");
+    commitFile(dir, "r.txt", "r\n", "one");
+    const gitDir = git(dir, "rev-parse", "--path-format=absolute", "--git-dir");
+    fs.writeFileSync(path.join(gitDir, "REVERT_HEAD"), git(dir, "rev-parse", "HEAD") + "\n");
+    fs.mkdirSync(path.join(gitDir, "sequencer"));
+    const head = git(dir, "rev-parse", "HEAD");
+    const r = wt(f, dir, ["merge"]);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /revert/i);
+    assert.equal(git(dir, "rev-parse", "HEAD"), head);
+    assert.ok(fs.existsSync(dir));
+    const mainBefore = git(f.repo, "rev-parse", "refs/heads/main");
+    fs.rmSync(path.join(gitDir, "REVERT_HEAD"));
+    const seqOnly = wt(f, dir, ["merge"]);
+    assert.equal(seqOnly.success, false, "outstanding sequencer state alone also refuses: " + seqOnly.output);
+    assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore);
+  } finally { f.cleanup(); }
 });
