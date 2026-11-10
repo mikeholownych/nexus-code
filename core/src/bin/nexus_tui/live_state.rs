@@ -2234,6 +2234,26 @@ fn steer_prefix() -> String {
         .clone()
 }
 
+/// Why a turn that ends unverified is unverified, from what this turn itself did (D-04): a verifier that ran only before
+/// the change is said to have run, and a turn that changed nothing does not claim that files changed. Without evidence
+/// (an older sidecar) the previous wording stands.
+fn unverified_cause(evidence: &Value) -> String {
+    const PLAIN: &str = "Files changed, but no verifier ran before the agent finished.";
+    if !evidence.is_object() {
+        return PLAIN.into();
+    }
+    if evidence["workspaceChanged"] == "no" && evidence["carriedChanges"] == Value::Bool(true) {
+        let denied = evidence["denied"].as_u64().unwrap_or(0);
+        let denial = if denied > 0 { format!(" ({denied} action{} denied)", if denied == 1 { "" } else { "s" }) } else { String::new() };
+        return format!("No files changed this turn{denial}; changes from an earlier turn are still unverified.");
+    }
+    let before_change_only = evidence["verifierRuns"].as_array().and_then(|runs| runs.last()).filter(|run| run["phase"] == "before_change");
+    match before_change_only.and_then(|run| run["command"].as_str()) {
+        Some(command) => format!("Files changed. {command} ran before the change; nothing checked the change itself."),
+        None => PLAIN.into(),
+    }
+}
+
 /// The outcome in words, from the reported execution, outcome and reason only. Raw fields stay in the receipt.
 pub fn outcome_for(turn: &Value) -> Outcome {
     let execution = turn["execution"].as_str().unwrap_or("");
@@ -2285,7 +2305,15 @@ pub fn outcome_for(turn: &Value) -> Outcome {
             Some(format!("{} passed, but none of the tests it ran covers the changed files.", verifier.unwrap_or_else(|| "The test command".into()))),
             text("add a test for the change (or run one that names it), or check it yourself with /diff"),
         ),
-        ("COMPLETED", "NOT_REQUIRED", _) => ("Done".to_string(), text("No files changed, so there was nothing to verify."), None),
+        ("COMPLETED", "NOT_REQUIRED", _) => {
+            let denied = turn["turnEvidence"]["denied"].as_u64().unwrap_or(0);
+            let cause = if denied > 0 {
+                format!("No files changed: you denied {denied} action{}.", if denied == 1 { "" } else { "s" })
+            } else {
+                "No files changed, so there was nothing to verify.".to_string()
+            };
+            ("Done".to_string(), Some(cause), None)
+        }
         ("COMPLETED", "UNVERIFIED", "NO_APPLICABLE_VERIFIER") => (
             "Done · not verified".to_string(),
             text("Files changed, and no test command was found for this workspace."),
@@ -2293,7 +2321,7 @@ pub fn outcome_for(turn: &Value) -> Outcome {
         ),
         ("COMPLETED", "UNVERIFIED", _) => (
             "Done · not verified".to_string(),
-            text("Files changed, but no verifier ran before the agent finished."),
+            text(&unverified_cause(&turn["turnEvidence"])),
             text("run /test, or ask Nexus to verify the change"),
         ),
         ("COMPLETED", "NOT_ESTABLISHED", "VERIFIER_FAILED") => (
@@ -2402,6 +2430,35 @@ mod tests {
         assert_eq!(outcome.cause.as_deref(), Some("npm test passed, but none of the tests it ran covers the changed files."));
         assert!(matches!(tone_for(&turn), Tone::Caution));
     }
+    #[test]
+    fn the_verdict_describes_this_turns_own_evidence() {
+        let cause = |json: &str| outcome_for(&serde_json::from_str::<Value>(json).unwrap()).cause;
+        // An approved baseline run is a run, not "no verifier ran" (D-04 case 1).
+        assert_eq!(
+            cause(r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{"workspaceChanged":"yes","carriedChanges":false,"denied":0,"verifierRuns":[{"command":"npm test","phase":"before_change","passed":true}]}}"#).as_deref(),
+            Some("Files changed. npm test ran before the change; nothing checked the change itself.")
+        );
+        // Nothing changed this turn; the earlier change is still unproven (case 2, after an earlier edit).
+        assert_eq!(
+            cause(r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{"workspaceChanged":"no","carriedChanges":true,"denied":1,"verifierRuns":[]}}"#).as_deref(),
+            Some("No files changed this turn (1 action denied); changes from an earlier turn are still unverified.")
+        );
+        // A denial with nothing changed ends plainly (case 2, fresh session).
+        assert_eq!(
+            cause(r#"{"execution":"COMPLETED","outcome":"NOT_REQUIRED","turnEvidence":{"workspaceChanged":"no","carriedChanges":false,"denied":2,"verifierRuns":[]}}"#).as_deref(),
+            Some("No files changed: you denied 2 actions.")
+        );
+        // A turn without evidence (an older sidecar) keeps the previous wording.
+        assert_eq!(
+            cause(r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN"}"#).as_deref(),
+            Some("Files changed, but no verifier ran before the agent finished.")
+        );
+        assert_eq!(
+            cause(r#"{"execution":"COMPLETED","outcome":"NOT_REQUIRED"}"#).as_deref(),
+            Some("No files changed, so there was nothing to verify.")
+        );
+    }
+
     use crate::protocol::parse_event;
     use crate::review::{LineKind, review_lines};
 
