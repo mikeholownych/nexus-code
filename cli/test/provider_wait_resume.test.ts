@@ -695,6 +695,62 @@ describe("the resumed provider wait (fake recovery clock)", () => {
     }
   });
 
+  test("a --step planner cycle that leaves the coder's window owed records it in the result; a restart then still waits for it", async () => {
+    const planner = await plannerSide((n) => (n === 1 ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] } : { kind: "text", content: "planner done" }));
+    const ctx = await interruptedThenRestored({});
+    let restarted: AutonomousAgent | undefined;
+    try {
+      const a = ctx.resumed as any;
+      const eligibleAt = eligibleAtOf(ctx.interrupted);
+      a.cognitiveRoutingEnabled = true;
+      a.plannerClient = planner.client;
+      a.coderClient = a.client;
+      const paused = await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true, step: true });
+      assert.equal(paused.interruption, null, "precondition: the cycle ended on the planner without an interruption");
+      assert.equal(ctx.requestedAt.length, 0, "precondition: the coder was not asked");
+      // What a checkpoint stores and a restart loads.
+      const stored = JSON.parse(JSON.stringify(paused)) as TurnResult;
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pw-restart-"));
+      try {
+        const clock = fakeClock();
+        const start = clock.now();
+        restarted = agentFor(ctx.gw.url, makeRepo(root), path.join(root, "state"), clock);
+        restarted.restoreConversation({ messages: ctx.resumed.getMessages(), lastTurn: stored }, noArchive);
+        const r = await restarted.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+        assert.equal(r.execution, "COMPLETED", JSON.stringify(r));
+        assert.deepEqual(clock.sleeps, [eligibleAt - start], "the restarted turn still waits for the coder's window");
+      } finally {
+        restarted?.shutdown();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    } finally {
+      await planner.cleanup();
+      await ctx.cleanup();
+    }
+  });
+
+  test("a subagent is declined when only the coder endpoint of its configuration is inside the window", async () => {
+    const planner = await plannerSide((n) => (n === 1 ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "look around" } }] } : { kind: "text", content: "planner done" }));
+    const ctx = await interruptedThenRestored({});
+    try {
+      const a = ctx.resumed as any;
+      const recorded = ctx.interrupted.providerRecovery?.at(-1)?.endpoint;
+      assert.ok(recorded, "precondition: the recorded endpoint");
+      a.cognitiveRoutingEnabled = true;
+      a.plannerClient = planner.client;
+      a.coderClient = a.client;
+      // Main and planner on another endpoint; only the coder endpoint is the recorded provider.
+      a.config.endpoint = "http://other.invalid:9/v1";
+      a.config.coderEndpoint = recorded;
+      await ctx.resumed.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true });
+      const spawned = ctx.resumed.getMessages().find((m: any) => m.role === "tool" && m.name === "spawn_subagent");
+      assert.match(JSON.stringify(spawned?.content ?? null), /Subagent not started/);
+    } finally {
+      await planner.cleanup();
+      await ctx.cleanup();
+    }
+  });
+
   test("an idle /compact --llm inside the window is refused; it runs once the window has passed", async () => {
     const ctx = await interruptedThenRestored({});
     try {

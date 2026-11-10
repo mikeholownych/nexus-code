@@ -978,7 +978,7 @@ export class AutonomousAgent {
    * again, and the recovery record of that wait (its real submissions, for the status shown while waiting). Consumed
    * by the first inference step of the next turn.
    */
-  private resumedProviderWait?: { eligibleAt: string; record?: ProviderRecoveryRecord };
+  private resumedProviderWait?: { eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord };
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
@@ -5548,16 +5548,19 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     // The restored record's last turn replaces this agent's own (a /resume reuses the agent): checkpoints and saves
     // written until the next turn ends describe the restored conversation, not an unrelated earlier turn.
     this.lastTurnResult = lastTurn ?? undefined;
-    const turn = lastTurn?.execution === "INTERRUPTED" ? lastTurn : undefined;
-    const interruption = turn?.interruption;
-    const eligibleAt = interruption?.phase === "provider_wait" ? interruption.providerEligibleAt : undefined;
+    // The window is owed either by an interruption in provider_wait or, when the turn ran on another endpoint,
+    // by the pending window it recorded.
+    const interruption = lastTurn?.execution === "INTERRUPTED" ? lastTurn.interruption : null;
+    const recoveries = lastTurn?.providerRecovery ?? [];
+    const record = recoveries[recoveries.length - 1];
+    const eligibleAt = interruption?.phase === "provider_wait" ? interruption.providerEligibleAt : lastTurn?.pendingProviderWindow?.eligibleAt;
+    const endpoint = interruption?.phase === "provider_wait" ? record?.endpoint : lastTurn?.pendingProviderWindow?.endpoint;
     // Durable records are same-user writable: an unparseable time is ignored, and the wait is bounded where it is used.
-    if (!turn || !eligibleAt || !Number.isFinite(Date.parse(eligibleAt))) {
+    if (!eligibleAt || !Number.isFinite(Date.parse(eligibleAt))) {
       this.resumedProviderWait = undefined;
       return;
     }
-    const recoveries = turn.providerRecovery ?? [];
-    this.resumedProviderWait = { eligibleAt, record: recoveries[recoveries.length - 1] };
+    this.resumedProviderWait = { eligibleAt, ...(endpoint ? { endpoint } : {}), record };
   }
 
   /** Embedding requests go to the main client's provider: held back while a restored window for it is open. */
@@ -5574,6 +5577,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return endpoints.some((endpoint) => this.resumedWindowCovers(endpoint));
   }
 
+  /** The window a turn leaves owed (it ran on another endpoint), for its result; empty once waited out or passed. */
+  private pendingWindowField(): { pendingProviderWindow?: { eligibleAt: string; endpoint?: string } } {
+    const pending = this.resumedProviderWait;
+    if (!pending || !(Date.parse(pending.eligibleAt) > this.recoveryClock.now())) return {};
+    return { pendingProviderWindow: { eligibleAt: pending.eligibleAt, ...(pending.endpoint ? { endpoint: pending.endpoint } : {}) } };
+  }
+
   /** True while the main connection's provider is inside a window restored by a resume (hosts hold background requests). */
   public isProviderWindowOpen(): boolean {
     return this.clientWindowOpen(this.client);
@@ -5583,7 +5593,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   private resumedWindowCovers(endpoint: string | undefined): boolean {
     const pending = this.resumedProviderWait;
     if (!pending || !(Date.parse(pending.eligibleAt) > this.recoveryClock.now())) return false;
-    const recorded = pending.record?.endpoint;
+    const recorded = pending.endpoint;
     return !recorded || !endpoint || comparableEndpoint(recorded) === comparableEndpoint(endpoint);
   }
 
@@ -6850,6 +6860,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       : undefined;
     const base = {
       ...(recoveries.length ? { providerRecovery: recoveries } : {}),
+      ...this.pendingWindowField(),
       acceptance: "NOT_REQUESTED" as const,
       modelStop: input.modelStop,
       finalOutputComplete: input.finalOutputComplete,
