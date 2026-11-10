@@ -657,7 +657,8 @@ export class LocalLlmClient {
     );
     this.cloudRoutedOrigins = config.cloudRoutedOrigins ?? [];
     this.allowCredentialReload = options?.allowCredentialReload !== false;
-    this.workspace = config.workspace;
+    // Receipts go to <workspace>/.nexus; a --read-only session writes nothing into the workspace (USER_MANUAL).
+    this.workspace = config.readOnly ? undefined : config.workspace;
     this.role = options?.role ?? (config.taskClass === "subagent" ? "subagent" : "main");
     this.maxOutputTokens = config.completionReserveTokens ?? 8192;
     this.reasoningEffort = config.reasoningEffort;
