@@ -7,6 +7,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
+import { CheckpointManager } from "../src/checkpoint.js";
 import { hasPendingStateRestore, restoreFromSources } from "../src/core/state_restore.js";
 import { SidecarOptions, SidecarServer } from "../src/sidecar.js";
 import { slashCatalog } from "../src/slash/catalog.js";
@@ -410,6 +411,25 @@ describe("SidecarServer: sessions and slash commands", () => {
       await send({ type: "slash", id: "s1", command: "history" });
       await server.idle();
       assert.match(events.find((e) => e.type === "slash.result").output, /^\[1\] what is here\?$/m);
+    });
+  });
+
+  test("after the agent moves into another workspace (a named worktree) turns are checkpointed there and /undo targets it", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, send, app, repo }) => {
+      const moved = makeRepo();
+      try {
+        app.getAgent().setWorkspace(moved); // what `run --worktree-branch` does inside the turn
+        await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+        await server.idle();
+        assert.equal(new CheckpointManager(moved).listCheckpoints().length, 1, "the snapshot is of the workspace the agent works in");
+        assert.equal(new CheckpointManager(repo).listCheckpoints().length, 0, "the launch checkout is not snapshotted");
+        fs.writeFileSync(path.join(moved, "edited.txt"), "edit\n");
+        fs.writeFileSync(path.join(repo, "unrelated.txt"), "keep\n");
+        await send({ type: "slash", id: "u1", command: "undo" });
+        await server.idle();
+        assert.equal(fs.existsSync(path.join(moved, "edited.txt")), false, "undo restored the agent's workspace");
+        assert.equal(fs.existsSync(path.join(repo, "unrelated.txt")), true, "the launch checkout is untouched");
+      } finally { fs.rmSync(moved, { recursive: true, force: true }); }
     });
   });
 

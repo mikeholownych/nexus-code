@@ -12,8 +12,9 @@ function makeRepl(choice: string, checkpoint: (allowSensitive: boolean) => void 
   const fallback: boolean[] = [];
   let first = true;
   const repl = Object.create(InteractiveRepl.prototype) as any;
-  repl.config = { readOnly: false };
+  repl.config = { readOnly: false, workspace: "/fake/workspace" };
   repl.checkpointManager = {
+    getWorkspace: () => "/fake/workspace",
     createCheckpoint: (_name: string, options?: { allowSensitive?: boolean }) => {
       if (first) {
         first = false;

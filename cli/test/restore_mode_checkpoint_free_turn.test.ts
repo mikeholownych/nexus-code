@@ -98,6 +98,7 @@ test("repl: a checkpoint-free turn releases the read-only checkpoint fallback, s
     repl.config = app.getConfig();
     repl.agent = agent;
     repl.checkpointManager = {
+      getWorkspace: () => path.resolve(app.getConfig().workspace),
       createCheckpoint: () => {
         checkpoints++;
         throw new Error("synthetic checkpoint failure");

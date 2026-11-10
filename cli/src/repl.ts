@@ -195,6 +195,13 @@ export class InteractiveRepl {
   }
 
   /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
+  /** The checkpoint manager for the workspace the agent is in now: a named worktree entered by a run moves the workspace after the frontend started. */
+  private checkpoints(): CheckpointManager {
+    const workspace = path.resolve(this.config.workspace);
+    if (this.checkpointManager.getWorkspace() !== workspace) this.checkpointManager = new CheckpointManager(workspace);
+    return this.checkpointManager;
+  }
+
   private async runInteractiveTurn(prompt: string | any[], titlePrompt?: string, options?: { step?: boolean; resume?: boolean }): Promise<TurnResult> {
     const label = titlePrompt ?? (typeof prompt === "string" && prompt ? prompt : "[step]");
     let result: TurnResult;
@@ -220,7 +227,7 @@ export class InteractiveRepl {
     let allowSensitive = false;
     while (true) {
       try {
-        this.checkpointManager.createCheckpoint(name, allowSensitive ? { allowSensitive: true } : undefined);
+        this.checkpoints().createCheckpoint(name, allowSensitive ? { allowSensitive: true } : undefined);
         this.agent.setCheckpointReadOnlyFallback(false);
         return true;
       } catch (error) {
@@ -1807,7 +1814,7 @@ export class InteractiveRepl {
                 console.log("Usage: /checkpoint diff <checkpoint_id> [base_checkpoint_id]\n");
               } else {
                 const baseId = subArgs[2];
-                const res = this.checkpointManager.getDiff(cpId, baseId);
+                const res = this.checkpoints().getDiff(cpId, baseId);
                 if (res.success) {
                   console.log(pc.bold(pc.white(`\nCheckpoint Diff (${cpId}${baseId ? ` vs ${baseId}` : " vs current"}):`)));
                   this.agent.getUi().renderDiff(res.diff);
@@ -1817,16 +1824,16 @@ export class InteractiveRepl {
               }
             } else if (subCmd === "prune") {
               const keepCount = subArgs[1] ? parseInt(subArgs[1], 10) : 20;
-              const res = this.checkpointManager.pruneCheckpoints(keepCount);
+              const res = this.checkpoints().pruneCheckpoints(keepCount);
               console.log(pc.green(`✔ ${res.message}\n`));
             } else {
               const cpName = arg ? arg : undefined;
-              const cp = this.checkpointManager.createCheckpoint(cpName);
+              const cp = this.checkpoints().createCheckpoint(cpName);
               console.log(pc.green(`✔ Checkpoint saved: ${pc.bold(cp.name)} (${cp.id})\n`));
             }
             continue;
           } else if (cmd === "checkpoints") {
-            const cps = this.checkpointManager.listCheckpoints();
+            const cps = this.checkpoints().listCheckpoints();
             if (cps.length === 0) {
               console.log(pc.yellow("No saved checkpoints.\n"));
             } else {
@@ -1838,7 +1845,7 @@ export class InteractiveRepl {
             }
             continue;
           } else if (cmd === "undo") {
-            const res = this.checkpointManager.rollbackLast();
+            const res = this.checkpoints().rollbackLast();
             if (res.success) {
               console.log(pc.green(`✔ ${res.message}\n`));
             } else {

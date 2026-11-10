@@ -567,7 +567,7 @@ export class SidecarServer {
       let checkpointReady = false;
       while (!checkpointReady) {
         try {
-          this.checkpointManager.createCheckpoint(
+          this.checkpoints().createCheckpoint(
             checkpoint,
             allowSensitiveCheckpoint ? { allowSensitive: true } : undefined,
           );
@@ -821,7 +821,7 @@ export class SidecarServer {
       setSessionId: (sessionId) => {
         this.sessionId = sessionId;
       },
-      checkpoints: () => this.checkpointManager,
+      checkpoints: () => this.checkpoints(),
       setWorkspace: (dir) => this.setWorkspace(dir),
       saveSession: (title) => this.saveSession(title),
       resumeSession: (sessionId) => this.resumeSession(sessionId),
@@ -899,6 +899,13 @@ export class SidecarServer {
 
   private receipt(): ReceiptSection[] {
     return receiptSections(this.lastTurn, this.app.getActiveValidationReceipt() ?? null, this.app.getAgent().getObjective());
+  }
+
+  /** The checkpoint manager for the workspace the agent is in now: a named worktree entered by a run moves the workspace after the frontend started. */
+  private checkpoints(): CheckpointManager {
+    const workspace = path.resolve(this.app.getConfig().workspace);
+    if (this.checkpointManager.getWorkspace() !== workspace) this.checkpointManager = new CheckpointManager(workspace);
+    return this.checkpointManager;
   }
 
   private setWorkspace(dir: string): void {

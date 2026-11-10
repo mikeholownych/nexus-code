@@ -126,6 +126,9 @@ export class ApplicationCore extends EventEmitter {
   }
 
   public getCheckpointManager(): CheckpointManager {
+    // Follows the agent into another workspace (a named worktree entered by a run).
+    const workspace = path.resolve(this.config.workspace || process.cwd());
+    if (this.checkpointManager.getWorkspace() !== workspace) this.checkpointManager = new CheckpointManager(workspace);
     return this.checkpointManager;
   }
 
@@ -447,7 +450,7 @@ export class ApplicationCore extends EventEmitter {
       case "checkpoint": {
         const name = args.join(" ") || `Checkpoint ${new Date().toISOString()}`;
         try {
-          const cp = this.checkpointManager.createCheckpoint(name);
+          const cp = this.getCheckpointManager().createCheckpoint(name);
           return { command: "checkpoint", success: true, output: `Created checkpoint: ${cp.id} (${name})`, data: cp };
         } catch (err: any) {
           return { command: "checkpoint", success: false, output: `Failed to create checkpoint: ${err.message}`, error: err.message };
