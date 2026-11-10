@@ -57,7 +57,7 @@ import { calculateContextBudget, countTokens, isContextAdmissible, isContextPres
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
-import { recordVerification } from "./worktrunk/verification.js";
+import { captureVerificationState, recordVerificationIfEligible } from "./worktrunk/verification.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
@@ -4269,6 +4269,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         : false;
       let verifierSucceeded = false;
       let hasExecuted = false;
+      // The linked worktree's state before the verifier runs: a receipt covers that state only.
+      let verificationStateBefore: ReturnType<typeof captureVerificationState>;
       let isDeliverableBound = false;
       let noApplicableVerifier = false;
 
@@ -4390,6 +4392,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             // The oracle owns the verifier's deadline (never an incidental bridge default); the runner enforces it.
             const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
             this.activity("verifying", { tool: verifierCommand });
+            verificationStateBefore = !this.activeWorktree && !this.config.dryRun ? captureVerificationState(this.config.workspace) : undefined;
             const testRes = await runTestSuiteWithExecutor(
               this.config.workspace,
               (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }),
@@ -4511,9 +4514,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // A passing deliverable-bound run inside a named (linked) worktree is recorded for `nexus worktree merge`, which
       // needs a verification for the exact state it merges. Recording never affects the task outcome.
       const isVerified = this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true;
-      if (!this.activeWorktree && !this.config.dryRun && verifierSucceeded && hasExecuted && isDeliverableBound && isVerified) {
-        recordVerification(this.config.workspace, this.verificationEvidence?.command || this.config.authoritativeVerifierCommand?.trim() || "verifier");
-      }
+      recordVerificationIfEligible(this.config.workspace, {
+        activeWorktree: Boolean(this.activeWorktree),
+        dryRun: Boolean(this.config.dryRun),
+        verifierSucceeded,
+        hasExecuted,
+        deliverableBound: isDeliverableBound,
+        verified: isVerified,
+        verifier: this.verificationEvidence?.command || this.config.authoritativeVerifierCommand?.trim() || "verifier",
+        before: verificationStateBefore,
+      });
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
       if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {
         this.modifiedFiles.clear();
