@@ -416,3 +416,21 @@ test("an already-aborted signal never sends the model request", async () => {
     assert.equal(git(f.repo, "log", "-1", "--format=%s"), "init");
   } finally { f.cleanup(); }
 });
+
+test("a `-` target is pinned to the branch it named when the merge began, not re-read after the model answers", async () => {
+  const f = fixture();
+  try {
+    const dir = await featureWithWork(f);
+    const made = await f.run(f.repo, ["switch", "-c", "release", "--no-copy"]);
+    assert.equal(made.success, true, made.output);
+    const releaseDir = path.join(f.repo, ".nexus", "worktrees", "release");
+    const releaseBefore = git(releaseDir, "rev-parse", "HEAD");
+    const r = await f.run(dir, ["merge", "-", "--no-verify-receipt", "--reason", "test fixture", "--ai-message"], async () => {
+      const moved = await f.run(releaseDir, ["switch", "main"]); // another terminal: the shared `-` shortcut now names `release`
+      assert.equal(moved.success, true, moved.output);
+      return "feat(b): add b.txt";
+    });
+    assert.equal(git(releaseDir, "rev-parse", "HEAD"), releaseBefore, `release was merged into: ${r.output}`);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat(b): add b.txt", "main is where the merge was asked to go");
+  } finally { f.cleanup(); }
+});
