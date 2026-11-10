@@ -44,7 +44,7 @@ If the earlier turn was suspended when the provider asked for a wait (for exampl
 This applies to `nexus run --resume`, the TUI (`--resume` or `/resume`) and `nexus operation resume`.
 The wait is shown as the usual provider-wait status.
 It is bounded by `LOCAL_LLM_RECOVERY_DEADLINE_MS` (default 20 minutes), skipped when you resume against a different endpoint, and Ctrl-C during it suspends again with the same eligible time.
-Until the wait is over, a resumed session sends nothing else to that provider either: the startup reachability check, the model-list lookup, model auto-detection (a resumed start takes the model from the session record when you pass no `--model`, or detects it after the wait), embedding requests for `hybrid_search` (the search stays lexical), `/compact --llm` and subagents are held back or declined.
+Until the wait is over, a resumed session sends nothing else to that provider either: the startup reachability check, the model-list lookup, model auto-detection (a resumed start takes the model from the session record when you pass no `--model`, or detects it after the wait; a resume that finds no saved session detects it at once, like a fresh start), embedding requests for `hybrid_search` (the search stays lexical), `/compact --llm` and subagents are held back or declined.
 With failover endpoints configured, the window covers each of them.
 
 ### Running Autonomous Non-Interactive Tasks
