@@ -421,3 +421,35 @@ test("no configuration or index flag hides an edit from the receipt: mode bits, 
     assert.ok(captureVerificationState(f.dir), "back to the recorded mode: certifiable again");
   } finally { f.cleanup(); }
 });
+
+test("the strict snapshot keeps what the merge keeps: an ignored file staged with add -f, and files absent under sparse checkout", () => {
+  const f = fixture();
+  try {
+    // An ignored new file the operator explicitly staged is part of what a merge commits.
+    fs.writeFileSync(path.join(f.dir, ".gitignore"), "forced.log\n");
+    git(f.dir, "add", ".gitignore");
+    git(f.dir, "commit", "-q", "-m", "ignore");
+    fs.writeFileSync(path.join(f.dir, "forced.log"), "kept on purpose\n");
+    git(f.dir, "add", "-f", "forced.log");
+    const withForced = captureVerificationState(f.dir);
+    assert.ok(withForced, "an explicitly staged ignored file does not block the receipt");
+    assert.equal(recordVerification(f.dir, "npm test"), true);
+    assert.match(git(f.dir, "ls-tree", "-r", "--name-only", withForced.tree), /forced\.log/, "and it is in the certified tree");
+    git(f.dir, "commit", "-q", "-m", "commit forced");
+
+    // Sparse checkout: files outside the cone are absent from disk by design, not deleted.
+    fs.mkdirSync(path.join(f.dir, "keep"));
+    fs.mkdirSync(path.join(f.dir, "other"));
+    fs.writeFileSync(path.join(f.dir, "keep", "k.txt"), "k\n");
+    fs.writeFileSync(path.join(f.dir, "other", "o.txt"), "o\n");
+    git(f.dir, "add", "keep", "other");
+    git(f.dir, "commit", "-q", "-m", "dirs");
+    git(f.dir, "sparse-checkout", "set", "--no-cone", "/*", "!/other/");
+    assert.equal(fs.existsSync(path.join(f.dir, "other", "o.txt")), false, "precondition: sparse checkout removed it from disk");
+    const sparse = captureVerificationState(f.dir);
+    assert.ok(sparse, "absent sparse files are not deletions");
+    assert.match(git(f.dir, "ls-tree", "-r", "--name-only", sparse.tree), /other\/o\.txt/, "they stay in the certified tree");
+    fs.writeFileSync(path.join(f.dir, "keep", "k.txt"), "an edit inside the cone\n");
+    assert.ok(captureVerificationState(f.dir), "an ordinary edit in the cone is certifiable");
+  } finally { f.cleanup(); }
+});

@@ -27,10 +27,28 @@ export interface WorkingState { head: string; tree: string; dirty: boolean }
  * applies it too, so both sides agree on what the bytes become.
  */
 const STRICT_CONFIG = [
-  "-c", "core.fileMode=true", "-c", "core.symlinks=true", "-c", "core.ignoreStat=false",
-  "-c", "core.sparseCheckout=false", "-c", "core.sparseCheckoutCone=false", "-c", "core.untrackedCache=false",
-  "-c", "core.splitIndex=false", "-c", "status.showUntrackedFiles=all",
+  "-c", "core.ignoreStat=false", "-c", "core.sparseCheckout=false", "-c", "core.sparseCheckoutCone=false",
+  "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false", "-c", "status.showUntrackedFiles=all",
 ];
+
+/** Whether the filesystem under `gitDir` stores executable bits and symlinks; where it does not, Git sets `core.fileMode`/`core.symlinks` false for a reason and forcing them would turn every file into a change. */
+function filesystemCapabilities(gitDir: string): { modes: boolean; symlinks: boolean } {
+  const probe = fs.mkdtempSync(path.join(gitDir, "nexus-probe-"));
+  try {
+    let modes = false;
+    let symlinks = false;
+    try {
+      const file = path.join(probe, "f");
+      fs.writeFileSync(file, "x");
+      fs.chmodSync(file, 0o755);
+      modes = (fs.statSync(file).mode & 0o111) !== 0;
+    } catch { /* no exec bits */ }
+    try { fs.symlinkSync("f", path.join(probe, "l")); symlinks = true; } catch { /* no symlinks */ }
+    return { modes, symlinks };
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+}
 
 /**
  * The tree `git add -A` would commit (minus `.nexus`), via a temporary index. `fresh`: the index starts as
@@ -43,19 +61,48 @@ function snapshotTree(dir: string, fresh: boolean): string {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-tree-"));
   try {
     const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
-    const config = fresh ? STRICT_CONFIG : [];
     const gitDir = gitOut(dir, ["rev-parse", "--path-format=absolute", "--git-dir"]);
     const realIndex = path.join(gitDir, "index");
+    const config = [...(fresh ? STRICT_CONFIG : [])];
+    if (fresh) {
+      const capabilities = filesystemCapabilities(gitDir);
+      if (capabilities.modes) config.push("-c", "core.fileMode=true");
+      if (capabilities.symlinks) config.push("-c", "core.symlinks=true");
+    }
     if (!fresh && fs.existsSync(realIndex)) {
       fs.copyFileSync(realIndex, path.join(scratch, "index"));
     } else {
       git(dir, [...config, "read-tree", "HEAD"], { env });
     }
+    if (fresh) carryIndexIntentions(dir, config, env);
     git(dir, [...config, "add", "-A"], { env });
     git(dir, ["reset", "-q", "HEAD", "--", NEXUS_STATE_PATH], { env, allowFailure: true }); // internal state is never part of a merge
     return gitOut(dir, ["write-tree"], { env });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/**
+ * What the repository's own index legitimately says and a merge's `add -A` honours, carried into the fresh index:
+ * a skip-worktree entry that is simply not on disk (sparse checkout) is not a deletion, and a new file the operator
+ * staged on purpose with `add -f` stays even though it is ignored. A skip-worktree file that IS on disk is not
+ * carried: an edit to it must be seen.
+ */
+function carryIndexIntentions(dir: string, config: string[], env: Record<string, string>): void {
+  const absentSparse: string[] = [];
+  for (const entry of gitOut(dir, ["ls-files", "-v", "-z"]).split("\0")) {
+    if (!/^[Ss] /.test(entry)) continue;
+    const file = entry.slice(2);
+    try { fs.lstatSync(path.join(dir, file)); } catch { absentSparse.push(file); }
+  }
+  if (absentSparse.length > 0) {
+    git(dir, [...config, "update-index", "--skip-worktree", "-z", "--stdin"], { env, input: absentSparse.join("\0") + "\0" });
+  }
+  const staged = gitOut(dir, ["diff-index", "--cached", "--name-only", "--diff-filter=A", "-z", "HEAD"]).split("\0").filter(Boolean)
+    .filter((file) => { try { fs.lstatSync(path.join(dir, file)); return true; } catch { return false; } });
+  if (staged.length > 0) {
+    git(dir, [...config, "add", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"], { env: { ...env, GIT_LITERAL_PATHSPECS: "1" }, input: staged.join("\0") + "\0" });
   }
 }
 
