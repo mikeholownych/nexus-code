@@ -459,6 +459,61 @@ describe("relocating after an explicit merge", () => {
   });
 });
 
+describe("entering the named worktree before the first turn keeps the conversation semantics of run()", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
+  async function firstPrompt(options: { resume?: boolean }, early: boolean): Promise<string> {
+    const f = fixture();
+    const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+    const home = process.env.HOME;
+    process.env.HOME = f.home;
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.repo, shell: "bash", worktree: true, worktreeBranch: "feat/conv" } as any);
+    try {
+      agent.setMessages([...agent.getMessages(), { role: "user", content: "OLD-PROMPT" } as any, { role: "assistant", content: "OLD-REPLY" } as any]);
+      if (early) agent.enterNamedWorktreeBeforeTurn(); // what the REPL and the sidecar do before the snapshot
+      await agent.run("fresh prompt", undefined, options);
+      return JSON.stringify(agent.getMessages().map((m: any) => (typeof m.content === "string" ? m.content : "")));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+      f.cleanup();
+    }
+  }
+
+  test("early entry leaves the conversation exactly as run() alone does, and a later prompt in the session still continues", async () => {
+    // Moving the session into the worktree resets the conversation (setWorkspace), with or without the early entry,
+    // so a fresh first prompt starts clean either way and the early entry changes nothing about --resume here.
+    for (const options of [{}, { resume: true }]) {
+      const plain = await firstPrompt(options, false);
+      const early = await firstPrompt(options, true);
+      assert.equal(/OLD-PROMPT/.test(early), /OLD-PROMPT/.test(plain), `identical with ${JSON.stringify(options)}`);
+      assert.match(early, /fresh prompt/);
+    }
+    assert.doesNotMatch(await firstPrompt({}, true), /OLD-PROMPT/, "a fresh first prompt starts with a clean conversation");
+  });
+
+  test("a session already inside the named worktree keeps its transcript across prompts (resumed binding or follow-up)", async () => {
+    const f = fixture();
+    const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+    const home = process.env.HOME;
+    process.env.HOME = f.home;
+    const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.repo, shell: "bash", worktree: true, worktreeBranch: "feat/conv2" } as any);
+    try {
+      agent.enterNamedWorktreeBeforeTurn();
+      await agent.run("first prompt");
+      agent.enterNamedWorktreeBeforeTurn(); // already inside: no effect
+      await agent.run("second prompt");
+      const transcript = JSON.stringify(agent.getMessages().map((m: any) => (typeof m.content === "string" ? m.content : "")));
+      assert.match(transcript, /first prompt/);
+      assert.match(transcript, /second prompt/);
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+      f.cleanup();
+    }
+  });
+});
+
 describe("REPL turn checkpoint with a named worktree", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
   test("the first prompt's snapshot is taken in the named worktree (reused or created), not the launch checkout", async () => {
     for (const reuse of [true, false]) {
@@ -477,12 +532,12 @@ describe("REPL turn checkpoint with a named worktree", { skip: !isSandboxAvailab
         const repl = Object.create(InteractiveRepl.prototype) as any;
         repl.config = app.getConfig();
         repl.agent = app.getAgent();
-        repl.checkpointManager = app.getCheckpointManager();
+        repl.app = app;
         assert.equal(await repl.prepareTurnCheckpoint("Turn: first"), true);
         assert.equal(new CheckpointManager(dir).listCheckpoints().length, reuse ? 2 : 1, `${branch}: snapshot in the worktree`);
         assert.equal(new CheckpointManager(f.repo).listCheckpoints().length, 0, `${branch}: launch checkout not snapshotted`);
         if (reuse) {
-          const undone = repl.checkpoints().rollbackLast();
+          const undone = app.getCheckpointManager().rollbackLast();
           assert.equal(undone.success, true, undone.message);
           assert.equal(fs.readFileSync(path.join(dir, "prelaunch.txt"), "utf8"), "edited between the sessions\n", "pre-launch work survives /undo");
         }

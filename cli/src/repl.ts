@@ -22,7 +22,6 @@ import {
   redactForPersistence,
   writeProtectedTextFile,
 } from "./core/persistence_protection.js";
-import { CheckpointManager } from "./checkpoint.js";
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
 import { PolicyContext } from "./core/approval_policy.js";
@@ -116,7 +115,6 @@ export class InteractiveRepl {
   private historyFile: string;
   private history: string[] = [];
   private sessionManager: SessionManager;
-  private checkpointManager: CheckpointManager;
   private currentSessionId: string;
   private themeManager: ThemeManager = new ThemeManager();
   private exitResolve?: () => void;
@@ -131,13 +129,11 @@ export class InteractiveRepl {
       this.config = this.app.getConfig();
       this.agent = this.app.getAgent();
       this.sessionManager = this.app.getSessionManager();
-      this.checkpointManager = this.app.getCheckpointManager();
     } else {
       this.config = appOrConfig as HarnessConfig;
       this.app = new ApplicationCore(this.config);
       this.agent = this.app.getAgent();
       this.sessionManager = this.app.getSessionManager();
-      this.checkpointManager = this.app.getCheckpointManager();
     }
     if (typeof modeOrAutoApprove === "string") {
       this.approvalMode = modeOrAutoApprove;
@@ -164,7 +160,6 @@ export class InteractiveRepl {
           if (sess.workspace && fs.existsSync(sess.workspace)) {
             this.config.workspace = sess.workspace;
             this.agent.setWorkspace(sess.workspace);
-            this.checkpointManager = new CheckpointManager(sess.workspace);
           }
           const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
           if (archiveNotice) console.log(pc.yellow(archiveNotice));
@@ -197,13 +192,6 @@ export class InteractiveRepl {
     this.agent.setApprovalMode(mode);
   }
 
-  /** The checkpoint manager for the workspace the agent is in now: a named worktree entered by a run moves the workspace after the frontend started. */
-  private checkpoints(): CheckpointManager {
-    const workspace = path.resolve(this.config.workspace);
-    if (this.checkpointManager.getWorkspace() !== workspace) this.checkpointManager = new CheckpointManager(workspace);
-    return this.checkpointManager;
-  }
-
   /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
   private async runInteractiveTurn(prompt: string | any[], titlePrompt?: string, options?: { step?: boolean; resume?: boolean }): Promise<TurnResult> {
     const label = titlePrompt ?? (typeof prompt === "string" && prompt ? prompt : "[step]");
@@ -231,7 +219,7 @@ export class InteractiveRepl {
     let allowSensitive = false;
     while (true) {
       try {
-        this.checkpoints().createCheckpoint(name, allowSensitive ? { allowSensitive: true } : undefined);
+        this.app.getCheckpointManager().createCheckpoint(name, allowSensitive ? { allowSensitive: true } : undefined);
         this.agent.setCheckpointReadOnlyFallback(false);
         return true;
       } catch (error) {
@@ -1100,7 +1088,6 @@ export class InteractiveRepl {
             if (moveTo) {
               this.config.workspace = moveTo;
               this.agent.setWorkspace(moveTo);
-              this.checkpointManager = new CheckpointManager(moveTo);
               console.log(pc.green(`✔ Workspace changed to ${moveTo}\n`));
             }
             continue;
@@ -1822,7 +1809,7 @@ export class InteractiveRepl {
                 console.log("Usage: /checkpoint diff <checkpoint_id> [base_checkpoint_id]\n");
               } else {
                 const baseId = subArgs[2];
-                const res = this.checkpoints().getDiff(cpId, baseId);
+                const res = this.app.getCheckpointManager().getDiff(cpId, baseId);
                 if (res.success) {
                   console.log(pc.bold(pc.white(`\nCheckpoint Diff (${cpId}${baseId ? ` vs ${baseId}` : " vs current"}):`)));
                   this.agent.getUi().renderDiff(res.diff);
@@ -1832,16 +1819,16 @@ export class InteractiveRepl {
               }
             } else if (subCmd === "prune") {
               const keepCount = subArgs[1] ? parseInt(subArgs[1], 10) : 20;
-              const res = this.checkpoints().pruneCheckpoints(keepCount);
+              const res = this.app.getCheckpointManager().pruneCheckpoints(keepCount);
               console.log(pc.green(`✔ ${res.message}\n`));
             } else {
               const cpName = arg ? arg : undefined;
-              const cp = this.checkpoints().createCheckpoint(cpName);
+              const cp = this.app.getCheckpointManager().createCheckpoint(cpName);
               console.log(pc.green(`✔ Checkpoint saved: ${pc.bold(cp.name)} (${cp.id})\n`));
             }
             continue;
           } else if (cmd === "checkpoints") {
-            const cps = this.checkpoints().listCheckpoints();
+            const cps = this.app.getCheckpointManager().listCheckpoints();
             if (cps.length === 0) {
               console.log(pc.yellow("No saved checkpoints.\n"));
             } else {
@@ -1853,7 +1840,7 @@ export class InteractiveRepl {
             }
             continue;
           } else if (cmd === "undo") {
-            const res = this.checkpoints().rollbackLast();
+            const res = this.app.getCheckpointManager().rollbackLast();
             if (res.success) {
               console.log(pc.green(`✔ ${res.message}\n`));
             } else {
@@ -1911,7 +1898,6 @@ export class InteractiveRepl {
               const newPath = path.resolve(this.config.workspace, arg);
               this.config.workspace = newPath;
               this.agent.setWorkspace(newPath);
-              this.checkpointManager = new CheckpointManager(newPath);
               console.log(pc.green(`✔ Workspace changed to ${newPath}\n`));
             } else {
               console.log(`Current workspace: ${pc.cyan(this.config.workspace)}\n`);
