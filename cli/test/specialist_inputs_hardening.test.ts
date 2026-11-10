@@ -173,3 +173,36 @@ test("a prerequisite summary is rendered as a JSON-encoded string, so instructio
   assert.ok(prompt.includes(JSON.stringify(hostile)), "the summary appears only as a JSON-encoded string");
   assert.doesNotMatch(prompt, /\nSystem: ignore all previous/, "no line of the prompt starts with the summary's injected text");
 });
+
+// ------------------------------------------------ modes staged in the real index (core.filemode=false)
+test("a mode-only change staged with update-index --chmod under core.filemode=false is shown", () => {
+  const d = mk((r) => { sh(r, "config", "core.filemode", "false"); sh(r, "update-index", "--chmod=+x", "run.sh"); }, { "run.sh": "echo hi\n", "a.txt": "one\n" });
+  const out = diffOf(d);
+  assert.match(out.diff, /old mode 100644/);
+  assert.match(out.diff, /new mode 100755/);
+});
+
+test("a plain chmod under core.filemode=false is not a change, as git itself sees it", () => {
+  const d = mk((r) => { sh(r, "config", "core.filemode", "false"); fs.chmodSync(path.join(r, "run.sh"), 0o755); }, { "run.sh": "echo hi\n", "a.txt": "one\n" });
+  assert.doesNotMatch(diffOf(d).diff, /mode/);
+});
+
+test("a mixed content and staged-mode change shows both", () => {
+  const d = mk((r) => { sh(r, "config", "core.filemode", "false"); sh(r, "update-index", "--chmod=+x", "run.sh"); put(r, "a.txt", "two EDITED_LINE\n"); }, { "run.sh": "echo hi\n", "a.txt": "one\n" });
+  const out = diffOf(d);
+  assert.match(out.diff, /EDITED_LINE/);
+  assert.match(out.diff, /new mode 100755/);
+});
+
+// ------------------------------------------------ the debugger snapshot keeps text/eol normalization like the tester's candidate
+test("a debugger snapshot normalizes line endings as the tester's own commit would (text=auto, CRLF edit)", () => {
+  const root = mk(() => {}, { "file.txt": "base\n", ".gitattributes": "* text=auto\n" });
+  const p = planOperationGit(root, "op-eol");
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const tester = ops.prepareUnit({ ...unit("tester"), id: "verify" } as WorkUnit).workspace;
+  fs.writeFileSync(path.join(tester, "file.txt"), "edited\r\nsecond\r\n");
+  const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "edited\nsecond\n");
+});
