@@ -9,7 +9,7 @@ import { validateBranchName } from "../worktrunk/paths.js";
 import { WORKTREE_BINDING_VERSION } from "./state_schema.js";
 import { readRegistry } from "../worktrunk/registry.js";
 import { openRepo } from "../worktrunk/repo.js";
-import { parseGitfilePointer, untrustedCheckoutReason } from "./checkout_trust.js";
+import { parseGitfilePointer, readSmallFile, untrustedCheckoutReason } from "./checkout_trust.js";
 import { ensurePrivateDir, writePrivateFile, appendPrivateFile } from "./durable_file.js";
 
 export class SensitivePersistenceError extends Error {
@@ -118,10 +118,8 @@ export function isLinkedWorktreeDir(worktreePath: string, commonDir: string): bo
     const dir = path.resolve(worktreePath);
     const dirStat = fs.lstatSync(dir);
     if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return false;
-    const dotGit = path.join(dir, ".git");
-    const dotStat = fs.lstatSync(dotGit);
-    if (dotStat.isSymbolicLink() || !dotStat.isFile() || dotStat.size > 4096) return false;
-    const pointer = parseGitfilePointer(fs.readFileSync(dotGit, "utf8"));
+    const content = readSmallFile(path.join(dir, ".git"), 4096); // never a blocking or unbounded read of an agent-controlled path
+    const pointer = content === undefined ? undefined : parseGitfilePointer(content);
     if (pointer === undefined) return false;
     const target = fs.realpathSync(path.resolve(dir, pointer));
     const admin = fs.realpathSync(path.join(commonDir, "worktrees"));

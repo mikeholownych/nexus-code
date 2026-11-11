@@ -96,8 +96,8 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
   // Large trees: the listings can be long, and one that does not fit is a refusal, not a pass.
   const listing = (args: string[]) => git(dir, args, { maxBuffer: LISTING_BUFFER }).stdout.split("\0");
   for (const entry of listing(["ls-files", "-s", "-z"])) {
-    const match = /^160000 [0-9a-f]+ \d\t(.+)$/.exec(entry);
-    if (match) candidates.add(match[1]);
+    const tab = entry.indexOf("\t"); // the path follows the first tab and may itself contain any character, a newline included
+    if (tab > 0 && /^160000 [0-9a-f]+ \d$/.test(entry.slice(0, tab))) candidates.add(entry.slice(tab + 1));
   }
   // `--directory` keeps the listing short; Git collapses an untracked directory into one `dir/` entry, so a repository
   // planted anywhere below it is looked for on disk, within a budget.

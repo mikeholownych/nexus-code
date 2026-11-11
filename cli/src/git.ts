@@ -30,6 +30,17 @@ function pathspecEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+/** The nested-repository scan lists the index and walks untracked directories: the per-prompt badge reuses a verdict for a few seconds. */
+const NESTED_VERDICT_TTL_MS = 3000;
+const nestedVerdicts = new Map<string, { at: number; reason: string | undefined }>();
+function nestedReasonSoon(workspace: string): string | undefined {
+  const known = nestedVerdicts.get(workspace);
+  if (known && Date.now() - known.at < NESTED_VERDICT_TTL_MS) return known.reason;
+  const reason = nestedRepositoryReason(workspace);
+  nestedVerdicts.set(workspace, { at: Date.now(), reason });
+  return reason;
+}
+
 /**
  * Host-side Git must not run in a worktree whose `.git` (or a nested repository) the sandboxed agent could have planted.
  * Returns the `--git-dir`/`--work-tree` pair to run Git against (empty for a plain repository), so a pointer rewritten
@@ -37,7 +48,7 @@ function pathspecEnv(): NodeJS.ProcessEnv {
  */
 function trustedGitArgs(workspace: string): string[] {
   const checkout = verifyCheckout(workspace);
-  const reason = checkout.reason ?? (checkout.gitDir ? nestedRepositoryReason(workspace) : undefined); // and any repository planted below it
+  const reason = checkout.reason ?? (checkout.gitDir ? nestedReasonSoon(workspace) : undefined); // and any repository planted below it
   if (reason) throw new Error(`refusing to run Git in ${workspace}: it is not a trusted worktree (${reason})`);
   return checkout.gitDir ? ["--git-dir", checkout.gitDir, "--work-tree", checkout.workTree!] : [];
 }
@@ -266,7 +277,7 @@ export function commitChanges(workspace: string, message: string): { success: bo
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const hash = execSync("git rev-parse --short HEAD", {
+    const hash = execFileSync("git", [...pin, "rev-parse", "--short", "HEAD"], {
       cwd: workspace,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],

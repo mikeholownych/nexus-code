@@ -506,6 +506,6 @@ test("the lazy provider completer resolves the local-model placeholder to the se
 });
 
 test("a model reply cannot forge commit trailers or release directives in the body", () => {
-  const cleaned = cleanReply("feat(b): add b\n\nAdds the b file.\nRelease-As: 9.0.0\nCo-Authored-By: Someone <a@b.c>\nBREAKING CHANGE: everything\nCloses #12");
+  const cleaned = cleanReply("feat(b): add b\n\nAdds the b file.\nRelease-As: 9.0.0\nCo-Authored-By: Someone <a@b.c>\nBREAKING CHANGE: everything\nCloses #12\nRelease-As:2.0.0\nCo-authored-by : X <a@b.c>\nBREAKING CHANGE removes the API");
   assert.equal(cleaned, "feat(b): add b\n\nAdds the b file.");
 });

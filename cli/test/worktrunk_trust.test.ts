@@ -294,7 +294,7 @@ test("a file name with control characters never forges a trailer in the determin
   assert.equal(conventionalCommitMessage(["src/plain.ts"]), "feat(core): update plain.ts");
 });
 
-test("a repository planted two levels below an untracked directory is found, and a replaced .git is found in a sibling-layout worktree", async () => {
+test("a repository planted two levels below an untracked directory is found, and a replaced .git is found through an opened repository's registry", async () => {
   const { getGitInfo } = await import("../src/git.js");
   const { verifyCheckout } = await import("../src/core/checkout_trust.js");
   const f = fixture("feat/deep");
@@ -351,12 +351,26 @@ test("a .git that is a FIFO, a link to /dev/zero or an oversized file is refused
   try {
     fs.rmSync(path.join(f.dir, ".git"));
     execFileSync("mkfifo", [path.join(f.dir, ".git")]); // a synchronous read of this would never return
-    assert.match(String(verifyCheckout(f.dir).reason), /not a plain pointer file|could not be verified|not a well-formed/);
+    assert.match(String(verifyCheckout(f.dir).reason), /not a plain pointer file/);
     fs.rmSync(path.join(f.dir, ".git"));
     fs.symlinkSync("/dev/zero", path.join(f.dir, ".git"));
     assert.match(String(verifyCheckout(f.dir).reason), /not a plain pointer file/);
     fs.rmSync(path.join(f.dir, ".git"));
     fs.writeFileSync(path.join(f.dir, ".git"), "gitdir: " + "x".repeat(10_000));
     assert.match(String(verifyCheckout(f.dir).reason), /not a plain pointer file/);
+  } finally { f.cleanup(); }
+});
+
+test("a gitlink whose path contains a newline is still checked for a planted repository", async () => {
+  const { nestedRepositoryReason } = await import("../src/worktrunk/git.js");
+  const f = fixture("feat/newline");
+  try {
+    const odd = "x\ny";
+    const sha = git(f.dir, "rev-parse", "HEAD");
+    git(f.dir, "update-index", "--add", "--cacheinfo", `160000,${sha},${odd}`);
+    const planted = path.join(f.dir, odd);
+    fs.mkdirSync(planted);
+    git(planted, "init", "-q");
+    assert.match(String(nestedRepositoryReason(f.dir)), /nested inside the linked worktree/);
   } finally { f.cleanup(); }
 });

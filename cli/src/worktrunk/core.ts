@@ -12,6 +12,7 @@ import { redactSecrets } from "../ui.js";
 import { ensureGitExclude } from "../core/git_exclude.js";
 import { identityOf, mkdirVerified } from "../safe_fs.js";
 import { readWorktreeSettings } from "./config.js";
+import { readSmallFile } from "../core/checkout_trust.js";
 import { git, gitOut, nestedRepositoryReason, UntrustedCheckoutError } from "./git.js";
 import { resolveWorktreePath, sanitizeBranch, validateBranchName, allowedRoot } from "./paths.js";
 import { readRegistry, updateRegistry, withWorktreeLock, type Registry } from "./registry.js";
@@ -589,9 +590,9 @@ function verifiedWorktreeDir(repo: Repo, entry: WorktreeEntry): { dev: number; i
   const stat = fs.lstatSync(entry.path);
   if (!before || stat.isSymbolicLink() || !stat.isDirectory()) throw new WorktreeError("the worktree path is not a plain directory; refusing to remove it");
   const dotGit = path.join(entry.path, ".git");
-  const dotStat = fs.lstatSync(dotGit);
-  if (!dotStat.isFile()) throw new WorktreeError("the worktree has no .git file; refusing to remove it");
-  const pointer = fs.readFileSync(dotGit, "utf8").trim();
+  const content = readSmallFile(dotGit, 4096); // the agent controls this path: no blocking or unbounded read
+  if (content === undefined) throw new WorktreeError("the worktree has no plain .git file; refusing to remove it");
+  const pointer = content.trim();
   // The pointer may be absolute or, with `worktree.useRelativePaths`, relative to the worktree directory. Either way
   // its canonical location must be an entry under this repository's common directory.
   const match = /^gitdir: (.+)$/.exec(pointer);

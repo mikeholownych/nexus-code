@@ -31,7 +31,7 @@ export function parseGitfilePointer(content: string): string | undefined {
  * synchronous read for ever, a link to `/dev/zero` or a huge sparse file would exhaust memory. Nothing is opened unless
  * `lstat` says it is a plain file of at most `maxBytes`, and it is opened non-blocking without following links.
  */
-function readSmallFile(file: string, maxBytes: number): string | undefined {
+export function readSmallFile(file: string, maxBytes: number): string | undefined {
   try {
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile() || stat.size > maxBytes) return undefined;
@@ -140,10 +140,9 @@ export function verifyCheckout(cwd: string): { reason?: string; gitDir?: string;
   for (const root of files) {
     const dotGit = path.join(root, ".git");
     try {
-      const stat = fs.lstatSync(dotGit);
-      if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 4096) return { reason: `${dotGit} is not a plain pointer file` };
       const content = readSmallFile(dotGit, MAX_POINTER_BYTES);
-      const target = content === undefined ? undefined : parseGitfilePointer(content);
+      if (content === undefined) return { reason: `${dotGit} is not a plain pointer file` };
+      const target = parseGitfilePointer(content);
       if (target === undefined) return { reason: `${dotGit} is not a well-formed gitdir pointer` };
       const admin = fs.realpathSync(path.resolve(root, target));
       if (inside(outer, admin)) return { reason: `${dotGit} leads into a repository inside the worktree itself` };

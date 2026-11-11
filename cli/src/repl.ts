@@ -1016,7 +1016,7 @@ export class InteractiveRepl {
           } else if (cmd === "diff") {
             const git = getGitInfo(this.config.workspace);
             if (!git.isRepo) {
-              console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+              console.log(pc.yellow(`${git.refusal ?? "Current workspace is not inside a git repository."}\n`));
               continue;
             }
             try {
@@ -1240,7 +1240,7 @@ export class InteractiveRepl {
           } else if (cmd === "git") {
             const git = getGitInfo(this.config.workspace);
             if (!git.isRepo) {
-              console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+              console.log(pc.yellow(`${git.refusal ?? "Current workspace is not inside a git repository."}\n`));
               continue;
             }
             try {
@@ -1256,7 +1256,7 @@ export class InteractiveRepl {
           } else if (cmd === "commit") {
             const git = getGitInfo(this.config.workspace);
             if (!git.isRepo) {
-              console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+              console.log(pc.yellow(`${git.refusal ?? "Current workspace is not inside a git repository."}\n`));
               continue;
             }
             if (git.dirtyCount === 0) {
@@ -1528,7 +1528,7 @@ export class InteractiveRepl {
             if (subArg === "diff") {
               const git = getGitInfo(this.config.workspace);
               if (!git.isRepo) {
-                console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+                console.log(pc.yellow(`${git.refusal ?? "Current workspace is not inside a git repository."}\n`));
                 continue;
               }
               try {

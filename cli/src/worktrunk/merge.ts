@@ -2,8 +2,8 @@
  * `nexus worktree merge` and `prune` (WP-1312).
  *
  * merge: commit what is dirty, squash, rebase onto the target, fast-forward only, then remove the worktree and its
- * branch. Nothing here runs a hook or an external command (commit messages are deterministic unless `--message` is
- * given). The pre-merge hook (WP-1313) will attach at `mergeSeams.preMerge` below, after every refusal.
+ * branch. Nothing here runs a hook or an external command (commit messages are deterministic unless `--message` or
+ * `--ai-message` supplies one). `mergeSeams.preMerge` below is called once after every refusal (a test seam for now).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -266,6 +266,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   // Commits that cancel each other (a change and its revert) add nothing: squashing them would leave an empty commit
   // and rewriting them onto the target would only add noise, so they are left where they are and not merged.
   const cancelled = count > 0 && treeOf("HEAD") === treeOf(mergeBase);
+  const nothingToMerge = !dirty && ahead === 0; // reported above: the rebase and fast-forward below have nothing to carry
   if (cancelled) notes.push(`The ${count} commit(s) on ${shownBranch(branch)} cancel each other out: nothing to merge into ${shownBranch(targetName)}.`);
   if (!cancelled && count > 1 && !options.noSquash) {
     const subjects = gitOut(source.path, ["log", "--reverse", "--format=%s", `${mergeBase}..HEAD`]).split("\n").filter(Boolean);
@@ -277,7 +278,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     git(source.path, ["commit", "--amend", "-m", options.message], { env: NON_INTERACTIVE });
   }
 
-  if (!cancelled && !options.noRebase && mergeBase !== targetSha) {
+  if (!cancelled && !nothingToMerge && !options.noRebase && mergeBase !== targetSha) {
     // `--autostash`: tracked `.nexus` state stays edited (and uncommitted) in the worktree, which a rebase otherwise refuses.
     // A plain rebase linearises the range and drops merge commits together with any edit only they carry (a conflict
     // resolution, for one). Squashing (the default) keeps the tree; without it such a history is refused.
@@ -298,7 +299,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     notes.push(`Rebased onto ${shownBranch(targetName)}.`);
   }
 
-  if (!cancelled) {
+  if (!cancelled && !nothingToMerge) {
     // Another terminal may have switched the target checkout since it was chosen: never advance another branch under this name.
     const targetRef = git(targetEntry.path, ["symbolic-ref", "--quiet", "HEAD"], { allowFailure: true }).stdout.trim();
     if (targetRef !== `refs/heads/${targetName}`) {

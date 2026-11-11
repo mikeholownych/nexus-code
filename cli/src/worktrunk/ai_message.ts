@@ -56,8 +56,9 @@ export function cleanReply(reply: unknown): string | undefined {
   text = redactSecrets(text).trim();
   const [subject, ...body] = text.split("\n").map((line) => line.trimEnd());
   if (!subject.trim() || subject.length > MAX_SUBJECT_CHARS) return undefined;
-  // A reply built from an untrusted diff must not forge trailers (`Release-As:`, `Co-Authored-By:`, `BREAKING CHANGE:`) that release and CI tooling act on.
-  const kept = body.filter((line) => !/^(?:[A-Za-z][A-Za-z0-9-]*|BREAKING[ -]CHANGE)(?::\s|\s#)/.test(line));
+  // A reply built from an untrusted diff must not forge trailers or release directives (`Release-As:`, `Co-Authored-By:`,
+  // `BREAKING CHANGE`) that release and CI tooling act on. Git's trailer grammar tolerates space before the colon and none after it.
+  const kept = body.filter((line) => !/^\s*(?:[A-Za-z][A-Za-z0-9-]*\s*(?::|\s#)|BREAKING[ -]CHANGE\b)/i.test(line));
   return [subject.trim(), ...kept].join("\n").trim();
 }
 

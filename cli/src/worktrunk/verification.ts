@@ -11,7 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { redactSecrets } from "../ui.js";
 import { statusOf } from "./core.js";
-import { git, gitOut, parseSubmoduleStatus } from "./git.js";
+import { git, gitOut, nestedRepositoryReason, parseSubmoduleStatus } from "./git.js";
 import { MAX_BRANCH_LENGTH, MAX_RECORDS, updateRegistry, type Registry } from "./registry.js";
 import { currentEntry, openRepo } from "./repo.js";
 
@@ -134,6 +134,7 @@ export function hasDirtySubmodule(dir: string): boolean {
  * receipt must cover exactly what a merge carries.
  */
 function certifiableState(dir: string): WorkingState | undefined {
+  if (nestedRepositoryReason(dir) !== undefined) return undefined; // before any Git runs inside a submodule below
   if (hasDirtySubmodule(dir)) return undefined;
   const state = workingState(dir, statusOf(dir).total > 0);
   return snapshotTree(dir, true) === state.tree ? state : undefined;
