@@ -124,7 +124,7 @@ export type SidecarEvent =
     }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
   | { type: "checkpoint.choice.request"; id: string; turn_id: string; message: string }
-  | { type: "turn.result"; turn_id: string; heading: string; line: string; turn: TurnResult; model_summary: ModelSummary | null }
+  | { type: "turn.result"; turn_id: string; heading: string; line: string; turn: TurnResult; model_summary: ModelSummary | null; saved: boolean }
   | {
       type: "slash.result";
       id: string;

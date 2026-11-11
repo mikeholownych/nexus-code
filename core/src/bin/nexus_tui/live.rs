@@ -345,7 +345,24 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     app.state.depth = depth;
     let result = event_loop(&mut terminal, &mut app);
     app.handle(Action::Quit);
+    drop(terminal);
+    drop(guard);
+    if let Some(breadcrumb) = maybe_format_exit_breadcrumb(&app.state) {
+        println!("{breadcrumb}");
+    }
     result
+}
+
+pub fn maybe_format_exit_breadcrumb(state: &LiveState) -> Option<String> {
+    if state.session_saved {
+        state.session.session_id.as_deref().map(format_exit_breadcrumb)
+    } else {
+        None
+    }
+}
+
+pub fn format_exit_breadcrumb(session_id: &str) -> String {
+    format!("Nexus session {session_id} saved. Resume with: nexus --resume {session_id}")
 }
 
 fn draw(terminal: &mut ratatui::DefaultTerminal, app: &mut LiveApp) -> io::Result<()> {
@@ -792,6 +809,59 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
         typed.push(enter);
         assert_eq!(burst_text(&typed), None, "a quickly sent line still submits on its trailing Enter");
         assert!(!pasteable(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+    }
+
+    #[test]
+    fn exit_breadcrumb_formats_session_id_and_resume_hint() {
+        assert_eq!(
+            format_exit_breadcrumb("sess-1234"),
+            "Nexus session sess-1234 saved. Resume with: nexus --resume sess-1234"
+        );
+    }
+
+    #[test]
+    fn exit_breadcrumb_only_shown_when_session_was_saved() {
+        let mut state = LiveState::new();
+        state.session.session_id = Some("sess-1234".into());
+        assert_eq!(
+            maybe_format_exit_breadcrumb(&state),
+            None,
+            "fresh session without turns or history must not print breadcrumb"
+        );
+
+        state.session_saved = true;
+        assert_eq!(
+            maybe_format_exit_breadcrumb(&state),
+            Some("Nexus session sess-1234 saved. Resume with: nexus --resume sess-1234".into())
+        );
+    }
+
+    #[test]
+    fn a_restarted_sidecar_has_saved_nothing_so_the_breadcrumb_stays_silent_until_it_does() {
+        let ev = |line: &str| crate::protocol::parse_event(line).unwrap();
+        let session = |id: &str| format!(r#"{{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false,"session":"{id}"}}"#);
+        let mut state = LiveState::new();
+        state.apply(ev(&session("sess-1")));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t1","heading":"Done","line":"ok","turn":{}}"#));
+        assert!(maybe_format_exit_breadcrumb(&state).is_some());
+        // `r` after a crash: the new sidecar generates a fresh id and has persisted nothing under it.
+        state.restarted();
+        state.apply(ev(&session("sess-2")));
+        assert_eq!(maybe_format_exit_breadcrumb(&state), None, "sess-2 was never saved");
+        // Its first completed turn saves it, and then the breadcrumb names the new id.
+        state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t2","heading":"Done","line":"ok","turn":{}}"#));
+        assert_eq!(maybe_format_exit_breadcrumb(&state), Some(format_exit_breadcrumb("sess-2")));
+    }
+
+    #[test]
+    fn a_turn_whose_record_could_not_be_written_does_not_advertise_a_session_to_resume() {
+        let ev = |line: &str| crate::protocol::parse_event(line).unwrap();
+        let mut state = LiveState::new();
+        state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false,"session":"sess-1"}"#));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t1","heading":"Done","line":"ok","turn":{},"saved":false}"#));
+        assert_eq!(maybe_format_exit_breadcrumb(&state), None);
+        state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t2","heading":"Done","line":"ok","turn":{},"saved":true}"#));
+        assert!(maybe_format_exit_breadcrumb(&state).is_some());
     }
 
     #[test]

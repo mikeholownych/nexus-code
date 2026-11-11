@@ -98,6 +98,15 @@ impl Picker {
     }
 
     pub fn rows(&self) -> Vec<Row> {
+        self.rows_matching(&self.query)
+    }
+
+    /// How many rows the list has with no filter typed: what a panel sizes itself by, so it does not resize per keystroke.
+    pub fn unfiltered_len(&self) -> usize {
+        self.rows_matching("").len()
+    }
+
+    fn rows_matching(&self, query: &str) -> Vec<Row> {
         let Fetch::Ready(catalog) = &self.catalog else {
             return Vec::new();
         };
@@ -118,9 +127,9 @@ impl Picker {
         };
         let shown = |provider: &str| self.only.as_deref().is_none_or(|only| only == provider);
         let mut rows = Vec::new();
-        if !self.query.trim().is_empty() {
+        if !query.trim().is_empty() {
             for m in &catalog.models {
-                if shown(&m.provider) && matches(&self.query, &label(&m.provider), &m.id) {
+                if shown(&m.provider) && matches(query, &label(&m.provider), &m.id) {
                     rows.push(model_row(&m.provider, &m.id));
                 }
             }

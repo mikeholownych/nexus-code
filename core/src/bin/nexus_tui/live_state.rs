@@ -479,6 +479,8 @@ pub struct LiveState {
     pub submit_when_ready: bool,
     /// The next assistant text starts a new reply (a new model step began since the last text).
     assistant_break: bool,
+    /// Whether this session has been saved/persisted to disk (e.g. after a completed turn or history restore).
+    pub session_saved: bool,
 }
 
 impl LiveState {
@@ -519,6 +521,7 @@ impl LiveState {
             pending_approvals: std::collections::VecDeque::new(),
             last_decided: None,
             submit_when_ready: false,
+            session_saved: false,
         }
     }
 
@@ -955,11 +958,13 @@ impl LiveState {
             Event::CheckpointChoiceRequest { id, message } => {
                 self.overlay = Some(Overlay::CheckpointChoice { id, message, selected: None });
             }
-            Event::TurnResult { heading, line, turn, model_summary } => {
+            Event::TurnResult { heading, line, turn, model_summary, saved } => {
                 self.pending = None;
                 self.cancel_requested = false;
                 self.cancel_started = None;
                 self.activity = None;
+                // A turn whose record the sidecar could not write must not advertise a session to resume.
+                self.session_saved |= saved;
                 self.interrupt_running_tools();
                 self.close_approval();
                 let (summary, notes) = model_summary
@@ -1024,6 +1029,7 @@ impl LiveState {
                 // A resume reads like the resume notice at startup (one style for the same event).
                 if command == "resume" && success {
                     self.transcript.push(Entry::Info(output));
+                    self.session_saved = true;
                 } else if !output.is_empty() || !success {
                     let diff = format.as_deref() == Some("diff");
                     self.transcript.push(Entry::Output {
@@ -1047,6 +1053,9 @@ impl LiveState {
             }
             Event::Notice { text } => self.transcript.push(Entry::Info(text)),
             Event::History { session, total, messages } => {
+                if total > 0 || !messages.is_empty() {
+                    self.session_saved = true;
+                }
                 let shown = messages.iter().filter(|m| m.role != "tool" && m.role != "outcome").count();
                 self.transcript.push(Entry::Info(if shown as u64 == total {
                     format!("Earlier conversation of session {session} ({total} messages)")
@@ -1203,6 +1212,8 @@ impl LiveState {
                 _ => {}
             }
         }
+        // The new sidecar generates its own session id and has persisted nothing under it yet.
+        self.session_saved = false;
         self.link = Link::Connecting;
         self.session.busy = false;
         self.cancel_requested = false;
@@ -2533,6 +2544,28 @@ mod tests {
         for c in text.chars() {
             assert_eq!(state.on_key(key(KeyCode::Char(c))), None);
         }
+    }
+
+    #[test]
+    fn session_saved_is_false_initially_and_set_on_turn_result_or_history() {
+        let mut state = LiveState::new();
+        state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false,"session":"sess-1"}"#));
+        assert_eq!(state.session.session_id.as_deref(), Some("sess-1"));
+        assert!(!state.session_saved, "fresh session is not yet saved to disk");
+
+        // When a turn completes:
+        state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t1","heading":"Done","line":"Finished task","turn":{}}"#));
+        assert!(state.session_saved, "turn result confirms session was saved");
+
+        // When resuming with history:
+        let mut resumed = LiveState::new();
+        resumed.apply(ev(r#"{"v":1,"type":"history","session":"sess-old","total":3,"messages":[{"role":"user","text":"hi"}]}"#));
+        assert!(resumed.session_saved, "history confirms non-empty saved session");
+
+        // When resume slash command succeeds:
+        let mut cmd_state = LiveState::new();
+        cmd_state.apply(ev(r#"{"v":1,"type":"slash.result","id":"s1","command":"resume","success":true,"output":"Resumed session sess-old."}"#));
+        assert!(cmd_state.session_saved, "successful resume command confirms saved session");
     }
 
     fn with(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
