@@ -1,0 +1,132 @@
+// The supported domain of the candidate diff and the debugger snapshot (WP-1316): a repository state is either inside
+// the predicate (a correct result) or refused with a reason. Never a silently wrong snapshot.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { candidateDiff } from "../src/core/specialist_inputs.js";
+import { OperationGit, ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
+import type { WorkUnit } from "../src/core/operation.js";
+
+const sh = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, stdio: "pipe", encoding: "utf8" });
+const put = (d: string, rel: string, text: string) => { fs.mkdirSync(path.dirname(path.join(d, rel)), { recursive: true }); fs.writeFileSync(path.join(d, rel), text); };
+const unit = (id: string, role = "implementer"): WorkUnit => ({ id, title: id, prompt: "p", dependsOn: [], requires: {}, status: "RUNNABLE", reroutes: [], runs: 0, unknownResumes: 0, modelsUsed: [], role } as any);
+
+function repo(files: Record<string, string> = { "in/a.txt": "a\n", "out/b.txt": "b\n", "run.sh": "echo\n" }): string {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-domain-"));
+  sh(d, "init", "-q", "-b", "main"); sh(d, "config", "user.email", "a@b"); sh(d, "config", "user.name", "t");
+  for (const [f, t] of Object.entries(files)) put(d, f, t);
+  sh(d, "add", "-A"); sh(d, "commit", "-qm", "base");
+  return d;
+}
+
+/** The unit's worktree (as the tester left it) and a function that snapshots it for a debugger. */
+function tester(files?: Record<string, string>) {
+  const root = repo(files);
+  const p = planOperationGit(root, `op-${path.basename(root)}`);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const wt = ops.prepareUnit(unit("verify", "tester")).workspace;
+  const snapshot = () => ops.prepareUnit(unit("debug", "failure_debugger"), { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
+  return { wt, snapshot };
+}
+
+type Setup = (d: string) => void;
+const REFUSED = [
+  ["sparse checkout (cone, out-of-cone path absent)", (d) => { sh(d, "sparse-checkout", "init", "--no-cone"); sh(d, "sparse-checkout", "set", "/in/"); put(d, "in/a.txt", "edited\n"); }, /sparse/],
+  ["skip-worktree on a tracked file", (d) => { sh(d, "update-index", "--skip-worktree", "in/a.txt"); put(d, "in/a.txt", "edited\n"); }, /skip-worktree/],
+  ["skip-worktree on a path absent from disk", (d) => { sh(d, "update-index", "--skip-worktree", "out/b.txt"); fs.rmSync(path.join(d, "out"), { recursive: true }); }, /skip-worktree/],
+  ["assume-unchanged on a tracked file", (d) => { sh(d, "update-index", "--assume-unchanged", "in/a.txt"); put(d, "in/a.txt", "edited\n"); }, /assume-unchanged/],
+  ["assume-unchanged with chmod +x", (d) => { sh(d, "update-index", "--assume-unchanged", "run.sh"); fs.chmodSync(path.join(d, "run.sh"), 0o755); }, /assume-unchanged/],
+  ["core.filemode=false with a staged --chmod=+x", (d) => { sh(d, "config", "core.filemode", "false"); sh(d, "update-index", "--chmod=+x", "run.sh"); }, /core\.filemode/],
+  ["core.symlinks=false", (d) => { sh(d, "config", "core.symlinks", "false"); }, /core\.symlinks/],
+  ["core.ignorecase=true", (d) => { sh(d, "config", "core.ignorecase", "true"); }, /core\.ignorecase/],
+  ["a submodule (gitlink) entry", (d) => {
+    const sub = repo({ "s.txt": "s\n" });
+    sh(d, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub"); sh(d, "commit", "-qm", "sub");
+  }, /submodule/],
+  ["an unresolved merge conflict", (d) => {
+    sh(d, "checkout", "-q", "-b", "side"); put(d, "in/a.txt", "side\n"); sh(d, "commit", "-qam", "side");
+    sh(d, "checkout", "-q", "main"); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
+    try { sh(d, "merge", "side"); } catch { /* conflict expected */ }
+  }, /merge conflicts/],
+] as Array<[string, Setup, RegExp]>;
+
+for (const [name, setup, why] of REFUSED) {
+  test(`refused with a reason, never a wrong diff: ${name}`, () => {
+    const d = repo();
+    setup(d);
+    const r = candidateDiff(d, undefined);
+    assert.ok("error" in r, `expected a refusal, got ${JSON.stringify(r).slice(0, 200)}`);
+    assert.match(r.error, /automatic inputs are not available/);
+    assert.match(r.error, why);
+  });
+}
+
+for (const [name, setup, why] of REFUSED.filter(([n]) => !/submodule|merge|core\./.test(n)) as Array<[string, Setup, RegExp]>) {
+  test(`the debugger snapshot refuses too: ${name}`, () => {
+    const t = tester();
+    setup(t.wt);
+    assert.throws(() => t.snapshot(), (e: Error) => /cannot be snapshotted/.test(e.message) && why.test(e.message));
+  });
+}
+
+test("sparse checkout with an out-of-cone path committed after the recorded base is refused, not shown as a deletion", () => {
+  const d = repo();
+  sh(d, "sparse-checkout", "init", "--no-cone"); sh(d, "sparse-checkout", "set", "/in/");
+  const r = candidateDiff(d, sh(d, "rev-parse", "HEAD").trim());
+  assert.ok("error" in r && /sparse/.test(r.error));
+});
+
+test("in-domain path is unchanged: edits, untracked files, a staged copy and an executable bit all appear", () => {
+  const d = repo();
+  put(d, "in/a.txt", "edited VISIBLE_EDIT\n"); put(d, "new.txt", "NEW_FILE\n"); fs.chmodSync(path.join(d, "run.sh"), 0o755);
+  sh(d, "rm", "-q", "--cached", "out/b.txt");
+  const r = candidateDiff(d, undefined);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  assert.match(r.diff, /VISIBLE_EDIT/);
+  assert.match(r.diff, /NEW_FILE/);
+  assert.match(r.diff, /new mode 100755/);
+  assert.match(r.diff, /deleted file mode[\s\S]*out\/b\.txt|out\/b\.txt[\s\S]*deleted file mode/);
+});
+
+test("in-domain snapshot is unchanged: tracked edit, untracked file and deletion are all in it", () => {
+  const t = tester();
+  put(t.wt, "in/a.txt", "edited\n"); put(t.wt, "fresh.txt", "fresh\n"); fs.rmSync(path.join(t.wt, "out"), { recursive: true });
+  const debug = t.snapshot();
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:in/a.txt"), "edited\n");
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:fresh.txt"), "fresh\n");
+  assert.throws(() => sh(debug, "cat-file", "-e", "HEAD:out/b.txt"));
+});
+
+// Sweep: for every repository state in the table the result is either correct against an independent oracle (the
+// worktree's own `git diff HEAD`-equivalent content) or an explicit refusal; a wrong diff fails the test.
+const MARK = "SWEEP_EDIT_MARKER";
+const SWEEP: Array<[string, Setup]> = [
+  ["clean edit", (d) => put(d, "in/a.txt", `a ${MARK}\n`)],
+  ["detached HEAD", (d) => { sh(d, "checkout", "-q", "--detach"); put(d, "in/a.txt", `a ${MARK}\n`); }],
+  ["intent-to-add new file", (d) => { put(d, "in/a.txt", `a ${MARK}\n`); put(d, "n.txt", "n\n"); sh(d, "add", "-N", "n.txt"); }],
+  ["staged edit then further edit", (d) => { put(d, "in/a.txt", "staged\n"); sh(d, "add", "in/a.txt"); put(d, "in/a.txt", `a ${MARK}\n`); }],
+  ["rename", (d) => { put(d, "in/a.txt", `a ${MARK}\n`); sh(d, "mv", "out/b.txt", "out/c.txt"); }],
+  ["symlink", (d) => { fs.symlinkSync("in/a.txt", path.join(d, "link")); put(d, "in/a.txt", `a ${MARK}\n`); }],
+  ["ignored file", (d) => { put(d, ".gitignore", "ign\n"); put(d, "ign", "x\n"); put(d, "in/a.txt", `a ${MARK}\n`); }],
+  ["untracked nested repo", (d) => { fs.mkdirSync(path.join(d, "v")); sh(path.join(d, "v"), "init", "-q"); put(d, "in/a.txt", `a ${MARK}\n`); }],
+  ["rebase-like: HEAD behind an extra commit", (d) => { put(d, "x.txt", "x\n"); sh(d, "add", "x.txt"); sh(d, "commit", "-qm", "x"); put(d, "in/a.txt", `a ${MARK}\n`); }],
+  ...REFUSED.map(([n, s]) => [n, (d: string) => { s(d); try { put(d, "in/a.txt", `a ${MARK}\n`); } catch { /* path may be unwritable */ } }] as [string, Setup]),
+];
+for (const [name, setup] of SWEEP) {
+  test(`sweep: ${name} gives a correct diff or an explicit unsupported reason`, () => {
+    const d = repo();
+    setup(d);
+    const r = candidateDiff(d, undefined);
+    if ("error" in r) { assert.match(r.error, /automatic inputs are not available|git could not produce/, r.error); return; }
+    // Oracle: git's own view of the change (tracked changes against HEAD plus untracked files).
+    const lines = (...args: string[]) => sh(d, ...args).split("\n").filter((l) => l && !l.endsWith("/"));
+    const expected = new Set([...lines("diff", "HEAD", "--name-only", "--no-renames"), ...lines("ls-files", "--others", "--exclude-standard")]);
+    const shown = new Set([...r.diff.matchAll(/^diff --git a\/(.+?) b\//gm)].map((m) => m[1]));
+    assert.deepEqual([...shown].sort(), [...expected].sort());
+  });
+}

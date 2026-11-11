@@ -66,7 +66,55 @@ export function withoutDrivers(text: string): string {
     return [head[1], ...rest.filter((token) => !/^[-!]?(filter|diff)(=|$)/.test(token))].join(" ");
   }).join("\n");
 }
-const DIFF_FLAGS = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--relative"];
+/**
+ * The repository states the candidate diff and the debugger snapshot are built for, as one finite predicate over the
+ * unit's own index and configuration. Inside it the scratch index (base tree, or a copy of the real index) plus the
+ * worktree is a faithful picture of the candidate: every index entry is a plain stage-0 file or symlink whose
+ * worktree state git actually checks, and file modes and symlinks are real on the filesystem. Outside it the answer
+ * would depend on flags that tell git not to look at the worktree (assume-unchanged, skip-worktree, sparse checkout),
+ * on modes the filesystem cannot report (`core.filemode=false`, `core.symlinks=false`), on case folding, on gitlinks
+ * (submodules: the diff shows only the pointer), or on an unresolved merge, so it is refused with a reason instead of
+ * a guess. Not refused, and covered by tests: detached HEAD, linked worktrees, untracked and ignored files,
+ * intent-to-add entries, renames and copies, symlinks, a merge or rebase in progress once resolved in the index.
+ * `run` is a pinned git call against the repository's own index (never written).
+ */
+export type SnapshotSupport = { ok: true } | { unsupported: string };
+export function snapshotSupport(run: (args: string[]) => string): SnapshotSupport {
+  const config = new Map<string, string>();
+  try {
+    for (const line of run(["config", "--type=bool", "--get-regexp", "^core\\.(filemode|symlinks|ignorecase|sparsecheckout|sparsecheckoutcone)$"]).split("\n")) {
+      const [key, value] = line.split(" ");
+      if (key) config.set(key.toLowerCase(), value);
+    }
+  } catch (err: any) {
+    if (err?.status !== 1) throw err; // 1 = none of them is set: every default is inside the domain
+  }
+  const refuse = (what: string, fix: string): SnapshotSupport => ({ unsupported: `${what}; ${fix}` });
+  if (config.get("core.filemode") === "false") return refuse("core.filemode is false, so file modes are not read from disk", "set core.filemode=true or pass explicit inputs");
+  if (config.get("core.symlinks") === "false") return refuse("core.symlinks is false, so symlinks are checked out as files", "set core.symlinks=true or pass explicit inputs");
+  if (config.get("core.ignorecase") === "true") return refuse("core.ignorecase is true (a case-insensitive filesystem), so paths cannot be matched exactly", "pass explicit inputs");
+  if (config.get("core.sparsecheckout") === "true") return refuse("a sparse checkout is enabled", "run `git sparse-checkout disable` or pass explicit inputs");
+  const unmerged = new Set<string>();
+  for (const entry of run(["ls-files", "-s", "-z"]).split("\0")) {
+    const m = /^(\d{6}) [0-9a-f]+ (\d)\t([\s\S]*)$/.exec(entry);
+    if (!m) continue;
+    if (m[1] === "160000") return refuse(`${m[3].slice(0, 80)} is a submodule (gitlink): only its pointer would be shown, not its content`, "pass explicit inputs");
+    if (m[2] !== "0") unmerged.add(m[3]);
+  }
+  if (unmerged.size) return refuse(`${unmerged.size} path(s) have unresolved merge conflicts (for example ${[...unmerged][0].slice(0, 80)})`, "resolve them or pass explicit inputs");
+  for (const entry of run(["ls-files", "-v", "-z", "--cached"]).split("\0")) {
+    if (!entry || entry[0] === "H") continue;
+    const tag = entry[0];
+    const file = entry.slice(2).slice(0, 80);
+    if (tag === "S" || tag === "s") return refuse(`${file} is marked skip-worktree (sparse checkout), so git does not look at its worktree state`, "run `git update-index --no-skip-worktree` or pass explicit inputs");
+    if (tag >= "a" && tag <= "z") return refuse(`${file} is marked assume-unchanged, so git does not look at its worktree state`, "run `git update-index --no-assume-unchanged` or pass explicit inputs");
+    if (tag === "M") continue; // unmerged entries are reported above
+    return refuse(`${file} has index state '${tag}' that is not supported`, "pass explicit inputs");
+  }
+  return { ok: true };
+}
+
+const DIFF_FLAGS =["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--relative"];
 const MAX_DIFF_PATHS = 2_000;
 const GIT_MAX_BUFFER = 4 * 1024 * 1024;
 /** Path listings scale with the repository, not the change, so they get room for very large repositories. */
@@ -226,6 +274,8 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     // .nexus-security.json never reaches a worktree.
     const security = new SecurityManager(policyWorkspace ?? root);
     // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
+    const support = snapshotSupport((args) => git(args, { ownIndex: true }));
+    if ("unsupported" in support) return { error: `automatic inputs are not available for this repository state: ${support.unsupported}` };
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     git(["read-tree", "--end-of-options", commit]);
     const listing = (args: string[], ownIndex = false, timeoutMs?: number) => git(["ls-files", "-z", ...args], { maxBuffer: LISTING_MAX_BUFFER, ownIndex, timeoutMs }).split("\0").filter(Boolean);
@@ -248,43 +298,13 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     if (removed.length) {
       git(["--literal-pathspecs", "rm", "--cached", "--force", "--quiet", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${removed.join("\0")}\0` });
     }
-    // The real index can hold a mode the base lacks while the file's mode on disk is not trusted (core.filemode=false,
-    // `git update-index --chmod=+x`). The scratch index only knows the base's, so carry over each tracked path's current
-    // executable bit (the mode is read from the real index; nothing the repository configures runs to read it).
-    const modeOf = (entries: string[]) => new Map(entries.filter(Boolean).flatMap((e) => {
-      const m = /^(\d{6}) ([0-9a-f]+) (\d)\t([\s\S]*)$/.exec(e);
-      return m && m[3] === "0" ? [[m[4], { mode: m[1], oid: m[2] }] as const] : [];
-    }));
-    const baseModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"));
-    const ownModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER, ownIndex: true }).split("\0"));
-    const exec = (m: string) => m === "100644" || m === "100755";
-    const modeChanges: string[] = [];
-    for (const [file, own] of ownModes) {
-      const atBaseEntry = baseModes.get(file);
-      if (atBaseEntry && atBaseEntry.mode !== own.mode && exec(atBaseEntry.mode) && exec(own.mode)) modeChanges.push(`${own.mode} ${atBaseEntry.oid}\t${file}\0`);
-    }
-    if (modeChanges.length) git(["update-index", "-z", "--index-info"], { input: modeChanges.join("") });
-    // Paths outside a sparse checkout are skip-worktree in the real index and absent from disk. `read-tree` does not set
-    // that flag, so against the scratch index every one of them would read as deleted: carry it over (a path present on
-    // disk keeps no flag, its edits are part of the candidate).
-    const sparse = git(["ls-files", "-v", "-z"], { maxBuffer: LISTING_MAX_BUFFER, ownIndex: true }).split("\0")
-      .filter((e) => (e[0] === "S" || e[0] === "s") && !onDisk(e.slice(2))).map((e) => e.slice(2));
-    if (sparse.length) git(["--literal-pathspecs", "update-index", "--skip-worktree", "-z", "--stdin"], { input: `${sparse.join("\0")}\0` });
     const removedSet = new Set(removed);
     const added = new Set([
       ...untracked.filter((p) => !removedSet.has(p)),
       ...[...ownIndex].filter((p) => !atBase.has(p) && onDisk(p)),
     ]);
     if (added.size) {
-      git(["--literal-pathspecs", "add", "--sparse", "--force", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${[...added].join("\0")}\0` });
-      // Adding re-reads the mode from disk; a path the real index holds with another executable bit (a new script staged
-      // with --chmod=+x under core.filemode=false) keeps the real index's mode, as integration preserves it.
-      const addedModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"));
-      for (const flag of ["+x", "-x"]) {
-        const want = flag === "+x" ? "100755" : "100644";
-        const paths = [...added].filter((f) => ownModes.get(f)?.mode === want && addedModes.get(f)?.mode !== undefined && addedModes.get(f)!.mode !== want);
-        if (paths.length) git(["--literal-pathspecs", "update-index", `--chmod=${flag}`, "-z", "--stdin"], { input: `${paths.join("\0")}\0` });
-      }
+      git(["--literal-pathspecs", "add", "--force", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${[...added].join("\0")}\0` });
     }
     // Comparing worktree content runs a path's clean filter, so before any diff every path is checked for a filter or
     // diff driver the stripped attribute source did not neutralise ($GIT_DIR/info/attributes, or a worktree

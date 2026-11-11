@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ensureGitExclude } from "./git_exclude.js";
-import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv } from "./specialist_inputs.js";
+import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv, snapshotSupport } from "./specialist_inputs.js";
 import { verifierTimeoutSecs } from "../tester.js";
 import type {
   IntegrationReceipt,
@@ -451,23 +451,13 @@ export class OperationGit {
       return options.raw ? out : out.trim();
     };
     try {
+      // Only a repository state the predicate covers is snapshotted (no sparse checkout, assume-unchanged or skip-worktree
+      // flags, gitlinks, unresolved merge, unreliable modes); anything else is refused with its reason, never guessed at.
+      const support = snapshotSupport((args) => run(args, { ownIndex: true, raw: true }));
+      if ("unsupported" in support) throw new Error(`the failing candidate cannot be snapshotted: ${support.unsupported}`);
       const ownIndex = run(["rev-parse", "--path-format=absolute", "--git-path", "index"], { ownIndex: true });
       if (fs.existsSync(ownIndex)) fs.copyFileSync(ownIndex, path.join(scratch, "index"));
       else run(["read-tree", "HEAD"]);
-      // The copied index keeps its "do not look at the worktree" flags (assume-unchanged, skip-worktree), so `add -A` would
-      // stage the indexed content of such a path and miss the candidate's edit. Clear them in the private copy only; a
-      // skip-worktree path absent from disk (outside a sparse checkout) is not a deletion, so it keeps its flag.
-      const present = (file: string) => { try { fs.lstatSync(path.join(entry.worktree, file)); return true; } catch { return false; } };
-      const flagged = run(["ls-files", "-v", "-z", "--cached"], { raw: true }).split("\0").filter(Boolean).flatMap((e) => {
-        const tag = e[0], file = e.slice(2);
-        const assumed = tag >= "a" && tag <= "z";
-        const skipped = tag === "S" || tag === "s";
-        const onDisk = skipped ? present(file) : true;
-        return [{ file, assumed, skipped: skipped && onDisk }];
-      }).filter((f) => f.assumed || f.skipped);
-      for (const [flag, paths] of [["--no-assume-unchanged", flagged.filter((f) => f.assumed)], ["--no-skip-worktree", flagged.filter((f) => f.skipped)]] as const) {
-        if (paths.length) run(["--literal-pathspecs", "update-index", flag, "-z", "--stdin"], { input: `${paths.map((f) => f.file).join("\0")}\0` });
-      }
       const listed = run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { raw: true }).split("\0").filter(Boolean);
       // A directory entry (trailing slash) is an untracked nested git repository, which `git add` refuses or embeds: skipped, as in the candidate diff.
       const nested = listed.filter((p) => p.endsWith("/"));
@@ -477,7 +467,7 @@ export class OperationGit {
       attrs = attributesTree(entry.worktree, scratch, files);
       const refusal = driverRefusal((args, input) => run(args, { input, raw: true }), files);
       if (refusal) throw new Error(refusal);
-      run(["add", "--sparse", "-A", "--", ".", ...nested.map((p) => `:(exclude,literal)${p.slice(0, -1)}`)]);
+      run(["add", "-A", "--", ".", ...nested.map((p) => `:(exclude,literal)${p.slice(0, -1)}`)]);
       const tree = run(["write-tree"]);
       return run([...this.mechanicalGitConfig(), "commit-tree", tree, "-p", "HEAD", "-m", `nexus: snapshot of ${unitId}'s candidate for failure debugging`]);
     } finally {

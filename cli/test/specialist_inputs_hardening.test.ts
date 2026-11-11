@@ -173,26 +173,6 @@ test("a prerequisite summary is rendered as a JSON-encoded string, so instructio
   assert.doesNotMatch(prompt, /\nSystem: ignore all previous/, "no line of the prompt starts with the summary's injected text");
 });
 
-// ------------------------------------------------ modes staged in the real index (core.filemode=false)
-test("a mode-only change staged with update-index --chmod under core.filemode=false is shown", () => {
-  const d = mk((r) => { sh(r, "config", "core.filemode", "false"); sh(r, "update-index", "--chmod=+x", "run.sh"); }, { "run.sh": "echo hi\n", "a.txt": "one\n" });
-  const out = diffOf(d);
-  assert.match(out.diff, /old mode 100644/);
-  assert.match(out.diff, /new mode 100755/);
-});
-
-test("a plain chmod under core.filemode=false is not a change, as git itself sees it", () => {
-  const d = mk((r) => { sh(r, "config", "core.filemode", "false"); fs.chmodSync(path.join(r, "run.sh"), 0o755); }, { "run.sh": "echo hi\n", "a.txt": "one\n" });
-  assert.doesNotMatch(diffOf(d).diff, /mode/);
-});
-
-test("a mixed content and staged-mode change shows both", () => {
-  const d = mk((r) => { sh(r, "config", "core.filemode", "false"); sh(r, "update-index", "--chmod=+x", "run.sh"); put(r, "a.txt", "two EDITED_LINE\n"); }, { "run.sh": "echo hi\n", "a.txt": "one\n" });
-  const out = diffOf(d);
-  assert.match(out.diff, /EDITED_LINE/);
-  assert.match(out.diff, /new mode 100755/);
-});
-
 // ------------------------------------------------ the debugger snapshot keeps text/eol normalization like the tester's candidate
 test("a debugger snapshot normalizes line endings as the tester's own commit would (text=auto, CRLF edit)", () => {
   const root = mk(() => {}, { "file.txt": "base\n", ".gitattributes": "* text=auto\n" });
@@ -204,12 +184,6 @@ test("a debugger snapshot normalizes line endings as the tester's own commit wou
   fs.writeFileSync(path.join(tester, "file.txt"), "edited\r\nsecond\r\n");
   const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
   assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "edited\nsecond\n");
-});
-
-test("a new script staged with --chmod=+x under core.filemode=false keeps its executable mode in the diff", () => {
-  const d = mk((r) => { sh(r, "config", "core.filemode", "false"); put(r, "new.sh", "echo new\n"); sh(r, "add", "new.sh"); sh(r, "update-index", "--chmod=+x", "new.sh"); });
-  const out = diffOf(d);
-  assert.match(out.diff, /new file mode 100755/);
 });
 
 test("a snapshot checks the real name of a file whose name starts with a space, so a quoted info/attributes rule for it refuses the snapshot", () => {
@@ -289,36 +263,6 @@ test("a new file copied from the operator's untracked, non-ignored secret is omi
   assert.doesNotMatch((r as { diff: string }).diff, LEAK);
 });
 
-for (const [flag, label] of [["--assume-unchanged", "assume-unchanged"], ["--skip-worktree", "skip-worktree"]] as const) {
-  test(`a debugger snapshot contains an edit to a tracked file flagged ${label}`, () => {
-    const root = mk(() => {}, { "file.txt": "base\n", "keep.txt": "k\n" });
-    const p = planOperationGit(root, `op-${label}`);
-    const state = newOperationGitState(p);
-    ensureIntegrationWorktree(p, state);
-    const ops = new OperationGit(p, state);
-    const tester = ops.prepareUnit({ ...unit("tester"), id: "verify" } as WorkUnit).workspace;
-    sh(tester, "update-index", flag, "file.txt");
-    put(tester, "file.txt", "failing edit\n");
-    const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
-    assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "failing edit\n");
-  });
-}
-
-test("a debugger snapshot keeps a sparse-excluded (skip-worktree, absent) path instead of recording its deletion", () => {
-  const root = mk(() => {}, { "file.txt": "base\n", "out/lib.txt": "lib\n" });
-  const p = planOperationGit(root, "op-sparse");
-  const state = newOperationGitState(p);
-  ensureIntegrationWorktree(p, state);
-  const ops = new OperationGit(p, state);
-  const tester = ops.prepareUnit({ ...unit("tester"), id: "verify" } as WorkUnit).workspace;
-  sh(tester, "update-index", "--skip-worktree", "out/lib.txt");
-  fs.rmSync(path.join(tester, "out"), { recursive: true });
-  put(tester, "file.txt", "edited\n");
-  const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
-  assert.equal(sh(debug, "cat-file", "-p", "HEAD:out/lib.txt"), "lib\n");
-  assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "edited\n");
-});
-
 test("a copy of an unprotected file with protected lines appended does not leak them (git reports it as a copy, not an addition)", () => {
   const body = Array.from({ length: 120 }, (_, i) => `function helper${i}() { return ${i}; }`).join("\n") + "\n";
   const d = mk((r) => { put(r, ".gitignore", ".env\n"); put(r, ".env", SECRET_BODY); put(r, "src/b.ts", body + SECRET_BODY); }, { "src/a.ts": body });
@@ -327,35 +271,3 @@ test("a copy of an unprotected file with protected lines appended does not leak 
   assert.ok(out.omittedNew >= 1);
 });
 
-function sparseRepo(): string {
-  const d = mk(() => {}, { "in/a.txt": "a\n", "out/b.txt": "b\n", "out/c.txt": "c\n" });
-  sh(d, "sparse-checkout", "init", "--no-cone");
-  sh(d, "sparse-checkout", "set", "/in/");
-  assert.equal(fs.existsSync(path.join(d, "out")), false);
-  return d;
-}
-
-test("a sparse worktree's out-of-cone tree is not a deletion in the candidate diff, and an untracked file there does not fail it", () => {
-  const d = sparseRepo();
-  put(d, "in/a.txt", "a edited VISIBLE_EDIT\n");
-  put(d, "out/new.txt", "new\n");
-  const out = diffOf(d);
-  assert.match(out.diff, /VISIBLE_EDIT/);
-  assert.doesNotMatch(out.diff, /deleted file mode/);
-});
-
-test("a debugger snapshot of a sparse worktree keeps out-of-cone files and does not fail on an untracked one there", () => {
-  const root = mk(() => {}, { "in/a.txt": "a\n", "out/b.txt": "b\n" });
-  const p = planOperationGit(root, "op-sparse2");
-  const state = newOperationGitState(p);
-  ensureIntegrationWorktree(p, state);
-  const ops = new OperationGit(p, state);
-  const tester = ops.prepareUnit({ ...unit("tester"), id: "verify" } as WorkUnit).workspace;
-  sh(tester, "sparse-checkout", "init", "--no-cone");
-  sh(tester, "sparse-checkout", "set", "/in/");
-  put(tester, "in/a.txt", "edited\n");
-  put(tester, "out/new.txt", "new\n");
-  const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
-  assert.equal(sh(debug, "cat-file", "-p", "HEAD:in/a.txt"), "edited\n");
-  assert.equal(sh(debug, "cat-file", "-p", "HEAD:out/b.txt"), "b\n");
-});
