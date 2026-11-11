@@ -4,7 +4,7 @@ Welcome to the **Nexus Code** documentation directory. This hub organizes all gu
 
 ---
 
-## 🚀 Getting Started & Configuration
+## Getting Started & Configuration
 
 Quickly set up your environment, connect models, and start your first session:
 
@@ -20,7 +20,7 @@ Quickly set up your environment, connect models, and start your first session:
 
 ---
 
-## 🏗️ Architecture & System Design
+## Architecture & System Design
 
 Deep-dive documentation on how Nexus Code operates under the hood:
 
@@ -34,7 +34,7 @@ Deep-dive documentation on how Nexus Code operates under the hood:
 
 ---
 
-## 🌲 Git Operations & Worktrees
+## Git Operations & Worktrees
 
 How Nexus Code safely isolates speculative work in clean git worktree checkouts:
 
@@ -44,7 +44,7 @@ How Nexus Code safely isolates speculative work in clean git worktree checkouts:
 
 ---
 
-## 🛠️ Development, Testing & Release
+## Development, Testing & Release
 
 Guidelines for building, verifying, and packaging Nexus Code from source:
 
@@ -57,7 +57,7 @@ Guidelines for building, verifying, and packaging Nexus Code from source:
 
 ---
 
-## 🔐 Security & Governance
+## Security & Governance
 
 Core policies governing the project's operation and community interactions:
 
@@ -69,7 +69,7 @@ Core policies governing the project's operation and community interactions:
 
 ---
 
-## 📜 Historical Records
+## Historical Records
 
 - [Cloudflare Contest Entry](CLOUDFLARE_CONTEST.md) — Documentation of the Cloudflare Workers collaboration service entry.
-- [Historical System Evolution](HISTORICAL.md) — Early project milestones and architectural evolution.
+- [Historical System Evolution](HISTORICAL.md) — Historical requirement and qualification records (Issue #12).
