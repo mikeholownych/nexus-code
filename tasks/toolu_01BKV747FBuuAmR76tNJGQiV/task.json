@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BKV747FBuuAmR76tNJGQiV",
+  "agent_id": "a443fb812d9e7992b",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix WP-1308 harnessNote provenance",
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 96255,
+    "cache_read_tokens": 3320221,
+    "output_tokens": 20384,
+    "api_call_count": 36
+  },
+  "started_at": "2026-11-11T19:32:17.12862745Z",
+  "completed_at": "2026-11-11T19:38:08.105846065Z"
+}

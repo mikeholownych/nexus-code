@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DcMvUaigMaWoTY45LW1w5W",
+  "agent_id": "a2e1a41d4778852c5",
+  "subagent_type": "general-purpose",
+  "task_description": "Pre-push review of PR 469",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 57107,
+    "cache_read_tokens": 647119,
+    "output_tokens": 7178,
+    "api_call_count": 11
+  },
+  "started_at": "2026-11-11T19:36:04.60662544Z",
+  "completed_at": "2026-11-11T19:38:04.005294579Z"
+}
