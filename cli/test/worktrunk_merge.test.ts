@@ -753,6 +753,15 @@ test("a named worktree on a nexus/* branch merges like any other; a task worktre
     const restarted = wt(f, other, ["merge", "nexus/op-k1/u2-17", ...W, "--no-remove"]);
     assert.equal(restarted.success, false, restarted.output);
     assert.match(restarted.output, /speculative task worktree/i, restarted.output);
+
+    const integrationDir = path.join(f.repo, ".nexus", "worktrees", "op-k1", "integration");
+    git(f.repo, "worktree", "add", "-q", "-b", "nexus/op-k1/integration", integrationDir);
+    commitFile(integrationDir, "i.txt", "i\n", "integration work");
+    const tip = git(f.repo, "rev-parse", "main");
+    const integration = wt(f, other, ["merge", "nexus/op-k1/integration", ...W, "--no-remove"]);
+    assert.equal(integration.success, false, integration.output);
+    assert.match(integration.output, /speculative task worktree/i, integration.output);
+    assert.equal(git(f.repo, "rev-parse", "main"), tip, "a refused merge must not move the target");
   } finally { f.cleanup(); }
 });
 

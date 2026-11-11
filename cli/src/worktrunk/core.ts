@@ -124,7 +124,7 @@ export function findEntry(repo: Repo, token: string, home: string): WorktreeEntr
 /**
  * An automated task worktree is unregistered, on branch `nexus/<id>`, at exactly `<repo>/.nexus/worktrees/<id>`
  * (`WorktreeManager.createWorktree`), or an operation worktree: branch `nexus/op-<key>/<unit>` at
- * `.nexus/worktrees/op-<key>/units/<dir>` (`operation_git.ts`; a restart suffixes the branch, not the directory), `integration` at `.nexus/worktrees/op-<key>/integration`.
+ * `.nexus/worktrees/op-<key>/units/<dir>` (`operation_git.ts`; a restart suffixes the branch, not the directory, so only the group and the `units` parent are matched), `integration` at `.nexus/worktrees/op-<key>/integration`.
  * A named worktree on a `nexus/*` branch lives at `.nexus/worktrees/nexus-<name>` and is none of these.
  */
 export function isTaskWorktree(repo: Repo, entry: { branch?: string | null; path: string }, registry: Registry): boolean {
