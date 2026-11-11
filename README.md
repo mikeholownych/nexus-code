@@ -7,7 +7,9 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-brightgreen?style=flat-square)](https://nodejs.org/)
 [![Rust](https://img.shields.io/badge/Rust-2024%20%7C%201.85%2B-red?style=flat-square)](https://www.rust-lang.org/)
 
-**Nexus Code** is an open-source, local-first AI coding agent and execution harness. Designed for developers who demand high performance, rigorous security sandboxing, transparent human-in-the-loop control, and seamless Git worktree isolation, Nexus Code pairs a high-level TypeScript agent with native Rust workspace tooling and a rich Ratatui terminal user interface (TUI).
+**Nexus Code** is an open-source, local-first AI coding agent and execution harness. It pairs a TypeScript agent and sidecar with native Rust workspace tools and a Ratatui terminal user interface (TUI), with opt-in sandboxing, human approval modes, and Git worktree isolation.
+
+> **Status:** the latest stable release is [v1.1.3](https://github.com/mikeholownych/nexus-code/releases). v1.1.4 is in development: its work ledger is closed and qualification is pending. Development plans and this README do not establish release readiness; see [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases) and [`docs/releases/`](docs/releases/).
 
 ---
 
@@ -42,25 +44,25 @@
 
 Most agentic coding tools operate either as black-box cloud subscriptions or as unconstrained local scripts with unrestricted shell access. Nexus Code takes a systems-engineering approach:
 
-- **Security by Default:** All agent actions (filesystem writes, command executions, child processes) run within unprivileged Linux Bubblewrap (`bwrap`) sandboxes and strict kernel resource limits (`prlimit`), with optional Docker container isolation.
-- **Git Worktree Isolation:** Rather than mutating your active checkout, speculative code changes and verification loops occur in dedicated, lightweight Git worktrees (`.nexus/worktrees/`), complete with verification receipts and clean fast-forward squashes.
-- **Thoughtfully Designed TUI:** Built on [Ratatui](https://ratatui.rs/), the live terminal interface delivers smooth token streaming, instant keyboard approvals, unified diff review, proportional modal overlays, and resilient paste management.
-- **Deterministic Verification:** Nexus Code refuses to guess whether code works. It establishes verifiable test baselines before modification and requires deliverable-bound verifier checks before merging.
-- **Cost & Context Protection:** Real-time token capacity tracking, automatic context compaction, and hard budget limits (`NEXUS_CLOUD_MAX_COST_USD`) prevent runaway API spending.
+- **Approval by Default:** Unset permission mode is `review`: file writes, shell commands, and network egress need your confirmation. File tools are confined to the workspace, and `--sandbox` adds Linux Bubblewrap (`bwrap`) or Docker isolation for commands (see the [architecture reference](docs/ARCHITECTURE.md) for limits).
+- **Git Worktree Isolation:** Rather than mutating your active checkout, speculative code changes and verification loops occur in dedicated, lightweight Git worktrees (`.nexus/worktrees/`), with a verification receipt required before `nexus worktree merge` squashes and fast-forwards them.
+- **Terminal UI:** Built on [Ratatui](https://ratatui.rs/), the live interface streams tokens, takes keyboard approvals, and offers diff review.
+- **Verification before merge:** `nexus worktree merge` requires a recorded passing verification for the exact state being merged, unless you pass `--no-verify-receipt --reason`.
+- **Cost & Context Protection:** Token tracking, context compaction, and optional cloud limits (`NEXUS_CLOUD_MAX_COST_USD`; only enforceable when the provider reports cost).
 
 ---
 
 ## Architecture Overview
 
 Nexus Code uses a hybrid, decoupled architecture:
-1. **Front-End & Terminal Experience (`core/src/bin/nexus_tui`):** High-performance Rust binary utilizing Ratatui and crossterm for zero-flicker diff rendering, event handling, and terminal management.
+1. **Front-End & Terminal Experience (`core/src/bin/nexus_tui`):** Rust binary using Ratatui and crossterm for diff rendering, event handling, and terminal management.
 2. **Agent Brain & Sidecar (`cli/`):** TypeScript-driven execution loop handling turn dispatch, LLM conversation state, tool calling, Model Context Protocol (MCP), and context compaction.
-3. **Workspace Tools Engine (`core/src/` / `harness-core`):** Rust native library implementing high-throughput file operations, unified diff generation, syntax inspection, and sandboxed command execution.
+3. **Workspace Tools Engine (`core/src/` / `harness-core`):** Rust tools implementing file operations, unified diff generation, syntax inspection, and command execution.
 
 ```mermaid
 graph TD
     User([Developer / Terminal]) <-->|Keystrokes / ANSI Output| TUI[nexus-tui\nRatatui / Rust]
-    TUI <-->|Bidirectional JSON-RPC / Unix Pipe| Sidecar[Agent Sidecar\nTypeScript / Node.js 22+]
+    TUI <-->|NDJSON over stdio| Sidecar[Agent Sidecar\nTypeScript / Node.js 22+]
     
     subgraph Agent Runtime
         Sidecar --> Context[Context Budgeting & Compaction]
@@ -97,9 +99,9 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 > [!NOTE]
-> To pin a specific release version, set `NEXUS_VERSION`:
+> To pin a release or install a prerelease, set `NEXUS_VERSION` to a tag from [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases):
 > ```sh
-> curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.1.4 sh
+> curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.1.3 sh
 > ```
 
 ### 2. Inference Setup
@@ -141,7 +143,7 @@ nexus
 ```
 - Real-time token streaming and syntax highlighting.
 - Visual approval prompt for shell execution and file modification.
-- Multi-line composer with history search and bracketed paste handling.
+- Multi-line composer and bracketed paste handling.
 - Use `/help` for available slash commands, `/model` to switch providers, or `Esc` to cancel the active turn.
 
 ### Command-Line REPL
@@ -152,43 +154,45 @@ nexus repl
 Provides the full conversational agent with line-based interactive approval prompts.
 
 ### Autonomous Task Execution
-Execute a targeted objective headlessly and exit upon verified completion:
+Execute a targeted objective without the interactive UI and exit when the run finishes:
 ```sh
 nexus run "Add unit tests for the token bucket rate limiter in src/rate_limiter.ts"
 ```
-Nexus will explore the codebase, plan edits, execute tests inside the sandbox, verify outcomes against your deliverable baseline, and record an audit trail.
+Nexus works on the task without a terminal UI and exits when it finishes. Approval prompts still apply unless you choose `--mode auto` or `--yes`; see the [User Manual](docs/USER_MANUAL.md). Add `--worktree-branch <name>` to run inside a named worktree that is kept after the run.
 
 ---
 
 ## Core Capabilities
 
 ### 🛡️ Defense-in-Depth Sandboxing
-Every command executed by the agent runs in an isolated sandbox:
-- **Bubblewrap (`bwrap`) Isolation:** Mounts the root filesystem read-only, providing dedicated writable mounts only for the workspace.
-- **Process Resource Limits (`prlimit`):** Caps CPU time, memory consumption (AS/RSS), max open file descriptors, and total process count.
-- **Network Egress Guard:** Unauthorized network calls from within the sandbox are blocked unless explicitly permitted by policy.
+- **Workspace path jail:** the Rust file tools reject paths outside the workspace, including `..` and symlink escapes.
+- **Opt-in command sandbox:** `--sandbox` runs commands under Bubblewrap (`bwrap`) or Docker. Without it, host commands have your filesystem access; `--read-only` masks `$HOME` when `bwrap` is available.
+- **Egress approval:** network access asks on first use of each origin, except under `--yes`.
+
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) lists each guarantee and its limits.
 
 ### 🌲 Git Worktree Isolation
 Eliminate uncommitted workspace pollution with native named worktrees (see [docs/WORKTREES.md](docs/WORKTREES.md)):
 - Run speculative features under `.nexus/worktrees/<branch>` (or configured sibling directories) with zero risk to your checked-out files.
-- Command `nexus worktree switch -c <branch>` (or session `/worktree switch -c <branch>`) creates an isolated branch checkout.
-- Fast-forward verified changes, remove completed worktrees with `nexus worktree remove <branch>`, and inspect status with `nexus worktree list --json`.
+- `nexus worktree switch -c <branch>` (or session `/worktree switch -c <branch>`) creates an isolated branch checkout; `nexus run --worktree-branch <branch> "<task>"` runs a task inside one.
+- `nexus worktree merge` squashes, rebases, and fast-forwards the branch into the default branch, then removes the worktree. It needs a recorded passing verification (or `--no-verify-receipt --reason`); `--ai-message` drafts the commit message with your configured model.
+- `nexus worktree prune` removes worktrees already integrated into the default branch (`--dry-run` first), `nexus worktree remove <branch>` removes one, and `nexus worktree list --json` inspects them.
 
 ### 🤝 Human-in-the-Loop (HITL) Approvals
 Stay in complete control of changes:
-- **`review` mode (default):** Prompts for confirmation before executing file writes, shell invocations, or network calls.
-- **`auto` mode:** Autonomous file edits and test runs; asks for approval only on first-time egress to new network endpoints.
-- **`read-only` mode:** Strictly forbids write operations and mutative commands; safe for auditing untrusted codebases.
+- **`review` mode (default):** Prompts for confirmation before file writes, shell commands, or network calls. `--yes` bypasses all prompts.
+- **`auto` mode (`--mode auto`):** Writes and commands run without approval; network egress still asks on first use of each origin.
+- **`read-only` mode (`--read-only`):** Explores code without permitting modifications or non-read commands.
 
 ### 🧠 Context Budgeting & Cost Governance
-- Tracks token consumption per step against discovered model context limits.
-- Automatic compaction summarizes older conversation turns when context headroom shrinks.
-- Enforces strict cloud cost ceilings via `NEXUS_CLOUD_MAX_COST_USD`.
+- Tracks token use against the model's context limit.
+- Compacts older conversation turns when context headroom shrinks.
+- Optional cloud ceilings via `NEXUS_CLOUD_MAX_REQUESTS`, `NEXUS_CLOUD_MAX_TOKENS` and `NEXUS_CLOUD_MAX_COST_USD`.
 
 ### 🔌 Universal Model Support & MCP
 - Local inference: native support for llama.cpp, Ollama, and vLLM (see [docs/LOCAL_SERVERS.md](docs/LOCAL_SERVERS.md)).
 - Cloud provider support with secret redaction and configurable cost governance (see [docs/CLOUD_PROVIDERS.md](docs/CLOUD_PROVIDERS.md)).
-- Full support for Model Context Protocol (MCP) clients and servers to expose external tools and resource context.
+- MCP client: connect external MCP servers (`.mcp.json` or `~/.config/nexus/mcp.json`) to expose their tools; see [docs/MCP_GUIDE.md](docs/MCP_GUIDE.md).
 
 ---
 
@@ -196,17 +200,17 @@ Stay in complete control of changes:
 
 | Command | Shortcut | Description |
 |---|---|---|
-| `/help` | `?` | List the slash commands and keybindings |
+| `/help` | `/?` | List the slash commands and keybindings |
 | `/model` | `Ctrl+P` | Choose a model from any connected provider (Ctrl+P connects one) |
 | `/status` | — | Show workspace, model, mode, endpoint, and session info |
-| `/worktree` | — | Manage speculative and named git worktrees (`status`, `merge`, `discard`, `list`, `switch`, `remove`) |
+| `/worktree` | — | Manage the speculative worktree and named worktrees (`status`, `discard`, `list`, `path`, `switch`, `remove`, `copy-ignored`, `prune`, `merge`) |
 | `/diff` | — | Show uncommitted changes as a syntax-highlighted unified diff |
 | `/commit` | — | Commit changes; suggests a conventional commit message if omitted |
 | `/doctor` | — | Diagnose configuration, endpoint, engine, shell, and session state |
 | `/tokens` | — | Display context window use and session token totals |
 | `/receipt` | — | Show turn outcome, verifier evidence, and validation receipt |
 | `/clear` | — | Reset conversation context for a clean task turn |
-| `/exit` | `Ctrl+C` | Cleanly exit session and print session resume command |
+| `/exit` | `Ctrl+C` | Quit (`Ctrl+C` cancels a running turn, twice to quit; quits when idle and empty) |
 
 ---
 
@@ -255,7 +259,7 @@ nexus-code/
 ├── docs/                  # Architecture specs, user manuals, and provider guides
 ├── experiments/           # Cloudflare Workers & Artifacts collaboration slices
 ├── scripts/               # Release packaging, CI runners, and security gates
-└── tasks/                 # Production roadmap, audit tracking, and issue ledgers
+└── tasks/                 # Working notes: plan and lessons
 ```
 
 ---
@@ -265,7 +269,7 @@ nexus-code/
 Explore our comprehensive guides in the [`docs/`](docs/) directory:
 
 - 📖 **[User Manual](docs/USER_MANUAL.md):** Complete guide to interactive workflows, approval postures, and session management.
-- 🚀 **[Quickstart Guide](quickstart.md):** Installation, configuration, and running your first task in 60 seconds.
+- 🚀 **[Quickstart Guide](quickstart.md):** Installation, configuration, and running your first task.
 - 🏗️ **[Architecture Reference](docs/ARCHITECTURE.md):** Deep dive into the process model, security guarantees, and execution loop.
 - 🌲 **[Worktree Operations](docs/WORKTREES.md):** Guide to isolated branching, receipt gates, and conflict-free merges.
 - 🖥️ **[Local Servers Guide](docs/LOCAL_SERVERS.md):** Instructions for configuring Ollama, LM Studio, vLLM, and llama.cpp.

@@ -11,7 +11,7 @@ Quickly set up your environment, connect models, and start your first session:
 | Guide | Description |
 |---|---|
 | [User Manual](USER_MANUAL.md) | Comprehensive reference for interactive TUI, REPL, execution postures, and approvals |
-| [Quickstart Guide](../quickstart.md) | One-line installer, prerequisite validation, and running tasks in 60 seconds |
+| [Quickstart Guide](../quickstart.md) | One-line installer, prerequisites, and running a first task |
 | [Local Servers Setup](LOCAL_SERVERS.md) | Step-by-step setup for Ollama, vLLM, LM Studio, and llama.cpp |
 | [Cloud Providers Guide](CLOUD_PROVIDERS.md) | Connecting Anthropic Claude, OpenAI, and custom OpenAI-compatible endpoints |
 | [MCP Guide](MCP_GUIDE.md) | Configuring Model Context Protocol servers and exposing tools to the agent |
@@ -53,7 +53,7 @@ Guidelines for building, verifying, and packaging Nexus Code from source:
 | [Development Guide](DEVELOPMENT.md) | Build requirements, running local test gates (`make test`, `make test-ci`), and packaging |
 | [Repository Quality Standards](REPOSITORY_QUALITY.md) | Code style, static analysis, type checking, and clippy guidelines |
 | [Upgrade Security](UPGRADE_SECURITY.md) | Safe dependency upgrades, vulnerability auditing, and SBOM maintenance |
-| [Releases Directory](releases/) | Version release notes, qualification records, and changelog archives |
+| [Releases Directory](releases/) | Release notes per version |
 
 ---
 
@@ -63,8 +63,8 @@ Core policies governing the project's operation and community interactions:
 
 - [Security Policy](../SECURITY.md) — Responsible vulnerability disclosure guidelines.
 - [Contributing Guidelines](../CONTRIBUTING.md) — Process for submitting issues and pull requests.
-- [Code of Conduct](../CODE_OF_CONDUCT.md) — Contributor Covenant community expectations.
-- [Project Governance](../GOVERNANCE.md) — Maintainer model, RFC processes, and project stewardship.
+- [Code of Conduct](../CODE_OF_CONDUCT.md) — Community conduct expectations.
+- [Project Governance](../GOVERNANCE.md) — Maintainer model and project stewardship.
 - [Support Channels](../SUPPORT.md) — Where to get help and ask questions.
 
 ---
