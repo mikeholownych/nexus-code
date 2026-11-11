@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Sgc4Y47C8e4NkcbcHBcLcN",
+  "agent_id": "a4d49ffc271382b36",
+  "subagent_type": "general-purpose",
+  "task_description": "Slop review",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 90061,
+    "cache_read_tokens": 927543,
+    "output_tokens": 7528,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-11T19:32:21.565366969Z",
+  "completed_at": "2026-11-11T19:33:38.493816276Z"
+}
