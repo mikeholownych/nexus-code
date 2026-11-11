@@ -1397,7 +1397,8 @@ impl LiveState {
     /// Keys that reached the screen together, applied one at a time in the order they were typed. At an open approval
     /// more than one press at once is typing (or a paste without bracketed paste), so the decision keys are inert for
     /// the batch (the panel's guard, as for input typed before the panel appeared): `y`, `n`, `a` become text of the
-    /// draft and Enter does nothing. Every other key (text, Backspace, arrows, Esc) acts exactly as it does alone.
+    /// draft and Enter does nothing. Every other key (text, Backspace, arrows, Tab, Esc) acts exactly as it does alone.
+    /// A batch of arrows alone does not count as typing, but a decision key in it is still inert.
     pub fn on_key_burst(&mut self, keys: Vec<KeyEvent>) -> Option<Action> {
         self.on_key_burst_at(keys, Instant::now())
     }
@@ -1406,7 +1407,10 @@ impl LiveState {
         if keys.len() > 1
             && let Some(Overlay::Approval(approval)) = &mut self.overlay
         {
-            approval.bulk_input_at(now);
+            if keys.iter().any(|key| matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Enter | KeyCode::Tab)) {
+                approval.last_text = Some(now);
+            }
+            approval.rearm_guard(now);
         }
         keys.into_iter().find_map(|key| self.on_key_at(key, now))
     }
@@ -4397,6 +4401,10 @@ mod tests {
             assert_eq!(state.on_key_burst_at(vec![key(KeyCode::Left), key(KeyCode::Right)], at(t0, 6050)), None);
             assert_eq!(state.on_key_at(t('y'), at(t0, 6100)), None, "still inside the guard");
             assert_eq!(state.on_key_at(t('y'), at(t0, 8000)), approve("approval-1", false));
+            // Navigation in a batch with a decision key: the key is inert and the focus moved.
+            let (mut state, t0) = panel(5000);
+            assert_eq!(state.on_key_burst_at(vec![key(KeyCode::Left), t('y')], at(t0, 6000)), None);
+            assert!(state.approval_id().is_some());
             // A single key is not a burst.
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_burst_at(vec![t('y')], at(t0, 6000)), approve("approval-1", false));

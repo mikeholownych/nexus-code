@@ -4502,7 +4502,7 @@ mod surface_tests {
     }
 
     #[test]
-    fn a_hunk_label_and_a_blank_looking_character_are_not_cut_or_hidden() {
+    fn a_hunk_label_is_wrapped_whole_not_cut() {
         let patch = "--- a/x.rs\n+++ b/x.rs\n@@ -1,2 +1,2 @@ fn a_section_name_that_is_far_wider_than_the_panel_ENDOFLABEL\n-old\n+new\n context\n";
         let request = serde_json::json!({"v": 1, "type": "approval.request", "id": "a1", "turn_id": "t1", "tool": "patch_file", "subject": "x.rs", "preview": "", "review": {"kind": "patch", "path": "x.rs", "patch": patch, "truncated": false}}).to_string();
         let mut st = state(true);

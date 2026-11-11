@@ -552,7 +552,7 @@ fn event_loop(
 mod tests {
 
     #[test]
-    fn input_queued_when_an_approval_opens_is_discarded_and_bursts_never_decide() {
+    fn input_queued_when_an_approval_opens_is_discarded() {
         use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
         let queued = vec![
             TermEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),

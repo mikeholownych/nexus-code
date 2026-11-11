@@ -189,8 +189,8 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
     `approve this and every later action?`. Enter or `a` confirms, but only 1 second or more after the question
     (and after any ignored press), so a double tap or a held key does not, including a held key's first repeat. ←/→ go back, and other answers (`y`, `n`,
     Esc) still answer.
-  - Esc denies, at any time. Keys with Ctrl, Alt, Super or Meta never answer, nor do bursts of keys or pastes (their
-    text goes to your draft, with its line breaks).
+  - Esc denies, at any time. Keys with Ctrl, Alt, Super or Meta never answer, nor do bursts of keys or pastes (letters
+    go to your draft in the order typed; Enter does nothing; Backspace and the arrows act as usual).
   - Other typing goes to your draft (steering), so nothing you type is lost; it does not switch the letters off. While
     you are in a run of typing (a key within about 0.3 seconds of the previous one), a `y`, `n` or `a` is a letter of
     your text and goes to the draft, Enter is ignored, and the panel says `ignored: you were typing`; after a pause the
