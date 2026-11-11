@@ -122,14 +122,19 @@ export function findEntry(repo: Repo, token: string, home: string): WorktreeEntr
 }
 
 /**
- * Whether the entry is an automated task worktree, by the shape the task-worktree code itself creates
- * (`WorktreeManager.createWorktree`: branch `nexus/<taskId>` at exactly `<repo>/.nexus/worktrees/<taskId>`) and never one
- * Nexus registered as a named worktree. A branch merely named `nexus/...` (a named worktree made with `switch -c
- * nexus/foo` lives at `.nexus/worktrees/nexus-foo`) is not a task worktree.
+ * An automated task worktree is unregistered, on branch `nexus/<id>`, at exactly `<repo>/.nexus/worktrees/<id>`
+ * (`WorktreeManager.createWorktree`), or an operation worktree: branch `nexus/op-<key>/<unit>` at
+ * `.nexus/worktrees/op-<key>/units/<unit>` (`operation_git.ts`), `integration` at `.nexus/worktrees/op-<key>/integration`.
+ * A named worktree on a `nexus/*` branch lives at `.nexus/worktrees/nexus-<name>` and is none of these.
  */
 export function isTaskWorktree(repo: Repo, entry: { branch?: string | null; path: string }, registry: Registry): boolean {
   if (!entry.branch?.startsWith("nexus/") || registry.worktrees.some((item) => item.path === entry.path)) return false;
-  return entry.path === path.join(repo.repoPath, ".nexus", "worktrees", entry.branch.slice("nexus/".length));
+  const id = entry.branch.slice("nexus/".length);
+  const base = path.join(repo.repoPath, ".nexus", "worktrees");
+  const [group, ...rest] = id.split("/");
+  const operationUnit = group.startsWith("op-") && rest.length === 1 && rest[0] !== "integration"
+    ? path.join(base, group, "units", rest[0]) : undefined;
+  return entry.path === path.join(base, id) || entry.path === operationUnit;
 }
 
 function kindOf(repo: Repo, entry: WorktreeEntry, registry: Registry): "main" | "task" | "named" | "external" {
