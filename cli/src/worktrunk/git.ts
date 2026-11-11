@@ -95,7 +95,11 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
   const candidates = new Set<string>();
   // Large trees: the listings can be long, and one that does not fit is a refusal, not a pass.
   const listing = (args: string[]) => git(dir, args, { maxBuffer: LISTING_BUFFER }).stdout.split("\0");
+  // Paths are decoded as UTF-8: bytes that are not valid become U+FFFD and name nothing on disk, so such a path could
+  // hide a planted repository from this check while Git still descends into it. It is refused, not skipped.
+  const undecodable = (name: string) => name.includes("\uFFFD");
   for (const entry of listing(["ls-files", "-s", "-z"])) {
+    if (undecodable(entry)) return `a tracked path below ${dir} is not valid UTF-8; it cannot be checked for a planted repository`;
     const tab = entry.indexOf("\t"); // the path follows the first tab and may itself contain any character, a newline included
     if (tab > 0 && /^160000 [0-9a-f]+ \d$/.test(entry.slice(0, tab))) candidates.add(entry.slice(tab + 1));
   }
@@ -105,9 +109,11 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
   // Git never reads a repository inside an ignored directory (`node_modules`) when it reports status: not scanned, not counted.
   const ignored = new Set(listing(["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"]).filter((entry) => entry.endsWith("/")).map((entry) => path.join(dir, entry.slice(0, -1))));
   for (const entry of listing(["ls-files", "-o", "--exclude-standard", "--directory", "-z"])) {
+    if (undecodable(entry)) return `an untracked path below ${dir} is not valid UTF-8; it cannot be checked for a planted repository`;
     if (!entry.endsWith("/")) continue;
     const found = gitDirectoriesBelow(path.join(dir, entry), budget, ignored);
     if (found === undefined) return `more than ${MAX_UNTRACKED_ENTRIES_SCANNED} entries sit in untracked directories below ${dir}; none can be checked for a planted repository`;
+    if (found.undecodable !== undefined) return `a path below ${dir} is not valid UTF-8; it cannot be checked for a planted repository`;
     budget -= found.scanned;
     for (const repo of found.repos) candidates.add(path.relative(dir, repo));
   }
@@ -121,7 +127,7 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
 }
 
 /** Directories at or below `root` that hold a `.git`, and how many entries were read; undefined when `budget` runs out. */
-function gitDirectoriesBelow(root: string, budget: number, skip: ReadonlySet<string>): { repos: string[]; scanned: number } | undefined {
+function gitDirectoriesBelow(root: string, budget: number, skip: ReadonlySet<string>): { repos: string[]; scanned: number; undecodable?: string } | undefined {
   const repos: string[] = [];
   const pending = [root];
   let scanned = 0;
@@ -131,6 +137,7 @@ function gitDirectoriesBelow(root: string, budget: number, skip: ReadonlySet<str
     try { names = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
     for (const entry of names) {
       if (++scanned > budget) return undefined;
+      if (entry.name.includes("\uFFFD")) return { repos, scanned, undecodable: path.join(dir, entry.name) };
       if (entry.name === ".git") repos.push(dir);
       else if (entry.isDirectory() && !skip.has(path.join(dir, entry.name))) pending.push(path.join(dir, entry.name));
     }

@@ -44,7 +44,7 @@ export function readSmallFile(file: string, maxBytes: number): string | undefine
   } catch { return undefined; }
 }
 
-const MAX_POINTER_BYTES = 4096;
+export const MAX_POINTER_BYTES = 4096;
 const MAX_CONFIG_BYTES = 1024 * 1024;
 
 /** Repositories this process has opened and their linked worktrees (from `git worktree list`, run where the operator is). */
@@ -133,11 +133,10 @@ export function verifyCheckout(cwd: string): { reason?: string; gitDir?: string;
     }
     return {};
   }
-  files.splice(0, files.length, ...files.filter((root) => inside(outer, root)));
   const planted = directories.find((dir) => inside(outer, dir));
   if (planted) return { reason: `${planted} is a repository nested inside the linked worktree ${outer}` };
   let pinned: { gitDir: string; workTree: string } | undefined;
-  for (const root of files) {
+  for (const root of files.filter((candidate) => inside(outer, candidate))) {
     const dotGit = path.join(root, ".git");
     try {
       const content = readSmallFile(dotGit, MAX_POINTER_BYTES);

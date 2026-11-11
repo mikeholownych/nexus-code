@@ -1,8 +1,7 @@
 /**
- * A pathspec-mode variable inherited from the operator's shell (GIT_LITERAL_PATHSPECS=1, set by some tools) turns the
- * `:(top).nexus` magic pathspec into a literal file name, so the exclusion of Nexus's internal state silently stops
- * working. The worktree Git helper computes its environment once per process, so this file sets the variable BEFORE
- * the first Git call in the process (dynamic import below) and runs in its own process.
+ * A pathspec-mode variable inherited from the operator's shell (GIT_LITERAL_PATHSPECS=1, set by some tools) would turn the
+ * `:(top).nexus` magic pathspec into a literal file name, so the exclusion of Nexus's internal state would silently stop
+ * working. The worktree Git helper scrubs these variables; this merge must not commit tracked `.nexus` state.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -20,7 +19,7 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-test("an inherited GIT_LITERAL_PATHSPECS=1 does not make the .nexus exclusion literal: tracked state is neither backed up nor committed", () => {
+test("an inherited GIT_LITERAL_PATHSPECS=1 does not make the .nexus exclusion literal: tracked state is not committed", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-wtenv-")));
   try {
     const repo = path.join(root, "proj");

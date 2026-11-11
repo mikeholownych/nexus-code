@@ -30,7 +30,7 @@ function pathspecEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** The nested-repository scan lists the index and walks untracked directories: the per-prompt badge reuses a verdict for a few seconds. */
+/** The nested-repository scan lists the index and walks untracked directories: the per-prompt badge and status reuse a verdict for a few seconds; `commitChanges` always scans afresh. */
 const NESTED_VERDICT_TTL_MS = 3000;
 const nestedVerdicts = new Map<string, { at: number; reason: string | undefined }>();
 function nestedReasonSoon(workspace: string): string | undefined {
@@ -46,9 +46,9 @@ function nestedReasonSoon(workspace: string): string | undefined {
  * Returns the `--git-dir`/`--work-tree` pair to run Git against (empty for a plain repository), so a pointer rewritten
  * after this check is not re-read.
  */
-function trustedGitArgs(workspace: string): string[] {
+function trustedGitArgs(workspace: string, fresh = false): string[] {
   const checkout = verifyCheckout(workspace);
-  const reason = checkout.reason ?? (checkout.gitDir ? nestedReasonSoon(workspace) : undefined); // and any repository planted below it
+  const reason = checkout.reason ?? (checkout.gitDir ? (fresh ? nestedRepositoryReason(workspace) : nestedReasonSoon(workspace)) : undefined); // and any repository planted below it
   if (reason) throw new Error(`refusing to run Git in ${workspace}: it is not a trusted worktree (${reason})`);
   return checkout.gitDir ? ["--git-dir", checkout.gitDir, "--work-tree", checkout.workTree!] : [];
 }
@@ -215,7 +215,7 @@ export function conventionalCommitMessage(files: string[]): string {
 
 export function commitChanges(workspace: string, message: string): { success: boolean; hash?: string; error?: string } {
   try {
-    const pin = trustedGitArgs(workspace);
+    const pin = trustedGitArgs(workspace, true); // a commit never relies on a verdict from the last few seconds
     const gitEnv = pathspecEnv();
     // Exclusions in `git add` do not remove paths that were already staged.
     // Restore only the internal state entries in the index, leaving their working

@@ -374,3 +374,19 @@ test("a gitlink whose path contains a newline is still checked for a planted rep
     assert.match(String(nestedRepositoryReason(f.dir)), /nested inside the linked worktree/);
   } finally { f.cleanup(); }
 });
+
+test("a path that is not valid UTF-8 cannot hide a planted repository: it is refused, not skipped", async () => {
+  const { nestedRepositoryReason } = await import("../src/worktrunk/git.js");
+  const f = fixture("feat/bytes");
+  try {
+    const odd = Buffer.concat([Buffer.from(path.join(f.dir, "d")), Buffer.from([0xff])]);
+    fs.mkdirSync(odd);
+    fs.mkdirSync(Buffer.concat([odd, Buffer.from("/.git")]));
+    assert.match(String(nestedRepositoryReason(f.dir)), /not valid UTF-8/);
+    const deep = Buffer.concat([Buffer.from(path.join(f.dir, "ok")), Buffer.from("/"), Buffer.from([0xfe])]);
+    fs.rmSync(odd, { recursive: true });
+    fs.mkdirSync(path.join(f.dir, "ok"));
+    fs.mkdirSync(deep);
+    assert.match(String(nestedRepositoryReason(f.dir)), /not valid UTF-8/);
+  } finally { f.cleanup(); }
+});
