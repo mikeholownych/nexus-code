@@ -200,6 +200,17 @@ export function projectSetting(key: string): string | undefined {
   return projectEnvSettings[key];
 }
 
+/**
+ * Runs `build` with the per-project `.env` layer switched off. For work whose destination must be the operator's choice
+ * although the process runs inside a repository an agent can write (`nexus worktree merge --ai-message` from inside the
+ * worktree): a project `.env` there could name the endpoint a diff is sent to.
+ */
+export function withoutProjectEnvironment<T>(build: () => T): T {
+  const saved = projectEnvSettings;
+  projectEnvSettings = {};
+  try { return build(); } finally { projectEnvSettings = saved; }
+}
+
 /** Persist non-secret appliance selection in the operator config without following symlinks or storing API keys. */
 export function saveLocalEndpointSettings(endpoint: string, model?: string): void {
   if (!endpoint || /[\r\n\0]/.test(endpoint) || (model !== undefined && (!model || /[\r\n\0]/.test(model)))) {

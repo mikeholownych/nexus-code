@@ -448,7 +448,7 @@ test("a project .env that is a symlink to a small regular file is still read", a
   }
 });
 
-test("Git's own error line, which can carry an agent-chosen file name, is shown escaped", async () => {
+test("Git's own error line, which can carry an agent-chosen file name, reaches the message without raw control bytes", { skip: process.getuid?.() === 0 && "root can read an unreadable file" }, async () => {
   const { git: run, printable } = await import("../src/worktrunk/git.js");
   assert.equal(printable("a\u001b]52;c;x\u0007b\u202ec"), "a\\u001b]52;c;x\\u0007b\\u202ec");
   const f = fixture("feat/stderr");
@@ -456,10 +456,9 @@ test("Git's own error line, which can carry an agent-chosen file name, is shown 
     const name = "\u001b]0;pwned\u0007";
     fs.writeFileSync(path.join(f.dir, name), "x\n");
     fs.chmodSync(path.join(f.dir, name), 0o000); // `git add` cannot open it and names it in its error line
-    if (process.getuid?.() === 0) return; // root can read it anyway
     let message = "";
     try { run(f.dir, ["add", "-A"]); } catch (err) { message = (err as Error).message; }
-    assert.match(message, /Permission denied|failed/);
+    assert.match(message, /pwned/, "Git named the file in its error line (it already shows control bytes as ?)");
     assert.doesNotMatch(message, /[\u0000-\u001f\u007f-\u009f]/, "no raw control byte reaches the message");
   } finally { f.cleanup(); }
 });
@@ -479,5 +478,22 @@ test("the checkpoint refusal never carries a raw control byte from an agent-chos
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     f.cleanup();
+  }
+});
+
+test("a project .env in the worktree cannot choose the endpoint of the --ai-message completer", async () => {
+  const { loadEnvironment, effectiveSetting, withoutProjectEnvironment } = await import("../src/config.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-envendpoint-"));
+  const previous = process.cwd();
+  try {
+    fs.writeFileSync(path.join(dir, ".env"), "LOCAL_LLM_ENDPOINT=http://127.0.0.1:9/planted\n");
+    process.chdir(dir);
+    loadEnvironment();
+    assert.equal(effectiveSetting("LOCAL_LLM_ENDPOINT"), "http://127.0.0.1:9/planted", "precondition: the project layer is normally honoured");
+    assert.notEqual(withoutProjectEnvironment(() => effectiveSetting("LOCAL_LLM_ENDPOINT")), "http://127.0.0.1:9/planted");
+    assert.equal(effectiveSetting("LOCAL_LLM_ENDPOINT"), "http://127.0.0.1:9/planted", "and restored afterwards");
+  } finally {
+    process.chdir(previous);
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

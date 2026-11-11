@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { conventionalCommitMessage } from "../git.js";
 import { redactSecrets } from "../ui.js";
 import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
-import { git, gitOut, parseSubmoduleStatus } from "./git.js";
+import { git, gitOut, parseSubmoduleStatus, printable } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type Repo, type WorktreeEntry } from "./repo.js";
 import { readRegistry, updateRegistry, MAX_RECORDS, MAX_BRANCH_LENGTH } from "./registry.js";
 import { hasVerification, NEXUS_STATE_PATH, workingState } from "./verification.js";
@@ -288,11 +288,11 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     const rebase = git(source.path, ["rebase", "--autostash", targetSha], { allowFailure: true, env: NON_INTERACTIVE });
     if (rebase.status !== 0) {
       const open = inProgress(gitOut(source.path, ["rev-parse", "--path-format=absolute", "--git-dir"]));
-      if (!open) throw new WorktreeError(`rebase onto ${shownBranch(targetName)} failed: ${redactSecrets(rebase.stderr.trim().split("\n")[0] ?? "")}`);
+      if (!open) throw new WorktreeError(`rebase onto ${shownBranch(targetName)} failed: ${printable(redactSecrets(rebase.stderr.trim().split("\n")[0] ?? ""))}`);
       const files = git(source.path, ["diff", "--name-only", "--diff-filter=U"], { allowFailure: true }).stdout.split("\n").filter(Boolean).slice(0, 10);
       return {
         success: false,
-        output: `Rebase onto ${shownBranch(targetName)} stopped on conflicts${files.length ? ` in ${files.map((f) => redactSecrets(f)).join(", ")}` : ""}.\n` +
+        output: `Rebase onto ${shownBranch(targetName)} stopped on conflicts${files.length ? ` in ${files.map((f) => printable(redactSecrets(f))).join(", ")}` : ""}.\n` +
           `The rebase is left open in ${shownPath(ctx.home, source.path)}: resolve the files, run \`git rebase --continue\` there and merge again, or \`git rebase --abort\` to undo it. ${targetName} was not changed.`,
       };
     }
@@ -310,7 +310,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     // `--no-overwrite-ignore` prevents fast-forwarding over an untracked ignored file in the target.
     const ff = git(targetEntry.path, ["merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", "--end-of-options", `refs/heads/${branch}`], { allowFailure: true, env: NON_INTERACTIVE });
     if (ff.status !== 0) {
-      const errDetail = ff.stderr ? redactSecrets(ff.stderr.trim().split("\n")[0] ?? "") : "";
+      const errDetail = ff.stderr ? printable(redactSecrets(ff.stderr.trim().split("\n")[0] ?? "")) : "";
       if (errDetail && (errDetail.toLowerCase().includes("overwrite") || errDetail.toLowerCase().includes("untracked working tree file"))) {
         throw new WorktreeError(`could not fast-forward ${shownBranch(targetName)} to ${shownBranch(branch)}: ${errDetail}`);
       }
@@ -349,13 +349,13 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
       notes.push(`Could not inspect the worktree after the merge (${redactSecrets((err as Error).message).slice(0, 150)}).`);
     }
     if (unpublished.length > 0) {
-      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${unpublished.map((sub) => redactSecrets(sub)).join(", ")} has a commit that is on no remote branch, and removing the worktree would delete its only copy. Push it from there, then run \`worktree remove\`. The merge itself is done.`);
+      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${unpublished.map((sub) => printable(redactSecrets(sub))).join(", ")} has a commit that is on no remote branch, and removing the worktree would delete its only copy. Push it from there, then run \`worktree remove\`. The merge itself is done.`);
     } else if (left === undefined) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: it could not be inspected, so nothing was deleted. The merge itself is done.`);
     } else if (left.total > 0) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: ${left.total} uncommitted change(s) remain that the merge could not carry (check \`git status\` there, submodules included). Nothing was deleted.`);
     } else if (initialized.length > 0) {
-      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${initialized.map((sub) => redactSecrets(sub)).join(", ")} is initialized here; removing it requires \`worktree remove --force\` after verifying submodule state. The merge itself is done.`);
+      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${initialized.map((sub) => printable(redactSecrets(sub))).join(", ")} is initialized here; removing it requires \`worktree remove --force\` after verifying submodule state. The merge itself is done.`);
     } else {
       try {
         notes.push(removeOne({ ...ctx, cwd: targetEntry.path }, source.path, { discardIgnored: true, target: targetName }));

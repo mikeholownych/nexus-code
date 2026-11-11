@@ -22,7 +22,7 @@ import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
 import { TaskStateNotFoundError } from "./core/state.js";
-import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError } from "./config.js";
+import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError, withoutProjectEnvironment } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
@@ -1032,7 +1032,7 @@ program
     const { runWorktreeCommandAsync } = await import("./worktrunk/command.js");
     const cwd = options.workspace ? path.resolve(options.workspace) : process.cwd();
     const result = await runWorktreeCommandAsync(args, { cwd, readOnly: Boolean(options.readOnly) }, {
-      completer: lazyProviderCompleter(() => buildConfigOrThrow({ ...options, workspace: cwd })),
+      completer: lazyProviderCompleter(() => withoutProjectEnvironment(() => buildConfigOrThrow({ ...options, workspace: cwd }))), // the worktree's .env is the agent's: it must not choose where a diff goes
     });
     (result.success ? console.log : console.error)(result.output);
     if (!result.success) process.exitCode = 1;
