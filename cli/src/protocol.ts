@@ -60,6 +60,11 @@ export type SidecarEvent =
       busy: boolean;
       /** The id the session is saved under (shown so it can be resumed or referred to). */
       session?: string;
+      /** The same facts the REPL /status reports (gate I-3). */
+      read_only?: boolean;
+      context_tokens?: number;
+      context_limit?: number;
+      endpoint_kind?: "local" | "cloud";
       posture?: {
         mode: "auto" | "review" | "read-only";
         sandbox: string;
