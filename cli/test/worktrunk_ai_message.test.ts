@@ -513,3 +513,8 @@ test("a model reply cannot forge commit trailers or release directives in the bo
   const cleaned = cleanReply("feat(b): add b\n\nAdds the b file.\nRelease-As: 9.0.0\nCo-Authored-By: Someone <a@b.c>\nBREAKING CHANGE: everything\nCloses #12\nRelease-As:2.0.0\nCo-authored-by : X <a@b.c>\nBREAKING CHANGE removes the API");
   assert.equal(cleaned, "feat(b): add b\n\nAdds the b file.");
 });
+
+test("a model reply with C1 or bidi-override characters is unusable", () => {
+  for (const reply of ["feat: a\u009b2Kb", "feat: a\u202eb", "feat: ok\n\nbody \u009d52;c;x"]) assert.equal(cleanReply(reply), undefined, JSON.stringify(reply));
+  assert.equal(cleanReply("feat: fine\n\nA body\twith a tab."), "feat: fine\n\nA body\twith a tab.");
+});

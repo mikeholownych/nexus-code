@@ -122,8 +122,10 @@ export function loadEnvironment(): void {
     let project: Record<string, string> = {};
     try {
       // The repository (a sandboxed agent's worktree, say) controls this file: never a blocking or unbounded read.
-      const text = readSmallFile(cwdEnv, MAX_PROJECT_ENV_BYTES);
+      // A link to a regular file is followed (a dotfile manager's layout); what it leads to must still be a small plain file.
+      const text = readSmallFile(fs.realpathSync(cwdEnv), MAX_PROJECT_ENV_BYTES);
       if (text !== undefined) project = parseDotenv(Buffer.from(text));
+      else warnOnce(`project .env ${cwdEnv} was not read (not a regular file, or larger than ${MAX_PROJECT_ENV_BYTES / 1024} KiB)`);
     } catch {}
     for (const [key, value] of Object.entries(project)) {
       if (isProjectEnvKey(key)) projectEnvSettings[key] = value;

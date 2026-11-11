@@ -132,7 +132,7 @@ function kindOf(repo: Repo, entry: WorktreeEntry, registry: Registry): "main" | 
 export interface Dirty { staged: number; modified: number; untracked: number; conflicted: number; ignored: number; total: number }
 
 /** One `git status --porcelain=v2 -z` call. `ignored` counts ignored paths only when asked (removal safety). */
-export function statusOf(dir: string, options: { ignored?: boolean; ignoreSubmodules?: string } = {}): Dirty {
+export function statusOf(dir: string, options: { ignored?: boolean; ignoreSubmodules?: "none" | "all" | "dirty" | "untracked" } = {}): Dirty {
   // Git descends into submodules for status and reads their configuration: nothing planted may sit below `dir`.
   const nested = nestedRepositoryReason(dir);
   if (nested) throw new UntrustedCheckoutError(dir, nested, ["status"]);

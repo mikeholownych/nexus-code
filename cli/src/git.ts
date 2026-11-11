@@ -204,9 +204,9 @@ export function conventionalCommitMessage(files: string[]): string {
   } else if (files.some((f) => f.includes("file_ops"))) {
     topic = "robust file editing and matching";
   } else if (files.length === 1) {
-    // A file name is agent-controlled: control characters (a newline would start a forged trailer) never reach the message.
+    // A file name is agent-controlled: control, C1 and bidi-override characters (a newline would start a forged trailer) never reach the message.
     const name = path.basename(files[0]);
-    topic = /[\u0000-\u001f\u007f]/.test(name) ? "update workspace files" : `update ${name}`;
+    topic = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(name) ? "update workspace files" : `update ${name}`;
   }
 
   return `${type}(${scope}): ${topic}`;

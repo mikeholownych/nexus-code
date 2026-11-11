@@ -52,7 +52,7 @@ export function cleanReply(reply: unknown): string | undefined {
   if (typeof reply !== "string") return undefined;
   let text = reply.trim().replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
   if (!text || text.length > MAX_MESSAGE_CHARS) return undefined;
-  if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) return undefined;
+  if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(text)) return undefined; // C0 (newline and tab excepted), C1 and bidi overrides
   text = redactSecrets(text).trim();
   const [subject, ...body] = text.split("\n").map((line) => line.trimEnd());
   if (!subject.trim() || subject.length > MAX_SUBJECT_CHARS) return undefined;

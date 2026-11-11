@@ -292,6 +292,7 @@ test("a file name with control characters never forges a trailer in the determin
   const { conventionalCommitMessage } = await import("../src/git.js");
   assert.equal(conventionalCommitMessage(["a\n\nSigned-off-by: x"]), "feat(core): update workspace files");
   assert.equal(conventionalCommitMessage(["src/plain.ts"]), "feat(core): update plain.ts");
+  for (const name of ["a\u009b2Kb", "a\u202eb", "a\u009db"]) assert.equal(conventionalCommitMessage([name]), "feat(core): update workspace files", JSON.stringify(name));
 });
 
 test("a repository planted two levels below an untracked directory is found, and a replaced .git is found through an opened repository's registry", async () => {
@@ -416,14 +417,31 @@ test("refusal text shows control bytes from agent-controlled paths escaped, neve
   assert.match(error.message, /\\x1b\]52;c;x\\x07/);
 });
 
-test("a project .env that is a FIFO is ignored without blocking the host", async () => {
-  const { loadEnvironment } = await import("../src/config.js");
+test("a project .env that is a FIFO is ignored, not read", async () => {
+  const { loadEnvironment, projectSetting } = await import("../src/config.js");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-envfifo-"));
   const previous = process.cwd();
   try {
     execFileSync("mkfifo", [path.join(dir, ".env")]);
     process.chdir(dir);
-    assert.doesNotThrow(() => loadEnvironment()); // a blocking read would hang this test until it times out
+    loadEnvironment(); // a blocking read would hang here; the test then never finishes
+    assert.equal(projectSetting("LOCAL_LLM_MODEL"), undefined, "nothing came from the FIFO");
+  } finally {
+    process.chdir(previous);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a project .env that is a symlink to a small regular file is still read", async () => {
+  const { loadEnvironment, projectSetting } = await import("../src/config.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-envlink-"));
+  const previous = process.cwd();
+  try {
+    fs.writeFileSync(path.join(dir, "shared.env"), "LOCAL_LLM_MODEL=from-link\n");
+    fs.symlinkSync(path.join(dir, "shared.env"), path.join(dir, ".env"));
+    process.chdir(dir);
+    loadEnvironment();
+    assert.equal(projectSetting("LOCAL_LLM_MODEL"), "from-link");
   } finally {
     process.chdir(previous);
     fs.rmSync(dir, { recursive: true, force: true });
