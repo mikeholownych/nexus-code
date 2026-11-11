@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017RCy3YvQeMwQmVMvEGfBRE",
+  "agent_id": "a2d8ed63b1d030f85",
+  "subagent_type": "reviewer",
+  "task_description": "Independent review of PR #434",
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 102673,
+    "cache_read_tokens": 1208828,
+    "output_tokens": 30161,
+    "api_call_count": 19
+  },
+  "started_at": "2026-11-11T22:57:07.601370005Z",
+  "completed_at": "2026-11-11T23:01:36.376578376Z"
+}
