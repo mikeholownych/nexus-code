@@ -154,6 +154,10 @@ pub struct HistoryMessage {
     pub turn: Option<Value>,
 }
 
+fn turn_saved_by_default() -> bool {
+    true
+}
+
 /// Sidecar → UI events. Fields this client does not use are ignored by serde.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -286,6 +290,9 @@ pub enum Event {
         line: String,
         turn: Value,
         model_summary: Option<ModelSummary>,
+        /// False when the sidecar could not write the session record for this turn. Older sidecars omit it.
+        #[serde(default = "turn_saved_by_default")]
+        saved: bool,
     },
     #[serde(rename = "slash.result")]
     SlashResult {
@@ -642,6 +649,7 @@ mod tests {
             line,
             turn,
             model_summary,
+            saved,
         } = event
         else {
             panic!("expected turn.result");
@@ -651,6 +659,9 @@ mod tests {
         assert_eq!(turn["execution"], "INTERRUPTED");
         assert_eq!(turn["outcome"], "NOT_ESTABLISHED");
         assert_eq!(model_summary, None);
+        assert!(saved, "a sidecar that does not say is taken to have saved");
+        let unsaved = parse_event(r#"{"v":1,"type":"turn.result","turn_id":"t3","heading":"H","line":"L","turn":{},"model_summary":null,"saved":false}"#).unwrap();
+        assert!(matches!(unsaved, Event::TurnResult { saved: false, .. }));
         let with_summary = parse_event(r#"{"v":1,"type":"turn.result","turn_id":"t2","heading":"H","line":"L","turn":{},"model_summary":{"summary":"Fixed it.","notes":"n"}}"#).unwrap();
         assert!(matches!(
             with_summary,

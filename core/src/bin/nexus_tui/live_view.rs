@@ -1189,16 +1189,32 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
 }
 
 fn render_empty(frame: &mut Frame, area: Rect) {
-    let paragraph = Paragraph::new(Text::from(vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             "N E X U S",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         )),
         Line::default(),
         Line::from(Span::styled(TAGLINE, Style::default().fg(MUTED))),
-    ]))
-    .alignment(Alignment::Center)
-    .wrap(Wrap { trim: true });
+    ];
+    if area.height >= 12 && area.width >= 50 {
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::styled("/help", Style::default().fg(ACCENT)),
+            Span::styled(" commands  ·  ", Style::default().fg(MUTED)),
+            Span::styled("/model", Style::default().fg(ACCENT)),
+            Span::styled(" switch model  ·  ", Style::default().fg(MUTED)),
+            Span::styled("/worktree", Style::default().fg(ACCENT)),
+            Span::styled(" manage worktree", Style::default().fg(MUTED)),
+        ]));
+        lines.push(Line::from(Span::styled(
+            "Type a prompt to begin · Esc cancels · Ctrl+C quits",
+            Style::default().fg(MUTED),
+        )));
+    }
+    let paragraph = Paragraph::new(Text::from(lines))
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
     let height = u16::try_from(paragraph.line_count(area.width))
         .unwrap_or(area.height)
         .min(area.height);
@@ -2050,6 +2066,18 @@ mod tests {
                 "›",
             ],
         );
+    }
+
+    #[test]
+    fn model_picker_on_a_40x10_terminal_does_not_panic() {
+        let mut state = ready();
+        state.overlay = Some(crate::live_state::Overlay::Models(crate::models::Picker::new("m1".into())));
+        feed(
+            &mut state,
+            &[r#"{"v":1,"type":"models.catalog","id":"m1","providers":[{"id":"anthropic","label":"Anthropic","disclosure":"cloud","connected":true,"methods":[],"status":"ok"}],"models":[{"provider":"anthropic","id":"claude-3-5-sonnet"}],"current":{"provider":"anthropic","model":"claude-3-5-sonnet"},"recent":[]}"#],
+        );
+        let rendered = draw(&state, 40, 10);
+        assert!(!rendered.is_empty());
     }
 
     #[test]
@@ -3156,6 +3184,70 @@ mod tests {
         assert!(screen.contains("20 characters"), "{screen}");
     }
 
+    #[test]
+    fn welcome_screen_renders_orientation_card_at_standard_sizes() {
+        let state = ready();
+        let screen = draw(&state, 100, 24);
+        assert!(screen.contains("N E X U S"), "{screen}");
+        assert!(screen.contains("/help"), "orientation card lists /help: {screen}");
+        assert!(screen.contains("/model"), "orientation card lists /model: {screen}");
+        assert!(screen.contains("/worktree"), "orientation card lists /worktree: {screen}");
+        assert!(screen.contains("Type a prompt to begin"), "{screen}");
+    }
+
+    #[test]
+    fn the_model_panel_keeps_its_height_while_a_filter_is_typed() {
+        let mut state = ready();
+        for c in "/model".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        feed(&mut state, &[&CATALOG.replace("\"ID\"", "\"m1\"")]);
+        let height = |state: &LiveState| {
+            let screen = draw(state, 120, 40);
+            let rows: Vec<usize> = screen.lines().enumerate().filter(|(_, l)| l.contains('╰') || l.contains("Select model")).map(|(y, _)| y).collect();
+            rows.iter().max().unwrap() - rows.iter().min().unwrap() + 1
+        };
+        let before = height(&state);
+        for c in "zzzz".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            assert_eq!(height(&state), before, "typing {c} resized the panel");
+        }
+    }
+
+    #[test]
+    fn model_picker_modal_height_is_clamped_proportionally_to_content() {
+        let mut state = ready();
+        for c in "/model".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        feed(&mut state, &[&CATALOG.replace("\"ID\"", "\"m1\"")]);
+        let screen = draw(&state, 120, 40);
+        let border_lines: Vec<(usize, &str)> = screen
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains('╰') || line.contains("Select model"))
+            .collect();
+        assert!(!border_lines.is_empty(), "modal borders must be present in screen: {screen}");
+        let top_y = border_lines.iter().map(|(y, _)| *y).min().unwrap();
+        let bottom_y = border_lines.iter().map(|(y, _)| *y).max().unwrap();
+        let height = bottom_y - top_y + 1;
+        let expected_height = match &state.overlay {
+            Some(Overlay::Models(picker)) => {
+                let row_count = picker.rows().len() as u16;
+                (row_count + 5).clamp(8, 24) as usize
+            }
+            _ => panic!("expected Overlay::Models"),
+        };
+        assert_eq!(expected_height, 11, "catalog should produce 6 rows -> height 11");
+        assert_eq!(
+            height,
+            expected_height,
+            "modal height must follow (rows().len() + 5).clamp(8, 24)"
+        );
+    }
+
 }
 
 
@@ -3187,7 +3279,14 @@ fn list_window(frame: &mut Frame, area: Rect, lines: Vec<Line<'_>>, focus: usize
 }
 
 fn render_models(frame: &mut Frame, area: Rect, picker: &Picker) {
-    let rect = modal(area, 96, area.height);
+    let wanted = match &picker.catalog {
+        Fetch::Waiting | Fetch::Failed(_) => 8,
+        Fetch::Ready(_) => {
+            let row_count = u16::try_from(picker.unfiltered_len()).unwrap_or(u16::MAX);
+            row_count.saturating_add(5).clamp(8, 24)
+        }
+    };
+    let rect = modal(area, 96, wanted);
     let title = match (&picker.only, &picker.catalog) {
         (Some(only), Fetch::Ready(catalog)) => {
             let label = catalog.providers.iter().find(|p| &p.id == only).map_or(only.as_str(), |p| p.label.as_str());
