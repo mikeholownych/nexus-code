@@ -27,10 +27,10 @@ Deep-dive documentation on how Nexus Code operates under the hood:
 | Document | Focus Area |
 |---|---|
 | [Architecture Reference](ARCHITECTURE.md) | High-level system topology, decoupled TypeScript/Rust model, and IPC protocol |
-| [Client Guide](CLIENT_GUIDE.md) | Internals of the TypeScript agent brain, REPL, and sidecar event loop |
+| [Client Guide](CLIENT_GUIDE.md) | Everyday CLI commands, providers, permissions, sessions and recovery, and troubleshooting |
 | [Execution Convergence](EXECUTION_CONVERGENCE.md) | One lifecycle for autonomous work: execution paths, `/team` on the convergence foundation, completion propagation, restart |
-| [Compaction & Continuity](COMPACTION_AND_CONTINUITY.md) | Context budgeting, live prompt compaction, and long-running task persistence |
-| [State Compatibility](STATE_COMPATIBILITY.md) | Schema versioning for checkpoints, turn journals, and backward-compatible state restoration |
+| [Compaction & Continuity](COMPACTION_AND_CONTINUITY.md) | Long tasks with no step ceiling, progress tracking, compaction, context sizing, and restart |
+| [State Compatibility](STATE_COMPATIBILITY.md) | Schema versioning and migration for tasks, sessions and checkpoints; persisted store locations and permissions |
 
 ---
 
