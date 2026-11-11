@@ -653,30 +653,37 @@ describe("REPL turn checkpoint with a named worktree", { skip: !isSandboxAvailab
   });
 });
 
-describe("the verifier baseline of a worktree the agent already worked in", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
-  for (const dirty of [false, true]) {
-    test(dirty ? "uncommitted work in a linked worktree: the tests and verifier files are not taken as the pre-change baseline" : "a clean linked worktree: the baseline is captured", async () => {
-      const f = fixture(); // feat/bind exists at f.dir
-      const gw = await startGateway(() => ({ kind: "text", content: "done" }));
-      const home = process.env.HOME;
-      process.env.HOME = f.home;
-      let agent: AutonomousAgent | undefined;
-      try {
-        fs.writeFileSync(path.join(f.dir, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
-        git(f.dir, "add", "package.json");
-        git(f.dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "package");
-        if (dirty) fs.writeFileSync(path.join(f.dir, "package.json"), JSON.stringify({ scripts: { test: "echo all tests passed" } })); // the agent rewrote the verifier in an earlier session
-        agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.dir, shell: "bash", authoritativeVerifierCommand: "npm test" } as any);
-        await agent.runTurn("look around");
-        const baseline = (agent as any).changeBaseline;
-        assert.ok(baseline, "a baseline record exists");
-        assert.equal(baseline.verifier === null, dirty, "verifier definition snapshot");
-      } finally {
-        agent?.shutdown();
-        await gw.close();
-        if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
-        f.cleanup();
-      }
-    });
+describe("a receipt on the verifier baseline of a worktree the agent already worked in", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
+  const states: Array<{ name: string; prepare: (dir: string) => void; untrusted: boolean }> = [
+    { name: "a clean linked worktree: the baseline can back a receipt", prepare: () => {}, untrusted: false },
+    { name: "uncommitted work: verification proceeds, but no receipt is issued on that baseline", prepare: (dir) => fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ scripts: { test: "echo all tests passed" } })), untrusted: true },
+    { name: "a state that cannot be certified (a planted nested repository) counts as pending work, not as clean", prepare: (dir) => { fs.mkdirSync(path.join(dir, "x")); git(path.join(dir, "x"), "init", "-q"); }, untrusted: true },
+  ];
+  for (const variant of states) {
+    for (const authoritative of [true, false]) {
+      test(`${variant.name} (${authoritative ? "configured" : "discovered"} verifier)`, async () => {
+        const f = fixture(); // feat/bind exists at f.dir
+        const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+        const home = process.env.HOME;
+        process.env.HOME = f.home;
+        let agent: AutonomousAgent | undefined;
+        try {
+          fs.writeFileSync(path.join(f.dir, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+          git(f.dir, "add", "package.json");
+          git(f.dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "package");
+          variant.prepare(f.dir);
+          agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.dir, shell: "bash", ...(authoritative ? { authoritativeVerifierCommand: "npm test" } : {}) } as any);
+          if (authoritative) await agent.runTurn("look around");
+          else await (agent as any).captureChangeBaseline(); // what the first mutating tool triggers
+          assert.equal((agent as any).receiptBaselineUntrusted, variant.untrusted, "only the receipt is withheld");
+          if (authoritative) assert.notEqual((agent as any).changeBaseline?.verifier, null, "verification is not blocked: the verifier definition is snapshotted either way");
+        } finally {
+          agent?.shutdown();
+          await gw.close();
+          if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+          f.cleanup();
+        }
+      });
+    }
   }
 });

@@ -200,6 +200,14 @@ export function projectSetting(key: string): string | undefined {
   return projectEnvSettings[key];
 }
 
+/** Whether the effective value of `key` comes from the project `.env` (the operator's shell does not set it): a repository, not the operator, chose it. */
+export function chosenByProjectEnvironment(key: string): boolean {
+  const project = projectEnvSettings[key];
+  if (project === undefined || shellEnvironment[key]?.trim()) return false;
+  // The operator chose the same value in their own configuration: it is theirs, whatever the project file says too.
+  return userConfigFile[key]?.trim() !== project && process.env[key]?.trim() !== project;
+}
+
 /**
  * Runs `build` with the per-project `.env` layer switched off. For work whose destination must be the operator's choice
  * although the process runs inside a repository an agent can write (`nexus worktree merge --ai-message` from inside the

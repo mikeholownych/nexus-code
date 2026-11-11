@@ -499,7 +499,7 @@ test("a project .env in the worktree cannot choose the endpoint of the --ai-mess
 });
 
 test("a session's --ai-message completer refuses an endpoint that a project .env chose", async () => {
-  const { loadEnvironment, buildConfig } = await import("../src/config.js");
+  const { loadEnvironment, buildConfig, chosenByProjectEnvironment } = await import("../src/config.js");
   const { providerCompleter } = await import("../src/worktrunk/provider.js");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-envslash-"));
   const previous = process.cwd();
@@ -511,6 +511,9 @@ test("a session's --ai-message completer refuses an endpoint that a project .env
     assert.equal(config.endpoint, "http://127.0.0.1:9/planted", "precondition: the session adopted the project endpoint");
     const reply = await providerCompleter(config)([{ role: "user", content: "write a message" }] as any, new AbortController().signal);
     assert.equal(reply, undefined, "no request was sent to the planted endpoint");
+    process.env.LOCAL_LLM_ENDPOINT = "http://127.0.0.1:9/planted"; // the operator chose the same value in their own environment
+    try { assert.equal(chosenByProjectEnvironment("LOCAL_LLM_ENDPOINT"), false, "then it is theirs, not the project's"); }
+    finally { delete process.env.LOCAL_LLM_ENDPOINT; }
   } finally {
     process.chdir(previous);
     fs.rmSync(dir, { recursive: true, force: true });

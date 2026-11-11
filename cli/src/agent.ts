@@ -60,6 +60,7 @@ import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { captureVerificationState, recordVerificationIfEligible } from "./worktrunk/verification.js";
 import { homeDir } from "./worktrunk/core.js";
+import { openRepo, currentEntry } from "./worktrunk/repo.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
@@ -927,6 +928,8 @@ export class AutonomousAgent {
   private modifiedFiles: Set<string> = new Set<string>();
   /** Pending recovered work has no authenticated pre-change verifier snapshot. */
   private verificationBaselineInvalidated: boolean = false;
+  /** The verifier baseline was taken in a linked worktree that already held uncommitted work: never certified by a receipt. */
+  private receiptBaselineUntrusted: boolean = false;
   /** A persisted baseline retained only as untrusted continuity evidence after recovery. */
   private untrustedRecoveredBaseline?: DurableTaskState["changeBaseline"];
   private recoveredOperation?: DurableTaskState["operation"];
@@ -2222,6 +2225,7 @@ export class AutonomousAgent {
       this.changeBaseline = null;
       return;
     }
+    if (this.linkedWorktreeStartsDirty()) this.receiptBaselineUntrusted = true; // see the field: verification proceeds, no receipt is issued
     try {
       const tests = snapshotTests(this.config.workspace);
       const trustedDeliverables = [...(this.config.trustedDeliverableFiles ?? [])];
@@ -2479,9 +2483,18 @@ export class AutonomousAgent {
     return this.workspacePathIdentity;
   }
 
-  /** Whether the workspace is a linked worktree holding uncommitted work; undefined-safe (a plain checkout or a refusal is "no"). */
+  /**
+   * Whether the workspace is a linked worktree that either holds uncommitted work or cannot be certified (a nested
+   * repository, a hidden edit, a dirty submodule). Fails closed there; a plain checkout or a non-repository is "no".
+   */
   private linkedWorktreeStartsDirty(): boolean {
-    try { return captureVerificationState(this.config.workspace)?.dirty === true; } catch { return false; }
+    let linked = false;
+    try {
+      const entry = currentEntry(openRepo(this.config.workspace));
+      linked = Boolean(entry && !entry.isMain);
+    } catch { return false; }
+    if (!linked) return false;
+    try { const state = captureVerificationState(this.config.workspace); return state === undefined || state.dirty; } catch { return true; }
   }
 
   /** True outside a worktree-isolated task, or inside a named linked worktree: where a verification receipt may be recorded. */
@@ -4664,7 +4677,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       const recordableWorktree = this.isRecordableWorktree();
       const isVerified = this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true;
       recordVerificationIfEligible(this.config.workspace, {
-        unrecordableWorktree: !recordableWorktree,
+        unrecordableWorktree: !recordableWorktree || this.receiptBaselineUntrusted,
         dryRun: Boolean(this.config.dryRun),
         verifierSucceeded,
         hasExecuted,
@@ -5980,14 +5993,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (authoritativeVerifier && this.changeBaseline === undefined) {
       // Capture workspace-resolved operator verifier files before plugins or the model can change them.
       // Existing pending work without an earlier snapshot remains unverified rather than being blessed retroactively.
-      // A linked worktree the agent already worked in (an earlier session, another terminal) is pending work too: its tests
-      // and verifier files may have been rewritten, so they cannot be taken as the pre-change baseline.
-      const pending = this.hasPendingModifications || this.linkedWorktreeStartsDirty();
+      // A linked worktree the agent already worked in (an earlier session, another terminal) gives a baseline taken from
+      // files the agent may have rewritten: verification proceeds as usual, but no receipt is issued on that baseline.
+      if (this.linkedWorktreeStartsDirty()) this.receiptBaselineUntrusted = true;
       this.changeBaseline = {
         command: authoritativeVerifier,
         failed: false,
-        tests: pending ? null : snapshotTests(this.config.workspace),
-        verifier: pending ? null : snapshotVerifierDefinition(this.config.workspace, authoritativeVerifier, this.config.trustedDeliverableFiles ?? []),
+        tests: this.hasPendingModifications ? null : snapshotTests(this.config.workspace),
+        verifier: this.hasPendingModifications ? null : snapshotVerifierDefinition(this.config.workspace, authoritativeVerifier, this.config.trustedDeliverableFiles ?? []),
         trustedDeliverables: [...(this.config.trustedDeliverableFiles ?? [])],
         at: new Date().toISOString(),
       };
