@@ -121,10 +121,20 @@ export function findEntry(repo: Repo, token: string, home: string): WorktreeEntr
   return hit;
 }
 
+/**
+ * Whether the entry is an automated task worktree, by the shape the task-worktree code itself creates
+ * (`WorktreeManager.createWorktree`: branch `nexus/<taskId>` at exactly `<repo>/.nexus/worktrees/<taskId>`) and never one
+ * Nexus registered as a named worktree. A branch merely named `nexus/...` (a named worktree made with `switch -c
+ * nexus/foo` lives at `.nexus/worktrees/nexus-foo`) is not a task worktree.
+ */
+export function isTaskWorktree(repo: Repo, entry: { branch?: string | null; path: string }, registry: Registry): boolean {
+  if (!entry.branch?.startsWith("nexus/") || registry.worktrees.some((item) => item.path === entry.path)) return false;
+  return entry.path === path.join(repo.repoPath, ".nexus", "worktrees", entry.branch.slice("nexus/".length));
+}
+
 function kindOf(repo: Repo, entry: WorktreeEntry, registry: Registry): "main" | "task" | "named" | "external" {
   if (entry.isMain) return "main";
-  const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;
-  if (entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase)) return "task";
+  if (isTaskWorktree(repo, entry, registry)) return "task";
   return registry.worktrees.some((item) => item.path === entry.path) ? "named" : "external";
 }
 

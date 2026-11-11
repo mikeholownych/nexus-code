@@ -720,6 +720,28 @@ test("merge rejects speculative task worktrees", () => {
   } finally { f.cleanup(); }
 });
 
+test("a named worktree on a nexus/* branch merges like any other; a task worktree still does not", () => {
+  const f = fixture();
+  try {
+    const dir = feature(f, "nexus/foo");
+    assert.equal(dir, dirOf(f, "nexus-foo"));
+    commitFile(dir, "foo.txt", "foo\n", "foo work");
+    const r = wt(f, dir, ["merge", ...W, "--no-remove"]);
+    assert.equal(r.success, true, r.output);
+    assert.doesNotMatch(r.output, /speculative/i, r.output);
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "foo work");
+
+    const taskDir = dirOf(f, "task-abc");
+    git(f.repo, "worktree", "add", "-q", "-b", "nexus/task-abc", taskDir);
+    commitFile(taskDir, "t.txt", "t\n", "task work");
+    const other = feature(f, "feat/other");
+    commitFile(other, "o.txt", "o\n", "other work");
+    const refused = wt(f, other, ["merge", "nexus/task-abc", ...W, "--no-remove"]);
+    assert.equal(refused.success, false, refused.output);
+    assert.match(refused.output, /speculative task worktree/i, refused.output);
+  } finally { f.cleanup(); }
+});
+
 test("merge with initialized submodule retains the worktree with an explanatory note", () => {
   const f = fixture();
   try {

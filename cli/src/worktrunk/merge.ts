@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { conventionalCommitMessage } from "../git.js";
 import { redactSecrets } from "../ui.js";
-import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
+import { clearStaleEntry, isTaskWorktree, removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git, gitOut, parseSubmoduleStatus, printable } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type Repo, type WorktreeEntry } from "./repo.js";
 import { readRegistry, updateRegistry, MAX_RECORDS, MAX_BRANCH_LENGTH } from "./registry.js";
@@ -57,10 +57,9 @@ function unpublishedSubmodules(dir: string, initialised: string[] = initializedS
   });
 }
 
-/** True when the entry is an automated task worktree (branch `nexus/<id>` under `.nexus/worktrees/`). */
+/** True when the entry is an automated task worktree (see `isTaskWorktree`: the shape the task-worktree code creates, never a registered named worktree). */
 function isSpeculativeEntry(repo: Repo, entry: { branch?: string | null; path: string }): boolean {
-  const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;
-  return Boolean(entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase));
+  return isTaskWorktree(repo, entry, readRegistry(repo.commonDir).registry);
 }
 
 /** Paths `git status` reports for the worktree, read through the pinned helper (no shell, no fsmonitor, no hooks). */
