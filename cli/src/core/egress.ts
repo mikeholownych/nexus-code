@@ -489,7 +489,7 @@ function bearerTokenLength(value: string): number {
   return head >= 16 ? head : 0;
 }
 
-/** How far past a key the encoded run and the dotted continuation are followed: keys are short, and a bound keeps each key's cost constant. */
+/** How far past a key the encoded run and the dotted continuation are followed: keys are short. The per-call `ExtensionBudget` bounds the total. */
 const MAX_EXTENSION = 1024;
 
 /**
@@ -501,9 +501,11 @@ function scanKeyRun(text: string, from: number, encoded: boolean, limit = text.l
   while (end < limit) {
     const code = text.charCodeAt(end);
     const unit = encoded && (code === 37 || code >= 0x2044) ? matchEncodedKeyChar(text, end) : 0; // "%" or a look-alike
-    if (unit > 0) end += unit;
-    else if (isBase64KeyChar(code)) end++;
-    else if (text[end] === "\\" && text[end + 1] === "/") end += 2; // a JSON-escaped "/"
+    if (unit > 0) {
+      if (end + unit > limit) break; // a unit never crosses the limit, so a bounded scan stays within its budget
+      end += unit;
+    } else if (isBase64KeyChar(code)) end++;
+    else if (text[end] === "\\" && text[end + 1] === "/" && end + 2 <= limit) end += 2; // a JSON-escaped "/"
     else break;
   }
   return end;
@@ -514,7 +516,7 @@ const DOTTED_CONTINUATION_PATTERNS = new Set([
   "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN", "GOOGLE_API_KEY", "HUGGINGFACE_TOKEN", "SLACK_TOKEN", "JWT_TOKEN",
 ]);
 
-/** A "."-joined segment is key material when it is 6 or more characters with a digit, "/" or "+", or that do not split into words. */
+/** A "."-joined segment is key material when it is 6 or more characters with a digit, "/" or "+", or does not split into words. */
 function isKeyMaterialSegment(segment: string): boolean {
   return segment.length >= 6 && (/[0-9+/]/.test(segment) || !segment.split(/[_-]+/).every(isIdentifierPart));
 }
@@ -811,7 +813,7 @@ function findOccurrences(text: string, values: string[], budget: number): Array<
 /**
  * Replaces every occurrence of each value, in one pass over the text: the same result as `replaceAll` for each value in
  * turn (values in priority order, longest first as classifyText returns them; text already replaced is not matched
- * again), without one pass per value, which is quadratic for a text with thousands of distinct secrets. All occurrences
+ * again) unless two values overlap only partly (below), without one pass per value, which is quadratic for a text with thousands of distinct secrets. All occurrences
  * are found first; they are accepted in priority order unless they lie inside text already accepted (a Fenwick tree
  * counts accepted positions); the output is built once from the accepted spans. An occurrence that only partly overlaps
  * accepted text would leave its other part in clear: the union replacement below is used instead, which replaces every
@@ -1219,8 +1221,9 @@ export class InformationFlowBoundary {
         !isReference(tok)
       ) {
         // A dotted token must be dotted key material (`isDottedKeyMaterial`): file paths, versions and host names are not
-        // tokens (JWTs have their own pattern above). Nexus's own session ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
-        // id made the session impossible to save or resume.
+        // tokens (JWTs have their own pattern above).
+        // Nexus's own session ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy,
+        // and a redacted id made the session impossible to save or resume.
         if ((/^[a-zA-Z0-9+/=_-]+$/.test(plain) || isDottedKeyMaterial(plain)) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain) &&
           // The temporary guard branch of `worktree remove` (`nexus-removed/<10 hex>-<8 hex>`): a redacted name cannot be undone by hand.
           !/^nexus-removed\/[0-9a-f]{10}-[0-9a-f]{8}$/.test(plain)) {
@@ -1413,7 +1416,7 @@ export class InformationFlowBoundary {
 
       const quarantinedSecrets: ClassifiedSecret[] = [];
       const sanitizedText = replaceValues(rawText, classifiedSecrets.map((item) => item.secret), (index, matched) => {
-        // `matched` is the exact text replaced: the secret itself, or a whole region of self-overlapping secrets, so
+        // `matched` is the exact text replaced: the secret itself, or a whole region of overlapping secrets, so
         // the token restores exactly what it replaced.
         const item = matched === classifiedSecrets[index].secret
           ? classifiedSecrets[index]

@@ -161,6 +161,7 @@ test("extensions cannot make the values to replace much larger than the text", (
     assert.ok(performance.now() - started < 5000, `${input.length} chars took ${Math.round(performance.now() - started)}ms`);
   });
   const total = new InformationFlowBoundary().classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
+  assert.ok(total > input.length, `${total} characters of values: the extensions are accepted until the budget is spent`);
   assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
 });
 

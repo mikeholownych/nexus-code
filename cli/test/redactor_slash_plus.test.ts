@@ -438,11 +438,18 @@ test("many distinct secrets are redacted in linear time", () => {
   assert.ok(!keys.some((key) => output.includes(key.slice(3, 15))), "every key is redacted");
 });
 
+/** Whether two occurrences of the values overlap without one lying inside the other. */
+function hasPartialOverlap(text: string, values: string[]): boolean {
+  const spans: Array<[number, number]> = [];
+  for (const value of values) for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + 1)) spans.push([at, at + value.length]);
+  return spans.some(([a, b]) => spans.some(([c, d]) => a < c && c < b && b < d));
+}
+
 /**
  * The one-pass replacement gives the same text as replaceAll for each value in turn, longest value first, unless a value
  * overlaps another only partly: replaceAll would then leave the rest of one in clear, so every part of both is replaced.
  */
-test("one-pass replacement matches sequential replaceAll, with few values and with many", () => {
+test("one-pass replacement matches sequential replaceAll unless values overlap partly, with few values and with many", () => {
   let seed = 7;
   const random = (n: number) => {
     seed = (seed * 1103515245 + 12345) >>> 0;
@@ -458,8 +465,12 @@ test("one-pass replacement matches sequential replaceAll, with few values and wi
     let expected = text;
     values.forEach((value, index) => { expected = expected.replaceAll(value, `<${index}>`); });
     const actual = replaceValues(text, values, (index) => `<${index}>`);
-    // Different only where a partial overlap made the sequential result leave text in clear: no value is left in clear now.
-    if (actual !== expected) for (const value of values) assert.ok(!actual.includes(value), JSON.stringify({ text, values, actual }));
+    // The results differ only where two values overlap partly (replaceAll leaves text of one in clear): no value is left in clear now.
+    if (hasPartialOverlap(text, values)) {
+      for (const value of values) assert.ok(!actual.includes(value), JSON.stringify({ text, values, actual }));
+    } else {
+      assert.equal(actual, expected, JSON.stringify({ text, values }));
+    }
   }
   // Disjoint and nested occurrences (no partial overlap) give exactly the sequential result.
   assert.equal(replaceValues("xabcdefyycdez", ["abcdef", "cde"], (index) => `<${index}>`), "x<0>yy<1>z");
