@@ -503,7 +503,7 @@ function scanKeyRun(text: string, from: number): number {
   return end;
 }
 
-/** Names of `DETERMINISTIC_PATTERNS`: credential kinds whose value, written as a "."-joined run, continues past a dot (a JWE has five segments, not three). */
+/** Names of `DETERMINISTIC_PATTERNS`: credential kinds whose value, written as a "."-joined run, continues past a dot. JWT_TOKEN matches three segments (`eyJ.eyJ.sig`); material joined after them is part of the same value. */
 const DOTTED_CONTINUATION_PATTERNS = new Set([
   "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN", "GOOGLE_API_KEY", "HUGGINGFACE_TOKEN", "SLACK_TOKEN", "JWT_TOKEN",
 ]);
@@ -1160,12 +1160,12 @@ export class InformationFlowBoundary {
       const tok = text.slice(start, end);
       const plain = normalizeKeyChars(unescapeSlashes(tok));
       if (
-        tok.length >= 20 &&
+        plain.length >= 20 &&
         // Longer tokens are prose or data. A base64 run ("+" or "/", not a path) is still a secret up to 512 characters,
         // the size of long access tokens, unless it is a data-URI payload (`;base64,…`): then it is an embedded file.
         // A credential-sized token is classified wherever it stands, after `base64,` too.
-        (tok.length <= 128 ||
-          (tok.length <= 512 && /[+/]/.test(plain) && !isPathLike(plain) && !text.startsWith("base64,", start - 7))) &&
+        (plain.length <= 128 ||
+          (plain.length <= 512 && /[+/]/.test(plain) && !isPathLike(plain) && !text.startsWith("base64,", start - 7))) &&
         // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
         (originalTokens.has(tok) || looksLikeCredentialToken(plain)) &&
         !isReference(tok)
@@ -1179,7 +1179,7 @@ export class InformationFlowBoundary {
           !/^nexus-removed\/[0-9a-f]{10}-[0-9a-f]{8}$/.test(plain)) {
           const entropy = calculateShannonEntropy(plain);
           // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
-          const threshold = tok.length < 32 ? 4.0 : 4.5;
+          const threshold = plain.length < 32 ? 4.0 : 4.5;
           if (entropy >= threshold) {
             matches.push({
               start,

@@ -85,6 +85,15 @@ test("the same dotted continuation is redacted after other token kinds", () => {
   assertRedactedEverywhere(github, "Xo2RtBq9Mn5Kp", "github token with dotted tail");
 });
 
+test("length gates and the entropy threshold use the decoded length of an encoded token", () => {
+  // 18 decoded characters, 30 encoded: below the 20-character gate once decoded, so it is not classified.
+  const short = "Qx7%2FKm2%2BVb9%2FLrTz4";
+  withFreshBoundary(() => assert.equal(redactDiagnosticForOutput(`id ${short} x`), `id ${short} x`));
+  // The same shape, long enough decoded, is redacted.
+  const long = "Qx7%2FKm2%2BVb9%2FLrTz4Wd8Ns3Hc6Yp1Jf5";
+  assertRedactedEverywhere(long, long, "long encoded token");
+});
+
 test("a long dotted high-entropy token is redacted whole", () => {
   const secret = "Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq.Xo2RtBq";
   assertRedactedEverywhere(secret, secret, "dotted token");
