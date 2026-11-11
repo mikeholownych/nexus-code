@@ -7,7 +7,6 @@ import { format as formatDiagnostic } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
-import { CheckpointManager } from "./checkpoint.js";
 import { autoDetectModel, buildConfig, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
 import { isNexusDirPermissive } from "./doctor.js";
@@ -17,7 +16,7 @@ import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn 
 import { getGitInfo } from "./git.js";
 import { redactSecrets, redactSecretPatterns } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
-import { EvidenceLedger, LastTurn, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
+import { EvidenceLedger, LastTurn, MAX_DETAIL, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
 import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
 import type { ChatMessage, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
@@ -44,7 +43,10 @@ import {
   DIFF_PREVIEW_CHARS,
   HistoryEntry,
   DIFF_PREVIEW_LINES,
+  MAX_PASTE,
   MAX_SLASH_OUTPUT,
+  MAX_SUMMARY,
+  TOOL_PREVIEW_LINES,
   MAX_TEXT_FIELD,
   PROTOCOL_VERSION,
   SteerStatus,
@@ -61,8 +63,10 @@ import {
 } from "./protocol.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
+import { surfaceFacts } from "./surface_facts.js";
 import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -92,7 +96,6 @@ export class SidecarServer {
   private readonly resume?: string;
   private readonly history: string[];
   private sessionId: string;
-  private checkpointManager: CheckpointManager;
   /** The running slash command; undefined for prompt turns and for commands that became turns. */
   private activeSpec?: SlashSpec;
   private readonly evidence = new EvidenceLedger();
@@ -117,7 +120,6 @@ export class SidecarServer {
     this.app.getAgent().setApprovalMode(this.mode);
     this.onShutdown = options.onShutdown ?? (() => {});
     this.resume = options.resume;
-    this.checkpointManager = this.app.getCheckpointManager();
     this.sessionId = this.app.getSessionManager().generateSessionId();
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.app.getAgent().setArchiveSink((compactionId, messages) => this.app.getSessionManager().appendArchivedHistory(this.sessionId, messages, compactionId));
@@ -134,6 +136,8 @@ export class SidecarServer {
     } catch (err) {
       resumed = { ok: false, message: `Could not resume ${this.resume ?? "latest"}: ${errorText(err)}` };
     }
+    // A resume that found nothing to restore is a fresh start: the model detection it skipped runs now.
+    if (this.resume && !resumed?.ok) void this.app.getAgent().detectPlaceholderModel();
     this.emitSessionState();
     if (resumed) this.emit({ type: "notice", text: resumed.message });
     if (isNexusDirPermissive()) {
@@ -557,6 +561,12 @@ export class SidecarServer {
   private async turn(turnId: string, prompt: string | any[], label: string, checkpoint: string, signal: AbortSignal, step = false): Promise<void> {
     const agent = this.app.getAgent();
     let allowSensitiveCheckpoint = false;
+    try {
+      agent.enterNamedWorktreeBeforeTurn(); // the snapshot is of the worktree the turn edits
+    } catch (err) {
+      this.emit({ type: "error", id: turnId, code: "INTERNAL", message: formatSafeSidecarText(errorText(err)) });
+      return;
+    }
     if (this.app.getConfig().readOnly) {
       // Read-only turns cannot change the workspace, so a workspace rollback snapshot is unnecessary.
       agent.setCheckpointReadOnlyFallback(false);
@@ -564,7 +574,7 @@ export class SidecarServer {
       let checkpointReady = false;
       while (!checkpointReady) {
         try {
-          this.checkpointManager.createCheckpoint(
+          this.app.getCheckpointManager().createCheckpoint(
             checkpoint,
             allowSensitiveCheckpoint ? { allowSensitive: true } : undefined,
           );
@@ -818,7 +828,7 @@ export class SidecarServer {
       setSessionId: (sessionId) => {
         this.sessionId = sessionId;
       },
-      checkpoints: () => this.checkpointManager,
+      checkpoints: () => this.app.getCheckpointManager(),
       setWorkspace: (dir) => this.setWorkspace(dir),
       saveSession: (title) => this.saveSession(title),
       resumeSession: (sessionId) => this.resumeSession(sessionId),
@@ -900,8 +910,7 @@ export class SidecarServer {
 
   private setWorkspace(dir: string): void {
     this.app.getAgent().setWorkspace(dir);
-    this.app.getConfig().workspace = dir;
-    this.checkpointManager = new CheckpointManager(dir);
+    this.app.getConfig().workspace = dir; // the app's checkpoint manager follows the workspace
   }
 
   /** Same record the REPL saves after each turn. Skipped while the conversation holds only the system prompt. */
@@ -926,6 +935,7 @@ export class SidecarServer {
         updatedAt: now,
         workspace: config.workspace,
         model: config.model,
+        endpoint: persistableEndpoint(config.endpoint),
         messages,
         unverifiedChangesPending: agent.hasUnverifiedChanges(),
         tokenStats: agent.getTokenStats(),
@@ -1019,6 +1029,7 @@ export class SidecarServer {
 
   private emitSessionState(): void {
     const config = this.app.getConfig();
+    const facts = surfaceFacts(this.app, this.sessionId);
     const git = getGitInfo(config.workspace);
     const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
     const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
@@ -1026,13 +1037,17 @@ export class SidecarServer {
       type: "session.state",
       workspace: config.workspace,
       workspace_name: path.basename(config.workspace),
-      model: config.provider ? `${config.provider} · ${config.model}` : config.model,
-      mode: this.app.getAgent().getApprovalMode(),
+      model: facts.model,
+      mode: facts.mode,
       git: git.isRepo ? { branch: git.branch, dirty: git.dirtyCount } : null,
       busy: Boolean(this.activeTurn),
-      session: this.sessionId,
+      session: facts.session,
+      read_only: facts.read_only,
+      context_tokens: facts.context_tokens,
+      context_limit: facts.context_limit,
+      endpoint_kind: facts.endpoint_kind,
       posture: {
-        mode: this.app.getAgent().getApprovalMode(),
+        mode: facts.mode,
         sandbox: sandboxStatus,
         trusted,
       },
@@ -1098,26 +1113,49 @@ const PATH_FIELDS: Partial<Record<SidecarEvent["type"], readonly string[]>> = {
   "tool.detail": ["diff_path"],
 };
 
-/** Characters kept per string field. Applied after redaction, so a cut can never split a credential. */
-const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<string, number>>>> = {
-  "steer.ack": { text: 64_000 },
-  "file.diff": { path: 400 },
+/**
+ * Characters kept per free-text string field (text from the model, a tool, the operator or a provider). Applied after
+ * redaction, so a cut can never split a credential. Each limit is at least the cap the field's producer already
+ * applies, and a value the producer already cut with `capText` keeps its own `…[truncated N chars]` count (see
+ * limitEventFields), so this changes nothing that is sent today; it bounds the field if a producer stops capping. Event types not
+ * listed are structured or bounded elsewhere (paths: PATH_FIELDS; history: HISTORY_LIMITS); the coverage test in
+ * test/sidecar_projection.test.ts classifies every protocol event type.
+ */
+export const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<string, number>>>> = {
+  "assistant.delta": { text: 64_000 },
+  "steer.ack": { message: MAX_TEXT_FIELD, text: 64_000 },
+  "file.diff": { path: 400, preview: 2 * DIFF_PREVIEW_CHARS, note: MAX_TEXT_FIELD },
   activity: { tool: 200, subject: 200 },
-  "tool.start": { tool: 200 },
-  "tool.end": { tool: 200 },
-  "tool.detail": { diff: MAX_DIFF_DETAIL },
-  "approval.request": { preview: MAX_TEXT_FIELD },
-  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD },
+  "tool.start": { tool: 200, subject: MAX_TEXT_FIELD },
+  // summary: protocol toolSummary caps at MAX_SUMMARY; preview: TOOL_PREVIEW_LINES rows of at most 400 characters.
+  "tool.end": { tool: 200, summary: MAX_SUMMARY, preview: TOOL_PREVIEW_LINES * 401 },
+  "tool.detail": { tool: 200, subject: MAX_TEXT_FIELD, args: MAX_DETAIL, output: MAX_DETAIL, diff: MAX_DIFF_DETAIL },
+  "approval.request": { tool: 200, subject: MAX_TEXT_FIELD, preview: MAX_TEXT_FIELD },
+  "checkpoint.choice.request": { message: MAX_TEXT_FIELD },
+  "turn.result": { heading: MAX_TEXT_FIELD, line: MAX_TEXT_FIELD },
+  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: MAX_PASTE },
+  notice: { text: MAX_TEXT_FIELD },
   error: { message: MAX_TEXT_FIELD },
+  "provider.auth": { instructions: MAX_TEXT_FIELD },
   "provider.result": { message: MAX_TEXT_FIELD },
+  "model.result": { message: MAX_TEXT_FIELD },
 };
 
 /** Characters kept of a resumed conversation's entries: tool names and subjects are short, messages are bounded. */
 const HISTORY_LIMITS = { toolName: 80, toolSubject: 200, text: HISTORY_CHARS } as const;
 
+/** Longest `…[truncated N chars]` marker capText appends after the kept text. */
+const CAP_MARKER_ROOM = 40;
+const CAP_MARKER = /…\[truncated \d+ chars\]$/;
+
 function limitEventFields(event: any): void {
   for (const [field, max] of Object.entries(FIELD_LIMITS[event.type as SidecarEvent["type"]] ?? {})) {
-    if (typeof event[field] === "string") event[field] = capText(event[field], max);
+    const value = event[field];
+    if (typeof value !== "string") continue;
+    // Already cut to this limit by its producer: keep the producer's count of what was dropped. A model- or tool-supplied
+    // text that fakes the marker only spoofs that count; the skip is bounded, since the value is at most max + CAP_MARKER_ROOM.
+    if (value.length <= max + CAP_MARKER_ROOM && CAP_MARKER.test(value)) continue;
+    event[field] = capText(value, max);
   }
   if (event.type === "history") {
     for (const entry of event.messages as HistoryEntry[]) {
@@ -1218,6 +1256,7 @@ async function main(argv: string[]): Promise<void> {
     .option("--read-only", "Reject all mutating tool executions and commands")
     .option("--sandbox [mode]", "Isolate command execution using bubblewrap or Docker")
     .option("--worktree", "Isolate execution inside an ephemeral git worktree")
+    .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
     .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
     .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", (value: string, previous: string[] = []) => [...previous, value], [])
     .option("--record-flight", "Record execution into an append-only .flightlog")
@@ -1261,7 +1300,7 @@ async function main(argv: string[]): Promise<void> {
   const configLoadError = operatorConfigLoadError();
   if (configLoadError) throw new Error(`Configuration error: ${configLoadError.message}`);
   const options = program.opts();
-  const config = await autoDetectModel(buildConfig(options));
+  const config = await autoDetectModel(buildConfig(options), { resuming: Boolean(options.resume) });
   config.surface = "tui";
   const app = new ApplicationCore(config);
   const server = new SidecarServer({

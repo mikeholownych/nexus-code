@@ -32,6 +32,11 @@ export interface ChatMessage {
    * other than `owner` ("<provider>:<model>"); `digest` detects alteration (e.g. by persistence redaction).
    */
   provider_state?: { owner: string; items: any[]; digest: string };
+  /**
+   * Provenance of a user-role message Nexus wrote itself: "skill-note" for the per-prompt skill note. Set only by the
+   * harness, kept in saved sessions and never sent to a provider; text that merely looks like a note is the operator's.
+   */
+  harness?: "skill-note";
 }
 
 export interface ToolParameterProperty {
@@ -91,6 +96,7 @@ export interface HarnessConfig {
   worktree?: boolean;        // Isolated ephemeral git worktree execution (default: false)
   /** A diagnostic run works on a snapshot of a failing candidate: its diagnosis completes it, so no completion verifier runs. */
   diagnosticRun?: boolean;
+  worktreeBranch?: string;   // Run in a named worktree for this branch instead of nexus/<task-id> (implies worktree; kept, never auto-merged)
   authoritativeVerifierCommand?: string; // Explicit trusted verifier: gates every task completion and authorizes automatic worktree merge
   /** Workspace-relative deliverable paths declared by the operator before the task starts. */
   trustedDeliverableFiles?: string[];

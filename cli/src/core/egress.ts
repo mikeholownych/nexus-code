@@ -1106,7 +1106,9 @@ export class InformationFlowBoundary {
         // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above). Nexus's own session
         // ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
         // id made the session impossible to save or resume.
-        if (/^[a-zA-Z0-9+/=_-]+$/.test(plain) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain)) {
+        if (/^[a-zA-Z0-9+/=_-]+$/.test(plain) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain) &&
+          // The temporary guard branch of `worktree remove` (`nexus-removed/<10 hex>-<8 hex>`): a redacted name cannot be undone by hand.
+          !/^nexus-removed\/[0-9a-f]{10}-[0-9a-f]{8}$/.test(plain)) {
           const entropy = calculateShannonEntropy(plain);
           // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
           const threshold = tok.length < 32 ? 4.0 : 4.5;

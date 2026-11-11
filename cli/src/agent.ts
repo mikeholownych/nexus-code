@@ -30,6 +30,7 @@ import {
   CandidateTracker,
   ValidationReceipt,
   computeCandidateIdentitySync,
+  gitTimeoutMs,
   hashContent,
 } from "./core/candidate.js";
 import {
@@ -48,7 +49,7 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine } from "./skills.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine, withSkillNoteProvenance } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -57,14 +58,17 @@ import { calculateContextBudget, countTokens, isContextAdmissible, isContextPres
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
+import { captureVerificationState, recordVerificationIfEligible } from "./worktrunk/verification.js";
+import { homeDir } from "./worktrunk/core.js";
+import { openRepo, currentEntry, NotARepositoryError } from "./worktrunk/repo.js";
+import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
+import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
 import { judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
-/** File-edit tools that can change the workspace before the verifier baseline is captured. */
-const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file", "patch_file", "delete_file"]);
 import { credentialOriginOf, InferenceError, type TruncatedCall, TokenCountError } from "./client.js";
 import {
   TurnResult,
@@ -82,6 +86,7 @@ import {
 } from "./core/turn.js";
 import { createHash } from "node:crypto";
 import { HybridSearchEngine } from "./embeddings.js";
+import { comparableEndpoint, persistableEndpoint } from "./core/endpoint_identity.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
@@ -155,11 +160,18 @@ import {
   isCondensedFinding,
   readFindings,
 } from "./core/findings.js";
-import { FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
-import type { TurnReason } from "./core/turn.js";
+import { FILE_EDIT_TOOLS, FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
+import type { TurnEvidence, TurnReason } from "./core/turn.js";
 import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
+
+/**
+ * A shell command that may leave a process running after it returns: a lone `&` (not `&&`, `&>` or `2>&1`), nohup,
+ * setsid, disown, systemd-run, or a daemonizing tool. Such a process can still write after the turn ends, so the turn
+ * is never lifted to "no change" (conservative: a false match only keeps the previous UNVERIFIED).
+ */
+const MAY_OUTLIVE_COMMAND = /(?<![&>])&(?![&>])|\b(?:nohup|setsid|disown|systemd-run|daemonize)\b/;
 
 /** Default deadline for the completion verifier (seconds); override with HarnessConfig.verifierTimeoutSecs / NEXUS_VERIFIER_TIMEOUT_SECS. */
 export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
@@ -815,9 +827,24 @@ function gitIndexIdentity(workspace: string): string {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "ignore"],
     maxBuffer: 64 * 1024 * 1024,
+    // A hung git must fail the state read (callers then treat the state as unknown), not block the turn.
+    timeout: gitTimeoutMs(),
   });
   return createHash("sha256").update(out).digest("hex").slice(0, 16);
 }
+
+/** A restored turn whose recorded endpoints are in their persistable form (origin and path), so a re-save leaks nothing. */
+function withPersistableEndpoints(turn: TurnResult): TurnResult {
+  if (!turn.providerRecovery?.some((r) => r.endpoint) && !turn.pendingProviderWindows?.some((w) => w.endpoint)) return turn;
+  return {
+    ...turn,
+    ...(turn.providerRecovery ? { providerRecovery: turn.providerRecovery.map((r) => (r.endpoint ? { ...r, endpoint: persistableEndpoint(r.endpoint) } : r)) } : {}),
+    ...(turn.pendingProviderWindows ? { pendingProviderWindows: turn.pendingProviderWindows.map((w) => (w.endpoint ? { ...w, endpoint: persistableEndpoint(w.endpoint) } : w)) } : {}),
+  };
+}
+
+/** Why work that would call the provider (a `/compact --llm`, a subagent) is not started while a resumed turn's provider window is open. */
+const RESUMED_WINDOW_REASON = "the provider is still inside the retry window it asked for";
 
 /** What an archive read means for a resumed conversation; undefined when the archive is whole. */
 function describeArchiveRead(read: ArchiveRead<ChatMessage>): string | undefined {
@@ -902,6 +929,10 @@ export class AutonomousAgent {
   private modifiedFiles: Set<string> = new Set<string>();
   /** Pending recovered work has no authenticated pre-change verifier snapshot. */
   private verificationBaselineInvalidated: boolean = false;
+  /** The verifier baseline was taken in a linked worktree that already held uncommitted work: never certified by a receipt. */
+  private receiptBaselineUntrusted: boolean = false;
+  /** Whether `receiptBaselineUntrusted` has been judged for the current workspace (the session's own verified work must not turn it on later). */
+  private receiptBaselineJudged: boolean = false;
   /** A persisted baseline retained only as untrusted continuity evidence after recovery. */
   private untrustedRecoveredBaseline?: DurableTaskState["changeBaseline"];
   private recoveredOperation?: DurableTaskState["operation"];
@@ -921,6 +952,17 @@ export class AutonomousAgent {
   }
   /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
   private turnCarriedChanges = false;
+  /** Evidence about this turn alone for its verdict (TUI-AUDIT D-04): operator denials and verifier runs. */
+  private turnDenials = 0;
+  /** Successful file-write tool calls this turn (write_file, edit_file, patch_file, delete_file). */
+  private turnFileWrites = 0;
+  /** run_command calls this turn that may leave a process running after the command returned (a trailing `&`, nohup, a named service). */
+  private turnBackgroundCommands = 0;
+  /** The no-change decision made for this turn: a rebuilt verdict (a failed final checkpoint) must reach the same outcome. */
+  private turnLatchLifted = false;
+  private turnVerifierRuns: TurnEvidence["verifierRuns"] = [];
+  /** Workspace state identity when this turn began ("unknown" when it could not be established). */
+  private turnStartState: string | undefined;
   /** The operator-configured verifier's latest result in this turn (FAILED: it refused a completion and has not passed since). */
   private turnConfiguredVerifier: "NOT_RUN" | "PASSED" | "FAILED" = "NOT_RUN";
   /** Key for the durable operation record of each tool call (provider call ids may be redacted on disk). */
@@ -959,6 +1001,19 @@ export class AutonomousAgent {
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
+  /**
+   * Provider windows owed by a restored turn: when each endpoint's provider may be asked again, and the recovery
+   * record of the wait (its real submissions, for the status shown while waiting). A step waits out the windows that
+   * cover its client; a step on another endpoint leaves the others pending. More than one can be owed (a planner
+   * recovery cancelled while the coder's window was pending).
+   */
+  private resumedProviderWaits: Array<{ eligibleAt: string; endpoint?: string; record?: ProviderRecoveryRecord }> = [];
+  /** A resumed start kept the "local-model" placeholder and its record named no model: detect it after the wait. */
+  private modelDetectionDeferred = false;
+  /** Set while restoreConversation runs: no progress is saved part-way through a restore. */
+  private restoringConversation = false;
+  /** Detection started by a resume that found no session; the first request waits for it. */
+  private pendingModelDetection?: Promise<void>;
   /** Recovery of the inference step in progress, persisted with the durable task state while waiting. */
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
@@ -999,7 +1054,7 @@ export class AutonomousAgent {
   private activeTraceSpanId?: string;
   private activeCompactionTrace?: { span: SpanHandle; ended: boolean };
   private worktreeManager: WorktreeManager;
-  private activeWorktree?: { taskId: string; worktreePath: string; branch: string };
+  private activeWorktree?: { taskId: string; worktreePath: string; branch: string; kind?: "task" | "named" };
   private originalWorkspace?: string;
   private inheritedWorktreeScope?: { workspace: string; requireSandbox: true };
   private plannerClient: LocalLlmClient;
@@ -1162,6 +1217,8 @@ export class AutonomousAgent {
       this.coderClient = this.client;
     }
     this.hybridSearch = new HybridSearchEngine(ws, this.client);
+    this.gateEmbeddings();
+
     this.synthesizer = new SynthesizerEngine(ws, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: verifierTimeoutSecs(config.verifierTimeoutSecs) }));
     this.browser = new BrowserDriver(ws);
     this.knowledge = new KnowledgeGraph(ws, { readOnly: initialReadOnly });
@@ -1280,6 +1337,7 @@ export class AutonomousAgent {
           this.setUnverifiedChanges(true);
           this.verificationEvidence = undefined;
           this.turnMutations++;
+          if (FILE_EDIT_TOOLS.has(event.toolName)) this.turnFileWrites++;
           await this.candidateTracker.createMutationHook()(event, context);
         },
       },
@@ -1534,6 +1592,7 @@ export class AutonomousAgent {
         workspacePath: this.workspacePathIdentity.value,
         workspace: this.workspacePathIdentity.value,
         model: this.config.model,
+        endpoint: persistableEndpoint(this.config.endpoint),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         status: "in_progress",
@@ -1566,6 +1625,7 @@ export class AutonomousAgent {
       workspacePath: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       workspace: this.activeWorktree ? this.primaryWorkspacePathIdentity.value : this.workspacePathIdentity.value,
       model: this.config.model,
+      endpoint: persistableEndpoint(this.config.endpoint),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: turn ? lifecycleStatusForTurn(turn) : this.verifiedWorktreeCompletion ? "completed" : "in_progress",
@@ -1578,6 +1638,8 @@ export class AutonomousAgent {
             worktreePath: this.activeWorktree.worktreePath,
             branch: this.activeWorktree.branch,
             createdAt: new Date().toISOString(),
+            kind: this.activeWorktree.kind ?? "task",
+            bindingVersion: WORKTREE_BINDING_VERSION,
           }
         : null,
       candidateId: this.activeValidationReceipt?.candidateId || null,
@@ -1663,13 +1725,14 @@ export class AutonomousAgent {
         taskId: state.worktreeBinding.taskId,
         worktreePath: state.worktreeBinding.worktreePath,
         branch: state.worktreeBinding.branch,
+        kind: state.worktreeBinding.kind ?? "task",
       };
       // Remember the checkout the task was resumed from so /merge and /discard can return there.
       this.originalWorkspace = this.originalWorkspace ?? this.primaryWorkspacePathIdentity.value;
       this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
     }
     this.activePlan = state.activePlan || [];
-    this.messages = state.messages || [];
+    this.messages = withSkillNoteProvenance(state.messages || []);
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
     // A ledger written by an earlier version lacks newer tracking fields (recovery, coverage): complete it now, before
@@ -1677,6 +1740,8 @@ export class AutonomousAgent {
     if (this.objective?.execution) this.objective.execution = normalizeTracking(this.objective.execution);
     this.activeProviderRecovery = state.providerRecovery ?? null;
     this.recoveredOperation = state.operation;
+    this.rememberResumedProviderWait(state.lastTurn);
+    this.adoptRecordedModel(state.model, state.endpoint);
     // Durable task state is writable by the same local user who can run candidate
     // commands. Never trust a saved baseline, nor capture a new one over a
     // resumed workspace with pending changes: an attacker could delete the field
@@ -1804,7 +1869,7 @@ export class AutonomousAgent {
     return this.worktreeManager;
   }
 
-  public getActiveWorktree(): { taskId: string; worktreePath: string; branch: string } | undefined {
+  public getActiveWorktree(): { taskId: string; worktreePath: string; branch: string; kind?: "task" | "named" } | undefined {
     return this.activeWorktree;
   }
 
@@ -1814,6 +1879,9 @@ export class AutonomousAgent {
   ): { success: boolean; taskId?: string; branch?: string; commitsMerged: number; error?: string } {
     if (!this.activeWorktree) {
       return { success: false, commitsMerged: 0, error: "No active worktree" };
+    }
+    if (this.activeWorktree.kind === "named") {
+      return { success: false, commitsMerged: 0, error: "This is a named worktree: merge it with `nexus worktree merge` (it needs a recorded verification) from inside it." };
     }
     const receiptToUse = receipt || this.activeValidationReceipt;
     const res = this.worktreeManager.mergeWorktree(
@@ -1834,6 +1902,9 @@ export class AutonomousAgent {
   public discardActiveWorktree(): { success: boolean; error?: string } {
     if (!this.activeWorktree) {
       return { success: false, error: "No active worktree" };
+    }
+    if (this.activeWorktree.kind === "named") {
+      return { success: false, error: "This is a named worktree: remove it with `nexus worktree remove <branch>`." };
     }
     const res = this.worktreeManager.discardWorktree(this.activeWorktree.taskId);
     if (res.success && this.originalWorkspace) {
@@ -1997,7 +2068,7 @@ export class AutonomousAgent {
   }
 
   public setMessages(msgs: ChatMessage[]): void {
-    this.messages = [...msgs];
+    this.messages = withSkillNoteProvenance(msgs);
   }
 
   /**
@@ -2037,7 +2108,7 @@ export class AutonomousAgent {
   ): void {
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
-    this.messages = [...msgs];
+    this.messages = withSkillNoteProvenance(msgs);
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
     if (this.objective) {
@@ -2157,6 +2228,7 @@ export class AutonomousAgent {
       this.changeBaseline = null;
       return;
     }
+    this.judgeReceiptBaselineOnce(); // see the field: verification proceeds, no receipt is issued
     try {
       const tests = snapshotTests(this.config.workspace);
       const trustedDeliverables = [...(this.config.trustedDeliverableFiles ?? [])];
@@ -2181,6 +2253,7 @@ export class AutonomousAgent {
       const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
       const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
       this.changeBaseline = { command, failed: !run.success, tests, verifier, trustedDeliverables, at: new Date().toISOString() };
+      this.turnVerifierRuns.push({ command, phase: "before_change", passed: run.success });
       if (this.durable) {
         try {
           this.checkpointDurableState("baseline captured");
@@ -2215,7 +2288,7 @@ export class AutonomousAgent {
   }
 
   private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
-    if (!this.durable) return;
+    if (!this.durable || this.restoringConversation) return;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
       else this.stateManager?.recordProgress(this.currentTaskId, {
@@ -2344,6 +2417,7 @@ export class AutonomousAgent {
   }
 
   public resetConversation(): void {
+    this.resumedProviderWaits = [];
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
     // A conversation reset in this process is not a durable recovery boundary. Keep
@@ -2412,9 +2486,50 @@ export class AutonomousAgent {
     return this.workspacePathIdentity;
   }
 
+  /** Judges, once per workspace, whether the session STARTED in a linked worktree the agent had already worked in. */
+  private judgeReceiptBaselineOnce(): void {
+    if (this.receiptBaselineJudged) return;
+    this.receiptBaselineJudged = true;
+    this.receiptBaselineUntrusted = this.linkedWorktreeStartsDirty();
+  }
+
+  /**
+   * Whether the workspace is a linked worktree that either holds uncommitted work or cannot be certified (a nested
+   * repository, a hidden edit, a dirty submodule). Fails closed there; a plain checkout or a non-repository is "no".
+   */
+  private linkedWorktreeStartsDirty(): boolean {
+    const workspace = this.config.workspace;
+    if (verifyCheckout(workspace).reason) return true; // a tampered pointer or a planted repository: not a plain checkout
+    let real: string;
+    try { real = fs.realpathSync(workspace); } catch { return false; }
+    // A registered linked worktree whose `.git` entry is missing or replaced is not a plain checkout either.
+    if (!fs.existsSync(path.join(real, ".git")) && replacedWorktreeReason(real)) return true;
+    let linked = false;
+    try {
+      const entry = currentEntry(openRepo(workspace));
+      linked = Boolean(entry && !entry.isMain);
+    } catch (err) {
+      return !(err instanceof NotARepositoryError); // a refusal or any other failure is not "no repository"
+    }
+    if (!linked) return false;
+    try { const state = captureVerificationState(workspace); return state === undefined || state.dirty; } catch { return true; }
+  }
+
+  /** True outside a worktree-isolated task, or inside a named linked worktree: where a verification receipt may be recorded. */
+  private isRecordableWorktree(): boolean {
+    return !this.activeWorktree ||
+      (this.activeWorktree.kind === "named" && this.worktreeManager.isLinkedWorktree(this.activeWorktree.worktreePath));
+  }
+
   public setWorkspace(newWorkspace: string): void {
     if (this.inheritedWorktreeScope && path.resolve(newWorkspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
       throw new Error("Cannot change workspace outside the inherited worktree authority.");
+    }
+    // A named worktree that an explicit `nexus worktree merge` removed is no longer a binding: the session has to be
+    // able to leave it for the branch it was merged into.
+    if (this.activeWorktree?.kind === "named" && !fs.existsSync(this.activeWorktree.worktreePath)) {
+      this.activeWorktree = undefined;
+      this.originalWorkspace = undefined;
     }
     if (this.activeWorktree && !this.managedWorktreeWorkspaceSwitch) {
       throw new Error("Cannot switch workspaces while a speculative worktree is unresolved; merge or discard it first.");
@@ -2428,15 +2543,16 @@ export class AutonomousAgent {
     }
     if (!currentWorkspaceIdentityIsValid || selectedWorkspace.value !== this.workspacePathIdentity.value) {
       this.invalidateVerificationBaseline();
+      this.receiptBaselineJudged = false; // another workspace: judged afresh at its first baseline (re-selecting the same directory keeps both)
+      this.receiptBaselineUntrusted = false;
     }
-    if (selectedWorkspace.value === this.primaryWorkspacePathIdentity.value) {
-      try {
-        this.primaryWorkspacePathIdentity.assertCurrent();
-      } catch {
-        // Explicitly selecting the replacement rebinds persistence to the live directory,
-        // but the verifier baseline stays invalidated by the identity check above.
-        this.primaryWorkspacePathIdentity = selectedWorkspace;
-      }
+    try {
+      this.primaryWorkspacePathIdentity.assertCurrent();
+    } catch {
+      // The directory this session started in is gone or was replaced: an explicit selection of a live directory
+      // (the same path recreated, or the branch a named worktree was merged into) rebinds persistence to it, so
+      // checkpoints and session saves keep validating. The verifier baseline stays invalidated by the check above.
+      this.primaryWorkspacePathIdentity = selectedWorkspace;
     }
     const readOnly = this.isReadOnly();
     this.bridge.shutdown();
@@ -2463,6 +2579,7 @@ export class AutonomousAgent {
     // specimen worktree, not the repository manager's authority root.
     if (!this.managedWorktreeWorkspaceSwitch) this.worktreeManager = new WorktreeManager(newWorkspace);
     this.hybridSearch = new HybridSearchEngine(newWorkspace, this.client);
+    this.gateEmbeddings();
     this.synthesizer = new SynthesizerEngine(newWorkspace, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: 120 }));
     this.browser = new BrowserDriver(newWorkspace);
     this.knowledge = new KnowledgeGraph(newWorkspace, { readOnly });
@@ -2488,6 +2605,28 @@ export class AutonomousAgent {
     this.applyReadOnlyAuthority(readOnly);
     this.setupSpineHandlers();
     this.resetConversation();
+  }
+
+  /**
+   * The shell bridge built at startup knows nothing of the worktree binding: re-create it with the worktree's sandbox
+   * requirement. For a session that already stands in the worktree, where switching workspaces (which does this and
+   * more) would also reset the conversation and objective.
+   */
+  private rebuildBridgeForIsolation(): void {
+    const readOnly = this.isReadOnly();
+    this.bridge.shutdown();
+    this.bridge = new RustCoreBridge(
+      this.config.workspace,
+      this.config.shell,
+      this.config.coreBinaryPath,
+      this.config.dryRun,
+      readOnly,
+      this.bridgeSandboxSetting(),
+      Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
+    );
+    this.bridge.setVerifierTimeoutSecs(this.config.verifierTimeoutSecs);
+    this.applyReadOnlyAuthority(readOnly);
+    this.setupSpineHandlers();
   }
 
   private bridgeSandboxSetting(): boolean | string | undefined {
@@ -2536,6 +2675,8 @@ export class AutonomousAgent {
   }
 
   public setModel(newModel: string): void {
+    // A model chosen now (/model) is never replaced by a deferred or in-flight detection.
+    this.modelDetectionDeferred = false;
     this.config.model = newModel;
     this.client.setModel(newModel);
     // In planner/coder mode an explicit /model choice applies to both tiers.
@@ -2595,15 +2736,27 @@ export class AutonomousAgent {
       providerRecovery?: DurableTaskState["providerRecovery"];
       operation?: DurableTaskState["operation"];
       changeBaseline?: DurableTaskState["changeBaseline"];
+      lastTurn?: TurnResult | null;
+      model?: string;
+      endpoint?: string;
     },
     readArchive: (committed?: ReadonlySet<string>) => ArchiveRead<ChatMessage>,
   ): string | undefined {
-    this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
-    this.restoreHistory(session.history);
-    const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
-    const read = readArchive(committed);
-    this.restoreArchive(read.messages);
-    return describeArchiveRead(read);
+    // Nothing is saved until the whole record is restored: a save part-way (restoreSession marks changes pending)
+    // would write the session record without its last turn, history or model, poorer than the one being restored.
+    this.restoringConversation = true;
+    try {
+      this.rememberResumedProviderWait(session.lastTurn);
+      this.adoptRecordedModel(session.model, session.endpoint);
+      this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
+      this.restoreHistory(session.history);
+      const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
+      const read = readArchive(committed);
+      this.restoreArchive(read.messages);
+      return describeArchiveRead(read);
+    } finally {
+      this.restoringConversation = false;
+    }
   }
 
   /** Restores the compaction record of a resumed conversation (its saved `history`), so completeness stays truthful. */
@@ -2734,11 +2887,13 @@ export class AutonomousAgent {
   }
 
   /**
-   * Whether a user-role message is Nexus's own note (continuation, recovery, step and empty-reply notes are sent in
-   * the user role, prefixed `[Nexus …]`), not something the operator asked for.
+   * Whether a user-role message is Nexus's own note, not something the operator asked for. The skill note is
+   * recognised by its provenance marker only, so operator text that begins with its prefix stays a request.
+   * Continuation, recovery, step and empty-reply notes are still recognised by their `[Nexus …]` text prefix
+   * (FINDINGS section E: moving them to provenance needs a migration for sessions saved by v1.1.3).
    */
-  private harnessNote(text: string): boolean {
-    return /^\[Nexus[ :]/.test(text);
+  private harnessNote(message: ChatMessage, text: string): boolean {
+    return isSkillNote(message) || (/^\[Nexus[ :]/.test(text) && !text.startsWith(SKILL_NOTE_PREFIX));
   }
 
   /** User messages the pinned ledger already carries (the objective and steering); compaction does not repeat them. */
@@ -2771,7 +2926,11 @@ export class AutonomousAgent {
       let index = "no-git";
       try {
         index = gitIndexIdentity(workspace);
-      } catch {}
+      } catch (err: any) {
+        // Only git exiting non-zero (not a repository) is "no-git". A git that hangs (ETIMEDOUT) or whose output
+        // overflows the buffer (ENOBUFS) did not report: the state is unknown (the outer catch), never "equal".
+        if (typeof err?.status !== "number") throw err;
+      }
       const id = combineState([candidate, index, externalInputsContentIdentity(workspace)]);
       const took = Date.now() - started;
       if (took > STATE_IDENTITY_BUDGET_MS) {
@@ -2781,6 +2940,8 @@ export class AutonomousAgent {
       return id;
     } catch (err: any) {
       this.stateIdentityUncertainty = `the workspace state could not be established (${String(err?.message ?? err).slice(0, 160)})`;
+      // A git that hangs would cost another full timeout on every later read: stop trying for the rest of the turn.
+      if (err?.code === "ETIMEDOUT") this.stateIdentityDisabled = true;
       return "unknown";
     }
   }
@@ -3173,7 +3334,7 @@ export class AutonomousAgent {
         }
       }
       // Earlier requests are the operator's: Nexus's own notes are not tasks (CTX-06).
-      if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !this.harnessNote(contentText)) {
+      if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !this.harnessNote(message, contentText)) {
         if (!priorTasks.includes(contentText)) priorTasks.push(contentText);
       }
       if (message.role === "assistant" && message.tool_calls) {
@@ -3452,8 +3613,8 @@ export class AutonomousAgent {
   private compactionCandidate(source: ChatMessage[], recentToolTurns: number, detailBudgetChars: number, unseenOutputChars?: number): { messages: ChatMessage[]; removedObservations: string[] } {
     const system = source[0];
     // The operator's latest request; a skill note written after it is a hint, not the request.
-    const currentUserIndex = source.map((message, index) => message.role === "user" && !isSkillNote(message.content) ? index : -1).filter((index) => index >= 0).at(-1);
-    const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]?.content) ? currentUserIndex + 1 : -1;
+    const currentUserIndex = source.map((message, index) => message.role === "user" && !isSkillNote(message) ? index : -1).filter((index) => index >= 0).at(-1);
+    const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]) ? currentUserIndex + 1 : -1;
     const toolTurnStarts = source
       .map((message, index) => message.role === "assistant" && message.tool_calls?.length ? index : -1)
       .filter((index) => index >= 0);
@@ -3579,7 +3740,7 @@ export class AutonomousAgent {
     let recorded = false;
 
     // The request the findings serve is the operator's latest, not a note Nexus added (CTX-06).
-    const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(normalizeMessageContent(message.content ?? "").text.join("")));
+    const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(message, normalizeMessageContent(message.content ?? "").text.join("")));
     const request = normalizeMessageContent(lastUser?.content ?? "").text.join("").slice(0, 8_000);
     const contextLimit = this.contextLimit();
     const inputBudget = contextLimit - this.getContextReserves().completion - countTokens(FINDINGS_INSTRUCTIONS) - countTokens(request) - 1_000;
@@ -3976,6 +4137,10 @@ export class AutonomousAgent {
 
   /** As compactConversation, returning the outcome instead of throwing (used by the queue and the hosts). */
   public async compactNow(useLlm: boolean, signal?: AbortSignal, step = 0): Promise<{ ok: boolean; durable: boolean; message: string; outcome?: CompactionOutcome }> {
+    // `/compact --llm` calls the provider: not inside the retry window a resumed turn is still waiting out.
+    if (useLlm && this.clientWindowOpen(this.client)) {
+      return { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_REASON}.` };
+    }
     const previousParent = this.activeTraceSpanId;
     const previousTrace = this.activeCompactionTrace;
     const span = this.safeStartTraceSpan("nexus.context.compaction", {
@@ -4089,9 +4254,25 @@ export class AutonomousAgent {
   }
 
   /** Runs (or, when `cancelReason` is given, cancels) the queued operator compactions, reporting each outcome. */
-  private async drainCompactionQueue(step: number, signal?: AbortSignal, cancelReason?: string): Promise<void> {
+  private async drainCompactionQueue(step: number, signal?: AbortSignal, cancelReason?: string, closing = false): Promise<void> {
+    // `/compact --llm` calls the main client's provider: held (kept queued, or cancelled when the turn is closing)
+    // while a restored window covers it. A plain `/compact` makes no provider request and runs.
+    const held: typeof this.compactionQueue = [];
+    try {
+      await this.drainCompactionEntries(step, signal, cancelReason, closing, held);
+    } finally {
+      this.compactionQueue.unshift(...held);
+    }
+  }
+
+  private async drainCompactionEntries(step: number, signal: AbortSignal | undefined, cancelReason: string | undefined, closing: boolean, held: typeof this.compactionQueue): Promise<void> {
     while (this.compactionQueue.length) {
       const request = this.compactionQueue.shift()!;
+      if (!cancelReason && request.llm && this.clientWindowOpen(this.client)) {
+        if (closing) this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${RESUMED_WINDOW_REASON}.` }, "cancelled");
+        else held.push(request);
+        continue;
+      }
       if (cancelReason) {
         this.reportCompaction(request.ids, { ok: false, durable: false, message: `/compact was not run: ${cancelReason}.` }, "cancelled");
         continue;
@@ -4168,7 +4349,7 @@ export class AutonomousAgent {
   /** Whether everything after `from` is the operator's submission: the message, then at most its skill note. */
   private isSubmissionTail(from: number): boolean {
     const tail = this.messages.slice(from);
-    return tail.length === 1 || (tail.length === 2 && typeof tail[1].content === "string" && tail[1].content.startsWith(SKILL_NOTE_PREFIX));
+    return tail.length === 1 || (tail.length === 2 && isSkillNote(tail[1]));
   }
 
   private buildSystemPrompt(): string {
@@ -4263,10 +4444,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
 
       const worktreeHasChanges = this.activeWorktree
-        ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
+        ? this.worktreeManager.bindingHasChanges(this.activeWorktree)
         : false;
       let verifierSucceeded = false;
       let hasExecuted = false;
+      // The linked worktree's state before the verifier runs: a receipt covers that state only.
+      let verificationStateBefore: ReturnType<typeof captureVerificationState>;
       let isDeliverableBound = false;
       let noApplicableVerifier = false;
 
@@ -4389,6 +4572,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             // The oracle owns the verifier's deadline (never an incidental bridge default); the runner enforces it.
             const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
             this.activity("verifying", { tool: verifierCommand });
+            verificationStateBefore = this.isRecordableWorktree() && !this.config.dryRun ? captureVerificationState(this.config.workspace) : undefined;
             const testRes = await runTestSuiteWithExecutor(
               this.config.workspace,
               (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }),
@@ -4431,6 +4615,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             };
             this.verificationEvidence = evidence;
             this.verificationEvidenceRawOutput = testRes.rawOutput || "";
+            this.turnVerifierRuns.push({ command: verifierCommand, phase: "completion", passed: testRes.success });
             if (configured) this.turnConfiguredVerifier = testRes.success ? "PASSED" : "FAILED";
             if (this.objective && candidateId) {
               recordAttempt(this.objective, {
@@ -4507,6 +4692,21 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (this.verificationBaselineInvalidated) this.verificationBaselineInvalidated = false;
         this.setUnverifiedChanges(false);
       }
+      // A passing deliverable-bound run inside a named (linked) worktree is recorded for `nexus worktree merge`, which
+      // needs a verification for the exact state it merges. Recording never affects the task outcome. Recording runs
+      // host-side Git in the worktree, so its `.git` pointer is verified first (the agent could have rewritten it).
+      const recordableWorktree = this.isRecordableWorktree();
+      const isVerified = this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true;
+      recordVerificationIfEligible(this.config.workspace, {
+        unrecordableWorktree: !recordableWorktree || this.receiptBaselineUntrusted,
+        dryRun: Boolean(this.config.dryRun),
+        verifierSucceeded,
+        hasExecuted,
+        deliverableBound: isDeliverableBound,
+        verified: isVerified,
+        verifier: this.verificationEvidence?.command || this.config.authoritativeVerifierCommand?.trim() || "verifier",
+        before: verificationStateBefore,
+      });
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
       if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {
         this.modifiedFiles.clear();
@@ -4577,6 +4777,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         };
       }
 
+      // A helper's agent builds its own clients from this config, so its first request would reach the provider a
+      // resumed turn is still waiting out. Declined for now; the model can go on without it or ask again later.
+      if (this.helperWindowOpen()) {
+        return {
+          success: false,
+          output: "",
+          error: `Subagent not started: ${RESUMED_WINDOW_REASON}. Continue without it, or start it in a later step.`,
+        };
+      }
+
       const subPrompt = args.prompt || "Investigate the task";
       // No step allowance: a helper stops on its report, on demonstrated lack of progress, or with the parent's turn
       // (cancellation). A `max_steps` argument from the model is not an operator limit and is ignored.
@@ -4639,6 +4849,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (childMutations > 0 || subagent.turnCarriedChanges) {
             this.mutationSeq += subagent.mutationSeq;
             this.turnMutations += childMutations;
+            this.turnFileWrites += subagent.turnFileWrites;
+            this.turnBackgroundCommands += subagent.turnBackgroundCommands;
             this.verificationEvidence = undefined;
             if (this.objective) {
               invalidateVerified(this.objective, `subagent changed workspace`);
@@ -4800,7 +5012,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           return {
             success: false,
             output: "",
-            error: `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
+            error: `Error: Skill '${oneLine(String(skillName ?? "").slice(0, 200))}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`,
           };
         }
         // No skill has that name: treat the text as a search. Matching advertises descriptions and activates nothing.
@@ -4816,7 +5028,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
       return {
         success: true,
-        output: `[Activated Skill: ${skill.name}] [source: ${skill.path}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n[Host application: Nexus Code. Provider/model identity does not change the host; select host-specific instructions for Nexus Code.]\n\n${skill.content}`,
+        output: `[Activated Skill: ${skill.name}] [source: ${oneLine(skill.path)}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n[Host application: Nexus Code. Provider/model identity does not change the host; select host-specific instructions for Nexus Code.]\n\n${skill.content}`,
       };
     });
 
@@ -5105,7 +5317,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (toolName === "activate_skill") {
       const skillName = args?.name;
       if (skillName && this.skillManager.getUntrustedSkill(skillName)) {
-        const cancelMsg = `Error: Skill '${skillName}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`;
+        const cancelMsg = `Error: Skill '${oneLine(String(skillName ?? "").slice(0, 200))}' is in an untrusted workspace and cannot be activated. Run 'nexus trust .' to trust this workspace.`;
         const receipt: ExecutionReceipt = {
           invocationId: call.id,
           taskId: this.activeWorktree?.taskId || this.currentTaskId,
@@ -5174,6 +5386,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (approved && egressOrigin) this.approvedEgressOrigins.add(egressOrigin);
       if (approved) this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
       if (!approved) {
+        this.turnDenials++;
         console.log(`⚠️ Tool execution cancelled by user.`);
         const cancelMsg =
           "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.";
@@ -5245,6 +5458,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (typeof (this.plannerClient as any)?.setTaskId === "function") this.plannerClient.setTaskId(effectiveTaskId);
     if (typeof (this.coderClient as any)?.setTaskId === "function") this.coderClient.setTaskId(effectiveTaskId);
     const operationSeq = ++this.operationSeq;
+    // A run_command that may run work past the call: its own `background` or `service_name`, or a command that
+    // backgrounds itself. Counted here, after approval (a denied call returned earlier and counts nothing): the turn is
+    // then never lifted to "no change", because the process can still write after the turn ends.
+    if (toolName === "run_command" && (args.background || args.service_name || MAY_OUTLIVE_COMMAND.test(String(args.command ?? "")))) this.turnBackgroundCommands++;
     // The file as it is right before this operation (after any approval wait), so the reported diff is this
     // operation's change only and never includes edits already in the working tree.
     const diffTarget = this.observer?.onFileChange && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
@@ -5486,6 +5703,201 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return this.lastTurnResult;
   }
 
+  /**
+   * A resumed start does not auto-detect the model (that is a request to the provider, possibly inside its window):
+   * while the model is still the "local-model" placeholder and no provider was chosen, the restored record's model
+   * replaces it, when the record says it was chosen on this endpoint; without one (or from another or an unknown
+   * endpoint), detection waits for the first step after the resumed wait.
+   * An explicit model is kept. An explicit `--model local-model` cannot be told from the placeholder and is replaced.
+   */
+  private adoptRecordedModel(recorded: string | undefined, recordedEndpoint?: string): void {
+    if (this.config.provider || this.config.model !== "local-model") {
+      this.modelDetectionDeferred = false;
+      return;
+    }
+    // "default" is what a record without a model is saved with. A record made on another endpoint names a model
+    // that may not exist on this one: detected after the wait instead.
+    const sameEndpoint = Boolean(recordedEndpoint) && this.clientEndpoints(this.client).some((e) => comparableEndpoint(e) === comparableEndpoint(recordedEndpoint!));
+    if (recorded && recorded !== "local-model" && recorded !== "default" && sameEndpoint) {
+      this.setDefaultModel(recorded);
+      this.modelDetectionDeferred = false;
+    } else {
+      this.modelDetectionDeferred = true;
+    }
+  }
+
+  /** The main model, without touching a tier whose own model the operator chose (plannerModel, coderModel). */
+  private setDefaultModel(model: string): void {
+    this.config.model = model;
+    this.client.setModel(model);
+    if (this.plannerClient !== this.client && !this.config.plannerModel) this.plannerClient.setModel(model);
+    if (this.coderClient !== this.client && !this.config.coderModel) this.coderClient.setModel(model);
+  }
+
+  /**
+   * A resume request that found nothing to restore behaves like a fresh start: the start-up detection it skipped
+   * runs now (one request, as autoDetectModel does), and the first request waits for it.
+   */
+  public detectPlaceholderModel(): Promise<void> {
+    if (this.config.provider || this.config.model !== "local-model") return Promise.resolve();
+    this.pendingModelDetection = (async () => {
+      try {
+        const models = await this.client.listModels();
+        if (models.length > 0 && this.config.model === "local-model") this.setDefaultModel(models[0]);
+      } catch {
+        // Keep the placeholder; the request will surface the connection problem.
+      }
+    })();
+    return this.pendingModelDetection;
+  }
+
+  /** The deferred detection, once the provider may be asked again: the first model the gateway lists. */
+  private async detectDeferredModel(): Promise<void> {
+    if (!this.modelDetectionDeferred || this.isProviderWindowOpen()) return;
+    this.modelDetectionDeferred = false;
+    try {
+      const models = await this.client.listModels();
+      if (models.length > 0 && this.config.model === "local-model") this.setDefaultModel(models[0]);
+    } catch {
+      // Keep the placeholder; the request will surface the connection problem.
+    }
+  }
+
+  /** Records the provider windows a restored turn still owed when it ended (see resumedProviderWaits). */
+  private rememberResumedProviderWait(lastTurn: TurnResult | null | undefined): void {
+    // The restored record's last turn replaces this agent's own (a /resume reuses the agent): checkpoints and saves
+    // written until the next turn ends describe the restored conversation, not an unrelated earlier turn.
+    // Endpoints in an older record may carry credentials (query string): re-saved only in their persistable form.
+    this.lastTurnResult = lastTurn ? withPersistableEndpoints(lastTurn) : undefined;
+    const windows: typeof this.resumedProviderWaits = [];
+    // Durable records are same-user writable: an unparseable time is ignored, and the wait is bounded where it is used.
+    const add = (eligibleAt: unknown, rawEndpoint: string | undefined, record?: ProviderRecoveryRecord) => {
+      if (typeof eligibleAt !== "string" || !Number.isFinite(Date.parse(eligibleAt))) return;
+      const endpoint = rawEndpoint ? persistableEndpoint(rawEndpoint) : undefined;
+      if (windows.some((w) => w.eligibleAt === eligibleAt && w.endpoint === endpoint)) return;
+      windows.push({ eligibleAt, ...(endpoint ? { endpoint } : {}), ...(record ? { record } : {}) });
+    };
+    // Owed by an interruption in provider_wait, and by the windows the turn left pending on other endpoints.
+    const interruption = lastTurn?.execution === "INTERRUPTED" ? lastTurn.interruption : null;
+    const recoveries = lastTurn?.providerRecovery ?? [];
+    const record = recoveries[recoveries.length - 1];
+    if (interruption?.phase === "provider_wait") add(interruption.providerEligibleAt, record?.endpoint, record);
+    for (const pending of lastTurn?.pendingProviderWindows ?? []) add(pending?.eligibleAt, pending?.endpoint);
+    this.resumedProviderWaits = windows;
+  }
+
+  /** Embedding requests go to the main client's provider: held back while a restored window for it is open. */
+  private gateEmbeddings(): void {
+    this.hybridSearch.setEmbeddingGate((client) => !this.clientWindowOpen(client));
+  }
+
+  /**
+   * True while a restored provider window is open for any endpoint the client may use: its failover endpoints
+   * included, since a request can be retried on any of them.
+   */
+  private clientWindowOpen(client: LocalLlmClient): boolean {
+    return this.windowsCovering(this.clientEndpoints(client)).length > 0;
+  }
+
+  /** When the latest restored window covering this client ends, if any is open. */
+  private latestCoveringWindow(client: LocalLlmClient): string | undefined {
+    return this.windowsCovering(this.clientEndpoints(client)).map((w) => w.eligibleAt).sort().at(-1);
+  }
+
+  /** The windows a turn leaves owed, for its result; empty once waited out or passed. */
+  private pendingWindowField(): { pendingProviderWindows?: Array<{ eligibleAt: string; endpoint?: string }> } {
+    const open = this.resumedProviderWaits.filter((w) => Date.parse(w.eligibleAt) > this.recoveryClock.now());
+    if (!open.length) return {};
+    return { pendingProviderWindows: open.map((w) => ({ eligibleAt: w.eligibleAt, ...(w.endpoint ? { endpoint: w.endpoint } : {}) })) };
+  }
+
+  /** True while a restored window covers any endpoint a helper's configuration may use (main, failover, planner, coder). */
+  private helperWindowOpen(): boolean {
+    const endpoints = [this.config.endpoint, ...(this.config.fallbackEndpoints ?? []), this.config.plannerEndpoint, this.config.coderEndpoint]
+      .filter((endpoint): endpoint is string => Boolean(endpoint));
+    return this.windowsCovering(endpoints).length > 0;
+  }
+
+  /** True while the main connection's provider is inside a window restored by a resume (hosts hold background requests). */
+  public isProviderWindowOpen(): boolean {
+    return this.clientWindowOpen(this.client);
+  }
+
+  /** The open restored windows that apply to any of these endpoints (a window without an endpoint applies to all). */
+  private windowsCovering(endpoints: readonly string[]): typeof this.resumedProviderWaits {
+    const now = this.recoveryClock.now();
+    return this.resumedProviderWaits.filter((w) => {
+      if (!(Date.parse(w.eligibleAt) > now)) return false;
+      return !w.endpoint || !endpoints.length || endpoints.some((endpoint) => comparableEndpoint(w.endpoint!) === comparableEndpoint(endpoint));
+    });
+  }
+
+  /** The endpoints a client may send a request to (its failover endpoints included). */
+  private clientEndpoints(client: LocalLlmClient): string[] {
+    return typeof client.getEndpoints === "function" ? client.getEndpoints() : [client.endpoint];
+  }
+
+  /**
+   * Before the first request of a resumed turn, waits until the provider's recorded eligible time.
+   * The wait is shown as the ordinary provider-wait status.
+   * It is skipped, and stays pending, for a step on another endpoint than the recorded one.
+   * As in live recovery, the advertised window is honoured in full: maxDelayMs caps only backoff.
+   * The wait is bounded by deadlineMs. Live recovery never plans a wait past it, so only a damaged or far-future
+   * record is cut.
+   * Each state of the wait (WAITING, then RESUMED or CANCELLED) is passed to `track` for the turn's recovery history.
+   * Cancellation throws RecoveryCancelled; the caller records the interruption with the same eligible time.
+   */
+  private async waitOutResumedProviderWindow(
+    policy: RecoveryPolicy,
+    step: number,
+    turn: NonNullable<AutonomousAgent["activeTurn"]>,
+    signal: AbortSignal | undefined,
+    client: LocalLlmClient,
+    track: (record: ProviderRecoveryRecord) => void,
+  ): Promise<void> {
+    const now = this.recoveryClock.now();
+    // Passed windows are dropped. The window is the recorded provider's: a step on another endpoint is not held back
+    // by it and leaves it pending, for a later step that routes back (planner/coder). Any endpoint the client may
+    // fail over to counts, since a request can be retried on it.
+    this.resumedProviderWaits = this.resumedProviderWaits.filter((w) => Date.parse(w.eligibleAt) > now);
+    const covering = this.windowsCovering(this.clientEndpoints(client));
+    if (!covering.length) return;
+    const pending = covering.reduce((a, b) => (Date.parse(b.eligibleAt) > Date.parse(a.eligibleAt) ? b : a));
+    const remaining = Date.parse(pending.eligibleAt) - now;
+    const delay = Math.min(remaining, policy.deadlineMs);
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const prior = pending.record;
+    const record: ProviderRecoveryRecord = {
+      state: "WAITING",
+      step,
+      startedAt: iso(now),
+      updatedAt: iso(now),
+      nextAttemptAt: iso(now + delay),
+      condition: prior?.condition ?? "TEMPORARILY_UNAVAILABLE",
+      reason: `resumed inside the provider's recorded window (eligible at ${pending.eligibleAt})`,
+      submissions: prior ? [...prior.submissions] : [],
+      probes: 0,
+      waitedMs: 0,
+      unknownReplays: 0,
+      ...(pending.endpoint ?? prior?.endpoint ? { endpoint: persistableEndpoint(pending.endpoint ?? prior?.endpoint) } : {}),
+      policy: { deadlineMs: policy.deadlineMs, maxDelayMs: policy.maxDelayMs, maxUnknownReplays: policy.maxUnknownReplays },
+    };
+    track(record);
+    // The windows stay pending through the sleep, so a checkpoint or save during it keeps the eligible times.
+    this.onProviderRecoveryState(record, turn, false);
+    try {
+      await this.recoveryClock.sleep(delay, signal);
+    } catch {
+      // Still inside the provider's window: the interrupted turn records it, and a later resume waits for the rest.
+      const at = this.recoveryClock.now();
+      track({ ...record, state: "CANCELLED", updatedAt: iso(at), waitedMs: at - now, reason: "cancelled while waiting out the recorded provider window" });
+      throw new RecoveryCancelled();
+    }
+    this.resumedProviderWaits = this.resumedProviderWaits.filter((w) => !covering.includes(w));
+    const at = iso(this.recoveryClock.now());
+    track({ ...record, state: "RESUMED", updatedAt: at, resumedAt: at, waitedMs: delay });
+  }
+
   /** Recovery of the current inference step; null when no provider failure is being waited out. */
   public getProviderRecovery(): ProviderRecoveryRecord | null {
     return this.activeProviderRecovery;
@@ -5497,6 +5909,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
    */
   public async probeStartupEndpoint(signal?: AbortSignal): Promise<string | undefined> {
     if (typeof this.client.probeAvailability !== "function") return undefined;
+    // After a resume the hosts probe right after restoring: inside the provider's window nothing is sent. The
+    // resumed turn waits it out and re-probes through live recovery, so no warning is lost.
+    if (this.isProviderWindowOpen()) return undefined;
     try {
       const probe = await this.client.probeAvailability(signal, { timeoutMs: 3_000 });
       if (probe.available && probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) {
@@ -5585,18 +6000,23 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
   private async runTurnImpl(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
-    // same establishment and resolution boundary as one-shot `run` tasks.
-    if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
+    // same establishment and resolution boundary as one-shot `run` tasks. A retained
+    // named worktree is where the session keeps working; `run` reuses it.
+    if (this.config.worktree && this.activeWorktree && this.activeWorktree.kind !== "named" && !this.worktreeRunTurnAuthorized) {
       throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
     }
     if (this.config.worktree && !this.worktreeRunTurnAuthorized) {
       return await this.run(taskPrompt, onConfirm, options);
     }
+    if (!this.config.worktree) this.assertNamedBindingCurrent();
     if (this.activeTurn) throw new Error("A turn is already active; wait for it to finish or cancel it.");
     const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
     if (authoritativeVerifier && this.changeBaseline === undefined) {
       // Capture workspace-resolved operator verifier files before plugins or the model can change them.
       // Existing pending work without an earlier snapshot remains unverified rather than being blessed retroactively.
+      // A linked worktree the agent already worked in (an earlier session, another terminal) gives a baseline taken from
+      // files the agent may have rewritten: verification proceeds as usual, but no receipt is issued on that baseline.
+      this.judgeReceiptBaselineOnce();
       this.changeBaseline = {
         command: authoritativeVerifier,
         failed: false,
@@ -5638,6 +6058,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0 };
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnCarriedChanges = this.hasPendingModifications;
+    this.turnDenials = 0;
+    this.turnFileWrites = 0;
+    this.turnBackgroundCommands = 0;
+    this.turnLatchLifted = false;
+    this.turnVerifierRuns = [];
+    this.turnStartState = undefined;
     // What compaction removed earlier in this conversation is still not in context, whichever way the turn began.
     this.turnRemovedObservations = new Set([...this.carriedRemovedObservations, ...unreacquiredRemovals(this.messages)]);
     this.findingsOutgrown = false;
@@ -5725,7 +6151,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // Skills whose descriptions fit this message, written once right after it and never moved: every later
         // request extends the earlier ones, so the provider's prefix cache survives each new prompt.
         const skillNote = this.skillNoteFor(taskPrompt);
-        if (skillNote) this.messages.push({ role: "user", content: skillNote });
+        if (skillNote) this.messages.push({ role: "user", content: skillNote, harness: "skill-note" });
         // The objective is durable before anything acts on it.
         this.persistProgress({ messages: true });
       }
@@ -5780,6 +6206,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
       }
       let stateNow = this.workspaceStateIdentity();
+      this.turnStartState = stateNow;
       tracker.noteState(stateNow);
       tracker.noteLedgerState(this.ledgerProgressIdentity());
       const noticedPolls = new Set<string>();
@@ -5820,15 +6247,20 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           break;
         }
         // Operator /compact queued during the previous step runs here: its inference and tool batch have settled.
-        if (this.compactionQueue.length) {
+        // False when a compaction that is not durable ends the turn.
+        const drainQueuedCompactions = async (): Promise<boolean> => {
+          // A `/compact --llm` stays queued while a resumed window covers the provider it calls (see drainCompactionQueue).
+          if (!this.compactionQueue.length) return true;
           try {
             await this.drainCompactionQueue(currentStep, signal);
           } catch (err) {
             if (!(err instanceof CompactionCommitError)) throw err;
             persistenceFailure = err.outcome.message;
-            break;
+            return false;
           }
-        }
+          return true;
+        };
+        if (!(await drainQueuedCompactions())) break;
         if (budget && currentStep > 1 && (currentStep - 1) % segmentSteps === 0) {
           segment++;
           if (this.objective) this.objective.continuation.segments = segment;
@@ -6010,6 +6442,28 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
         const requestId = randomUUID();
         const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
+        // A resumed turn first waits out the provider window it was suspended in, before anything is sent to the
+        // provider: the capability read and compaction admission (which can make auxiliary requests) included.
+        const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
+        // When the provider may be asked again, while this step waits for it (kept if the wait is interrupted).
+        let providerEligibleAt: string | undefined = this.latestCoveringWindow(activeClient);
+        let resumedWait: ProviderRecoveryRecord | undefined;
+        try {
+          await this.waitOutResumedProviderWindow(policy, currentStep, turn, signal, activeClient, (r) => (resumedWait = r));
+        } catch (err) {
+          if (!(err instanceof RecoveryCancelled)) throw err;
+          this.ui.stopSpinner(false, "Stopped while waiting for the inference provider");
+          if (resumedWait) providerRecoveries.push(resumedWait);
+          turn.phase = "inference";
+          this.activeProviderRecovery = null;
+          markInterrupted("provider_wait", providerEligibleAt ? { providerEligibleAt } : {});
+          break;
+        }
+        providerEligibleAt = undefined;
+        if (resumedWait) providerRecoveries.push(resumedWait);
+        if (!(await drainQueuedCompactions())) break;
+        await this.pendingModelDetection;
+        await this.detectDeferredModel();
         // Provider limits for this step's connection (cached; re-read on change or after the TTL). Optional capability.
         await this.refreshCapabilities(activeClient, this.capabilitiesStale ?? "step", Boolean(this.capabilitiesStale), signal);
         this.capabilitiesStale = undefined;
@@ -6067,7 +6521,6 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         let streamedTokens = false;
         // Temporary provider failures are waited out here, at the inference boundary: history and tool state
         // are untouched while waiting, and a submission's output is used only once it is complete.
-        const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
         const recovery = new ProviderRecoveryController(policy, this.recoveryClock, currentStep, {
           everSucceeded: typeof activeClient.hasEverSucceeded === "function" ? activeClient.hasEverSucceeded() : true,
           endpoint: activeClient.endpoint,
@@ -6110,6 +6563,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 process.stdout.write(pc.dim("\n[partial response discarded: the provider failed before completing it]\n"));
                 streamedTokens = false;
               }
+              if (record.state === "WAITING" && record.nextAttemptAt) providerEligibleAt = record.nextAttemptAt;
               this.onProviderRecoveryState(record, turn, discarded);
             },
           }, signal);
@@ -6126,7 +6580,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (streamedTokens) process.stdout.write("\n");
           if (err instanceof RecoveryCancelled) {
             this.ui.stopSpinner(false, "Stopped while waiting for the inference provider");
-            markInterrupted("provider_wait");
+            markInterrupted("provider_wait", providerEligibleAt ? { providerEligibleAt } : {});
             break;
           }
           if (err instanceof InferenceError && err.kind === "aborted") {
@@ -6463,7 +6917,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // Queued /compact: run now that the last step has settled, or cancelled with the turn.
       if (this.compactionQueue.length) {
         try {
-          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : undefined);
+          await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : undefined, true);
         } catch (err) {
           if (!(err instanceof CompactionCommitError)) throw err;
           persistenceFailure ??= err.outcome.message;
@@ -6619,6 +7073,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return !this.runningAsSubagent && !nonMutatingTeamRole && Boolean(this.config.authoritativeVerifierCommand?.trim());
   }
 
+  /** Whether workspace content differs from how this turn found it (D-04); "unknown" when either state is unknown. */
+  private turnWorkspaceChanged(): TurnEvidence["workspaceChanged"] {
+    // A file-write tool that succeeded is a change whatever the identity could see (a gitignored target).
+    if (this.turnFileWrites > 0) return "yes";
+    if (!this.turnStartState || this.turnStartState === "unknown") return "unknown";
+    const now = this.workspaceStateIdentity();
+    if (now === "unknown") return "unknown";
+    return now === this.turnStartState ? "no" : "yes";
+  }
+
   /** Single place where a turn's execution/outcome dimensions are derived from evidence held by the agent. */
   private buildTurnResult(input: {
     /** A compaction the next action depended on could not be committed: the turn stopped (PERSISTENCE_FAILED). */
@@ -6656,8 +7120,34 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           ...(ledger?.nextAction ? { nextAction: ledger.nextAction } : {}),
         }
       : undefined;
+    const workspaceChanged = this.turnWorkspaceChanged();
+    // Running a command latches the verification obligation, because a command can change files. When the turn ended
+    // normally, nothing was pending before it, no worktree holds its work, no verifier result is held (a verifier that
+    // ran is the evidence), and the workspace is exactly as the turn found it, the latch caught nothing: there is no
+    // change to verify (TUI-AUDIT D-04). A command that changed any file leaves the identity different.
+    const endedNormally = !input.interruption && !input.unhandledError && !input.persistenceFailure && !input.inferenceFailure &&
+      !input.capacityBlock && !input.limitReached;
+    // A file-write tool (write_file, edit_file, patch_file, delete_file) that succeeded is a change by definition, even
+    // when the workspace identity cannot see its target (a gitignored build/ directory): never lifted.
+    // The decision is kept for the turn: lifting clears the pending flag, and a rebuilt verdict must not flip to UNVERIFIED.
+    // A command that may have left a process running is never lifted: the process can still write after the turn.
+    const latchCaughtNothing = this.turnLatchLifted || (endedNormally && this.hasPendingModifications && !this.turnCarriedChanges &&
+      !this.activeWorktree && !evidence && this.turnFileWrites === 0 && this.turnBackgroundCommands === 0 && workspaceChanged === "no");
+    if (latchCaughtNothing) this.turnLatchLifted = true;
+    if (latchCaughtNothing) {
+      this.setUnverifiedChanges(false);
+      // A later change takes a fresh pre-change baseline: the workspace may change between turns.
+      this.changeBaseline = undefined;
+    }
+    const turnEvidence: TurnEvidence = {
+      workspaceChanged,
+      carriedChanges: this.turnCarriedChanges,
+      denied: this.turnDenials,
+      verifierRuns: [...this.turnVerifierRuns],
+    };
     const base = {
       ...(recoveries.length ? { providerRecovery: recoveries } : {}),
+      ...this.pendingWindowField(),
       acceptance: "NOT_REQUESTED" as const,
       modelStop: input.modelStop,
       finalOutputComplete: input.finalOutputComplete,
@@ -6672,6 +7162,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       ...(this.turnPersistenceFailures.length ? { persistence: { durable: false as const, failures: [...new Set(this.turnPersistenceFailures)].slice(0, 8) } } : {}),
       ...(this.durable ? { tokenAccounting: this.tokenAccounting() } : {}),
       ...(Object.values(this.turnToolCallSyntax).some((n) => n > 0) ? { toolCallSyntax: { ...this.turnToolCallSyntax } } : {}),
+      turnEvidence,
     };
 
     if (input.interruption) {
@@ -6794,7 +7285,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (requirementsIncomplete) {
       return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "REQUIREMENTS_INCOMPLETE", detail: incompleteDetail() }));
     }
-    if (this.turnMutations > 0 || this.turnCarriedChanges) {
+    if ((this.turnMutations > 0 && !latchCaughtNothing) || this.turnCarriedChanges) {
       if (evidence?.status === "PASSED") {
         if (evidence.hasExecutedTests === false) {
           return deepFreezeTurn(assertTurnResultInvariants({
@@ -6881,7 +7372,62 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     };
   }
 
+  private assertWorktreeRunnable(): void {
+    if (!this.worktreeManager.isGitRepo()) {
+      throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
+    }
+    const configuredSandbox = this.config.sandbox === "bwrap" || this.config.sandbox === "docker"
+      ? this.config.sandbox
+      : "auto";
+    if (!isSandboxAvailable(configuredSandbox)) {
+      throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
+    }
+  }
+
+  /** Creates or reuses the `--worktree-branch` worktree and moves the session into it. */
+  private establishNamedWorktree(): void {
+    if (this.isReadOnly() || this.config.dryRun) {
+      throw new Error("Cannot create or reuse a named worktree in read-only or dry-run mode.");
+    }
+    const named = this.worktreeManager.ensureNamedWorktree(this.config.worktreeBranch!, homeDir());
+    // The binding belongs to this durable task; the worktree itself is addressed by its branch.
+    this.activeWorktree = { taskId: this.currentTaskId, worktreePath: named.path, branch: named.branch, kind: "named" };
+    this.originalWorkspace = this.config.workspace;
+    // Already standing in it (`--resume` launched inside the saved worktree): switching to the same directory would reset
+    // the conversation and objective that were just restored.
+    const standingInIt = (() => {
+      try { return fs.realpathSync(this.config.workspace) === fs.realpathSync(named.path); } catch { return false; }
+    })();
+    if (!standingInIt) this.switchWorktreeWorkspace(named.path);
+    else this.rebuildBridgeForIsolation();
+    console.log(pc.cyan(`🌲 ${named.created ? "Created" : "Reusing"} named git worktree: ${named.branch} at ${named.path}`));
+  }
+
+  /**
+   * For a frontend that snapshots the workspace before a turn: moves the session into the `--worktree-branch` worktree
+   * first, so that snapshot (and a later `/undo`) is of the worktree the turn edits, not the launch checkout. Does
+   * nothing once the session is in it, without the flag, or where `run` would refuse anyway (read-only, dry run).
+   */
+  public enterNamedWorktreeBeforeTurn(): void {
+    if (!this.config.worktree || !this.config.worktreeBranch || this.activeWorktree || this.isReadOnly() || this.config.dryRun) return;
+    this.assertWorktreeRunnable();
+    this.establishNamedWorktree();
+  }
+
+  /**
+   * A named binding (restored by `--resume` or kept between turns) must still be the registered linked worktree on its
+   * recorded branch, whatever flags this launch has: another terminal can switch its branch or replace it while stopped.
+   */
+  private assertNamedBindingCurrent(): void {
+    const retained = this.activeWorktree;
+    if (retained?.kind !== "named") return;
+    if (!this.worktreeManager.isRetainedNamedWorktree(retained.worktreePath, retained.branch)) {
+      throw new Error(`Cannot continue: ${retained.worktreePath} is no longer the registered linked worktree for ${retained.branch} (its branch may have been switched); restore it or start a new session.`);
+    }
+  }
+
   async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; step?: boolean }): Promise<TurnResult> {
+    if (!this.config.worktree) this.assertNamedBindingCurrent();
     this.ui.banner();
     console.log(`🎯 Task: ${safeTerminal(typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]")}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
@@ -6890,24 +7436,33 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
     this.verifiedWorktreeCompletion = false;
     this.activeValidationReceipt = undefined;
+    let continuingNamedWorktree = false;
     if (this.config.worktree) {
-      if (this.activeWorktree) {
-        throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
+      // A task worktree must be merged or discarded before another task starts. A named worktree is kept by design,
+      // so later runs and REPL/TUI turns continue inside it; only a request for a different named worktree is refused.
+      const retained = this.activeWorktree;
+      continuingNamedWorktree = retained?.kind === "named";
+      if (retained && retained.kind !== "named") {
+        throw new Error(`Cannot start a new task: unresolved worktree ${retained.taskId}; merge or discard it first.`);
       }
-      if (!this.worktreeManager.isGitRepo()) {
-        throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
+      if (retained && this.config.worktreeBranch && this.config.worktreeBranch !== retained.branch) {
+        throw new Error(`Cannot start a new task: this session runs in the named worktree ${retained.branch} at ${retained.worktreePath}; start a new session for ${this.config.worktreeBranch}.`);
       }
-      const configuredSandbox = this.config.sandbox === "bwrap" || this.config.sandbox === "docker"
-        ? this.config.sandbox
-        : "auto";
-      if (!isSandboxAvailable(configuredSandbox)) {
-        throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
+      this.assertWorktreeRunnable();
+      if (retained) {
+        // Still the worktree it was: another terminal can switch its branch or replace it between turns, so the same
+        // validation as the durable binding (Git lists it on the recorded branch, pointer, registry) runs again.
+        this.assertNamedBindingCurrent();
+        console.log(pc.cyan(`🌲 Continuing in named git worktree: ${retained.branch} at ${retained.worktreePath}`));
+      } else if (this.config.worktreeBranch) {
+        this.establishNamedWorktree();
+      } else {
+        const wt = this.worktreeManager.createWorktree();
+        this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch, kind: "task" };
+        this.originalWorkspace = this.config.workspace;
+        this.switchWorktreeWorkspace(wt.worktreePath);
+        console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
       }
-      const wt = this.worktreeManager.createWorktree();
-      this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch };
-      this.originalWorkspace = this.config.workspace;
-      this.switchWorktreeWorkspace(wt.worktreePath);
-      console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
     }
 
     if (this.flightRecorder && !this.flightRecorder.isSessionActive()) {
@@ -6918,7 +7473,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       });
     }
 
-    if (!options?.resume) {
+    // Continuing in a retained named worktree is a follow-up, not a new task: keep the transcript, objective and findings.
+    if (!options?.resume && !continuingNamedWorktree) {
       this.resetConversation();
     }
     this.worktreeRunTurnAuthorized = true;
@@ -6946,7 +7502,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
     } finally {
       this.worktreeRunTurnAuthorized = false;
-      if (this.activeWorktree && this.config.worktree) {
+      if (this.activeWorktree?.kind === "named") {
+        console.log(pc.cyan(`🌲 Named worktree ${this.activeWorktree.branch} kept at ${this.activeWorktree.worktreePath}. Merge it with \`nexus worktree merge\` from inside it, or remove it with \`nexus worktree remove\`.`));
+      } else if (this.activeWorktree && this.config.worktree) {
         const hasChanges = this.worktreeManager.hasChanges(this.activeWorktree.taskId);
         if (hasChanges) {
           if (

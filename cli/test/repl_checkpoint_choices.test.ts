@@ -12,8 +12,8 @@ function makeRepl(choice: string, checkpoint: (allowSensitive: boolean) => void 
   const fallback: boolean[] = [];
   let first = true;
   const repl = Object.create(InteractiveRepl.prototype) as any;
-  repl.config = { readOnly: false };
-  repl.checkpointManager = {
+  repl.config = { readOnly: false, workspace: "/fake/workspace" };
+  const manager = {
     createCheckpoint: (_name: string, options?: { allowSensitive?: boolean }) => {
       if (first) {
         first = false;
@@ -23,7 +23,9 @@ function makeRepl(choice: string, checkpoint: (allowSensitive: boolean) => void 
       return {};
     },
   };
+  repl.app = { getCheckpointManager: () => manager }; // injected through the ApplicationCore seam
   repl.agent = {
+    enterNamedWorktreeBeforeTurn: () => {},
     setCheckpointReadOnlyFallback: (value: boolean) => fallback.push(value),
     setApprovalMode: () => {},
   };
@@ -51,7 +53,7 @@ test("REPL asks how to proceed when sensitive content blocks a turn checkpoint",
 
 test("REPL asks how to proceed when initial protected Git verification blocks a turn checkpoint", async () => {
   const { repl, prompts, fallback } = makeRepl("2");
-  repl.checkpointManager.createCheckpoint = () => {
+  repl.app.getCheckpointManager().createCheckpoint = () => {
     throw new Error("Checkpoint could not verify protected Git state; no checkpoint was written");
   };
 
@@ -87,7 +89,7 @@ test("REPL does not request a checkpoint for an explicitly read-only launch", as
   const { repl, prompts, fallback } = makeRepl("1");
   repl.config.readOnly = true;
   let checkpointCalls = 0;
-  repl.checkpointManager.createCheckpoint = () => { checkpointCalls++; };
+  repl.app.getCheckpointManager().createCheckpoint = () => { checkpointCalls++; };
   assert.equal(await (repl as any).prepareTurnCheckpoint("Turn: read-only"), true);
   assert.equal(checkpointCalls, 0);
   assert.deepEqual(prompts, []);
@@ -100,7 +102,7 @@ test("REPL uses read-only for the current turn and resumes after a later safe ch
   assert.deepEqual(fallback, [true]);
 
   let checkpointsAfterChoice = 0;
-  repl.checkpointManager.createCheckpoint = () => { checkpointsAfterChoice++; };
+  repl.app.getCheckpointManager().createCheckpoint = () => { checkpointsAfterChoice++; };
   assert.equal(await (repl as any).prepareTurnCheckpoint("Turn: later instruction"), true);
   assert.equal(checkpointsAfterChoice, 1, "the later turn starts only after its safe checkpoint succeeds");
   assert.deepEqual(fallback, [true, false], "configured mode resumes only after the successful checkpoint");
