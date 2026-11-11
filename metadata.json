@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M762Q2298H2KNFMV39CP4B28",
+  "strategy": "manual-commit",
+  "branch": "v1/v114-wp1308-harness-provenance",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 2414,
+    "cache_read_tokens": 313636,
+    "output_tokens": 394,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 30,
+      "cache_creation_tokens": 96363,
+      "cache_read_tokens": 1572803,
+      "output_tokens": 5096,
+      "api_call_count": 14
+    }
+  },
+  "redaction": {
+    "replacements": 29,
+    "layers": {
+      "betterleaks": 1,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 28,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
