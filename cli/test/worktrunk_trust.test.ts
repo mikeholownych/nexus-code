@@ -414,7 +414,7 @@ test("refusal text shows control bytes from agent-controlled paths escaped, neve
   const { UntrustedCheckoutError } = await import("../src/worktrunk/git.js");
   const error = new UntrustedCheckoutError("/w/\u001b]52;c;x\u0007", "/w/\u001b[2K/.git is a repository nested inside the linked worktree /w", ["status"]);
   assert.doesNotMatch(error.message, /[\u0000-\u001f\u007f-\u009f]/);
-  assert.match(error.message, /\\x1b\]52;c;x\\x07/);
+  assert.match(error.message, /\\u001b\]52;c;x\\u0007/);
 });
 
 test("a project .env that is a FIFO is ignored, not read", async () => {
@@ -446,4 +446,20 @@ test("a project .env that is a symlink to a small regular file is still read", a
     process.chdir(previous);
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("Git's own error line, which can carry an agent-chosen file name, is shown escaped", async () => {
+  const { git: run, printable } = await import("../src/worktrunk/git.js");
+  assert.equal(printable("a\u001b]52;c;x\u0007b\u202ec"), "a\\u001b]52;c;x\\u0007b\\u202ec");
+  const f = fixture("feat/stderr");
+  try {
+    const name = "\u001b]0;pwned\u0007";
+    fs.writeFileSync(path.join(f.dir, name), "x\n");
+    fs.chmodSync(path.join(f.dir, name), 0o000); // `git add` cannot open it and names it in its error line
+    if (process.getuid?.() === 0) return; // root can read it anyway
+    let message = "";
+    try { run(f.dir, ["add", "-A"]); } catch (err) { message = (err as Error).message; }
+    assert.match(message, /Permission denied|failed/);
+    assert.doesNotMatch(message, /[\u0000-\u001f\u007f-\u009f]/, "no raw control byte reaches the message");
+  } finally { f.cleanup(); }
 });

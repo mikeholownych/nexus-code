@@ -54,11 +54,17 @@ export class GitError extends Error {
   }
 }
 
+/**
+ * Text that may carry bytes from the agent's worktree (a path, Git's own error line) shown with control, C1, bidi and
+ * line-separator characters escaped, never raw: they would otherwise reach the operator's terminal as escape sequences.
+ */
+export function printable(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 /** A checkout (or a repository nested in one) whose Git directory the sandboxed agent could have planted. */
 export class UntrustedCheckoutError extends GitError {
   constructor(cwd: string, reason: string, args: readonly string[]) {
-    // The paths come from the agent's worktree: control bytes (terminal escapes) are shown escaped, never raw.
-    const printable = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
     super(`refusing to run Git in ${printable(cwd)}: it is not a trusted worktree of this repository (${printable(reason)})`, null, args);
     this.name = "UntrustedCheckoutError";
   }
@@ -182,7 +188,7 @@ export function git(cwd: string, args: readonly string[], options: GitOptions = 
   const out: GitResult = { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "", timedOut };
   if (result.error && !timedOut) throw new GitError(`git could not run: ${(result.error as Error).message}`, null, args);
   if (!options.allowFailure && (timedOut || result.status !== 0)) {
-    const detail = timedOut ? "timed out" : redactSecrets(out.stderr.trim().split("\n")[0] ?? "").slice(0, 300);
+    const detail = timedOut ? "timed out" : printable(redactSecrets(out.stderr.trim().split("\n")[0] ?? "").slice(0, 300));
     throw new GitError(`git ${args[0] ?? ""} failed: ${detail || `exit ${result.status}`}`, result.status, args);
   }
   return out;

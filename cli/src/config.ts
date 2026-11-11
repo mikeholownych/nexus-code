@@ -9,10 +9,10 @@ import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
 import { readSmallFile } from "./core/checkout_trust.js";
+import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
 
 /** A project `.env` larger than this is ignored (it is repository-controlled). */
 const MAX_PROJECT_ENV_BYTES = 256 * 1024;
-import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
 const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
@@ -126,7 +126,9 @@ export function loadEnvironment(): void {
       const text = readSmallFile(fs.realpathSync(cwdEnv), MAX_PROJECT_ENV_BYTES);
       if (text !== undefined) project = parseDotenv(Buffer.from(text));
       else warnOnce(`project .env ${cwdEnv} was not read (not a regular file, or larger than ${MAX_PROJECT_ENV_BYTES / 1024} KiB)`);
-    } catch {}
+    } catch {
+      warnOnce(`project .env ${cwdEnv} was not read (it could not be resolved or read)`);
+    }
     for (const [key, value] of Object.entries(project)) {
       if (isProjectEnvKey(key)) projectEnvSettings[key] = value;
       else projectEnvIgnored.push(key);

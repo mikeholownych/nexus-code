@@ -137,7 +137,7 @@ test("staged ignored file with git add -f is preserved in working state and inva
     git(f.dir, "add", ".gitignore");
     git(f.dir, "commit", "-q", "-m", "ignore file");
     // Verify current clean state
-    recordVerification(f.dir, "npm test");
+    assert.equal(recordVerification(f.dir, "npm test"), true);
     // Now stage an ignored file using git add -f
     fs.writeFileSync(path.join(f.dir, "ignored.txt"), "secret edit\n");
     git(f.dir, "add", "-f", "ignored.txt");

@@ -334,7 +334,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (!options.noRemove) {
     // The merged work is on the target. Only ignored output (build caches) may still be in the worktree; it goes with
     // it. Anything else left (edits inside a submodule cannot be committed from here, for one) is never forced away.
-    let left: ReturnType<typeof statusOf>;
+    let left: ReturnType<typeof statusOf> | undefined; // undefined: the inspection itself failed
     let initialized: string[];
     let unpublished: string[];
     try {
@@ -343,13 +343,15 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
       unpublished = unpublishedSubmodules(source.path, initialized);
     } catch (err) {
       // The merge is done; whatever stops the safety checks keeps the worktree rather than failing the report.
-      left = { staged: 0, modified: 0, untracked: 0, conflicted: 0, ignored: 0, total: 1 };
+      left = undefined;
       initialized = [];
       unpublished = [];
       notes.push(`Could not inspect the worktree after the merge (${redactSecrets((err as Error).message).slice(0, 150)}).`);
     }
     if (unpublished.length > 0) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${unpublished.map((sub) => redactSecrets(sub)).join(", ")} has a commit that is on no remote branch, and removing the worktree would delete its only copy. Push it from there, then run \`worktree remove\`. The merge itself is done.`);
+    } else if (left === undefined) {
+      notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: it could not be inspected, so nothing was deleted. The merge itself is done.`);
     } else if (left.total > 0) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: ${left.total} uncommitted change(s) remain that the merge could not carry (check \`git status\` there, submodules included). Nothing was deleted.`);
     } else if (initialized.length > 0) {

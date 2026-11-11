@@ -67,7 +67,7 @@ when its deliverable-bound verifier passes inside that worktree, keyed by branch
 no longer matches. Without one, merge refuses unless you pass `--no-verify-receipt --reason "why"`; the waiver (branch, head,
 reason) is recorded in the registry. `--ai-message` asks your configured model for the commit message instead: it receives the diffstat and a diff of what will be
 committed, capped at 20,000 characters and redacted, labelled as untrusted data; the reply is validated (at most 100
-characters for the subject line, no control characters) and redacted; body lines shaped like commit trailers or release directives (`Release-As: ...`, `Co-Authored-By: ...`, `BREAKING CHANGE`) are dropped, and so is any ordinary line that happens to look like one. Any failure or a 30 second timeout falls
+characters for the subject line, no control, C1 or bidi-override characters) and redacted; body lines shaped like commit trailers or release directives (`Release-As: ...`, `Co-Authored-By: ...`, `BREAKING CHANGE`) are dropped, and so is any ordinary line that happens to look like one. Any failure or a 30 second timeout falls
 back with a note to the deterministic message, and an explicit `-m` always wins. No external command is run. Before history is rewritten the branch, including swept-in working-tree changes, is saved to
 `refs/nexus-backup/<name>-<hash>`: one flat ref per branch, where `<name>` is the branch name with every character outside
 `A-Za-z0-9._-` turned into `-` (at most 40 characters) and `<hash>` is the first 12 hex digits of the SHA-1 of the
