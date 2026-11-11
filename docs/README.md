@@ -28,7 +28,7 @@ Deep-dive documentation on how Nexus Code operates under the hood:
 |---|---|
 | [Architecture Reference](ARCHITECTURE.md) | High-level system topology, decoupled TypeScript/Rust model, and IPC protocol |
 | [Client Guide](CLIENT_GUIDE.md) | Internals of the TypeScript agent brain, REPL, and sidecar event loop |
-| [Execution Convergence](EXECUTION_CONVERGENCE.md) | Turn state machines, deterministic action loops, and invariant verification |
+| [Execution Convergence](EXECUTION_CONVERGENCE.md) | One lifecycle for autonomous work: execution paths, `/team` on the convergence foundation, completion propagation, restart |
 | [Compaction & Continuity](COMPACTION_AND_CONTINUITY.md) | Context budgeting, live prompt compaction, and long-running task persistence |
 | [State Compatibility](STATE_COMPATIBILITY.md) | Schema versioning for checkpoints, turn journals, and backward-compatible state restoration |
 
@@ -51,8 +51,8 @@ Guidelines for building, verifying, and packaging Nexus Code from source:
 | Document | Focus Area |
 |---|---|
 | [Development Guide](DEVELOPMENT.md) | Build requirements, running local test gates (`make test`, `make test-ci`), and packaging |
-| [Repository Quality Standards](REPOSITORY_QUALITY.md) | Code style, static analysis, type checking, and clippy guidelines |
-| [Upgrade Security](UPGRADE_SECURITY.md) | Safe dependency upgrades, vulnerability auditing, and SBOM maintenance |
+| [Repository Quality Standards](REPOSITORY_QUALITY.md) | Repository administration and quality: branch-protection verification, dependency and automation boundaries |
+| [Upgrade Security](UPGRADE_SECURITY.md) | Installer and upgrade security: origin and redirect validation, bounded downloads, provenance, rollback, publisher authenticity |
 | [Releases Directory](releases/) | Release notes per version |
 
 ---

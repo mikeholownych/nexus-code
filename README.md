@@ -10,6 +10,8 @@
 **Nexus Code** is an open-source, local-first AI coding agent and execution harness. It pairs a TypeScript agent and sidecar with native Rust workspace tools and a Ratatui terminal user interface (TUI), with opt-in sandboxing, human approval modes, and Git worktree isolation.
 
 > **Status:** the latest stable release is [v1.1.3](https://github.com/mikeholownych/nexus-code/releases). v1.1.4 is in development: its work ledger is closed and qualification is pending. Development plans and this README do not establish release readiness; see [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases) and [`docs/releases/`](docs/releases/).
+>
+> The Cloudflare contest entry is historical: see [docs/CLOUDFLARE_CONTEST.md](docs/CLOUDFLARE_CONTEST.md).
 
 ---
 
@@ -73,10 +75,11 @@ graph TD
 
     Sidecar <-->|CLI / NDJSON| CoreTools[harness-core\nRust Native Engine]
 
-    subgraph Sandboxed Workspace
-        CoreTools --> Sandbox[Linux bwrap / Docker]
-        Sandbox --> Worktrees[Git Worktree Isolation\n.nexus/worktrees/branch]
-        Worktrees --> Disk[(Project Workspace)]
+    subgraph Workspace ["Workspace (opt-in sandbox / worktree)"]
+        CoreTools --> Disk[(Project Workspace)]
+        CoreTools -.->|--sandbox| Sandbox[Linux bwrap / Docker]
+        Sandbox -.-> Disk
+        Worktrees[Optional git worktree\n.nexus/worktrees/branch] -.-> Disk
     end
 ```
 
@@ -201,7 +204,7 @@ Stay in complete control of changes:
 | Command | Shortcut | Description |
 |---|---|---|
 | `/help` | `/?` | List the slash commands and keybindings |
-| `/model` | `Ctrl+P` | Choose a model from any connected provider (Ctrl+P connects one) |
+| `/model` | — | Choose a model from any connected provider (press Ctrl+P inside the picker to connect one) |
 | `/status` | — | Show workspace, model, mode, endpoint, and session info |
 | `/worktree` | — | Manage the speculative worktree and named worktrees (`status`, `discard`, `list`, `path`, `switch`, `remove`, `copy-ignored`, `prune`, `merge`) |
 | `/diff` | — | Show uncommitted changes as a syntax-highlighted unified diff |
@@ -257,7 +260,7 @@ nexus-code/
 │   ├── src/bin/nexus_tui/ # Live TUI: views, diff cards, composer, markdown
 │   └── src/               # File operations, sandboxing, unified diffs, syntax
 ├── docs/                  # Architecture specs, user manuals, and provider guides
-├── experiments/           # Cloudflare Workers & Artifacts collaboration slices
+├── experiments/           # Experiment and measurement records, including the Cloudflare Artifacts vertical slice
 ├── scripts/               # Release packaging, CI runners, and security gates
 └── tasks/                 # Working notes: plan and lessons
 ```
