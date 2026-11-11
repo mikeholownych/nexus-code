@@ -732,7 +732,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     if ("error" in candidate && "unsupported" in candidate) {
       const plain = plainCandidateDiff(ctx.workspace ?? workspace, ctx.baseCommit ?? ctx.startCommit, this.opts.baseConfig.workspace);
       if (!("error" in plain)) {
-        plainNote = `[This is a plain git diff against the base, not the usual auto-collected one: ${candidate.error.replace(/^automatic inputs are not available for this repository state: /, "").replace(/; give the unit explicit inputs instead$/, "")}. It can show absent or filtered files as changed.]\n`;
+        plainNote = `[This is a plain git diff against the base, not the usual auto-collected one: ${candidate.unsupported}. It can show absent or filtered files as changed.]\n`;
         candidate = plain;
       }
     }

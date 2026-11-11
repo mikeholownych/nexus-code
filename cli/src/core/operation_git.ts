@@ -437,15 +437,15 @@ export class OperationGit {
   private snapshotCandidate(unitId: string): string {
     const entry = this.state.units[unitId];
     if (!entry || !fs.existsSync(entry.worktree)) throw new Error(`unit ${unitId}'s worktree is not available to snapshot`);
+    // Host-side git runs only where the checkout is trusted: the unit's model owns this worktree and may have replaced
+    // its `.git` pointer or planted a repository in it. Refused (throws) before anything is read or copied.
+    const pin = trustedGitArgs(entry.worktree);
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-candidate-snapshot-"));
     // Pinned like the candidate diff: nothing the (model-written) worktree configures may run here. No inherited GIT_*,
     // no fsmonitor or hooks, and attributes from a stripped copy of the worktree's own .gitattributes (filter and diff
     // drivers removed, text/eol kept), so no clean filter runs; a driver assigned through $GIT_DIR/info/attributes
     // refuses the snapshot instead of being run.
     let attrs: ReturnType<typeof attributesTree>;
-    // Host-side git runs only where the checkout is trusted: the unit's model owns this worktree and may have replaced
-    // its `.git` pointer or planted a repository in it. Refused (throws) before anything is read or copied.
-    const pin = trustedGitArgs(entry.worktree);
     // `raw` keeps the output verbatim (NUL-separated listings: a path may start or end with whitespace); scalar results
     // are trimmed.
     const run = (args: string[], options: { input?: string; ownIndex?: boolean; raw?: boolean } = {}) => {

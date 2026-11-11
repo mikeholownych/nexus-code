@@ -65,7 +65,7 @@ for (const [name, setup, why] of REFUSED) {
     const r = candidateDiff(d, undefined);
     assert.ok("error" in r, `expected a refusal, got ${JSON.stringify(r).slice(0, 200)}`);
     assert.match(r.error, /automatic inputs are not available/);
-    assert.equal((r as { unsupported?: boolean }).unsupported, true);
+    assert.ok((r as { unsupported?: string }).unsupported, "marked as a domain refusal with its reason");
     assert.match(r.error, why);
   });
 }
@@ -173,7 +173,7 @@ test("a worktree whose .git pointer was replaced by another repository is refuse
   const t = linkedUnit();
   fs.writeFileSync(path.join(t.wt, ".git"), `gitdir: ${path.join(evil, ".git")}\n`);
   const r = candidateDiff(t.wt, undefined);
-  assert.ok("error" in r && !(r as { unsupported?: boolean }).unsupported && /point back|could not be verified|not a plain/i.test(r.error), JSON.stringify(r));
+  assert.ok("error" in r && !(r as { unsupported?: string }).unsupported && /point back|could not be verified|not a plain/i.test(r.error), JSON.stringify(r));
   assert.throws(() => t.snapshot(), /point back|could not be verified|not a plain/i);
   assert.equal(fs.existsSync(marker), false);
 });
@@ -227,7 +227,7 @@ for (const [name, setup] of [...REFUSED.map(([n, s]) => [n, s] as [string, Setup
   });
 }
 
-test("the plain diff leaves protected files out and refuses a replaced .git like the main builder", () => {
+test("the plain diff leaves protected files out, including a moved one, and refuses a replaced .git", () => {
   const d = repo({ "in/a.txt": "a\n", ".env": "SECRET_TOKEN_VALUE_1234\n" });
   put(d, ".env", "SECRET_TOKEN_VALUE_5678\n"); put(d, "in/a.txt", `a ${MARK}\n`);
   const r = plainCandidateDiff(d, undefined);
@@ -235,4 +235,18 @@ test("the plain diff leaves protected files out and refuses a replaced .git like
   assert.doesNotMatch(r.diff, /SECRET_TOKEN/);
   assert.match(r.diff, new RegExp(MARK));
   assert.ok(r.omitted >= 1);
+  sh(d, "checkout", "--", ".env"); fs.renameSync(path.join(d, ".env"), path.join(d, "notes.txt"));
+  const moved = plainCandidateDiff(d, undefined);
+  assert.ok(!("error" in moved), JSON.stringify(moved));
+  assert.doesNotMatch(moved.diff, /SECRET_TOKEN/, "a protected file moved to a new name is not shown");
+  const t = tester();
+  fs.writeFileSync(path.join(t.wt, ".git"), `gitdir: ${path.join(d, ".git")}\n`);
+  assert.ok("error" in plainCandidateDiff(t.wt, undefined));
+});
+
+test("a deleted tracked .gitattributes does not refuse the candidate", () => {
+  const d = repo({ "in/a.txt": "a\n", ".gitattributes": "*.txt text\n" });
+  fs.rmSync(path.join(d, ".gitattributes"));
+  const r = candidateDiff(d, undefined);
+  assert.ok(!("error" in r), JSON.stringify(r));
 });

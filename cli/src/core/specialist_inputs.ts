@@ -11,6 +11,7 @@ import { SecurityManager } from "../security.js";
 import { MAX_SPECIALIST_INPUT_CHARS } from "./specialist_profiles.js";
 import { redactForPersistence } from "./persistence_protection.js";
 import { trustedGitArgs } from "../git.js";
+import { verifyCheckout } from "./checkout_trust.js";
 import { UntrustedCheckoutError } from "../worktrunk/git.js";
 
 /**
@@ -138,7 +139,10 @@ export function snapshotSupport(run: (args: string[]) => string, root: string): 
       if (!st.isFile()) continue;
       if (st.size > MAX_ATTRIBUTES_BYTES) return refuse(`${file.slice(0, 80)} is larger than ${MAX_ATTRIBUTES_BYTES} bytes, so its attributes cannot be applied`, "shrink it");
       text = fs.readFileSync(full, "utf8");
-    } catch { return refuse(`${file.slice(0, 80)} could not be read`, "fix its permissions"); }
+    } catch (err: any) {
+      if (err?.code === "ENOENT") continue; // listed but deleted from the worktree: nothing to apply
+      return refuse(`${file.slice(0, 80)} could not be read`, "fix its permissions");
+    }
     if (/(^|\s)filter=/m.test(text.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n"))) return refuse(`${file.slice(0, 80)} assigns a clean/smudge filter, so worktree content differs from the index by design`, "no workaround");
   }
   return { ok: true };
@@ -234,7 +238,7 @@ function significantLines(data: Buffer): string[] {
  * The attribute source for a diff: the worktree's .gitattributes files with filter and diff assignments removed, as a
  * tree in a private object directory (nothing is written to the repository). Undefined when there are none.
  */
-export function attributesTree(root: string, scratch: string, files: string[], pin: string[] = []): { tree: string; objects: string } | undefined {
+export function attributesTree(root: string, scratch: string, files: string[], pin: string[]): { tree: string; objects: string } | undefined {
   const sources = files.filter((f) => path.posix.basename(f) === ".gitattributes").flatMap((f) => {
     try {
       const full = path.join(root, f);
@@ -283,7 +287,7 @@ export function attributesTree(root: string, scratch: string, files: string[], p
  */
 export interface CandidateDiff { base: string; diff: string; omitted: number; omittedNew: number; omittedNested: number }
 /** A refusal because the repository state is outside the supported domain (as opposed to a git failure). */
-export type CandidateDiffError = { error: string; unsupported?: true };
+export type CandidateDiffError = { error: string; unsupported?: string };
 export function candidateDiff(workspace: string, base: string | undefined, policyWorkspace?: string): CandidateDiff | CandidateDiffError {
   const root = path.resolve(workspace);
   let scratch: string | undefined;
@@ -311,7 +315,7 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     const security = new SecurityManager(policyWorkspace ?? root);
     // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
     const support = snapshotSupport((args) => git(args, { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }), root);
-    if ("unsupported" in support) return { error: `automatic inputs are not available for this repository state: ${support.unsupported}; give the unit explicit inputs instead`, unsupported: true };
+    if ("unsupported" in support) return { error: `automatic inputs are not available for this repository state: ${support.unsupported}; give the unit explicit inputs instead`, unsupported: support.unsupported };
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     git(["read-tree", "--end-of-options", commit]);
     const listing = (args: string[], ownIndex = false, timeoutMs?: number) => git(["ls-files", "-z", ...args], { maxBuffer: LISTING_MAX_BUFFER, ownIndex, timeoutMs }).split("\0").filter(Boolean);
@@ -400,7 +404,10 @@ function protectedMatcher(git: (args: string[], timeoutMs?: number) => string, r
   // A unit's worktree lacks the operator's untracked and ignored secrets (.env), so those are compared too.
   if (path.resolve(policyWorkspace ?? root) !== root) {
     const operator = path.resolve(policyWorkspace!);
-    const operatorPin = trustedGitArgs(operator);
+    // The operator's own checkout is not agent-writable: it is pinned like any checkout, but a repository nested in it (an untracked clone) is normal there.
+    const operatorCheckout = verifyCheckout(operator);
+    if (operatorCheckout.reason) throw new UntrustedCheckoutError(operator, operatorCheckout.reason, []);
+    const operatorPin = operatorCheckout.gitDir ? ["--git-dir", operatorCheckout.gitDir, "--work-tree", operatorCheckout.workTree!] : [];
     for (const extra of [[], ["--ignored"]]) {
       const listed = execFileSync("git", [...operatorPin, ...GIT_SAFE, "ls-files", "-z", "--cached", "--others", ...extra, "--exclude-standard"], {
         cwd: operator, env: safeGitEnv(undefined), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: IGNORED_LISTING_TIMEOUT_MS, maxBuffer: LISTING_MAX_BUFFER,
@@ -413,7 +420,7 @@ function protectedMatcher(git: (args: string[], timeoutMs?: number) => string, r
 
 /**
  * A plain candidate diff for review units when the repository state is outside the supported domain: tracked changes
- * against the base (`git diff`, no copy detection, no scratch index) plus untracked files, as before WP-1316. The same
+ * against the base (`git diff`, no copy detection, no scratch index) plus untracked files. The same
  * guards apply that do not depend on the domain: the checkout is verified and pinned, no driver runs, protected paths
  * are left out, and a new file carrying protected content is omitted. It can be wrong where the predicate refuses (a
  * sparse checkout shows its absent files as deleted, an LFS pointer differs from its content), which is why the reviewer
@@ -438,7 +445,12 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     // The base tree in a private index: no flag of the real index (skip-worktree, assume-unchanged) can hide a file.
     git(["read-tree", "--end-of-options", commit]);
-    const tracked = git(["diff", "--name-only", "-z", "--relative", "--no-renames", "--no-ext-diff", "--no-textconv", "--"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
+    // No content is compared (no clean filter can run) before every path is known to have no driver.
+    const driverCheck = (files: string[]) => driverRefusal((args, input) => execFileSync("git", [...pin, ...GIT_SAFE, ...args], { cwd: root, env, encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"], timeout: 30_000, maxBuffer: GIT_MAX_BUFFER }), files);
+    const listed = [...git(["ls-files", "-z", "--cached"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"), ...git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0")].filter((p) => p && !p.endsWith("/"));
+    const early = driverCheck(listed);
+    if (early) return { error: early };
+    const tracked = git(["diff", "--name-only", "-z", "--ignore-submodules=all", "--relative", "--no-renames", "--no-ext-diff", "--no-textconv", "--"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
     const others = git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
     const omittedNested = others.filter((p) => p.endsWith("/")).length;
     const untracked = others.filter((p) => !p.endsWith("/"));
@@ -448,14 +460,14 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     let omitted = tracked.length - allowedTracked.length;
     let omittedNew = 0;
     const allowedNew: string[] = [];
+    // As in the main builder: once any protected path changed (a protected file moved leaves no source on disk), no new file is shown.
+    const protectedChanged = allowedTracked.length !== tracked.length;
     for (const file of untracked) {
       if (inputPathProtection(security, file) !== undefined) omitted++;
-      else if (sources.carriedBy(root, file)) omittedNew++;
+      else if (protectedChanged || sources.carriedBy(root, file)) omittedNew++;
       else allowedNew.push(file);
     }
-    const refusal = driverRefusal((args, input) => execFileSync("git", [...pin, ...GIT_SAFE, ...args], { cwd: root, env, encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"], timeout: 30_000, maxBuffer: GIT_MAX_BUFFER }), [...allowedTracked, ...allowedNew]);
-    if (refusal) return { error: refusal };
-    let diff = allowedTracked.length ? git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--relative", "--", ...allowedTracked.map((p) => `:(literal)${p}`)]) : "";
+    let diff = allowedTracked.length ? git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=all", "--relative", "--", ...allowedTracked.map((p) => `:(literal)${p}`)]) : "";
     for (const file of allowedNew) diff += git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-index", "--", "/dev/null", file], { okExit: [1] });
     return { base: commit, diff, omitted, omittedNew, omittedNested };
   } catch (err: any) {
