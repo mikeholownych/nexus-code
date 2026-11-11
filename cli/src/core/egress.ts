@@ -493,7 +493,8 @@ function bearerTokenLength(value: string): number {
 function scanKeyRun(text: string, from: number): number {
   let end = from;
   while (end < text.length) {
-    const encoded = matchEncodedKeyChar(text, end);
+    const code = text.charCodeAt(end);
+    const encoded = code === 37 || code >= 0x2044 ? matchEncodedKeyChar(text, end) : 0; // "%" or a look-alike
     if (encoded > 0) end += encoded;
     else if (isBase64KeyChar(text.charCodeAt(end))) end++;
     else if (text[end] === "\\" && text[end + 1] === "/") end += 2; // a JSON-escaped "/"
@@ -502,21 +503,22 @@ function scanKeyRun(text: string, from: number): number {
   return end;
 }
 
-/** Credential kinds whose value, written as a "."-joined run, continues past a dot (a JWE has five segments, not three). */
+/** Names of `DETERMINISTIC_PATTERNS`: credential kinds whose value, written as a "."-joined run, continues past a dot (a JWE has five segments, not three). */
 const DOTTED_CONTINUATION_PATTERNS = new Set([
   "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN", "GOOGLE_API_KEY", "HUGGINGFACE_TOKEN", "SLACK_TOKEN", "JWT_TOKEN",
 ]);
 
 /**
  * A key followed by "." and more key characters keeps going: `sk-…RtBq.Xo2RtBq` is one credential, not a key and a
- * stray word. A dotted segment is key material when it is at least 6 characters and has a digit, a capital after its first
- * character, or a "/" or "+": a sentence's full stop (`…RtBq.` then a space), a file extension (`.json`) and a word
- * (`.Models`) end the key as before. Each segment is scanned once, so the cost stays linear.
+ * stray word. A dotted segment is key material when it is at least 6 characters and has a digit, "/" or "+", or does not
+ * split into words: a sentence's full stop (`…RtBq.` then a space), a file extension (`.json`) and a word
+ * (`.Models`, `.toString`, `.README`) end the key as before. Each segment is scanned once, so the cost stays linear.
  */
 function extendDottedKey(text: string, end: number): number {
   while (text[end] === ".") {
     const segmentEnd = scanKeyRun(text, end + 1);
-    if (segmentEnd - end - 1 < 6 || !/[0-9A-Z+/]/.test(normalizeKeyChars(text.slice(end + 2, segmentEnd)))) break;
+    const segment = normalizeKeyChars(text.slice(end + 1, segmentEnd));
+    if (segment.length < 6 || !(/[0-9+/]/.test(segment) || !segment.split(/[_-]+/).every(isIdentifierPart))) break;
     end = segmentEnd;
   }
   return end;
@@ -525,8 +527,8 @@ function extendDottedKey(text: string, end: number): number {
 /**
  * `sk-` / `sk-ant-` keys whose body is base64 ("/" and "+" included), found in one left-to-right pass: from each `sk-`
  * at a word boundary take the maximal run of key characters (a JSON-escaped `\/` counts as "/") once, validate it,
- * and resume after it. Nothing of the run
- * is trimmed: its last segment is key material whatever its letter case. A run is a key if its body is at least 20
+ * and resume after it (the run takes encoded and look-alike "/" and "+" and a dotted continuation, see `scanKeyRun` and
+ * `extendDottedKey`). Nothing of the run is trimmed: its last segment is key material whatever its letter case. A run is a key if its body is at least 20
  * characters, contains "/" or "+", has a digit, a capital or "+", and is not a path (`sk-learn/linear_model/Ridge2`,
  * see `isPathLike`). A plain key followed by a URL path (`sk-…RtBq/models`: the body before its first "/" is a 20-64
  * character plain key and the rest is a path) is left to the bounded `sk-` patterns, which stop at the "/".
@@ -1071,7 +1073,10 @@ export class InformationFlowBoundary {
           continue;
         }
         let end = name === "BEARER_AUTH_HEADER" ? start + bearerTokenLength(text.slice(start, matchEnd)) : matchEnd;
-        if (DOTTED_CONTINUATION_PATTERNS.has(name)) end = extendDottedKey(text, end);
+        if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
+          end = extendDottedKey(text, end);
+          re.lastIndex = Math.max(re.lastIndex, end); // resume after the extension: a chain of keys is scanned once
+        }
         while (end > start) {
           const ch = text.charCodeAt(end - 1);
           if (ch === 34 || ch === 39 || ch === 59 || ch === 44) { // ", ', ;, ,

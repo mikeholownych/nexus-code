@@ -95,7 +95,9 @@ test("a key at the end of a sentence keeps the full stop and an extension-like t
     const key = `sk-ant-${ANTHROPIC_BODY}${TAIL}`;
     assert.equal(redactDiagnosticForOutput(`the key was ${key}.`), "the key was [REDACTED:ANTHROPIC_API_KEY].");
     assert.equal(redactDiagnosticForOutput(`wrote ${key}.json now`), "wrote [REDACTED:ANTHROPIC_API_KEY].json now");
-    assert.equal(redactDiagnosticForOutput(`a ${key}.Models b`), "a [REDACTED:ANTHROPIC_API_KEY].Models b");
+    for (const word of ["Models", "toString", "README", "getBytes", "ApiClient"]) {
+      assert.equal(redactDiagnosticForOutput(`a ${key}.${word} b`), `a [REDACTED:ANTHROPIC_API_KEY].${word} b`);
+    }
   });
 });
 
@@ -131,7 +133,22 @@ test("adversarial inputs are linear: long runs of sk-, escapes and dots finish w
     ("A".repeat(30) + "%2F").repeat(5000),
     "." .repeat(100000),
   ];
+  // A chain of keys joined by dots (each key extends to the end of the chain) must cost the same per key at N and 4N.
+  const chain = (unit: string, count: number): string => (unit + ".").repeat(count) + "end";
+  const ghp = "ghp_Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo";
+  const skKey = "sk-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0Ua";
   withFreshBoundary(() => {
+    for (const unit of [ghp, skKey]) {
+      const time = (count: number): number => {
+        const started = performance.now();
+        redactDiagnosticForOutput(chain(unit, count));
+        return performance.now() - started;
+      };
+      time(500); // warm up
+      const small = Math.max(time(2000), 5);
+      const large = time(8000);
+      assert.ok(large < small * 12, `${unit.slice(0, 6)} chain: ${Math.round(small)}ms for 2000, ${Math.round(large)}ms for 8000`);
+    }
     for (const input of inputs) {
       const started = performance.now();
       redactDiagnosticForOutput(input);
