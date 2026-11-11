@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { AgentWorkUnitExecutor } from "../src/core/operation_runner_execution.js";
-import { candidateDiff, plainCandidateDiff } from "../src/core/specialist_inputs.js";
+import { candidateDiff, plainCandidateDiff, snapshotSupport } from "../src/core/specialist_inputs.js";
 import { OperationGit, ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
 import type { WorkUnit } from "../src/core/operation.js";
 
@@ -249,4 +249,20 @@ test("a deleted tracked .gitattributes does not refuse the candidate", () => {
   fs.rmSync(path.join(d, ".gitattributes"));
   const r = candidateDiff(d, undefined);
   assert.ok(!("error" in r), JSON.stringify(r));
+});
+
+test("the plain diff does not silently drop a changed path that is not valid UTF-8", () => {
+  const d = repo();
+  const bad = Buffer.concat([Buffer.from(d + "/"), Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74])]);
+  fs.writeFileSync(bad, "x\n");
+  const r = plainCandidateDiff(d, undefined);
+  assert.ok("error" in r && /not valid UTF-8/.test(r.error), JSON.stringify(r));
+});
+
+test("an object-format answer that is neither sha1 nor sha256 (git before 2.38 echoes the flag) is refused as too old", () => {
+  const d = repo();
+  const real = (args: string[]) => execFileSync("git", args, { cwd: d, encoding: "utf8" });
+  const r = snapshotSupport((args) => (args.includes("--show-object-format") ? "--show-object-format\n" : real(args)), d);
+  assert.ok("unsupported" in r && /too old/.test(r.unsupported), JSON.stringify(r));
+  assert.deepEqual(snapshotSupport((args) => (args.includes("--show-object-format") ? "sha1\n" : real(args)), d), { ok: true });
 });

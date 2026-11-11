@@ -69,6 +69,9 @@ export function withoutDrivers(text: string): string {
     return [head[1], ...rest.filter((token) => !/^[-!]?(filter|diff)(=|$)/.test(token))].join(" ");
   }).join("\n");
 }
+const MAX_ATTRIBUTES_BYTES = 1024 * 1024;
+export type SnapshotSupport = { ok: true } | { unsupported: string };
+
 /**
  * The repository states the candidate diff and the debugger snapshot are built for, as one finite predicate over the
  * unit's own index and configuration. Inside it the scratch index (base tree, or a copy of the real index) plus the
@@ -86,8 +89,6 @@ export function withoutDrivers(text: string): string {
  * variables are dropped, so the predicate reads the files' configuration only.
  * `run` is a pinned git call against the repository's own index (never written); `root` is the workspace.
  */
-const MAX_ATTRIBUTES_BYTES = 1024 * 1024;
-export type SnapshotSupport = { ok: true } | { unsupported: string };
 export function snapshotSupport(run: (args: string[]) => string, root: string): SnapshotSupport {
   const config = new Map<string, string>();
   try {
@@ -106,6 +107,8 @@ export function snapshotSupport(run: (args: string[]) => string, root: string): 
     // permission error or a corrupt repository is not an answer.
     if (!/ambiguous argument|unknown option|unknown revision/i.test(String(err?.stderr ?? ""))) throw err;
   }
+  // A git before 2.38 echoes the unknown flag back with exit 0: any answer but sha1 or sha256 means it cannot say.
+  if (format !== "sha1" && format !== "sha256") return refuse("this git is too old to read the repository's object format", "upgrade git");
   if (format !== "sha1") return refuse(`the repository uses the ${format} object format, which is not supported`, "no workaround");
   if (config.get("core.filemode") === "false") return refuse("core.filemode is false, so file modes are not read from disk", "set core.filemode=true");
   if (config.get("core.symlinks") === "false") return refuse("core.symlinks is false, so symlinks are checked out as files", "set core.symlinks=true");
@@ -148,7 +151,9 @@ export function snapshotSupport(run: (args: string[]) => string, root: string): 
   return { ok: true };
 }
 
-const DIFF_FLAGS = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--relative"];
+/** How every diff the host runs for a prompt is rendered: no colour, no external diff, no textconv. */
+const DIFF_RENDER = ["--no-color", "--no-ext-diff", "--no-textconv"];
+const DIFF_FLAGS = [...DIFF_RENDER, "--no-renames", "--relative"];
 const MAX_DIFF_PATHS = 2_000;
 const GIT_MAX_BUFFER = 4 * 1024 * 1024;
 /** Path listings scale with the repository, not the change, so they get room for very large repositories. */
@@ -256,6 +261,10 @@ export function attributesTree(root: string, scratch: string, files: string[], p
   return { tree: run(["write-tree"]).trim(), objects };
 }
 
+export interface CandidateDiff { base: string; diff: string; omitted: number; omittedNew: number; omittedNested: number }
+/** A refusal because the repository state is outside the supported domain (as opposed to a git failure). */
+export type CandidateDiffError = { error: string; unsupported?: string };
+
 /**
  * The candidate diff against `base` (HEAD when absent), for every unit that is shown one: review units and the
  * security reviewer. No repository-configured command runs while it is built (see GIT_SAFE and safeGitEnv); a
@@ -285,9 +294,6 @@ export function attributesTree(root: string, scratch: string, files: string[], p
  * Any git failure or an unmanageable path count returns an error: nothing is ever kept because it could not be
  * classified.
  */
-export interface CandidateDiff { base: string; diff: string; omitted: number; omittedNew: number; omittedNested: number }
-/** A refusal because the repository state is outside the supported domain (as opposed to a git failure). */
-export type CandidateDiffError = { error: string; unsupported?: string };
 export function candidateDiff(workspace: string, base: string | undefined, policyWorkspace?: string): CandidateDiff | CandidateDiffError {
   const root = path.resolve(workspace);
   let scratch: string | undefined;
@@ -454,6 +460,8 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     const others = git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
     const omittedNested = others.filter((p) => p.endsWith("/")).length;
     const untracked = others.filter((p) => !p.endsWith("/"));
+    // A name that is not valid UTF-8 was mangled by decoding and would match nothing: say so instead of dropping the change.
+    if ([...tracked, ...others].some((p) => p.includes("\uFFFD"))) return { error: "a changed path is not valid UTF-8 text and cannot be shown; rename it" };
     if (tracked.length + untracked.length > MAX_DIFF_PATHS) return { error: `the change touches more than ${MAX_DIFF_PATHS} paths; scope it with explicit inputs` };
     const allowedTracked = tracked.filter((p) => inputPathProtection(security, p) === undefined);
     const sources = protectedMatcher((args, timeoutMs) => git(args, { maxBuffer: LISTING_MAX_BUFFER, timeoutMs }), root, policyWorkspace, security, [...tracked, ...untracked]);
@@ -467,8 +475,8 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
       else if (protectedChanged || sources.carriedBy(root, file)) omittedNew++;
       else allowedNew.push(file);
     }
-    let diff = allowedTracked.length ? git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=all", "--relative", "--", ...allowedTracked.map((p) => `:(literal)${p}`)]) : "";
-    for (const file of allowedNew) diff += git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-index", "--", "/dev/null", file], { okExit: [1] });
+    let diff = allowedTracked.length ? git(["diff", ...DIFF_RENDER, "--no-renames", "--ignore-submodules=all", "--relative", "--", ...allowedTracked.map((p) => `:(literal)${p}`)]) : "";
+    for (const file of allowedNew) diff += git(["diff", ...DIFF_RENDER, "--no-index", "--", "/dev/null", file], { okExit: [1] });
     return { base: commit, diff, omitted, omittedNew, omittedNested };
   } catch (err: any) {
     if (err instanceof UntrustedCheckoutError) return { error: `automatic inputs are not available: ${err.message}` };
