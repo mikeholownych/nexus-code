@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01UP8EJSCTHzURw7S9CyKLKv",
+  "agent_id": "af1c75d5778ec595b",
+  "subagent_type": "general-purpose",
+  "task_description": "Security review round 2",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 88470,
+    "cache_read_tokens": 883835,
+    "output_tokens": 14988,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-11T21:21:22.226079666Z",
+  "completed_at": "2026-11-11T21:23:32.579228644Z"
+}
