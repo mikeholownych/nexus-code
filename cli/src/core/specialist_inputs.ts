@@ -456,7 +456,7 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     const listed = [...git(["ls-files", "-z", "--cached"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"), ...git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0")].filter((p) => p && !p.endsWith("/"));
     const early = driverCheck(listed);
     if (early) return { error: early };
-    const tracked = git(["diff", "--name-only", "-z", "--ignore-submodules=all", "--relative", "--no-renames", "--no-ext-diff", "--no-textconv", "--"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
+    const tracked = git(["diff", "--name-only", "-z", ...DIFF_RENDER, "--ignore-submodules=all", "--relative", "--no-renames", "--"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
     const others = git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
     const omittedNested = others.filter((p) => p.endsWith("/")).length;
     const untracked = others.filter((p) => !p.endsWith("/"));
