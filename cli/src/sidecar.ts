@@ -7,7 +7,6 @@ import { format as formatDiagnostic } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
-import { CheckpointManager } from "./checkpoint.js";
 import { autoDetectModel, buildConfig, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
 import { isNexusDirPermissive } from "./doctor.js";
@@ -96,7 +95,6 @@ export class SidecarServer {
   private readonly resume?: string;
   private readonly history: string[];
   private sessionId: string;
-  private checkpointManager: CheckpointManager;
   /** The running slash command; undefined for prompt turns and for commands that became turns. */
   private activeSpec?: SlashSpec;
   private readonly evidence = new EvidenceLedger();
@@ -121,7 +119,6 @@ export class SidecarServer {
     this.app.getAgent().setApprovalMode(this.mode);
     this.onShutdown = options.onShutdown ?? (() => {});
     this.resume = options.resume;
-    this.checkpointManager = this.app.getCheckpointManager();
     this.sessionId = this.app.getSessionManager().generateSessionId();
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.app.getAgent().setArchiveSink((compactionId, messages) => this.app.getSessionManager().appendArchivedHistory(this.sessionId, messages, compactionId));
@@ -563,6 +560,12 @@ export class SidecarServer {
   private async turn(turnId: string, prompt: string | any[], label: string, checkpoint: string, signal: AbortSignal, step = false): Promise<void> {
     const agent = this.app.getAgent();
     let allowSensitiveCheckpoint = false;
+    try {
+      agent.enterNamedWorktreeBeforeTurn(); // the snapshot is of the worktree the turn edits
+    } catch (err) {
+      this.emit({ type: "error", id: turnId, code: "INTERNAL", message: formatSafeSidecarText(errorText(err)) });
+      return;
+    }
     if (this.app.getConfig().readOnly) {
       // Read-only turns cannot change the workspace, so a workspace rollback snapshot is unnecessary.
       agent.setCheckpointReadOnlyFallback(false);
@@ -570,7 +573,7 @@ export class SidecarServer {
       let checkpointReady = false;
       while (!checkpointReady) {
         try {
-          this.checkpointManager.createCheckpoint(
+          this.app.getCheckpointManager().createCheckpoint(
             checkpoint,
             allowSensitiveCheckpoint ? { allowSensitive: true } : undefined,
           );
@@ -824,7 +827,7 @@ export class SidecarServer {
       setSessionId: (sessionId) => {
         this.sessionId = sessionId;
       },
-      checkpoints: () => this.checkpointManager,
+      checkpoints: () => this.app.getCheckpointManager(),
       setWorkspace: (dir) => this.setWorkspace(dir),
       saveSession: (title) => this.saveSession(title),
       resumeSession: (sessionId) => this.resumeSession(sessionId),
@@ -906,8 +909,7 @@ export class SidecarServer {
 
   private setWorkspace(dir: string): void {
     this.app.getAgent().setWorkspace(dir);
-    this.app.getConfig().workspace = dir;
-    this.checkpointManager = new CheckpointManager(dir);
+    this.app.getConfig().workspace = dir; // the app's checkpoint manager follows the workspace
   }
 
   /** Same record the REPL saves after each turn. Skipped while the conversation holds only the system prompt. */
@@ -1248,6 +1250,7 @@ async function main(argv: string[]): Promise<void> {
     .option("--read-only", "Reject all mutating tool executions and commands")
     .option("--sandbox [mode]", "Isolate command execution using bubblewrap or Docker")
     .option("--worktree", "Isolate execution inside an ephemeral git worktree")
+    .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
     .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
     .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", (value: string, previous: string[] = []) => [...previous, value], [])
     .option("--record-flight", "Record execution into an append-only .flightlog")

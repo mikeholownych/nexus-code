@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { trustedGitArgs } from "./git.js";
 import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 
@@ -142,7 +143,7 @@ export class HunkStager {
       if (filePath) {
         args.push("--", filePath);
       }
-      return execFileSync("git", args, {
+      return execFileSync("git", [...trustedGitArgs(this.workspace), ...args], {
         cwd: this.workspace,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
@@ -154,7 +155,7 @@ export class HunkStager {
 
   public getStagedDiff(): string {
     try {
-      return execFileSync("git", ["diff", "--cached"], {
+      return execFileSync("git", [...trustedGitArgs(this.workspace), "diff", "--cached"], {
         cwd: this.workspace,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
@@ -175,7 +176,7 @@ export class HunkStager {
   public stageHunk(file: DiffFile, hunk: DiffHunk): { success: boolean; error?: string } {
     const patch = buildSingleHunkPatch(file, hunk);
     try {
-      execFileSync("git", ["apply", "--cached", "--unidiff-zero", "-"], {
+      execFileSync("git", [...trustedGitArgs(this.workspace), "apply", "--cached", "--unidiff-zero", "-"], {
         cwd: this.workspace,
         input: patch,
         encoding: "utf-8",
@@ -186,7 +187,7 @@ export class HunkStager {
     } catch (err: any) {
       // Fallback: try standard git apply --cached without unidiff-zero
       try {
-        execFileSync("git", ["apply", "--cached", "-"], {
+        execFileSync("git", [...trustedGitArgs(this.workspace), "apply", "--cached", "-"], {
           cwd: this.workspace,
           input: patch,
           encoding: "utf-8",
@@ -209,7 +210,7 @@ export class HunkStager {
   public discardHunk(file: DiffFile, hunk: DiffHunk): { success: boolean; error?: string } {
     const patch = buildSingleHunkPatch(file, hunk);
     try {
-      execFileSync("git", ["apply", "--reverse", "--unidiff-zero", "-"], {
+      execFileSync("git", [...trustedGitArgs(this.workspace), "apply", "--reverse", "--unidiff-zero", "-"], {
         cwd: this.workspace,
         input: patch,
         encoding: "utf-8",
@@ -219,7 +220,7 @@ export class HunkStager {
       return { success: true };
     } catch (err: any) {
       try {
-        execFileSync("git", ["apply", "--reverse", "-"], {
+        execFileSync("git", [...trustedGitArgs(this.workspace), "apply", "--reverse", "-"], {
           cwd: this.workspace,
           input: patch,
           encoding: "utf-8",
@@ -241,7 +242,7 @@ export class HunkStager {
    */
   public stageFile(filePath: string): boolean {
     try {
-      execFileSync("git", ["add", filePath], { cwd: this.workspace });
+      execFileSync("git", [...trustedGitArgs(this.workspace), "add", filePath], { cwd: this.workspace });
       return true;
     } catch {
       return false;
@@ -257,7 +258,7 @@ export class HunkStager {
       if (filePath) {
         args.push("--", filePath);
       }
-      execFileSync("git", args, { cwd: this.workspace, stdio: "ignore" });
+      execFileSync("git", [...trustedGitArgs(this.workspace), ...args], { cwd: this.workspace, stdio: "ignore" });
       return true;
     } catch {
       return false;
@@ -272,7 +273,7 @@ export class HunkStager {
     const unstagedHunkCount = files.reduce((acc, f) => acc + f.hunks.length, 0);
     let stagedCount = 0;
     try {
-      const stagedOut = execFileSync("git", ["diff", "--cached", "--name-only"], {
+      const stagedOut = execFileSync("git", [...trustedGitArgs(this.workspace), "diff", "--cached", "--name-only"], {
         cwd: this.workspace,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],

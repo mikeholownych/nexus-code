@@ -5,6 +5,11 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
+import { validateBranchName } from "../worktrunk/paths.js";
+import { WORKTREE_BINDING_VERSION } from "./state_schema.js";
+import { readRegistry } from "../worktrunk/registry.js";
+import { openRepo } from "../worktrunk/repo.js";
+import { MAX_POINTER_BYTES, parseGitfilePointer, readSmallFile, untrustedCheckoutReason } from "./checkout_trust.js";
 import { ensurePrivateDir, writePrivateFile, appendPrivateFile } from "./durable_file.js";
 
 export class SensitivePersistenceError extends Error {
@@ -100,6 +105,58 @@ export function isManagedWorktreePath(
   }
 }
 
+/**
+ * Whether `worktreePath` is a plain directory (not a link) whose `.git` is a regular file that points into
+ * `<commonDir>/worktrees/`, the layout `git worktree add` produces. The agent can write anywhere inside its worktree,
+ * including that pointer: rewritten to a repository it planted, every later host-side Git call (status, add, rev-parse)
+ * would read that repository's configuration (`core.fsmonitor`, filter drivers) outside the sandbox. The worktree
+ * feature's own Git helper verifies each call itself (`untrustedCheckoutReason`, which this includes); this is for
+ * callers that run Git elsewhere and must fail closed when it is false.
+ */
+export function isLinkedWorktreeDir(worktreePath: string, commonDir: string): boolean {
+  try {
+    const dir = path.resolve(worktreePath);
+    const dirStat = fs.lstatSync(dir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return false;
+    const content = readSmallFile(path.join(dir, ".git"), MAX_POINTER_BYTES); // never a blocking or unbounded read of an agent-controlled path
+    const pointer = content === undefined ? undefined : parseGitfilePointer(content);
+    if (pointer === undefined) return false;
+    const target = fs.realpathSync(path.resolve(dir, pointer));
+    const admin = fs.realpathSync(path.join(commonDir, "worktrees"));
+    return target.startsWith(admin + path.sep) && fs.statSync(target).isDirectory() && untrustedCheckoutReason(dir) === undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify that a named worktree (`--worktree-branch`) is a worktree this repository's registry knows: Git lists it for the
+ * same common directory on the recorded branch, it is a real directory (not a link) whose `.git` pointer leads into
+ * that common directory, and Nexus registered it. A plain `git worktree add` by someone else, or a path a checkout
+ * merely points at, is not accepted. This does not widen `isManagedWorktreePath`, which still accepts only
+ * `nexus/<taskId>` under `.nexus/worktrees`.
+ */
+export function isNamedWorktreePath(
+  workspace: WorkspacePath,
+  worktreePath: string,
+  binding: { kind?: string; bindingVersion?: number; branch?: string }
+): boolean {
+  if (binding.kind !== "named" || binding.bindingVersion !== WORKTREE_BINDING_VERSION || typeof binding.branch !== "string" || validateBranchName(binding.branch)) return false;
+  try {
+    const resolved = path.resolve(worktreePath);
+    if (fs.realpathSync(resolved) !== resolved) return false;
+    const repo = openRepo(workspace.value);
+    const entry = repo.entries.find((item) => !item.isMain && item.path === resolved && item.branch === binding.branch);
+    if (!entry || !isLinkedWorktreeDir(resolved, repo.commonDir)) return false;
+    return readRegistry(repo.commonDir).registry.worktrees.some((item) => item.path === resolved && item.branch === binding.branch);
+  } catch {
+    return false;
+  }
+}
+
+/** Stands in for a repository-validated branch name while the rest of the record is classified. */
+const WORKTREE_BRANCH_PLACEHOLDER = "[NEXUS_TYPED_WORKTREE_BRANCH]";
+
 /** Provider tool-call ids at least this long are eligible for the high-entropy classifier (see egress.ts). */
 const ENTROPY_CHECKED_LENGTH = 20;
 
@@ -172,8 +229,8 @@ export function redactTaskStateForPersistence<T extends {
   taskId: string;
   workspacePath: string;
   workspace?: string;
-  worktreeBinding?: { worktreePath?: string; taskId?: string; branch?: string } | null;
-}>(original: T, workspacePaths: readonly WorkspacePath[] = []): T {
+  worktreeBinding?: { worktreePath?: string; taskId?: string; branch?: string; kind?: string; bindingVersion?: number } | null;
+}>(original: T, workspacePaths: readonly WorkspacePath[] = [], options: { historical?: boolean } = {}): T {
   const value = withStableToolCallIds(original);
   if (workspacePaths.length === 0) {
     const paths = [value.workspacePath, value.workspace, value.worktreeBinding?.worktreePath]
@@ -194,15 +251,41 @@ export function redactTaskStateForPersistence<T extends {
   const boundary = InformationFlowBoundary.getGlobalInstance();
   const typedPaths = [selectedWorkspace];
   const worktreePath = value.worktreeBinding?.worktreePath;
+  // A binding Git lists on the recorded branch and Nexus manages (task) or registered (named). Computed once, lazily.
+  let validatedBinding: boolean | undefined;
+  const bindingValidated = (): boolean => {
+    // Historical state (a record being loaded again) may name a named worktree that has since been removed: that binding
+    // is inactive, not invalid, and what was persisted is read back verbatim. Only that case is tolerated; every other
+    // binding must still validate. Positively classified material is refused either way.
+    validatedBinding ??= worktreePath !== undefined && (
+      (options.historical === true && value.worktreeBinding?.kind === "named" && !fs.existsSync(worktreePath)) ||
+      isManagedWorktreePath(selectedWorkspace, worktreePath, value.taskId, value.worktreeBinding ?? {}) ||
+      isNamedWorktreePath(selectedWorkspace, worktreePath, value.worktreeBinding ?? {}));
+    return validatedBinding;
+  };
   if (worktreePath) {
     const typedWorktree = workspacePaths.find((identity) => identity.matches(worktreePath));
     if (typedWorktree) typedPaths.push(typedWorktree);
     else {
       const findings = classifyPathComponents(worktreePath);
-      if (findings.some((finding) => finding.classificationType !== "UNCERTAIN") ||
-          (findings.length > 0 && !isManagedWorktreePath(selectedWorkspace, worktreePath, value.taskId, value.worktreeBinding ?? {}))) {
+      if (findings.some((finding) => finding.classificationType !== "UNCERTAIN") || (findings.length > 0 && !bindingValidated())) {
         throw new Error("Task state worktree path has no selected workspace identity");
       }
+    }
+  }
+  // A valid branch name is often long and varied enough to look high-entropy. One the repository confirms (Git lists
+  // the worktree on it, and the registry or the task layout knows it) is an identity the next load needs verbatim:
+  // redacting it would quarantine the record. Only uncertain findings qualify; a positive match is never preserved.
+  const branch = value.worktreeBinding?.branch;
+  let preserveBranch = false;
+  if (typeof branch === "string") {
+    const branchFindings = boundary.classifyText(branch);
+    if (branchFindings.some((finding) => finding.classificationType !== "UNCERTAIN")) {
+      throw new Error("Task state worktree branch contains positively classified sensitive material");
+    }
+    if (branchFindings.length > 0) {
+      if (!bindingValidated()) throw new Error("Task state worktree branch has no validated worktree identity");
+      preserveBranch = true;
     }
   }
   for (const identity of typedPaths) {
@@ -214,13 +297,20 @@ export function redactTaskStateForPersistence<T extends {
 
   const preserveOperationGitPaths = hasValidatedOperationGitPaths(value as any, selectedWorkspace);
   const operationGit = (value as any).operation?.git;
+  const maskWorktreePath = Boolean(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0));
   // Mask validated path fields before classification, then restore their exact values.
   const masked = {
     ...value,
     workspacePath: "[NEXUS_TYPED_WORKSPACE_PATH]",
     ...(value.workspace === undefined ? {} : { workspace: "[NEXUS_TYPED_WORKSPACE_PATH]" }),
-    ...(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0)
-      ? { worktreeBinding: { ...value.worktreeBinding, worktreePath: "[NEXUS_TYPED_WORKSPACE_PATH]" } }
+    ...(maskWorktreePath || preserveBranch
+      ? {
+          worktreeBinding: {
+            ...value.worktreeBinding,
+            ...(maskWorktreePath ? { worktreePath: "[NEXUS_TYPED_WORKSPACE_PATH]" } : {}),
+            ...(preserveBranch ? { branch: WORKTREE_BRANCH_PLACEHOLDER } : {}),
+          },
+        }
       : {}),
     ...(preserveOperationGitPaths ? {
       operation: {
@@ -247,8 +337,14 @@ export function redactTaskStateForPersistence<T extends {
     ...protectedValue,
     workspacePath: selectedWorkspace.value,
     ...(value.workspace === undefined ? {} : { workspace: selectedWorkspace.value }),
-    ...(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0)
-      ? { worktreeBinding: { ...protectedValue.worktreeBinding, worktreePath } }
+    ...(maskWorktreePath || preserveBranch
+      ? {
+          worktreeBinding: {
+            ...protectedValue.worktreeBinding,
+            ...(maskWorktreePath ? { worktreePath } : {}),
+            ...(preserveBranch ? { branch } : {}),
+          },
+        }
       : {}),
     ...(preserveOperationGitPaths ? {
       operation: {
