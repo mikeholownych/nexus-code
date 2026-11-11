@@ -131,6 +131,12 @@ export function verifyCheckout(cwd: string): { reason?: string; gitDir?: string;
       const replaced = replacedWorktreeReason(root);
       if (replaced) return { reason: replaced };
     }
+    // A registered linked worktree whose `.git` was DELETED has no `.git` at all: Git would find the enclosing repository
+    // and act on it. Every directory between here and that repository is a candidate root.
+    for (let dir = start; dir !== directories[0] && path.dirname(dir) !== dir; dir = path.dirname(dir)) {
+      const missing = replacedWorktreeReason(dir);
+      if (missing) return { reason: missing.replace("whose .git file was replaced by a repository", "whose .git file is missing") };
+    }
     return {};
   }
   const planted = directories.find((dir) => inside(outer, dir));

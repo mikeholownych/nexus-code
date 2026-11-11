@@ -519,3 +519,24 @@ test("a session's --ai-message completer refuses an endpoint that a project .env
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a linked worktree whose .git file was deleted is refused, not resolved to the enclosing main repository", async () => {
+  const { statusOf } = await import("../src/worktrunk/core.js");
+  const { verifyCheckout } = await import("../src/core/checkout_trust.js");
+  const f = fixture("feat/deleted");
+  try {
+    fs.writeFileSync(path.join(f.dir, "w.txt"), "w\n");
+    fs.rmSync(path.join(f.dir, ".git"));
+    fs.mkdirSync(path.join(f.dir, "sub"));
+    assert.match(String(verifyCheckout(f.dir).reason), /whose \.git file is missing/);
+    assert.match(String(verifyCheckout(path.join(f.dir, "sub")).reason), /whose \.git file is missing/, "from a subdirectory too");
+    assert.throws(() => statusOf(f.dir), /not a trusted worktree/);
+    const before = git(f.repo, "rev-parse", "HEAD");
+    const merged = f.merge();
+    assert.equal(merged.success, false, merged.output);
+    assert.equal(git(f.repo, "rev-parse", "HEAD"), before, "the main checkout was not touched through the worktree");
+    assert.equal(verifyCheckout(f.repo).reason, undefined, "the main checkout itself is fine");
+    fs.mkdirSync(path.join(f.repo, "docs", "deeper"), { recursive: true });
+    assert.equal(verifyCheckout(path.join(f.repo, "docs", "deeper")).reason, undefined, "an ordinary subdirectory of the main checkout is fine");
+  } finally { f.cleanup(); }
+});
