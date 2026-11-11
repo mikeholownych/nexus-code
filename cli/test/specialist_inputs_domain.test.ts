@@ -48,6 +48,7 @@ const REFUSED = [
     const sub = repo({ "s.txt": "s\n" });
     sh(d, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub"); sh(d, "commit", "-qm", "sub");
   }, /submodule/],
+  ["a clean/smudge filter assigned in .gitattributes", (d) => { put(d, ".gitattributes", "*.txt filter=lfs\n"); sh(d, "add", ".gitattributes"); sh(d, "commit", "-qm", "attrs"); }, /filter/],
   ["an unresolved merge conflict", (d) => {
     sh(d, "checkout", "-q", "-b", "side"); put(d, "in/a.txt", "side\n"); sh(d, "commit", "-qam", "side");
     sh(d, "checkout", "-q", "main"); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
@@ -73,6 +74,20 @@ for (const [name, setup, why] of REFUSED.filter(([n]) => !/submodule|merge|core\
     assert.throws(() => t.snapshot(), (e: Error) => /cannot be snapshotted/.test(e.message) && why.test(e.message));
   });
 }
+
+test("a workspace that is a subdirectory of its repository is refused", () => {
+  const d = repo();
+  const r = candidateDiff(path.join(d, "in"), undefined);
+  assert.ok("error" in r && /subdirectory/.test(r.error), JSON.stringify(r));
+});
+
+test("a SHA-256 repository is refused with a reason", () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-domain-sha256-"));
+  try { sh(d, "init", "-q", "--object-format=sha256"); } catch { return; } // git without SHA-256 support: nothing to test
+  sh(d, "config", "user.email", "a@b"); sh(d, "config", "user.name", "t"); put(d, "a.txt", "a\n"); sh(d, "add", "-A"); sh(d, "commit", "-qm", "base");
+  const r = candidateDiff(d, undefined);
+  assert.ok("error" in r && /sha256/.test(r.error), JSON.stringify(r));
+});
 
 test("sparse checkout with an out-of-cone path committed after the recorded base is refused, not shown as a deletion", () => {
   const d = repo();
@@ -115,6 +130,18 @@ const SWEEP: Array<[string, Setup]> = [
   ["ignored file", (d) => { put(d, ".gitignore", "ign\n"); put(d, "ign", "x\n"); put(d, "in/a.txt", `a ${MARK}\n`); }],
   ["untracked nested repo", (d) => { fs.mkdirSync(path.join(d, "v")); sh(path.join(d, "v"), "init", "-q"); put(d, "in/a.txt", `a ${MARK}\n`); }],
   ["rebase-like: HEAD behind an extra commit", (d) => { put(d, "x.txt", "x\n"); sh(d, "add", "x.txt"); sh(d, "commit", "-qm", "x"); put(d, "in/a.txt", `a ${MARK}\n`); }],
+  ["merge in progress, resolved in the index", (d) => {
+    sh(d, "checkout", "-q", "-b", "side"); put(d, "in/a.txt", "side\n"); sh(d, "commit", "-qam", "side");
+    sh(d, "checkout", "-q", "main"); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
+    try { sh(d, "merge", "side"); } catch { /* conflict expected */ }
+    put(d, "in/a.txt", `a ${MARK}\n`); sh(d, "add", "in/a.txt");
+  }],
+  ["cherry-pick in progress, resolved in the index", (d) => {
+    sh(d, "checkout", "-q", "-b", "side"); put(d, "in/a.txt", "side\n"); sh(d, "commit", "-qam", "side");
+    sh(d, "checkout", "-q", "main"); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
+    try { sh(d, "cherry-pick", "side"); } catch { /* conflict expected */ }
+    put(d, "in/a.txt", `a ${MARK}\n`); sh(d, "add", "in/a.txt");
+  }],
   ...REFUSED.map(([n, s]) => [n, (d: string) => { s(d); try { put(d, "in/a.txt", `a ${MARK}\n`); } catch { /* path may be unwritable */ } }] as [string, Setup]),
 ];
 for (const [name, setup] of SWEEP) {

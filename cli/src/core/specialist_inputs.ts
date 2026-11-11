@@ -50,7 +50,7 @@ export function safeGitEnv(indexFile: string | undefined, attrs?: { tree: string
   for (const [key, value] of Object.entries(process.env)) if (!key.startsWith("GIT_")) env[key] = value;
   return {
     ...env, ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}), GIT_CONFIG_NOSYSTEM: "1", GIT_ATTR_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1",
-    GIT_ATTR_SOURCE: attrs?.tree ?? EMPTY_TREE, GIT_OPTIONAL_LOCKS: "0",
+    GIT_ATTR_SOURCE: attrs?.tree ?? EMPTY_TREE, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1",
     ...(attrs ? { GIT_ALTERNATE_OBJECT_DIRECTORIES: attrs.objects } : {}),
   };
 }
@@ -74,15 +74,20 @@ export function withoutDrivers(text: string): string {
  * would depend on flags that tell git not to look at the worktree (assume-unchanged, skip-worktree, sparse checkout),
  * on modes the filesystem cannot report (`core.filemode=false`, `core.symlinks=false`), on case folding, on gitlinks
  * (submodules: the diff shows only the pointer), or on an unresolved merge, so it is refused with a reason instead of
- * a guess. Not refused, and covered by tests: detached HEAD, linked worktrees, untracked and ignored files,
- * intent-to-add entries, renames and copies, symlinks, a merge or rebase in progress once resolved in the index.
- * `run` is a pinned git call against the repository's own index (never written).
+ * a guess. Also refused: a workspace that is a subdirectory of its repository (attributes and protected-file
+ * listings would be relative to it), a SHA-256 repository, and a `filter=` attribute in any worktree .gitattributes
+ * (a clean/smudge filter, such as LFS or git-crypt, makes every filtered file differ from its index blob). Not
+ * refused, and covered by tests: detached HEAD, linked worktrees, untracked and ignored files, intent-to-add entries,
+ * renames and copies, symlinks, a merge or cherry-pick in progress once resolved in the index. Known gaps, not
+ * refused: a `-diff` attribute can make the diff exceed its size limit (reported as too large); `GIT_*` config
+ * variables are dropped, so the predicate reads the files' configuration only.
+ * `run` is a pinned git call against the repository's own index (never written); `root` is the workspace.
  */
 export type SnapshotSupport = { ok: true } | { unsupported: string };
-export function snapshotSupport(run: (args: string[]) => string): SnapshotSupport {
+export function snapshotSupport(run: (args: string[]) => string, root: string): SnapshotSupport {
   const config = new Map<string, string>();
   try {
-    for (const line of run(["config", "--type=bool", "--get-regexp", "^core\\.(filemode|symlinks|ignorecase|sparsecheckout|sparsecheckoutcone)$"]).split("\n")) {
+    for (const line of run(["config", "--type=bool", "--get-regexp", "^core\\.(filemode|symlinks|ignorecase|sparsecheckout)$"]).split("\n")) {
       const [key, value] = line.split(" ");
       if (key) config.set(key.toLowerCase(), value);
     }
@@ -90,26 +95,35 @@ export function snapshotSupport(run: (args: string[]) => string): SnapshotSuppor
     if (err?.status !== 1) throw err; // 1 = none of them is set: every default is inside the domain
   }
   const refuse = (what: string, fix: string): SnapshotSupport => ({ unsupported: `${what}; ${fix}` });
-  if (config.get("core.filemode") === "false") return refuse("core.filemode is false, so file modes are not read from disk", "set core.filemode=true or pass explicit inputs");
-  if (config.get("core.symlinks") === "false") return refuse("core.symlinks is false, so symlinks are checked out as files", "set core.symlinks=true or pass explicit inputs");
-  if (config.get("core.ignorecase") === "true") return refuse("core.ignorecase is true (a case-insensitive filesystem), so paths cannot be matched exactly", "pass explicit inputs");
-  if (config.get("core.sparsecheckout") === "true") return refuse("a sparse checkout is enabled", "run `git sparse-checkout disable` or pass explicit inputs");
+  if (run(["rev-parse", "--show-prefix"]).trim()) return refuse("the workspace is a subdirectory of its repository", "run from the repository root");
+  let format = "sha1";
+  try { format = run(["rev-parse", "--show-object-format"]).trim(); } catch { /* git before 2.38 knows only SHA-1 */ }
+  if (format !== "sha1") return refuse(`the repository uses the ${format} object format, which is not supported`, "no workaround");
+  if (config.get("core.filemode") === "false") return refuse("core.filemode is false, so file modes are not read from disk", "set core.filemode=true");
+  if (config.get("core.symlinks") === "false") return refuse("core.symlinks is false, so symlinks are checked out as files", "set core.symlinks=true");
+  if (config.get("core.ignorecase") === "true") return refuse("core.ignorecase is true (a case-insensitive filesystem), so paths cannot be matched exactly", "no workaround");
+  if (config.get("core.sparsecheckout") === "true") return refuse("a sparse checkout is enabled", "run `git sparse-checkout disable`");
   const unmerged = new Set<string>();
   for (const entry of run(["ls-files", "-s", "-z"]).split("\0")) {
     const m = /^(\d{6}) [0-9a-f]+ (\d)\t([\s\S]*)$/.exec(entry);
     if (!m) continue;
-    if (m[1] === "160000") return refuse(`${m[3].slice(0, 80)} is a submodule (gitlink): only its pointer would be shown, not its content`, "pass explicit inputs");
+    if (m[1] === "160000") return refuse(`${m[3].slice(0, 80)} is a submodule (gitlink): only its pointer would be shown, not its content`, "no workaround");
     if (m[2] !== "0") unmerged.add(m[3]);
   }
-  if (unmerged.size) return refuse(`${unmerged.size} path(s) have unresolved merge conflicts (for example ${[...unmerged][0].slice(0, 80)})`, "resolve them or pass explicit inputs");
+  if (unmerged.size) return refuse(`${unmerged.size} path(s) have unresolved merge conflicts (for example ${[...unmerged][0].slice(0, 80)})`, "resolve them");
   for (const entry of run(["ls-files", "-v", "-z", "--cached"]).split("\0")) {
     if (!entry || entry[0] === "H") continue;
     const tag = entry[0];
     const file = entry.slice(2).slice(0, 80);
-    if (tag === "S" || tag === "s") return refuse(`${file} is marked skip-worktree (sparse checkout), so git does not look at its worktree state`, "run `git update-index --no-skip-worktree` or pass explicit inputs");
-    if (tag >= "a" && tag <= "z") return refuse(`${file} is marked assume-unchanged, so git does not look at its worktree state`, "run `git update-index --no-assume-unchanged` or pass explicit inputs");
-    if (tag === "M") continue; // unmerged entries are reported above
-    return refuse(`${file} has index state '${tag}' that is not supported`, "pass explicit inputs");
+    if (tag === "S" || tag === "s") return refuse(`${file} is marked skip-worktree (sparse checkout), so git does not look at its worktree state`, "run `git update-index --no-skip-worktree`");
+    if (tag >= "a" && tag <= "z") return refuse(`${file} is marked assume-unchanged, so git does not look at its worktree state`, "run `git update-index --no-assume-unchanged`");
+    return refuse(`${file} has index state '${tag}' that is not supported`, "no workaround");
+  }
+  for (const file of run(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ":(glob)**/.gitattributes", ".gitattributes"]).split("\0")) {
+    if (!file || file.endsWith("/")) continue;
+    let text = "";
+    try { const full = path.join(root, file); if (fs.lstatSync(full).isFile()) text = fs.readFileSync(full, "utf8"); } catch { continue; }
+    if (/(^|\s)filter=/m.test(text.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n"))) return refuse(`${file.slice(0, 80)} assigns a clean/smudge filter, so worktree content differs from the index by design`, "no workaround");
   }
   return { ok: true };
 }
@@ -274,8 +288,8 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     // .nexus-security.json never reaches a worktree.
     const security = new SecurityManager(policyWorkspace ?? root);
     // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
-    const support = snapshotSupport((args) => git(args, { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }));
-    if ("unsupported" in support) return { error: `automatic inputs are not available for this repository state: ${support.unsupported}` };
+    const support = snapshotSupport((args) => git(args, { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }), root);
+    if ("unsupported" in support) return { error: `automatic inputs are not available for this repository state: ${support.unsupported}; give the unit explicit inputs instead` };
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     git(["read-tree", "--end-of-options", commit]);
     const listing = (args: string[], ownIndex = false, timeoutMs?: number) => git(["ls-files", "-z", ...args], { maxBuffer: LISTING_MAX_BUFFER, ownIndex, timeoutMs }).split("\0").filter(Boolean);

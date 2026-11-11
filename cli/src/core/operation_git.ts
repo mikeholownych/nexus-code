@@ -453,8 +453,8 @@ export class OperationGit {
     try {
       // Only a repository state the predicate covers is snapshotted (no sparse checkout, assume-unchanged or skip-worktree
       // flags, gitlinks, unresolved merge, unreliable modes); anything else is refused with its reason, never guessed at.
-      const support = snapshotSupport((args) => run(args, { ownIndex: true, raw: true }));
-      if ("unsupported" in support) throw new Error(`the failing candidate cannot be snapshotted: ${support.unsupported}`);
+      const support = snapshotSupport((args) => run(args, { ownIndex: true, raw: true }), entry.worktree);
+      if ("unsupported" in support) throw new Error(`the failing candidate cannot be snapshotted: ${support.unsupported}; fix that state in the unit's worktree and retry, or stop`);
       const ownIndex = run(["rev-parse", "--path-format=absolute", "--git-path", "index"], { ownIndex: true });
       if (fs.existsSync(ownIndex)) fs.copyFileSync(ownIndex, path.join(scratch, "index"));
       else run(["read-tree", "HEAD"]);

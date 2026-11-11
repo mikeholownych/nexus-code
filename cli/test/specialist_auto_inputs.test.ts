@@ -475,7 +475,7 @@ test("new files are shown when no protected file changed", async () => {
   assert.doesNotMatch(fake.prompts[0], /omitted/);
 });
 
-test("collecting the diff runs no repository-configured filter or fsmonitor command", async () => {
+test("collecting the diff runs no repository-configured filter or fsmonitor command, and a worktree filter assignment is refused", async () => {
   const { repo, run } = protectedRepo();
   const markers = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-auto-markers-"));
   fs.writeFileSync(path.join(repo, ".gitattributes"), "*.txt filter=evil\n");
@@ -490,8 +490,8 @@ test("collecting the diff runs no repository-configured filter or fsmonitor comm
   const outcome = await exec(fake.agent, repo).run(unit("security_reviewer", {}), resource, ctx(repo));
   assert.equal(fs.existsSync(path.join(markers, "filter")), false, "the clean filter ran");
   assert.equal(fs.existsSync(path.join(markers, "fsmonitor")), false, "the fsmonitor hook ran");
-  assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
-  assert.match(fake.prompts[0], /VISIBLE_CHANGE/);
+  assert.equal(outcome.kind, "failed", "a clean/smudge filter assignment is outside the supported domain");
+  assert.match((outcome as { reason: string }).reason, /unified_diff.*filter/);
 });
 
 test("a filter assigned outside the worktree's .gitattributes fails closed without running", async () => {
@@ -667,7 +667,7 @@ test("text/eol normalization from the worktree's .gitattributes still applies, s
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-auto-eol-"));
   const run = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
   run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t"); run("config", "core.autocrlf", "false");
-  fs.writeFileSync(path.join(repo, ".gitattributes"), "*.txt text eol=crlf\n*.dat filter=evil\n");
+  fs.writeFileSync(path.join(repo, ".gitattributes"), "*.txt text eol=crlf\n");
   fs.writeFileSync(path.join(repo, "crlf.txt"), "line1\r\nline2\r\n");
   fs.writeFileSync(path.join(repo, "b.txt"), "b one\r\n");
   run("add", "."); run("commit", "-q", "-m", "base");
