@@ -34,7 +34,8 @@ fn forbidden(c: char) -> bool {
 /// One of every kind of character `forbidden` lists.
 fn bad() -> String {
     let mut out = String::new();
-    for code in (0x1bu32..=0x1b).chain([0x0d, 0x7f, 0x85, 0x9f, 0xa0, 0xad, 0x34f, 0x61c, 0x115f, 0x1160, 0x1680, 0x17b4, 0x180b, 0x180e, 0x2800, 0x3000, 0x3164, 0xfeff, 0xffa0, 0xe0001])
+    for code in [0x1b, 0x0d, 0x7f, 0x85, 0x9f, 0xa0, 0xad, 0x34f, 0x61c, 0x115f, 0x1160, 0x1680, 0x17b4, 0x180b, 0x180e, 0x2800, 0x3000, 0x3164, 0xfeff, 0xffa0, 0xe0001]
+        .into_iter()
         .chain(0x2000..=0x200f)
         .chain(0x2028..=0x202f)
         .chain(0x205f..=0x206f)
@@ -80,6 +81,8 @@ fn kinds(bad: &str) -> Vec<Kind> {
         kind("identical", "write_file", "a.txt", serde_json::json!({"kind": "change", "path": format!("a{bad}.txt"), "before": "same\n", "after": "same\n", "created": false, "truncated": false}), &["nochanges"]),
         kind("edit", "write_file", "a.txt", serde_json::json!({"kind": "change", "path": "a.txt", "before": format!("a\nb{bad}\nc\n"), "after": format!("a\nqe1{bad}\nc\n"), "created": false, "truncated": false}), &["qe1"]),
         kind("patch", "patch_file", "x", serde_json::json!({"kind": "patch", "path": "x", "patch": format!("--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@ sec{bad}\n-qp1{bad}\n+qp2{bad}\n qp3"), "truncated": false}), &["qp1", "qp2", "qp3"]),
+        kind("patch miscounted", "patch_file", "x", serde_json::json!({"kind": "patch", "path": "x", "patch": format!("--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-qm1{bad}\n+qm2\n-qm3\n+qm4"), "truncated": false}), &["qm1", "qm2", "qm3", "qm4"]),
+        kind("patch two files", "patch_file", "x", serde_json::json!({"kind": "patch", "path": "x", "patch": format!("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-qn1\n+qn2\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-qn3{bad}\n+qn4"), "truncated": false}), &["qn1", "qn2", "qn3", "qn4"]),
         kind("patch no hunks", "patch_file", "x", serde_json::json!({"kind": "patch", "path": "x", "patch": format!("--- a/x\n+++ b/x\nBinary files differ{bad}"), "truncated": false}), &["Binaryfiles"]),
         kind("unknown tool", "zap_things", "x", serde_json::json!({"kind": "args", "text": format!("qz1{bad}"), "truncated": false}), &["qz1"]),
         kind("future kind", "zap_things", "x", serde_json::json!({"kind": "future-kind"}), &["Thisrequesthasnopreview"]),
@@ -156,9 +159,8 @@ fn is_approve(action: &Option<Action>, always: bool) -> bool {
 }
 
 /// What a frame of an answerable panel must show: the three buttons and the hint (the question when confirming).
-fn check_answerable_frame(state: &LiveState, frame: &Frame, tag: &str, out: &mut Vec<String>) {
+fn check_answerable_frame(frame: &Frame, tag: &str, out: &mut Vec<String>) {
     let all = flat(&frame.rows.join(""));
-    let _ = state;
     if !frame.layout.approval_drawn {
         out.push(format!("{tag}: answerable but the frame did not draw it"));
     }
@@ -170,19 +172,15 @@ fn check_answerable_frame(state: &LiveState, frame: &Frame, tag: &str, out: &mut
     if !all.contains("Alllater") && !all.contains("Approvealllateractions") {
         out.push(format!("{tag}: answerable without the approve-all button drawn"));
     }
-    match frame.notice {
-        Some(notice) => {
-            let head: String = flat(notice.split(" — ").next().unwrap_or(notice)).chars().take(10).collect();
-            if !all.contains(&head) {
-                out.push(format!("{tag}: the notice {notice:?} was not drawn"));
-            }
+    if frame.confirming {
+        if !all.contains("confirms") || !all.contains("all") {
+            out.push(format!("{tag}: confirming without the question drawn"));
         }
-        None if frame.confirming => {
-            if !all.contains("confirms") || !all.contains("all") {
-                out.push(format!("{tag}: confirming without the question drawn"));
-            }
+    } else if let Some(notice) = frame.notice {
+        let head: String = flat(notice.split(" — ").next().unwrap_or(notice)).chars().take(10).collect();
+        if !all.contains(&head) {
+            out.push(format!("{tag}: the notice {notice:?} was not drawn"));
         }
-        None => {}
     }
     if frame.notice.is_none() && !all.contains("denies") {
         out.push(format!("{tag}: answerable without the Esc hint drawn"));
@@ -221,7 +219,7 @@ fn read_through(kind: &Kind, draft: &str, queued: bool, width: u16, height: u16,
     let at = |ms: u64| t0 + Duration::from_millis(ms);
     for step in 0..80 {
         let tag = format!("{tag} step {step}");
-        check_answerable_frame(&state, &frame, &tag, &mut out);
+        check_answerable_frame(&frame, &tag, &mut out);
         record(&mut doc, &frame);
         let read = {
             let all: String = doc.values().map(|row| flat(row)).collect();
@@ -242,7 +240,16 @@ fn read_through(kind: &Kind, draft: &str, queued: bool, width: u16, height: u16,
                 }
                 // The question must be on screen before Enter can confirm it.
                 frame = draw(&mut state, width, height, mode);
-                check_answerable_frame(&state, &frame, &format!("{tag} (question)"), &mut out);
+                check_answerable_frame(&frame, &format!("{tag} (question)"), &mut out);
+                // A second press inside the wait is ignored with a notice; the question stays drawn.
+                clock += 100;
+                let action = state.on_key_at(key(KeyCode::Char('a')), at(clock));
+                if action.is_some() {
+                    out.push(format!("{tag}: a second `a` inside the wait answered ({action:?})"));
+                    return out;
+                }
+                frame = draw(&mut state, width, height, mode);
+                check_answerable_frame(&frame, &format!("{tag} (after a second `a`)"), &mut out);
                 clock += 3000;
                 let action = state.on_key_at(key(KeyCode::Enter), at(clock));
                 if !is_approve(&action, true) {
@@ -378,7 +385,7 @@ fn sweep_kind(kind: &Kind, with_bad: bool, mode: Mode) -> Vec<String> {
                     out.push(format!("{tag}: a one-line command is refused on a terminal with room for it"));
                 }
                 if shown {
-                    check_answerable_frame(&state, &frame, &tag, &mut out);
+                    check_answerable_frame(&frame, &tag, &mut out);
                 } else {
                     let all = flat(&frame.rows.join(""));
                     let top = frame.rows.iter().position(|row| row.contains('╭'));

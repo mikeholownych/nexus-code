@@ -963,7 +963,16 @@ impl LiveState {
             } => {
                 let lines = review_lines(review.as_ref().unwrap_or(&Review::Unknown));
                 let text: String = lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n");
-                let mut patch = Some(diff_view::parse(&text)).filter(|patch| patch.files.iter().any(|file| !file.hunks.is_empty()));
+                // The diff view draws only what the parser took in; a patch whose hunk counts do not match its rows (the
+                // applier ignores the counts) or that names several files is drawn as plain rows instead, so nothing the
+                // review lists is left off the panel.
+                let hunk_rows = lines
+                    .iter()
+                    .skip_while(|line| !line.text.starts_with("@@"))
+                    .filter(|line| !line.text.starts_with("@@") && !line.text.starts_with("… preview truncated"))
+                    .count();
+                let mut patch = Some(diff_view::parse(&text))
+                    .filter(|patch| patch.files.len() == 1 && patch.files.iter().any(|file| !file.hunks.is_empty()) && patch.line_count() == hunk_rows);
                 // The review says whether the file is new; its diff headers do not (no /dev/null side).
                 if let (Some(patch), Some(Review::Change { created: true, .. })) = (patch.as_mut(), review.as_ref())
                     && let Some(file) = patch.files.first_mut()

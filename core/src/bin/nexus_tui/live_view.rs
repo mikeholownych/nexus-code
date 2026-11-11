@@ -658,13 +658,14 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     );
     let wrap_hint = |spans: Vec<Span<'static>>| markdown::wrap(spans, width, Vec::new(), Vec::new());
     let hint_rows = wrap_hint(default_hint.clone()).len().max(wrap_hint(confirm_hint.clone()).len());
+    // The question stays on screen for as long as it is pending, whatever key was ignored meanwhile.
     let mut hint = match approval.notice {
+        _ if approval.confirming => wrap_hint(confirm_hint),
         // A key did not answer: say which and why, instead of silently doing nothing.
         Some(notice) => wrap_hint(pick_hint(
             vec![vec![Span::styled(notice, ask)], vec![Span::styled(notice.split(" — ").next().unwrap_or(notice), ask)]],
             width,
         )),
-        None if approval.confirming => wrap_hint(confirm_hint),
         None => wrap_hint(default_hint),
     };
     hint.truncate(hint_rows);
