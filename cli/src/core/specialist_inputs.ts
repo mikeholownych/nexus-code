@@ -70,6 +70,20 @@ export function withoutDrivers(text: string): string {
   }).join("\n");
 }
 const MAX_ATTRIBUTES_BYTES = 1024 * 1024;
+/**
+ * The first path, among every list used to build a pathspec, whose name is not valid UTF-8: the base tree (a path
+ * deleted since the base is only there), the index and the untracked files. Output is decoded as text, so such a name
+ * becomes another one that no literal pathspec matches and its change would be silently missing. `run` is a pinned
+ * git call against the repository's own index.
+ */
+export function undecodablePath(run: (args: string[]) => string, commit: string): string | undefined {
+  for (const args of [["ls-tree", "-r", "-z", "--name-only", commit], ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]]) {
+    const found = run(args).split("\0").find((p) => p.includes("\uFFFD"));
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 export type SnapshotSupport = { ok: true } | { unsupported: string };
 
 /**
@@ -89,7 +103,7 @@ export type SnapshotSupport = { ok: true } | { unsupported: string };
  * variables are dropped, so the predicate reads the files' configuration only.
  * `run` is a pinned git call against the repository's own index (never written); `root` is the workspace.
  */
-export function snapshotSupport(run: (args: string[]) => string, root: string): SnapshotSupport {
+export function snapshotSupport(run: (args: string[]) => string, root: string, base?: string): SnapshotSupport {
   const config = new Map<string, string>();
   try {
     for (const line of run(["config", "--type=bool", "--get-regexp", "^core\\.(filemode|symlinks|ignorecase|sparsecheckout)$"]).split("\n")) {
@@ -101,14 +115,13 @@ export function snapshotSupport(run: (args: string[]) => string, root: string): 
   }
   const refuse = (what: string, fix: string): SnapshotSupport => ({ unsupported: `${what}; ${fix}` });
   if (run(["rev-parse", "--show-prefix"]).trim()) return refuse("the workspace is a subdirectory of its repository", "run from the repository root");
-  let format = "sha1";
+  // Any answer other than sha1 or sha256 (the flag echoed back, or not understood) means git cannot report the object
+  // format; an error that is not "not understood" (a timeout, a permission error, a corrupt repository) is no answer at all.
+  let format = "";
   try { format = run(["rev-parse", "--show-object-format"]).trim(); } catch (err: any) {
-    // Only a git that does not know the option (it reads it as an unknown revision) is a SHA-1 git; a timeout, a
-    // permission error or a corrupt repository is not an answer.
     if (!/ambiguous argument|unknown option|unknown revision/i.test(String(err?.stderr ?? ""))) throw err;
   }
-  // A git before 2.38 echoes the unknown flag back with exit 0: any answer but sha1 or sha256 means it cannot say.
-  if (format !== "sha1" && format !== "sha256") return refuse("this git is too old to read the repository's object format", "upgrade git");
+  if (format !== "sha1" && format !== "sha256") return refuse("git cannot report this repository's object format", "no workaround");
   if (format !== "sha1") return refuse(`the repository uses the ${format} object format, which is not supported`, "no workaround");
   if (config.get("core.filemode") === "false") return refuse("core.filemode is false, so file modes are not read from disk", "set core.filemode=true");
   if (config.get("core.symlinks") === "false") return refuse("core.symlinks is false, so symlinks are checked out as files", "set core.symlinks=true");
@@ -130,10 +143,9 @@ export function snapshotSupport(run: (args: string[]) => string, root: string): 
     if (tag >= "a" && tag <= "z") return refuse(`${file} is marked assume-unchanged, so git does not look at its worktree state`, "run `git update-index --no-assume-unchanged`");
     return refuse(`${file} has index state '${tag}' that is not supported`, "no workaround");
   }
-  // Paths are read as UTF-8 text from here on; a name that is not valid UTF-8 would be mangled into another one.
-  const everything = run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0");
-  const mangled = everything.find((p) => p.includes("\uFFFD"));
+  const mangled = undecodablePath(run, run(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim());
   if (mangled !== undefined) return refuse(`a path (${JSON.stringify(mangled.slice(0, 60))}) is not valid UTF-8 text`, "rename it");
+  const everything = run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0");
   for (const file of everything.filter((p) => p && !p.endsWith("/") && path.posix.basename(p) === ".gitattributes")) {
     let text = "";
     try {
@@ -333,7 +345,7 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     // .nexus-security.json never reaches a worktree.
     const security = new SecurityManager(policyWorkspace ?? root);
     // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
-    const support = snapshotSupport((args) => git(args, { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }), root);
+    const support = snapshotSupport((args) => git(args, { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }), root, base);
     if ("unsupported" in support) return { error: `automatic inputs are not available for this repository state: ${support.unsupported}; give the unit explicit inputs instead`, unsupported: support.unsupported };
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     git(["read-tree", "--end-of-options", commit]);
@@ -471,6 +483,8 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     const stagedRemovals: string[] = [];
     for (let i = 0; i + 1 < staged.length; i += 2) if (staged[i] === "D") stagedRemovals.push(staged[i + 1]);
     if (stagedRemovals.length) git(["update-index", "--force-remove", "-z", "--stdin"], { input: `${stagedRemovals.join("\0")}\0` });
+    const mangled = undecodablePath((args) => git(args, { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }), commit);
+    if (mangled !== undefined) return { error: `a path (${JSON.stringify(mangled.slice(0, 60))}) is not valid UTF-8 text and cannot be shown; rename it` };
     // No content is compared (no clean filter can run) before every path is known to have no driver.
     const driverCheck = (files: string[]) => driverRefusal((args, input) => execFileSync("git", [...pin, ...GIT_SAFE, ...args], { cwd: root, env, encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"], timeout: 30_000, maxBuffer: GIT_MAX_BUFFER }), files);
     const listed = [...git(["ls-files", "-z", "--cached"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"), ...git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0")].filter((p) => p && !p.endsWith("/"));
@@ -480,8 +494,6 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     const others = git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
     const omittedNested = others.filter((p) => p.endsWith("/")).length;
     const untracked = others.filter((p) => !p.endsWith("/"));
-    // A name that is not valid UTF-8 was mangled by decoding and would match nothing: say so instead of dropping the change.
-    if ([...tracked, ...others].some((p) => p.includes("\uFFFD"))) return { error: "a changed path is not valid UTF-8 text and cannot be shown; rename it" };
     if (tracked.length + untracked.length > MAX_DIFF_PATHS) return { error: `the change touches more than ${MAX_DIFF_PATHS} paths; scope it with explicit inputs` };
     const allowedTracked = tracked.filter((p) => inputPathProtection(security, p) === undefined);
     const sources = protectedMatcher((args, timeoutMs) => git(args, { maxBuffer: LISTING_MAX_BUFFER, timeoutMs }), root, policyWorkspace, security, [...listed, ...tracked, ...untracked]);
