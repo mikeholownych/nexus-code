@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01U12v8N39DSTRxxSHCjqp39",
+  "agent_id": "ab5dc9bf5b65c8a3f",
+  "subagent_type": "general-purpose",
+  "task_description": "Code review round 2",
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 121101,
+    "cache_read_tokens": 2557685,
+    "output_tokens": 38517,
+    "api_call_count": 25
+  },
+  "started_at": "2026-11-11T21:21:20.694874981Z",
+  "completed_at": "2026-11-11T21:26:40.434760973Z"
+}
