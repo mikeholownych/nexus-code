@@ -746,6 +746,13 @@ test("a named worktree on a nexus/* branch merges like any other; a task worktre
     const unit = wt(f, other, ["merge", "nexus/op-k1/u1", ...W, "--no-remove"]);
     assert.equal(unit.success, false, unit.output);
     assert.match(unit.output, /speculative task worktree/i, unit.output);
+
+    const restartDir = path.join(f.repo, ".nexus", "worktrees", "op-k1", "units", "u2");
+    git(f.repo, "worktree", "add", "-q", "-b", "nexus/op-k1/u2-17", restartDir);
+    commitFile(restartDir, "r.txt", "r\n", "restarted unit work");
+    const restarted = wt(f, other, ["merge", "nexus/op-k1/u2-17", ...W, "--no-remove"]);
+    assert.equal(restarted.success, false, restarted.output);
+    assert.match(restarted.output, /speculative task worktree/i, restarted.output);
   } finally { f.cleanup(); }
 });
 
