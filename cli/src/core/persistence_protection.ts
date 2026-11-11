@@ -9,6 +9,7 @@ import { validateBranchName } from "../worktrunk/paths.js";
 import { WORKTREE_BINDING_VERSION } from "./state_schema.js";
 import { readRegistry } from "../worktrunk/registry.js";
 import { openRepo } from "../worktrunk/repo.js";
+import { parseGitfilePointer, untrustedCheckoutReason } from "../worktrunk/git.js";
 import { ensurePrivateDir, writePrivateFile, appendPrivateFile } from "./durable_file.js";
 
 export class SensitivePersistenceError extends Error {
@@ -108,8 +109,9 @@ export function isManagedWorktreePath(
  * Whether `worktreePath` is a plain directory (not a link) whose `.git` is a regular file that points into
  * `<commonDir>/worktrees/`, the layout `git worktree add` produces. The agent can write anywhere inside its worktree,
  * including that pointer: rewritten to a repository it planted, every later host-side Git call (status, add, rev-parse)
- * would read that repository's configuration (`core.fsmonitor`, filter drivers) outside the sandbox. Callers check
- * this immediately before each host-side Git call on the worktree and fail closed when it is false.
+ * would read that repository's configuration (`core.fsmonitor`, filter drivers) outside the sandbox. The worktree
+ * feature's own Git helper verifies each call itself (`untrustedCheckoutReason`, which this includes); this is for
+ * callers that run Git elsewhere and must fail closed when it is false.
  */
 export function isLinkedWorktreeDir(worktreePath: string, commonDir: string): boolean {
   try {
@@ -119,11 +121,11 @@ export function isLinkedWorktreeDir(worktreePath: string, commonDir: string): bo
     const dotGit = path.join(dir, ".git");
     const dotStat = fs.lstatSync(dotGit);
     if (dotStat.isSymbolicLink() || !dotStat.isFile() || dotStat.size > 4096) return false;
-    const pointer = fs.readFileSync(dotGit, "utf8").trim();
-    if (!pointer.startsWith("gitdir: ")) return false;
-    const target = fs.realpathSync(path.resolve(dir, pointer.slice("gitdir: ".length)));
+    const pointer = parseGitfilePointer(fs.readFileSync(dotGit, "utf8"));
+    if (pointer === undefined) return false;
+    const target = fs.realpathSync(path.resolve(dir, pointer));
     const admin = fs.realpathSync(path.join(commonDir, "worktrees"));
-    return target.startsWith(admin + path.sep) && fs.statSync(target).isDirectory();
+    return target.startsWith(admin + path.sep) && fs.statSync(target).isDirectory() && untrustedCheckoutReason(dir) === undefined;
   } catch {
     return false;
   }

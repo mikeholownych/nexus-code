@@ -7,7 +7,10 @@
  * come from a user are passed after `--end-of-options`; callers also validate them first (see paths.ts), so a
  * name such as `--upload-pack=...` is refused before it reaches Git.
  *
- * Trust boundary: `.git/config`, the user's and the system's Git configuration are trusted as Git trusts them. Hooks,
+ * Trust boundary: the agent's sandbox can write its worktree, `.git` pointer and nested repositories included, so
+ * `git()` first refuses a checkout whose `.git` leads anywhere the agent could have planted (`untrustedCheckoutReason`),
+ * and then runs Git against the VERIFIED git directory (`--git-dir`/`--work-tree`), so a pointer rewritten after the
+ * check is never re-read. Past that, `.git/config`, the user's and the system's Git configuration are trusted as Git trusts them. Hooks,
  * fsmonitor and external transports are pinned off because a checkout can reach them, but a `filter.<name>.clean`
  * command configured in that trusted configuration still runs when `git status` compares content; `.gitattributes`
  * can only name a filter, never define its command.
@@ -50,6 +53,14 @@ export class GitError extends Error {
   }
 }
 
+/** A checkout (or a repository nested in one) whose Git directory the sandboxed agent could have planted. */
+export class UntrustedCheckoutError extends GitError {
+  constructor(cwd: string, reason: string, args: readonly string[]) {
+    super(`refusing to run Git in ${cwd}: it is not a trusted worktree of this repository (${reason})`, null, args);
+    this.name = "UntrustedCheckoutError";
+  }
+}
+
 export interface GitResult { status: number | null; stdout: string; stderr: string; timedOut: boolean }
 
 export interface GitOptions {
@@ -69,17 +80,30 @@ function inside(root: string, candidate: string): boolean {
 }
 
 /**
- * The agent runs in a sandbox that can write its worktree, `.git` pointer included, but nothing outside it. Git reads
- * the configuration of whatever repository `.git` leads to; a planted one can carry commands (`filter.*.clean`,
- * `commit.gpgsign` with `gpg.program`) that would run on the host. A linked worktree is therefore trusted only when its
- * `.git` file leads to an administrative directory that is OUTSIDE the worktree (so outside what the agent could write),
- * sits under `<common>/worktrees/`, and points back at this very `.git` file; and a repository nested inside a linked
- * worktree is never trusted. Returns the reason, or undefined when `cwd` is fine (or not in a repository at all).
+ * The agent runs in a sandbox that can write its worktree, `.git` pointer file and any nested repository included, but
+ * nothing outside it. Git reads the configuration of whatever repository `.git` leads to; a planted one can carry
+ * commands (`filter.*.clean`, `commit.gpgsign` with `gpg.program`) that would run on the host. A checkout is trusted only
+ * when every `.git` file on the way up is a plain pointer to a Git directory OUTSIDE the outermost linked worktree
+ * (outside what the agent can write) that points back at it (`gitdir` of a `<common>/worktrees/<name>` entry, or
+ * `core.worktree` of a separate or submodule Git directory), and no repository with a real `.git` directory sits inside
+ * a linked worktree. `gitDir`/`workTree` are the verified pair for the nearest `.git` file: Git is then run against them
+ * directly, so a pointer rewritten after this check is not re-read.
  */
-export function untrustedCheckoutReason(cwd: string): string | undefined {
+/**
+ * The path in a `.git` pointer file, read the way Git reads it: the content must start with `gitdir: `, only the
+ * trailing line break is dropped, and nothing else is trimmed. A guard that trimmed would resolve a different directory
+ * than Git does for `gitdir: x ` and could be shown a harmless one; such a pointer is refused instead.
+ */
+export function parseGitfilePointer(content: string): string | undefined {
+  if (!content.startsWith("gitdir: ")) return undefined;
+  const target = content.slice("gitdir: ".length).replace(/\r?\n$/, "");
+  if (target === "" || target !== target.trim() || /[\0\r\n]/.test(target)) return undefined;
+  return target;
+}
+
+export function verifyCheckout(cwd: string): { reason?: string; gitDir?: string; workTree?: string } {
   let start: string;
-  try { start = fs.realpathSync(cwd); } catch { return undefined; }
-  // Every `.git` on the way up from `cwd`. The outermost `.git` FILE is the boundary the sandboxed agent can write.
+  try { start = fs.realpathSync(cwd); } catch { return {}; }
   const files: string[] = [];
   const directories: string[] = [];
   for (let dir = start; ; dir = path.dirname(dir)) {
@@ -89,28 +113,72 @@ export function untrustedCheckoutReason(cwd: string): string | undefined {
     if (path.dirname(dir) === dir) break;
   }
   const outer = files[files.length - 1];
-  if (!outer) return undefined; // a plain repository (or none): not a sandbox-writable checkout
-  // A repository with a real `.git` directory below that boundary was planted (or cloned) inside the writable area.
+  if (!outer) return {}; // a plain repository (or none): not a sandbox-writable checkout
   const planted = directories.find((dir) => inside(outer, dir));
-  if (planted) return `${planted} is a repository nested inside the linked worktree ${outer}`;
+  if (planted) return { reason: `${planted} is a repository nested inside the linked worktree ${outer}` };
+  let pinned: { gitDir: string; workTree: string } | undefined;
   for (const root of files) {
     const dotGit = path.join(root, ".git");
     try {
       const stat = fs.lstatSync(dotGit);
-      if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 4096) return `${dotGit} is not a plain pointer file`;
-      const match = /^gitdir: (.+)$/m.exec(fs.readFileSync(dotGit, "utf8"));
-      if (!match) return `${dotGit} is not a gitdir pointer`;
-      const admin = fs.realpathSync(path.resolve(root, match[1].trim()));
-      if (inside(outer, admin)) return `${dotGit} leads into a repository inside the worktree itself`;
+      if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 4096) return { reason: `${dotGit} is not a plain pointer file` };
+      const target = parseGitfilePointer(fs.readFileSync(dotGit, "utf8"));
+      if (target === undefined) return { reason: `${dotGit} is not a well-formed gitdir pointer` };
+      const admin = fs.realpathSync(path.resolve(root, target));
+      if (inside(outer, admin)) return { reason: `${dotGit} leads into a repository inside the worktree itself` };
+      let pointsBack = false;
       if (path.basename(path.dirname(admin)) === "worktrees") {
         const common = fs.realpathSync(path.dirname(path.dirname(admin)));
-        if (inside(outer, common)) return `${dotGit} leads into a repository inside the worktree itself`;
-        const back = fs.readFileSync(path.join(admin, "gitdir"), "utf8").trim();
-        if (fs.realpathSync(path.resolve(admin, back)) !== path.join(root, ".git")) return `the administrative directory behind ${dotGit} does not point back at it`;
+        if (inside(outer, common)) return { reason: `${dotGit} leads into a repository inside the worktree itself` };
+        pointsBack = fs.realpathSync(path.resolve(admin, fs.readFileSync(path.join(admin, "gitdir"), "utf8").trim())) === path.join(root, ".git");
+      } else {
+        const configured = /^\s*worktree\s*=\s*(.+?)\s*$/m.exec(fs.readFileSync(path.join(admin, "config"), "utf8"));
+        pointsBack = Boolean(configured) && fs.realpathSync(path.resolve(admin, configured![1])) === root;
       }
+      if (!pointsBack) return { reason: `the Git directory behind ${dotGit} does not point back at it` };
+      pinned ??= { gitDir: admin, workTree: root };
     } catch {
-      return `${dotGit} could not be verified`;
+      return { reason: `${dotGit} could not be verified` };
     }
+  }
+  return pinned ?? {};
+}
+
+/** `git submodule status` lines as {path, initialised}; a path may contain spaces. */
+export function parseSubmoduleStatus(listing: string): Array<{ path: string; initialised: boolean }> {
+  const found: Array<{ path: string; initialised: boolean }> = [];
+  for (const line of listing.split("\n")) {
+    const match = /^(.)[0-9a-f]{40,64} (.*?)(?: \(.*\))?$/.exec(line);
+    if (match) found.push({ path: match[2], initialised: match[1] !== "-" });
+  }
+  return found;
+}
+
+/** The reason `cwd` is not a trusted checkout (see `verifyCheckout`), or undefined. */
+export function untrustedCheckoutReason(cwd: string): string | undefined {
+  return verifyCheckout(cwd).reason;
+}
+
+/**
+ * Whether a repository the agent could have planted sits below `dir`: a gitlink in the index or an untracked directory
+ * holding a `.git`. Git itself descends into submodules when it reports status, reading their configuration, so this
+ * runs before every status. Undefined when `dir` is not an agent-writable checkout or nothing is wrong.
+ */
+export function nestedRepositoryReason(dir: string): string | undefined {
+  const own = verifyCheckout(dir);
+  if (own.reason) return own.reason;
+  if (!own.gitDir) return undefined;
+  const candidates = new Set<string>();
+  for (const entry of git(dir, ["ls-files", "-s", "-z"]).stdout.split("\0")) {
+    const match = /^160000 [0-9a-f]+ \d\t(.+)$/.exec(entry);
+    if (match) candidates.add(match[1]);
+  }
+  for (const entry of git(dir, ["ls-files", "-o", "--exclude-standard", "--directory", "-z"]).stdout.split("\0")) {
+    if (entry.endsWith("/")) candidates.add(entry.slice(0, -1));
+  }
+  for (const rel of candidates) {
+    const reason = verifyCheckout(path.join(dir, rel)).reason;
+    if (reason) return reason;
   }
   return undefined;
 }
@@ -132,9 +200,10 @@ function baseEnv(): NodeJS.ProcessEnv {
 }
 
 export function git(cwd: string, args: readonly string[], options: GitOptions = {}): GitResult {
-  const untrusted = untrustedCheckoutReason(cwd);
-  if (untrusted) throw new GitError(`refusing to run Git in ${cwd}: it is not a trusted worktree of this repository (${untrusted})`, null, args);
-  const result = spawnSync("git", [...PINNED_GIT_FLAGS, ...args], {
+  const checkout = verifyCheckout(cwd);
+  if (checkout.reason) throw new UntrustedCheckoutError(cwd, checkout.reason, args);
+  const pin = checkout.gitDir ? ["--git-dir", checkout.gitDir, "--work-tree", checkout.workTree!] : [];
+  const result = spawnSync("git", [...PINNED_GIT_FLAGS, ...pin, ...args], {
     cwd,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],

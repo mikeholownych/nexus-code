@@ -11,7 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { redactSecrets } from "../ui.js";
 import { statusOf } from "./core.js";
-import { git, gitOut } from "./git.js";
+import { git, gitOut, parseSubmoduleStatus } from "./git.js";
 import { MAX_BRANCH_LENGTH, MAX_RECORDS, updateRegistry, type Registry } from "./registry.js";
 import { currentEntry, openRepo } from "./repo.js";
 
@@ -119,11 +119,9 @@ export function workingState(dir: string, dirty: boolean): WorkingState {
  * content would be tested by a verifier yet never be part of what a receipt authorises and a merge carries.
  */
 export function hasDirtySubmodule(dir: string): boolean {
-  const listing = gitOut(dir, ["submodule", "status", "--recursive"]);
-  for (const line of listing.split("\n")) {
-    const m = /^(.)[0-9a-f]{40,64} (.*?)(?: \(.*\))?$/.exec(line);
-    if (!m || m[1] === "-") continue; // not initialised: no content to differ
-    const sub = path.join(dir, m[2]);
+  for (const { path: rel, initialised } of parseSubmoduleStatus(gitOut(dir, ["submodule", "status", "--recursive"]))) {
+    if (!initialised) continue; // no content to differ
+    const sub = path.join(dir, rel);
     if (snapshotTree(sub, true) !== gitOut(sub, ["rev-parse", "--verify", "HEAD^{tree}"])) return true;
   }
   return false;

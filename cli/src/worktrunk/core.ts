@@ -12,7 +12,7 @@ import { redactSecrets } from "../ui.js";
 import { ensureGitExclude } from "../core/git_exclude.js";
 import { identityOf, mkdirVerified } from "../safe_fs.js";
 import { readWorktreeSettings } from "./config.js";
-import { git, gitOut } from "./git.js";
+import { git, gitOut, nestedRepositoryReason, UntrustedCheckoutError } from "./git.js";
 import { resolveWorktreePath, sanitizeBranch, validateBranchName, allowedRoot } from "./paths.js";
 import { readRegistry, updateRegistry, withWorktreeLock, type Registry } from "./registry.js";
 import { currentEntry, defaultBranch, openRepo, refExists, resolveBranchCommit, resolveCommit, type Repo, type WorktreeEntry } from "./repo.js";
@@ -132,6 +132,9 @@ export interface Dirty { staged: number; modified: number; untracked: number; co
 
 /** One `git status --porcelain=v2 -z` call. `ignored` counts ignored paths only when asked (removal safety). */
 export function statusOf(dir: string, options: { ignored?: boolean; ignoreSubmodules?: string } = {}): Dirty {
+  // Git descends into submodules for status and reads their configuration: nothing planted may sit below `dir`.
+  const nested = nestedRepositoryReason(dir);
+  if (nested) throw new UntrustedCheckoutError(dir, nested, ["status"]);
   const args = ["status", "--porcelain=v2", "-z", options.ignored ? "--untracked-files=all" : "--untracked-files=normal"];
   if (options.ignored) args.push("--ignored=matching");
   if (options.ignoreSubmodules) args.push(`--ignore-submodules=${options.ignoreSubmodules}`);

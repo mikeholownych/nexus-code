@@ -99,7 +99,7 @@ test("a target checkout switched to another branch at the same commit is refused
     let r;
     try { r = f.merge(); } finally { delete mergeSeams.preMerge; }
     assert.equal(r.success, false, r.output);
-    assert.match(r.output, /target|switched|main/i);
+    assert.match(r.output, /no longer on/);
     assert.equal(git(f.repo, "rev-parse", "other"), git(f.repo, "rev-parse", "main"), "the switched-to branch was not advanced");
     assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").includes("w.txt"), false);
   } finally { f.cleanup(); }
@@ -124,6 +124,67 @@ test("trust table: legitimate layouts pass, planted ones are refused", async () 
     assert.match(String(untrustedCheckoutReason(path.join(f.dir, "sub"))), /inside the worktree itself/);
     fs.rmSync(path.join(f.dir, "sub", ".git"));
     fs.symlinkSync(path.join(f.repo, ".git"), path.join(f.dir, "sub", ".git"));
-    assert.match(String(untrustedCheckoutReason(path.join(f.dir, "sub"))), /nested|plain pointer/);
+    assert.match(String(untrustedCheckoutReason(path.join(f.dir, "sub"))), /plain pointer/);
   } finally { f.cleanup(); }
+});
+
+test("a pointer padded with whitespace cannot show the guard a different directory than Git reads", () => {
+  const f = fixture("feat/pad");
+  try {
+    const marker = path.join(f.root, "MARKER");
+    const realAdmin = fs.readFileSync(path.join(f.dir, ".git"), "utf8").replace(/^gitdir: /, "").trim();
+    const planted = path.join(f.dir, "plant", "adm "); // a directory whose name ends in a space: a Git directory with a filter
+    fs.mkdirSync(path.join(planted, "objects"), { recursive: true });
+    fs.mkdirSync(path.join(planted, "refs"), { recursive: true });
+    fs.writeFileSync(path.join(planted, "HEAD"), "ref: refs/heads/feat/pad\n");
+    fs.writeFileSync(path.join(planted, "config"), `[core]\n\trepositoryformatversion = 0\n[filter "plant"]\n\tclean = sh -c 'echo ran > ${marker}; cat'\n`);
+    fs.symlinkSync(realAdmin, path.join(f.dir, "plant", "adm")); // what a trimming guard would resolve to: the genuine admin directory
+    fs.writeFileSync(path.join(f.dir, ".git"), "gitdir: plant/adm \n");
+    fs.writeFileSync(path.join(f.dir, ".gitattributes"), "* filter=plant\n");
+    fs.writeFileSync(path.join(f.dir, "a.txt"), "edited by the agent\n");
+    const r = f.merge();
+    assert.equal(fs.existsSync(marker), false, `the planted filter ran: ${r.output}`);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /not a well-formed gitdir pointer/, "refused by the pointer rule itself, not by an accident further on");
+  } finally { f.cleanup(); }
+});
+
+test("a pointer to the main repository's own Git directory, and a repository planted in an untracked directory, are refused", () => {
+  const f = fixture("feat/nest");
+  try {
+    const marker = path.join(f.root, "MARKER");
+    // an untracked directory holding a complete repository with a filter: Git would read it when it descends for status
+    const nested = path.join(f.dir, "vendor");
+    fs.mkdirSync(nested);
+    git(nested, "init", "-q");
+    fs.writeFileSync(path.join(nested, "f.txt"), "x\n");
+    git(nested, "add", "-A");
+    git(nested, "-c", "commit.gpgsign=false", "-c", "user.email=t@e.c", "-c", "user.name=T", "commit", "-q", "-m", "p");
+    git(nested, "config", "filter.plant.clean", `sh -c 'echo ran > ${marker}; cat'`); // armed only now
+    fs.writeFileSync(path.join(nested, ".gitattributes"), "* filter=plant\n");
+    fs.writeFileSync(path.join(nested, "f.txt"), "dirty\n");
+    fs.writeFileSync(path.join(f.dir, "w.txt"), "w\n");
+    const r = f.merge();
+    assert.equal(fs.existsSync(marker), false, `the nested repository's filter ran: ${r.output}`);
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /nested inside the linked worktree/);
+  } finally { f.cleanup(); }
+
+  const g = fixture("feat/main-ptr");
+  try {
+    fs.writeFileSync(path.join(g.dir, ".git"), `gitdir: ${path.join(g.repo, ".git")}\n`);
+    fs.writeFileSync(path.join(g.dir, "w.txt"), "w\n");
+    const before = git(g.repo, "rev-parse", "main");
+    const r = g.merge();
+    assert.equal(r.success, false, r.output);
+    assert.equal(git(g.repo, "rev-parse", "main"), before, "the main branch was not advanced through the rewritten pointer");
+  } finally { g.cleanup(); }
+});
+
+test("submodule status lines are parsed with their whole path, spaces included", async () => {
+  const { parseSubmoduleStatus } = await import("../src/worktrunk/git.js");
+  const sha = "a".repeat(40);
+  assert.deepEqual(parseSubmoduleStatus(` ${sha} my sub (heads/main)\n-${sha} other\n+${sha} nested/dir (v1-2-gabc)`), [
+    { path: "my sub", initialised: true }, { path: "other", initialised: false }, { path: "nested/dir", initialised: true },
+  ]);
 });

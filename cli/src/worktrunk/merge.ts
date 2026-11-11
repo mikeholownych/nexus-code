@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { conventionalCommitMessage } from "../git.js";
 import { redactSecrets } from "../ui.js";
 import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, statusOf, integratedReason, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
-import { git, gitOut } from "./git.js";
+import { git, gitOut, parseSubmoduleStatus } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type Repo, type WorktreeEntry } from "./repo.js";
 import { readRegistry, updateRegistry, MAX_RECORDS, MAX_BRANCH_LENGTH } from "./registry.js";
 import { hasVerification, NEXUS_STATE_PATH, workingState } from "./verification.js";
@@ -42,13 +42,7 @@ export const mergeSeams: { preMerge?: (info: { branch: string; target: string })
 
 /** The initialised submodules of the worktree (one `git submodule status --recursive` call). */
 function initializedSubmodules(dir: string): string[] {
-  const found: string[] = [];
-  for (const line of git(dir, ["submodule", "status", "--recursive"], { allowFailure: true }).stdout.split("\n").filter(Boolean)) {
-    if (line[0] === "-") continue; // not initialised here: no objects of its own
-    const sub = line.slice(1).trim().split(/\s+/)[1];
-    if (sub) found.push(sub);
-  }
-  return found;
+  return parseSubmoduleStatus(git(dir, ["submodule", "status", "--recursive"], { allowFailure: true }).stdout).filter((sub) => sub.initialised).map((sub) => sub.path);
 }
 
 /**
@@ -261,8 +255,8 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     throw new WorktreeError("a commit landed in the worktree after the verification receipt was checked; nothing was merged. Verify the current state and run the command again");
   }
 
-  // A clean source has an index equal to HEAD. Anything staged since the snapshot (another terminal's `add -f` of an
-  // ignored file, say) would be unstaged by the squash below and then removed with the worktree as disposable output.
+  // A clean source has an index equal to HEAD; anything staged since the snapshot (an `add -f` of an ignored file) would
+  // be committed by the squash or amend below, or lost with the worktree.
   if (!dirty && gitOut(source.path, ["write-tree"]) !== gitOut(source.path, ["rev-parse", "--verify", "HEAD^{tree}"])) {
     throw new WorktreeError("the index changed after the state snapshot (something was staged in the worktree); nothing was merged. Review it and run the command again");
   }
@@ -276,14 +270,11 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (!cancelled && count > 1 && !options.noSquash) {
     const subjects = gitOut(source.path, ["log", "--reverse", "--format=%s", `${mergeBase}..HEAD`]).split("\n").filter(Boolean);
     const message = options.message ?? `${subjects[0]}\n\nSquashed ${count} commits from ${branch}:\n${subjects.map((s) => `- ${s}`).join("\n")}`;
-    // Unstage first: the soft reset keeps the index, and anything another terminal staged since the snapshot would be committed.
-    git(source.path, ["reset", "-q", "HEAD"]);
     git(source.path, ["reset", "--soft", mergeBase]);
     git(source.path, ["commit", "-m", message], { env: NON_INTERACTIVE });
     notes.push(`Squashed ${count} commits.`);
   } else if (!cancelled && !dirty && count === 1 && options.message && options.amendSingleCommit) {
-    // `--only`: a message-only amend. Without it the amend would commit whatever another terminal staged since the snapshot.
-    git(source.path, ["commit", "--amend", "--only", "-m", options.message], { env: NON_INTERACTIVE });
+    git(source.path, ["commit", "--amend", "-m", options.message], { env: NON_INTERACTIVE });
   }
 
   if (!cancelled && !options.noRebase && mergeBase !== targetSha) {
@@ -308,9 +299,7 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   }
 
   if (!cancelled) {
-    // The target checkout was chosen before the source was backed up, squashed and rebased. Another terminal may have
-    // switched it to another branch since (even one at the same commit): refuse rather than advance that branch under
-    // this one's name.
+    // Another terminal may have switched the target checkout since it was chosen: never advance another branch under this name.
     const targetRef = git(targetEntry.path, ["symbolic-ref", "--quiet", "HEAD"], { allowFailure: true }).stdout.trim();
     if (targetRef !== `refs/heads/${targetName}`) {
       const targetNow = targetRef.replace(/^refs\/heads\//, "");
@@ -339,9 +328,20 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   if (!options.noRemove) {
     // The merged work is on the target. Only ignored output (build caches) may still be in the worktree; it goes with
     // it. Anything else left (edits inside a submodule cannot be committed from here, for one) is never forced away.
-    const left = statusOf(source.path, { ignoreSubmodules: "none" });
-    const initialized = left.total > 0 ? [] : initializedSubmodules(source.path); // one `git submodule status` for both notes
-    const unpublished = unpublishedSubmodules(source.path, initialized);
+    let left: ReturnType<typeof statusOf>;
+    let initialized: string[];
+    let unpublished: string[];
+    try {
+      left = statusOf(source.path, { ignoreSubmodules: "none" });
+      initialized = left.total > 0 ? [] : initializedSubmodules(source.path); // one `git submodule status` for both notes
+      unpublished = unpublishedSubmodules(source.path, initialized);
+    } catch (err) {
+      // The merge is done; whatever stops the safety checks keeps the worktree rather than failing the report.
+      left = { staged: 0, modified: 0, untracked: 0, conflicted: 0, ignored: 0, total: 1 };
+      initialized = [];
+      unpublished = [];
+      notes.push(`Could not inspect the worktree after the merge (${redactSecrets((err as Error).message).slice(0, 150)}).`);
+    }
     if (unpublished.length > 0) {
       notes.push(`Kept the worktree ${shownPath(ctx.home, source.path)}: submodule ${unpublished.map((sub) => redactSecrets(sub)).join(", ")} has a commit that is on no remote branch, and removing the worktree would delete its only copy. Push it from there, then run \`worktree remove\`. The merge itself is done.`);
     } else if (left.total > 0) {

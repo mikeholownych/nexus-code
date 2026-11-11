@@ -561,7 +561,7 @@ test("a repository whose git directory is not <checkout>/.git is refused by `nex
     commitFile(main, "a.txt", "one\n", "init");
     const refused = wt(f, main, ["list"]);
     assert.equal(refused.success, false);
-    assert.match(refused.output, /not supported/);
+    assert.match(refused.output, /not supported|not a trusted worktree/);
     const linked = path.join(f.root, "linked");
     git(main, "worktree", "add", "-q", "-b", "side", linked);
     // Git records no way back to the main checkout, so the documented limit is the checkout itself, never the git directory
