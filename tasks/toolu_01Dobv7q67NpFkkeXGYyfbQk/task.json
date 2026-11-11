@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Dobv7q67NpFkkeXGYyfbQk",
+  "agent_id": "a7bae307e3dacbf7a",
+  "subagent_type": "reviewer",
+  "task_description": "Independent security review of PR #478",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 67052,
+    "cache_read_tokens": 526767,
+    "output_tokens": 23850,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-11T20:48:47.983940845Z",
+  "completed_at": "2026-11-11T20:52:16.70192777Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Y8MG92fgQ937TEUWicxMpQ",
+  "agent_id": "ace36d82d937d8a99",
+  "subagent_type": "general-purpose",
+  "task_description": "Pre-push reviews, new head",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 95409,
+    "cache_read_tokens": 958589,
+    "output_tokens": 32281,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-11T20:29:31.678830569Z",
+  "completed_at": "2026-11-11T20:34:01.117175767Z"
+}

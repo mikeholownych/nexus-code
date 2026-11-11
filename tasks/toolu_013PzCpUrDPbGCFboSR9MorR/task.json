@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_013PzCpUrDPbGCFboSR9MorR",
+  "agent_id": "ae3f735c65dd14995",
+  "subagent_type": "general-purpose",
+  "task_description": "Pre-push reviews, final round",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 88328,
+    "cache_read_tokens": 631011,
+    "output_tokens": 33305,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-11T20:16:40.328094823Z",
+  "completed_at": "2026-11-11T20:21:22.9736421Z"
+}

@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M767RC5KBCP3AHEYMNQY54C3",
+  "session_id": "6473a60e-9fa2-4bd9-9d0c-35324295cf68",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-11T21:21:09.285791772Z",
+  "branch": "v1/v114-wp1316-auto-inputs",
+  "checkpoints_count": 19,
+  "save_step_count": 113,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "b13487d70794",
+  "checkpoint_transcript_start": 5644,
+  "transcript_lines_at_start": 5644,
+  "compact_transcript_start": 572,
+  "token_usage": {
+    "input_tokens": 148,
+    "cache_creation_tokens": 56542,
+    "cache_read_tokens": 10804000,
+    "output_tokens": 25874,
+    "api_call_count": 57,
+    "subagent_tokens": {
+      "input_tokens": 348,
+      "cache_creation_tokens": 1385782,
+      "cache_read_tokens": 19539133,
+      "output_tokens": 125901,
+      "api_call_count": 154
+    }
+  },
+  "redaction": {
+    "replacements": 50,
+    "layers": {
+      "betterleaks": 1,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 49,
+      "key_context": 0,
+      "provider_token": 21,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 125
+  }
+}
