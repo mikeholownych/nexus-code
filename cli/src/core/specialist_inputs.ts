@@ -257,20 +257,26 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     }));
     const baseModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"));
     const ownModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER, ownIndex: true }).split("\0"));
+    const exec = (m: string) => m === "100644" || m === "100755";
     const modeChanges: string[] = [];
     for (const [file, own] of ownModes) {
       const atBaseEntry = baseModes.get(file);
-      const exec = (m: string) => m === "100644" || m === "100755";
       if (atBaseEntry && atBaseEntry.mode !== own.mode && exec(atBaseEntry.mode) && exec(own.mode)) modeChanges.push(`${own.mode} ${atBaseEntry.oid}\t${file}\0`);
     }
     if (modeChanges.length) git(["update-index", "-z", "--index-info"], { input: modeChanges.join("") });
+    // Paths outside a sparse checkout are skip-worktree in the real index and absent from disk. `read-tree` does not set
+    // that flag, so against the scratch index every one of them would read as deleted: carry it over (a path present on
+    // disk keeps no flag, its edits are part of the candidate).
+    const sparse = git(["ls-files", "-v", "-z"], { maxBuffer: LISTING_MAX_BUFFER, ownIndex: true }).split("\0")
+      .filter((e) => (e[0] === "S" || e[0] === "s") && !onDisk(e.slice(2))).map((e) => e.slice(2));
+    if (sparse.length) git(["--literal-pathspecs", "update-index", "--skip-worktree", "-z", "--stdin"], { input: `${sparse.join("\0")}\0` });
     const removedSet = new Set(removed);
     const added = new Set([
       ...untracked.filter((p) => !removedSet.has(p)),
       ...[...ownIndex].filter((p) => !atBase.has(p) && onDisk(p)),
     ]);
     if (added.size) {
-      git(["--literal-pathspecs", "add", "--force", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${[...added].join("\0")}\0` });
+      git(["--literal-pathspecs", "add", "--sparse", "--force", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${[...added].join("\0")}\0` });
       // Adding re-reads the mode from disk; a path the real index holds with another executable bit (a new script staged
       // with --chmod=+x under core.filemode=false) keeps the real index's mode, as integration preserves it.
       const addedModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"));
@@ -325,7 +331,8 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     const allowed: string[] = [];
     for (const group of groups) {
       if (isProtected(group)) omitted++;
-      else if (group.status[0] === "A" && (protectedChanged || sources.carriedBy(root, group.paths[0]))) omittedNew++;
+      // A copy or rename is a new file too: its destination is compared with the protected content like an added file.
+      else if ("ACR".includes(group.status[0]) && ((group.status[0] === "A" && protectedChanged) || sources.carriedBy(root, group.paths[group.paths.length - 1]))) omittedNew++;
       else allowed.push(...group.paths);
     }
     const diff = allowed.length ? git(["diff", ...DIFF_FLAGS, "--end-of-options", commit, "--", ...allowed.map((p) => `:(literal)${p}`)]) : "";

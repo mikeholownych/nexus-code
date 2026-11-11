@@ -477,7 +477,7 @@ export class OperationGit {
       attrs = attributesTree(entry.worktree, scratch, files);
       const refusal = driverRefusal((args, input) => run(args, { input, raw: true }), files);
       if (refusal) throw new Error(refusal);
-      run(["add", "-A", "--", ".", ...nested.map((p) => `:(exclude,literal)${p.slice(0, -1)}`)]);
+      run(["add", "--sparse", "-A", "--", ".", ...nested.map((p) => `:(exclude,literal)${p.slice(0, -1)}`)]);
       const tree = run(["write-tree"]);
       return run([...this.mechanicalGitConfig(), "commit-tree", tree, "-p", "HEAD", "-m", `nexus: snapshot of ${unitId}'s candidate for failure debugging`]);
     } finally {

@@ -150,7 +150,6 @@ test("building a debugger snapshot runs no clean filter or fsmonitor hook of a h
   put(tester, "evil.txt", "candidate\n");
   sh(tester, "config", "core.fsmonitor", `sh -c 'touch ${markers}/fsmonitor'`);
   sh(tester, "config", "filter.evil.clean", `sh -c 'touch ${markers}/filter; cat'`);
-  put(tester, ".git-info-hack", "x\n");
   const info = path.join(sh(tester, "rev-parse", "--git-common-dir").trim().replace(/^(?!\/)/, `${tester}/`), "info");
   fs.mkdirSync(info, { recursive: true });
   fs.writeFileSync(path.join(info, "attributes"), "*.txt filter=evil\n");
@@ -158,7 +157,7 @@ test("building a debugger snapshot runs no clean filter or fsmonitor hook of a h
   try { ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }); } catch (e) { threw = e; }
   assert.equal(fs.existsSync(path.join(markers, "filter")), false, "the clean filter ran while snapshotting");
   assert.equal(fs.existsSync(path.join(markers, "fsmonitor")), false, "the fsmonitor hook ran while snapshotting");
-  assert.ok(threw, "a filter that would apply refuses the snapshot rather than being run");
+  assert.match(String((threw as Error | undefined)?.message), /filter driver .* is not run|filter driver.*not run|driver \('.*'\) applies/, "a filter that would apply refuses the snapshot rather than being run");
 });
 
 // ------------------------------------------------ 8: prerequisite summaries are data
@@ -318,4 +317,45 @@ test("a debugger snapshot keeps a sparse-excluded (skip-worktree, absent) path i
   const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
   assert.equal(sh(debug, "cat-file", "-p", "HEAD:out/lib.txt"), "lib\n");
   assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "edited\n");
+});
+
+test("a copy of an unprotected file with protected lines appended does not leak them (git reports it as a copy, not an addition)", () => {
+  const body = Array.from({ length: 120 }, (_, i) => `function helper${i}() { return ${i}; }`).join("\n") + "\n";
+  const d = mk((r) => { put(r, ".gitignore", ".env\n"); put(r, ".env", SECRET_BODY); put(r, "src/b.ts", body + SECRET_BODY); }, { "src/a.ts": body });
+  const out = diffOf(d);
+  assert.doesNotMatch(out.diff, LEAK);
+  assert.ok(out.omittedNew >= 1);
+});
+
+function sparseRepo(): string {
+  const d = mk(() => {}, { "in/a.txt": "a\n", "out/b.txt": "b\n", "out/c.txt": "c\n" });
+  sh(d, "sparse-checkout", "init", "--no-cone");
+  sh(d, "sparse-checkout", "set", "/in/");
+  assert.equal(fs.existsSync(path.join(d, "out")), false);
+  return d;
+}
+
+test("a sparse worktree's out-of-cone tree is not a deletion in the candidate diff, and an untracked file there does not fail it", () => {
+  const d = sparseRepo();
+  put(d, "in/a.txt", "a edited VISIBLE_EDIT\n");
+  put(d, "out/new.txt", "new\n");
+  const out = diffOf(d);
+  assert.match(out.diff, /VISIBLE_EDIT/);
+  assert.doesNotMatch(out.diff, /deleted file mode/);
+});
+
+test("a debugger snapshot of a sparse worktree keeps out-of-cone files and does not fail on an untracked one there", () => {
+  const root = mk(() => {}, { "in/a.txt": "a\n", "out/b.txt": "b\n" });
+  const p = planOperationGit(root, "op-sparse2");
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const tester = ops.prepareUnit({ ...unit("tester"), id: "verify" } as WorkUnit).workspace;
+  sh(tester, "sparse-checkout", "init", "--no-cone");
+  sh(tester, "sparse-checkout", "set", "/in/");
+  put(tester, "in/a.txt", "edited\n");
+  put(tester, "out/new.txt", "new\n");
+  const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:in/a.txt"), "edited\n");
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:out/b.txt"), "b\n");
 });
