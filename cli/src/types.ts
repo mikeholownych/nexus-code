@@ -33,10 +33,11 @@ export interface ChatMessage {
    */
   provider_state?: { owner: string; items: any[]; digest: string };
   /**
-   * Provenance of a user-role message Nexus wrote itself: "skill-note" for the per-prompt skill note. Set only by the
-   * harness, kept in saved sessions and never sent to a provider; text that merely looks like a note is the operator's.
+   * Provenance of a user-role message Nexus wrote itself: "skill-note" for the per-prompt skill note, "note" for every
+   * other note (continuation, recovery, notices, cut-off and empty-reply). Set only by the harness, kept in saved
+   * sessions and never sent to a provider; text that merely looks like a note is the operator's.
    */
-  harness?: "skill-note";
+  harness?: "skill-note" | "note";
 }
 
 export interface ToolParameterProperty {
