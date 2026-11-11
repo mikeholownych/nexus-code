@@ -1331,8 +1331,8 @@ impl LiveState {
         }
         if let Some(Overlay::Approval(approval)) = &mut self.overlay {
             // A change drawn with the diff view is judged as the diff; text rows (commands, scripts) must be read to
-            // the end.
-            approval.read_all = approval.patch.is_some() || approval.scroll >= layout.overlay_limit;
+            // the end, in a frame that drew them (a frame without room for a row clamps the scroll past rows never shown).
+            approval.read_all = approval.patch.is_some() || (layout.approval_drawn && approval.scroll >= layout.overlay_limit);
             // The refusal told the operator to scroll to the end: once they have, it no longer applies.
             if approval.read_all && approval.notice == Some(APPROVAL_UNSEEN) {
                 approval.notice = None;
@@ -4641,7 +4641,6 @@ mod tests {
         #[test]
         fn an_a_held_inside_the_wait_never_reaches_a_confirmed_approve_all() {
             let (mut state, t0) = after_a_submit();
-            let mut now = 900;
             let mut approved = false;
             // `a` held from 900 ms: auto-repeat after 660 ms, then every 30 ms for 3 s.
             let mut times = vec![900, 900 + 660];
@@ -4650,10 +4649,8 @@ mod tests {
                 times.push(next);
             }
             for t in times {
-                now = t;
                 approved |= state.on_key_at(key(KeyCode::Char('a')), at(t0, t)).is_some();
             }
-            let _ = now;
             assert!(!approved, "a held `a` approved all later actions");
         }
 
