@@ -121,7 +121,7 @@ function protectedContent(sources: Array<{ root: string; file: string }>): { car
     } catch { continue; }
     // A large `.nexus` file (a flight log) is not a credential source: it is left out instead of failing every new file closed.
     if (structural && size > SOURCE_FILE_MAX) continue;
-    total += size;
+    if (!structural) total += size;
     if (size > SOURCE_FILE_MAX || total > SOURCE_TOTAL_MAX) { complete = false; continue; }
     let data: Buffer;
     try { data = fs.readFileSync(path.join(root, file)); } catch { complete = false; continue; }
@@ -310,12 +310,14 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     // A unit's worktree lacks the operator's untracked and ignored secrets (.env), so those are compared too.
     if (isolated) {
       const operator = path.resolve(policyWorkspace!);
-      try {
-        const listed = execFileSync("git", [...GIT_SAFE, "ls-files", "-z", "--cached", "--others", "--ignored", "--exclude-standard"], {
+      // Tracked, untracked and ignored files of the operator's repository. A failure (timeout, buffer) propagates: the
+      // comparison is never silently skipped.
+      for (const extra of [[], ["--ignored"]]) {
+        const listed = execFileSync("git", [...GIT_SAFE, "ls-files", "-z", "--cached", "--others", ...extra, "--exclude-standard"], {
           cwd: operator, env: safeGitEnv(undefined), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: IGNORED_LISTING_TIMEOUT_MS, maxBuffer: LISTING_MAX_BUFFER,
         }).split("\0").filter((p) => p && !p.endsWith("/") && inputPathProtection(security, p) !== undefined);
         for (const file of listed) protectedSources.push({ root: operator, file });
-      } catch { /* the operator's workspace is not a repository: nothing further to compare */ }
+      }
     }
     const sources = protectedContent(protectedSources);
     let omitted = 0;

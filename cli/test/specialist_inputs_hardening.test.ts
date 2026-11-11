@@ -279,3 +279,13 @@ test("a review unit's diff is credential-redacted, and an all-omitted candidate 
   const ev2 = (executor as any).reviewEvidence({ ...unit("reviewer"), id: "rv" }, { objective: "o", workspace: d2, dependencies: [] }, d2);
   assert.match(ev2.diffError ?? "", /new files that carry protected content/);
 });
+
+test("a new file copied from the operator's untracked, non-ignored secret is omitted too", () => {
+  const main = mk((r) => { put(r, ".env.local", SECRET_BODY); }, { README: "hi\n" });
+  const wt = `${main}-wt2`;
+  sh(main, "worktree", "add", "-q", "-b", "unit2", wt);
+  put(wt, "notes.txt", SECRET_BODY);
+  const r = candidateDiff(wt, undefined, main);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  assert.doesNotMatch((r as { diff: string }).diff, LEAK);
+});
