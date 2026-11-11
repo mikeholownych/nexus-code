@@ -561,7 +561,7 @@ test("a repository whose git directory is not <checkout>/.git is refused by `nex
     commitFile(main, "a.txt", "one\n", "init");
     const refused = wt(f, main, ["list"]);
     assert.equal(refused.success, false);
-    assert.match(refused.output, /not supported/);
+    assert.match(refused.output, /not supported|not a trusted worktree/);
     const linked = path.join(f.root, "linked");
     git(main, "worktree", "add", "-q", "-b", "side", linked);
     // Git records no way back to the main checkout, so the documented limit is the checkout itself, never the git directory
@@ -681,22 +681,6 @@ test("a commit that lands between creating the guard branch and reading its head
   } finally { f.cleanup(); }
 });
 
-test("a leaked guard branch for the same worktree and commit is reused by a retry", () => {
-  const f = fixture();
-  try {
-    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-leaked");
-    fs.mkdirSync(path.dirname(dir), { recursive: true });
-    git(f.repo, "worktree", "add", "-q", "--detach", dir);
-    const head = git(dir, "rev-parse", "HEAD");
-    const name = `nexus-removed/${crypto.createHash("sha1").update(fs.realpathSync(dir)).digest("hex").slice(0, 10)}-${head.slice(0, 8)}`;
-    git(f.repo, "branch", name, head); // what an interrupted removal leaves behind
-    const r = wt(f, f.repo, ["remove", dir]);
-    assert.equal(r.success, true, r.output);
-    assert.equal(fs.existsSync(dir), false);
-    assert.equal(git(f.repo, "for-each-ref", "refs/heads/nexus-removed"), "", "the reused guard branch is cleaned up");
-  } finally { f.cleanup(); }
-});
-
 test("when the detached HEAD cannot be restored after a refused removal the message names the branch the worktree is left on", async () => {
   const f = fixture();
   try {
@@ -715,6 +699,8 @@ test("when the detached HEAD cannot be restored after a refused removal the mess
     assert.match(r.output, /could not restore the detached HEAD/);
     assert.match(r.output, /nexus-removed\//);
     assert.match(r.output, /switch --detach/);
+    assert.doesNotMatch(r.output, /reuses it/, "a retry no longer reuses a guard branch");
+    assert.match(r.output, /git branch -D/);
   } finally { f.cleanup(); }
 });
 
@@ -733,5 +719,84 @@ test("a lock whose holder died before writing its pid is taken over after a shor
       fs.utimesSync(lock, old, old);
       assert.equal(withWorktreeLock(common, () => "ran"), "ran", "older than the grace: taken over");
     } finally { lockSettings.waitMs = before; fs.rmSync(lock, { force: true }); }
+  } finally { f.cleanup(); }
+});
+
+const guardNameFor = (dir: string, head: string) => `nexus-removed/${crypto.createHash("sha1").update(fs.realpathSync(dir)).digest("hex").slice(0, 10)}-${head.slice(0, 8)}`;
+
+test("a leaked guard branch makes removal refuse before anything changes, naming the branch, its commit and the commands to inspect it", () => {
+  const f = fixture();
+  try {
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-leaked");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    const head = git(dir, "rev-parse", "HEAD");
+    const name = guardNameFor(dir, head);
+    git(f.repo, "branch", name, head); // what an interrupted removal leaves behind
+    const r = wt(f, f.repo, ["remove", dir]);
+    assert.equal(r.success, false, r.output);
+    assert.equal(fs.existsSync(dir), true, "nothing is removed");
+    assert.throws(() => git(dir, "symbolic-ref", "-q", "HEAD"), undefined, "the worktree stays detached");
+    assert.equal(git(f.repo, "rev-parse", `refs/heads/${name}`), head, "the leaked branch is untouched");
+    assert.ok(r.output.includes(name) && r.output.includes(head.slice(0, 12)), r.output);
+    assert.match(r.output, /git log/);
+    assert.match(r.output, /git branch -D/);
+    assert.equal(git(f.repo, "for-each-ref", "refs/heads/nexus-removed").split("\n").filter(Boolean).length, 1, "no other branch was created");
+  } finally { f.cleanup(); }
+});
+
+test("a guard-named branch checked out in another worktree is refused and that worktree is left intact", () => {
+  const f = fixture();
+  try {
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-elsewhere");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    const head = git(dir, "rev-parse", "HEAD");
+    const name = guardNameFor(dir, head);
+    const other = path.join(f.repo, ".nexus", "worktrees", "on-the-guard");
+    git(f.repo, "worktree", "add", "-q", "-b", name, other, head);
+    const r = wt(f, f.repo, ["remove", dir, "--delete-unmerged"]);
+    assert.equal(r.success, false, r.output);
+    assert.equal(fs.existsSync(dir), true);
+    assert.equal(git(other, "rev-parse", "HEAD"), head, "the other worktree still has its branch and commit");
+    assert.equal(git(f.repo, "rev-parse", `refs/heads/${name}`), head);
+  } finally { f.cleanup(); }
+});
+
+test("a commit that lands on a fresh detached worktree before the guard switch is kept on the guard branch and nothing is removed", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-before-switch");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    let landed = "";
+    core.removeSeams.beforeGuardSwitch = () => { landed = commitFile(dir, "b.txt", "B\n", "B lands before the guard switch"); };
+    let r;
+    try { r = wt(f, f.repo, ["remove", dir]); } finally { delete core.removeSeams.beforeGuardSwitch; }
+    assert.ok(landed);
+    assert.equal(r.success, false, r.output);
+    assert.equal(fs.existsSync(dir), true);
+    assert.ok(git(f.repo, "for-each-ref", "--format=%(objectname)", "refs/heads/nexus-removed").includes(landed));
+  } finally { f.cleanup(); }
+});
+
+test("a commit that only survives in the HEAD reflog after the guard switch is kept, not deleted with the worktree", async () => {
+  const f = fixture();
+  try {
+    const core = await import("../src/worktrunk/core.js") as any;
+    const dir = path.join(f.repo, ".nexus", "worktrees", "detached-reflog");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(f.repo, "worktree", "add", "-q", "--detach", dir);
+    let lost = "";
+    // what a commit that raced the switch leaves behind: HEAD is back at the checked commit, the new commit is in the reflog only
+    core.removeSeams.afterGuardSwitch = () => { lost = commitFile(dir, "raced.txt", "x\n", "raced the switch"); git(dir, "reset", "-q", "--hard", "HEAD~1"); };
+    let r;
+    try { r = wt(f, f.repo, ["remove", dir]); } finally { delete core.removeSeams.afterGuardSwitch; }
+    assert.ok(lost);
+    assert.equal(r.success, false, r.output);
+    assert.equal(fs.existsSync(dir), true, "the worktree and its reflog are kept");
+    assert.match(r.output, /reflog|nexus-removed\//);
+    assert.equal(git(dir, "rev-parse", "HEAD@{1}"), lost);
   } finally { f.cleanup(); }
 });

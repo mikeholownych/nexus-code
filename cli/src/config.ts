@@ -6,8 +6,13 @@ import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, operatorSetting, setCredentialAuthority } from "./client.js";
 import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
+import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
+import { readSmallFile } from "./core/checkout_trust.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
+
+/** A project `.env` larger than this is ignored (it is repository-controlled). */
+const MAX_PROJECT_ENV_BYTES = 256 * 1024;
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
 const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
@@ -116,8 +121,14 @@ export function loadEnvironment(): void {
   if (cwdEnv !== installEnv && fs.existsSync(cwdEnv)) {
     let project: Record<string, string> = {};
     try {
-      project = parseDotenv(fs.readFileSync(cwdEnv));
-    } catch {}
+      // The repository (a sandboxed agent's worktree, say) controls this file: never a blocking or unbounded read.
+      // A link to a regular file is followed (a dotfile manager's layout); what it leads to must still be a small plain file.
+      const text = readSmallFile(fs.realpathSync(cwdEnv), MAX_PROJECT_ENV_BYTES);
+      if (text !== undefined) project = parseDotenv(Buffer.from(text));
+      else warnOnce(`project .env ${cwdEnv} was not read (not a regular file, or larger than ${MAX_PROJECT_ENV_BYTES / 1024} KiB)`);
+    } catch {
+      warnOnce(`project .env ${cwdEnv} was not read (it could not be resolved or read)`);
+    }
     for (const [key, value] of Object.entries(project)) {
       if (isProjectEnvKey(key)) projectEnvSettings[key] = value;
       else projectEnvIgnored.push(key);
@@ -187,6 +198,25 @@ export function effectiveSetting(key: string): string | undefined {
 
 export function projectSetting(key: string): string | undefined {
   return projectEnvSettings[key];
+}
+
+/** Whether the effective value of `key` comes from the project `.env` (the operator's shell does not set it): a repository, not the operator, chose it. */
+export function chosenByProjectEnvironment(key: string): boolean {
+  const project = projectEnvSettings[key];
+  if (project === undefined || shellEnvironment[key]?.trim()) return false;
+  // The operator chose the same value in their own configuration: it is theirs, whatever the project file says too.
+  return userConfigFile[key]?.trim() !== project && process.env[key]?.trim() !== project;
+}
+
+/**
+ * Runs `build` with the per-project `.env` layer switched off. For work whose destination must be the operator's choice
+ * although the process runs inside a repository an agent can write (`nexus worktree merge --ai-message` from inside the
+ * worktree): a project `.env` there could name the endpoint a diff is sent to. `build` must be synchronous.
+ */
+export function withoutProjectEnvironment<T>(build: () => T): T {
+  const saved = projectEnvSettings;
+  projectEnvSettings = {};
+  try { return build(); } finally { projectEnvSettings = saved; }
 }
 
 /** Persist non-secret appliance selection in the operator config without following symlinks or storing API keys. */
@@ -411,7 +441,13 @@ export function buildConfig(options: any): HarnessConfig {
   const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : (effectiveSetting("NEXUS_CONTEXT_LIMIT") ? parseInt(effectiveSetting("NEXUS_CONTEXT_LIMIT")!, 10) : undefined);
   const strictTokenCount = Boolean(options.strictTokenCount) || effectiveSetting("NEXUS_STRICT_TOKEN_COUNT") === "1";
-  const worktree = Boolean(options.worktree);
+  // Presence, not truthiness: `--worktree-branch ""` (an unset shell variable) must not quietly become "no worktree".
+  const worktreeBranch = options.worktreeBranch !== undefined && options.worktreeBranch !== null ? String(options.worktreeBranch) : undefined;
+  if (worktreeBranch !== undefined) {
+    const problem = validateBranchName(worktreeBranch);
+    if (problem) throw new Error(`Invalid --worktree-branch: ${problem}.`);
+  }
+  const worktree = Boolean(options.worktree) || Boolean(worktreeBranch);
   const authoritativeVerifierCommand = options.authoritativeVerifier;
   const trustedDeliverableFiles = normalizeTrustedDeliverableFiles(workspace, options.deliverableFile);
   const recordFlight = Boolean(options.recordFlight || options.flight);
@@ -469,6 +505,7 @@ export function buildConfig(options: any): HarnessConfig {
     contextLimit,
     ...(strictTokenCount ? { strictTokenCount } : {}),
     worktree,
+    ...(worktreeBranch ? { worktreeBranch } : {}),
     authoritativeVerifierCommand,
     trustedDeliverableFiles,
     verifierTimeoutSecs,
@@ -691,10 +728,13 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
   };
 }
 
-/** Replaces the "local-model" placeholder with the first model the gateway lists; unchanged if the gateway is unreachable. */
-export async function autoDetectModel(config: HarnessConfig): Promise<HarnessConfig> {
+/** Replaces the "local-model" placeholder with the first model the gateway lists; unchanged if the gateway is unreachable or the start is a resume. */
+export async function autoDetectModel(config: HarnessConfig, options: { resuming?: boolean } = {}): Promise<HarnessConfig> {
   // A provider's catalog lists billable models; one is never chosen on the operator's behalf.
   if (config.provider || config.model !== "local-model") return config;
+  // A resumed start sends nothing before the agent knows whether the provider asked it to wait: the session record
+  // supplies the model (AutonomousAgent.adoptRecordedModel), else the first step detects it after the wait.
+  if (options.resuming) return config;
   try {
     const models = await new LocalLlmClient(config).listModels();
     if (models.length > 0) return { ...config, model: models[0] };

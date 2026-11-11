@@ -1156,6 +1156,16 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
             } else {
                 segments.push((1, vec![Span::styled(format!("  {}", session.mode), muted)]));
             }
+            // Read-only is a safety fact (kept at every width); context use and endpoint kind go first when narrow.
+            if session.read_only == Some(true) {
+                segments.push((1, vec![Span::styled("  read-only", Style::default().fg(Color::Yellow))]));
+            }
+            if let (Some(used), Some(limit)) = (session.context_tokens, session.context_limit) {
+                segments.push((6, vec![Span::styled(format!("  context {used}/{limit}"), muted)]));
+            }
+            if let Some(kind) = &session.endpoint_kind {
+                segments.push((7, vec![Span::styled(format!("  {kind}"), muted)]));
+            }
             let room = usize::from(area.width).saturating_sub(7);
             let mut keep: Vec<bool> = vec![false; segments.len()];
             let mut used = 0;
@@ -4346,6 +4356,29 @@ mod surface_tests {
         assert!(status.contains("mode: review"), "status missing mode: review: {status}");
         assert!(status.contains("sandbox: off"), "status missing sandbox: {status}");
         assert!(status.contains("workspace: untrusted"), "status missing untrusted: {status}");
+    }
+
+    #[test]
+    fn the_status_bar_renders_read_only_context_and_endpoint_kind_and_drops_them_when_narrow() {
+        let mut state = state(true);
+        feed(&mut state, &[r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"read-only","git":null,"busy":false,"read_only":true,"context_tokens":1200,"context_limit":32768,"endpoint_kind":"cloud"}"#]);
+        let (rows, _) = screen(&mut state, 100, 12);
+        for want in ["read-only", "context 1200/32768", "cloud"] {
+            assert!(rows[0].contains(want), "missing {want}: {}", rows[0]);
+        }
+        let (rows, _) = screen(&mut state, 40, 12);
+        assert!(unicode_width::UnicodeWidthStr::width(rows[0].as_str()) <= 40, "{}", rows[0]);
+        assert!(rows[0].contains("read-only"), "{}", rows[0]);
+        // An older sidecar sends none of the four: nothing is invented.
+        let mut old = state_for_old();
+        let (rows, _) = screen(&mut old, 100, 12);
+        assert!(!rows[0].contains("context ") && !rows[0].contains("cloud") && !rows[0].contains("local"), "{}", rows[0]);
+    }
+
+    fn state_for_old() -> LiveState {
+        let mut s = state(true);
+        feed(&mut s, &[r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#]);
+        s
     }
 
     #[test]

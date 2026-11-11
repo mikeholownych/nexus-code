@@ -12,6 +12,11 @@ import { visibleControls } from "./file_diff.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
+/**
+ * Longest clipboard text `/paste` puts into the composer, and the limit of the `slash.result` composer field. It keeps
+ * the escaped `slash.result` line under the TUI's 1 MiB protocol line cap.
+ */
+export const MAX_PASTE = 100_000;
 export const MAX_SUMMARY = 160;
 export const MAX_SLASH_OUTPUT = 32_000;
 
@@ -55,6 +60,11 @@ export type SidecarEvent =
       busy: boolean;
       /** The id the session is saved under (shown so it can be resumed or referred to). */
       session?: string;
+      /** The same facts the REPL /status reports (gate I-3). */
+      read_only?: boolean;
+      context_tokens?: number;
+      context_limit?: number;
+      endpoint_kind?: "local" | "cloud";
       posture?: {
         mode: "auto" | "review" | "read-only";
         sandbox: string;
@@ -315,6 +325,9 @@ export function projectTurn(turn: TurnResult): TurnResult {
     verification: turn.verification ? { ...turn.verification, command: redactOptional(turn.verification.command) } : null,
     interruption: turn.interruption ? { ...turn.interruption, outstandingTool: redactOptional(turn.interruption.outstandingTool) } : null,
     inferenceFailure: turn.inferenceFailure ? { ...turn.inferenceFailure, message: redactSecrets(turn.inferenceFailure.message) } : null,
+    ...(turn.turnEvidence
+      ? { turnEvidence: { ...turn.turnEvidence, verifierRuns: turn.turnEvidence.verifierRuns.map((r) => ({ ...r, command: redactSecrets(r.command) })) } }
+      : {}),
     ...(turn.providerRecovery
       ? {
           providerRecovery: turn.providerRecovery.map((r) => ({

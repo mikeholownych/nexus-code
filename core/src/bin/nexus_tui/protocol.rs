@@ -176,6 +176,15 @@ pub enum Event {
         session: Option<String>,
         #[serde(default)]
         posture: Option<PostureInfo>,
+        /// Surface facts (v1.1.4 I-3); each is absent from older sidecars.
+        #[serde(default)]
+        read_only: Option<bool>,
+        #[serde(default)]
+        context_tokens: Option<u64>,
+        #[serde(default)]
+        context_limit: Option<u64>,
+        #[serde(default)]
+        endpoint_kind: Option<String>,
     },
     #[serde(rename = "assistant.delta")]
     AssistantDelta { turn_id: String, text: String },
@@ -508,6 +517,10 @@ mod tests {
                 busy: false,
                 session: None,
                 posture: None,
+                read_only: None,
+                context_tokens: None,
+                context_limit: None,
+                endpoint_kind: None,
             })
         );
         assert_eq!(
@@ -526,6 +539,28 @@ mod tests {
                     sandbox: "off".into(),
                     trusted: false,
                 }),
+                read_only: None,
+                context_tokens: None,
+                context_limit: None,
+                endpoint_kind: None,
+            })
+        );
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"session.state","workspace":"/w","workspace_name":"w","model":"m","mode":"read-only","git":null,"busy":false,"read_only":true,"context_tokens":1200,"context_limit":32768,"endpoint_kind":"cloud"}"#
+            ),
+            Ok(Event::SessionState {
+                workspace_name: "w".into(),
+                model: "m".into(),
+                mode: "read-only".into(),
+                git: None,
+                busy: false,
+                session: None,
+                posture: None,
+                read_only: Some(true),
+                context_tokens: Some(1200),
+                context_limit: Some(32768),
+                endpoint_kind: Some("cloud".into()),
             })
         );
         assert!(matches!(

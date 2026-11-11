@@ -5,7 +5,7 @@ tasks can run side by side without disturbing your checkout. It is a native subs
 [Worktrunk](https://worktrunk.dev) (a separate Rust CLI by its own authors); Nexus does not bundle, call or copy it.
 
 The speculative `nexus run --worktree` task worktrees (`nexus/<task-id>` under `.nexus/worktrees/`) are unchanged, and
-`/worktree status|merge|discard` still act on them.
+`/worktree status`, a bare `/worktree merge` and `/worktree discard` still act on them. `/worktree merge ^` (or `merge <target>`, or `merge` with any option) is the named merge described below; run it from inside the named worktree.
 
 ## Commands
 
@@ -15,6 +15,9 @@ nexus worktree switch feature/login             # print/refresh the worktree of 
 nexus worktree list --json                      # dirty, ahead/behind, integrated, age (schema 1)
 nexus worktree path feature/login
 nexus worktree remove feature/login
+nexus worktree copy-ignored --to feature/login --dry-run
+nexus worktree merge                            # from inside the worktree: squash, rebase, fast-forward, clean up
+nexus worktree prune --dry-run --min-age 1d
 ```
 
 Shortcuts work wherever a branch is accepted: `^` the default branch, `@` the branch of the current worktree, `-` the
@@ -23,6 +26,61 @@ branch that was active before the last `switch`. A worktree path is accepted too
 `remove` refuses a worktree with changes, untracked or ignored files (`--force` overrides), a branch that is not merged
 into the default branch (`--delete-unmerged` overrides), the main checkout, the worktree you are standing in, a locked
 worktree and a speculative task worktree (unless `--force`).
+
+## Running a task in a named worktree
+
+`nexus run --worktree-branch feature/login "task"` (also on `nexus repl` and `nexus live`) runs the task inside the named worktree
+for that branch, creating it from the default branch when it does not exist and reusing it when it does. It has the same
+sandbox requirement as `--worktree`. The branch must not be the one checked out in the primary checkout (`--worktree-branch main`
+is refused: running there would not be isolated). Unlike the ephemeral task worktree, a named worktree is never auto-merged or
+discarded: when the task ends it stays, later runs and follow-up `repl`/`live` prompts in the same session continue inside it, and a
+passing verifier run inside it records the verification that `nexus worktree merge` needs. After an in-session merge
+of that branch removes the worktree, a later turn in a session still started with `--worktree-branch` creates the branch
+again (it is created when missing). The
+task state records a binding of kind `named` (binding version 1); builds that predate it ignore the kind and cannot merge or discard
+it, because their paths are derived from `nexus/<task-id>`.
+
+## Shared build caches
+
+`switch -c` copies the files that are both git-ignored and matched by the source checkout's `.worktreeinclude` (gitignore
+syntax, for example `target/` or `node_modules/`) into the new worktree; `--no-copy` skips it. `copy-ignored` does the same on
+demand (`--from`/`--to` default to the main checkout and the current worktree). Existing files are kept unless `--force`.
+Copies use a reflink where the file system has one, keep modification times so incremental builds do not restart, and
+stop with an error beyond 50,000 files or 4 GiB (under `switch -c`, a warning: the worktree is still created). `.git`, `.nexus`, `.entire`, nested worktrees and Python virtualenvs
+(absolute paths) are never copied, and a symbolic link is copied only if its real target (resolved through other links, not just
+as text) is inside the tree. `--force` never overwrites a file that is tracked in the destination (it is reported and skipped).
+Every file is staged under `.nexus-copy-<pid>-<id>.tmp` in its directory and moved into place, so a killed run never leaves a
+truncated file under its real name; the next run removes leftovers whose owner process is gone (a running copy's staging file is never touched), including those in the destination root. Nothing is written at or below a submodule or a nested repository
+of the destination, and a destination file where a source directory would go skips that subtree with a report. `--dry-run` runs the same checks as the
+real run (kept files, tracked files, a symbolic link or directory in the way), so its counts match. Hard links, including pnpm
+store links, are copied as ordinary files: the bytes are counted per file and can reach the size limit sooner than the disk use
+suggests. `--all-ignored` copies every
+ignored file and can therefore carry secrets such as `.env` into each worktree; it is never the default.
+
+## Merge and prune
+
+`merge [target]` (default: the default branch) commits uncommitted changes with a deterministic message (or `-m`), squashes
+the branch to one commit (`--no-squash` keeps them), rebases onto the target (`--no-rebase` skips it), fast-forwards the
+target (never a merge commit) and removes the worktree and branch (`--no-remove` keeps them). The target's worktree must be
+clean. The state being merged (HEAD, plus uncommitted work) needs a recorded passing verification: a Nexus session records one
+when its deliverable-bound verifier passes inside that worktree (the verifier must be the configured `--authoritative-verifier` or an independent one, never a discovered generic command), keyed by branch, head and tree, so a later edit or commit
+no longer matches. Without one, merge refuses unless you pass `--no-verify-receipt --reason "why"`; the waiver (branch, head,
+reason) is recorded in the registry. A session that starts in a worktree that already holds uncommitted work (or one that cannot be certified, such as one with a nested repository or a missing or replaced `.git`; judged where the session starts, so its own later verified work does not count) verifies as usual, but its baseline came from files the agent may have rewritten, so no receipt is issued and that merge needs the waiver. `--ai-message` asks your configured model (`nexus worktree merge` takes the endpoint from your operator settings, never from a `.env` inside the worktree; a session's `/worktree merge` uses the settings the session started with) for the commit message instead: it receives the diffstat and a diff of what will be
+committed, capped at 20,000 characters and redacted, labelled as untrusted data; the reply is validated (at most 100
+characters for the subject line, no control, C1 or bidi-override characters) and redacted; body lines shaped like commit trailers or release directives (`Release-As: ...`, `Co-Authored-By: ...`, `BREAKING CHANGE`) are dropped, and so is any ordinary line that happens to look like one. Any failure or a 30 second timeout falls
+back with a note to the deterministic message, and an explicit `-m` always wins. No external command is run. Before history is rewritten the branch, including swept-in working-tree changes, is saved to
+`refs/nexus-backup/<name>-<hash>`: one flat ref per branch, where `<name>` is the branch name with every character outside
+`A-Za-z0-9._-` turned into `-` (at most 40 characters) and `<hash>` is the first 12 hex digits of the SHA-1 of the
+branch name, so `foo` and `foo/bar` never collide (Git cannot hold both as refs). Find yours with
+`git for-each-ref refs/nexus-backup`. Tracked Nexus state under `.nexus/` is left out of both the backup and the automatic commit, as `/commit` does. A submodule is backed up as its recorded commit only, so a worktree whose submodule holds a commit that is on no remote branch is kept after the merge (its objects live in the worktree and would go with it); push it, then run `remove`. `--no-squash` with merge commits in the branch and a moved target is refused, because a plain rebase would drop edits only the merge commits carry. The source branch is merged as `refs/heads/<branch>`, never as a same-named tag. A rebase conflict stops the
+command and leaves the rebase open in the worktree. Ignored leftovers (build caches) are deleted with the worktree after
+a successful merge, but never while tracked, staged, untracked or submodule changes remain: then the worktree is kept
+and the command says so. When `merge` removes the worktree an interactive session (`/worktree merge ^` in the REPL or the TUI) is standing in, the session moves to the worktree of the branch it was merged into and its checkpoints and session saves keep working.
+
+`prune` removes worktrees whose HEAD is already integrated into the default branch (same commit, ancestor, empty diff,
+same tree or patch-id equivalent), that have no changes or untracked files, and that were last touched longer ago than
+`--min-age` (default `1d`). It never touches the main checkout, the worktree you are in, locked worktrees or speculative
+task worktrees; worktrees holding ignored files are kept unless `--discard-ignored`; `--limit` bounds one run (default 100). `--discard-ignored` removes ignored files only: tracked, staged and untracked changes are checked again under the removal lock, so an edit made while prune waited keeps the worktree. Worktrees whose directory was deleted by hand are judged too: a detached one is cleared only if its HEAD is integrated and old enough (its administrative HEAD may be the only reference to its commits), a branch one always (the branch stays), and only the selected entries are cleared, never every stale one at once.
 
 ## Where worktrees go
 
@@ -43,6 +101,15 @@ can never change it:
 * Every Git call goes through one helper: replace objects, hooks (`core.hooksPath` and configured hooks), fsmonitor and
   external transport helpers are switched off; branch names and paths follow `--end-of-options`.
 * Git hooks never run while Nexus creates or removes a worktree.
+* The agent can write its worktree, including its `.git` pointer. Nexus refuses (with "not a trusted worktree") to run Git
+  in a worktree whose `.git` leads anywhere the agent could have planted, whose `.git` was replaced or deleted, or that
+  holds a repository nested inside it. A custom layout whose main repository is neither an ancestor of the worktree, nor
+  the repository named by the worktree's own name beside it (`<repo>.<branch>`), nor one this process has already opened
+  is not recognised when its `.git` was deleted or replaced: use the default or sibling layout where the agent runs
+  unattended, or run a Nexus command from the main checkout first.
+* A modification that Git's own index or configuration hides (`--assume-unchanged`, `--skip-worktree`,
+  `core.fileMode=false`) is in no commit and no backup. `merge` (with or without a receipt or a waiver), `remove` and
+  `prune` refuse a worktree that holds one; `remove --force` discards it knowingly.
 * The repository is found from `git rev-parse --git-common-dir`, so commands behave the same inside any linked worktree.
 * Created worktrees are recorded in `<git-common-dir>/nexus/worktrees.json` (64 KiB cap, no symbolic links).
 * Human-readable output (the `list` table, messages, errors) passes branch names and paths through the secret
@@ -70,9 +137,12 @@ can never change it:
   detached worktree is first put on a temporary branch `nexus-removed/<id>`, so a commit that lands after that check
   advances the branch instead of vanishing with the worktree; the branch is deleted again unless it moved, in which case
   the command names it. The protected commit is the one verified under the lock: if `HEAD` differs right after the switch, the
-  branch is kept with the new commit and nothing is removed. A guard branch left by an interrupted attempt for the same worktree
-  and commit is reused by the retry; if the detached HEAD cannot be restored after a refused removal, the message names the
-  branch and how to undo it. What was read before waiting for the lock is re-read under it: a worktree that changed
+  branch is kept with the new commit and nothing is removed. A guard branch (`nexus-removed/<id>`) that already exists is never reused, moved or deleted: removal refuses
+  before changing anything and prints the branch, its commit and the commands to inspect (`git log`) and delete
+  (`git branch -D`) it. `git switch` is not atomic with a concurrent `git commit`, so after the switch the `HEAD` reflog
+  is checked as well: a commit that is in the reflog but not on the branch keeps the worktree and the branch and removes
+  nothing. If the detached HEAD cannot be restored after a refused removal, the message names the branch and how to
+  undo it. What was read before waiting for the lock is re-read under it: a worktree that changed
   meanwhile (a stale registration recreated by `switch`, for example) is not removed.
 * **Deleted and detached worktrees.** A worktree whose directory was deleted by hand is listed as prunable. `remove`
   accepts its absolute path (a detached one has no branch name) and drops that one registration, never the other stale
