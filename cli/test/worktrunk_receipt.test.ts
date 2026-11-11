@@ -265,7 +265,7 @@ test("an edit saved after the receipt check but before the commit is not merged 
     let r;
     try { r = f.wt(f.dir, ["merge"]); } finally { delete mergeSeams.preMerge; }
     assert.equal(r.success, false, r.output);
-    assert.match(r.output, /changed after|verification/i);
+    assert.match(r.output, /changed after the verification receipt/);
     assert.equal(git(f.repo, "rev-parse", "refs/heads/main"), mainBefore, "the target is untouched");
     assert.ok(fs.existsSync(f.dir), "the worktree and the edit are kept");
     assert.equal(fs.readFileSync(path.join(f.dir, "c.txt"), "utf8"), "an unverified edit saved by an editor\n");

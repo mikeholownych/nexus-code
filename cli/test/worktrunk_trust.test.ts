@@ -202,13 +202,86 @@ test("the session's own Git helpers and the checkpoint manager refuse a worktree
   const previousHome = process.env.HOME;
   process.env.HOME = f.home; // checkpoints live under HOME
   try {
+    const manager = new CheckpointManager(f.dir);
+    const earlier = manager.createCheckpoint("before the pointer was rewritten"); // a real checkpoint, so a refusal is the guard's and not "not found"
     const marker = plantRepository(f, "feat/session", [`filter.plant.clean\u0000sh -c 'echo ran > @MARKER@; cat'`, `core.fsmonitor\u0000sh -c 'echo fsm > @MARKER@'`]);
     assert.equal(getGitInfo(f.dir).isRepo, false, "no branch badge from a planted repository");
-    assert.equal(commitChanges(f.dir, "chore: x").success, false);
-    const manager = new CheckpointManager(f.dir);
+    const committed = commitChanges(f.dir, "chore: x");
+    assert.equal(committed.success, false);
+    assert.match(String(committed.error), /not a trusted worktree/);
     assert.throws(() => manager.createCheckpoint("turn"), /not a trusted worktree/);
-    assert.equal(manager.restore("cp_none").success, false);
+    const restored = manager.restore(earlier.id);
+    assert.equal(restored.success, false);
+    assert.match(restored.message, /not a trusted worktree/);
+    const diff = manager.getDiff(earlier.id);
+    assert.equal(diff.success, false);
+    assert.match(String(diff.error), /not a trusted worktree/);
     assert.equal(fs.existsSync(marker), false, "a planted configuration command ran on the host");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    f.cleanup();
+  }
+});
+
+test("session Git helpers also refuse a repository planted below the worktree", async () => {
+  const { getGitInfo } = await import("../src/git.js");
+  const f = fixture("feat/below");
+  try {
+    const marker = path.join(f.root, "MARKER");
+    const nested = path.join(f.dir, "vendor");
+    fs.mkdirSync(nested);
+    git(nested, "init", "-q");
+    git(nested, "config", "core.fsmonitor", `sh -c 'echo fsm > ${marker}'`);
+    assert.equal(getGitInfo(f.dir).isRepo, false);
+    assert.equal(fs.existsSync(marker), false, "a nested repository's configuration ran on the host");
+    assert.equal(getGitInfo(f.repo).isRepo, true, "the main checkout is unaffected");
+  } finally { f.cleanup(); }
+});
+
+test("a bare-repository layout (project/.git -> .bare, worktrees beside it) is trusted", async () => {
+  const { untrustedCheckoutReason } = await import("../src/worktrunk/git.js");
+  const { getGitInfo } = await import("../src/git.js");
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-wtbare-")));
+  try {
+    const seed = path.join(root, "seed");
+    fs.mkdirSync(seed);
+    git(seed, "init", "-q", "-b", "main");
+    fs.writeFileSync(path.join(seed, "a"), "a\n");
+    git(seed, "add", ".");
+    git(seed, "-c", "commit.gpgsign=false", "-c", "user.email=t@e.c", "-c", "user.name=T", "commit", "-q", "-m", "i");
+    const project = path.join(root, "project");
+    fs.mkdirSync(project);
+    git(root, "clone", "-q", "--bare", seed, path.join(project, ".bare"));
+    fs.writeFileSync(path.join(project, ".git"), "gitdir: ./.bare\n");
+    git(project, "worktree", "add", "-q", "feature");
+    assert.equal(untrustedCheckoutReason(path.join(project, "feature")), undefined);
+    assert.equal(getGitInfo(path.join(project, "feature")).isRepo, true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a linked worktree whose .git file was replaced by a repository is refused everywhere, not taken for a plain repository", async () => {
+  const { getGitInfo } = await import("../src/git.js");
+  const { CheckpointManager } = await import("../src/checkpoint.js");
+  const { statusOf } = await import("../src/worktrunk/core.js");
+  const { conventionalCommitMessage } = await import("../src/git.js");
+  const f = fixture("feat/replaced");
+  const previousHome = process.env.HOME;
+  process.env.HOME = f.home;
+  try {
+    const marker = path.join(f.root, "MARKER");
+    fs.rmSync(path.join(f.dir, ".git")); // the agent can: `rm .git && git init`
+    git(f.dir, "init", "-q", "-b", "main");
+    git(f.dir, "config", "filter.plant.clean", `sh -c 'echo ran > ${marker}; cat'`);
+    git(f.dir, "config", "core.fsmonitor", `sh -c 'echo fsm > ${marker}'`);
+    fs.writeFileSync(path.join(f.dir, ".gitattributes"), "* filter=plant\n");
+    fs.writeFileSync(path.join(f.dir, "a.txt"), "edited\n");
+    assert.throws(() => statusOf(f.dir), /not a trusted worktree/);
+    assert.equal(getGitInfo(f.dir).isRepo, false);
+    assert.throws(() => new CheckpointManager(f.dir).createCheckpoint("turn"), /not a trusted worktree/);
+    assert.equal(f.merge().success, false);
+    assert.equal(fs.existsSync(marker), false, "a planted repository's configuration ran on the host");
+    assert.equal(getGitInfo(f.repo).isRepo, true, "the main checkout is a plain repository and still works");
+    assert.equal(conventionalCommitMessage(["a\n\nSigned-off-by: x"]), "feat(core): update workspace files", "a file name never forges a trailer");
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     f.cleanup();

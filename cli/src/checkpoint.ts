@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { envWithoutConfiguredHooks } from "./core/git_hook_guard.js";
-import { untrustedCheckoutReason } from "./core/checkout_trust.js";
+import { nestedRepositoryReason } from "./worktrunk/git.js";
 import crypto from "node:crypto";
 import {
   assertNoSensitivePersistenceContent,
@@ -932,7 +932,8 @@ export class CheckpointManager {
 
   /** The reason the workspace is a worktree host-side Git must not run in (a planted `.git` pointer or nested repository), or undefined. */
   private untrustedReason(): string | undefined {
-    return this.isGit ? untrustedCheckoutReason(this.workspace) : undefined;
+    if (!this.isGit) return undefined;
+    try { return nestedRepositoryReason(this.workspace); } catch (err) { return (err as Error).message; }
   }
 
   public createCheckpoint(name?: string, options: { allowSensitive?: boolean } = {}): CheckpointInfo {

@@ -11,6 +11,9 @@ function inside(root: string, candidate: string): boolean {
   return candidate === root || candidate.startsWith(root + path.sep);
 }
 
+/** Variables that change how Git reads pathspecs; an inherited one would turn a `:(top)` magic pathspec literal or case-insensitive. */
+export const PATHSPEC_MODE_ENV: readonly string[] = ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"];
+
 /**
  * The path in a `.git` pointer file, read the way Git reads it: the content must start with `gitdir: `, only the
  * trailing line break is dropped, and nothing else is trimmed. A guard that trimmed would resolve a different directory
@@ -21,6 +24,22 @@ export function parseGitfilePointer(content: string): string | undefined {
   const target = content.slice("gitdir: ".length).replace(/\r?\n$/, "");
   if (target === "" || target !== target.trim() || /[\0\r\n]/.test(target)) return undefined;
   return target;
+}
+
+/** Whether `root` (which has a `.git` DIRECTORY) is a linked worktree of an enclosing repository, registered there with a `.git` FILE it no longer has. */
+function replacedWorktreeReason(root: string): string | undefined {
+  for (let dir = path.dirname(root); ; dir = path.dirname(dir)) {
+    const registry = path.join(dir, ".git", "worktrees");
+    try {
+      for (const name of fs.readdirSync(registry)) {
+        const recorded = fs.readFileSync(path.join(registry, name, "gitdir"), "utf8").trim();
+        if (path.basename(recorded) === ".git" && fs.realpathSync(path.dirname(path.resolve(registry, name, recorded))) === root) {
+          return `${root} is a linked worktree registered in ${dir} whose .git file was replaced by a repository`;
+        }
+      }
+    } catch { /* no registry here */ }
+    if (path.dirname(dir) === dir) return undefined;
+  }
 }
 
 /**
@@ -44,8 +63,23 @@ export function verifyCheckout(cwd: string): { reason?: string; gitDir?: string;
     } catch { /* no .git here */ }
     if (path.dirname(dir) === dir) break;
   }
-  const outer = files[files.length - 1];
-  if (!outer) return {}; // a plain repository (or none): not a sandbox-writable checkout
+  // The agent-writable boundary is the outermost LINKED worktree (its `.git` leads to `<common>/worktrees/<name>`). A
+  // `.git` file above it (a bare-repository layout `project/.git` -> `.bare`) is the operator's, not the agent's.
+  const isLinkedRoot = (root: string): boolean => {
+    try {
+      const target = parseGitfilePointer(fs.readFileSync(path.join(root, ".git"), "utf8"));
+      return target !== undefined && path.basename(path.dirname(fs.realpathSync(path.resolve(root, target)))) === "worktrees";
+    } catch { return false; }
+  };
+  const outer = [...files].reverse().find(isLinkedRoot) ?? files[files.length - 1];
+  if (!outer) {
+    // A plain repository (or none). But a registered linked worktree whose `.git` file the agent replaced by a repository
+    // looks exactly like one: the main repository's worktree registry says it is not.
+    const root = directories[0];
+    const replaced = root === undefined ? undefined : replacedWorktreeReason(root);
+    return replaced ? { reason: replaced } : {};
+  }
+  files.splice(0, files.length, ...files.filter((root) => inside(outer, root)));
   const planted = directories.find((dir) => inside(outer, dir));
   if (planted) return { reason: `${planted} is a repository nested inside the linked worktree ${outer}` };
   let pinned: { gitDir: string; workTree: string } | undefined;

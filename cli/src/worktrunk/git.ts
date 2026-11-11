@@ -19,8 +19,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { envWithoutConfiguredHooks } from "../core/git_hook_guard.js";
-import { PATHSPEC_MODE_ENV } from "../git.js";
-import { parseGitfilePointer, parseSubmoduleStatus, untrustedCheckoutReason, verifyCheckout } from "../core/checkout_trust.js";
+import { PATHSPEC_MODE_ENV, parseGitfilePointer, parseSubmoduleStatus, untrustedCheckoutReason, verifyCheckout } from "../core/checkout_trust.js";
 export { parseGitfilePointer, parseSubmoduleStatus, untrustedCheckoutReason, verifyCheckout };
 import { redactSecrets } from "../ui.js";
 
@@ -77,6 +76,9 @@ export interface GitOptions {
   input?: string;
 }
 
+/** Submodule levels `nestedRepositoryReason` walks before refusing rather than guessing. */
+const MAX_SUBMODULE_DEPTH = 4;
+
 /**
  * Whether a repository the agent could have planted sits below `dir`: a gitlink in the index or an untracked directory
  * holding a `.git`. Git itself descends into submodules when it reports status, reading their configuration, so this
@@ -85,7 +87,8 @@ export interface GitOptions {
 export function nestedRepositoryReason(dir: string, depth = 0): string | undefined {
   const own = verifyCheckout(dir);
   if (own.reason) return own.reason;
-  if (!own.gitDir || depth > 4) return undefined;
+  if (!own.gitDir) return undefined;
+  if (depth > MAX_SUBMODULE_DEPTH) return `submodules are nested more than ${MAX_SUBMODULE_DEPTH} levels deep below ${dir}`;
   const candidates = new Set<string>();
   for (const entry of git(dir, ["ls-files", "-s", "-z"]).stdout.split("\0")) {
     const match = /^160000 [0-9a-f]+ \d\t(.+)$/.exec(entry);

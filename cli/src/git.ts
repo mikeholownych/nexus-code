@@ -1,6 +1,8 @@
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import * as path from "node:path";
-import { untrustedCheckoutReason } from "./core/checkout_trust.js";
+import { PATHSPEC_MODE_ENV } from "./core/checkout_trust.js";
+import { nestedRepositoryReason } from "./worktrunk/git.js";
+export { PATHSPEC_MODE_ENV };
 import * as fs from "node:fs";
 
 export interface GitInfo {
@@ -20,9 +22,6 @@ const NEXUS_STATE = [".nexus", ":(top).nexus"];
 const NEXUS_STATE_EXCLUDED = [":(exclude).nexus", ":(exclude).nexus/**", ":(top,exclude).nexus", ":(top,exclude).nexus/**"];
 const WITHOUT_NEXUS_STATE = ["--", ":/", ...NEXUS_STATE_EXCLUDED];
 
-/** Variables that change how Git reads pathspecs; an inherited one would turn a `:(top)` magic pathspec literal or case-insensitive. */
-export const PATHSPEC_MODE_ENV: readonly string[] = ["GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"];
-
 /** The environment for git calls that pass the pathspecs above: an inherited pathspec mode would make them literal. */
 function pathspecEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -32,7 +31,7 @@ function pathspecEnv(): NodeJS.ProcessEnv {
 
 /** Host-side Git must not run in a worktree whose `.git` (or a nested repository) the sandboxed agent could have planted. */
 function assertTrustedCheckout(workspace: string): void {
-  const reason = untrustedCheckoutReason(workspace);
+  const reason = nestedRepositoryReason(workspace); // the checkout itself, and any repository planted below it
   if (reason) throw new Error(`refusing to run Git in ${workspace}: it is not a trusted worktree (${reason})`);
 }
 
@@ -188,7 +187,9 @@ export function conventionalCommitMessage(files: string[]): string {
   } else if (files.some((f) => f.includes("file_ops"))) {
     topic = "robust file editing and matching";
   } else if (files.length === 1) {
-    topic = `update ${path.basename(files[0])}`;
+    // A file name is agent-controlled: control characters (a newline would start a forged trailer) never reach the message.
+    const name = path.basename(files[0]);
+    topic = /[\u0000-\u001f\u007f]/.test(name) ? "update workspace files" : `update ${name}`;
   }
 
   return `${type}(${scope}): ${topic}`;
