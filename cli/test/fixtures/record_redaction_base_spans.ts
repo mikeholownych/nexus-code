@@ -1,5 +1,6 @@
 /**
- * Regenerates redaction_base_spans.json (the ranges of each corpus input that the redactor replaces) from a copy of the redactor as it was before the encoded/dotted work:
+ * Regenerates redaction_base_spans.json (the ranges of each corpus input that the redactor replaces) from a copy of the
+ * redactor as it was before the encoded/dotted work:
  *   git show 29e7ebff:cli/src/core/egress.ts > /tmp/egress_base.ts
  *   npx tsx test/fixtures/record_redaction_base_spans.ts /tmp/egress_base.ts
  * Run it again only when the corpus changes, with the same base copy.

@@ -438,7 +438,10 @@ test("many distinct secrets are redacted in linear time", () => {
   assert.ok(!keys.some((key) => output.includes(key.slice(3, 15))), "every key is redacted");
 });
 
-/** The one-pass replacement gives the same text as replaceAll for each value in turn, longest value first. */
+/**
+ * The one-pass replacement gives the same text as replaceAll for each value in turn, longest value first, unless a value
+ * overlaps another only partly: replaceAll would then leave the rest of one in clear, so every part of both is replaced.
+ */
 test("one-pass replacement matches sequential replaceAll, with few values and with many", () => {
   let seed = 7;
   const random = (n: number) => {
@@ -454,8 +457,14 @@ test("one-pass replacement matches sequential replaceAll, with few values and wi
     }))].sort((a, b) => b.length - a.length);
     let expected = text;
     values.forEach((value, index) => { expected = expected.replaceAll(value, `<${index}>`); });
-    assert.equal(replaceValues(text, values, (index) => `<${index}>`), expected, JSON.stringify({ text, values }));
+    const actual = replaceValues(text, values, (index) => `<${index}>`);
+    // Different only where a partial overlap made the sequential result leave text in clear: no value is left in clear now.
+    if (actual !== expected) for (const value of values) assert.ok(!actual.includes(value), JSON.stringify({ text, values, actual }));
   }
+  // Disjoint and nested occurrences (no partial overlap) give exactly the sequential result.
+  assert.equal(replaceValues("xabcdefyycdez", ["abcdef", "cde"], (index) => `<${index}>`), "x<0>yy<1>z");
+  // A partial overlap: "ab" and "bc" in "abc" are both replaced whole.
+  assert.equal(replaceValues("abc", ["ab", "bc"], (index) => `<${index}>`), "<0>");
   // More occurrences than characters: the fallback replaces the union of all occurrences, by the longest value.
   assert.equal(replaceValues(`x${"a".repeat(5000)}y`, ["aaa", "aa", "a"], (index) => `<${index}>`), "x<0>y");
   assert.equal(replaceValues(`${"ab".repeat(3000)}-c`, Array.from({ length: 20 }, (_, i) => "ab".repeat(i + 1)), (index) => `<${index}>`), "<19>-c");

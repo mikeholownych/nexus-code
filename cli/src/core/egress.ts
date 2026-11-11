@@ -434,8 +434,7 @@ function unescapeSlashes(value: string): string {
 /**
  * A "/" or "+" written other than plainly: percent-encoded (`%2F`, `%2B`, and once more encoded as `%252F`) or as a
  * look-alike (U+2215 division slash, U+2044 fraction slash, U+FF0F fullwidth solidus, U+29F8 big solidus; U+FF0B
- * fullwidth plus, U+FE62 small plus). Sticky:
- * `matchEncodedKeyChar` tests it at one position.
+ * fullwidth plus, U+FE62 small plus). Sticky: `matchEncodedKeyChar` tests it at one position.
  */
 const ENCODED_KEY_CHAR = /%(?:25)?2[FfBb]|[\u2215\u2044\uFF0F\u29F8\uFF0B\uFE62]/y;
 const ENCODED_KEY_CHARS = new RegExp(ENCODED_KEY_CHAR.source, "g");
@@ -522,8 +521,9 @@ function isKeyMaterialSegment(segment: string): boolean {
 
 /**
  * How much longer than the text itself the redactor may make its values. Each extension (encoded run, dotted
- * continuation) is charged to the budget of one classifyText call and is skipped once the budget is spent, so the values
- * to replace stay within a constant factor of the text however it is crafted. Spent budget never removes an original match.
+ * continuation) is charged to the budget of one classifyText call and is neither scanned nor kept once the budget is
+ * spent, so both the work and the values to replace stay within a constant factor of the text however it is crafted.
+ * A spent budget never removes an original match.
  */
 interface ExtensionBudget { left: number }
 
@@ -533,7 +533,7 @@ interface ExtensionBudget { left: number }
  * before (`isKeyMaterialSegment`). Returns `end` itself when nothing continues it or the budget is spent.
  */
 function extendDottedKey(text: string, end: number, budget: ExtensionBudget): number {
-  const limit = end + MAX_EXTENSION;
+  const limit = end + Math.min(MAX_EXTENSION, budget.left);
   let extended = end;
   while (text[extended] === "." && extended < limit) {
     const segmentEnd = scanKeyRun(text, extended + 1, true, limit);
@@ -566,12 +566,11 @@ function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolea
  * (`sk-learn/linear_model/Ridge2`, see `isPathLike`). A plain key followed by a URL path (`sk-…RtBq/models`: the body
  * before its first "/" is a 20-64 character plain key and the rest is a path) is left to the bounded `sk-` patterns,
  * which stop at the "/".
- * Redaction only grows: the run as it always was is judged and kept exactly as before, and the longer runs (one that
+ * Redaction only grows: the original run is judged and kept, and the longer runs (one that
  * continues through an encoded or look-alike "/" or "+", and that run plus a dotted continuation, see `extendDottedKey`)
  * are judged in addition, so a longer run that is rejected never hides the shorter one. Scanning resumes after the
  * original run, so a key after a dot is found whatever the longer runs were. Every `sk-` inside the original run is
- * skipped: a key inside it is found by the bounded patterns. Each start follows at most MAX_EXTENSION characters past
- * its original run, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
+ * skipped: a key inside it is found by the bounded patterns. The longer runs are charged to the extension budget, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
  */
 function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: number; end: number; name: string }> {
   const found: Array<{ start: number; end: number; name: string }> = [];
@@ -586,7 +585,7 @@ function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: n
     const anthropic = text.startsWith("sk-ant-", at);
     const name = anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
     const runEnd = scanKeyRun(text, at + 3, false);
-    const encodedEnd = chargeExtension(runEnd, scanKeyRun(text, runEnd, true, runEnd + MAX_EXTENSION), budget);
+    const encodedEnd = chargeExtension(runEnd, scanKeyRun(text, runEnd, true, runEnd + Math.min(MAX_EXTENSION, budget.left)), budget);
     const extendedEnd = extendDottedKey(text, encodedEnd, budget);
     for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
       if (!isBase64KeyRun(text, at, end, anthropic)) continue;
@@ -619,7 +618,7 @@ interface PositionedMatch {
  * path display), and a key inside a Bearer match is still redacted where it occurs again unmatched. The result has
  * one entry per distinct value, longest first.
  */
-function resolveOverlaps(matches: PositionedMatch[], text: string): ClassifiedSecret[] {
+function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
   const order = matches.map((_, i) => i).sort(
     (a, b) => matches[a].start - matches[b].start || matches[b].end - matches[a].end || a - b
   );
@@ -647,32 +646,6 @@ function resolveOverlaps(matches: PositionedMatch[], text: string): ClassifiedSe
       classified.push(match.item);
     }
   });
-  // Matches that overlap without one containing the other (a key and the operator secret that starts inside it and ends
-  // past it): replacement takes the longer value and skips the other, leaving the part of it past the first in clear. One
-  // more value, the union of the chain of such matches, is replaced first and covers all of them.
-  let chain: { start: number; end: number; best: ClassifiedSecret; partial: boolean } | undefined;
-  const closeChain = (): void => {
-    if (chain?.partial && !seen.has(text.slice(chain.start, chain.end))) {
-      const secret = text.slice(chain.start, chain.end);
-      seen.add(secret);
-      classified.push({ ...chain.best, secret });
-    }
-  };
-  for (const i of order) {
-    if (dropped.has(i)) continue;
-    const { start, end, item } = matches[i];
-    if (chain && start < chain.end) {
-      if (end > chain.end) {
-        chain.end = end;
-        chain.partial = true;
-      }
-      if (item.confidence > chain.best.confidence) chain.best = item;
-    } else {
-      closeChain();
-      chain = { start, end, best: item, partial: false };
-    }
-  }
-  closeChain();
   // Longest value first: a value that also occurs inside a longer one elsewhere is replaced after it, not through it.
   return classified.sort((a, b) => b.secret.length - a.secret.length);
 }
@@ -839,8 +812,10 @@ function findOccurrences(text: string, values: string[], budget: number): Array<
  * Replaces every occurrence of each value, in one pass over the text: the same result as `replaceAll` for each value in
  * turn (values in priority order, longest first as classifyText returns them; text already replaced is not matched
  * again), without one pass per value, which is quadratic for a text with thousands of distinct secrets. All occurrences
- * are found first; they are accepted in priority order unless they overlap text already accepted (a Fenwick tree counts
- * accepted positions); the output is built once from the accepted spans.
+ * are found first; they are accepted in priority order unless they lie inside text already accepted (a Fenwick tree
+ * counts accepted positions); the output is built once from the accepted spans. An occurrence that only partly overlaps
+ * accepted text would leave its other part in clear: the union replacement below is used instead, which replaces every
+ * part of every occurrence (the result then covers everything replaceAll in turn would, and more).
  *
  * Values that overlap themselves on a repetitive text (secrets that are suffixes of one another over a run of one
  * letter) can occur far more often than the text is long. Past one occurrence per character the replacement falls
@@ -870,7 +845,9 @@ export function replaceValues(
   const accepted: Array<[start: number, end: number, index: number]> = [];
   for (const [start, index] of occurrences) {
     const end = start + values[index].length;
-    if (countBefore(end) - countBefore(start) !== 0) continue;
+    const overlap = countBefore(end) - countBefore(start);
+    if (overlap === end - start) continue; // wholly inside text already accepted
+    if (overlap !== 0) return replaceUnion(text, values, replacement); // partly inside: the rest of it must not stay in clear
     accepted.push([start, end, index]);
     for (let position = start + 1; position <= end; position++) {
       for (let i = position; i <= text.length; i += i & -i) covered[i]++;
@@ -1145,7 +1122,7 @@ export class InformationFlowBoundary {
             break;
           }
         }
-        // The match as it always was is kept; a dotted continuation is a second, longer match (never a replacement), so a
+        // The original match is kept; a dotted continuation is a second, longer match (never a replacement), so a
         // value found only by its shorter form (the key on its own elsewhere in the text) is still redacted.
         const ends = [end];
         if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
@@ -1242,8 +1219,7 @@ export class InformationFlowBoundary {
         !isReference(tok)
       ) {
         // A dotted token must be dotted key material (`isDottedKeyMaterial`): file paths, versions and host names are not
-        // tokens (JWTs have their own pattern above). Nexus's own session
-        // ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
+        // tokens (JWTs have their own pattern above). Nexus's own session ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
         // id made the session impossible to save or resume.
         if ((/^[a-zA-Z0-9+/=_-]+$/.test(plain) || isDottedKeyMaterial(plain)) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain) &&
           // The temporary guard branch of `worktree remove` (`nexus-removed/<10 hex>-<8 hex>`): a redacted name cannot be undone by hand.
@@ -1268,7 +1244,7 @@ export class InformationFlowBoundary {
       }
     }
 
-    return resolveOverlaps(matches, text);
+    return resolveOverlaps(matches);
   }
 
   /**

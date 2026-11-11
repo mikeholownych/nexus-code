@@ -1,7 +1,7 @@
 /**
  * Inputs for the redaction monotonicity test: existing redaction shapes and templates plus generated adjacent, nested
- * and chained key shapes. All keys are synthetic. `redaction_base_spans.json` records the [start, end) ranges of each input that the redactor
- * replaced before the encoded/dotted work (origin/main 29e7ebff).
+ * and chained key shapes. All keys are synthetic. `redaction_base_spans.json` records the [start, end) ranges of each
+ * input that the redactor replaced before the encoded/dotted work (origin/main 29e7ebff).
  */
 const KEYS = [
   "sk-ant-api03-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq",
