@@ -412,31 +412,10 @@ fn drain_key_presses(first: KeyEvent, mut next: impl FnMut() -> io::Result<Optio
     Ok(keys)
 }
 
-/// How a burst that reached an open approval is handled: keys that could be text (letters, Enter, Tab) never answer,
-/// they go to the draft as a paste would; the rest (arrows, Esc, scrolling) act as keys. Returns the draft text and
-/// the keys to act on, in order.
-fn split_approval_burst(keys: &[KeyEvent]) -> (String, Vec<KeyEvent>) {
-    let text: Vec<KeyEvent> = keys.iter().filter(|key| pasteable(key)).copied().collect();
-    (burst_draft_text(&text), keys.iter().filter(|key| !pasteable(key)).copied().collect())
-}
-
 fn pasteable(key: &KeyEvent) -> bool {
     key.kind == KeyEventKind::Press
         && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         && matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Tab)
-}
-
-/// What a burst of keys that did not answer an approval puts in the draft: its characters, with Enter and Tab kept as
-/// the line break and tab they stand for, as a paste would carry them.
-fn burst_draft_text(keys: &[KeyEvent]) -> String {
-    keys.iter()
-        .filter_map(|key| match key.code {
-            KeyCode::Char(c) => Some(c),
-            KeyCode::Enter => Some('\n'),
-            KeyCode::Tab => Some('\t'),
-            _ => None,
-        })
-        .collect()
 }
 
 /// Text of a burst of keys that arrived together. Without bracketed paste a paste is typed at machine speed, so its
@@ -516,15 +495,7 @@ fn event_loop(
             // Several presses at an open approval (a `Left` then a `y` at machine speed included) never answer it.
             TermEvent::Key(key) if key.kind == KeyEventKind::Press && app.state.approval_id().is_some() && event::poll(Duration::ZERO)? => {
                 let keys = drain_key_presses(key, || Ok(if event::poll(Duration::ZERO)? { Some(event::read()?) } else { None }), &mut pending)?;
-                if let [only] = keys.as_slice() {
-                    app.state.on_key(*only)
-                } else {
-                    let (text, acts) = split_approval_burst(&keys);
-                    if !text.is_empty() {
-                        app.state.on_paste(&text);
-                    }
-                    acts.into_iter().find_map(|key| app.state.on_key(key))
-                }
+                app.state.on_key_burst(keys)
             }
             TermEvent::Key(key) if pasteable(&key) && event::poll(Duration::ZERO)? => {
                 let mut keys = vec![key];
@@ -594,8 +565,6 @@ mod tests {
         let with_resize = vec![TermEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)), TermEvent::Resize(80, 24)];
         assert_eq!(discard_queued_input(with_resize.into_iter()), (true, true), "a queued resize still redraws");
         assert_eq!(discard_queued_input(std::iter::once(TermEvent::Resize(80, 24))), (true, false), "a resize alone is not typing");
-        let keys: Vec<KeyEvent> = [KeyCode::Char('a'), KeyCode::Enter, KeyCode::Char('b'), KeyCode::Tab, KeyCode::Char('c')].map(|code| KeyEvent::new(code, KeyModifiers::NONE)).to_vec();
-        assert_eq!(burst_draft_text(&keys), "a\nb\tc", "line breaks and tabs of a burst are kept");
     }
 
     #[test]
@@ -609,12 +578,6 @@ mod tests {
         let keys = drain_key_presses(press(KeyCode::Left), || Ok(queue.next()), &mut pending).unwrap();
         assert_eq!(keys, vec![press(KeyCode::Left), press(KeyCode::Char('y'))], "a release is skipped; the drain stops at the resize");
         assert!(matches!(pending, Some(TermEvent::Resize(80, 24))));
-        let (text, acts) = split_approval_burst(&keys);
-        assert_eq!(text, "y", "the y goes to the draft");
-        assert_eq!(acts, vec![press(KeyCode::Left)], "the arrow still moves the focus");
-        let (text, acts) = split_approval_burst(&[press(KeyCode::Char('y')), press(KeyCode::Enter), press(KeyCode::Esc), press(KeyCode::Down)]);
-        assert_eq!(text, "y\n");
-        assert_eq!(acts, vec![press(KeyCode::Esc), press(KeyCode::Down)], "Esc in a burst still denies");
     }
 
     use super::*;

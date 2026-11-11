@@ -574,8 +574,8 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     // What is proposed, and the target.
     let mut head = markdown::wrap(
         vec![
-            Span::styled(diff_view::safe_text(&tool_verb(&approval.tool)), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {}", diff_view::safe_text(&approval.subject)), Style::default().fg(Color::White)),
+            Span::styled(diff_view::approval_safe_text(&tool_verb(&approval.tool)), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {}", diff_view::approval_safe_text(&approval.subject)), Style::default().fg(Color::White)),
         ],
         width,
         Vec::new(),
@@ -588,7 +588,7 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
                 diff_view::Status::Added => "create",
                 diff_view::Status::Deleted => "delete",
                 _ => "change",
-            }, diff_view::safe_text(file.path()), diff_view::MINUS)
+            }, diff_view::approval_safe_text(file.path()), diff_view::MINUS)
         }),
         None if approval.tool == "run_command" => Some("run a shell command in the workspace".to_string()),
         None => None,
@@ -721,10 +721,6 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
         };
         shown.push(Line::from(Span::styled(marker, Style::default().fg(Color::Yellow))));
     }
-    // Whatever the sources did not sanitise is shown as a stand-in here, the last stage before the screen.
-    for line in head.iter_mut().chain(shown.iter_mut()).chain(footer.iter_mut()) {
-        scrub(line);
-    }
     frame.render_widget(Paragraph::new(head), Rect { height: head_rows, ..inner });
     frame.render_widget(Paragraph::new(shown), body);
     frame.render_widget(Paragraph::new(footer), Rect { y: inner.y + inner.height - footer_rows, height: footer_rows, ..inner });
@@ -735,15 +731,6 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     layout.approval_top = top;
     layout.approval_seen_to = (top + viewport).min(total);
     layout.approval_width = width;
-}
-
-/// Replaces control and invisible characters in a drawn line by their visible stand-ins.
-fn scrub(line: &mut Line<'_>) {
-    for span in &mut line.spans {
-        if span.content.chars().any(|c| diff_view::visible_control(c).is_some()) {
-            span.content = diff_view::safe_text(&span.content).into();
-        }
-    }
 }
 
 fn line_style(kind: LineKind) -> Style {
@@ -4521,9 +4508,8 @@ mod surface_tests {
         let mut st = state(true);
         feed(&mut st, &[&request]);
         let (frame, _) = screen(&mut st, 40, 24);
-        let flat: String = frame.join("").split_whitespace().collect();
-        assert!(flat.contains("ENDOFLABEL") || !flat.contains("a_section"), "a hunk label is wrapped whole or absent, never cut: {frame:#?}");
-        assert_eq!(diff_view::visible_control('\u{2800}').as_deref(), Some("<U+2800>"));
+        let flat: String = frame.join("").chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
+        assert!(flat.contains("fna_section_name_that_is_far_wider_than_the_panel_ENDOFLABEL"), "the hunk label is drawn whole, wrapped: {frame:#?}");
     }
 
     #[test]

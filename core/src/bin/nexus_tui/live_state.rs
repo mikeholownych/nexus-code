@@ -1394,6 +1394,23 @@ impl LiveState {
         }
     }
 
+    /// Keys that reached the screen together, applied one at a time in the order they were typed. At an open approval
+    /// more than one press at once is typing (or a paste without bracketed paste), so the decision keys are inert for
+    /// the batch (the panel's guard, as for input typed before the panel appeared): `y`, `n`, `a` become text of the
+    /// draft and Enter does nothing. Every other key (text, Backspace, arrows, Esc) acts exactly as it does alone.
+    pub fn on_key_burst(&mut self, keys: Vec<KeyEvent>) -> Option<Action> {
+        self.on_key_burst_at(keys, Instant::now())
+    }
+
+    pub fn on_key_burst_at(&mut self, keys: Vec<KeyEvent>, now: Instant) -> Option<Action> {
+        if keys.len() > 1
+            && let Some(Overlay::Approval(approval)) = &mut self.overlay
+        {
+            approval.bulk_input_at(now);
+        }
+        keys.into_iter().find_map(|key| self.on_key_at(key, now))
+    }
+
     fn close_approval(&mut self) {
         self.pending_approvals.clear();
         if matches!(self.overlay, Some(Overlay::Approval(_))) {
@@ -4357,6 +4374,35 @@ mod tests {
             // A slow model: `y` 100 ms after the panel appears answers it too (nothing was in flight).
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 5100)), approve("approval-1", false));
+        }
+
+        #[test]
+        fn burst_keys_apply_in_order_and_never_answer() {
+            let t = |c| key(KeyCode::Char(c));
+            // x, Backspace, z in one batch leaves `z` in the draft.
+            let (mut state, t0) = panel(5000);
+            assert_eq!(state.on_key_burst_at(vec![t('x'), key(KeyCode::Backspace), t('z')], at(t0, 6000)), None);
+            assert_eq!(state.composer.text(), "z");
+            assert!(state.approval_id().is_some());
+            // A `y` inside a batch does not approve (it is text); neither do n, a or Enter.
+            for decision in [t('y'), t('n'), t('a'), key(KeyCode::Enter)] {
+                let (mut state, t0) = panel(5000);
+                assert_eq!(state.on_key_burst_at(vec![t('q'), decision], at(t0, 6000)), None);
+                assert!(state.approval_id().is_some(), "{decision:?} in a batch must not answer");
+            }
+            let (mut state, t0) = panel(5000);
+            assert_eq!(state.on_key_burst_at(vec![t('y'), t('e'), t('s')], at(t0, 6000)), None);
+            assert_eq!(state.composer.text(), "yes", "a leading y is text too");
+            // Arrows still navigate inside a batch; a lone y after the guard has expired approves.
+            assert_eq!(state.on_key_burst_at(vec![key(KeyCode::Left), key(KeyCode::Right)], at(t0, 6050)), None);
+            assert_eq!(state.on_key_at(t('y'), at(t0, 6100)), None, "still inside the guard");
+            assert_eq!(state.on_key_at(t('y'), at(t0, 8000)), approve("approval-1", false));
+            // A single key is not a burst.
+            let (mut state, t0) = panel(5000);
+            assert_eq!(state.on_key_burst_at(vec![t('y')], at(t0, 6000)), approve("approval-1", false));
+            // Esc inside a batch still denies.
+            let (mut state, t0) = panel(5000);
+            assert_eq!(state.on_key_burst_at(vec![t('x'), key(KeyCode::Esc)], at(t0, 6000)), deny("approval-1"));
         }
 
         #[test]

@@ -402,16 +402,34 @@ struct Cell {
 }
 
 /// The visible stand-in for a character a terminal would interpret: control pictures for C0 controls (`␛` for ESC),
-/// `␡` for DEL, `<U+XXXX>` for C1 controls, bidirectional overrides, zero-width, no-break and other space characters, soft hyphens, variation selectors, tag characters and line/paragraph separators. `None` for ordinary characters.
+/// `␡` for DEL, `<U+XXXX>` for C1 controls and bidirectional overrides. `None` for ordinary characters.
 pub fn visible_control(c: char) -> Option<String> {
     let code = c as u32;
     match code {
         0x00..=0x1f => char::from_u32(0x2400 + code).map(String::from),
         0x7f => Some("␡".to_string()),
-        0x80..=0xa0 | 0xad | 0x34f | 0x61c | 0x115f | 0x1160 | 0x1680 | 0x17b4..=0x17b5 | 0x180b..=0x180e | 0x2000..=0x200f | 0x2028..=0x202f | 0x205f..=0x2064
-        | 0x2066..=0x2069 | 0x2800 | 0x3000 | 0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff9..=0xfffb | 0xe0000..=0xe007f | 0xe0100..=0xe01ef => Some(format!("<U+{code:04X}>")),
+        0x80..=0x9f | 0x61c | 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069 => Some(format!("<U+{code:04X}>")),
         _ => None,
     }
+}
+
+/// Approval rows only: everything `visible_control` shows, plus the characters that draw as nothing or as a blank
+/// (zero-width, no-break and other space characters, soft hyphen, variation selectors, tag characters, line and
+/// paragraph separators, braille blank). Ordinary prose never goes through this, so emoji and CJK text are unaffected.
+pub fn approval_visible_control(c: char) -> Option<String> {
+    visible_control(c).or_else(|| {
+        let code = c as u32;
+        match code {
+            0xa0 | 0xad | 0x34f | 0x115f | 0x1160 | 0x1680 | 0x17b4..=0x17b5 | 0x180b..=0x180e | 0x2000..=0x200d | 0x2028..=0x202f | 0x205f..=0x2064 | 0x2800 | 0x3000
+            | 0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff9..=0xfffb | 0xe0000..=0xe007f | 0xe0100..=0xe01ef => Some(format!("<U+{code:04X}>")),
+            _ => None,
+        }
+    })
+}
+
+/// `safe_text` for approval rows, with the wider `approval_visible_control` set.
+pub fn approval_safe_text(text: &str) -> String {
+    text.chars().map(|c| approval_visible_control(c).unwrap_or_else(|| c.to_string())).collect()
 }
 
 /// Text safe to draw: every control character replaced by its visible stand-in (tabs and newlines included).
@@ -1256,11 +1274,27 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
     #[test]
     fn invisible_and_line_separator_characters_get_visible_stand_ins() {
         for c in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{2028}', '\u{2029}', '\u{feff}', '\u{ad}', '\u{a0}', '\u{2000}', '\u{200a}', '\u{202f}', '\u{205f}', '\u{3000}', '\u{1680}', '\u{fe00}', '\u{fe0f}', '\u{e0100}', '\u{e01ef}', '\u{fff9}', '\u{fffb}', '\u{180b}', '\u{180d}', '\u{e0041}', '\u{2800}', '\u{17b4}', '\u{17b5}'] {
-            let shown = visible_control(c).unwrap_or_else(|| panic!("{:04X} is invisible and has no stand-in", c as u32));
+            let shown = approval_visible_control(c).unwrap_or_else(|| panic!("{:04X} is invisible and has no stand-in", c as u32));
             assert_eq!(shown, format!("<U+{:04X}>", c as u32));
-            assert!(!safe_text(&format!("a{c}b")).contains(c));
+            assert!(!approval_safe_text(&format!("a{c}b")).contains(c));
         }
-        assert_eq!(visible_control('é'), None);
+        assert_eq!(approval_visible_control('é'), None);
+        // The superset keeps every stand-in of the shared predicate.
+        for code in 0..0x3000u32 {
+            if let Some(c) = char::from_u32(code).filter(|c| visible_control(*c).is_some()) {
+                assert_eq!(approval_visible_control(c), visible_control(c));
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_prose_is_not_changed_by_the_shared_predicate() {
+        for c in ['\u{fe0f}', '\u{3000}', '\u{a0}', '\u{200b}', '\u{2800}', '\u{e0100}', '\u{ad}'] {
+            assert_eq!(visible_control(c), None, "{:04X}", c as u32);
+        }
+        let prose = "\u{26a0}\u{fe0f} done\u{3000}ok";
+        assert_eq!(safe_text(prose), prose);
+        assert_eq!(approval_safe_text(prose), "\u{26a0}<U+FE0F> done<U+3000>ok");
     }
 
     #[test]

@@ -37,7 +37,7 @@ fn line(kind: LineKind, text: impl Into<String>) -> ReviewLine {
 /// A row of a command or script as drawn: tabs as spaces, every other control character (a lone carriage return that
 /// would redraw the line, ESC) and bidirectional override shown as a visible stand-in, so what is displayed is what runs.
 fn safe_row(row: &str) -> String {
-    crate::diff_view::safe_text(&row.replace('\t', "    "))
+    crate::diff_view::approval_safe_text(&row.replace('\t', "    "))
 }
 
 fn truncation_note() -> ReviewLine {
