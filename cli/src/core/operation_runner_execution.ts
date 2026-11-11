@@ -10,7 +10,7 @@ import type { ChatMessage, HarnessConfig } from "../types.js";
 import type { TaskRecoveryResult } from "./state.js";
 import { unitBaseTask, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { messagesBlock } from "./operation_messages.js";
-import { boundedRedactedInput, candidateDiff } from "./specialist_inputs.js";
+import { boundedRedactedInput, candidateDiff, plainCandidateDiff } from "./specialist_inputs.js";
 import { redactForPersistence } from "./persistence_protection.js";
 import { ROLE_PROFILES, SPECIALIST_CONTRACTS, isReadOnlyRole, isSpecialistRole, missingSpecialistInputs, validateSpecialistOutput, type AgentRole, type SpecialistRole } from "./roles.js";
 import { applyProviderCatalog, ResourceRegistry, type ResourceConditionRecord, type ResourceDescriptor } from "./resources.js";
@@ -725,7 +725,17 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
 
   /** The objective evidence a review unit is given: requirements, scope, base, candidate diff and verifier receipts. */
   private reviewEvidence(unit: WorkUnit, ctx: UnitRunContext, workspace: string): ReviewEvidencePackage {
-    const candidate = candidateDiffFor(ctx, workspace, this.opts.baseConfig.workspace);
+    let candidate = candidateDiffFor(ctx, workspace, this.opts.baseConfig.workspace);
+    // A repository state outside the supported domain must not stop a review that a plain diff can serve: the reviewer
+    // gets the plain diff and is told why the automatic one was not used. Any other failure still blocks, as before.
+    let plainNote = "";
+    if ("error" in candidate && "unsupported" in candidate) {
+      const plain = plainCandidateDiff(ctx.workspace ?? workspace, ctx.baseCommit ?? ctx.startCommit, this.opts.baseConfig.workspace);
+      if (!("error" in plain)) {
+        plainNote = `[This is a plain git diff against the base, not the usual auto-collected one: ${candidate.error.replace(/^automatic inputs are not available for this repository state: /, "").replace(/; give the unit explicit inputs instead$/, "")}. It can show absent or filtered files as changed.]\n`;
+        candidate = plain;
+      }
+    }
     // The worst result across every dependency that ran a verifier decides; order must not matter.
     const verifications = ctx.dependencies.flatMap((d) => (d.verification ? [d.verification] : []));
     const passing = (v: { status: string; hasExecutedTests: boolean }) => v.status === "PASSED" && v.hasExecutedTests;
@@ -738,7 +748,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       unitId: unit.id,
       objective: `${ctx.objective}\n\nReview task: ${unit.prompt}`,
       baselineCommit: "base" in candidate ? candidate.base : "unknown",
-      unifiedDiff: "diff" in candidate ? redactForPersistence(candidateDiffText(candidate)) : "",
+      unifiedDiff: "diff" in candidate ? redactForPersistence(plainNote + candidateDiffText(candidate)) : "",
       // An empty diff gives the reviewer nothing to judge, so it is a failure to collect evidence, not an accept.
       ...("error" in candidate
         ? { diffError: candidate.error || "git diff failed" }

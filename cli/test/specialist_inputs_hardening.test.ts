@@ -228,7 +228,7 @@ test("a new file copied from the operator's ignored secret is omitted although t
   assert.ok((r as { omittedNew: number }).omittedNew >= 1);
 });
 
-test("a debugger snapshot skips an untracked nested git repository instead of failing", () => {
+test("a debugger snapshot refuses a unit worktree with a repository planted inside it (checkout trust), copying nothing", () => {
   const root = mk(() => {}, { "file.txt": "base\n" });
   const p = planOperationGit(root, "op-nested");
   const state = newOperationGitState(p);
@@ -238,9 +238,7 @@ test("a debugger snapshot skips an untracked nested git repository instead of fa
   put(tester, "file.txt", "edited\n");
   const nested = path.join(tester, "vendor", "lib"); fs.mkdirSync(nested, { recursive: true });
   sh(nested, "init", "-q"); put(nested, "lib.js", "NESTED_CONTENT\n");
-  const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
-  assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "edited\n");
-  assert.equal(fs.existsSync(path.join(debug, "vendor", "lib", "lib.js")), false);
+  assert.throws(() => ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }), /nested|planted|repository/i);
 });
 
 test("a review unit's diff is credential-redacted, and an all-omitted candidate says why", () => {

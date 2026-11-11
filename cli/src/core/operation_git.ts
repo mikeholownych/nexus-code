@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { trustedGitArgs } from "../git.js";
 import { ensureGitExclude } from "./git_exclude.js";
 import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv, snapshotSupport } from "./specialist_inputs.js";
 import { verifierTimeoutSecs } from "../tester.js";
@@ -206,6 +207,8 @@ export class OperationGit {
     const staleSnapshot = Boolean(recorded && options.snapshotOf
       && (recorded.snapshotOf !== options.snapshotOf || recorded.snapshotRun !== options.snapshotRun));
     const restart = Boolean((options.restart || staleSnapshot) && recorded);
+    // A restart onto a fresh snapshot builds it first: when it cannot be built the old worktree and branch are still there.
+    let snapshot = restart && options.snapshotOf ? this.snapshotCandidate(options.snapshotOf) : undefined;
     let restartBranch = branch;
     if (restart) {
       // The worktree may be gone while its registration survives; prune before deleting the branch, or `branch -D`
@@ -231,7 +234,7 @@ export class OperationGit {
       branchExists = false;
     }
     // A failure_debugger on a failed dependency starts from that dependency's candidate, which was never integrated.
-    const snapshot = !branchExists && options.snapshotOf ? this.snapshotCandidate(options.snapshotOf) : undefined;
+    snapshot ??= !branchExists && options.snapshotOf ? this.snapshotCandidate(options.snapshotOf) : undefined;
     const startPoint = snapshot ?? this.currentTip();
     const add = () => branchExists
       ? gitResult(this.plan.repoRoot, ["worktree", "add", worktree, restartBranch])
@@ -440,10 +443,13 @@ export class OperationGit {
     // drivers removed, text/eol kept), so no clean filter runs; a driver assigned through $GIT_DIR/info/attributes
     // refuses the snapshot instead of being run.
     let attrs: ReturnType<typeof attributesTree>;
+    // Host-side git runs only where the checkout is trusted: the unit's model owns this worktree and may have replaced
+    // its `.git` pointer or planted a repository in it. Refused (throws) before anything is read or copied.
+    const pin = trustedGitArgs(entry.worktree);
     // `raw` keeps the output verbatim (NUL-separated listings: a path may start or end with whitespace); scalar results
     // are trimmed.
     const run = (args: string[], options: { input?: string; ownIndex?: boolean; raw?: boolean } = {}) => {
-      const out = execFileSync("git", [...GIT_SAFE, ...args], {
+      const out = execFileSync("git", [...pin, ...GIT_SAFE, ...args], {
         cwd: entry.worktree, encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS,
         env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch, "index"), attrs), maxBuffer: 256 * 1024 * 1024,
         ...(options.input === undefined ? {} : { input: options.input }),
@@ -455,16 +461,21 @@ export class OperationGit {
       // flags, gitlinks, unresolved merge, unreliable modes); anything else is refused with its reason, never guessed at.
       const support = snapshotSupport((args) => run(args, { ownIndex: true, raw: true }), entry.worktree);
       if ("unsupported" in support) throw new Error(`the failing candidate cannot be snapshotted: ${support.unsupported}; fix that state in the unit's worktree and retry, or stop`);
-      const ownIndex = run(["rev-parse", "--path-format=absolute", "--git-path", "index"], { ownIndex: true });
-      if (fs.existsSync(ownIndex)) fs.copyFileSync(ownIndex, path.join(scratch, "index"));
-      else run(["read-tree", "HEAD"]);
+      const ownIndex = run(["rev-parse", "--path-format=absolute", "--git-path", "index"], { ownIndex: true, raw: true }).replace(/\n$/, "");
+      try {
+        fs.copyFileSync(ownIndex, path.join(scratch, "index"));
+      } catch (err: any) {
+        // Only a repository without an index yet (nothing staged) starts from HEAD; any other failure would silently drop the unit's staged state.
+        if (err?.code !== "ENOENT") throw err;
+        run(["read-tree", "HEAD"]);
+      }
       const listed = run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { raw: true }).split("\0").filter(Boolean);
       // A directory entry (trailing slash) is an untracked nested git repository, which `git add` refuses or embeds: skipped, as in the candidate diff.
       const nested = listed.filter((p) => p.endsWith("/"));
       const files = listed.filter((p) => !p.endsWith("/"));
       // The worktree's own .gitattributes without filter and diff assignments, as for the candidate diff, so text/eol
       // normalization applies to the snapshot exactly as it would to the tester's own commit.
-      attrs = attributesTree(entry.worktree, scratch, files);
+      attrs = attributesTree(entry.worktree, scratch, files, pin);
       const refusal = driverRefusal((args, input) => run(args, { input, raw: true }), files);
       if (refusal) throw new Error(refusal);
       run(["add", "-A", "--", ".", ...nested.map((p) => `:(exclude,literal)${p.slice(0, -1)}`)]);

@@ -6,7 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { candidateDiff } from "../src/core/specialist_inputs.js";
+import { AgentWorkUnitExecutor } from "../src/core/operation_runner_execution.js";
+import { candidateDiff, plainCandidateDiff } from "../src/core/specialist_inputs.js";
 import { OperationGit, ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
 import type { WorkUnit } from "../src/core/operation.js";
 
@@ -30,8 +31,8 @@ function tester(files?: Record<string, string>) {
   ensureIntegrationWorktree(p, state);
   const ops = new OperationGit(p, state);
   const wt = ops.prepareUnit(unit("verify", "tester")).workspace;
-  const snapshot = () => ops.prepareUnit(unit("debug", "failure_debugger"), { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
-  return { wt, snapshot };
+  const snapshotRun = (run: string) => ops.prepareUnit(unit("debug", "failure_debugger"), { snapshotOf: "verify", snapshotRun: run }).workspace;
+  return { wt, snapshot: () => snapshotRun("t1"), snapshotRun };
 }
 
 type Setup = (d: string) => void;
@@ -50,8 +51,9 @@ const REFUSED = [
   }, /submodule/],
   ["a clean/smudge filter assigned in .gitattributes", (d) => { put(d, ".gitattributes", "*.txt filter=lfs\n"); sh(d, "add", ".gitattributes"); sh(d, "commit", "-qm", "attrs"); }, /filter/],
   ["an unresolved merge conflict", (d) => {
+    const cur = sh(d, "rev-parse", "--abbrev-ref", "HEAD").trim();
     sh(d, "checkout", "-q", "-b", "side"); put(d, "in/a.txt", "side\n"); sh(d, "commit", "-qam", "side");
-    sh(d, "checkout", "-q", "main"); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
+    sh(d, "checkout", "-q", cur); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
     try { sh(d, "merge", "side"); } catch { /* conflict expected */ }
   }, /merge conflicts/],
 ] as Array<[string, Setup, RegExp]>;
@@ -63,11 +65,12 @@ for (const [name, setup, why] of REFUSED) {
     const r = candidateDiff(d, undefined);
     assert.ok("error" in r, `expected a refusal, got ${JSON.stringify(r).slice(0, 200)}`);
     assert.match(r.error, /automatic inputs are not available/);
+    assert.equal((r as { unsupported?: boolean }).unsupported, true);
     assert.match(r.error, why);
   });
 }
 
-for (const [name, setup, why] of REFUSED.filter(([n]) => !/submodule|merge|core\./.test(n)) as Array<[string, Setup, RegExp]>) {
+for (const [name, setup, why] of REFUSED) {
   test(`the debugger snapshot refuses too: ${name}`, () => {
     const t = tester();
     setup(t.wt);
@@ -131,14 +134,16 @@ const SWEEP: Array<[string, Setup]> = [
   ["untracked nested repo", (d) => { fs.mkdirSync(path.join(d, "v")); sh(path.join(d, "v"), "init", "-q"); put(d, "in/a.txt", `a ${MARK}\n`); }],
   ["rebase-like: HEAD behind an extra commit", (d) => { put(d, "x.txt", "x\n"); sh(d, "add", "x.txt"); sh(d, "commit", "-qm", "x"); put(d, "in/a.txt", `a ${MARK}\n`); }],
   ["merge in progress, resolved in the index", (d) => {
+    const cur = sh(d, "rev-parse", "--abbrev-ref", "HEAD").trim();
     sh(d, "checkout", "-q", "-b", "side"); put(d, "in/a.txt", "side\n"); sh(d, "commit", "-qam", "side");
-    sh(d, "checkout", "-q", "main"); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
+    sh(d, "checkout", "-q", cur); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
     try { sh(d, "merge", "side"); } catch { /* conflict expected */ }
     put(d, "in/a.txt", `a ${MARK}\n`); sh(d, "add", "in/a.txt");
   }],
   ["cherry-pick in progress, resolved in the index", (d) => {
+    const cur = sh(d, "rev-parse", "--abbrev-ref", "HEAD").trim();
     sh(d, "checkout", "-q", "-b", "side"); put(d, "in/a.txt", "side\n"); sh(d, "commit", "-qam", "side");
-    sh(d, "checkout", "-q", "main"); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
+    sh(d, "checkout", "-q", cur); put(d, "in/a.txt", "main\n"); sh(d, "commit", "-qam", "main");
     try { sh(d, "cherry-pick", "side"); } catch { /* conflict expected */ }
     put(d, "in/a.txt", `a ${MARK}\n`); sh(d, "add", "in/a.txt");
   }],
@@ -149,7 +154,7 @@ for (const [name, setup] of SWEEP) {
     const d = repo();
     setup(d);
     const r = candidateDiff(d, undefined);
-    if ("error" in r) { assert.match(r.error, /automatic inputs are not available|git could not produce/, r.error); return; }
+    if ("error" in r) { assert.match(r.error, /automatic inputs are not available/, `only a stated refusal is acceptable, got: ${r.error}`); return; }
     // Oracle: git's own view of the change (tracked changes against HEAD plus untracked files).
     const lines = (...args: string[]) => sh(d, ...args).split("\n").filter((l) => l && !l.endsWith("/"));
     const expected = new Set([...lines("diff", "HEAD", "--name-only", "--no-renames"), ...lines("ls-files", "--others", "--exclude-standard")]);
@@ -157,3 +162,77 @@ for (const [name, setup] of SWEEP) {
     assert.deepEqual([...shown].sort(), [...expected].sort());
   });
 }
+
+// ------------------------------------------------ checkout trust: the unit's model owns its worktree
+const linkedUnit = () => tester();
+test("a worktree whose .git pointer was replaced by another repository is refused (diff and snapshot), and nothing of it is read", () => {
+  const evil = repo({ "evil.txt": "EVIL\n" });
+  const marker = path.join(evil, "fsmonitor-ran");
+  fs.writeFileSync(path.join(evil, "mon.sh"), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
+  sh(evil, "config", "core.fsmonitor", path.join(evil, "mon.sh"));
+  const t = linkedUnit();
+  fs.writeFileSync(path.join(t.wt, ".git"), `gitdir: ${path.join(evil, ".git")}\n`);
+  const r = candidateDiff(t.wt, undefined);
+  assert.ok("error" in r && !(r as { unsupported?: boolean }).unsupported && /point back|could not be verified|not a plain/i.test(r.error), JSON.stringify(r));
+  assert.throws(() => t.snapshot(), /point back|could not be verified|not a plain/i);
+  assert.equal(fs.existsSync(marker), false);
+});
+
+test("a repository planted inside the unit worktree is refused by the diff and the snapshot", () => {
+  const t = linkedUnit();
+  const nested = path.join(t.wt, "vendor"); fs.mkdirSync(nested);
+  sh(nested, "init", "-q");
+  const r = candidateDiff(t.wt, undefined);
+  assert.ok("error" in r && /nested|planted|repository/i.test(r.error), JSON.stringify(r));
+  assert.throws(() => t.snapshot(), /nested|planted|repository/i);
+});
+
+// ------------------------------------------------ gaps closed in the final round
+test("a path that is not valid UTF-8 is refused instead of being mangled into another name", () => {
+  const d = repo();
+  fs.writeFileSync(Buffer.concat([Buffer.from(d + "/"), Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74])]), "x\n");
+  const r = candidateDiff(d, undefined);
+  assert.ok("error" in r && /not valid UTF-8/.test(r.error), JSON.stringify(r));
+});
+
+test("a .gitattributes too large to apply is refused, not silently dropped", () => {
+  const d = repo();
+  put(d, ".gitattributes", "*.txt text\n" + "# pad\n".repeat(200_000));
+  const r = candidateDiff(d, undefined);
+  assert.ok("error" in r && /larger than/.test(r.error), JSON.stringify(r));
+});
+
+test("a failed stale-snapshot restart leaves the old debugger worktree and branch in place", () => {
+  const t = tester();
+  put(t.wt, "in/a.txt", "edited\n");
+  const first = t.snapshot();
+  sh(t.wt, "update-index", "--skip-worktree", "in/a.txt"); // the candidate is now outside the domain
+  assert.ok(fs.existsSync(first));
+  assert.throws(() => t.snapshotRun("t2"), /cannot be snapshotted/);
+  assert.ok(fs.existsSync(first), "the old worktree survives a failed rebuild");
+});
+
+// ------------------------------------------------ reviewers: a refused state still gets a (plain) diff
+const reviewerEvidence = (d: string, workspace = d) => (new AgentWorkUnitExecutor({ baseConfig: { workspace: d } as any }) as any)
+  .reviewEvidence({ ...unit("rv", "reviewer") }, { objective: "o", workspace, dependencies: [] }, workspace) as { unifiedDiff: string; diffError?: string };
+for (const [name, setup] of [...REFUSED.map(([n, s]) => [n, s] as [string, Setup]), ["a subdirectory workspace", () => {}] as [string, Setup]]) {
+  test(`a reviewer still gets a diff, with the reason, when the repository is ${name}`, () => {
+    const d = repo();
+    setup(d);
+    put(d, "in/a.txt", `a ${MARK}\n`);
+    const ev = reviewerEvidence(d, name === "a subdirectory workspace" ? path.join(d, "in") : d);
+    assert.equal(ev.diffError, undefined, ev.diffError);
+    assert.match(ev.unifiedDiff, /plain git diff/);
+    assert.match(ev.unifiedDiff, new RegExp(MARK));
+  });
+}
+
+test("the plain diff leaves protected files out and refuses a replaced .git like the main builder", () => {
+  const d = repo({ "in/a.txt": "a\n", ".env": "SECRET_TOKEN_VALUE_1234\n" });
+  put(d, ".env", "SECRET_TOKEN_VALUE_5678\n"); put(d, "in/a.txt", `a ${MARK}\n`);
+  const r = plainCandidateDiff(d, undefined);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  assert.doesNotMatch(r.diff, /SECRET_TOKEN/);
+  assert.match(r.diff, new RegExp(MARK));
+  assert.ok(r.omitted >= 1);
+});
