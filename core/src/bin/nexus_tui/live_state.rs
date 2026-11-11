@@ -376,7 +376,8 @@ pub struct DiffReview {
 /// with a notice, when typing was in flight as it appeared. The guard actually lasts until
 /// `max(this after the panel is drawn, APPROVAL_REPEAT_QUIET after the last key)`, and every ignored decision key
 /// (also one ignored in a typing run, or refused on an unseen fold) restarts it for a full `APPROVAL_REPEAT_QUIET`, so
-/// a key pressed and held inside the wait is not answered by its own first auto-repeat. Related windows: `APPROVAL_IN_FLIGHT` decides whether typing was in flight (a key, Tab or paste
+/// a key pressed and held inside the wait is not answered by its own first auto-repeat. Related windows:
+/// `APPROVAL_IN_FLIGHT` decides whether typing was in flight (a key, Tab or paste
 /// within it before the panel is drawn), `APPROVAL_REPEAT_QUIET` keeps a held key's auto-repeat from answering,
 /// `APPROVAL_TYPING_RUN` keeps typing from the open panel from answering, and `APPROVAL_CONFIRM_DELAY` applies the
 /// same quiet period to the approve-all confirmation.
@@ -398,7 +399,12 @@ impl Approval {
     /// key's auto-repeat, which begins after about 660 ms, is then ignored too.
     fn bulk_input_at(&mut self, now: Instant) {
         self.last_text = Some(now);
-        self.guard_until = Some(self.guard_until.unwrap_or(now).max(now + APPROVAL_REPEAT_QUIET));
+        self.rearm_guard(now);
+    }
+
+    /// Decision keys stay inert until `APPROVAL_REPEAT_QUIET` after `now` (never shortening a longer guard).
+    fn rearm_guard(&mut self, now: Instant) {
+        self.guard_until = Some(self.guard_until.map_or(now + APPROVAL_REPEAT_QUIET, |until| until.max(now + APPROVAL_REPEAT_QUIET)));
     }
 }
 const APPROVAL_CONFIRM_JUST_OPENED: &str = "ignored: confirm question just opened — press again to approve all later actions";
@@ -1463,7 +1469,7 @@ impl LiveState {
             // An ignored key re-arms the run, and the wait for a full repeat window: a held key (auto-repeat arrives
             // as presses) stays inert until released.
             approval.last_text = Some(now);
-            approval.guard_until = Some(approval.guard_until.unwrap_or(now).max(now + APPROVAL_REPEAT_QUIET));
+            approval.rearm_guard(now);
             if let KeyCode::Char(c) = key.code {
                 self.composer.insert(c.encode_utf8(&mut [0; 4]));
             }
@@ -1479,7 +1485,7 @@ impl LiveState {
             // Re-armed for a full repeat window by every ignored key: a key pressed and held inside the wait is not
             // answered by its own first auto-repeat (up to about a second after the press); only a fresh press after
             // the key has been quiet that long answers.
-            approval.guard_until = Some(approval.guard_until.unwrap_or(now).max(now + APPROVAL_REPEAT_QUIET));
+            approval.rearm_guard(now);
             // The key was typing in flight: its letter is kept in the draft and starts the typing run, so the rest of
             // the word (an `a`, `n` and then `y` of "any") is text too.
             if let KeyCode::Char(c) = key.code {
@@ -1491,7 +1497,7 @@ impl LiveState {
         // A command that is cut off at the fold is never approved unseen.
         if verdict != Verdict::Denied && !approval.read_all {
             approval.notice = Some(APPROVAL_UNSEEN);
-            approval.guard_until = Some(approval.guard_until.unwrap_or(now).max(now + APPROVAL_REPEAT_QUIET));
+            approval.rearm_guard(now);
             return None;
         }
         // Approving every later action is never one key: it asks once, then Enter or `a` confirms, no sooner than

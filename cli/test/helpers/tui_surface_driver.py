@@ -27,7 +27,7 @@ def approval_panel_shown(lines):
     panel's bottom border. A frame reaches the terminal cell by cell from the top row down, so the title can be on
     screen while the decisions and their hint are still in flight; waiting for the title alone and reading the hint a
     fixed moment later failed once in CI. The structure is checked, not one hint's wording: the hint differs by state
-    (letters armed or not, a choice made, settling)."""
+    (normal, confirming approve-all, a refusal notice)."""
     title = next((i for i, line in enumerate(lines) if "Approval needed" in line), None)
     if title is None:
         return False

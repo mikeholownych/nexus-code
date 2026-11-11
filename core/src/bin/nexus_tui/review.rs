@@ -111,7 +111,7 @@ pub fn review_lines(review: &Review) -> Vec<ReviewLine> {
             false
         }
         Review::Args { text, truncated } => {
-            lines.extend(text.lines().map(|row| line(LineKind::Context, row)));
+            lines.extend(text.lines().map(|row| line(LineKind::Context, safe_row(row))));
             *truncated
         }
         Review::Unknown => {
@@ -368,6 +368,16 @@ mod tests {
             vec!["{", "  \"url\": \"u\"", "}"]
         );
         assert_eq!(review_lines(&Review::Unknown)[0].kind, LineKind::Meta);
+    }
+
+    #[test]
+    fn argument_rows_and_invisible_characters_are_shown_not_acted_on() {
+        let rows = review_lines(&Review::Args { text: "path\u{202e}gpj.exe\r\u{e0041}\u{2062}x".into(), truncated: false });
+        let text: String = rows.iter().map(|row| row.text.as_str()).collect();
+        for bad in ['\r', '\u{202e}', '\u{e0041}', '\u{2062}'] {
+            assert!(!text.contains(bad), "{bad:?} reached the screen text: {text:?}");
+        }
+        assert!(text.contains("<U+E0041>") && text.contains("<U+2062>"), "{text:?}");
     }
 
     #[test]
