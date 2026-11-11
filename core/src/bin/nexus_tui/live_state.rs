@@ -391,6 +391,16 @@ pub const APPROVAL_REPEAT_QUIET: Duration = Duration::from_millis(1000);
 /// The confirming key of the approve-all question is ignored this soon after the question was asked (and after each
 /// ignored press, so a held or auto-repeating key stays inert until it is released).
 pub const APPROVAL_CONFIRM_DELAY: Duration = APPROVAL_REPEAT_QUIET;
+
+impl Approval {
+    /// Input that arrived in bulk (a paste, or keys queued together) while this panel is open went to the draft. Its
+    /// last key may still be held, so the typing run starts and the guard stretches to a full repeat window: the
+    /// key's auto-repeat, which begins after about 660 ms, is then ignored too.
+    fn bulk_input_at(&mut self, now: Instant) {
+        self.last_text = Some(now);
+        self.guard_until = Some(self.guard_until.unwrap_or(now).max(now + APPROVAL_REPEAT_QUIET));
+    }
+}
 const APPROVAL_CONFIRM_JUST_OPENED: &str = "ignored: confirm question just opened — press again to approve all later actions";
 const APPROVAL_UNSEEN: &str = "not approved: scroll to the end (↓ or End) first — part of this command was never shown";
 /// What the panel says when it ignores a key typed before the operator could see it.
@@ -1254,7 +1264,7 @@ impl LiveState {
             Some(Overlay::Approval(approval)) => {
                 approval.notice = Some("text went to your draft — pasted or typed too fast to be an answer");
                 approval.confirming = false;
-                approval.last_text = Some(now);
+                approval.bulk_input_at(now);
                 if !text.is_empty() {
                     self.composer.paste(text);
                 }
@@ -1353,10 +1363,7 @@ impl LiveState {
         self.last_key = Some(now);
         if let Some(Overlay::Approval(approval)) = &mut self.overlay {
             approval.notice = Some(APPROVAL_IGNORED);
-            approval.last_text = Some(now);
-            if approval.shown {
-                approval.guard_until = Some(now + APPROVAL_REPEAT_QUIET);
-            }
+            approval.bulk_input_at(now);
         }
     }
 
@@ -4652,6 +4659,31 @@ mod tests {
                 approved |= state.on_key_at(key(KeyCode::Char('a')), at(t0, t)).is_some();
             }
             assert!(!approved, "a held `a` approved all later actions");
+        }
+
+        /// Whatever arrives in bulk while the panel is open (a paste, or a queued burst of keys) can end in a key that
+        /// is still held: its auto-repeat must stay inert for the full repeat window, however late the burst comes.
+        #[test]
+        fn a_burst_or_paste_with_a_decision_key_held_at_its_end_is_never_answered_by_the_repeat() {
+            for text in ["xy", "y", "xxxxn", "ya", "x\n"] {
+                for burst_at in [5000u64, 5400, 6500, 9000] {
+                    for code in [KeyCode::Char('y'), KeyCode::Char('a'), KeyCode::Char('n'), KeyCode::Enter] {
+                        let (mut state, t0) = panel(5000);
+                        state.on_paste_at(text, at(t0, burst_at));
+                        // The last key of the burst is held: first repeat after 660 ms, then every 30 ms.
+                        let mut answered = None;
+                        let mut t = burst_at + 660;
+                        while t < burst_at + 660 + 900 {
+                            if state.on_key_at(key(code), at(t0, t)).is_some() {
+                                answered = Some(t - burst_at);
+                                break;
+                            }
+                            t += 30;
+                        }
+                        assert_eq!(answered, None, "{text:?} at {burst_at}: a repeat of {code:?} answered {answered:?} ms after the burst");
+                    }
+                }
+            }
         }
 
         #[test]
