@@ -8,6 +8,12 @@ import {
   CandidateIdentity,
 } from "./core/candidate.js";
 import { ensureGitExclude } from "./core/git_exclude.js";
+import { isLinkedWorktreeDir, isNamedWorktreePath } from "./core/persistence_protection.js";
+import { WORKTREE_BINDING_VERSION } from "./core/state_schema.js";
+import { WorkspacePath } from "./core/workspace_path.js";
+import { ensureWorktree } from "./worktrunk/core.js";
+import { openRepo } from "./worktrunk/repo.js";
+import { git as pinnedGit, nestedRepositoryReason } from "./worktrunk/git.js";
 export { ensureGitExclude };
 
 export interface WorktreeInfo {
@@ -40,24 +46,52 @@ export interface WorktreeMergeResult {
  */
 export class WorktreeManager {
   private workspace: string;
+  /** Storage anchor: the main checkout, where `.nexus/worktrees/` and the git exclude live. */
   private gitRoot: string;
+  /** The checkout the session runs in: tasks start from its HEAD and merge back into its branch. */
+  private checkoutRoot: string;
 
   constructor(workspace: string) {
     this.workspace = path.resolve(workspace);
+    this.checkoutRoot = this.resolveCheckoutRoot();
     this.gitRoot = this.resolveGitRoot();
   }
 
-  private resolveGitRoot(): string {
+  /** The top level of the checkout that contains the workspace (a linked worktree stays itself). */
+  private resolveCheckoutRoot(): string {
     try {
-      const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      return execFileSync("git", ["rev-parse", "--show-toplevel"], {
         cwd: this.workspace,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
-      return out;
     } catch {
       return this.workspace;
     }
+  }
+
+  /**
+   * The main checkout, found from the git common dir so that a manager created inside a linked worktree (including
+   * one of its own `.nexus/worktrees/<id>` directories) still stores its worktrees with the repository that owns them.
+   * Git operations that depend on "the current branch" use checkoutRoot instead.
+   *
+   * Known limit: this needs the common dir to be `<main checkout>/.git`. With `git init --separate-git-dir` (or any
+   * other layout) Git records no way back from the git directory to the main checkout, and `git worktree list` itself
+   * names the git directory, so the manager anchors on the checkout it runs in. `nexus worktree` refuses such
+   * repositories (docs/WORKTREES.md).
+   */
+  private resolveGitRoot(): string {
+    try {
+      const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+        cwd: this.workspace,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (path.basename(common) === ".git") return fs.realpathSync(path.dirname(common));
+    } catch {
+      // fall through to the checkout root
+    }
+    return this.checkoutRoot;
   }
 
   public isGitRepo(): boolean {
@@ -109,9 +143,9 @@ export class WorktreeManager {
     }
 
     try {
-      // Add worktree branching from startPoint (default HEAD)
+      // Add worktree branching from startPoint (default HEAD): HEAD is the originating checkout's, not the main one's
       execFileSync("git", ["worktree", "add", "-b", branch, worktreePath, startPoint || "HEAD"], {
-        cwd: this.gitRoot,
+        cwd: this.checkoutRoot,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -179,26 +213,78 @@ export class WorktreeManager {
 
   /** Returns whether a speculative worktree contains changes or commits to verify. */
   public hasChanges(taskId: string): boolean {
-    const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);
+    return this.hasChangesAt(path.join(this.getWorktreesBaseDir(), taskId), `nexus/${taskId}`, this.checkoutRoot);
+  }
+
+  /**
+   * Whether a run's bound worktree holds work to verify. A task worktree forks the checkout the run was launched from,
+   * so its commits are counted against that checkout (`hasChanges`); a named worktree is compared with the primary
+   * checkout.
+   */
+  public bindingHasChanges(binding: { taskId: string; worktreePath: string; branch: string; kind?: "task" | "named" }): boolean {
+    return binding.kind === "named" ? this.hasChangesAt(binding.worktreePath, binding.branch) : this.hasChanges(binding.taskId);
+  }
+
+  /**
+   * The named worktree for `branch` (`run --worktree-branch`): reused when it exists, created from the default branch
+   * otherwise. A branch checked out in the primary checkout is refused (running there would not be isolated and
+   * `nexus worktree merge` refuses the primary checkout), and the result is accepted only when it passes the same
+   * validation the durable binding uses: Git lists it on that branch, its `.git` pointer leads into this repository,
+   * and the registry holds it.
+   */
+  public ensureNamedWorktree(branch: string, home: string): { branch: string; path: string; created: boolean } {
+    const repo = openRepo(this.gitRoot);
+    const checkedOut = repo.entries.find((entry) => entry.branch === branch);
+    if (checkedOut?.isMain) {
+      throw new Error(`--worktree-branch ${branch}: that branch is checked out in the primary checkout (${checkedOut.path}); a named worktree must be a separate linked worktree.`);
+    }
+    const named = ensureWorktree({ cwd: this.gitRoot, home, readOnly: false }, branch);
+    const binding = { kind: "named", bindingVersion: WORKTREE_BINDING_VERSION, branch: named.branch };
+    if (!isNamedWorktreePath(WorkspacePath.fromSelectedWorkspace(this.gitRoot), named.path, binding)) {
+      throw new Error(`Named worktree ${named.branch} at ${named.path} is not a registered linked worktree of this repository; inspect it with \`nexus worktree list\`.`);
+    }
+    return named;
+  }
+
+  /** Whether `worktreePath` is still the registered linked worktree of this repository checked out on `branch`. */
+  public isRetainedNamedWorktree(worktreePath: string, branch: string): boolean {
+    return isNamedWorktreePath(WorkspacePath.fromSelectedWorkspace(this.gitRoot), worktreePath, { kind: "named", bindingVersion: WORKTREE_BINDING_VERSION, branch });
+  }
+
+  /** The repository's common Git directory (resolved), where linked worktrees keep their administrative directories. */
+  private gitCommonDir(): string {
+    return fs.realpathSync(pinnedGit(this.gitRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).stdout.trim());
+  }
+
+  /** Whether the directory is a linked worktree of this repository whose `.git` pointer still leads into it. */
+  public isLinkedWorktree(worktreePath: string): boolean {
+    try {
+      return isLinkedWorktreeDir(worktreePath, this.gitCommonDir());
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Whether the worktree at `worktreePath` holds work the primary checkout lacks: uncommitted, untracked or ignored
+   * output (Nexus's own `.nexus/` state excepted), or commits on `branch` ahead of `baseRoot`'s HEAD (default: the primary checkout, never the launching worktree;
+   * task worktrees pass the checkout they merge back into). `branch` is resolved as a branch, never as a same-named tag.
+   * A missing directory holds nothing. Git runs with the worktree feature's pinned flags, and only after the
+   * worktree's `.git` pointer has been verified; an unreadable or unverifiable worktree counts as changed, because
+   * it is not safe to merge or complete as verified.
+   */
+  public hasChangesAt(worktreePath: string, branch: string, baseRoot: string = this.gitRoot): boolean {
     if (!fs.existsSync(worktreePath)) return false;
     try {
-      const status = execFileSync("git", ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"], {
-        cwd: worktreePath,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-      const statusLines = status
-        ? status
-            .split("\n")
-            .map((l) => l.trim())
-            .filter((l) => l.length > 0 && !l.startsWith("!! .nexus/") && l !== "!! .nexus")
-        : [];
-      if (statusLines.length > 0) return true;
-      const ahead = execFileSync("git", ["rev-list", "--count", `HEAD..nexus/${taskId}`], {
-        cwd: this.gitRoot,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
+      if (!this.isLinkedWorktree(worktreePath)) return true;
+      if (nestedRepositoryReason(worktreePath)) return true; // Git would read a planted nested repository's configuration for status
+      const status = pinnedGit(worktreePath, ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"]).stdout;
+      const dirty = status
+        .split("\n")
+        .map((line) => line.trim())
+        .some((line) => line.length > 0 && !/^(!!|\?\?) \.nexus(\/|$)/.test(line));
+      if (dirty) return true;
+      const ahead = pinnedGit(baseRoot, ["rev-list", "--count", "--end-of-options", `HEAD..refs/heads/${branch}`]).stdout.trim();
       return Number(ahead) > 0;
     } catch {
       // An unreadable worktree is not safe to merge as verified.
@@ -224,11 +310,11 @@ export class WorktreeManager {
     }
   }
 
-  /** Dirty developer state prevents an automatic merge from disturbing the root checkout. */
+  /** Dirty developer state prevents an automatic merge from disturbing the originating checkout. */
   public rootHasChanges(): boolean {
     try {
       return execFileSync("git", ["status", "--porcelain"], {
-        cwd: this.gitRoot,
+        cwd: this.checkoutRoot,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim().length > 0;
@@ -341,17 +427,17 @@ export class WorktreeManager {
       let commitCount = hasCommits ? 1 : 0;
       try {
         const countOut = execFileSync("git", ["rev-list", "--count", `HEAD..${branch}`], {
-          cwd: this.gitRoot,
+          cwd: this.checkoutRoot,
           encoding: "utf-8",
           stdio: ["ignore", "pipe", "ignore"],
         }).trim();
         commitCount = Math.max(commitCount, parseInt(countOut, 10) || 0);
       } catch {}
 
-      // 2. Merge speculative branch into active branch
+      // 2. Merge speculative branch into the active branch of the originating checkout
       if (commitCount > 0) {
         execFileSync("git", ["merge", "--no-ff", branch, "-m", commitMessage], {
-          cwd: this.gitRoot,
+          cwd: this.checkoutRoot,
           encoding: "utf-8",
         });
       }

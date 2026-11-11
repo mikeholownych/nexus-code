@@ -42,3 +42,10 @@
 - 2026-11-05 housekeeping: before removing a worktree, check a detached HEAD is reachable from some ref (otherwise
   removal orphans the commits), and archive dirty trees (binary diff + untracked tarball) first. `git branch -d` also
   refuses branches merged to main but not to their upstream; verify with `git branch --merged main` before `-D`.
+
+- 2026-11-09 (WP-1310/1312 review rounds): Entire flagged my tests twice for the same two habits. Do not prefix test names
+  with review-finding IDs (they mean nothing to later readers; keep the finding-to-fix map in the PR body and
+  FINDINGS.md), and do not write a test that greps a source file for a string (use the type checker or lint for
+  dead code, a behavioural test for behaviour). Also: after `mkdir` on a claim, re-read `owner.json` before editing; a
+  second agent overwrote my PR_446 claim and worked in the same worktree, so check `git status` for foreign edits and
+  `git log origin/<branch>` before every commit and push.

@@ -1,0 +1,281 @@
+/**
+ * `nexus worktree <subcommand>`: one argument parser and dispatcher shared by the CLI command, the `/worktree` slash
+ * command (REPL and sidecar) and the tests. Mutating subcommands are refused in read-only mode here as well as at the
+ * two slash gates, so no entry point can reach them.
+ */
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { redactSecrets } from "../ui.js";
+import { homeDir, listWorktrees, pathOf, removeWorktrees, switchWorktree, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
+import { copyIgnored } from "./copy.js";
+import { generateMergeMessage, DEFAULT_AI_TIMEOUT_MS, type Completer } from "./ai_message.js";
+import { mergeWorktree, parseAge, pruneWorktrees, resolveMergeContext, writesCommitMessage, type MergeContextInfo, type MergeOptions } from "./merge.js";
+import { GitError } from "./git.js";
+import { WorktreePathError } from "./paths.js";
+
+export interface RunContext {
+  cwd: string;
+  home?: string;
+  readOnly?: boolean;
+}
+
+interface Parsed { positionals: string[]; flags: Set<string>; values: Map<string, string> }
+
+interface Spec { booleans: Record<string, string>; values: Record<string, string>; positional: string }
+
+const SPECS: Record<string, Spec> = {
+  switch: { booleans: { "-c": "create", "--create": "create", "--no-copy": "no-copy" }, values: { "--base": "base" }, positional: "<branch>" },
+  "copy-ignored": { booleans: { "--force": "force", "-f": "force", "--dry-run": "dry-run", "--all-ignored": "all-ignored" }, values: { "--from": "from", "--to": "to" }, positional: "" },
+  list: { booleans: { "--json": "json" }, values: { "--limit": "limit" }, positional: "" },
+  remove: { booleans: { "--force": "force", "-f": "force", "--delete-unmerged": "delete-unmerged" }, values: {}, positional: "<branch|path>..." },
+  path: { booleans: {}, values: {}, positional: "<branch|path>" },
+  merge: { booleans: { "--no-squash": "no-squash", "--no-rebase": "no-rebase", "--no-remove": "no-remove", "--no-verify-receipt": "no-verify-receipt", "--ai-message": "ai-message" }, values: { "--message": "message", "-m": "message", "--reason": "reason" }, positional: "[target]" },
+  prune: { booleans: { "--dry-run": "dry-run", "--discard-ignored": "discard-ignored" }, values: { "--min-age": "min-age", "--limit": "limit" }, positional: "" },
+};
+
+const ALIASES: Record<string, string> = { copy: "copy-ignored", ls: "list", rm: "remove", sw: "switch" };
+
+/** Subcommands that only read. Used by the slash gates and by `runWorktreeCommand`. */
+const READ_ONLY = new Set(["list", "path"]);
+/** Subcommands that mutate unless `--dry-run` is given. */
+const READ_ONLY_WITH_DRY_RUN = new Set(["copy-ignored", "prune"]);
+
+/**
+ * The pre-WP-1310 `/worktree` forms, which act on the speculative worktree of the running session (`nexus run
+ * --worktree`): no argument or `status` shows it, a bare `merge` and `discard` resolve it. `status` is never a
+ * named-worktree subcommand (it is not an alias of `list`), and `merge` with arguments is the named merge, so the CLI
+ * and both slash entry points agree.
+ */
+const LEGACY = new Set(["", "status", "merge", "discard"]);
+
+export const WORKTREE_USAGE = "worktree [list|path <branch>|switch [-c] <branch> [--base B] [--no-copy]|remove <branch>... [--force] [--delete-unmerged]|copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]|merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message] [--no-verify-receipt --reason why] [--ai-message]|prune [--dry-run] [--min-age 1d] [--limit N] [--discard-ignored]]";
+
+/** The subcommand a token names, matched case-insensitively (the slash gates lowercase their input; the CLI does not). */
+function canonical(sub: string): string | undefined {
+  const key = sub.toLowerCase();
+  const name = ALIASES[key] ?? key;
+  return SPECS[name] ? name : undefined;
+}
+
+function firstWord(args: string): string {
+  return (args.trim().split(/\s+/)[0] ?? "").toLowerCase();
+}
+
+/** True when `args` (the text after `/worktree`) is one of the legacy speculative-worktree forms. */
+export function isLegacyWorktreeArgs(args: string): boolean {
+  const first = firstWord(args);
+  // A bare `merge` resolves the speculative worktree. `merge <target>` or `merge <flags>` is the named-worktree merge
+  // (`/worktree merge ^` merges into the default branch), so both stay reachable from the slash commands.
+  if (first === "merge") return args.trim().split(/\s+/).length === 1;
+  return LEGACY.has(first);
+}
+
+/**
+ * True when `args` (the text after `/worktree` or `nexus worktree`) only inspects. Empty args are the legacy speculative
+ * `status` form that the slash entry points run (read-only); only the `nexus worktree` command maps no subcommand to `list`.
+ */
+export function isReadOnlyWorktreeArgs(args: string): boolean {
+  const sub = firstWord(args);
+  if (isLegacyWorktreeArgs(sub)) return sub === "" || sub === "status";
+  const name = canonical(sub);
+  if (name === undefined) return false;
+  if (READ_ONLY.has(name)) return true;
+  return READ_ONLY_WITH_DRY_RUN.has(name) && args.trim().split(/\s+/).includes("--dry-run");
+}
+
+function parse(spec: Spec, tokens: string[]): Parsed {
+  const parsed: Parsed = { positionals: [], flags: new Set(), values: new Map() };
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === "--") { parsed.positionals.push(...tokens.slice(i + 1)); break; }
+    if (token.length > 1 && token.startsWith("-")) {
+      if (spec.booleans[token]) parsed.flags.add(spec.booleans[token]);
+      else if (spec.values[token]) {
+        const value = tokens[++i];
+        if (value === undefined) throw new WorktreeError(`${token} needs a value`);
+        parsed.values.set(spec.values[token], value);
+      } else throw new WorktreeError(`unknown option ${redactSecrets(token).slice(0, 40)}`);
+      continue;
+    }
+    parsed.positionals.push(token);
+  }
+  return parsed;
+}
+
+/** Runs one worktree command. Never throws: failures come back as `success: false` with a redacted message. */
+export function runWorktreeCommand(tokens: string[], run: RunContext): CommandResult {
+  const ctx: WorktreeContext = { cwd: run.cwd, home: run.home ?? homeDir(), readOnly: Boolean(run.readOnly) };
+  try {
+    const first = tokens[0] && !tokens[0].startsWith("-") ? tokens[0] : "list";
+    const rest = first === tokens[0] ? tokens.slice(1) : tokens;
+    const name = canonical(first);
+    if (!name) throw new WorktreeError(`unknown subcommand '${redactSecrets(first).slice(0, 40)}'. Usage: ${WORKTREE_USAGE}`);
+    const parsed = parse(SPECS[name], rest);
+    if (ctx.readOnly && !READ_ONLY.has(name) && !(READ_ONLY_WITH_DRY_RUN.has(name) && parsed.flags.has("dry-run"))) {
+      throw new WorktreeError(`read-only mode: 'worktree ${name}' changes the repository and is refused`);
+    }
+    switch (name) {
+      case "switch": {
+        if (parsed.positionals.length !== 1) throw new WorktreeError("usage: worktree switch [-c] <branch> [--base B]");
+        const switched = switchWorktree(ctx, parsed.positionals[0], { create: parsed.flags.has("create"), base: parsed.values.get("base") });
+        const made = switched.data as { created?: boolean; path?: string } | undefined;
+        if (switched.success && made?.created && !parsed.flags.has("no-copy") && made.path) {
+          // Sharing build caches is a convenience: a failure here never undoes or fails the switch, but it is said.
+          try {
+            const copied = copyIgnored(ctx, { to: made.path });
+            const data = copied.data as { copied?: number } | undefined;
+            if (!copied.success) switched.output += `\nwarning: ignored files were not copied: ${copied.output}`;
+            else if (data?.copied) switched.output += `\n${copied.output}`;
+          } catch (err) {
+            switched.output += `\nwarning: copying ignored files failed: ${redactSecrets((err as Error).message).slice(0, 200)}`;
+          }
+        }
+        return switched;
+      }
+      case "copy-ignored": {
+        if (parsed.positionals.length) throw new WorktreeError("usage: worktree copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]");
+        return copyIgnored(ctx, {
+          from: parsed.values.get("from"), to: parsed.values.get("to"), force: parsed.flags.has("force"),
+          dryRun: parsed.flags.has("dry-run"), allIgnored: parsed.flags.has("all-ignored"),
+        });
+      }
+      case "list": {
+        if (parsed.positionals.length) throw new WorktreeError("usage: worktree list [--json] [--limit N]");
+        const limit = parsed.values.get("limit");
+        if (limit !== undefined && !/^[1-9]\d{0,5}$/.test(limit)) throw new WorktreeError("--limit must be a positive integer");
+        return listWorktrees(ctx, { json: parsed.flags.has("json"), limit: limit ? Number(limit) : undefined });
+      }
+      case "path": {
+        if (parsed.positionals.length !== 1) throw new WorktreeError("usage: worktree path <branch|path>");
+        return pathOf(ctx, parsed.positionals[0]);
+      }
+      case "merge": {
+        if (parsed.positionals.length > 1) throw new WorktreeError("usage: worktree merge [target] [--no-squash] [--no-rebase] [--no-remove] [-m message] [--ai-message] [--no-verify-receipt --reason why]");
+        return mergeWorktree(ctx, mergeOptionsFrom(parsed));
+      }
+      case "prune": {
+        if (parsed.positionals.length) throw new WorktreeError("usage: worktree prune [--dry-run] [--min-age 1d] [--limit N] [--discard-ignored]");
+        const limit = parsed.values.get("limit");
+        if (limit !== undefined && !/^[1-9]\d{0,5}$/.test(limit)) throw new WorktreeError("--limit must be a positive integer");
+        const age = parsed.values.get("min-age");
+        return pruneWorktrees(ctx, {
+          dryRun: parsed.flags.has("dry-run"), discardIgnored: parsed.flags.has("discard-ignored"),
+          minAgeMs: age === undefined ? undefined : parseAge(age), limit: limit ? Number(limit) : undefined,
+        });
+      }
+      case "remove":
+        return removeWorktrees(ctx, parsed.positionals, { force: parsed.flags.has("force"), deleteUnmerged: parsed.flags.has("delete-unmerged") });
+    }
+    throw new WorktreeError("unreachable");
+  } catch (err) {
+    return formatCommandError(err);
+  }
+}
+
+function mergeOptionsFrom(parsed: Parsed): MergeOptions {
+  return {
+    target: parsed.positionals[0],
+    noSquash: parsed.flags.has("no-squash"),
+    noRebase: parsed.flags.has("no-rebase"),
+    noRemove: parsed.flags.has("no-remove"),
+    message: parsed.values.get("message"),
+    noVerifyReceipt: parsed.flags.has("no-verify-receipt"),
+    reason: parsed.values.get("reason"),
+  };
+}
+
+function formatCommandError(err: unknown): CommandResult {
+  if (err instanceof WorktreeError || err instanceof WorktreePathError || err instanceof GitError) {
+    return { success: false, output: redactSecrets(err.message) };
+  }
+  return { success: false, output: redactSecrets((err as Error)?.message ?? String(err)).slice(0, 400) };
+}
+
+/** Split the text after the command name into tokens, preserving single- and double-quoted strings. */
+export function tokenizeWorktreeArgs(args: string): string[] {
+  const tokens: string[] = [];
+  const regex = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(args)) !== null) {
+    if (match[1] !== undefined) {
+      tokens.push(match[1].replace(/\\(["\\])/g, "$1"));
+    } else if (match[2] !== undefined) {
+      tokens.push(match[2].replace(/\\(['\\])/g, "$1"));
+    } else if (match[3] !== undefined) {
+      tokens.push(match[3]);
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Where an interactive session standing in a worktree that a command just removed should move to: the worktree of the
+ * branch the work was merged into. Undefined when nothing was removed or the session is elsewhere.
+ */
+export function relocationAfter(result: CommandResult, cwd: string): string | undefined {
+  const data = result.data as { removedPath?: string; targetPath?: string } | undefined;
+  if (!result.success || !data?.removedPath || !data.targetPath) return undefined;
+  const removed = data.removedPath;
+  const inside = (candidate: string) => candidate === removed || candidate.startsWith(removed + path.sep);
+  return inside(cwd) || inside(canonicalAfterRemoval(cwd)) ? data.targetPath : undefined;
+}
+
+/** `realpath` for a path whose tail may be gone: resolves links (also dangling ones) and the deepest existing ancestor. */
+function canonicalAfterRemoval(file: string, depth = 0): string {
+  const absolute = path.resolve(file);
+  try {
+    return fs.realpathSync(absolute);
+  } catch {
+    if (depth > 20) return absolute;
+    try {
+      if (fs.lstatSync(absolute).isSymbolicLink()) return canonicalAfterRemoval(path.resolve(path.dirname(absolute), fs.readlinkSync(absolute)), depth + 1);
+    } catch { /* not there at all */ }
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(canonicalAfterRemoval(parent, depth + 1), path.basename(absolute));
+  }
+}
+
+export interface AsyncDeps {
+  /** Asks the configured model; absent when no provider is available. */
+  completer?: Completer;
+  aiTimeoutMs?: number;
+  /** An operator cancel (Ctrl-C) while the model is being asked: the merge does not start. */
+  signal?: AbortSignal;
+}
+
+/** Like `runWorktreeCommand`, plus the opt-in `merge --ai-message`. Read-only mode never reaches the model. */
+export async function runWorktreeCommandAsync(tokens: string[], run: RunContext, deps: AsyncDeps = {}): Promise<CommandResult> {
+  const name = tokens[0] ? canonical(tokens[0]) : undefined;
+  if (name !== "merge" || run.readOnly) return runWorktreeCommand(tokens, run);
+  let parsed: Parsed;
+  try { parsed = parse(SPECS.merge, tokens.slice(1)); } catch { return runWorktreeCommand(tokens, run); }
+  if (!parsed.flags.has("ai-message") || parsed.values.has("message")) return runWorktreeCommand(tokens, run); // an explicit message wins
+  if (parsed.positionals.length > 1) return runWorktreeCommand(tokens, run); // the one place that owns the merge usage
+  const ctx: WorktreeContext = { cwd: run.cwd, home: run.home ?? homeDir(), readOnly: false };
+
+  const mergeOptions = mergeOptionsFrom(parsed);
+  let mctx: MergeContextInfo;
+  try {
+    mctx = resolveMergeContext(ctx, mergeOptions);
+  } catch (err) {
+    return formatCommandError(err);
+  }
+
+  const aiOptions: MergeOptions = { ...mergeOptions, amendSingleCommit: true };
+  if (!writesCommitMessage(mctx, aiOptions)) {
+    return runWorktreeCommand(tokens, run); // nothing to describe: the ordinary path
+  }
+
+  if (deps.signal?.aborted) return { success: false, output: "Cancelled before the model was asked: nothing was merged, committed or removed." };
+  const generated = await generateMergeMessage(mctx, deps.completer, deps.aiTimeoutMs ?? DEFAULT_AI_TIMEOUT_MS, deps.signal, mergeOptions);
+
+  if (deps.signal?.aborted) return { success: false, output: "Cancelled while the model was being asked: nothing was merged, committed or removed." };
+
+  try {
+    const options: MergeOptions = { ...aiOptions, target: mctx.targetName, expectedState: { branch: mctx.branch, head: mctx.gateState.head, tree: mctx.gateState.tree }, ...(generated.message ? { message: generated.message } : {}) };
+    const result = mergeWorktree(ctx, options);
+    return { ...result, output: `${generated.note}\n${result.output}` };
+  } catch (err) {
+    return formatCommandError(err);
+  }
+}

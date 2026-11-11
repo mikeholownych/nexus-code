@@ -20,7 +20,7 @@ import {
 } from "./candidate.js";
 import { AuthorityAdmissionEngine } from "./authority.js";
 import { WorktreeManager } from "../worktree.js";
-import { isManagedWorktreePath, redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
+import { isManagedWorktreePath, isNamedWorktreePath, redactForPersistence, redactTaskStateForPersistence } from "./persistence_protection.js";
 import type { ObjectiveLedger } from "./objective.js";
 import { WorkspacePath } from "./workspace_path.js";
 import { writeFileDurably, writePrivateFile, appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, fsyncDirectoryDurably } from "./durable_file.js";
@@ -28,8 +28,8 @@ import { protectArchivedMessages } from "./persistence_protection.js";
 import { updateTaskMessages, readTaskMessages, TaskMessageLogError, type TaskMessageCursor } from "./task_message_log.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
 
-import { CURRENT_STATE_SCHEMA_VERSION } from "./state_schema.js";
-export { CURRENT_STATE_SCHEMA_VERSION } from "./state_schema.js";
+import { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION, normalizeWorktreeBinding } from "./state_schema.js";
+export { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION } from "./state_schema.js";
 
 interface StoredTaskRecord {
   filePath: string;
@@ -85,6 +85,13 @@ export interface DurableWorktreeBinding {
   worktreePath: string;
   branch: string;
   createdAt: string;
+  /**
+   * "task": the ephemeral `nexus/<taskId>` worktree of `--worktree`. "named": a user-named worktree from
+   * `--worktree-branch`, validated against Git's worktree list and the registry. Absent in records written before
+   * this field existed; loading migrates those to "task".
+   */
+  kind?: "task" | "named";
+  bindingVersion?: number;
 }
 
 export interface DurableCognitiveRouting {
@@ -114,6 +121,8 @@ export interface DurableTaskState {
   workspacePath: string;
   workspace: string; // Compatibility alias for workspacePath
   model?: string;
+  /** The inference endpoint the model was chosen on (a resume without --model adopts the model only on the same one). */
+  endpoint?: string;
   createdAt: string;
   updatedAt: string;
   status: TaskLifecycleStatus;
@@ -239,8 +248,10 @@ export class CorruptStateError extends TaskStateError {
 export class UnsupportedSchemaVersionError extends TaskStateError {
   public readonly version: number;
   public readonly maxSupported: number;
-  constructor(version: number, maxSupported: number = CURRENT_STATE_SCHEMA_VERSION) {
-    super(`State was created by a newer Nexus (schema ${version}); upgrade to load this state. (Highest supported version is ${maxSupported})`);
+  constructor(version: number, maxSupported: number = CURRENT_STATE_SCHEMA_VERSION, kind: "schema" | "binding" = "schema") {
+    super(kind === "binding"
+      ? `Worktree binding was created by a newer Nexus (binding version ${version}); upgrade to load this state. (Highest supported binding version is ${maxSupported})`
+      : `State was created by a newer Nexus (schema ${version}); upgrade to load this state. (Highest supported version is ${maxSupported})`);
     this.name = "UnsupportedSchemaVersionError";
     this.version = version;
     this.maxSupported = maxSupported;
@@ -523,11 +534,11 @@ export class DurableStateManager {
    * Atomically saves task state to disk using write-to-temp and atomic rename.
    * Prevents partially written or corrupted state from being seen on disk (PERS-001, PERS-003).
    */
-  public saveTaskState(state: DurableTaskState, workspacePaths: WorkspacePath[] = this.workspacePaths): void {
-    withStateStoreGuard(this.baseDir, () => this.saveTaskStateLocked(state, workspacePaths));
+  public saveTaskState(state: DurableTaskState, workspacePaths: WorkspacePath[] = this.workspacePaths, options: { historical?: boolean } = {}): void {
+    withStateStoreGuard(this.baseDir, () => this.saveTaskStateLocked(state, workspacePaths, options));
   }
 
-  private saveTaskStateLocked(state: DurableTaskState, workspacePaths: WorkspacePath[]): DurableTaskState {
+  private saveTaskStateLocked(state: DurableTaskState, workspacePaths: WorkspacePath[], options: { historical?: boolean } = {}): DurableTaskState {
     if (!state.taskId) {
       throw new TaskStateWriteError("unknown", "Missing required taskId");
     }
@@ -535,6 +546,12 @@ export class DurableStateManager {
       throw new TaskStateWriteError("unknown", "Invalid state schema version");
     }
 
+    if (state.worktreeBinding) {
+      // The same rules as loadTaskState applies (state_schema.ts), so a record this build writes is one it can read.
+      const problem = normalizeWorktreeBinding(state.worktreeBinding);
+      if (problem?.problem === "unsupported") throw new UnsupportedSchemaVersionError(problem.version, WORKTREE_BINDING_VERSION, "binding");
+      if (problem) throw new TaskStateWriteError(state.taskId, problem.reason);
+    }
     state.updatedAt = new Date().toISOString();
     if (state.schemaVersion > CURRENT_STATE_SCHEMA_VERSION) throw new UnsupportedSchemaVersionError(state.schemaVersion);
     state.schemaVersion = CURRENT_STATE_SCHEMA_VERSION;
@@ -548,7 +565,7 @@ export class DurableStateManager {
     let changedIdentityFields: string[] = [];
     try {
       const authorizedPaths = this.authorizeWorkspacePaths(workspacePaths);
-      protectedState = redactTaskStateForPersistence(state, authorizedPaths);
+      protectedState = redactTaskStateForPersistence(state, authorizedPaths, options);
       protectionPhase = "identity validation";
       changedIdentityFields = (["taskId", "sessionId", "id", "workspacePath"] as const).filter(
         (field) => protectedState[field] !== state[field]
@@ -620,6 +637,7 @@ export class DurableStateManager {
     // Schema version check (fails closed on unsupported future versions) is performed before reading any messages.
     // Migrate legacy session file if necessary with pre-migration backup; publication below creates the backup first.
     const state: DurableTaskState = this.migrateIfLegacy(record.parsed, taskId);
+    this.normalizeWorktreeBinding(state, taskId, record);
 
     // Verify task identity binding
     if (state.taskId && taskId && state.taskId !== taskId && state.sessionId !== taskId) {
@@ -644,7 +662,7 @@ export class DurableStateManager {
           state.taskId !== taskId ||
           bindingPath !== normActual ||
           !binding ||
-          !isManagedWorktreePath(expectedIdentity, normActual, taskId, binding)
+          !(isManagedWorktreePath(expectedIdentity, normActual, taskId, binding) || isNamedWorktreePath(expectedIdentity, normActual, binding))
         ) {
           throw new WorkspaceIdentityMismatchError(normExpected, normActual);
         }
@@ -662,7 +680,7 @@ export class DurableStateManager {
     if (!protectOnLoad) return state;
     try {
       selectedPaths = this.authorizeWorkspacePaths(selectedPaths);
-      const protectedState = redactTaskStateForPersistence(state, selectedPaths);
+      const protectedState = redactTaskStateForPersistence(state, selectedPaths, { historical: true });
       const changedIdentityFields: string[] = (["taskId", "sessionId", "id", "workspacePath"] as const).filter(
         (field) => protectedState[field] !== state[field]
       );
@@ -674,7 +692,7 @@ export class DurableStateManager {
       }
       if (record.version < CURRENT_STATE_SCHEMA_VERSION || normalizedLegacyWorkspace || JSON.stringify(protectedState) !== JSON.stringify(state)) {
         // Migrate older plaintext state on disk before reporting a successful load.
-        this.saveTaskState(protectedState, selectedPaths);
+        this.saveTaskState(protectedState, selectedPaths, { historical: true });
         return protectedState;
       }
     } catch (error) {
@@ -988,7 +1006,9 @@ export class DurableStateManager {
     // Live execution is governed strictly by current runtime configuration.
 
     // 6. Persist the reconciled state atomically
-    this.saveTaskState(state, recoveryWorkspacePaths);
+    // A recovered record may describe a worktree that has since been removed (an inactive binding): persisting the
+    // reconciled state must not require that worktree to still be registered.
+    this.saveTaskState(state, recoveryWorkspacePaths, { historical: true });
 
     return {
       success: true,
@@ -1115,6 +1135,18 @@ export class DurableStateManager {
     } catch {
       return filePath;
     }
+  }
+
+  /**
+   * Migrates and validates the worktree binding with the shared rules in state_schema.ts: records without `kind` are
+   * task bindings (version 1); corruption quarantines the file; a newer binding version fails closed.
+   */
+  private normalizeWorktreeBinding(state: DurableTaskState, taskId: string, record: StoredTaskRecord): void {
+    if (!state.worktreeBinding) return;
+    const problem = normalizeWorktreeBinding(state.worktreeBinding);
+    if (!problem) return;
+    if (problem.problem === "unsupported") throw new UnsupportedSchemaVersionError(problem.version, WORKTREE_BINDING_VERSION, "binding");
+    throw new CorruptStateError(taskId, problem.reason, this.quarantineFile(record.filePath));
   }
 
   /**

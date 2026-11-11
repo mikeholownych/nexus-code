@@ -11,6 +11,7 @@ import { BANG, SLASH_COMMANDS, SlashHost, SlashOutcome, SlashReply, findSlash, s
 import { hasHandler, routeSlash } from "../src/slash/router.js";
 import { receiptSections } from "../src/evidence.js";
 import { makeHome, makeRepo } from "./helpers/fixtures.js";
+import { relocationAfter, runWorktreeCommand } from "../src/worktrunk/command.js";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -317,6 +318,80 @@ describe("slash router: workspace commands", () => {
       assert.match((await reply("worktree")).output, /^No speculative worktrees/);
       assert.equal((await reply("worktree", "merge")).output, "No active speculative worktree to merge.");
       assert.equal((await reply("audit")).output, "No audit records yet.");
+    });
+  });
+
+  test("worktree runs the named-worktree commands and keeps the legacy forms", async () => {
+    await withRig(async ({ reply, repo }) => {
+      const made = await reply("worktree", "switch -c feature/slash");
+      assert.equal(made.success, true, made.output);
+      assert.ok(fs.existsSync(path.join(repo, ".nexus", "worktrees", "feature-slash")));
+      assert.match((await reply("worktree", "list")).output, /feature\/slash/);
+      assert.equal((await reply("worktree", "bogus")).success, false);
+      // mixed case reaches the named command set; `status` in any case stays the legacy speculative view
+      assert.match((await reply("worktree", "List")).output, /feature\/slash/);
+      assert.match((await reply("worktree", "STATUS")).output, /^(• |No speculative worktrees)/); // legacy bullet view, not the named table
+      assert.equal((await reply("worktree", "remove feature/slash")).success, true);
+      assert.match((await reply("worktree")).output, /^No speculative worktrees/);
+    });
+  });
+
+  test("worktree merge with a target reaches the named merge; a bare merge stays the speculative one", async () => {
+    await withRig(async ({ reply, repo, host }) => {
+      assert.equal((await reply("worktree", "switch -c feature/slash-merge --no-copy")).success, true);
+      const dir = path.join(repo, ".nexus", "worktrees", "feature-slash-merge");
+      fs.writeFileSync(path.join(dir, "named.txt"), "named\n");
+      execSync("git add named.txt && git commit -q -m named", { cwd: dir });
+      host.setWorkspace(dir);
+      assert.equal((await reply("worktree", "merge")).output, "No active speculative worktree to merge.");
+      // the receipt gate (WP-1316) has its own tests; these merges are about routing and the session move, so they use the documented waiver
+      const merged = await reply("worktree", "merge ^ --no-verify-receipt --reason slash-router-fixture");
+      assert.equal(merged.success, true, merged.output);
+      assert.match(merged.output, /Fast-forwarded/);
+      assert.ok(fs.existsSync(path.join(repo, "named.txt")));
+      assert.equal(fs.existsSync(dir), false);
+      assert.equal(fs.realpathSync(host.app.getConfig().workspace), fs.realpathSync(repo), "the session is moved out of the removed worktree");
+      for (const identity of (host.app.getAgent().stateManager as any).workspacePaths) identity.assertCurrent(); // durable state stays usable
+    });
+  });
+
+  test("worktree merge --ai-message with an already-aborted command signal merges nothing", async () => {
+    await withRig(async ({ reply, repo, host }) => {
+      assert.equal((await reply("worktree", "switch -c feature/slash-cancel --no-copy")).success, true);
+      const dir = path.join(repo, ".nexus", "worktrees", "feature-slash-cancel");
+      fs.writeFileSync(path.join(dir, "cancel.txt"), "x\n");
+      execSync("git add cancel.txt && git commit -q -m cancel", { cwd: dir });
+      host.setWorkspace(dir);
+      const before = execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf8" }).trim();
+      const cancelled = new AbortController();
+      cancelled.abort(); // aborted before the model is asked
+      const out = await routeSlash(host, "worktree", "merge ^ --ai-message --no-verify-receipt --reason slash-cancel-fixture", cancelled.signal);
+      assert.equal(out.kind, "reply");
+      assert.equal((out as SlashReply).success, false, (out as SlashReply).output);
+      assert.match((out as SlashReply).output, /Cancelled/);
+      assert.equal(execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf8" }).trim(), before, "nothing was merged");
+      assert.ok(fs.existsSync(dir), "the worktree was not removed");
+    });
+  });
+
+  test("an agent that started inside a worktree can be moved out of it after the worktree is merged away, with its durable state still valid", async () => {
+    await withRig(async ({ reply, repo }) => {
+      assert.equal((await reply("worktree", "switch -c feature/started-inside --no-copy")).success, true);
+      const dir = path.join(repo, ".nexus", "worktrees", "feature-started-inside");
+      fs.writeFileSync(path.join(dir, "inside.txt"), "x\n");
+      execSync("git add inside.txt && git commit -q -m inside", { cwd: dir });
+      const inside = new ApplicationCore({ endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 4, temperature: 0, workspace: dir, shell: "bash" } as any);
+      try {
+        const merged = runWorktreeCommand(["merge", "--no-verify-receipt", "--reason", "agent move fixture"], { cwd: dir, readOnly: false });
+        assert.equal(merged.success, true, merged.output);
+        assert.equal(fs.existsSync(dir), false);
+        const moveTo = relocationAfter(merged, dir);
+        assert.ok(moveTo, "the merge says where to move");
+        inside.getAgent().setWorkspace(moveTo!);
+        for (const identity of (inside.getAgent().stateManager as any).workspacePaths) identity.assertCurrent();
+      } finally {
+        inside.shutdown();
+      }
     });
   });
 

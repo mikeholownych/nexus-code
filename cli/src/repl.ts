@@ -1,9 +1,11 @@
+import { isLegacyWorktreeArgs, isReadOnlyWorktreeArgs, relocationAfter, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "./worktrunk/command.js";
+import { providerCompleter } from "./worktrunk/provider.js";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import pc from "picocolors";
 import { AutonomousAgent } from "./agent.js";
 import { withDurableSync } from "./core/durable_file.js";
@@ -12,7 +14,8 @@ import { LocalLlmClient } from "./client.js";
 import { HarnessConfig, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { isNexusDirPermissive } from "./doctor.js";
-import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges, workspaceStatus } from "./git.js";
+import { surfaceFacts } from "./surface_facts.js";
+import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges, trustedGitArgs, workspaceStatus } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import { formatDiagnosticForOutput } from "./ui.js";
 import {
@@ -20,7 +23,6 @@ import {
   redactForPersistence,
   writeProtectedTextFile,
 } from "./core/persistence_protection.js";
-import { CheckpointManager } from "./checkpoint.js";
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
 import { PolicyContext } from "./core/approval_policy.js";
@@ -34,6 +36,7 @@ import { HunkStager } from "./stager.js";
 import { TurnResult, lifecycleStatusForTurn } from "./core/turn.js";
 import { buildSessionExport } from "./session_export.js";
 import { SensitivePersistenceError } from "./core/persistence_protection.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 interface PatchHunk {
   header: string;
@@ -93,7 +96,7 @@ export function replReadOnlyAllowed(command: string, args: string): boolean {
     return true;
   }
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
-  if (name === "worktree") return !value || value === "status";
+  if (name === "worktree") return isReadOnlyWorktreeArgs(value);
   if (name === "plan" || name === "knowledge") {
     return !value || value === "list" || value === "show" || value === "get";
   }
@@ -113,12 +116,13 @@ export class InteractiveRepl {
   private historyFile: string;
   private history: string[] = [];
   private sessionManager: SessionManager;
-  private checkpointManager: CheckpointManager;
   private currentSessionId: string;
   private themeManager: ThemeManager = new ThemeManager();
   private exitResolve?: () => void;
   /** Cancels a running /team operation (Ctrl-C). */
   private teamAbort?: AbortController;
+  /** Set while `/worktree merge --ai-message` awaits the model: Ctrl-C cancels it instead of ending the session. */
+  private worktreeAbort?: AbortController;
 
   constructor(appOrConfig: ApplicationCore | HarnessConfig, modeOrAutoApprove?: ApprovalMode | boolean, resumeSessionId?: string) {
     if ("getAgent" in appOrConfig && typeof (appOrConfig as any).getAgent === "function") {
@@ -126,13 +130,11 @@ export class InteractiveRepl {
       this.config = this.app.getConfig();
       this.agent = this.app.getAgent();
       this.sessionManager = this.app.getSessionManager();
-      this.checkpointManager = this.app.getCheckpointManager();
     } else {
       this.config = appOrConfig as HarnessConfig;
       this.app = new ApplicationCore(this.config);
       this.agent = this.app.getAgent();
       this.sessionManager = this.app.getSessionManager();
-      this.checkpointManager = this.app.getCheckpointManager();
     }
     if (typeof modeOrAutoApprove === "string") {
       this.approvalMode = modeOrAutoApprove;
@@ -159,7 +161,6 @@ export class InteractiveRepl {
           if (sess.workspace && fs.existsSync(sess.workspace)) {
             this.config.workspace = sess.workspace;
             this.agent.setWorkspace(sess.workspace);
-            this.checkpointManager = new CheckpointManager(sess.workspace);
           }
           const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
           if (archiveNotice) console.log(pc.yellow(archiveNotice));
@@ -167,10 +168,12 @@ export class InteractiveRepl {
         } else {
           console.log(pc.red(`Session not found: ${resumeSessionId}\n`));
           this.currentSessionId = this.sessionManager.generateSessionId();
+          void this.agent.detectPlaceholderModel();
         }
       } catch (err: any) {
         console.log(pc.red(`Failed to restore session ${resumeSessionId}: ${formatDiagnosticForOutput(err)}\n`));
         this.currentSessionId = this.sessionManager.generateSessionId();
+        void this.agent.detectPlaceholderModel();
       }
     } else {
       this.currentSessionId = this.sessionManager.generateSessionId();
@@ -208,6 +211,7 @@ export class InteractiveRepl {
 
   /** Ask before a turn when a rollback checkpoint would persist sensitive workspace content. */
   private async prepareTurnCheckpoint(name: string): Promise<boolean> {
+    this.agent.enterNamedWorktreeBeforeTurn(); // the snapshot is of the worktree the turn edits
     if (this.config.readOnly) {
       this.agent.setCheckpointReadOnlyFallback(false);
       return true;
@@ -216,7 +220,7 @@ export class InteractiveRepl {
     let allowSensitive = false;
     while (true) {
       try {
-        this.checkpointManager.createCheckpoint(name, allowSensitive ? { allowSensitive: true } : undefined);
+        this.app.getCheckpointManager().createCheckpoint(name, allowSensitive ? { allowSensitive: true } : undefined);
         this.agent.setCheckpointReadOnlyFallback(false);
         return true;
       } catch (error) {
@@ -288,6 +292,7 @@ export class InteractiveRepl {
       updatedAt: new Date().toISOString(),
       workspace: this.config.workspace,
       model: this.config.model,
+      endpoint: persistableEndpoint(this.config.endpoint),
       messages,
       unverifiedChangesPending: this.agent.hasUnverifiedChanges(),
       tokenStats: this.agent.getTokenStats(),
@@ -360,15 +365,20 @@ export class InteractiveRepl {
       ? pc.cyan(` [git: ${pc.bold(gitInfo.formattedBadge)}]`)
       : "";
 
+    const facts = surfaceFacts(this.app, this.currentSessionId);
     const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
     const sandboxStatus = this.config.sandbox ? (typeof this.config.sandbox === "string" ? this.config.sandbox : "on") : "off";
     const trustStatus = trusted ? "trusted" : "untrusted (nexus trust .)";
-    console.log(pc.dim(`mode: ${this.approvalMode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
+    console.log(pc.dim(`mode: ${facts.mode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
 
     console.log(`${pc.bold(pc.cyan("WORKSPACE"))}  ${pc.white(wsName)}${gitBadge}  ${pc.dim(this.config.workspace)}`);
-    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(this.config.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
-    if (verbose) console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint}  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
-    console.log(`${pc.dim(`session ${this.currentSessionId} · ${this.agent.getHistoryCount()} messages · ${this.config.shell}`)}\n`);
+    console.log(`${pc.bold(pc.cyan("MODEL"))}      ${pc.green(verbose ? facts.model : this.config.model)}  ${pc.dim(`· ${this.approvalMode === "auto" ? "autonomous" : this.approvalMode === "read-only" ? "read-only" : "review mode"}`)}`);
+    if (verbose) {
+      console.log(`${pc.bold(pc.cyan("RUNTIME"))}   ${this.config.endpoint} (${facts.endpoint_kind})  ·  ${this.config.shell}  ·  ${this.agent.getHistoryCount()} messages`);
+      console.log(`${pc.bold(pc.cyan("READ-ONLY"))}  ${facts.read_only ? "yes" : "no"}`);
+      console.log(`${pc.bold(pc.cyan("CONTEXT"))}    ${facts.context_tokens} of ${facts.context_limit} tokens`);
+    }
+    console.log(`${pc.dim(`session ${facts.session} · ${this.agent.getHistoryCount()} messages · ${this.config.shell}`)}\n`);
   }
 
   private printHelp(): void {
@@ -382,7 +392,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/mode [auto|review]"))} Toggle autonomous execution vs human review approval`);
     console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
     console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
-    console.log(`  ${pc.bold(pc.yellow("/worktree [status|merge|discard]"))} Manage isolated ephemeral git worktrees`);
+    console.log(`  ${pc.bold(pc.yellow("/worktree [status|discard|list|path|switch|remove|copy-ignored|prune|merge [<target>]]"))} Manage isolated ephemeral and named git worktrees (a bare merge is the speculative one)`);
     console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         [experimental] Execute strict RED-GREEN-REFACTOR TDD cycle`);
     console.log(`  ${pc.bold(pc.yellow("/knowledge [set|del]"))} Manage persistent project knowledge graph`);
     console.log(`  ${pc.bold(pc.yellow("/browse <url>"))}        Verify URL in headless browser driver`);
@@ -707,6 +717,11 @@ export class InteractiveRepl {
     // cancellation (no new inference or tool dispatch is admitted); a second press terminates the process.
     // While idle it keeps its deliberate-exit meaning.
     this.rl.on("SIGINT", () => {
+      if (this.worktreeAbort && !this.worktreeAbort.signal.aborted) {
+        this.worktreeAbort.abort();
+        console.log(pc.yellow("\n⏹  Cancel requested: the merge stops before it changes anything."));
+        return;
+      }
       if (this.teamAbort && !this.teamAbort.signal.aborted) {
         this.teamAbort.abort();
         console.log(pc.yellow("\n⏹  Stop requested: the team operation is cancelled after its current step; its state is preserved."));
@@ -730,7 +745,10 @@ export class InteractiveRepl {
     });
 
     // Populate /model completion from the endpoint's real model list (best effort, never blocks the prompt).
-    new LocalLlmClient(this.config).listModels().then((models) => { this.knownModels = models; }).catch(() => {});
+    // Not inside the provider window a resume restored (a later `/model` still lists them on request).
+    if (!this.agent.isProviderWindowOpen()) {
+      new LocalLlmClient(this.config).listModels().then((models) => { this.knownModels = models; }).catch(() => {});
+    }
 
     this.agent.getSkillManager().startWatcher((skills) => {
       console.log(pc.dim(`\n🔄 [Hot-Reload] Skills library updated (${skills.length} available).`));
@@ -1004,11 +1022,11 @@ export class InteractiveRepl {
           } else if (cmd === "diff") {
             const git = getGitInfo(this.config.workspace);
             if (!git.isRepo) {
-              console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+              console.log(pc.yellow(`${git.refusal ?? "Current workspace is not inside a git repository."}\n`));
               continue;
             }
             try {
-              const diffOut = execSync("git diff", {
+              const diffOut = execFileSync("git", [...trustedGitArgs(this.config.workspace), "diff"], {
                 cwd: this.config.workspace,
                 encoding: "utf-8",
                 stdio: ["pipe", "pipe", "pipe"],
@@ -1060,6 +1078,23 @@ export class InteractiveRepl {
                 }
                 console.log(pc.dim("Use '/stage reset' to unstage, or '/commit' to create a commit.\n"));
               }
+            }
+            continue;
+          } else if (cmd === "worktree" && !isLegacyWorktreeArgs(arg)) {
+            this.worktreeAbort = new AbortController();
+            let result: Awaited<ReturnType<typeof runWorktreeCommandAsync>>;
+            try {
+              result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(arg), { cwd: this.config.workspace, readOnly: Boolean(this.config.readOnly) || this.agent.getApprovalMode() === "read-only" }, { completer: providerCompleter(this.config), signal: this.worktreeAbort.signal });
+            } finally {
+              this.worktreeAbort = undefined;
+            }
+            console.log((result.success ? result.output : pc.red(result.output)) + "\n");
+            // A merge removes the worktree the session may be standing in: move it to the branch it was merged into.
+            const moveTo = relocationAfter(result, this.config.workspace);
+            if (moveTo) {
+              this.config.workspace = moveTo;
+              this.agent.setWorkspace(moveTo);
+              console.log(pc.green(`✔ Workspace changed to ${moveTo}\n`));
             }
             continue;
           } else if (cmd === "worktree") {
@@ -1211,7 +1246,7 @@ export class InteractiveRepl {
           } else if (cmd === "git") {
             const git = getGitInfo(this.config.workspace);
             if (!git.isRepo) {
-              console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+              console.log(pc.yellow(`${git.refusal ?? "Current workspace is not inside a git repository."}\n`));
               continue;
             }
             try {
@@ -1227,7 +1262,7 @@ export class InteractiveRepl {
           } else if (cmd === "commit") {
             const git = getGitInfo(this.config.workspace);
             if (!git.isRepo) {
-              console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+              console.log(pc.yellow(`${git.refusal ?? "Current workspace is not inside a git repository."}\n`));
               continue;
             }
             if (git.dirtyCount === 0) {
@@ -1499,11 +1534,11 @@ export class InteractiveRepl {
             if (subArg === "diff") {
               const git = getGitInfo(this.config.workspace);
               if (!git.isRepo) {
-                console.log(pc.yellow("Current workspace is not inside a git repository.\n"));
+                console.log(pc.yellow(`${git.refusal ?? "Current workspace is not inside a git repository."}\n`));
                 continue;
               }
               try {
-                const diffOut = execSync("git diff", {
+                const diffOut = execFileSync("git", [...trustedGitArgs(this.config.workspace), "diff"], {
                   cwd: this.config.workspace,
                   encoding: "utf-8",
                   stdio: ["pipe", "pipe", "pipe"],
@@ -1780,7 +1815,7 @@ export class InteractiveRepl {
                 console.log("Usage: /checkpoint diff <checkpoint_id> [base_checkpoint_id]\n");
               } else {
                 const baseId = subArgs[2];
-                const res = this.checkpointManager.getDiff(cpId, baseId);
+                const res = this.app.getCheckpointManager().getDiff(cpId, baseId);
                 if (res.success) {
                   console.log(pc.bold(pc.white(`\nCheckpoint Diff (${cpId}${baseId ? ` vs ${baseId}` : " vs current"}):`)));
                   this.agent.getUi().renderDiff(res.diff);
@@ -1790,16 +1825,20 @@ export class InteractiveRepl {
               }
             } else if (subCmd === "prune") {
               const keepCount = subArgs[1] ? parseInt(subArgs[1], 10) : 20;
-              const res = this.checkpointManager.pruneCheckpoints(keepCount);
+              const res = this.app.getCheckpointManager().pruneCheckpoints(keepCount);
               console.log(pc.green(`✔ ${res.message}\n`));
             } else {
               const cpName = arg ? arg : undefined;
-              const cp = this.checkpointManager.createCheckpoint(cpName);
-              console.log(pc.green(`✔ Checkpoint saved: ${pc.bold(cp.name)} (${cp.id})\n`));
+              try {
+                const cp = this.app.getCheckpointManager().createCheckpoint(cpName);
+                console.log(pc.green(`✔ Checkpoint saved: ${pc.bold(cp.name)} (${cp.id})\n`));
+              } catch (error: any) {
+                console.log(pc.red(`Checkpoint failed: ${formatDiagnosticForOutput(error)}\n`));
+              }
             }
             continue;
           } else if (cmd === "checkpoints") {
-            const cps = this.checkpointManager.listCheckpoints();
+            const cps = this.app.getCheckpointManager().listCheckpoints();
             if (cps.length === 0) {
               console.log(pc.yellow("No saved checkpoints.\n"));
             } else {
@@ -1811,7 +1850,7 @@ export class InteractiveRepl {
             }
             continue;
           } else if (cmd === "undo") {
-            const res = this.checkpointManager.rollbackLast();
+            const res = this.app.getCheckpointManager().rollbackLast();
             if (res.success) {
               console.log(pc.green(`✔ ${res.message}\n`));
             } else {
@@ -1869,7 +1908,6 @@ export class InteractiveRepl {
               const newPath = path.resolve(this.config.workspace, arg);
               this.config.workspace = newPath;
               this.agent.setWorkspace(newPath);
-              this.checkpointManager = new CheckpointManager(newPath);
               console.log(pc.green(`✔ Workspace changed to ${newPath}\n`));
             } else {
               console.log(`Current workspace: ${pc.cyan(this.config.workspace)}\n`);
