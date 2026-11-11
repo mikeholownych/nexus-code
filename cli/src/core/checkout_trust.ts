@@ -63,7 +63,7 @@ export function rememberRepository(commonDir: string, linkedWorktrees: readonly 
  * repository's or an opened repository's worktree registry. A registry entry that cannot be read is skipped on its own,
  * never ending the scan of the others.
  */
-function replacedWorktreeReason(root: string): string | undefined {
+export function replacedWorktreeReason(root: string): string | undefined {
   if (knownLinkedWorktrees.has(root)) return `${root} is a linked worktree whose .git file was replaced by a repository`;
   const registries = new Set<string>(Array.from(knownCommonDirs, (common) => path.join(common, "worktrees")));
   for (let dir = path.dirname(root); ; dir = path.dirname(dir)) {

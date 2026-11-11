@@ -658,6 +658,8 @@ describe("a receipt on the verifier baseline of a worktree the agent already wor
     { name: "a clean linked worktree: the baseline can back a receipt", prepare: () => {}, untrusted: false },
     { name: "uncommitted work: verification proceeds, but no receipt is issued on that baseline", prepare: (dir) => fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ scripts: { test: "echo all tests passed" } })), untrusted: true },
     { name: "a state that cannot be certified (a planted nested repository) counts as pending work, not as clean", prepare: (dir) => { fs.mkdirSync(path.join(dir, "x")); git(path.join(dir, "x"), "init", "-q"); }, untrusted: true },
+    { name: "a replaced .git (the agent made its own repository) counts as pending work, not as a plain checkout", prepare: (dir) => { fs.rmSync(path.join(dir, ".git")); git(dir, "init", "-q"); }, untrusted: true },
+    { name: "a deleted .git counts as pending work, not as a subdirectory of the main checkout", prepare: (dir) => fs.rmSync(path.join(dir, ".git")), untrusted: true },
   ];
   for (const variant of states) {
     for (const authoritative of [true, false]) {
@@ -686,4 +688,40 @@ describe("a receipt on the verifier baseline of a worktree the agent already wor
       });
     }
   }
+});
+
+describe("the receipt baseline is judged where the session starts, not on its own later work", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
+  test("a session's own verified edits in a clean worktree do not withhold later receipts; moving into a dirty worktree does", async () => {
+    const f = fixture(); // feat/bind at f.dir
+    const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+    const home = process.env.HOME;
+    process.env.HOME = f.home;
+    let agent: AutonomousAgent | undefined;
+    try {
+      fs.writeFileSync(path.join(f.dir, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+      git(f.dir, "add", "package.json");
+      git(f.dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "package");
+      agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.dir, shell: "bash" } as any);
+      await (agent as any).captureChangeBaseline();
+      assert.equal((agent as any).receiptBaselineUntrusted, false, "clean at the start");
+      fs.writeFileSync(path.join(f.dir, "own-work.txt"), "this session's verified edit\n"); // dirty now, by the session itself
+      (agent as any).changeBaseline = undefined; // what a verified pass does
+      await (agent as any).captureChangeBaseline();
+      assert.equal((agent as any).receiptBaselineUntrusted, false, "still the session's own start state");
+      // another linked worktree that already holds the agent's work
+      const other = runWorktreeCommand(["switch", "-c", "feat/other", "--no-copy"], { cwd: f.repo, home: f.home });
+      assert.equal(other.success, true, other.output);
+      const otherDir = path.join(f.repo, ".nexus", "worktrees", "feat-other");
+      fs.writeFileSync(path.join(otherDir, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+      fs.writeFileSync(path.join(otherDir, "agent-wrote-this.test.js"), "// earlier session\n");
+      agent.setWorkspace(otherDir);
+      await (agent as any).captureChangeBaseline();
+      assert.equal((agent as any).receiptBaselineUntrusted, true, "a different, already-worked-in worktree");
+    } finally {
+      agent?.shutdown();
+      await gw.close();
+      if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+      f.cleanup();
+    }
+  });
 });

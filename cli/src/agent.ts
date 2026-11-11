@@ -61,6 +61,7 @@ import { WorktreeManager } from "./worktree.js";
 import { captureVerificationState, recordVerificationIfEligible } from "./worktrunk/verification.js";
 import { homeDir } from "./worktrunk/core.js";
 import { openRepo, currentEntry } from "./worktrunk/repo.js";
+import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
@@ -930,6 +931,8 @@ export class AutonomousAgent {
   private verificationBaselineInvalidated: boolean = false;
   /** The verifier baseline was taken in a linked worktree that already held uncommitted work: never certified by a receipt. */
   private receiptBaselineUntrusted: boolean = false;
+  /** Whether `receiptBaselineUntrusted` has been judged for the current workspace (the session's own verified work must not turn it on later). */
+  private receiptBaselineJudged: boolean = false;
   /** A persisted baseline retained only as untrusted continuity evidence after recovery. */
   private untrustedRecoveredBaseline?: DurableTaskState["changeBaseline"];
   private recoveredOperation?: DurableTaskState["operation"];
@@ -2225,7 +2228,7 @@ export class AutonomousAgent {
       this.changeBaseline = null;
       return;
     }
-    if (this.linkedWorktreeStartsDirty()) this.receiptBaselineUntrusted = true; // see the field: verification proceeds, no receipt is issued
+    this.judgeReceiptBaselineOnce(); // see the field: verification proceeds, no receipt is issued
     try {
       const tests = snapshotTests(this.config.workspace);
       const trustedDeliverables = [...(this.config.trustedDeliverableFiles ?? [])];
@@ -2483,18 +2486,33 @@ export class AutonomousAgent {
     return this.workspacePathIdentity;
   }
 
+  /** Judges, once per workspace, whether the session STARTED in a linked worktree the agent had already worked in. */
+  private judgeReceiptBaselineOnce(): void {
+    if (this.receiptBaselineJudged) return;
+    this.receiptBaselineJudged = true;
+    this.receiptBaselineUntrusted = this.linkedWorktreeStartsDirty();
+  }
+
   /**
    * Whether the workspace is a linked worktree that either holds uncommitted work or cannot be certified (a nested
    * repository, a hidden edit, a dirty submodule). Fails closed there; a plain checkout or a non-repository is "no".
    */
   private linkedWorktreeStartsDirty(): boolean {
+    const workspace = this.config.workspace;
+    if (verifyCheckout(workspace).reason) return true; // a tampered pointer or a planted repository: not a plain checkout
+    let real: string;
+    try { real = fs.realpathSync(workspace); } catch { return false; }
+    // A registered linked worktree whose `.git` entry is missing or replaced is not a plain checkout either.
+    if (!fs.existsSync(path.join(real, ".git")) && replacedWorktreeReason(real)) return true;
     let linked = false;
     try {
-      const entry = currentEntry(openRepo(this.config.workspace));
+      const entry = currentEntry(openRepo(workspace));
       linked = Boolean(entry && !entry.isMain);
-    } catch { return false; }
+    } catch (err) {
+      return !(err instanceof Error && err.message === "not inside a git repository"); // a refusal or any other failure is not "no repository"
+    }
     if (!linked) return false;
-    try { const state = captureVerificationState(this.config.workspace); return state === undefined || state.dirty; } catch { return true; }
+    try { const state = captureVerificationState(workspace); return state === undefined || state.dirty; } catch { return true; }
   }
 
   /** True outside a worktree-isolated task, or inside a named linked worktree: where a verification receipt may be recorded. */
@@ -2544,6 +2562,8 @@ export class AutonomousAgent {
         : [this.primaryWorkspacePathIdentity, this.workspacePathIdentity]
     );
     this.config.workspace = newWorkspace;
+    this.receiptBaselineJudged = false; // another workspace: judged afresh at its first baseline
+    this.receiptBaselineUntrusted = false;
     this.bridge = new RustCoreBridge(
       this.config.workspace,
       this.config.shell,
@@ -5995,7 +6015,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // Existing pending work without an earlier snapshot remains unverified rather than being blessed retroactively.
       // A linked worktree the agent already worked in (an earlier session, another terminal) gives a baseline taken from
       // files the agent may have rewritten: verification proceeds as usual, but no receipt is issued on that baseline.
-      if (this.linkedWorktreeStartsDirty()) this.receiptBaselineUntrusted = true;
+      this.judgeReceiptBaselineOnce();
       this.changeBaseline = {
         command: authoritativeVerifier,
         failed: false,
