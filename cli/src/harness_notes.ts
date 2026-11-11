@@ -18,7 +18,7 @@ export function isHarnessNote(message: unknown): boolean {
 const CUT_OFF_HEAD = /^\[Nexus: your previous reply was cut off at /;
 const LEGACY_NOTE_HEADS: readonly RegExp[] = [
   /^\[Nexus recovery \d+\/\d+\] You have /,
-  /^\[Nexus continuation \d+\/\d+\] The operator's acceptance requirements are still open: /,
+  /^\[Nexus continuation \d+\/\d+\] The operator's acceptance requirements are still open/,
   /^\[Nexus: your reply was empty: no text and no tool call\./,
   CUT_OFF_HEAD,
   /^\[Nexus: Malformed native tool call dropped: /,

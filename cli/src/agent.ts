@@ -3610,7 +3610,12 @@ export class AutonomousAgent {
     const system = source[0];
     // The operator's latest request; a note Nexus wrote after it (skill note, recovery, notice) is not the request.
     const currentUserIndex = source.map((message, index) => message.role === "user" && !isHarnessNote(message) ? index : -1).filter((index) => index >= 0).at(-1);
-    const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]) ? currentUserIndex + 1 : -1;
+    // Notes Nexus wrote after it are kept whole: the skill note, and notes not yet answered (a retry instruction the model has not seen).
+    const keptNotes = new Set<number>();
+    if (currentUserIndex !== undefined) {
+      if (isSkillNote(source[currentUserIndex + 1])) keptNotes.add(currentUserIndex + 1);
+      for (let i = source.length - 1; i > currentUserIndex && isHarnessNote(source[i]); i--) keptNotes.add(i);
+    }
     const toolTurnStarts = source
       .map((message, index) => message.role === "assistant" && message.tool_calls?.length ? index : -1)
       .filter((index) => index >= 0);
@@ -3623,10 +3628,10 @@ export class AutonomousAgent {
     });
     const retained = source
       .map((message, index) => ({ message, index }))
-      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && index !== noteIndex && ((message.role !== "system" && index >= recentStart) || retainedOriginalContent.has(index)));
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && !keptNotes.has(index) && ((message.role !== "system" && index >= recentStart) || retainedOriginalContent.has(index)));
     const messagesToSummarize = source
       .map((message, index) => ({ message, index }))
-      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && index !== noteIndex && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
+      .filter(({ message, index }) => index > 0 && index !== currentUserIndex && !keptNotes.has(index) && (retainedOriginalContent.has(index) || !(index >= recentStart && message.role !== "system")));
     const summary = this.summarizeDiscardedHistory(messagesToSummarize.map(({ message }) => message), detailBudgetChars, new Set(this.unseenToolResults(source).map((index) => source[index])));
     const compacted: ChatMessage[] = [system];
     if (messagesToSummarize.length) {
@@ -3638,7 +3643,7 @@ export class AutonomousAgent {
     for (const item of retained) selected.set(item.index, item.message);
     if (currentUserIndex !== undefined) {
       selected.set(currentUserIndex, source[currentUserIndex]);
-      if (noteIndex >= 0) selected.set(noteIndex, source[noteIndex]);
+      for (const index of keptNotes) selected.set(index, source[index]);
     }
     if (unseenOutputChars !== undefined) {
       const unseen = this.unseenToolResults(source)

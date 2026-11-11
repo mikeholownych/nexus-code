@@ -76,7 +76,10 @@ describe("harness notes carry provenance", () => {
       const all = out.map(text).join("\n");
       assert.match(all, /Earlier task requests[\s\S]*the deploy script exits 3/, "an earlier operator request with the prefix is listed");
       assert.doesNotMatch(all, /Earlier task requests[\s\S]*your reply was empty/, "the marked note is not a task");
-      // A latest operator request with the prefix is the current request, kept verbatim, and a note after it is not.
+      // A note not yet answered (a retry instruction after a cut-off first reply) survives compaction with no tool turns.
+      const pending = [{ role: "system", content: "system" }, { role: "user", content: "Do the task." }, { role: "user", content: "[Nexus: your previous reply was cut off at the limit. Continue the task.]", harness: "note" }];
+      assert.ok((agent.compactionCandidate(pending, 0, 100_000).messages as any[]).some((m) => text(m).startsWith("[Nexus: your previous reply was cut off")), "the unanswered note is kept");
+      // A latest operator request with the prefix is the current request, kept verbatim; an unanswered note after it is kept too.
       const latest = [...convo.slice(0, 2), { role: "assistant", content: "x" }, { role: "user", content: SPOOF }, { role: "user", content: "[Nexus: notice]", harness: "note" }];
       const kept = agent.compactionCandidate(latest, 0, 100_000).messages as any[];
       assert.ok(kept.some((m) => text(m) === SPOOF), "kept verbatim as the current request");
