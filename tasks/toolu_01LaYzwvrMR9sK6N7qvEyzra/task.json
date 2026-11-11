@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LaYzwvrMR9sK6N7qvEyzra",
+  "agent_id": "ae031f3232ead997c",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix #469 four regressions, simpler design",
+  "token_usage": {
+    "input_tokens": 122,
+    "cache_creation_tokens": 111650,
+    "cache_read_tokens": 5768285,
+    "output_tokens": 25978,
+    "api_call_count": 55
+  },
+  "started_at": "2026-11-11T21:53:55.693498337Z",
+  "completed_at": "2026-11-11T22:01:16.110951357Z"
+}
