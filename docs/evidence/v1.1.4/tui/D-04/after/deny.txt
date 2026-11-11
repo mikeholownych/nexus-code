@@ -1,0 +1,40 @@
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted
+› SC:delete go
+  × denied Delete base.txt
+  × Delete base.txt — Error: Execution was rejected by the user. Ask the user for clarification or proceed with an
+    alternative approach. · 0.8s
+
+Deleted.
+
+✓ Done  No files changed: you denied 1 action.
+
+› /git
+  Working tree clean.
+
+› /diff
+  Working tree clean: no uncommitted changes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys

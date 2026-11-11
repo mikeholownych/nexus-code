@@ -7,7 +7,6 @@ import { format as formatDiagnostic } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
-import { CheckpointManager } from "./checkpoint.js";
 import { autoDetectModel, buildConfig, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
 import { isNexusDirPermissive } from "./doctor.js";
@@ -64,8 +63,10 @@ import {
 } from "./protocol.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
+import { surfaceFacts } from "./surface_facts.js";
 import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
+import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -95,7 +96,6 @@ export class SidecarServer {
   private readonly resume?: string;
   private readonly history: string[];
   private sessionId: string;
-  private checkpointManager: CheckpointManager;
   /** The running slash command; undefined for prompt turns and for commands that became turns. */
   private activeSpec?: SlashSpec;
   private readonly evidence = new EvidenceLedger();
@@ -120,7 +120,6 @@ export class SidecarServer {
     this.app.getAgent().setApprovalMode(this.mode);
     this.onShutdown = options.onShutdown ?? (() => {});
     this.resume = options.resume;
-    this.checkpointManager = this.app.getCheckpointManager();
     this.sessionId = this.app.getSessionManager().generateSessionId();
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.app.getAgent().setArchiveSink((compactionId, messages) => this.app.getSessionManager().appendArchivedHistory(this.sessionId, messages, compactionId));
@@ -137,6 +136,8 @@ export class SidecarServer {
     } catch (err) {
       resumed = { ok: false, message: `Could not resume ${this.resume ?? "latest"}: ${errorText(err)}` };
     }
+    // A resume that found nothing to restore is a fresh start: the model detection it skipped runs now.
+    if (this.resume && !resumed?.ok) void this.app.getAgent().detectPlaceholderModel();
     this.emitSessionState();
     if (resumed) this.emit({ type: "notice", text: resumed.message });
     if (isNexusDirPermissive()) {
@@ -560,6 +561,12 @@ export class SidecarServer {
   private async turn(turnId: string, prompt: string | any[], label: string, checkpoint: string, signal: AbortSignal, step = false): Promise<void> {
     const agent = this.app.getAgent();
     let allowSensitiveCheckpoint = false;
+    try {
+      agent.enterNamedWorktreeBeforeTurn(); // the snapshot is of the worktree the turn edits
+    } catch (err) {
+      this.emit({ type: "error", id: turnId, code: "INTERNAL", message: formatSafeSidecarText(errorText(err)) });
+      return;
+    }
     if (this.app.getConfig().readOnly) {
       // Read-only turns cannot change the workspace, so a workspace rollback snapshot is unnecessary.
       agent.setCheckpointReadOnlyFallback(false);
@@ -567,7 +574,7 @@ export class SidecarServer {
       let checkpointReady = false;
       while (!checkpointReady) {
         try {
-          this.checkpointManager.createCheckpoint(
+          this.app.getCheckpointManager().createCheckpoint(
             checkpoint,
             allowSensitiveCheckpoint ? { allowSensitive: true } : undefined,
           );
@@ -821,7 +828,7 @@ export class SidecarServer {
       setSessionId: (sessionId) => {
         this.sessionId = sessionId;
       },
-      checkpoints: () => this.checkpointManager,
+      checkpoints: () => this.app.getCheckpointManager(),
       setWorkspace: (dir) => this.setWorkspace(dir),
       saveSession: (title) => this.saveSession(title),
       resumeSession: (sessionId) => this.resumeSession(sessionId),
@@ -903,8 +910,7 @@ export class SidecarServer {
 
   private setWorkspace(dir: string): void {
     this.app.getAgent().setWorkspace(dir);
-    this.app.getConfig().workspace = dir;
-    this.checkpointManager = new CheckpointManager(dir);
+    this.app.getConfig().workspace = dir; // the app's checkpoint manager follows the workspace
   }
 
   /** Same record the REPL saves after each turn. Skipped while the conversation holds only the system prompt. */
@@ -929,6 +935,7 @@ export class SidecarServer {
         updatedAt: now,
         workspace: config.workspace,
         model: config.model,
+        endpoint: persistableEndpoint(config.endpoint),
         messages,
         unverifiedChangesPending: agent.hasUnverifiedChanges(),
         tokenStats: agent.getTokenStats(),
@@ -1022,6 +1029,7 @@ export class SidecarServer {
 
   private emitSessionState(): void {
     const config = this.app.getConfig();
+    const facts = surfaceFacts(this.app, this.sessionId);
     const git = getGitInfo(config.workspace);
     const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
     const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
@@ -1029,13 +1037,17 @@ export class SidecarServer {
       type: "session.state",
       workspace: config.workspace,
       workspace_name: path.basename(config.workspace),
-      model: config.provider ? `${config.provider} · ${config.model}` : config.model,
-      mode: this.app.getAgent().getApprovalMode(),
+      model: facts.model,
+      mode: facts.mode,
       git: git.isRepo ? { branch: git.branch, dirty: git.dirtyCount } : null,
       busy: Boolean(this.activeTurn),
-      session: this.sessionId,
+      session: facts.session,
+      read_only: facts.read_only,
+      context_tokens: facts.context_tokens,
+      context_limit: facts.context_limit,
+      endpoint_kind: facts.endpoint_kind,
       posture: {
-        mode: this.app.getAgent().getApprovalMode(),
+        mode: facts.mode,
         sandbox: sandboxStatus,
         trusted,
       },
@@ -1244,6 +1256,7 @@ async function main(argv: string[]): Promise<void> {
     .option("--read-only", "Reject all mutating tool executions and commands")
     .option("--sandbox [mode]", "Isolate command execution using bubblewrap or Docker")
     .option("--worktree", "Isolate execution inside an ephemeral git worktree")
+    .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
     .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
     .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", (value: string, previous: string[] = []) => [...previous, value], [])
     .option("--record-flight", "Record execution into an append-only .flightlog")
@@ -1287,7 +1300,7 @@ async function main(argv: string[]): Promise<void> {
   const configLoadError = operatorConfigLoadError();
   if (configLoadError) throw new Error(`Configuration error: ${configLoadError.message}`);
   const options = program.opts();
-  const config = await autoDetectModel(buildConfig(options));
+  const config = await autoDetectModel(buildConfig(options), { resuming: Boolean(options.resume) });
   config.surface = "tui";
   const app = new ApplicationCore(config);
   const server = new SidecarServer({

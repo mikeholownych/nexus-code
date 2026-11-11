@@ -12,7 +12,9 @@ import { redactSecrets } from "../ui.js";
 import { ensureGitExclude } from "../core/git_exclude.js";
 import { identityOf, mkdirVerified } from "../safe_fs.js";
 import { readWorktreeSettings } from "./config.js";
-import { git, gitOut } from "./git.js";
+import { MAX_POINTER_BYTES, parseGitfilePointer, readSmallFile } from "../core/checkout_trust.js";
+import { hiddenModificationReason } from "./verification.js";
+import { git, gitOut, nestedRepositoryReason, UntrustedCheckoutError } from "./git.js";
 import { resolveWorktreePath, sanitizeBranch, validateBranchName, allowedRoot } from "./paths.js";
 import { readRegistry, updateRegistry, withWorktreeLock, type Registry } from "./registry.js";
 import { currentEntry, defaultBranch, openRepo, refExists, resolveBranchCommit, resolveCommit, type Repo, type WorktreeEntry } from "./repo.js";
@@ -119,10 +121,24 @@ export function findEntry(repo: Repo, token: string, home: string): WorktreeEntr
   return hit;
 }
 
+/**
+ * An automated task worktree is unregistered, on branch `nexus/<id>`, at exactly `<repo>/.nexus/worktrees/<id>`
+ * (`WorktreeManager.createWorktree`), or an operation worktree: branch `nexus/op-<key>/<unit>` at
+ * `.nexus/worktrees/op-<key>/units/<dir>` (`operation_git.ts`; a restart suffixes the branch, not the directory, so only the group and the `units` parent are matched), `integration` at `.nexus/worktrees/op-<key>/integration`.
+ * A named worktree on a `nexus/*` branch lives at `.nexus/worktrees/nexus-<name>` and is none of these.
+ */
+export function isTaskWorktree(repo: Repo, entry: { branch?: string | null; path: string }, registry: Registry): boolean {
+  if (!entry.branch?.startsWith("nexus/") || registry.worktrees.some((item) => item.path === entry.path)) return false;
+  const id = entry.branch.slice("nexus/".length);
+  const base = path.join(repo.repoPath, ".nexus", "worktrees");
+  if (entry.path === path.join(base, id)) return true;
+  const group = id.split("/")[0];
+  return id.includes("/") && group.startsWith("op-") && path.dirname(entry.path) === path.join(base, group, "units");
+}
+
 function kindOf(repo: Repo, entry: WorktreeEntry, registry: Registry): "main" | "task" | "named" | "external" {
   if (entry.isMain) return "main";
-  const taskBase = path.join(repo.repoPath, ".nexus", "worktrees") + path.sep;
-  if (entry.branch?.startsWith("nexus/") && entry.path.startsWith(taskBase)) return "task";
+  if (isTaskWorktree(repo, entry, registry)) return "task";
   return registry.worktrees.some((item) => item.path === entry.path) ? "named" : "external";
 }
 
@@ -131,9 +147,13 @@ function kindOf(repo: Repo, entry: WorktreeEntry, registry: Registry): "main" | 
 export interface Dirty { staged: number; modified: number; untracked: number; conflicted: number; ignored: number; total: number }
 
 /** One `git status --porcelain=v2 -z` call. `ignored` counts ignored paths only when asked (removal safety). */
-export function statusOf(dir: string, options: { ignored?: boolean } = {}): Dirty {
+export function statusOf(dir: string, options: { ignored?: boolean; ignoreSubmodules?: "none" | "all" | "dirty" | "untracked" } = {}): Dirty {
+  // Git descends into submodules for status and reads their configuration: nothing planted may sit below `dir`.
+  const nested = nestedRepositoryReason(dir);
+  if (nested) throw new UntrustedCheckoutError(dir, nested, ["status"]);
   const args = ["status", "--porcelain=v2", "-z", options.ignored ? "--untracked-files=all" : "--untracked-files=normal"];
   if (options.ignored) args.push("--ignored=matching");
+  if (options.ignoreSubmodules) args.push(`--ignore-submodules=${options.ignoreSubmodules}`);
   const out = git(dir, args, { timeoutMs: PER_CALL_MS }).stdout;
   const dirty: Dirty = { staged: 0, modified: 0, untracked: 0, conflicted: 0, ignored: 0, total: 0 };
   const records = out.split("\0");
@@ -261,6 +281,16 @@ function rememberPrevious(repo: Repo, from: string | null | undefined, to: strin
   try { updateRegistry(repo.commonDir, (reg) => { reg.previous = from; }); } catch { /* the shortcut is a convenience */ }
 }
 
+/** The worktree for `branch`, created from the default branch when neither it nor the branch exists (used by `run --worktree-branch`). */
+export function ensureWorktree(ctx: WorktreeContext, branch: string): { branch: string; path: string; created: boolean } {
+  const problem = validateBranchName(branch);
+  if (problem) throw new WorktreeError(`invalid branch name: ${problem}`);
+  const repo = openRepo(ctx.cwd);
+  const exists = repo.entries.some((entry) => entry.branch === branch) || refExists(repo, `refs/heads/${branch}`);
+  const result = switchWorktree(ctx, branch, { create: !exists });
+  return result.data as { branch: string; path: string; created: boolean };
+}
+
 // ---- path -----------------------------------------------------------------------------------------------------
 
 export function pathOf(ctx: WorktreeContext, token: string): CommandResult {
@@ -363,7 +393,17 @@ function humanAge(seconds: number): string {
 
 // ---- remove ---------------------------------------------------------------------------------------------------
 
-export interface RemoveOptions { force?: boolean; deleteUnmerged?: boolean }
+export interface RemoveOptions {
+  force?: boolean;
+  deleteUnmerged?: boolean;
+  /**
+   * Remove even if ignored files (build caches) are present, but never over tracked, staged or untracked changes: they
+   * are checked again under the removal lock. Unlike `force`, which skips every check.
+   */
+  discardIgnored?: boolean;
+  /** The branch the work must be integrated into (default: the repository's default branch). `merge` passes its target. */
+  target?: string;
+}
 
 /** Test seam: runs after every refusal check and immediately before the worktree is removed. Not a hook point. */
 export const removeSeams: {
@@ -390,7 +430,8 @@ export function removeWorktrees(ctx: WorktreeContext, tokens: string[], options:
   return { success, output: lines.join("\n") };
 }
 
-function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions): string {
+/** Removes one worktree (and its branch) after the safety checks; returns a one-line report or throws. */
+export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions): string {
   const repo = openRepo(ctx.cwd);
   const registry = loadRegistry(repo);
   const entry = findEntry(repo, token, ctx.home);
@@ -403,7 +444,7 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
   }
 
   const dropFromRegistry = () => updateRegistry(repo.commonDir, (reg) => { reg.worktrees = reg.worktrees.filter((item) => item.path !== entry.path); });
-  const target = defaultBranch(repo);
+  const target = options.target ?? defaultBranch(repo);
   const targetSha = target ? resolveBranchCommit(repo, target) : undefined;
   const integrated = entry.head && targetSha ? integratedReason(repo, entry.head, targetSha) : null;
   if (!integrated && !options.deleteUnmerged) {
@@ -436,10 +477,12 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
     } else {
       const before = verifiedWorktreeDir(repo, entry);
       if (!options.force) {
-        const dirty = statusOf(entry.path, { ignored: true });
-        if (dirty.total + dirty.ignored > 0) {
+        const dirty = statusOf(entry.path, { ignored: true, ignoreSubmodules: "none" });
+        if (dirty.total + (options.discardIgnored ? 0 : dirty.ignored) > 0) {
           throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
         }
+        const hidden = hiddenModificationReason(entry.path);
+        if (hidden) throw new WorktreeError(`${hidden}; clear the flag (\`git update-index --no-assume-unchanged --no-skip-worktree <file>\`) or restore the file, or pass --force`);
       }
       removeSeams.beforeRemove?.(entry);
       // A commit made here since the integration check (another session's `/commit`, an editor) must not be lost with
@@ -491,6 +534,9 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
       }
       try {
         removeSeams.beforeGitRemove?.(entry);
+        // `worktree remove` runs `git status` in the worktree and re-reads its `.git` pointer: verify it once more first.
+        const unsafe = nestedRepositoryReason(entry.path);
+        if (unsafe) throw new UntrustedCheckoutError(entry.path, unsafe, ["worktree", "remove"]);
         git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
       } catch (err) {
         // Git refused (an initialised submodule, a file that appeared): the worktree stays, so put it back on its
@@ -526,6 +572,24 @@ function removeOne(ctx: WorktreeContext, token: string, options: RemoveOptions):
   return `Removed worktree ${label}${branchNote}`;
 }
 
+/**
+ * Drops one stale (directory deleted by hand) worktree registration: `git worktree remove --force <path>` on that one
+ * entry and its registry record, never a branch. Callers decide whether it is safe (see `prune`).
+ */
+export function clearStaleEntry(repo: Repo, entry: WorktreeEntry): void {
+  removeSeams.beforeLock?.(entry);
+  withWorktreeLock(repo.commonDir, () => {
+    // Re-read under the lock, as removeOne does: a `switch` may have recreated the path while this waited, and a live
+    // worktree must not be force-removed on the strength of an entry read earlier.
+    const fresh = openRepo(repo.cwd).entries.find((candidate) => candidate.path === entry.path);
+    if (fresh && (!fresh.prunable || fresh.head !== entry.head || fresh.branch !== entry.branch || fresh.locked)) {
+      throw new WorktreeError("the worktree changed while this command waited for the lock; it was left alone");
+    }
+    if (fresh) git(repo.cwd, ["worktree", "remove", "--force", "--end-of-options", entry.path]);
+    updateRegistry(repo.commonDir, (reg) => { reg.worktrees = reg.worktrees.filter((item) => item.path !== entry.path); });
+  });
+}
+
 /** Delete `refs/heads/<branch>` only while it still points at `expectedSha` (Git's compare-and-delete). */
 function deleteBranchAt(repo: Repo, branch: string, expectedSha: string): boolean {
   // The all-zero id tells update-ref to skip the comparison, so it is never accepted as an expected value.
@@ -543,13 +607,12 @@ function verifiedWorktreeDir(repo: Repo, entry: WorktreeEntry): { dev: number; i
   const stat = fs.lstatSync(entry.path);
   if (!before || stat.isSymbolicLink() || !stat.isDirectory()) throw new WorktreeError("the worktree path is not a plain directory; refusing to remove it");
   const dotGit = path.join(entry.path, ".git");
-  const dotStat = fs.lstatSync(dotGit);
-  if (!dotStat.isFile()) throw new WorktreeError("the worktree has no .git file; refusing to remove it");
-  const pointer = fs.readFileSync(dotGit, "utf8").trim();
+  const content = readSmallFile(dotGit, MAX_POINTER_BYTES); // the agent controls this path: no blocking or unbounded read
+  if (content === undefined) throw new WorktreeError("the worktree has no plain .git file; refusing to remove it");
+  const pointer = parseGitfilePointer(content); // as Git reads it: nothing trimmed
   // The pointer may be absolute or, with `worktree.useRelativePaths`, relative to the worktree directory. Either way
   // its canonical location must be an entry under this repository's common directory.
-  const match = /^gitdir: (.+)$/.exec(pointer);
-  const admin = match ? normalizedPath(path.resolve(entry.path, match[1])) : "";
+  const admin = pointer === undefined ? "" : normalizedPath(path.resolve(entry.path, pointer));
   if (!admin || !admin.startsWith(path.join(normalizedPath(repo.commonDir), "worktrees") + path.sep)) {
     throw new WorktreeError("the worktree does not belong to this repository's common directory; refusing to remove it");
   }

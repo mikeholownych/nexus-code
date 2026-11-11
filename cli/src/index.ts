@@ -15,13 +15,14 @@ import { PluginManager } from "./plugins.js";
 import { HarnessConfig } from "./types.js";
 import { FlightPlayer } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
+import { lazyProviderCompleter } from "./worktrunk/provider.js";
 import { HunkStager } from "./stager.js";
 import { BenchmarkEvaluator } from "./evaluator.js";
 import { SynthesizerEngine } from "./synthesizer.js";
 import { BrowserDriver } from "./browser.js";
 import { KnowledgeGraph } from "./knowledge.js";
 import { TaskStateNotFoundError } from "./core/state.js";
-import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError } from "./config.js";
+import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError, withoutProjectEnvironment } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
@@ -231,7 +232,8 @@ async function startRepl(options: any): Promise<void> {
   if (trustDecision === "exit") return;
   triggerBackgroundGc();
   const config = buildConfig(options);
-  if (config.model === "local-model") {
+  // A resumed start takes the model from the session record (or detects it after the resumed wait): no request now.
+  if (config.model === "local-model" && !options.resume) {
     try {
       const client = new LocalLlmClient(config);
       const models = await client.listModels();
@@ -345,6 +347,7 @@ program
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
+  .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
   .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
   .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", collectDeliverableFile, [])
   .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
@@ -383,6 +386,7 @@ program
   .option("--read-only", "Reject all mutating tool executions and commands")
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
+  .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
   .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
   .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", collectDeliverableFile, [])
   .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
@@ -427,6 +431,7 @@ program
   .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: review; folder trust does not change it)")
   .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
+  .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
   .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")
   .option("--deliverable-file <path>", "Operator-declared workspace-relative product file used for VERIFIED binding (repeatable)", collectDeliverableFile, [])
   .option("--record-flight", "Record execution into an append-only deterministic .flightlog")
@@ -449,8 +454,9 @@ program
     config.surface = "headless";
     const isJson = Boolean(options.json);
 
-    // Auto-detect loaded model if model is 'local-model'
-    if (config.model === "local-model") {
+    // Auto-detect loaded model if model is 'local-model' (not on a resume: the task record supplies it, or the first
+    // step detects it after the resumed provider wait)
+    if (config.model === "local-model" && (options.resume === undefined || options.resume === false)) {
       try {
         const client = new LocalLlmClient(config);
         const models = await client.listModels();
@@ -1015,7 +1021,7 @@ program
 
 program
   .command("worktree")
-  .description("Named git worktrees: switch [-c] <branch> [--base B], list [--json] [--limit N], path <branch>, remove <branch>... [--force] [--delete-unmerged]")
+  .description("Named git worktrees: switch [-c] <branch> [--base B] [--no-copy], list [--json] [--limit N], path <branch>, remove <branch>... [--force] [--delete-unmerged], copy-ignored [--from B] [--to B] [--force] [--dry-run] [--all-ignored]")
   .argument("[args...]", "Subcommand and its arguments")
   .option("-w, --workspace <path>", "Directory inside the repository", process.cwd())
   .option("--read-only", "Refuse every subcommand that changes the repository")
@@ -1023,10 +1029,10 @@ program
   .helpOption("-h, --help", "Show help")
   .action(async (args: string[], _options: { workspace?: string; readOnly?: boolean }, cmd: Command) => {
     const options = commandOptions(cmd);
-    const { runWorktreeCommand } = await import("./worktrunk/command.js");
-    const result = runWorktreeCommand(args, {
-      cwd: options.workspace ? path.resolve(options.workspace) : process.cwd(),
-      readOnly: Boolean(options.readOnly),
+    const { runWorktreeCommandAsync } = await import("./worktrunk/command.js");
+    const cwd = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    const result = await runWorktreeCommandAsync(args, { cwd, readOnly: Boolean(options.readOnly) }, {
+      completer: lazyProviderCompleter(() => withoutProjectEnvironment(() => buildConfigOrThrow({ ...options, workspace: cwd }))), // the worktree's .env is the agent's: it must not choose where a diff goes
     });
     (result.success ? console.log : console.error)(result.output);
     if (!result.success) process.exitCode = 1;

@@ -23,11 +23,52 @@ export interface RegistryEntry {
   vars?: Record<string, string>;
 }
 
+/** A passing verification of one exact working state of a branch (head commit and the tree of head plus uncommitted work). */
+export interface VerificationRecord {
+  branch: string;
+  head: string;
+  tree: string;
+  verifier: string;
+  recordedAt: string;
+}
+
+/** An operator's explicit decision to merge without a verification record. */
+export interface WaiverRecord {
+  branch: string;
+  head: string;
+  reason: string;
+  recordedAt: string;
+}
+
 export interface Registry {
   version: 1;
   /** The branch that was active before the last `switch` (the `-` shortcut). */
   previous?: string;
   worktrees: RegistryEntry[];
+  /** Newest last; capped at MAX_RECORDS. */
+  verifications?: VerificationRecord[];
+  waivers?: WaiverRecord[];
+}
+
+export const MAX_RECORDS = 100;
+export const MAX_FIELD_LENGTH = 400;
+export const MAX_BRANCH_LENGTH = 1024;
+
+function parseRecords<T extends object>(value: unknown, keys: readonly string[], name: string): T[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_RECORDS) throw new Error(`${name} must be an array of at most ${MAX_RECORDS} records`);
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`${name} record is not an object`);
+    const record = item as Record<string, unknown>;
+    for (const key of Object.keys(record)) if (!keys.includes(key)) throw new Error(`unexpected ${name} field '${key}'`);
+    for (const key of keys) {
+      const maxLen = key === "branch" ? MAX_BRANCH_LENGTH : MAX_FIELD_LENGTH;
+      if (typeof record[key] !== "string" || !(record[key] as string) || (record[key] as string).length > maxLen) {
+        throw new Error(`${name}.${key} must be a short non-empty string`);
+      }
+    }
+    return record as unknown as T;
+  });
 }
 
 export function registryDir(commonDir: string): string {
@@ -46,7 +87,7 @@ function parseRegistry(text: string): Registry {
   const raw = JSON.parse(text) as unknown;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("not an object");
   const root = raw as Record<string, unknown>;
-  for (const key of Object.keys(root)) if (!["version", "previous", "worktrees"].includes(key)) throw new Error(`unexpected field '${key}'`);
+  for (const key of Object.keys(root)) if (!["version", "previous", "worktrees", "verifications", "waivers"].includes(key)) throw new Error(`unexpected field '${key}'`);
   if (root.version !== 1) throw new Error("version must be 1");
   if (root.previous !== undefined && typeof root.previous !== "string") throw new Error("previous must be a string");
   if (!Array.isArray(root.worktrees) || root.worktrees.length > MAX_ENTRIES) throw new Error("worktrees must be an array of at most 500 entries");
@@ -61,7 +102,12 @@ function parseRegistry(text: string): Registry {
     }
     return entry as unknown as RegistryEntry;
   });
-  return { version: 1, ...(root.previous !== undefined ? { previous: root.previous as string } : {}), worktrees };
+  const verifications = parseRecords<VerificationRecord>(root.verifications, ["branch", "head", "tree", "verifier", "recordedAt"], "verifications");
+  const waivers = parseRecords<WaiverRecord>(root.waivers, ["branch", "head", "reason", "recordedAt"], "waivers");
+  return {
+    version: 1, ...(root.previous !== undefined ? { previous: root.previous as string } : {}), worktrees,
+    ...(verifications ? { verifications } : {}), ...(waivers ? { waivers } : {}),
+  };
 }
 
 /** Never throws for a missing, corrupt or linked file: returns an empty registry and a warning instead. */
@@ -83,8 +129,28 @@ export function readRegistry(commonDir: string): { registry: Registry; warning?:
   }
 }
 
+/** Evicts the oldest verification and waiver records until the registry fits within REGISTRY_LIMIT_BYTES. */
+export function trimHistoryToFit(registry: Registry): void {
+  const verifications = registry.verifications ? [...registry.verifications] : [];
+  const waivers = registry.waivers ? [...registry.waivers] : [];
+
+  while ((verifications.length > 0 || waivers.length > 0) && Buffer.byteLength(`${JSON.stringify({ ...registry, verifications, waivers }, null, 1)}\n`) > REGISTRY_LIMIT_BYTES) {
+    const vOldest = verifications[0]?.recordedAt ?? "";
+    const wOldest = waivers[0]?.recordedAt ?? "";
+    if (verifications.length > 0 && (waivers.length === 0 || vOldest <= wOldest)) {
+      verifications.shift();
+    } else if (waivers.length > 0) {
+      waivers.shift();
+    }
+  }
+
+  if (registry.verifications) registry.verifications = verifications;
+  if (registry.waivers) registry.waivers = waivers;
+}
+
 /** Atomically replaces the registry. Throws on a linked target or when the result would exceed 64 KiB. */
 export function writeRegistry(commonDir: string, registry: Registry): void {
+  trimHistoryToFit(registry);
   const text = `${JSON.stringify(registry, null, 1)}\n`;
   if (Buffer.byteLength(text) > REGISTRY_LIMIT_BYTES) throw new Error("worktree registry would exceed 64 KiB (too large); remove finished worktrees first");
   const file = registryFile(commonDir);
