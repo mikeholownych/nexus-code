@@ -203,7 +203,7 @@ export function projectSetting(key: string): string | undefined {
 /**
  * Runs `build` with the per-project `.env` layer switched off. For work whose destination must be the operator's choice
  * although the process runs inside a repository an agent can write (`nexus worktree merge --ai-message` from inside the
- * worktree): a project `.env` there could name the endpoint a diff is sent to.
+ * worktree): a project `.env` there could name the endpoint a diff is sent to. `build` must be synchronous.
  */
 export function withoutProjectEnvironment<T>(build: () => T): T {
   const saved = projectEnvSettings;

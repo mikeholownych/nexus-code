@@ -2479,6 +2479,11 @@ export class AutonomousAgent {
     return this.workspacePathIdentity;
   }
 
+  /** Whether the workspace is a linked worktree holding uncommitted work; undefined-safe (a plain checkout or a refusal is "no"). */
+  private linkedWorktreeStartsDirty(): boolean {
+    try { return captureVerificationState(this.config.workspace)?.dirty === true; } catch { return false; }
+  }
+
   /** True outside a worktree-isolated task, or inside a named linked worktree: where a verification receipt may be recorded. */
   private isRecordableWorktree(): boolean {
     return !this.activeWorktree ||
@@ -5975,11 +5980,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (authoritativeVerifier && this.changeBaseline === undefined) {
       // Capture workspace-resolved operator verifier files before plugins or the model can change them.
       // Existing pending work without an earlier snapshot remains unverified rather than being blessed retroactively.
+      // A linked worktree the agent already worked in (an earlier session, another terminal) is pending work too: its tests
+      // and verifier files may have been rewritten, so they cannot be taken as the pre-change baseline.
+      const pending = this.hasPendingModifications || this.linkedWorktreeStartsDirty();
       this.changeBaseline = {
         command: authoritativeVerifier,
         failed: false,
-        tests: this.hasPendingModifications ? null : snapshotTests(this.config.workspace),
-        verifier: this.hasPendingModifications ? null : snapshotVerifierDefinition(this.config.workspace, authoritativeVerifier, this.config.trustedDeliverableFiles ?? []),
+        tests: pending ? null : snapshotTests(this.config.workspace),
+        verifier: pending ? null : snapshotVerifierDefinition(this.config.workspace, authoritativeVerifier, this.config.trustedDeliverableFiles ?? []),
         trustedDeliverables: [...(this.config.trustedDeliverableFiles ?? [])],
         at: new Date().toISOString(),
       };

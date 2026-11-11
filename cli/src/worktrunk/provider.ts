@@ -1,10 +1,14 @@
 import { LocalLlmClient } from "../client.js";
-import { autoDetectModel } from "../config.js";
+import { autoDetectModel, projectSetting } from "../config.js";
 import type { HarnessConfig } from "../types.js";
 import type { Completer } from "./ai_message.js";
 
 /** A one-shot completer over the configured provider; egress policy and receipts apply inside `chatCompletion`. */
 export function providerCompleter(config: HarnessConfig): Completer {
+  // A session started inside a worktree takes a project `.env` from it, and that file is the agent's: an endpoint it chose
+  // is not somewhere a branch diff may go on the operator's behalf.
+  const chosenByProject = projectSetting("LOCAL_LLM_ENDPOINT");
+  if (chosenByProject !== undefined && chosenByProject === config.endpoint) return async () => undefined;
   return async (messages, signal) => {
     const client = new LocalLlmClient({ ...config, workspace: "", maxSteps: 1 }, { role: "commit-message" });
     const reply = await client.chatCompletion(messages, [], undefined, signal, "commit-message");

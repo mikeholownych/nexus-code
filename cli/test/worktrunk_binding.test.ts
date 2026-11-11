@@ -652,3 +652,31 @@ describe("REPL turn checkpoint with a named worktree", { skip: !isSandboxAvailab
     }
   });
 });
+
+describe("the verifier baseline of a worktree the agent already worked in", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
+  for (const dirty of [false, true]) {
+    test(dirty ? "uncommitted work in a linked worktree: the tests and verifier files are not taken as the pre-change baseline" : "a clean linked worktree: the baseline is captured", async () => {
+      const f = fixture(); // feat/bind exists at f.dir
+      const gw = await startGateway(() => ({ kind: "text", content: "done" }));
+      const home = process.env.HOME;
+      process.env.HOME = f.home;
+      let agent: AutonomousAgent | undefined;
+      try {
+        fs.writeFileSync(path.join(f.dir, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+        git(f.dir, "add", "package.json");
+        git(f.dir, "-c", "user.email=t@example.com", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "package");
+        if (dirty) fs.writeFileSync(path.join(f.dir, "package.json"), JSON.stringify({ scripts: { test: "echo all tests passed" } })); // the agent rewrote the verifier in an earlier session
+        agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.dir, shell: "bash", authoritativeVerifierCommand: "npm test" } as any);
+        await agent.runTurn("look around");
+        const baseline = (agent as any).changeBaseline;
+        assert.ok(baseline, "a baseline record exists");
+        assert.equal(baseline.verifier === null, dirty, "verifier definition snapshot");
+      } finally {
+        agent?.shutdown();
+        await gw.close();
+        if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+        f.cleanup();
+      }
+    });
+  }
+});
