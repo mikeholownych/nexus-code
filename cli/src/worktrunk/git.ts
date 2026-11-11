@@ -13,6 +13,8 @@
  * can only name a filter, never define its command.
  */
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { envWithoutConfiguredHooks } from "../core/git_hook_guard.js";
 import { PATHSPEC_MODE_ENV } from "../git.js";
 import { redactSecrets } from "../ui.js";
@@ -62,6 +64,57 @@ export interface GitOptions {
   input?: string;
 }
 
+function inside(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(root + path.sep);
+}
+
+/**
+ * The agent runs in a sandbox that can write its worktree, `.git` pointer included, but nothing outside it. Git reads
+ * the configuration of whatever repository `.git` leads to; a planted one can carry commands (`filter.*.clean`,
+ * `commit.gpgsign` with `gpg.program`) that would run on the host. A linked worktree is therefore trusted only when its
+ * `.git` file leads to an administrative directory that is OUTSIDE the worktree (so outside what the agent could write),
+ * sits under `<common>/worktrees/`, and points back at this very `.git` file; and a repository nested inside a linked
+ * worktree is never trusted. Returns the reason, or undefined when `cwd` is fine (or not in a repository at all).
+ */
+export function untrustedCheckoutReason(cwd: string): string | undefined {
+  let start: string;
+  try { start = fs.realpathSync(cwd); } catch { return undefined; }
+  // Every `.git` on the way up from `cwd`. The outermost `.git` FILE is the boundary the sandboxed agent can write.
+  const files: string[] = [];
+  const directories: string[] = [];
+  for (let dir = start; ; dir = path.dirname(dir)) {
+    try {
+      if (fs.lstatSync(path.join(dir, ".git")).isDirectory()) directories.push(dir); else files.push(dir);
+    } catch { /* no .git here */ }
+    if (path.dirname(dir) === dir) break;
+  }
+  const outer = files[files.length - 1];
+  if (!outer) return undefined; // a plain repository (or none): not a sandbox-writable checkout
+  // A repository with a real `.git` directory below that boundary was planted (or cloned) inside the writable area.
+  const planted = directories.find((dir) => inside(outer, dir));
+  if (planted) return `${planted} is a repository nested inside the linked worktree ${outer}`;
+  for (const root of files) {
+    const dotGit = path.join(root, ".git");
+    try {
+      const stat = fs.lstatSync(dotGit);
+      if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 4096) return `${dotGit} is not a plain pointer file`;
+      const match = /^gitdir: (.+)$/m.exec(fs.readFileSync(dotGit, "utf8"));
+      if (!match) return `${dotGit} is not a gitdir pointer`;
+      const admin = fs.realpathSync(path.resolve(root, match[1].trim()));
+      if (inside(outer, admin)) return `${dotGit} leads into a repository inside the worktree itself`;
+      if (path.basename(path.dirname(admin)) === "worktrees") {
+        const common = fs.realpathSync(path.dirname(path.dirname(admin)));
+        if (inside(outer, common)) return `${dotGit} leads into a repository inside the worktree itself`;
+        const back = fs.readFileSync(path.join(admin, "gitdir"), "utf8").trim();
+        if (fs.realpathSync(path.resolve(admin, back)) !== path.join(root, ".git")) return `the administrative directory behind ${dotGit} does not point back at it`;
+      }
+    } catch {
+      return `${dotGit} could not be verified`;
+    }
+  }
+  return undefined;
+}
+
 let hookEnvCache: { key: string; env: NodeJS.ProcessEnv } | undefined;
 
 function baseEnv(): NodeJS.ProcessEnv {
@@ -79,6 +132,8 @@ function baseEnv(): NodeJS.ProcessEnv {
 }
 
 export function git(cwd: string, args: readonly string[], options: GitOptions = {}): GitResult {
+  const untrusted = untrustedCheckoutReason(cwd);
+  if (untrusted) throw new GitError(`refusing to run Git in ${cwd}: it is not a trusted worktree of this repository (${untrusted})`, null, args);
   const result = spawnSync("git", [...PINNED_GIT_FLAGS, ...args], {
     cwd,
     encoding: "utf8",

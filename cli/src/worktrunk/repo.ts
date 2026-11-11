@@ -71,7 +71,7 @@ export function openRepo(startDir: string): Repo {
   try {
     commonDir = fs.realpathSync(gitOut(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
   } catch (err) {
-    if (err instanceof GitError) throw new Error("not inside a git repository");
+    if (err instanceof GitError) throw new Error(err.message.startsWith("refusing to run Git") ? err.message : "not inside a git repository");
     throw err;
   }
   const entries = listEntries(cwd);

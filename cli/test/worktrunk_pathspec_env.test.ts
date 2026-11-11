@@ -12,9 +12,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 process.env.GIT_LITERAL_PATHSPECS = "1";
-const { runWorktreeCommand, WORKTREE_USAGE } = await import("../src/worktrunk/command.js");
-// The receipt gate (a later PR in the stack) needs the documented waiver; this test is about the merge commit, not the gate.
-const MERGE = WORKTREE_USAGE.includes("--no-verify-receipt") ? ["merge", "--no-verify-receipt", "--reason", "pathspec env fixture"] : ["merge"];
+const { runWorktreeCommand } = await import("../src/worktrunk/command.js");
 const { SCRUBBED_ENV } = await import("../src/worktrunk/git.js");
 const { PATHSPEC_MODE_ENV } = await import("../src/git.js");
 
@@ -47,7 +45,7 @@ test("an inherited GIT_LITERAL_PATHSPECS=1 does not make the .nexus exclusion li
     git(dir, "commit", "-q", "-m", "an old commit that tracked internal state");
     fs.writeFileSync(path.join(dir, ".nexus", "knowledge.json"), '{"v":2,"edited by a session":true}\n');
     fs.writeFileSync(path.join(dir, "real.txt"), "real work\n");
-    const merged = runWorktreeCommand(MERGE, { cwd: dir, home, readOnly: false });
+    const merged = runWorktreeCommand(["merge", "--no-verify-receipt", "--reason", "pathspec env fixture"], { cwd: dir, home, readOnly: false });
     assert.equal(merged.success, true, merged.output);
     assert.equal(git(repo, "show", "main:real.txt"), "real work");
     assert.equal(git(repo, "show", "main:.nexus/knowledge.json"), '{"v":1}', "the state edit was committed under an inherited literal-pathspec mode");

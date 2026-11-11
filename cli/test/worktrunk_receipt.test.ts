@@ -206,7 +206,7 @@ test("registry evicts oldest records when history approaches byte budget", () =>
   } finally { f.cleanup(); }
 });
 
-const eligible = { activeWorktree: false, dryRun: false, verifierSucceeded: true, hasExecuted: true, deliverableBound: true, verified: true, verifier: "npm test" };
+const eligible = { unrecordableWorktree: false, dryRun: false, verifierSucceeded: true, hasExecuted: true, deliverableBound: true, verified: true, verifier: "npm test" };
 
 test("the agent's recording step writes a receipt only for a passing, deliverable-bound, configured-or-independent run in a linked worktree", () => {
   const f = fixture();
@@ -220,7 +220,7 @@ test("the agent's recording step writes a receipt only for a passing, deliverabl
     assert.ok(before, "a linked worktree has a state to capture");
 
     for (const [name, override] of Object.entries({
-      activeWorktree: { activeWorktree: true }, dryRun: { dryRun: true }, failed: { verifierSucceeded: false },
+      unrecordableWorktree: { unrecordableWorktree: true }, dryRun: { dryRun: true }, failed: { verifierSucceeded: false },
       noTests: { hasExecuted: false }, notDeliverableBound: { deliverableBound: false }, notConfiguredOrIndependent: { verified: false },
     })) {
       assert.equal(recordVerificationIfEligible(dir, { ...eligible, ...override, before }), false, name);

@@ -438,7 +438,7 @@ test("a `-` target is pinned to the branch it named when the merge began, not re
   } finally { f.cleanup(); }
 });
 
-test("content staged by another terminal after the state snapshot is not swept into the message-only amend", async () => {
+test("content staged by another terminal after the state snapshot refuses the merge instead of being swept into the amend", async () => {
   const f = fixture();
   try {
     const dir = await featureWithWork(f);
@@ -448,15 +448,19 @@ test("content staged by another terminal after the state snapshot is not swept i
       fs.writeFileSync(path.join(dir, "staged-later.txt"), "unverified\n");
       git(dir, "add", "staged-later.txt");
     };
+    let r;
     try {
-      await f.run(dir, MERGE, async () => "feat(b): add b.txt");
+      r = await f.run(dir, MERGE, async () => "feat(b): add b.txt");
     } finally { delete mergeSeams.preMerge; }
-    assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").includes("staged-later.txt"), false, "unverified staged content reached the target");
-    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "feat(b): add b.txt", "the message was still applied");
+    assert.equal(r.success, false, r.output);
+    assert.match(r.output, /index changed/);
+    assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").split("\n").includes("staged-later.txt"), false, "unverified staged content reached the target");
+    assert.equal(git(f.repo, "log", "-1", "--format=%s"), "init", "nothing was merged");
+    assert.equal(git(dir, "diff", "--cached", "--name-only"), "staged-later.txt", "the staged intent is kept");
   } finally { f.cleanup(); }
 });
 
-test("content staged after the state snapshot is not swept into the squash commit either", async () => {
+test("content staged after the state snapshot refuses the squash merge too", async () => {
   const f = fixture();
   try {
     const dir = await featureWithWork(f);
@@ -473,8 +477,9 @@ test("content staged after the state snapshot is not swept into the squash commi
     try {
       r = runWorktreeCommand(["merge", "--no-verify-receipt", "--reason", "test fixture"], { cwd: dir, home: f.home, readOnly: false });
     } finally { delete mergeSeams.preMerge; }
-    assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").includes("staged-later.txt"), false, `unverified staged content reached the target: ${r.output}`);
-    assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").includes("c.txt"), true, "the verified commits were merged");
+    assert.equal(r.success, false, r.output);
+    assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").split("\n").includes("staged-later.txt"), false, `unverified staged content reached the target: ${r.output}`);
+    assert.equal(git(f.repo, "ls-tree", "-r", "--name-only", "HEAD").split("\n").includes("c.txt"), false, "nothing was merged");
   } finally { f.cleanup(); }
 });
 

@@ -178,7 +178,7 @@ export function recordVerification(workspace: string, verifier: string, expected
 }
 
 export interface RecordRequest {
-  activeWorktree: boolean;
+  unrecordableWorktree: boolean;
   dryRun: boolean;
   verifierSucceeded: boolean;
   hasExecuted: boolean;
@@ -192,7 +192,7 @@ export interface RecordRequest {
 
 /** The agent's recording step: a receipt only for a passing, deliverable-bound, configured-or-independent run on the state that was tested. */
 export function recordVerificationIfEligible(workspace: string, request: RecordRequest): boolean {
-  if (request.activeWorktree || request.dryRun || !request.verifierSucceeded || !request.hasExecuted || !request.deliverableBound || !request.verified) return false;
+  if (request.unrecordableWorktree || request.dryRun || !request.verifierSucceeded || !request.hasExecuted || !request.deliverableBound || !request.verified) return false;
   if (!request.before) return false;
   return recordVerification(workspace, request.verifier, request.before);
 }

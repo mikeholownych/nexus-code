@@ -4658,7 +4658,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       const recordableWorktree = this.isRecordableWorktree();
       const isVerified = this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true;
       recordVerificationIfEligible(this.config.workspace, {
-        activeWorktree: !recordableWorktree,
+        unrecordableWorktree: !recordableWorktree,
         dryRun: Boolean(this.config.dryRun),
         verifierSucceeded,
         hasExecuted,

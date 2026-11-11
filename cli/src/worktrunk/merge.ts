@@ -261,6 +261,12 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
     throw new WorktreeError("a commit landed in the worktree after the verification receipt was checked; nothing was merged. Verify the current state and run the command again");
   }
 
+  // A clean source has an index equal to HEAD. Anything staged since the snapshot (another terminal's `add -f` of an
+  // ignored file, say) would be unstaged by the squash below and then removed with the worktree as disposable output.
+  if (!dirty && gitOut(source.path, ["write-tree"]) !== gitOut(source.path, ["rev-parse", "--verify", "HEAD^{tree}"])) {
+    throw new WorktreeError("the index changed after the state snapshot (something was staged in the worktree); nothing was merged. Review it and run the command again");
+  }
+
   const count = Number(gitOut(source.path, ["rev-list", "--count", `${mergeBase}..HEAD`]));
   const treeOf = (rev: string) => gitOut(source.path, ["rev-parse", "--verify", "--end-of-options", `${rev}^{tree}`]);
   // Commits that cancel each other (a change and its revert) add nothing: squashing them would leave an empty commit
@@ -302,6 +308,14 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
   }
 
   if (!cancelled) {
+    // The target checkout was chosen before the source was backed up, squashed and rebased. Another terminal may have
+    // switched it to another branch since (even one at the same commit): refuse rather than advance that branch under
+    // this one's name.
+    const targetRef = git(targetEntry.path, ["symbolic-ref", "--quiet", "HEAD"], { allowFailure: true }).stdout.trim();
+    if (targetRef !== `refs/heads/${targetName}`) {
+      const targetNow = targetRef.replace(/^refs\/heads\//, "");
+      throw new WorktreeError(`the target checkout ${shownPath(ctx.home, targetEntry.path)} is no longer on ${shownBranch(targetName)} (it is on ${targetNow ? shownBranch(targetNow) : "a detached HEAD"}); nothing was fast-forwarded. The source branch is intact and backed up at ${backupRef(branch)}; switch the target back and run merge again`);
+    }
     // `refs/heads/<branch>`, not the short name: a tag of the same name would otherwise be what gets merged.
     // `--no-overwrite-ignore` prevents fast-forwarding over an untracked ignored file in the target.
     const ff = git(targetEntry.path, ["merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", "--end-of-options", `refs/heads/${branch}`], { allowFailure: true, env: NON_INTERACTIVE });
