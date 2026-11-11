@@ -60,7 +60,7 @@ import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { captureVerificationState, recordVerificationIfEligible } from "./worktrunk/verification.js";
 import { homeDir } from "./worktrunk/core.js";
-import { openRepo, currentEntry } from "./worktrunk/repo.js";
+import { openRepo, currentEntry, NotARepositoryError } from "./worktrunk/repo.js";
 import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
@@ -2509,7 +2509,7 @@ export class AutonomousAgent {
       const entry = currentEntry(openRepo(workspace));
       linked = Boolean(entry && !entry.isMain);
     } catch (err) {
-      return !(err instanceof Error && err.message === "not inside a git repository"); // a refusal or any other failure is not "no repository"
+      return !(err instanceof NotARepositoryError); // a refusal or any other failure is not "no repository"
     }
     if (!linked) return false;
     try { const state = captureVerificationState(workspace); return state === undefined || state.dirty; } catch { return true; }
@@ -2543,6 +2543,8 @@ export class AutonomousAgent {
     }
     if (!currentWorkspaceIdentityIsValid || selectedWorkspace.value !== this.workspacePathIdentity.value) {
       this.invalidateVerificationBaseline();
+      this.receiptBaselineJudged = false; // another workspace: judged afresh at its first baseline (re-selecting the same directory keeps both)
+      this.receiptBaselineUntrusted = false;
     }
     try {
       this.primaryWorkspacePathIdentity.assertCurrent();
@@ -2562,8 +2564,6 @@ export class AutonomousAgent {
         : [this.primaryWorkspacePathIdentity, this.workspacePathIdentity]
     );
     this.config.workspace = newWorkspace;
-    this.receiptBaselineJudged = false; // another workspace: judged afresh at its first baseline
-    this.receiptBaselineUntrusted = false;
     this.bridge = new RustCoreBridge(
       this.config.workspace,
       this.config.shell,

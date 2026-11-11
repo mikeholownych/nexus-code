@@ -8,6 +8,11 @@ import * as path from "node:path";
 import { rememberRepository } from "../core/checkout_trust.js";
 import { git, gitOut, GitError, UntrustedCheckoutError } from "./git.js";
 
+/** `startDir` is not inside a Git repository (as opposed to Git refusing it, or failing). */
+export class NotARepositoryError extends Error {
+  constructor() { super("not inside a git repository"); this.name = "NotARepositoryError"; }
+}
+
 export interface WorktreeEntry {
   path: string;
   head: string;
@@ -73,7 +78,7 @@ export function openRepo(startDir: string): Repo {
     commonDir = fs.realpathSync(gitOut(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
   } catch (err) {
     if (err instanceof UntrustedCheckoutError) throw err;
-    if (err instanceof GitError) throw new Error("not inside a git repository");
+    if (err instanceof GitError) throw new NotARepositoryError();
     throw err;
   }
   const entries = listEntries(cwd);

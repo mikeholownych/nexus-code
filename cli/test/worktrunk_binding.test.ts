@@ -655,7 +655,7 @@ describe("REPL turn checkpoint with a named worktree", { skip: !isSandboxAvailab
 
 describe("a receipt on the verifier baseline of a worktree the agent already worked in", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
   const states: Array<{ name: string; prepare: (dir: string) => void; untrusted: boolean }> = [
-    { name: "a clean linked worktree: the baseline can back a receipt", prepare: () => {}, untrusted: false },
+    { name: "a clean linked worktree: the baseline is judged trusted", prepare: () => {}, untrusted: false },
     { name: "uncommitted work: verification proceeds, but no receipt is issued on that baseline", prepare: (dir) => fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ scripts: { test: "echo all tests passed" } })), untrusted: true },
     { name: "a state that cannot be certified (a planted nested repository) counts as pending work, not as clean", prepare: (dir) => { fs.mkdirSync(path.join(dir, "x")); git(path.join(dir, "x"), "init", "-q"); }, untrusted: true },
     { name: "a replaced .git (the agent made its own repository) counts as pending work, not as a plain checkout", prepare: (dir) => { fs.rmSync(path.join(dir, ".git")); git(dir, "init", "-q"); }, untrusted: true },
@@ -677,7 +677,7 @@ describe("a receipt on the verifier baseline of a worktree the agent already wor
           agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: f.dir, shell: "bash", ...(authoritative ? { authoritativeVerifierCommand: "npm test" } : {}) } as any);
           if (authoritative) await agent.runTurn("look around");
           else await (agent as any).captureChangeBaseline(); // what the first mutating tool triggers
-          assert.equal((agent as any).receiptBaselineUntrusted, variant.untrusted, "only the receipt is withheld");
+          assert.equal((agent as any).receiptBaselineUntrusted, variant.untrusted, "the baseline is judged as expected (the flag that withholds the receipt)");
           if (authoritative) assert.notEqual((agent as any).changeBaseline?.verifier, null, "verification is not blocked: the verifier definition is snapshotted either way");
         } finally {
           agent?.shutdown();
@@ -717,6 +717,8 @@ describe("the receipt baseline is judged where the session starts, not on its ow
       agent.setWorkspace(otherDir);
       await (agent as any).captureChangeBaseline();
       assert.equal((agent as any).receiptBaselineUntrusted, true, "a different, already-worked-in worktree");
+      agent.setWorkspace(otherDir); // the same directory again: the baseline survives, so the judgement must too
+      assert.equal((agent as any).receiptBaselineUntrusted, true, "re-selecting the same directory does not launder the baseline");
     } finally {
       agent?.shutdown();
       await gw.close();
