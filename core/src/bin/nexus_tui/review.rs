@@ -47,7 +47,18 @@ fn truncation_note() -> ReviewLine {
     )
 }
 
+/// The rows the approval panel draws for a review. Every row passes through `safe_row` here, whatever its kind or
+/// field (a path, a hunk, a command, an argument), so no review text can reach the screen as a control character or an
+/// invisible one.
 pub fn review_lines(review: &Review) -> Vec<ReviewLine> {
+    let mut lines = review_rows(review);
+    for row in &mut lines {
+        row.text = safe_row(&row.text);
+    }
+    lines
+}
+
+fn review_rows(review: &Review) -> Vec<ReviewLine> {
     let mut lines = Vec::new();
     let truncated = match review {
         Review::Change {
@@ -83,7 +94,7 @@ pub fn review_lines(review: &Review) -> Vec<ReviewLine> {
             lines.extend(command.lines().enumerate().map(|(index, row)| {
                 line(
                     LineKind::Command,
-                    format!("{} {}", if index == 0 { "$" } else { " " }, safe_row(row)),
+                    format!("{} {row}", if index == 0 { "$" } else { " " }),
                 )
             }));
             false
@@ -94,24 +105,24 @@ pub fn review_lines(review: &Review) -> Vec<ReviewLine> {
             detail,
         } => {
             if let Some(detail) = detail {
-                lines.push(line(LineKind::Meta, format!("verifier: {}", safe_row(detail))));
+                lines.push(line(LineKind::Meta, format!("verifier: {detail}")));
             }
             lines.extend(command.lines().enumerate().map(|(index, row)| {
                 line(
                     LineKind::Command,
-                    format!("{} {}", if index == 0 { "$" } else { " " }, safe_row(row)),
+                    format!("{} {row}", if index == 0 { "$" } else { " " }),
                 )
             }));
             if let Some(script) = script {
                 if script != command {
                     lines.push(line(LineKind::Meta, "script:"));
-                    lines.extend(script.lines().map(|row| line(LineKind::Context, format!("  {}", safe_row(row)))));
+                    lines.extend(script.lines().map(|row| line(LineKind::Context, format!("  {row}"))));
                 }
             }
             false
         }
         Review::Args { text, truncated } => {
-            lines.extend(text.lines().map(|row| line(LineKind::Context, safe_row(row))));
+            lines.extend(text.lines().map(|row| line(LineKind::Context, row)));
             *truncated
         }
         Review::Unknown => {

@@ -395,10 +395,29 @@ fn is_typing(event: &TermEvent) -> bool {
     matches!(event, TermEvent::Key(key) if key.kind == KeyEventKind::Press) || matches!(event, TermEvent::Paste(_))
 }
 
-/// Several keys arriving together (typed faster than anyone decides, or pasted by a terminal without bracketed
-/// paste) never answer an approval; one deliberate key does.
-fn burst_may_answer(approval_open: bool, keys: usize) -> bool {
-    !approval_open || keys <= 1
+/// The key presses queued behind `first`, read until something else arrives (kept in `pending`). Several presses of
+/// any kind arriving together are typed faster than anyone decides, or pasted by a terminal without bracketed paste.
+fn drain_key_presses(first: KeyEvent, mut next: impl FnMut() -> io::Result<Option<TermEvent>>, pending: &mut Option<TermEvent>) -> io::Result<Vec<KeyEvent>> {
+    let mut keys = vec![first];
+    while let Some(event) = next()? {
+        match event {
+            TermEvent::Key(key) if key.kind == KeyEventKind::Press => keys.push(key),
+            TermEvent::Key(_) => {}
+            other => {
+                *pending = Some(other);
+                break;
+            }
+        }
+    }
+    Ok(keys)
+}
+
+/// How a burst that reached an open approval is handled: keys that could be text (letters, Enter, Tab) never answer,
+/// they go to the draft as a paste would; the rest (arrows, Esc, scrolling) act as keys. Returns the draft text and
+/// the keys to act on, in order.
+fn split_approval_burst(keys: &[KeyEvent]) -> (String, Vec<KeyEvent>) {
+    let text: Vec<KeyEvent> = keys.iter().filter(|key| pasteable(key)).copied().collect();
+    (burst_draft_text(&text), keys.iter().filter(|key| !pasteable(key)).copied().collect())
 }
 
 fn pasteable(key: &KeyEvent) -> bool {
@@ -494,6 +513,19 @@ fn event_loop(
             }
         };
         let action = match event {
+            // Several presses at an open approval (a `Left` then a `y` at machine speed included) never answer it.
+            TermEvent::Key(key) if key.kind == KeyEventKind::Press && app.state.approval_id().is_some() && event::poll(Duration::ZERO)? => {
+                let keys = drain_key_presses(key, || Ok(if event::poll(Duration::ZERO)? { Some(event::read()?) } else { None }), &mut pending)?;
+                if let [only] = keys.as_slice() {
+                    app.state.on_key(*only)
+                } else {
+                    let (text, acts) = split_approval_burst(&keys);
+                    if !text.is_empty() {
+                        app.state.on_paste(&text);
+                    }
+                    acts.into_iter().find_map(|key| app.state.on_key(key))
+                }
+            }
             TermEvent::Key(key) if pasteable(&key) && event::poll(Duration::ZERO)? => {
                 let mut keys = vec![key];
                 while event::poll(Duration::ZERO)? {
@@ -507,11 +539,6 @@ fn event_loop(
                     }
                 }
                 match burst_text(&keys) {
-                    // Several keys at once never answer an approval: their text goes to the draft, as a paste does.
-                    _ if !burst_may_answer(app.state.approval_id().is_some(), keys.len()) => {
-                        app.state.on_paste(&burst_draft_text(&keys));
-                        None
-                    }
                     Some(text) => {
                         app.state.on_paste(&text);
                         None
@@ -569,9 +596,25 @@ mod tests {
         assert_eq!(discard_queued_input(std::iter::once(TermEvent::Resize(80, 24))), (true, false), "a resize alone is not typing");
         let keys: Vec<KeyEvent> = [KeyCode::Char('a'), KeyCode::Enter, KeyCode::Char('b'), KeyCode::Tab, KeyCode::Char('c')].map(|code| KeyEvent::new(code, KeyModifiers::NONE)).to_vec();
         assert_eq!(burst_draft_text(&keys), "a\nb\tc", "line breaks and tabs of a burst are kept");
-        assert!(!burst_may_answer(true, 3), "a burst never answers an approval");
-        assert!(burst_may_answer(true, 1), "a single deliberate key may");
-        assert!(burst_may_answer(false, 5), "bursts outside approvals are typing or paste as before");
+    }
+
+    #[test]
+    fn every_press_queued_at_an_open_approval_counts_toward_the_burst() {
+        use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let release = KeyEvent { kind: KeyEventKind::Release, state: KeyEventState::NONE, ..press(KeyCode::Char('y')) };
+        // `Left` was read first and `y` is queued behind it: both count, and the `y` is text, not an answer.
+        let mut queue = vec![TermEvent::Key(press(KeyCode::Char('y'))), TermEvent::Key(release), TermEvent::Resize(80, 24), TermEvent::Key(press(KeyCode::Char('n')))].into_iter();
+        let mut pending = None;
+        let keys = drain_key_presses(press(KeyCode::Left), || Ok(queue.next()), &mut pending).unwrap();
+        assert_eq!(keys, vec![press(KeyCode::Left), press(KeyCode::Char('y'))], "a release is skipped; the drain stops at the resize");
+        assert!(matches!(pending, Some(TermEvent::Resize(80, 24))));
+        let (text, acts) = split_approval_burst(&keys);
+        assert_eq!(text, "y", "the y goes to the draft");
+        assert_eq!(acts, vec![press(KeyCode::Left)], "the arrow still moves the focus");
+        let (text, acts) = split_approval_burst(&[press(KeyCode::Char('y')), press(KeyCode::Enter), press(KeyCode::Esc), press(KeyCode::Down)]);
+        assert_eq!(text, "y\n");
+        assert_eq!(acts, vec![press(KeyCode::Esc), press(KeyCode::Down)], "Esc in a burst still denies");
     }
 
     use super::*;
@@ -678,7 +721,7 @@ exit 0"#
         assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), Instant::now()), None);
         // Drawn a moment after the operator last typed: one `y` approves.
         let shown = Instant::now() + crate::live_state::APPROVAL_IN_FLIGHT;
-        app.state.note_approval_shown(shown);
+        app.state.note_approval_shown_and_read(shown);
         let approve = app.state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), shown).unwrap();
         assert!(app.handle(approve));
         pump_until(&mut app, |s| {

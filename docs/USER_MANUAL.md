@@ -204,11 +204,13 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
     than about 0.3 seconds per key that starts when no key was pressed in the second before the panel appeared; and a
     held key whose first repeat comes more than 1 second after the press (a long repeat delay set for accessibility).
     Terminals that do not report key release cannot tell a held key from fast presses.
-  - A command or script longer than the panel shows `↓ n more rows below`. Approve and Approve all are refused (with a
-    notice) until you have scrolled to its end with ↓ or End; Deny never waits. Control characters and bidirectional
-    overrides in a command are shown as visible stand-ins (`␍`, `␛`, `<U+202E>`), and long lines wrap. Zero-width
-    characters show as `<U+200D>` and the like too, also inside emoji and right-to-left text: that is deliberate, since
-    an invisible character in a command is something to see before approving.
+  - A command, script or diff longer than the panel shows `↓ n more rows below`. Approve and Approve all are refused
+    (with a notice) until every row of it has been on screen, read from the top with ↓ or PageDown (End and other jumps
+    do not count the rows they skip, and a new terminal width starts the reading again); Deny never waits. Every row
+    of the panel shows control characters and bidirectional overrides as visible stand-ins (`␍`, `␛`, `<U+202E>`), and
+    long lines wrap. Zero-width, no-break and other invisible characters show as `<U+200D>`, `<U+00A0>` and the like
+    too, also inside emoji and right-to-left text: that is deliberate, since an invisible character in a command is
+    something to see before approving.
   The panel is answerable only while its change is visible — on a window too small to show it, it asks you to enlarge
   the terminal (Esc still denies). Approvals that arrive while another panel or approval is open wait in order; the
   panel title shows how many are waiting.
