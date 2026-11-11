@@ -274,7 +274,7 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     // .nexus-security.json never reaches a worktree.
     const security = new SecurityManager(policyWorkspace ?? root);
     // A base read from persisted JSON is resolved as a commit before use: a value shaped like an option is refused.
-    const support = snapshotSupport((args) => git(args, { ownIndex: true }));
+    const support = snapshotSupport((args) => git(args, { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }));
     if ("unsupported" in support) return { error: `automatic inputs are not available for this repository state: ${support.unsupported}` };
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     git(["read-tree", "--end-of-options", commit]);
