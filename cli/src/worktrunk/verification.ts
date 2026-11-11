@@ -39,9 +39,11 @@ function filesystemCapabilities(gitDir: string): { modes: boolean; symlinks: boo
     let symlinks = false;
     try {
       const file = path.join(probe, "f");
-      fs.writeFileSync(file, "x");
+      fs.writeFileSync(file, "x", { mode: 0o644 });
+      fs.chmodSync(file, 0o644);
+      const plain = (fs.statSync(file).mode & 0o111) === 0; // a filesystem that fakes modes shows every file executable
       fs.chmodSync(file, 0o755);
-      modes = (fs.statSync(file).mode & 0o111) !== 0;
+      modes = plain && (fs.statSync(file).mode & 0o111) !== 0; // and one that ignores chmod never shows the bit appear
     } catch { /* no exec bits */ }
     try { fs.symlinkSync("f", path.join(probe, "l")); symlinks = true; } catch { /* no symlinks */ }
     return { modes, symlinks };

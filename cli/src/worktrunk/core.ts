@@ -468,7 +468,7 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
           throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
         }
         const hidden = hiddenModificationReason(entry.path);
-        if (hidden) throw new WorktreeError(`${hidden}; restore or commit it, or pass --force`);
+        if (hidden) throw new WorktreeError(`${hidden}; clear the flag (\`git update-index --no-assume-unchanged --no-skip-worktree <file>\`) or restore the file, or pass --force`);
       }
       removeSeams.beforeRemove?.(entry);
       // A commit made here since the integration check (another session's `/commit`, an editor) must not be lost with

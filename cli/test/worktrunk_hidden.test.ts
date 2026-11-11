@@ -67,19 +67,23 @@ for (const hider of HIDERS) {
       hider.hide(f.dir);
       const r = f.run(f.dir, ["merge", "--no-verify-receipt", "--reason", "hidden fixture"]);
       assert.equal(r.success, false, r.output);
+      assert.match(r.output, /hides|hidden/, "refused by the hidden-edit check, not by the waiver parsing");
       assert.ok(fs.existsSync(f.dir));
     } finally { f.cleanup(); }
   });
 
-  test(`remove keeps a worktree holding a hidden edit (${hider.name}) unless forced`, () => {
+  test(`remove refuses a worktree holding a hidden edit (${hider.name}) unless forced`, () => {
     const f = fixture("feat/remove");
     try {
       git(f.repo, "merge", "--ff-only", "-q", "feat/remove"); // integrated: the only thing left to lose is the hidden edit
       hider.hide(f.dir);
       const r = f.run(f.repo, ["remove", "feat/remove"]);
       assert.equal(r.success, false, r.output);
+      assert.match(r.output, /hides|hidden/);
       assert.ok(fs.existsSync(f.dir), "the worktree survives");
-      if (hider.name.startsWith("assume")) assert.equal(fs.readFileSync(path.join(f.dir, "a.txt"), "utf8"), "hidden edit\n", "and so does the edit");
+      const forced = f.run(f.repo, ["remove", "feat/remove", "--force"]);
+      assert.equal(forced.success, true, `--force discards knowingly: ${forced.output}`);
+      assert.equal(fs.existsSync(f.dir), false);
     } finally { f.cleanup(); }
   });
 
@@ -90,7 +94,7 @@ for (const hider of HIDERS) {
       hider.hide(f.dir);
       const r = f.run(f.repo, ["prune", "--min-age", "0s"]);
       assert.ok(fs.existsSync(f.dir), `the worktree survives: ${r.output}`);
-      assert.match(r.output, /kept 1|hides/);
+      assert.match(r.output, /kept .*hides/, "kept for that reason");
     } finally { f.cleanup(); }
   });
 }
