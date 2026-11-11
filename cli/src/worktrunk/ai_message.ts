@@ -54,9 +54,11 @@ export function cleanReply(reply: unknown): string | undefined {
   if (!text || text.length > MAX_MESSAGE_CHARS) return undefined;
   if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) return undefined;
   text = redactSecrets(text).trim();
-  const subject = text.split("\n")[0].trim();
-  if (!subject || subject.length > MAX_SUBJECT_CHARS) return undefined;
-  return text;
+  const [subject, ...body] = text.split("\n").map((line) => line.trimEnd());
+  if (!subject.trim() || subject.length > MAX_SUBJECT_CHARS) return undefined;
+  // A reply built from an untrusted diff must not forge trailers (`Release-As:`, `Co-Authored-By:`, `BREAKING CHANGE:`) that release and CI tooling act on.
+  const kept = body.filter((line) => !/^(?:[A-Za-z][A-Za-z0-9-]*|BREAKING[ -]CHANGE)(?::\s|\s#)/.test(line));
+  return [subject.trim(), ...kept].join("\n").trim();
 }
 
 export async function generateMergeMessage(

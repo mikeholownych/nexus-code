@@ -26,8 +26,26 @@ export function parseGitfilePointer(content: string): string | undefined {
   return target;
 }
 
-/** Directory entries examined beside a worktree when looking for its main repository. */
-const MAX_SIBLINGS_SCANNED = 500;
+/**
+ * The text of a small regular file, or undefined. The agent controls these paths: a FIFO would block the host's
+ * synchronous read for ever, a link to `/dev/zero` or a huge sparse file would exhaust memory. Nothing is opened unless
+ * `lstat` says it is a plain file of at most `maxBytes`, and it is opened non-blocking without following links.
+ */
+function readSmallFile(file: string, maxBytes: number): string | undefined {
+  try {
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > maxBytes) return undefined;
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+    try {
+      const opened = fs.fstatSync(fd);
+      if (!opened.isFile() || opened.size > maxBytes) return undefined;
+      return fs.readFileSync(fd, "utf8");
+    } finally { fs.closeSync(fd); }
+  } catch { return undefined; }
+}
+
+const MAX_POINTER_BYTES = 4096;
+const MAX_CONFIG_BYTES = 1024 * 1024;
 
 /** Repositories this process has opened and their linked worktrees (from `git worktree list`, run where the operator is). */
 const knownCommonDirs = new Set<string>();
@@ -53,17 +71,19 @@ function replacedWorktreeReason(root: string): string | undefined {
     if (path.dirname(dir) === dir) break;
   }
   // The sibling layout (`<repo>.<branch>` beside `<repo>`) puts the main repository next to the worktree, not above it.
-  for (const parent of [path.dirname(root), path.dirname(path.dirname(root))]) {
-    let children: string[] = [];
-    try { children = fs.readdirSync(parent).slice(0, MAX_SIBLINGS_SCANNED); } catch { /* unreadable */ }
-    for (const child of children) registries.add(path.join(parent, child, ".git", "worktrees"));
-  }
+  const parent = path.dirname(root);
+  try {
+    for (const child of fs.readdirSync(parent)) {
+      if (path.basename(root).startsWith(child + ".")) registries.add(path.join(parent, child, ".git", "worktrees"));
+    }
+  } catch { /* unreadable */ }
   for (const registry of registries) {
     let names: string[];
     try { names = fs.readdirSync(registry); } catch { continue; } // no registry here
     for (const name of names) {
       try {
-        const recorded = fs.readFileSync(path.join(registry, name, "gitdir"), "utf8").trim();
+        const recorded = readSmallFile(path.join(registry, name, "gitdir"), MAX_POINTER_BYTES)?.trim();
+        if (recorded === undefined) continue;
         if (path.basename(recorded) === ".git" && fs.realpathSync(path.dirname(path.resolve(registry, name, recorded))) === root) {
           return `${root} is a linked worktree registered in ${path.dirname(path.dirname(registry))} whose .git file was replaced by a repository`;
         }
@@ -98,7 +118,8 @@ export function verifyCheckout(cwd: string): { reason?: string; gitDir?: string;
   // `.git` file above it (a bare-repository layout `project/.git` -> `.bare`) is the operator's, not the agent's.
   const isLinkedRoot = (root: string): boolean => {
     try {
-      const target = parseGitfilePointer(fs.readFileSync(path.join(root, ".git"), "utf8"));
+      const content = readSmallFile(path.join(root, ".git"), MAX_POINTER_BYTES);
+      const target = content === undefined ? undefined : parseGitfilePointer(content);
       return target !== undefined && path.basename(path.dirname(fs.realpathSync(path.resolve(root, target)))) === "worktrees";
     } catch { return false; }
   };
@@ -121,7 +142,8 @@ export function verifyCheckout(cwd: string): { reason?: string; gitDir?: string;
     try {
       const stat = fs.lstatSync(dotGit);
       if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 4096) return { reason: `${dotGit} is not a plain pointer file` };
-      const target = parseGitfilePointer(fs.readFileSync(dotGit, "utf8"));
+      const content = readSmallFile(dotGit, MAX_POINTER_BYTES);
+      const target = content === undefined ? undefined : parseGitfilePointer(content);
       if (target === undefined) return { reason: `${dotGit} is not a well-formed gitdir pointer` };
       const admin = fs.realpathSync(path.resolve(root, target));
       if (inside(outer, admin)) return { reason: `${dotGit} leads into a repository inside the worktree itself` };
@@ -129,9 +151,10 @@ export function verifyCheckout(cwd: string): { reason?: string; gitDir?: string;
       if (path.basename(path.dirname(admin)) === "worktrees") {
         const common = fs.realpathSync(path.dirname(path.dirname(admin)));
         if (inside(outer, common)) return { reason: `${dotGit} leads into a repository inside the worktree itself` };
-        pointsBack = fs.realpathSync(path.resolve(admin, fs.readFileSync(path.join(admin, "gitdir"), "utf8").trim())) === path.join(root, ".git");
+        const back = readSmallFile(path.join(admin, "gitdir"), MAX_POINTER_BYTES)?.trim();
+        pointsBack = back !== undefined && fs.realpathSync(path.resolve(admin, back)) === path.join(root, ".git");
       } else {
-        const configured = /^\s*worktree\s*=\s*(.+?)\s*$/m.exec(fs.readFileSync(path.join(admin, "config"), "utf8"));
+        const configured = /^\s*worktree\s*=\s*(.+?)\s*$/m.exec(readSmallFile(path.join(admin, "config"), MAX_CONFIG_BYTES) ?? "");
         pointsBack = configured !== null && fs.realpathSync(path.resolve(admin, configured[1])) === root;
       }
       if (!pointsBack) return { reason: `the Git directory behind ${dotGit} does not point back at it` };

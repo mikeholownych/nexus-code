@@ -10,6 +10,7 @@ import { mergeSeams } from "../src/worktrunk/merge.js";
 import { lazyProviderCompleter } from "../src/worktrunk/provider.js";
 import { buildConfig } from "../src/config.js";
 import { startGateway } from "./helpers/fixtures.js";
+import { cleanReply } from "../src/worktrunk/ai_message.js";
 import type { Completer } from "../src/worktrunk/ai_message.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -502,4 +503,9 @@ test("the lazy provider completer resolves the local-model placeholder to the se
     if (previousModel !== undefined) process.env.LOCAL_LLM_MODEL = previousModel;
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("a model reply cannot forge commit trailers or release directives in the body", () => {
+  const cleaned = cleanReply("feat(b): add b\n\nAdds the b file.\nRelease-As: 9.0.0\nCo-Authored-By: Someone <a@b.c>\nBREAKING CHANGE: everything\nCloses #12");
+  assert.equal(cleaned, "feat(b): add b\n\nAdds the b file.");
 });

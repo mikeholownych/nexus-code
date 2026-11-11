@@ -329,3 +329,34 @@ test("a repository planted two levels below an untracked directory is found, and
     assert.match(String(verifyCheckout(fresh).reason), /whose \.git file was replaced/);
   } finally { f.cleanup(); }
 });
+
+test("an ignored directory below an untracked one is neither scanned nor a reason to refuse", async () => {
+  const { nestedRepositoryReason } = await import("../src/worktrunk/git.js");
+  const f = fixture("feat/ignored");
+  try {
+    fs.writeFileSync(path.join(f.dir, ".gitignore"), "node_modules/\n");
+    fs.mkdirSync(path.join(f.dir, "apps", "new", "node_modules", "pkg"), { recursive: true });
+    git(path.join(f.dir, "apps", "new", "node_modules", "pkg"), "init", "-q"); // Git never reads this one for status
+    fs.writeFileSync(path.join(f.dir, "apps", "new", "index.js"), "x\n");
+    assert.equal(nestedRepositoryReason(f.dir), undefined);
+    fs.mkdirSync(path.join(f.dir, "apps", "new", "src", "vendored"), { recursive: true });
+    git(path.join(f.dir, "apps", "new", "src", "vendored"), "init", "-q"); // not ignored: still found
+    assert.match(String(nestedRepositoryReason(f.dir)), /nested inside the linked worktree/);
+  } finally { f.cleanup(); }
+});
+
+test("a .git that is a FIFO, a link to /dev/zero or an oversized file is refused without blocking or reading it", async () => {
+  const { verifyCheckout } = await import("../src/core/checkout_trust.js");
+  const f = fixture("feat/special");
+  try {
+    fs.rmSync(path.join(f.dir, ".git"));
+    execFileSync("mkfifo", [path.join(f.dir, ".git")]); // a synchronous read of this would never return
+    assert.match(String(verifyCheckout(f.dir).reason), /not a plain pointer file|could not be verified|not a well-formed/);
+    fs.rmSync(path.join(f.dir, ".git"));
+    fs.symlinkSync("/dev/zero", path.join(f.dir, ".git"));
+    assert.match(String(verifyCheckout(f.dir).reason), /not a plain pointer file/);
+    fs.rmSync(path.join(f.dir, ".git"));
+    fs.writeFileSync(path.join(f.dir, ".git"), "gitdir: " + "x".repeat(10_000));
+    assert.match(String(verifyCheckout(f.dir).reason), /not a plain pointer file/);
+  } finally { f.cleanup(); }
+});

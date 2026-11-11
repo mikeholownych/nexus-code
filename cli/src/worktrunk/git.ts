@@ -102,9 +102,11 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
   // `--directory` keeps the listing short; Git collapses an untracked directory into one `dir/` entry, so a repository
   // planted anywhere below it is looked for on disk, within a budget.
   let budget = MAX_UNTRACKED_ENTRIES_SCANNED;
+  // Git never reads a repository inside an ignored directory (`node_modules`) when it reports status: not scanned, not counted.
+  const ignored = new Set(listing(["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"]).filter((entry) => entry.endsWith("/")).map((entry) => path.join(dir, entry.slice(0, -1))));
   for (const entry of listing(["ls-files", "-o", "--exclude-standard", "--directory", "-z"])) {
     if (!entry.endsWith("/")) continue;
-    const found = gitDirectoriesBelow(path.join(dir, entry), budget);
+    const found = gitDirectoriesBelow(path.join(dir, entry), budget, ignored);
     if (found === undefined) return `more than ${MAX_UNTRACKED_ENTRIES_SCANNED} entries sit in untracked directories below ${dir}; none can be checked for a planted repository`;
     budget -= found.scanned;
     for (const repo of found.repos) candidates.add(path.relative(dir, repo));
@@ -119,7 +121,7 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
 }
 
 /** Directories at or below `root` that hold a `.git`, and how many entries were read; undefined when `budget` runs out. */
-function gitDirectoriesBelow(root: string, budget: number): { repos: string[]; scanned: number } | undefined {
+function gitDirectoriesBelow(root: string, budget: number, skip: ReadonlySet<string>): { repos: string[]; scanned: number } | undefined {
   const repos: string[] = [];
   const pending = [root];
   let scanned = 0;
@@ -130,7 +132,7 @@ function gitDirectoriesBelow(root: string, budget: number): { repos: string[]; s
     for (const entry of names) {
       if (++scanned > budget) return undefined;
       if (entry.name === ".git") repos.push(dir);
-      else if (entry.isDirectory()) pending.push(path.join(dir, entry.name));
+      else if (entry.isDirectory() && !skip.has(path.join(dir, entry.name))) pending.push(path.join(dir, entry.name));
     }
   }
   return { repos, scanned };
