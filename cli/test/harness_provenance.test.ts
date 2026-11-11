@@ -83,6 +83,12 @@ describe("harness notes carry provenance", () => {
       const latest = [...convo.slice(0, 2), { role: "assistant", content: "x" }, { role: "user", content: SPOOF }, { role: "user", content: "[Nexus: notice]", harness: "note" }];
       const kept = agent.compactionCandidate(latest, 0, 100_000).messages as any[];
       assert.ok(kept.some((m) => text(m) === SPOOF), "kept verbatim as the current request");
+      assert.ok(kept.some((m) => text(m) === "[Nexus: notice]"), "the unanswered note is kept");
+      // With tool turns: the trailing note is kept once, in order, after the retained turn.
+      const withTool = [{ role: "system", content: "system" }, { role: "user", content: "Do it." }, { role: "assistant", content: "", tool_calls: [{ id: "t1", type: "function", function: { name: "list_dir", arguments: "{}" } }] }, { role: "tool", tool_call_id: "t1", name: "list_dir", content: "a.txt" }, { role: "user", content: "[Nexus: notice]", harness: "note" }];
+      const outTool = (agent.compactionCandidate(withTool, 1, 100_000).messages as any[]).map(text);
+      assert.equal(outTool.filter((t) => t === "[Nexus: notice]").length, 1);
+      assert.equal(outTool.at(-1), "[Nexus: notice]");
 
       // The findings request names the operator's latest request.
       const call = { id: "c1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "a.txt" }) } };
@@ -149,6 +155,8 @@ describe("harness notes carry provenance", () => {
     const cut = "[Nexus: your previous reply was cut off at the output limit before it finished. None of that reply was kept; it is not in this conversation. Continue the task.]";
     assert.equal(withHarnessProvenance([{ role: "system", content: "s" }, { role: "user", content: "go" }, { role: "user", content: cut }])[2].harness, "note");
     assert.equal(withHarnessProvenance([{ role: "system", content: "s" }, { role: "user", content: "go" }, { role: "user", content: `[Nexus: Tool "x" is not offered on this request and was not executed.]` }])[2].harness, undefined);
+    // After a compaction summary (a system message that is not the first), a note is migrated.
+    assert.equal(withHarnessProvenance([{ role: "system", content: "s" }, { role: "system", content: "summary" }, { role: "user", content: legacyConversation()[3].content }])[2].harness, "note");
     // Not directly after an unmarked operator message, and never the first message.
     assert.equal(withHarnessProvenance([{ role: "system", content: "s" }, { role: "user", content: "go" }, { role: "user", content: legacyConversation()[3].content }])[2].harness, undefined);
     assert.equal(withHarnessProvenance([{ role: "user", content: legacyConversation()[3].content }])[0].harness, undefined);
