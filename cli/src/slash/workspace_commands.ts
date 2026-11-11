@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { copyToClipboard, readFromClipboard } from "../clipboard.js";
-import { commitChanges, generateConventionalCommit, getGitInfo, workspaceStatus } from "../git.js";
+import { commitChanges, generateConventionalCommit, getGitInfo, trustedGitArgs, workspaceStatus } from "../git.js";
 import { HunkStager } from "../stager.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "../tester.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
@@ -14,7 +14,7 @@ import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply 
 import { MAX_PASTE } from "../protocol.js";
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  return execFileSync("git", [...trustedGitArgs(cwd), ...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
 }
 
 function workspace(ctx: SlashContext): string {

@@ -5,7 +5,7 @@ import { stdin as input, stdout as output } from "node:process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import pc from "picocolors";
 import { AutonomousAgent } from "./agent.js";
 import { withDurableSync } from "./core/durable_file.js";
@@ -14,7 +14,7 @@ import { LocalLlmClient } from "./client.js";
 import { HarnessConfig, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { isNexusDirPermissive } from "./doctor.js";
-import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges, workspaceStatus } from "./git.js";
+import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges, trustedGitArgs, workspaceStatus } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import { formatDiagnosticForOutput } from "./ui.js";
 import {
@@ -1020,7 +1020,7 @@ export class InteractiveRepl {
               continue;
             }
             try {
-              const diffOut = execSync("git diff", {
+              const diffOut = execFileSync("git", [...trustedGitArgs(this.config.workspace), "diff"], {
                 cwd: this.config.workspace,
                 encoding: "utf-8",
                 stdio: ["pipe", "pipe", "pipe"],
@@ -1532,7 +1532,7 @@ export class InteractiveRepl {
                 continue;
               }
               try {
-                const diffOut = execSync("git diff", {
+                const diffOut = execFileSync("git", [...trustedGitArgs(this.config.workspace), "diff"], {
                   cwd: this.config.workspace,
                   encoding: "utf-8",
                   stdio: ["pipe", "pipe", "pipe"],

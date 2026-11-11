@@ -14,7 +14,7 @@ import { clearStaleEntry, removeOne, resolveBranchName, shownBranch, shownPath, 
 import { git, gitOut, parseSubmoduleStatus, printable } from "./git.js";
 import { currentEntry, defaultBranch, openRepo, resolveBranchCommit, type Repo, type WorktreeEntry } from "./repo.js";
 import { readRegistry, updateRegistry, MAX_RECORDS, MAX_BRANCH_LENGTH } from "./registry.js";
-import { hasVerification, NEXUS_STATE_PATH, workingState } from "./verification.js";
+import { hasVerification, hiddenModificationReason, NEXUS_STATE_PATH, workingState } from "./verification.js";
 
 export interface MergeOptions {
   target?: string;
@@ -169,6 +169,8 @@ export function resolveMergeContext(ctx: WorktreeContext, options: MergeOptions 
   if (targetState.total > 0) throw new WorktreeError(`the target worktree (${shownBranch(targetName)}) has uncommitted changes; commit or stash them first`);
 
   const state = statusOf(source.path);
+  const hidden = hiddenModificationReason(source.path);
+  if (hidden) throw new WorktreeError(`${shownBranch(branch)} cannot be merged: ${hidden}. Clear the flag or restore the file (\`git update-index --no-assume-unchanged --no-skip-worktree <file>\`), and run merge again. Nothing was changed`);
   // A conflicted `git stash pop` leaves unmerged index entries with no operation marker; staging them would
   // clear the conflict and commit the markers.
   if (state.conflicted > 0) throw new WorktreeError(`the worktree has ${state.conflicted} path(s) with unresolved conflicts; resolve them (or \`git restore\` them) in ${shownPath(ctx.home, source.path)} and run merge again. Nothing was changed`);
@@ -431,6 +433,8 @@ export function pruneWorktrees(ctx: WorktreeContext, options: PruneOptions = {})
       const dirty = statusOf(entry.path, { ignored: true, ignoreSubmodules: "none" });
       if (dirty.total > 0) { keep(entry, `dirty (${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked)`); continue; }
       if (dirty.ignored > 0 && !options.discardIgnored) { keep(entry, `${dirty.ignored} ignored path(s); pass --discard-ignored to prune it anyway`); continue; }
+      const hiddenEdit = hiddenModificationReason(entry.path);
+      if (hiddenEdit) { keep(entry, "it holds a modification that Git's index or configuration hides"); continue; }
       if (options.dryRun) {
         counts.removed++;
         lines.push(`would remove ${label(entry)} (integrated: ${reason})`);

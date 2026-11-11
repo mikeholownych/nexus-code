@@ -128,6 +128,18 @@ export function hasDirtySubmodule(dir: string): boolean {
 }
 
 /**
+ * A modification the repository's own index or configuration hides from `status` and `add -A` (`--assume-unchanged`,
+ * `--skip-worktree`, `core.fileMode=false`, stat caching) shows up as a difference between the strict snapshot and the
+ * tree a merge would commit. Anything that deletes a worktree, or merges it, refuses while one exists: the edit would be
+ * in no commit and in no backup. Undefined when there is none.
+ */
+export function hiddenModificationReason(dir: string): string | undefined {
+  const normal = workingState(dir, statusOf(dir).total > 0).tree;
+  if (snapshotTree(dir, true) === normal) return undefined;
+  return "it holds a modification that Git's index or configuration hides (an `--assume-unchanged` or `--skip-worktree` file, `core.fileMode=false`) and that no merge or backup would carry";
+}
+
+/**
  * The working state of `dir` for a receipt, or undefined when it cannot be certified: a submodule holds uncommitted
  * content, or the strict snapshot (see `snapshotTree`) differs from the state a merge would commit, meaning something
  * in the repository's index or configuration hides an edit from `status` and `add -A`. Whatever a verifier saw, the

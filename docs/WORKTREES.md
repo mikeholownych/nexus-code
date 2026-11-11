@@ -101,6 +101,15 @@ can never change it:
 * Every Git call goes through one helper: replace objects, hooks (`core.hooksPath` and configured hooks), fsmonitor and
   external transport helpers are switched off; branch names and paths follow `--end-of-options`.
 * Git hooks never run while Nexus creates or removes a worktree.
+* The agent can write its worktree, including its `.git` pointer. Nexus refuses (with "not a trusted worktree") to run Git
+  in a worktree whose `.git` leads anywhere the agent could have planted, whose `.git` was replaced or deleted, or that
+  holds a repository nested inside it. A custom layout whose main repository is neither an ancestor of the worktree, nor
+  the repository named by the worktree's own name beside it (`<repo>.<branch>`), nor one this process has already opened
+  is not recognised when its `.git` was deleted or replaced: use the default or sibling layout where the agent runs
+  unattended, or run a Nexus command from the main checkout first.
+* A modification that Git's own index or configuration hides (`--assume-unchanged`, `--skip-worktree`,
+  `core.fileMode=false`) is in no commit and no backup. `merge` (with or without a receipt or a waiver), `remove` and
+  `prune` refuse a worktree that holds one; `remove --force` discards it knowingly.
 * The repository is found from `git rev-parse --git-common-dir`, so commands behave the same inside any linked worktree.
 * Created worktrees are recorded in `<git-common-dir>/nexus/worktrees.json` (64 KiB cap, no symbolic links).
 * Human-readable output (the `list` table, messages, errors) passes branch names and paths through the secret

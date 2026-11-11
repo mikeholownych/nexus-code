@@ -540,3 +540,18 @@ test("a linked worktree whose .git file was deleted is refused, not resolved to 
     assert.equal(verifyCheckout(path.join(f.repo, "docs", "deeper")).reason, undefined, "an ordinary subdirectory of the main checkout is fine");
   } finally { f.cleanup(); }
 });
+
+test("the diff and stage helpers run against the verified Git directory and refuse a planted one", async () => {
+  const { HunkStager } = await import("../src/stager.js");
+  const { trustedGitArgs } = await import("../src/git.js");
+  const f = fixture("feat/stager");
+  try {
+    fs.writeFileSync(path.join(f.dir, "a.txt"), "edited in the worktree\n");
+    assert.match(new HunkStager(f.dir).getUnstagedDiff(), /edited in the worktree/, "an intact linked worktree works");
+    assert.deepEqual(trustedGitArgs(f.dir).slice(0, 1), ["--git-dir"], "and runs against the verified directory");
+    const marker = plantRepository(f, "feat/stager", [`filter.plant.clean\u0000sh -c 'echo ran > @MARKER@; cat'`, `core.fsmonitor\u0000sh -c 'echo fsm > @MARKER@'`]);
+    assert.throws(() => trustedGitArgs(f.dir), /not a trusted worktree/);
+    assert.equal(new HunkStager(f.dir).getUnstagedDiff(), "", "nothing is diffed in a planted repository");
+    assert.equal(fs.existsSync(marker), false, "a planted configuration command ran on the host");
+  } finally { f.cleanup(); }
+});

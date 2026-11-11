@@ -35,7 +35,7 @@ function pathspecEnv(): NodeJS.ProcessEnv {
  * Returns the `--git-dir`/`--work-tree` pair to run Git against (empty for a plain repository), so a pointer rewritten
  * after this check is not re-read.
  */
-function trustedGitArgs(workspace: string): string[] {
+export function trustedGitArgs(workspace: string): string[] {
   const checkout = verifyCheckout(workspace);
   const reason = checkout.reason ?? (checkout.gitDir ? nestedRepositoryReason(workspace) : undefined); // and any repository planted below it
   if (reason) throw new UntrustedCheckoutError(workspace, reason, []);

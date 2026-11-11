@@ -13,6 +13,7 @@ import { ensureGitExclude } from "../core/git_exclude.js";
 import { identityOf, mkdirVerified } from "../safe_fs.js";
 import { readWorktreeSettings } from "./config.js";
 import { MAX_POINTER_BYTES, parseGitfilePointer, readSmallFile } from "../core/checkout_trust.js";
+import { hiddenModificationReason } from "./verification.js";
 import { git, gitOut, nestedRepositoryReason, UntrustedCheckoutError } from "./git.js";
 import { resolveWorktreePath, sanitizeBranch, validateBranchName, allowedRoot } from "./paths.js";
 import { readRegistry, updateRegistry, withWorktreeLock, type Registry } from "./registry.js";
@@ -466,6 +467,8 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
         if (dirty.total + (options.discardIgnored ? 0 : dirty.ignored) > 0) {
           throw new WorktreeError(`worktree has ${dirty.staged + dirty.modified} changed, ${dirty.untracked} untracked and ${dirty.ignored} ignored path(s); commit or clean them, or pass --force`);
         }
+        const hidden = hiddenModificationReason(entry.path);
+        if (hidden) throw new WorktreeError(`${hidden}; restore or commit it, or pass --force`);
       }
       removeSeams.beforeRemove?.(entry);
       // A commit made here since the integration check (another session's `/commit`, an editor) must not be lost with
