@@ -231,3 +231,51 @@ test("a snapshot checks the real name of a file whose name starts with a space, 
   assert.equal(fs.existsSync(path.join(markers, "filter")), false, "the clean filter ran while snapshotting");
   assert.ok(threw, "the filter that applies to the real name refuses the snapshot");
 });
+
+test("an oversized .nexus file (a flight log) does not hide every new file from the diff", () => {
+  const d = mk((r) => {
+    put(r, ".gitignore", ".nexus/\n");
+    fs.mkdirSync(path.join(r, ".nexus"), { recursive: true });
+    fs.writeFileSync(path.join(r, ".nexus", "big.flightlog"), Buffer.alloc(5 * 1024 * 1024, 97));
+    put(r, "fresh.txt", "FRESH_VISIBLE_CONTENT\n");
+  });
+  const out = diffOf(d);
+  assert.match(out.diff, /FRESH_VISIBLE_CONTENT/);
+  assert.equal(out.omittedNew, 0);
+});
+
+test("a new file copied from the operator's ignored secret is omitted although the unit's worktree lacks it", () => {
+  const main = mk((r) => { put(r, ".gitignore", ".env\n"); put(r, ".env", SECRET_BODY); }, { README: "hi\n" });
+  const wt = `${main}-wt`;
+  sh(main, "worktree", "add", "-q", "-b", "unit", wt);
+  put(wt, "notes.txt", SECRET_BODY);
+  const r = candidateDiff(wt, undefined, main);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  assert.doesNotMatch((r as { diff: string }).diff, LEAK);
+  assert.ok((r as { omittedNew: number }).omittedNew >= 1);
+});
+
+test("a debugger snapshot skips an untracked nested git repository instead of failing", () => {
+  const root = mk(() => {}, { "file.txt": "base\n" });
+  const p = planOperationGit(root, "op-nested");
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const tester = ops.prepareUnit({ ...unit("tester"), id: "verify" } as WorkUnit).workspace;
+  put(tester, "file.txt", "edited\n");
+  const nested = path.join(tester, "vendor", "lib"); fs.mkdirSync(nested, { recursive: true });
+  sh(nested, "init", "-q"); put(nested, "lib.js", "NESTED_CONTENT\n");
+  const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "edited\n");
+  assert.equal(fs.existsSync(path.join(debug, "vendor", "lib", "lib.js")), false);
+});
+
+test("a review unit's diff is credential-redacted, and an all-omitted candidate says why", () => {
+  const d = mk((r) => { put(r, "cfg.txt", "token=sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD\n"); });
+  const executor = new AgentWorkUnitExecutor({ baseConfig: { workspace: d } as any });
+  const ev = (executor as any).reviewEvidence({ ...unit("reviewer"), id: "rv" }, { objective: "o", workspace: d, dependencies: [] }, d);
+  assert.doesNotMatch(ev.unifiedDiff, /sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD/);
+  const d2 = mk((r) => { put(r, "copy.txt", SECRET_BODY); });
+  const ev2 = (executor as any).reviewEvidence({ ...unit("reviewer"), id: "rv" }, { objective: "o", workspace: d2, dependencies: [] }, d2);
+  assert.match(ev2.diffError ?? "", /new files that carry protected content/);
+});

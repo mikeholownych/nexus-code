@@ -106,36 +106,39 @@ const SIGNIFICANT_LINE_MIN = 8;
  * exact content only (their lines are structural). When the sources cannot all be read within the limits, every new
  * file counts as carried: nothing is kept because it could not be compared.
  */
-function protectedContent(root: string, files: string[]): { carriedBy(root: string, relative: string): boolean } {
+function protectedContent(sources: Array<{ root: string; file: string }>): { carriedBy(dir: string, relative: string): boolean } {
   const hashes = new Set<string>();
   const lines = new Set<string>();
   let complete = true;
   let total = 0;
-  for (const file of files) {
+  for (const { root, file } of sources) {
+    const structural = file.split(/[\\/]/).some((seg) => seg.toLowerCase() === ".nexus");
     let size: number;
     try {
       const st = fs.lstatSync(path.join(root, file));
       if (!st.isFile()) continue;
       size = st.size;
     } catch { continue; }
+    // A large `.nexus` file (a flight log) is not a credential source: it is left out instead of failing every new file closed.
+    if (structural && size > SOURCE_FILE_MAX) continue;
     total += size;
     if (size > SOURCE_FILE_MAX || total > SOURCE_TOTAL_MAX) { complete = false; continue; }
     let data: Buffer;
     try { data = fs.readFileSync(path.join(root, file)); } catch { complete = false; continue; }
     hashes.add(createHash("sha256").update(data).digest("hex"));
-    if (file.split(/[\\/]/).some((seg) => seg.toLowerCase() === ".nexus")) continue;
+    if (structural) continue;
     for (const line of significantLines(data)) lines.add(line);
   }
   return {
-    carriedBy(base: string, relative: string): boolean {
+    carriedBy(dir: string, relative: string): boolean {
       if (!complete) return true;
       if (hashes.size === 0 && lines.size === 0) return false;
       let data: Buffer;
       try {
-        const st = fs.lstatSync(path.join(base, relative));
+        const st = fs.lstatSync(path.join(dir, relative));
         if (!st.isFile()) return false;
         if (st.size > ADDED_FILE_MAX) return true;
-        data = fs.readFileSync(path.join(base, relative));
+        data = fs.readFileSync(path.join(dir, relative));
       } catch { return true; }
       if (hashes.has(createHash("sha256").update(data).digest("hex"))) return true;
       for (const line of significantLines(data)) if (lines.has(line)) return true;
@@ -301,7 +304,20 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     // Git's copy detection stops at its similarity threshold and never sees an ignored protected file, so an added file
     // is also compared with the content of every protected file present in the workspace.
     const ignored = listing(["--others", "--ignored", "--exclude-standard"], false, IGNORED_LISTING_TIMEOUT_MS).filter((p) => !p.endsWith("/"));
-    const sources = protectedContent(root, [...new Set([...atBase, ...ownIndex, ...untracked, ...ignored])].filter((p) => inputPathProtection(security, p) !== undefined));
+    const isolated = path.resolve(policyWorkspace ?? root) !== root;
+    const protectedSources = [...new Set([...atBase, ...ownIndex, ...untracked, ...ignored])]
+      .filter((p) => inputPathProtection(security, p) !== undefined).map((file) => ({ root, file }));
+    // A unit's worktree lacks the operator's untracked and ignored secrets (.env), so those are compared too.
+    if (isolated) {
+      const operator = path.resolve(policyWorkspace!);
+      try {
+        const listed = execFileSync("git", [...GIT_SAFE, "ls-files", "-z", "--cached", "--others", "--ignored", "--exclude-standard"], {
+          cwd: operator, env: safeGitEnv(undefined), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: IGNORED_LISTING_TIMEOUT_MS, maxBuffer: LISTING_MAX_BUFFER,
+        }).split("\0").filter((p) => p && !p.endsWith("/") && inputPathProtection(security, p) !== undefined);
+        for (const file of listed) protectedSources.push({ root: operator, file });
+      } catch { /* the operator's workspace is not a repository: nothing further to compare */ }
+    }
+    const sources = protectedContent(protectedSources);
     let omitted = 0;
     let omittedNew = 0;
     const allowed: string[] = [];

@@ -52,7 +52,7 @@ function candidateDiffFor(ctx: UnitRunContext, workspace: string, policyWorkspac
 }
 
 /** The diff text a unit is given, with the count of protected sections that were left out. */
-function candidateDiffText(candidate: { diff: string; omitted: number; omittedNew: number; omittedNested?: number }): string {
+function candidateDiffText(candidate: { diff: string; omitted: number; omittedNew: number; omittedNested: number }): string {
   const notes = [
     ...(candidate.omitted ? [`[${candidate.omitted} protected file section(s) omitted]`] : []),
     ...(candidate.omittedNew ? [`[${candidate.omittedNew} new file(s) omitted: a protected file changed, or a new file carries content of a protected file]`] : []),
@@ -62,9 +62,12 @@ function candidateDiffText(candidate: { diff: string; omitted: number; omittedNe
 }
 
 /** Why a candidate diff with nothing left to show is empty. */
-function emptyCandidateReason(candidate: { omitted: number; omittedNew: number }): string {
+function emptyCandidateReason(candidate: { omitted: number; omittedNew: number; omittedNested: number }): string {
   if (candidate.omitted && candidate.omittedNew) return "only protected files, and new files hidden with them, changed";
-  return candidate.omitted ? "only protected files changed" : "there is no change against the base to review";
+  if (candidate.omitted) return "only protected files changed";
+  if (candidate.omittedNew) return "only new files that carry protected content changed";
+  if (candidate.omittedNested) return "only untracked nested git repositories changed";
+  return "there is no change against the base to review";
 }
 
 /**
@@ -735,12 +738,12 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       unitId: unit.id,
       objective: `${ctx.objective}\n\nReview task: ${unit.prompt}`,
       baselineCommit: "base" in candidate ? candidate.base : "unknown",
-      unifiedDiff: "diff" in candidate ? candidateDiffText(candidate) : "",
+      unifiedDiff: "diff" in candidate ? redactForPersistence(candidateDiffText(candidate)) : "",
       // An empty diff gives the reviewer nothing to judge, so it is a failure to collect evidence, not an accept.
       ...("error" in candidate
         ? { diffError: candidate.error || "git diff failed" }
         : emptyDiff
-          ? { diffError: candidate.omitted ? `${emptyCandidateReason(candidate)}: there is nothing the reviewer may be shown` : "the candidate diff is empty: there is no change against the base to review" }
+          ? { diffError: candidate.omitted || candidate.omittedNew || candidate.omittedNested ? `${emptyCandidateReason(candidate)}: there is nothing the reviewer may be shown` : "the candidate diff is empty: there is no change against the base to review" }
           : {}),
       ...(verified
         ? {

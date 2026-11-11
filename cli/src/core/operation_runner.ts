@@ -318,7 +318,7 @@ export class OperationRunner {
               cause: "EXECUTION_FAILED",
               reason,
               question: `${unit.title}: ${reason}. Give each failed unit its own failure_debugger, or stop?`,
-              options: [],
+              options: [{ label: "retry", action: { kind: "retry" } }],
             };
           }
           const snapshotOf = failedDeps[0];

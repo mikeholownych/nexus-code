@@ -454,13 +454,16 @@ export class OperationGit {
       const ownIndex = run(["rev-parse", "--path-format=absolute", "--git-path", "index"], { ownIndex: true });
       if (fs.existsSync(ownIndex)) fs.copyFileSync(ownIndex, path.join(scratch, "index"));
       else run(["read-tree", "HEAD"]);
-      const files = [...run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { raw: true }).split("\0").filter(Boolean)];
+      const listed = run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { raw: true }).split("\0").filter(Boolean);
+      // A directory entry (trailing slash) is an untracked nested git repository, which `git add` refuses or embeds: skipped, as in the candidate diff.
+      const nested = listed.filter((p) => p.endsWith("/"));
+      const files = listed.filter((p) => !p.endsWith("/"));
       // The worktree's own .gitattributes without filter and diff assignments, as for the candidate diff, so text/eol
       // normalization applies to the snapshot exactly as it would to the tester's own commit.
       attrs = attributesTree(entry.worktree, scratch, files);
       const refusal = driverRefusal((args, input) => run(args, { input, raw: true }), files);
       if (refusal) throw new Error(refusal);
-      run(["add", "-A"]);
+      run(["add", "-A", "--", ".", ...nested.map((p) => `:(exclude,literal)${p.slice(0, -1)}`)]);
       const tree = run(["write-tree"]);
       return run([...this.mechanicalGitConfig(), "commit-tree", tree, "-p", "HEAD", "-m", `nexus: snapshot of ${unitId}'s candidate for failure debugging`]);
     } finally {

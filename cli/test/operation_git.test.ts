@@ -1070,6 +1070,7 @@ test("a failure_debugger that depends on two failed units fails closed instead o
   assert.equal(debug.status, "BLOCKED", JSON.stringify(state.units.map((u) => [u.id, u.status])));
   assert.match(debug.blocked?.reason ?? "", /verify-a/);
   assert.match(debug.blocked?.reason ?? "", /verify-b/);
+  assert.ok(debug.blocked?.decision.options.some((o) => o.action.kind === "retry"), "the operator can retry once only one dependency still fails");
   assert.equal(state.git!.units.debug, undefined, "no snapshot worktree was created");
 });
 
