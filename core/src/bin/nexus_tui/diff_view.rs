@@ -408,8 +408,8 @@ pub fn visible_control(c: char) -> Option<String> {
     match code {
         0x00..=0x1f => char::from_u32(0x2400 + code).map(String::from),
         0x7f => Some("␡".to_string()),
-        0x80..=0xa0 | 0xad | 0x34f | 0x61c | 0x115f | 0x1160 | 0x1680 | 0x180b..=0x180e | 0x2000..=0x200f | 0x2028..=0x202f | 0x205f..=0x2064
-        | 0x2066..=0x2069 | 0x3000 | 0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff9..=0xfffb | 0xe0000..=0xe007f | 0xe0100..=0xe01ef => Some(format!("<U+{code:04X}>")),
+        0x80..=0xa0 | 0xad | 0x34f | 0x61c | 0x115f | 0x1160 | 0x1680 | 0x17b4..=0x17b5 | 0x180b..=0x180e | 0x2000..=0x200f | 0x2028..=0x202f | 0x205f..=0x2064
+        | 0x2066..=0x2069 | 0x2800 | 0x3000 | 0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff9..=0xfffb | 0xe0000..=0xe007f | 0xe0100..=0xe01ef => Some(format!("<U+{code:04X}>")),
         _ => None,
     }
 }
@@ -657,6 +657,14 @@ pub fn meta_row(geo: Geometry, pal: &Palette, text: &str) -> Line<'static> {
         Span::raw(" "),
         Span::styled(clip(&safe_text(text), room), Style::default().fg(pal.meta)),
     ])
+}
+
+/// A note or hunk gap: wrapped when the view wraps (so none of its text is cut off), clipped when it pans.
+fn meta_lines(geo: Geometry, pal: &Palette, text: &str, fit: Fit) -> Vec<Line<'static>> {
+    match fit {
+        Fit::Wrap => meta_rows(geo, pal, text),
+        _ => vec![meta_row(geo, pal, text)],
+    }
 }
 
 /// A quiet block of text inside a diff block that must stay readable whole (omission lines, notes): wrapped at
@@ -1072,12 +1080,12 @@ pub fn panel_row_lines(patch: &Patch, row: Row, geo: Geometry, fit: Fit, pal: &P
             let text = Line::from(heading_spans(vec![Span::raw(" ".repeat(geo.indent))], file.status, file.path(), file.old_path.as_deref(), counts, usize::MAX / 2, pal));
             wrap_spans(text, geo.width)
         }
-        Row::Note(f, n) => vec![meta_row(geo, pal, &patch.files[f].notes[n])],
+        Row::Note(f, n) => meta_lines(geo, pal, &patch.files[f].notes[n], fit),
         Row::Gap(f, h) => {
             let file = &patch.files[f];
             let previous = h.checked_sub(1).map(|p| &file.hunks[p]);
             let text = gap_text(previous, &file.hunks[h], true).unwrap_or_default();
-            vec![meta_row(geo, pal, &text)]
+            meta_lines(geo, pal, &text, fit)
         }
         Row::Line(f, h, l) => {
             let file = &patch.files[f];
@@ -1247,7 +1255,7 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
 
     #[test]
     fn invisible_and_line_separator_characters_get_visible_stand_ins() {
-        for c in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{2028}', '\u{2029}', '\u{feff}', '\u{ad}', '\u{a0}', '\u{2000}', '\u{200a}', '\u{202f}', '\u{205f}', '\u{3000}', '\u{1680}', '\u{fe00}', '\u{fe0f}', '\u{e0100}', '\u{e01ef}', '\u{fff9}', '\u{fffb}', '\u{180b}', '\u{180d}', '\u{e0041}'] {
+        for c in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{2028}', '\u{2029}', '\u{feff}', '\u{ad}', '\u{a0}', '\u{2000}', '\u{200a}', '\u{202f}', '\u{205f}', '\u{3000}', '\u{1680}', '\u{fe00}', '\u{fe0f}', '\u{e0100}', '\u{e01ef}', '\u{fff9}', '\u{fffb}', '\u{180b}', '\u{180d}', '\u{e0041}', '\u{2800}', '\u{17b4}', '\u{17b5}'] {
             let shown = visible_control(c).unwrap_or_else(|| panic!("{:04X} is invisible and has no stand-in", c as u32));
             assert_eq!(shown, format!("<U+{:04X}>", c as u32));
             assert!(!safe_text(&format!("a{c}b")).contains(c));

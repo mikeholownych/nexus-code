@@ -662,7 +662,7 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
         None => approval
             .lines
             .iter()
-            .flat_map(|line| markdown::wrap(vec![Span::styled(expand_tabs(&line.text).into_owned(), line_style(line.kind))], width, Vec::new(), vec![Span::raw("    ")]))
+            .flat_map(|line| markdown::wrap(vec![Span::styled(line.text.clone(), line_style(line.kind))], width, Vec::new(), vec![Span::raw("    ")]))
             .collect(),
     };
     // The panel fits its content (heading, the change, decisions) and never needs more than the area; the hint row
@@ -672,7 +672,7 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     // The hint or notice never takes a row the text needs: text that must be folded needs two body rows (one row and
     // the fold marker), so on a short terminal a refusal's notice is left out and the marker explains the refusal.
     let body_min = if lines.len() > 1 { 2 } else { usize::from(!lines.is_empty()) };
-    let with_hint = available >= fixed + 1 + 1 + body_min;
+    let with_hint = available >= fixed + 1 + 2 + body_min;
     if with_hint {
         footer.push(Line::from(hint));
     }
@@ -4515,6 +4515,18 @@ mod surface_tests {
     }
 
     #[test]
+    fn a_hunk_label_and_a_blank_looking_character_are_not_cut_or_hidden() {
+        let patch = "--- a/x.rs\n+++ b/x.rs\n@@ -1,2 +1,2 @@ fn a_section_name_that_is_far_wider_than_the_panel_ENDOFLABEL\n-old\n+new\n context\n";
+        let request = serde_json::json!({"v": 1, "type": "approval.request", "id": "a1", "turn_id": "t1", "tool": "patch_file", "subject": "x.rs", "preview": "", "review": {"kind": "patch", "path": "x.rs", "patch": patch, "truncated": false}}).to_string();
+        let mut st = state(true);
+        feed(&mut st, &[&request]);
+        let (frame, _) = screen(&mut st, 40, 24);
+        let flat: String = frame.join("").split_whitespace().collect();
+        assert!(flat.contains("ENDOFLABEL") || !flat.contains("a_section"), "a hunk label is wrapped whole or absent, never cut: {frame:#?}");
+        assert_eq!(diff_view::visible_control('\u{2800}').as_deref(), Some("<U+2800>"));
+    }
+
+    #[test]
     fn the_approval_panel_survives_every_tiny_terminal_and_never_approves_what_it_did_not_draw() {
         let diff_lines: String = (0..30).map(|n| format!("line{n}\n")).collect();
         let diff = format!(
@@ -4603,7 +4615,7 @@ mod surface_tests {
                         panic!("{width}x{height}: a row is wider than the terminal: {rows:#?}");
                     }
                 }
-                if height >= if long_subject { 22 } else { 14 } {
+                if height >= if long_subject { 22 } else if width < 60 { 13 } else { 12 } {
                     assert!(approved_at.is_some(), "{width}x{height}: a panel with room for the text can be approved once it was read");
                 }
             }
