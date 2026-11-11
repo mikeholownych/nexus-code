@@ -431,6 +431,26 @@ function unescapeSlashes(value: string): string {
   return value.includes("\\/") ? value.replaceAll("\\/", "/") : value;
 }
 
+/**
+ * A "/" or "+" written other than plainly: percent-encoded (`%2F`, `%2B`, and once more encoded as `%252F`) or as a
+ * look-alike (U+2215 division slash, U+2044 fraction slash, U+FF0F fullwidth solidus, U+FF0B fullwidth plus). Sticky:
+ * `matchEncodedKeyChar` tests it at one position.
+ */
+const ENCODED_KEY_CHAR = /%(?:25)?2[FfBb]|[\u2215\u2044\uFF0F\uFF0B]/y;
+const ENCODED_KEY_CHARS = new RegExp(ENCODED_KEY_CHAR.source, "g");
+
+/** The length of the encoded "/" or "+" at `at`, or 0 when there is none. */
+function matchEncodedKeyChar(text: string, at: number): number {
+  ENCODED_KEY_CHAR.lastIndex = at;
+  const found = ENCODED_KEY_CHAR.exec(text);
+  return found ? found[0].length : 0;
+}
+
+/** The text as detection sees it: encoded and look-alike "/" and "+" written plainly. The redacted span is never this copy. */
+function normalizeKeyChars(value: string): string {
+  return value.replace(ENCODED_KEY_CHARS, (found) => (/[/\u2215\u2044\uFF0F]|2[Ff]$/.test(found) ? "/" : "+"));
+}
+
 function isBase64KeyChar(code: number): boolean {
   return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
     code === 95 || code === 45 || code === 43 || code === 47; // _ - + /
@@ -469,6 +489,39 @@ function bearerTokenLength(value: string): number {
   return head >= 16 ? head : 0;
 }
 
+/** The end of the run of key characters from `from`: a JSON-escaped `\/` and an encoded or look-alike "/" or "+" count. */
+function scanKeyRun(text: string, from: number): number {
+  let end = from;
+  while (end < text.length) {
+    const encoded = matchEncodedKeyChar(text, end);
+    if (encoded > 0) end += encoded;
+    else if (isBase64KeyChar(text.charCodeAt(end))) end++;
+    else if (text[end] === "\\" && text[end + 1] === "/") end += 2; // a JSON-escaped "/"
+    else break;
+  }
+  return end;
+}
+
+/** Credential kinds whose value, written as a "."-joined run, continues past a dot (a JWE has five segments, not three). */
+const DOTTED_CONTINUATION_PATTERNS = new Set([
+  "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN", "GOOGLE_API_KEY", "HUGGINGFACE_TOKEN", "SLACK_TOKEN", "JWT_TOKEN",
+]);
+
+/**
+ * A key followed by "." and more key characters keeps going: `sk-…RtBq.Xo2RtBq` is one credential, not a key and a
+ * stray word. A dotted segment is key material when it is at least 6 characters and has a digit, a capital after its first
+ * character, or a "/" or "+": a sentence's full stop (`…RtBq.` then a space), a file extension (`.json`) and a word
+ * (`.Models`) end the key as before. Each segment is scanned once, so the cost stays linear.
+ */
+function extendDottedKey(text: string, end: number): number {
+  while (text[end] === ".") {
+    const segmentEnd = scanKeyRun(text, end + 1);
+    if (segmentEnd - end - 1 < 6 || !/[0-9A-Z+/]/.test(normalizeKeyChars(text.slice(end + 2, segmentEnd)))) break;
+    end = segmentEnd;
+  }
+  return end;
+}
+
 /**
  * `sk-` / `sk-ant-` keys whose body is base64 ("/" and "+" included), found in one left-to-right pass: from each `sk-`
  * at a word boundary take the maximal run of key characters (a JSON-escaped `\/` counts as "/") once, validate it,
@@ -490,14 +543,9 @@ function scanBase64Keys(text: string): Array<{ start: number; end: number; name:
       from = at + 1;
       continue;
     }
-    let end = at + 3;
-    while (end < text.length) {
-      if (isBase64KeyChar(text.charCodeAt(end))) end++;
-      else if (text[end] === "\\" && text[end + 1] === "/") end += 2; // a JSON-escaped "/"
-      else break;
-    }
+    const end = extendDottedKey(text, scanKeyRun(text, at + 3));
     const anthropic = text.startsWith("sk-ant-", at);
-    const body = unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end));
+    const body = normalizeKeyChars(unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end)));
     const separator = body.search(/[/+]/);
     const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
       isPathLike(body.slice(separator + 1));
@@ -575,6 +623,19 @@ function looksLikeCredentialToken(token: string): boolean {
   // a base64 secret that happens to contain slashes also carries "+" or "=", or has at most one.
   if (token.startsWith("/") || (token.match(/\//g)?.length ?? 0) >= 2) return false;
   return !token.split(/[/._-]+/).every(isIdentifierPart);
+}
+
+/**
+ * A "."-joined token is key material only when it is unlike every ordinary dotted name: every segment is at least 6
+ * characters of base64url characters with a digit, a capital after its first character, or a "+" (so no path, host name,
+ * file name, version number, package or class name), and one segment is at least 16 characters that do not split into
+ * words. The caller still applies the entropy threshold to the whole token.
+ */
+function isDottedKeyMaterial(plain: string): boolean {
+  const segments = plain.split(".");
+  return segments.length >= 2 && segments.every((segment) =>
+    segment.length >= 6 && /^[a-zA-Z0-9+=_-]+$/.test(segment) && /[0-9A-Z+]/.test(segment.slice(1))) &&
+    segments.some((segment) => segment.length >= 16 && !segment.split(/[_-]+/).every(isIdentifierPart));
 }
 
 /** A number, a short tag such as `v1` or `x86`, or letters that split cleanly into words of two or more letters. */
@@ -1010,6 +1071,7 @@ export class InformationFlowBoundary {
           continue;
         }
         let end = name === "BEARER_AUTH_HEADER" ? start + bearerTokenLength(text.slice(start, matchEnd)) : matchEnd;
+        if (DOTTED_CONTINUATION_PATTERNS.has(name)) end = extendDottedKey(text, end);
         while (end > start) {
           const ch = text.charCodeAt(end - 1);
           if (ch === 34 || ch === 39 || ch === 59 || ch === 44) { // ", ', ;, ,
@@ -1091,7 +1153,7 @@ export class InformationFlowBoundary {
       let end = start + token[0].length;
       while (end > start && (text[end - 1] === "." || text[end - 1] === "!")) end--;
       const tok = text.slice(start, end);
-      const plain = unescapeSlashes(tok);
+      const plain = normalizeKeyChars(unescapeSlashes(tok));
       if (
         tok.length >= 20 &&
         // Longer tokens are prose or data. A base64 run ("+" or "/", not a path) is still a secret up to 512 characters,
@@ -1103,10 +1165,11 @@ export class InformationFlowBoundary {
         (originalTokens.has(tok) || looksLikeCredentialToken(plain)) &&
         !isReference(tok)
       ) {
-        // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above). Nexus's own session
+        // A dotted token must be dotted key material (`isDottedKeyMaterial`): file paths, versions and host names are not
+        // tokens (JWTs have their own pattern above). Nexus's own session
         // ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
         // id made the session impossible to save or resume.
-        if (/^[a-zA-Z0-9+/=_-]+$/.test(plain) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain) &&
+        if ((/^[a-zA-Z0-9+/=_-]+$/.test(plain) || isDottedKeyMaterial(plain)) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain) &&
           // The temporary guard branch of `worktree remove` (`nexus-removed/<10 hex>-<8 hex>`): a redacted name cannot be undone by hand.
           !/^nexus-removed\/[0-9a-f]{10}-[0-9a-f]{8}$/.test(plain)) {
           const entropy = calculateShannonEntropy(plain);

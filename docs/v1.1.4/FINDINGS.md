@@ -114,8 +114,8 @@ Severity set by the fixing agent; the reviewer did not rate these. Each needs it
 
 | Item | Sev | Finding | Status |
 |---|---|---|---|
-| PR #440 review | medium | A key whose `/` or `+` is percent-encoded (`%2F`, `%2B`) or written as a look-alike (`∕`, U+2215) is not redacted whole: the patterns and the tokenizer stop at the encoded character, so the rest of the key stays in clear | OPEN |
-| PR #440 review | medium | Key material after a dot that directly follows an `sk-` key (`sk-…RtBq.Xo2RtBq`) is left in clear: the `sk-` patterns and the scanner stop at "." and the entropy tokenizer does not take dotted tokens | OPEN |
+| PR #440 review | medium | A key whose `/` or `+` is percent-encoded (`%2F`, `%2B`) or written as a look-alike (`∕`, U+2215) is not redacted whole: the patterns and the tokenizer stop at the encoded character, so the rest of the key stays in clear | FIXED: `cli/test/redactor_encoded_dotted.test.ts` ("a key whose / or + is percent-encoded or a look-alike is redacted whole", "a short head before an encoded slash…", "a non-prefixed base64 secret with encoded / and + …") |
+| PR #440 review | medium | Key material after a dot that directly follows an `sk-` key (`sk-…RtBq.Xo2RtBq`) is left in clear: the `sk-` patterns and the scanner stop at "." and the entropy tokenizer does not take dotted tokens | FIXED: `cli/test/redactor_encoded_dotted.test.ts` ("key material after a dot that follows an sk- key is redacted whole", "the same dotted continuation is redacted after other token kinds", "a long dotted high-entropy token is redacted whole"; negatives and the ReDoS time bound in the same file) |
 
 ## G. WP-1317 TUI audit follow-ups (docs/v1.1.4/TUI-AUDIT.md)
 
