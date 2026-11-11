@@ -6742,9 +6742,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               this.observer?.onContinuation?.({ kind: "requirements", n: completionNudges, max: budget.maxCompletionNudges, detail: open.map((r) => r.id).join(", ") });
             } catch {}
             this.messages.push(harnessNoteMessage(
-                `[Nexus continuation ${completionNudges}/${budget.maxCompletionNudges}] The operator's acceptance requirements are still open: ` +
-                `${open.map((r) => `${r.id} [${r.status}] ${r.text}`).join("; ")}. Continue working on them without waiting for the operator. ` +
-                `If one cannot be done here, call update_requirements with status "blocked" (or "descoped") and a note giving the reason, then stop.`,
+              `[Nexus continuation ${completionNudges}/${budget.maxCompletionNudges}] The operator's acceptance requirements are still open: ` +
+              `${open.map((r) => `${r.id} [${r.status}] ${r.text}`).join("; ")}. Continue working on them without waiting for the operator. ` +
+              `If one cannot be done here, call update_requirements with status "blocked" (or "descoped") and a note giving the reason, then stop.`,
             ));
             this.persistProgress({ messages: true });
             endStep();

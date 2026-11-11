@@ -142,6 +142,10 @@ describe("harness notes carry provenance", () => {
     for (const variant of variants) {
       assert.equal(withHarnessProvenance([...base, { role: "user", content: variant }])[3].harness, undefined, variant);
     }
+    // A cut-off reply is discarded, so its note directly follows the operator's message: migrated. The others are not.
+    const cut = "[Nexus: your previous reply was cut off at the output limit before it finished. None of that reply was kept; it is not in this conversation. Continue the task.]";
+    assert.equal(withHarnessProvenance([{ role: "system", content: "s" }, { role: "user", content: "go" }, { role: "user", content: cut }])[2].harness, "note");
+    assert.equal(withHarnessProvenance([{ role: "system", content: "s" }, { role: "user", content: "go" }, { role: "user", content: `[Nexus: Tool "x" is not offered on this request and was not executed.]` }])[2].harness, undefined);
     // Not directly after an unmarked operator message, and never the first message.
     assert.equal(withHarnessProvenance([{ role: "system", content: "s" }, { role: "user", content: "go" }, { role: "user", content: legacyConversation()[3].content }])[2].harness, undefined);
     assert.equal(withHarnessProvenance([{ role: "user", content: legacyConversation()[3].content }])[0].harness, undefined);
@@ -165,6 +169,7 @@ describe("harness notes carry provenance", () => {
       const notes = msgs.filter((m) => m.role === "user" && /^\[Nexus[ :]/.test(text(m)) && !text(m).startsWith(SPOOF));
       assert.ok(notes.length >= 1, `a cut-off-reply note was written: ${notes.map(text).join(" | ")}`);
       assert.ok(notes.every((m) => m.harness === "note"), "every note is marked");
+      assert.ok(notes.some((m) => text(m).startsWith("[Nexus: your previous reply was cut off")), "the cut-off note is one of them");
       const operator = msgs.find((m) => text(m).startsWith(SPOOF));
       assert.equal(operator.harness, undefined, "the operator's message is not");
       const manager = new SessionManager(path.join(root, "sessions"), () => WorkspacePath.fromSelectedWorkspace(repo));
@@ -182,5 +187,13 @@ describe("harness notes carry provenance", () => {
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("no Nexus note is pushed to the conversation without the marker", () => {
+    const source = fs.readFileSync(path.join(import.meta.dirname, "../src/agent.ts"), "utf8");
+    const pushes = [...source.matchAll(/this\.messages\.push\(([\s\S]{0,900}?)\);/g)].map((m) => m[1]);
+    const nexus = pushes.filter((p) => /\[Nexus|Notice\(|pendingRecoveryNote|\bnote\b/.test(p) && !/skill-note/.test(p));
+    assert.ok(nexus.length >= 7, `the note producers are found: ${nexus.length}`);
+    assert.ok(nexus.every((p) => p.startsWith("harnessNoteMessage(")), nexus.filter((p) => !p.startsWith("harnessNoteMessage(")).join("\n"));
   });
 });
