@@ -454,6 +454,20 @@ export class OperationGit {
       const ownIndex = run(["rev-parse", "--path-format=absolute", "--git-path", "index"], { ownIndex: true });
       if (fs.existsSync(ownIndex)) fs.copyFileSync(ownIndex, path.join(scratch, "index"));
       else run(["read-tree", "HEAD"]);
+      // The copied index keeps its "do not look at the worktree" flags (assume-unchanged, skip-worktree), so `add -A` would
+      // stage the indexed content of such a path and miss the candidate's edit. Clear them in the private copy only; a
+      // skip-worktree path absent from disk (outside a sparse checkout) is not a deletion, so it keeps its flag.
+      const present = (file: string) => { try { fs.lstatSync(path.join(entry.worktree, file)); return true; } catch { return false; } };
+      const flagged = run(["ls-files", "-v", "-z", "--cached"], { raw: true }).split("\0").filter(Boolean).flatMap((e) => {
+        const tag = e[0], file = e.slice(2);
+        const assumed = tag >= "a" && tag <= "z";
+        const skipped = tag === "S" || tag === "s";
+        const onDisk = skipped ? present(file) : true;
+        return [{ file, assumed, skipped: skipped && onDisk }];
+      }).filter((f) => f.assumed || f.skipped);
+      for (const [flag, paths] of [["--no-assume-unchanged", flagged.filter((f) => f.assumed)], ["--no-skip-worktree", flagged.filter((f) => f.skipped)]] as const) {
+        if (paths.length) run(["--literal-pathspecs", "update-index", flag, "-z", "--stdin"], { input: `${paths.map((f) => f.file).join("\0")}\0` });
+      }
       const listed = run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { raw: true }).split("\0").filter(Boolean);
       // A directory entry (trailing slash) is an untracked nested git repository, which `git add` refuses or embeds: skipped, as in the candidate diff.
       const nested = listed.filter((p) => p.endsWith("/"));

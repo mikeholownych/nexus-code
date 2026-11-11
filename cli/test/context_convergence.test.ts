@@ -252,6 +252,21 @@ describe("A+B: compaction keeps the investigation moving instead of re-reading",
     });
   });
 
+  test("B: a diagnostic debugger's report resting on compacted-away output is not established either", async () => {
+    await isolated(async (repo) => {
+      const gw = await gateway((r) => (r.n === 1 ? { tools: BATCH.map(read) } : { tools: [done(`markers: ${BATCH.map((f) => (visible(r.body, f) ? MARKERS[f] : "?")).join(", ")}`)] }));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { diagnosticRun: true })));
+      try {
+        const turn = await muted(() => agent.runTurn("Report the marker word of a.txt, b.txt and c.txt via task_completed."));
+        assert.equal(turn.outcome, "UNVERIFIED");
+        assert.equal(turn.reason, "CONTEXT_EVIDENCE_NOT_RETAINED");
+      } finally {
+        agent.shutdown();
+        await gw.close();
+      }
+    });
+  });
+
   test("B: truncation state is recognised only from a well-formed trailing notice; full re-reads count as observed", async () => {
     await isolated(async (repo) => {
       const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cc-state-"));

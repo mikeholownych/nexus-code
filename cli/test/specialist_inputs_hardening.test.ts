@@ -289,3 +289,33 @@ test("a new file copied from the operator's untracked, non-ignored secret is omi
   assert.ok(!("error" in r), JSON.stringify(r));
   assert.doesNotMatch((r as { diff: string }).diff, LEAK);
 });
+
+for (const [flag, label] of [["--assume-unchanged", "assume-unchanged"], ["--skip-worktree", "skip-worktree"]] as const) {
+  test(`a debugger snapshot contains an edit to a tracked file flagged ${label}`, () => {
+    const root = mk(() => {}, { "file.txt": "base\n", "keep.txt": "k\n" });
+    const p = planOperationGit(root, `op-${label}`);
+    const state = newOperationGitState(p);
+    ensureIntegrationWorktree(p, state);
+    const ops = new OperationGit(p, state);
+    const tester = ops.prepareUnit({ ...unit("tester"), id: "verify" } as WorkUnit).workspace;
+    sh(tester, "update-index", flag, "file.txt");
+    put(tester, "file.txt", "failing edit\n");
+    const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
+    assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "failing edit\n");
+  });
+}
+
+test("a debugger snapshot keeps a sparse-excluded (skip-worktree, absent) path instead of recording its deletion", () => {
+  const root = mk(() => {}, { "file.txt": "base\n", "out/lib.txt": "lib\n" });
+  const p = planOperationGit(root, "op-sparse");
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const tester = ops.prepareUnit({ ...unit("tester"), id: "verify" } as WorkUnit).workspace;
+  sh(tester, "update-index", "--skip-worktree", "out/lib.txt");
+  fs.rmSync(path.join(tester, "out"), { recursive: true });
+  put(tester, "file.txt", "edited\n");
+  const debug = ops.prepareUnit({ ...unit("debug"), id: "debug", role: "failure_debugger" } as WorkUnit, { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:out/lib.txt"), "lib\n");
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:file.txt"), "edited\n");
+});
