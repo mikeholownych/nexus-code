@@ -203,9 +203,19 @@ function protectedContent(sources: Array<{ root: string; file: string }>): { car
     let size: number;
     try {
       const st = fs.lstatSync(path.join(root, file));
-      if (!st.isFile()) continue;
+      if (!st.isFile()) {
+        // Nexus's own state is compared by exact content only and is not a credential source: a link there is left out.
+        // Any other protected path that is not a regular file (a link whose target would be read through, a special
+        // file, a directory in its place) cannot be compared: nothing new is kept because of it.
+        if (!structural) complete = false;
+        continue;
+      }
       size = st.size;
-    } catch { continue; }
+    } catch (err: any) {
+      // Gone from disk: there is nothing to copy from it (a deleted protected path is a protected change, handled by the caller).
+      if (err?.code !== "ENOENT") complete = false;
+      continue;
+    }
     // A large `.nexus` file (a flight log) is not a credential source: it is left out instead of failing every new file closed.
     if (structural && size > SOURCE_FILE_MAX) continue;
     if (!structural) total += size;
@@ -223,7 +233,8 @@ function protectedContent(sources: Array<{ root: string; file: string }>): { car
       let data: Buffer;
       try {
         const st = fs.lstatSync(path.join(dir, relative));
-        if (!st.isFile()) return false;
+        // A link is shown as its target path, never as content; anything else that is not a regular file is not read.
+        if (!st.isFile()) return !st.isSymbolicLink();
         if (st.size > ADDED_FILE_MAX) return true;
         data = fs.readFileSync(path.join(dir, relative));
       } catch { return true; }
@@ -439,9 +450,10 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     const pin = trustedGitArgs(root);
     scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plain-index-"));
     const env = safeGitEnv(path.join(scratch, "index"));
-    const git = (args: string[], options: { okExit?: number[]; timeoutMs?: number; maxBuffer?: number } = {}): string => {
+    const ownEnv = safeGitEnv(undefined);
+    const git = (args: string[], options: { okExit?: number[]; timeoutMs?: number; maxBuffer?: number; ownIndex?: boolean; input?: string } = {}): string => {
       try {
-        return execFileSync("git", [...pin, ...GIT_SAFE, ...args], { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: options.timeoutMs ?? 30_000, maxBuffer: options.maxBuffer ?? GIT_MAX_BUFFER });
+        return execFileSync("git", [...pin, ...GIT_SAFE, ...args], { cwd: root, env: options.ownIndex ? ownEnv : env, encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: options.timeoutMs ?? 30_000, maxBuffer: options.maxBuffer ?? GIT_MAX_BUFFER, ...(options.input === undefined ? {} : { input: options.input }) });
       } catch (err: any) {
         if (typeof err?.status === "number" && options.okExit?.includes(err.status) && typeof err.stdout === "string") return err.stdout;
         throw err;
@@ -451,12 +463,18 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     const commit = git(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim();
     // The base tree in a private index: no flag of the real index (skip-worktree, assume-unchanged) can hide a file.
     git(["read-tree", "--end-of-options", commit]);
+    // A path the real index no longer holds (`git rm --cached`, the file may stay on disk, ignored) is a deletion of the
+    // candidate: take it out of the private index too, so the comparison with the base tree still reports it.
+    const staged = git(["diff-index", "--cached", "--name-status", "-z", "--no-renames", commit], { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }).split("\0");
+    const stagedRemovals: string[] = [];
+    for (let i = 0; i + 1 < staged.length; i += 2) if (staged[i] === "D") stagedRemovals.push(staged[i + 1]);
+    if (stagedRemovals.length) git(["update-index", "--force-remove", "-z", "--stdin"], { input: `${stagedRemovals.join("\0")}\0` });
     // No content is compared (no clean filter can run) before every path is known to have no driver.
     const driverCheck = (files: string[]) => driverRefusal((args, input) => execFileSync("git", [...pin, ...GIT_SAFE, ...args], { cwd: root, env, encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"], timeout: 30_000, maxBuffer: GIT_MAX_BUFFER }), files);
     const listed = [...git(["ls-files", "-z", "--cached"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"), ...git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0")].filter((p) => p && !p.endsWith("/"));
     const early = driverCheck(listed);
     if (early) return { error: early };
-    const tracked = git(["diff", "--name-only", "-z", ...DIFF_RENDER, "--ignore-submodules=all", "--relative", "--no-renames", "--"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
+    const tracked = git(["diff", "--name-only", "-z", ...DIFF_RENDER, "--ignore-submodules=all", "--relative", "--no-renames", "--end-of-options", commit, "--"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
     const others = git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
     const omittedNested = others.filter((p) => p.endsWith("/")).length;
     const untracked = others.filter((p) => !p.endsWith("/"));
@@ -475,7 +493,7 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
       else if (protectedChanged || sources.carriedBy(root, file)) omittedNew++;
       else allowedNew.push(file);
     }
-    let diff = allowedTracked.length ? git(["diff", ...DIFF_RENDER, "--no-renames", "--ignore-submodules=all", "--relative", "--", ...allowedTracked.map((p) => `:(literal)${p}`)]) : "";
+    let diff = allowedTracked.length ? git(["diff", ...DIFF_RENDER, "--no-renames", "--ignore-submodules=all", "--relative", "--end-of-options", commit, "--", ...allowedTracked.map((p) => `:(literal)${p}`)]) : "";
     for (const file of allowedNew) diff += git(["diff", ...DIFF_RENDER, "--no-index", "--", "/dev/null", file], { okExit: [1] });
     return { base: commit, diff, omitted, omittedNew, omittedNested };
   } catch (err: any) {

@@ -266,3 +266,75 @@ test("an object-format answer that is neither sha1 nor sha256 (git before 2.38 e
   assert.ok("unsupported" in r && /too old/.test(r.unsupported), JSON.stringify(r));
   assert.deepEqual(snapshotSupport((args) => (args.includes("--show-object-format") ? "sha1\n" : real(args)), d), { ok: true });
 });
+
+// ------------------------------------------------ protected-content comparison: sound domain, otherwise fail closed
+const SECRET_LINES = Array.from({ length: 30 }, (_, i) => `value_${i}_SECRETBODY`);
+const SECRET = SECRET_LINES.join("\n") + "\n";
+const LEAK = /value_\d+_SECRETBODY/;
+const protectedRepo = (): string => repo({ "in/a.txt": "a\n", ".gitignore": ".env\nhard.txt\n" });
+/** Creates the protected source `.env` in the shape `kind`; returns the text a copy would be made from. */
+const SOURCES: Array<[string, (d: string) => string | undefined]> = [
+  ["regular file", (d) => { fs.writeFileSync(path.join(d, ".env"), SECRET); return SECRET; }],
+  ["symlink to a file", (d) => { put(d, "store/value.cfg", SECRET); fs.symlinkSync("store/value.cfg", path.join(d, ".env")); return SECRET; }],
+  ["symlink to a directory", (d) => { put(d, "store/value.cfg", SECRET); fs.symlinkSync("store", path.join(d, ".env")); return SECRET; }],
+  ["dangling symlink", (d) => { fs.symlinkSync("missing.cfg", path.join(d, ".env")); return undefined; }],
+  ["FIFO (no readable content; falls back to a regular file where mkfifo is missing)", (d) => { try { execFileSync("mkfifo", [path.join(d, ".env")]); return undefined; } catch { fs.writeFileSync(path.join(d, ".env"), SECRET); return SECRET; } }],
+  ["oversized file (over the comparison bound)", (d) => { fs.writeFileSync(path.join(d, ".env"), SECRET + "filler line\n".repeat(500_000)); return SECRET; }],
+  ["unreadable file", (d) => { fs.writeFileSync(path.join(d, ".env"), SECRET); fs.chmodSync(path.join(d, ".env"), 0o000); return SECRET; }],
+  ["directory in its place", (d) => { put(d, ".env/inner.txt", SECRET); return SECRET; }],
+  ["hardlink target", (d) => { fs.writeFileSync(path.join(d, ".env"), SECRET); fs.linkSync(path.join(d, ".env"), path.join(d, "hard.txt")); return SECRET; }],
+];
+const SHAPES: Array<[string, (text: string) => string]> = [
+  ["an identical copy", (t) => t],
+  ["a partial copy", (t) => t.split("\n").slice(0, 12).join("\n") + "\n"],
+  ["the dereferenced contents", (t) => `# notes\n${t}`],
+];
+for (const [kind, make] of SOURCES) {
+  for (const [shape, copy] of SHAPES) {
+    test(`protected source "${kind}" x ${shape}: protected content never reaches the diff (diff builder and plain builder)`, () => {
+      const d = protectedRepo();
+      const text = make(d);
+      if (text !== undefined) put(d, "notes.txt", copy(text));
+      put(d, "in/a.txt", `a ${MARK}\n`);
+      try {
+        for (const build of [candidateDiff, plainCandidateDiff]) {
+          const r = build(d, undefined);
+          if ("error" in r) { assert.match(r.error, /automatic inputs are not available|git could not produce/); continue; }
+          assert.doesNotMatch(r.diff, LEAK, `${build.name} showed protected content`);
+          assert.match(r.diff, new RegExp(MARK), "the ordinary change is still shown");
+        }
+      } finally {
+        try { fs.chmodSync(path.join(d, ".env"), 0o600); } catch { /* not there */ }
+      }
+    });
+  }
+}
+
+test("a protected file that is a symlink makes every new file omitted, with the count in the result (cannot compare = protected changed)", () => {
+  const d = protectedRepo();
+  put(d, "store/value.cfg", SECRET); fs.symlinkSync("store/value.cfg", path.join(d, ".env"));
+  put(d, "notes.txt", SECRET); put(d, "unrelated.txt", "unrelated\n");
+  for (const build of [candidateDiff, plainCandidateDiff]) {
+    const r = build(d, undefined);
+    assert.ok(!("error" in r), JSON.stringify(r));
+    assert.doesNotMatch(r.diff, LEAK);
+    assert.doesNotMatch(r.diff, /unrelated\.txt/, "a new file cannot be shown while a protected source cannot be compared");
+    assert.ok(r.omittedNew >= 2, `${build.name}: omittedNew ${r.omittedNew}`);
+  }
+});
+
+// ------------------------------------------------ plain diff keeps the real index's staged removals
+test("under core.filemode=false a `git rm --cached` of a file that stays on disk (ignored) is a deletion in the reviewer's diff, as in `git diff <base>`", () => {
+  const d = repo({ "in/a.txt": "a\n", "generated.txt": "generated\n" });
+  sh(d, "config", "core.filemode", "false");
+  sh(d, "rm", "-q", "--cached", "generated.txt");
+  put(d, ".gitignore", "generated.txt\n");
+  put(d, "in/a.txt", `a ${MARK}\n`);
+  const mainDiff = sh(d, "diff", "HEAD", "--");
+  assert.match(mainDiff, /deleted file mode[\s\S]*generated\.txt|generated\.txt[\s\S]*deleted file mode/);
+  const ev = reviewerEvidence(d);
+  assert.equal(ev.diffError, undefined, ev.diffError);
+  assert.match(ev.unifiedDiff, /plain git diff/);
+  assert.match(ev.unifiedDiff, /diff --git a\/generated\.txt b\/generated\.txt\ndeleted file mode/);
+  assert.match(ev.unifiedDiff, new RegExp(MARK));
+});
