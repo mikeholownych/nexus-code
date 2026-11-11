@@ -489,7 +489,7 @@ function bearerTokenLength(value: string): number {
   return head >= 16 ? head : 0;
 }
 
-/** How far past a key the encoded run and the dotted continuation are followed: keys are short. The per-call `ExtensionBudget` bounds the total. */
+/** How far past a key the encoded run and the dotted continuation are followed: keys are short. Each match gets its own allowance of this size; the per-call `ExtensionBudget` bounds what is kept. */
 const MAX_EXTENSION = 1024;
 
 /**
@@ -522,10 +522,11 @@ function isKeyMaterialSegment(segment: string): boolean {
 }
 
 /**
- * How much longer than the text itself the redactor may make its values. Each extension (encoded run, dotted
- * continuation) is charged to the budget of one classifyText call and is neither scanned nor kept once the budget is
- * spent, so both the work and the values to replace stay within a constant factor of the text however it is crafted.
- * A spent budget never removes an original match.
+ * How much longer than the text itself the redactor may make its values. Every match scans its own extension
+ * (encoded run, dotted continuation, each at most MAX_EXTENSION, so the work is linear in the text). Only an extension
+ * that becomes a value is charged to the budget of one classifyText call, and it is kept only while the budget lasts,
+ * so the values to replace stay within a constant factor of the text however it is crafted, and rejected runs (a blob
+ * of `sk-%2F` look-alikes) cannot starve a real key later in the text. A spent budget never removes an original match.
  */
 interface ExtensionBudget { left: number }
 
@@ -534,21 +535,22 @@ interface ExtensionBudget { left: number }
  * stray word; a sentence's full stop, a file extension (`.json`) and a word (`.Models`, `.toString`) end the key as
  * before (`isKeyMaterialSegment`). Returns `end` itself when nothing continues it or the budget is spent.
  */
-function extendDottedKey(text: string, end: number, budget: ExtensionBudget): number {
-  const limit = end + Math.min(MAX_EXTENSION, budget.left);
+function extendDottedKey(text: string, end: number): number {
+  const limit = end + MAX_EXTENSION;
   let extended = end;
   while (text[extended] === "." && extended < limit) {
     const segmentEnd = scanKeyRun(text, extended + 1, true, limit);
     if (!isKeyMaterialSegment(normalizeKeyChars(text.slice(extended + 1, segmentEnd)))) break;
     extended = segmentEnd;
   }
-  return chargeExtension(end, extended, budget);
+  return extended;
 }
 
-function chargeExtension(from: number, to: number, budget: ExtensionBudget): number {
-  if (to - from > budget.left) return from;
+/** Takes the extension `from`..`to` out of the budget; false (nothing taken) when it does not fit. */
+function chargeExtension(from: number, to: number, budget: ExtensionBudget): boolean {
+  if (to - from > budget.left) return false;
   budget.left -= to - from;
-  return to;
+  return true;
 }
 
 /** Whether `text[at, end)` (an `sk-` run) is a base64 key: see `scanBase64Keys` for the rule. */
@@ -576,6 +578,12 @@ function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolea
  */
 function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: number; end: number; name: string }> {
   const found: Array<{ start: number; end: number; name: string }> = [];
+  // A key that starts past everything an earlier key's extension scanned adds fresh characters to the scan, so those
+  // scans total at most the text. A key inside that region would rescan it (`sk-%2F` repeated): rescans draw on a
+  // ceiling proportional to the text and stop extending once it is spent, so a crafted prefix costs linear time and
+  // never withholds the extension of a real key that comes after it.
+  let scannedTo = 0;
+  let rescanLeft = 16 * text.length;
   let from = 0;
   while (from < text.length) {
     const at = text.indexOf("sk-", from);
@@ -587,10 +595,15 @@ function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: n
     const anthropic = text.startsWith("sk-ant-", at);
     const name = anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
     const runEnd = scanKeyRun(text, at + 3, false);
-    const encodedEnd = chargeExtension(runEnd, scanKeyRun(text, runEnd, true, runEnd + Math.min(MAX_EXTENSION, budget.left)), budget);
-    const extendedEnd = extendDottedKey(text, encodedEnd, budget);
+    const rescan = at < scannedTo;
+    const mayExtend = !rescan || rescanLeft > 0;
+    const encodedEnd = mayExtend ? scanKeyRun(text, runEnd, true, runEnd + MAX_EXTENSION) : runEnd;
+    const extendedEnd = mayExtend ? extendDottedKey(text, encodedEnd) : runEnd;
+    if (rescan) rescanLeft -= 16 + extendedEnd - runEnd;
+    scannedTo = Math.max(scannedTo, extendedEnd);
     for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
       if (!isBase64KeyRun(text, at, end, anthropic)) continue;
+      if (end > runEnd && !chargeExtension(runEnd, end, budget)) continue;
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
       found.push({ start: at, end: secretEnd, name });
@@ -1128,8 +1141,8 @@ export class InformationFlowBoundary {
         // value found only by its shorter form (the key on its own elsewhere in the text) is still redacted.
         const ends = [end];
         if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
-          const extended = extendDottedKey(text, end, extensionBudget);
-          if (extended > end) ends.push(extended);
+          const extended = extendDottedKey(text, end);
+          if (extended > end && chargeExtension(end, extended, extensionBudget)) ends.push(extended);
         }
         for (const spanEnd of ends) {
           const secretVal = text.slice(start, spanEnd);

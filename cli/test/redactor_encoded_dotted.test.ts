@@ -165,6 +165,24 @@ test("extensions cannot make the values to replace much larger than the text", (
   assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
 });
 
+test("a blob of rejected encoded look-alikes does not starve a real key later in the text", () => {
+  const body = "Qx7Km2Vb9%2FLrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq";
+  const key = `sk-${body}.${TAIL}`;
+  const blob = "sk-%2F-".repeat(40000) + "sk-a.".repeat(20000);
+  const input = `${blob} then ${key} end`;
+  withFreshBoundary(() => {
+    const started = performance.now();
+    const output = redactDiagnosticForOutput(input);
+    assert.ok(performance.now() - started < 5000, `took ${Math.round(performance.now() - started)}ms`);
+    const after = output.slice(output.lastIndexOf(" then ") + 6);
+    assert.ok(after.endsWith(" end") && after.length < 60, after);
+    assert.equal(leftover(after, body), undefined, after);
+    assert.ok(!after.includes(TAIL) && !after.includes("RtBq"), after);
+  });
+  const total = new InformationFlowBoundary().classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
+  assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
+});
+
 test("a long dotted high-entropy token is redacted whole", () => {
   const secret = "Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq.Xo2RtBq";
   assertRedactedEverywhere(secret, secret, "dotted token");

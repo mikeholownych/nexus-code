@@ -2077,7 +2077,11 @@ mod tests {
             &[r#"{"v":1,"type":"models.catalog","id":"m1","providers":[{"id":"anthropic","label":"Anthropic","disclosure":"cloud","connected":true,"methods":[],"status":"ok"}],"models":[{"provider":"anthropic","id":"claude-3-5-sonnet"}],"current":{"provider":"anthropic","model":"claude-3-5-sonnet"},"recent":[]}"#],
         );
         let rendered = draw(&state, 40, 10);
-        assert!(!rendered.is_empty());
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert!(lines.len() <= 10, "{} rows on a 10-row terminal:\n{rendered}", lines.len());
+        assert!(lines.iter().all(|l| l.trim_matches('"').chars().count() <= 40), "a row is wider than 40:\n{rendered}");
+        assert_shows(&rendered, &["Select model", "claude-3-5-sonnet"]);
+        assert!(rendered.contains('╰'), "the panel's bottom border is cut off:\n{rendered}");
     }
 
     #[test]
@@ -3216,7 +3220,7 @@ mod tests {
     }
 
     #[test]
-    fn model_picker_modal_height_is_clamped_proportionally_to_content() {
+    fn model_picker_panel_is_eleven_rows_for_the_test_catalog() {
         let mut state = ready();
         for c in "/model".chars() {
             state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
@@ -3233,19 +3237,7 @@ mod tests {
         let top_y = border_lines.iter().map(|(y, _)| *y).min().unwrap();
         let bottom_y = border_lines.iter().map(|(y, _)| *y).max().unwrap();
         let height = bottom_y - top_y + 1;
-        let expected_height = match &state.overlay {
-            Some(Overlay::Models(picker)) => {
-                let row_count = picker.rows().len() as u16;
-                (row_count + 5).clamp(8, 24) as usize
-            }
-            _ => panic!("expected Overlay::Models"),
-        };
-        assert_eq!(expected_height, 11, "catalog should produce 6 rows -> height 11");
-        assert_eq!(
-            height,
-            expected_height,
-            "modal height must follow (rows().len() + 5).clamp(8, 24)"
-        );
+        assert_eq!(height, 11, "a catalog of 6 rows makes an 11-row panel:\n{screen}");
     }
 
 }

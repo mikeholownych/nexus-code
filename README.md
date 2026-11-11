@@ -47,7 +47,7 @@
 Nexus Code's design choices:
 
 - **Approval by Default:** Unset permission mode is `review`: file writes, shell commands, and network egress need your confirmation. File tools are confined to the workspace, and `--sandbox` adds Linux Bubblewrap (`bwrap`) or Docker isolation for commands (see the [architecture reference](docs/ARCHITECTURE.md) for limits).
-- **Git Worktree Isolation:** Rather than mutating your active checkout, speculative code changes and verification loops occur in dedicated, lightweight Git worktrees (`.nexus/worktrees/`), with a verification receipt required before `nexus worktree merge` squashes and fast-forwards them.
+- **Opt-in Git Worktree Isolation:** Pass `--worktree` (ephemeral) or `--worktree-branch <name>` (named, kept) and the run happens in a lightweight Git worktree under `.nexus/worktrees/` instead of your active checkout; without either flag it runs in your checkout. See [docs/WORKTREES.md](docs/WORKTREES.md).
 - **Terminal UI:** Built on [Ratatui](https://ratatui.rs/), the live interface streams tokens, takes keyboard approvals, and offers diff review.
 - **Verification before merge:** `nexus worktree merge` requires a recorded passing verification for the exact state being merged, unless you pass `--no-verify-receipt --reason`.
 - **Cost & Context Protection:** Token tracking, context compaction, and optional cloud limits (`NEXUS_CLOUD_MAX_COST_USD`; only enforceable when the provider reports cost).
