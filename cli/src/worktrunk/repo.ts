@@ -5,6 +5,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { rememberRepository } from "../core/checkout_trust.js";
 import { git, gitOut, GitError, UntrustedCheckoutError } from "./git.js";
 
 export interface WorktreeEntry {
@@ -82,6 +83,7 @@ export function openRepo(startDir: string): Repo {
   // (`--separate-git-dir`), and nothing in the common directory leads back to the checkout, so the anchor would be wrong.
   if (path.basename(commonDir) !== ".git") throw new Error("repositories whose git directory is not <checkout>/.git (for example --separate-git-dir) are not supported by `nexus worktree`");
   const repoPath = fs.realpathSync(main.path);
+  rememberRepository(commonDir, entries.filter((entry) => !entry.isMain).map((entry) => entry.path));
   return { cwd, commonDir, repoPath, repoName: path.basename(repoPath), entries };
 }
 

@@ -19,8 +19,8 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { envWithoutConfiguredHooks } from "../core/git_hook_guard.js";
-import { PATHSPEC_MODE_ENV, parseGitfilePointer, parseSubmoduleStatus, untrustedCheckoutReason, verifyCheckout } from "../core/checkout_trust.js";
-export { parseGitfilePointer, parseSubmoduleStatus, untrustedCheckoutReason, verifyCheckout };
+import { PATHSPEC_MODE_ENV, parseSubmoduleStatus, untrustedCheckoutReason, verifyCheckout } from "../core/checkout_trust.js";
+export { parseSubmoduleStatus, untrustedCheckoutReason };
 import { redactSecrets } from "../ui.js";
 
 /** Hook events Nexus-initiated worktree commands must never fire. */
@@ -94,7 +94,8 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
     const match = /^160000 [0-9a-f]+ \d\t(.+)$/.exec(entry);
     if (match) candidates.add(match[1]);
   }
-  for (const entry of git(dir, ["ls-files", "-o", "--exclude-standard", "--directory", "-z"]).stdout.split("\0")) {
+  // Without `--directory` Git still lists a nested repository (at any depth) as one `dir/` entry.
+  for (const entry of git(dir, ["ls-files", "-o", "--exclude-standard", "-z"]).stdout.split("\0")) {
     if (entry.endsWith("/")) candidates.add(entry.slice(0, -1));
   }
   for (const rel of candidates) {

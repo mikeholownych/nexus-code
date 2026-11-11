@@ -26,20 +26,42 @@ export function parseGitfilePointer(content: string): string | undefined {
   return target;
 }
 
-/** Whether `root` (which has a `.git` DIRECTORY) is a linked worktree of an enclosing repository, registered there with a `.git` FILE it no longer has. */
+/** Repositories this process has opened and their linked worktrees (from `git worktree list`, run where the operator is). */
+const knownCommonDirs = new Set<string>();
+const knownLinkedWorktrees = new Set<string>();
+export function rememberRepository(commonDir: string, linkedWorktrees: readonly string[]): void {
+  knownCommonDirs.add(commonDir);
+  for (const dir of linkedWorktrees) {
+    try { knownLinkedWorktrees.add(fs.realpathSync(dir)); } catch { /* gone: nothing to run Git in */ }
+  }
+}
+
+/**
+ * Whether `root`, which has a `.git` DIRECTORY, is really a linked worktree whose `.git` FILE the agent replaced: it is
+ * a linked worktree of a repository this process opened, or it is registered (with its `.git` file) in an enclosing
+ * repository's or an opened repository's worktree registry. A registry entry that cannot be read is skipped on its own,
+ * never ending the scan of the others.
+ */
 function replacedWorktreeReason(root: string): string | undefined {
+  if (knownLinkedWorktrees.has(root)) return `${root} is a linked worktree whose .git file was replaced by a repository`;
+  const registries = new Set<string>(Array.from(knownCommonDirs, (common) => path.join(common, "worktrees")));
   for (let dir = path.dirname(root); ; dir = path.dirname(dir)) {
-    const registry = path.join(dir, ".git", "worktrees");
-    try {
-      for (const name of fs.readdirSync(registry)) {
+    registries.add(path.join(dir, ".git", "worktrees"));
+    if (path.dirname(dir) === dir) break;
+  }
+  for (const registry of registries) {
+    let names: string[];
+    try { names = fs.readdirSync(registry); } catch { continue; } // no registry here
+    for (const name of names) {
+      try {
         const recorded = fs.readFileSync(path.join(registry, name, "gitdir"), "utf8").trim();
         if (path.basename(recorded) === ".git" && fs.realpathSync(path.dirname(path.resolve(registry, name, recorded))) === root) {
-          return `${root} is a linked worktree registered in ${dir} whose .git file was replaced by a repository`;
+          return `${root} is a linked worktree registered in ${path.dirname(path.dirname(registry))} whose .git file was replaced by a repository`;
         }
-      }
-    } catch { /* no registry here */ }
-    if (path.dirname(dir) === dir) return undefined;
+      } catch { /* a stale entry (its directory was deleted by hand) */ }
+    }
   }
+  return undefined;
 }
 
 /**
@@ -75,9 +97,11 @@ export function verifyCheckout(cwd: string): { reason?: string; gitDir?: string;
   if (!outer) {
     // A plain repository (or none). But a registered linked worktree whose `.git` file the agent replaced by a repository
     // looks exactly like one: the main repository's worktree registry says it is not.
-    const root = directories[0];
-    const replaced = root === undefined ? undefined : replacedWorktreeReason(root);
-    return replaced ? { reason: replaced } : {};
+    for (const root of directories) {
+      const replaced = replacedWorktreeReason(root);
+      if (replaced) return { reason: replaced };
+    }
+    return {};
   }
   files.splice(0, files.length, ...files.filter((root) => inside(outer, root)));
   const planted = directories.find((dir) => inside(outer, dir));

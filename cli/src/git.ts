@@ -2,7 +2,6 @@ import { execFileSync, execSync, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { PATHSPEC_MODE_ENV } from "./core/checkout_trust.js";
 import { nestedRepositoryReason } from "./worktrunk/git.js";
-export { PATHSPEC_MODE_ENV };
 import * as fs from "node:fs";
 
 export interface GitInfo {
@@ -60,10 +59,8 @@ function currentBranch(workspace: string): string {
 
 export function getGitInfo(workspace: string): GitInfo {
   try {
-    assertTrustedCheckout(workspace);
+    const statusOut = workspaceStatus(workspace, "--porcelain").trim(); // guards the checkout before any Git runs
     const branch = currentBranch(workspace);
-
-    const statusOut = workspaceStatus(workspace, "--porcelain").trim();
 
     const lines = statusOut ? statusOut.split("\n") : [];
     const dirtyCount = lines.length;

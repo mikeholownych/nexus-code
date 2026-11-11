@@ -263,7 +263,6 @@ test("a linked worktree whose .git file was replaced by a repository is refused 
   const { getGitInfo } = await import("../src/git.js");
   const { CheckpointManager } = await import("../src/checkpoint.js");
   const { statusOf } = await import("../src/worktrunk/core.js");
-  const { conventionalCommitMessage } = await import("../src/git.js");
   const f = fixture("feat/replaced");
   const previousHome = process.env.HOME;
   process.env.HOME = f.home;
@@ -281,9 +280,50 @@ test("a linked worktree whose .git file was replaced by a repository is refused 
     assert.equal(f.merge().success, false);
     assert.equal(fs.existsSync(marker), false, "a planted repository's configuration ran on the host");
     assert.equal(getGitInfo(f.repo).isRepo, true, "the main checkout is a plain repository and still works");
-    assert.equal(conventionalCommitMessage(["a\n\nSigned-off-by: x"]), "feat(core): update workspace files", "a file name never forges a trailer");
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     f.cleanup();
   }
+});
+
+test("a file name with control characters never forges a trailer in the deterministic commit message", async () => {
+  const { conventionalCommitMessage } = await import("../src/git.js");
+  assert.equal(conventionalCommitMessage(["a\n\nSigned-off-by: x"]), "feat(core): update workspace files");
+  assert.equal(conventionalCommitMessage(["src/plain.ts"]), "feat(core): update plain.ts");
+});
+
+test("a repository planted two levels below an untracked directory is found, and a replaced .git is found in a sibling-layout worktree", async () => {
+  const { getGitInfo } = await import("../src/git.js");
+  const { verifyCheckout } = await import("../src/core/checkout_trust.js");
+  const f = fixture("feat/deep");
+  try {
+    const marker = path.join(f.root, "MARKER");
+    const deep = path.join(f.dir, "vendor", "lib");
+    fs.mkdirSync(deep, { recursive: true });
+    git(deep, "init", "-q");
+    git(deep, "config", "core.fsmonitor", `sh -c 'echo fsm > ${marker}'`);
+    assert.equal(getGitInfo(f.dir).isRepo, false, "depth two");
+    assert.equal(fs.existsSync(marker), false);
+
+    // a worktree outside the main repository's directory tree (sibling layout), registered through `worktree add`
+    const sibling = path.join(f.root, "sibling-wt");
+    git(f.repo, "worktree", "add", "-q", "-b", "feat/sibling", sibling);
+    assert.equal(runWorktreeCommand(["list"], { cwd: f.repo, home: f.home, readOnly: true }).success, true); // opens the repository: its registry becomes known
+    assert.equal(verifyCheckout(sibling).reason, undefined, "intact");
+    fs.rmSync(path.join(sibling, ".git"));
+    git(sibling, "init", "-q");
+    assert.match(String(verifyCheckout(sibling).reason), /whose \.git file was replaced/);
+
+    // a stale registry entry (directory deleted by hand) sorted before the agent's worktree does not hide it; this
+    // worktree was made with plain Git, so only the registry scan (not the opened-repository set) can recognise it
+    git(f.repo, "worktree", "add", "-q", "-b", "feat/a-old", path.join(f.root, "a-old-wt"));
+    fs.rmSync(path.join(f.root, "a-old-wt"), { recursive: true, force: true });
+    assert.ok(fs.existsSync(path.join(f.repo, ".git", "worktrees", "a-old-wt")), "precondition: the stale entry is still registered");
+    const fresh = path.join(f.repo, ".nexus", "worktrees", "zz-fresh");
+    git(f.repo, "worktree", "add", "-q", "-b", "feat/zz-fresh", fresh);
+    assert.equal(verifyCheckout(fresh).reason, undefined, "intact");
+    fs.rmSync(path.join(fresh, ".git"));
+    git(fresh, "init", "-q", "-b", "main");
+    assert.match(String(verifyCheckout(fresh).reason), /whose \.git file was replaced/);
+  } finally { f.cleanup(); }
 });
