@@ -9,7 +9,7 @@ import { validateBranchName } from "../worktrunk/paths.js";
 import { WORKTREE_BINDING_VERSION } from "./state_schema.js";
 import { readRegistry } from "../worktrunk/registry.js";
 import { openRepo } from "../worktrunk/repo.js";
-import { parseGitfilePointer, untrustedCheckoutReason } from "../worktrunk/git.js";
+import { parseGitfilePointer, untrustedCheckoutReason } from "./checkout_trust.js";
 import { ensurePrivateDir, writePrivateFile, appendPrivateFile } from "./durable_file.js";
 
 export class SensitivePersistenceError extends Error {

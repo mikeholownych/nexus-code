@@ -118,13 +118,18 @@ test("trust table: legitimate layouts pass, planted ones are refused", async () 
     git(path.join(f.dir, "sub"), "init", "-q");
     assert.match(String(untrustedCheckoutReason(path.join(f.dir, "sub"))), /nested inside the linked worktree/);
     fs.rmSync(path.join(f.dir, "sub", ".git"), { recursive: true });
-    // a pointer to a directory inside the worktree, to another worktree's admin directory, and a symlinked .git
+    // a pointer to a directory inside the worktree, and a symlinked .git
     fs.mkdirSync(path.join(f.dir, "fake", "worktrees", "w"), { recursive: true });
     fs.writeFileSync(path.join(f.dir, "sub", ".git"), `gitdir: ${path.join(f.dir, "fake", "worktrees", "w")}\n`);
     assert.match(String(untrustedCheckoutReason(path.join(f.dir, "sub"))), /inside the worktree itself/);
     fs.rmSync(path.join(f.dir, "sub", ".git"));
     fs.symlinkSync(path.join(f.repo, ".git"), path.join(f.dir, "sub", ".git"));
     assert.match(String(untrustedCheckoutReason(path.join(f.dir, "sub"))), /plain pointer/);
+    // a pointer to a different linked worktree's administrative directory, which does not point back at this .git
+    fs.unlinkSync(path.join(f.dir, "sub", ".git"));
+    git(f.repo, "worktree", "add", "-q", "-b", "feat/sibling", path.join(f.root, "sibling"));
+    fs.writeFileSync(path.join(f.dir, "sub", ".git"), `gitdir: ${path.join(f.repo, ".git", "worktrees", "sibling")}\n`);
+    assert.match(String(untrustedCheckoutReason(path.join(f.dir, "sub"))), /does not point back/);
   } finally { f.cleanup(); }
 });
 
@@ -178,6 +183,7 @@ test("a pointer to the main repository's own Git directory, and a repository pla
     const r = g.merge();
     assert.equal(r.success, false, r.output);
     assert.equal(git(g.repo, "rev-parse", "main"), before, "the main branch was not advanced through the rewritten pointer");
+    assert.match(r.output, /not a trusted worktree|does not point back/);
   } finally { g.cleanup(); }
 });
 
@@ -187,4 +193,24 @@ test("submodule status lines are parsed with their whole path, spaces included",
   assert.deepEqual(parseSubmoduleStatus(` ${sha} my sub (heads/main)\n-${sha} other\n+${sha} nested/dir (v1-2-gabc)`), [
     { path: "my sub", initialised: true }, { path: "other", initialised: false }, { path: "nested/dir", initialised: true },
   ]);
+});
+
+test("the session's own Git helpers and the checkpoint manager refuse a worktree whose .git pointer was planted", async () => {
+  const { getGitInfo, commitChanges } = await import("../src/git.js");
+  const { CheckpointManager } = await import("../src/checkpoint.js");
+  const f = fixture("feat/session");
+  const previousHome = process.env.HOME;
+  process.env.HOME = f.home; // checkpoints live under HOME
+  try {
+    const marker = plantRepository(f, "feat/session", [`filter.plant.clean\u0000sh -c 'echo ran > @MARKER@; cat'`, `core.fsmonitor\u0000sh -c 'echo fsm > @MARKER@'`]);
+    assert.equal(getGitInfo(f.dir).isRepo, false, "no branch badge from a planted repository");
+    assert.equal(commitChanges(f.dir, "chore: x").success, false);
+    const manager = new CheckpointManager(f.dir);
+    assert.throws(() => manager.createCheckpoint("turn"), /not a trusted worktree/);
+    assert.equal(manager.restore("cp_none").success, false);
+    assert.equal(fs.existsSync(marker), false, "a planted configuration command ran on the host");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    f.cleanup();
+  }
 });

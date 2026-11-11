@@ -767,6 +767,7 @@ describe("SidecarServer: sessions and slash commands", () => {
       assert.equal(events.some((e) => e.type === "notice" && /cannot be cancelled/.test(e.text)), false, "the merge route is cancellable");
       const reply = events.filter((e) => e.type === "slash.result").find((e) => e.id === "w3");
       assert.equal(reply.success, false, reply.output);
+      assert.match(reply.output, /Cancelled/);
       assert.equal(sh(repo, "git rev-parse HEAD"), before, "nothing was merged");
       assert.ok(fs.existsSync(dir), "the worktree was not removed");
     });

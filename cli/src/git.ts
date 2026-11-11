@@ -1,5 +1,6 @@
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import * as path from "node:path";
+import { untrustedCheckoutReason } from "./core/checkout_trust.js";
 import * as fs from "node:fs";
 
 export interface GitInfo {
@@ -29,8 +30,15 @@ function pathspecEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+/** Host-side Git must not run in a worktree whose `.git` (or a nested repository) the sandboxed agent could have planted. */
+function assertTrustedCheckout(workspace: string): void {
+  const reason = untrustedCheckoutReason(workspace);
+  if (reason) throw new Error(`refusing to run Git in ${workspace}: it is not a trusted worktree (${reason})`);
+}
+
 /** `git status` in `format` for the workspace's repository, without Nexus state. Throws when git fails. */
 export function workspaceStatus(workspace: string, format: "--porcelain" | "--short"): string {
+  assertTrustedCheckout(workspace);
   return execFileSync("git", ["status", format, ...WITHOUT_NEXUS_STATE], {
     cwd: workspace,
     env: pathspecEnv(),
@@ -53,6 +61,7 @@ function currentBranch(workspace: string): string {
 
 export function getGitInfo(workspace: string): GitInfo {
   try {
+    assertTrustedCheckout(workspace);
     const branch = currentBranch(workspace);
 
     const statusOut = workspaceStatus(workspace, "--porcelain").trim();
@@ -187,6 +196,7 @@ export function conventionalCommitMessage(files: string[]): string {
 
 export function commitChanges(workspace: string, message: string): { success: boolean; hash?: string; error?: string } {
   try {
+    assertTrustedCheckout(workspace);
     const gitEnv = pathspecEnv();
     // Exclusions in `git add` do not remove paths that were already staged.
     // Restore only the internal state entries in the index, leaving their working

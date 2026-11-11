@@ -516,6 +516,9 @@ export function removeOne(ctx: WorktreeContext, token: string, options: RemoveOp
       }
       try {
         removeSeams.beforeGitRemove?.(entry);
+        // `worktree remove` runs `git status` in the worktree and re-reads its `.git` pointer: verify it once more first.
+        const unsafe = nestedRepositoryReason(entry.path);
+        if (unsafe) throw new UntrustedCheckoutError(entry.path, unsafe, ["worktree", "remove"]);
         git(repo.cwd, ["worktree", "remove", ...(options.force ? ["--force"] : []), "--end-of-options", entry.path]);
       } catch (err) {
         // Git refused (an initialised submodule, a file that appeared): the worktree stays, so put it back on its

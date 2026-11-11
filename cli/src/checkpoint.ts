@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { envWithoutConfiguredHooks } from "./core/git_hook_guard.js";
+import { untrustedCheckoutReason } from "./core/checkout_trust.js";
 import crypto from "node:crypto";
 import {
   assertNoSensitivePersistenceContent,
@@ -929,7 +930,14 @@ export class CheckpointManager {
     visit(this.workspace, "");
   }
 
+  /** The reason the workspace is a worktree host-side Git must not run in (a planted `.git` pointer or nested repository), or undefined. */
+  private untrustedReason(): string | undefined {
+    return this.isGit ? untrustedCheckoutReason(this.workspace) : undefined;
+  }
+
   public createCheckpoint(name?: string, options: { allowSensitive?: boolean } = {}): CheckpointInfo {
+    const untrusted = this.untrustedReason();
+    if (untrusted) throw new Error(`Checkpoint refused: ${this.workspace} is not a trusted worktree (${untrusted}); no checkpoint was written`);
     const allowSensitive = options.allowSensitive === true;
     const rand = Math.random().toString(36).slice(2, 6);
     const id = `cp_${Date.now()}_${rand}`;
@@ -1121,6 +1129,8 @@ export class CheckpointManager {
   }
 
   public getDiff(checkpointId: string, baseCheckpointId?: string): { success: boolean; diff: string; error?: string } {
+    const untrusted = this.untrustedReason();
+    if (untrusted) return { success: false, diff: "", error: `${this.workspace} is not a trusted worktree (${untrusted})` };
     const cpTarget = this.getCheckpoint(checkpointId);
     if (!cpTarget) {
       return { success: false, diff: "", error: `Checkpoint '${checkpointId}' not found.` };
@@ -1240,6 +1250,8 @@ export class CheckpointManager {
   }
 
   public restore(id: string): { success: boolean; message: string } {
+    const untrusted = this.untrustedReason();
+    if (untrusted) return { success: false, message: `Rollback refused: ${this.workspace} is not a trusted worktree (${untrusted}); the workspace was not changed` };
     const cp = this.getCheckpoint(id);
     if (!cp) {
       return { success: false, message: `Checkpoint '${id}' not found.` };

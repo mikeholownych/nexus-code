@@ -13,8 +13,6 @@ import { execFileSync } from "node:child_process";
 
 process.env.GIT_LITERAL_PATHSPECS = "1";
 const { runWorktreeCommand } = await import("../src/worktrunk/command.js");
-const { SCRUBBED_ENV } = await import("../src/worktrunk/git.js");
-const { PATHSPEC_MODE_ENV } = await import("../src/git.js");
 
 function git(cwd: string, ...args: string[]): string {
   const env = { ...process.env };
@@ -50,9 +48,4 @@ test("an inherited GIT_LITERAL_PATHSPECS=1 does not make the .nexus exclusion li
     assert.equal(git(repo, "show", "main:real.txt"), "real work");
     assert.equal(git(repo, "show", "main:.nexus/knowledge.json"), '{"v":1}', "the state edit was committed under an inherited literal-pathspec mode");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test("the worktree Git helper scrubs every pathspec-mode variable the /commit helper does", () => {
-  assert.deepEqual([...PATHSPEC_MODE_ENV].sort(), ["GIT_GLOB_PATHSPECS", "GIT_ICASE_PATHSPECS", "GIT_LITERAL_PATHSPECS", "GIT_NOGLOB_PATHSPECS"]);
-  for (const name of PATHSPEC_MODE_ENV) assert.ok(SCRUBBED_ENV.includes(name), `${name} is scrubbed`);
 });

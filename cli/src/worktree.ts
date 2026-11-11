@@ -13,7 +13,7 @@ import { WORKTREE_BINDING_VERSION } from "./core/state_schema.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { ensureWorktree } from "./worktrunk/core.js";
 import { openRepo } from "./worktrunk/repo.js";
-import { git as pinnedGit } from "./worktrunk/git.js";
+import { git as pinnedGit, nestedRepositoryReason } from "./worktrunk/git.js";
 export { ensureGitExclude };
 
 export interface WorktreeInfo {
@@ -277,6 +277,7 @@ export class WorktreeManager {
     if (!fs.existsSync(worktreePath)) return false;
     try {
       if (!this.isLinkedWorktree(worktreePath)) return true;
+      if (nestedRepositoryReason(worktreePath)) return true; // Git would read a planted nested repository's configuration for status
       const status = pinnedGit(worktreePath, ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"]).stdout;
       const dirty = status
         .split("\n")

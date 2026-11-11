@@ -191,7 +191,7 @@ export function resolveMergeContext(ctx: WorktreeContext, options: MergeOptions 
     waiver = reason;
   }
 
-  const mergeBase = gitOut(source.path, ["merge-base", targetSha, "HEAD"], { allowFailure: false });
+  const mergeBase = gitOut(source.path, ["merge-base", targetSha, "HEAD"]);
   const ahead = Number(gitOut(source.path, ["rev-list", "--count", `${mergeBase}..HEAD`]));
 
   return {
@@ -320,9 +320,14 @@ export function mergeWorktree(ctx: WorktreeContext, options: MergeOptions = {}):
 
   if (waiver !== undefined) {
     const reason = waiver;
-    updateRegistry(repo.commonDir, (reg) => {
-      reg.waivers = [...(reg.waivers ?? []), { branch, head: gateState.head, reason, recordedAt: new Date().toISOString() }].slice(-MAX_RECORDS);
-    });
+    try {
+      updateRegistry(repo.commonDir, (reg) => {
+        reg.waivers = [...(reg.waivers ?? []), { branch, head: gateState.head, reason, recordedAt: new Date().toISOString() }].slice(-MAX_RECORDS);
+      });
+    } catch (err) {
+      // The target has already advanced: report the merge, and say the audit record is missing.
+      notes.push(`The waiver could not be recorded in the registry (${redactSecrets((err as Error).message).slice(0, 150)}).`);
+    }
   }
 
   if (!options.noRemove) {
