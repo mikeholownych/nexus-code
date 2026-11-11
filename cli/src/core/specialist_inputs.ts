@@ -143,7 +143,9 @@ export function snapshotSupport(run: (args: string[]) => string, root: string, b
     if (tag >= "a" && tag <= "z") return refuse(`${file} is marked assume-unchanged, so git does not look at its worktree state`, "run `git update-index --no-assume-unchanged`");
     return refuse(`${file} has index state '${tag}' that is not supported`, "no workaround");
   }
-  const mangled = undecodablePath(run, run(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim());
+  let commit: string;
+  try { commit = run(["rev-parse", "--verify", "--end-of-options", `${base ?? "HEAD"}^{commit}`]).trim(); } catch { return refuse("the base commit cannot be resolved", "check the operation's recorded base"); }
+  const mangled = undecodablePath(run, commit);
   if (mangled !== undefined) return refuse(`a path (${JSON.stringify(mangled.slice(0, 60))}) is not valid UTF-8 text`, "rename it");
   const everything = run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0");
   for (const file of everything.filter((p) => p && !p.endsWith("/") && path.posix.basename(p) === ".gitattributes")) {

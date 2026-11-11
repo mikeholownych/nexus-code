@@ -259,7 +259,7 @@ test("the plain diff does not silently drop a changed path that is not valid UTF
   assert.ok("error" in r && /not valid UTF-8/.test(r.error), JSON.stringify(r));
 });
 
-test("an object-format answer that is neither sha1 nor sha256 (git before 2.38 echoes the flag) is refused as unreportable", () => {
+test("an object-format answer that is neither sha1 nor sha256 (for example git echoing the flag) is refused as unreportable", () => {
   const d = repo();
   const real = (args: string[]) => execFileSync("git", args, { cwd: d, encoding: "utf8" });
   const r = snapshotSupport((args) => (args.includes("--show-object-format") ? "--show-object-format\n" : real(args)), d);
