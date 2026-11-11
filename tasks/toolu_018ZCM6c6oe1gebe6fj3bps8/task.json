@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_018ZCM6c6oe1gebe6fj3bps8",
+  "agent_id": "a9a6be2637c33bc67",
+  "subagent_type": "reviewer",
+  "task_description": "Code Review pass 17",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 63671,
+    "cache_read_tokens": 527226,
+    "output_tokens": 12435,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-11T04:32:45.047435888Z",
+  "completed_at": "2026-11-11T04:34:32.142886304Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NdL37Gehm5YYqbyeUicJ1K",
+  "agent_id": "a71f7ab78a073fa93",
+  "subagent_type": "reviewer",
+  "task_description": "Slop review pass 23",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 51065,
+    "cache_read_tokens": 396939,
+    "output_tokens": 6847,
+    "api_call_count": 11
+  },
+  "started_at": "2026-11-11T07:00:36.68505919Z",
+  "completed_at": "2026-11-11T07:01:40.472984774Z"
+}

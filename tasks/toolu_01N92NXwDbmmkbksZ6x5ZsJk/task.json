@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01N92NXwDbmmkbksZ6x5ZsJk",
+  "agent_id": "af8f15b9a4931a521",
+  "task_description": "Review docs-only delta on #449",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 41073,
+    "cache_read_tokens": 513945,
+    "output_tokens": 3003,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-10T23:17:28.793952514Z",
+  "completed_at": "2026-11-10T23:18:04.743759451Z"
+}

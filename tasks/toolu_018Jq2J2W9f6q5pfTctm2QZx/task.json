@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_018Jq2J2W9f6q5pfTctm2QZx",
+  "agent_id": "a49bdeedd7185dafd",
+  "subagent_type": "reviewer",
+  "task_description": "Security Review pass 4",
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 148967,
+    "cache_read_tokens": 3351167,
+    "output_tokens": 38733,
+    "api_call_count": 37
+  },
+  "started_at": "2026-11-11T01:09:51.599715709Z",
+  "completed_at": "2026-11-11T01:15:35.303988012Z"
+}
