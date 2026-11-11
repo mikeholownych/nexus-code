@@ -200,6 +200,8 @@ function protectedContent(sources: Array<{ root: string; file: string }>): { car
   let total = 0;
   for (const { root, file } of sources) {
     const structural = file.split(/[\\/]/).some((seg) => seg.toLowerCase() === ".nexus");
+    // A name that is not valid UTF-8 was mangled by decoding: it cannot be found on disk, so it cannot be compared.
+    if (file.includes("\uFFFD")) { complete = false; continue; }
     let size: number;
     try {
       const st = fs.lstatSync(path.join(root, file));
@@ -233,8 +235,8 @@ function protectedContent(sources: Array<{ root: string; file: string }>): { car
       let data: Buffer;
       try {
         const st = fs.lstatSync(path.join(dir, relative));
-        // A link is shown as its target path, never as content; anything else that is not a regular file is not read.
-        if (!st.isFile()) return !st.isSymbolicLink();
+        // Anything that is not a regular file is not read, and not shown either: a link to a directory is followed by `git diff --no-index`.
+        if (!st.isFile()) return true;
         if (st.size > ADDED_FILE_MAX) return true;
         data = fs.readFileSync(path.join(dir, relative));
       } catch { return true; }
@@ -465,7 +467,7 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     git(["read-tree", "--end-of-options", commit]);
     // A path the real index no longer holds (`git rm --cached`, the file may stay on disk, ignored) is a deletion of the
     // candidate: take it out of the private index too, so the comparison with the base tree still reports it.
-    const staged = git(["diff-index", "--cached", "--name-status", "-z", "--no-renames", commit], { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }).split("\0");
+    const staged = git(["diff-index", "--cached", "--name-status", "-z", "--relative", "--no-renames", commit], { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }).split("\0");
     const stagedRemovals: string[] = [];
     for (let i = 0; i + 1 < staged.length; i += 2) if (staged[i] === "D") stagedRemovals.push(staged[i + 1]);
     if (stagedRemovals.length) git(["update-index", "--force-remove", "-z", "--stdin"], { input: `${stagedRemovals.join("\0")}\0` });
@@ -482,7 +484,7 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     if ([...tracked, ...others].some((p) => p.includes("\uFFFD"))) return { error: "a changed path is not valid UTF-8 text and cannot be shown; rename it" };
     if (tracked.length + untracked.length > MAX_DIFF_PATHS) return { error: `the change touches more than ${MAX_DIFF_PATHS} paths; scope it with explicit inputs` };
     const allowedTracked = tracked.filter((p) => inputPathProtection(security, p) === undefined);
-    const sources = protectedMatcher((args, timeoutMs) => git(args, { maxBuffer: LISTING_MAX_BUFFER, timeoutMs }), root, policyWorkspace, security, [...tracked, ...untracked]);
+    const sources = protectedMatcher((args, timeoutMs) => git(args, { maxBuffer: LISTING_MAX_BUFFER, timeoutMs }), root, policyWorkspace, security, [...listed, ...tracked, ...untracked]);
     let omitted = tracked.length - allowedTracked.length;
     let omittedNew = 0;
     const allowedNew: string[] = [];

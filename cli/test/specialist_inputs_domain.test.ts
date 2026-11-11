@@ -338,3 +338,44 @@ test("under core.filemode=false a `git rm --cached` of a file that stays on disk
   assert.match(ev.unifiedDiff, /diff --git a\/generated\.txt b\/generated\.txt\ndeleted file mode/);
   assert.match(ev.unifiedDiff, new RegExp(MARK));
 });
+
+// ------------------------------------------------ review round: plain builder fails closed too
+test("a new symlink to a directory holding protected content is omitted by the plain builder (git --no-index would follow it)", () => {
+  const d = protectedRepo();
+  fs.writeFileSync(path.join(d, ".env"), SECRET);
+  put(d, "d/null", SECRET); fs.symlinkSync("d", path.join(d, "dlnk"));
+  const r = plainCandidateDiff(d, undefined);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  assert.doesNotMatch(r.diff, LEAK);
+  assert.ok(r.omittedNew >= 2, `omittedNew ${r.omittedNew}`);
+});
+
+test("a copy of an unchanged TRACKED protected file is omitted by the plain builder", () => {
+  const d = repo({ "in/a.txt": "a\n", ".env.production": SECRET });
+  put(d, "notes.txt", SECRET);
+  const r = plainCandidateDiff(d, undefined);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  assert.doesNotMatch(r.diff, LEAK);
+  assert.ok(r.omittedNew >= 1);
+});
+
+test("a protected source whose name is not valid UTF-8 (ignored) means cannot compare: new files are omitted", () => {
+  const d = protectedRepo();
+  put(d, ".gitignore", ".env*\n");
+  fs.writeFileSync(Buffer.concat([Buffer.from(d + "/.env."), Buffer.from([0xff])]), SECRET);
+  put(d, "notes.txt", SECRET);
+  const r = plainCandidateDiff(d, undefined);
+  if ("error" in r) return assert.match(r.error, /not valid UTF-8/);
+  assert.doesNotMatch(r.diff, LEAK);
+});
+
+test("a staged removal is applied from a subdirectory workspace too (paths relative to it)", () => {
+  const d = repo({ "in/a.txt": "a\n", "in/gen.txt": "g\n", "gen.txt": "root\n" });
+  sh(d, "rm", "-q", "--cached", "in/gen.txt");
+  put(d, ".gitignore", "in/gen.txt\n");
+  const r = plainCandidateDiff(path.join(d, "in"), undefined);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  assert.match(r.diff, /deleted file mode/);
+  assert.match(r.diff, /gen\.txt/);
+  assert.doesNotMatch(r.diff, /root/);
+});
