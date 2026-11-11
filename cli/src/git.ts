@@ -1,7 +1,7 @@
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { PATHSPEC_MODE_ENV, verifyCheckout } from "./core/checkout_trust.js";
-import { nestedRepositoryReason } from "./worktrunk/git.js";
+import { nestedRepositoryReason, UntrustedCheckoutError } from "./worktrunk/git.js";
 import * as fs from "node:fs";
 
 export interface GitInfo {
@@ -49,7 +49,7 @@ function nestedReasonSoon(workspace: string): string | undefined {
 function trustedGitArgs(workspace: string, fresh = false): string[] {
   const checkout = verifyCheckout(workspace);
   const reason = checkout.reason ?? (checkout.gitDir ? (fresh ? nestedRepositoryReason(workspace) : nestedReasonSoon(workspace)) : undefined); // and any repository planted below it
-  if (reason) throw new Error(`refusing to run Git in ${workspace}: it is not a trusted worktree (${reason})`);
+  if (reason) throw new UntrustedCheckoutError(workspace, reason, []);
   return checkout.gitDir ? ["--git-dir", checkout.gitDir, "--work-tree", checkout.workTree!] : [];
 }
 
@@ -93,13 +93,12 @@ export function getGitInfo(workspace: string): GitInfo {
       formattedBadge,
     };
   } catch (err) {
-    const message = (err as Error)?.message ?? "";
     return {
       isRepo: false,
       branch: "",
       dirtyCount: 0,
       formattedBadge: "",
-      ...(message.startsWith("refusing to run Git") ? { refusal: message } : {}),
+      ...(err instanceof UntrustedCheckoutError ? { refusal: err.message } : {}),
     };
   }
 }

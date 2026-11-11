@@ -12,7 +12,7 @@ import { redactSecrets } from "../ui.js";
 import { ensureGitExclude } from "../core/git_exclude.js";
 import { identityOf, mkdirVerified } from "../safe_fs.js";
 import { readWorktreeSettings } from "./config.js";
-import { MAX_POINTER_BYTES, readSmallFile } from "../core/checkout_trust.js";
+import { MAX_POINTER_BYTES, parseGitfilePointer, readSmallFile } from "../core/checkout_trust.js";
 import { git, gitOut, nestedRepositoryReason, UntrustedCheckoutError } from "./git.js";
 import { resolveWorktreePath, sanitizeBranch, validateBranchName, allowedRoot } from "./paths.js";
 import { readRegistry, updateRegistry, withWorktreeLock, type Registry } from "./registry.js";
@@ -592,11 +592,10 @@ function verifiedWorktreeDir(repo: Repo, entry: WorktreeEntry): { dev: number; i
   const dotGit = path.join(entry.path, ".git");
   const content = readSmallFile(dotGit, MAX_POINTER_BYTES); // the agent controls this path: no blocking or unbounded read
   if (content === undefined) throw new WorktreeError("the worktree has no plain .git file; refusing to remove it");
-  const pointer = content.trim();
+  const pointer = parseGitfilePointer(content); // as Git reads it: nothing trimmed
   // The pointer may be absolute or, with `worktree.useRelativePaths`, relative to the worktree directory. Either way
   // its canonical location must be an entry under this repository's common directory.
-  const match = /^gitdir: (.+)$/.exec(pointer);
-  const admin = match ? normalizedPath(path.resolve(entry.path, match[1])) : "";
+  const admin = pointer === undefined ? "" : normalizedPath(path.resolve(entry.path, pointer));
   if (!admin || !admin.startsWith(path.join(normalizedPath(repo.commonDir), "worktrees") + path.sep)) {
     throw new WorktreeError("the worktree does not belong to this repository's common directory; refusing to remove it");
   }

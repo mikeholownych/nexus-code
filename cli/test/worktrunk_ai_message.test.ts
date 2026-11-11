@@ -64,8 +64,10 @@ test("without --ai-message the model is never called", async () => {
   const f = fixture();
   try {
     const dir = await featureWithWork(f);
-    const r = await f.run(dir, ["merge", "--no-verify-receipt", "--reason", "test fixture"], async () => { throw new Error("must not be called"); });
+    let calls = 0;
+    const r = await f.run(dir, ["merge", "--no-verify-receipt", "--reason", "test fixture"], async () => { calls++; return "feat: unused"; });
     assert.equal(r.success, true, r.output);
+    assert.equal(calls, 0, "the model is not asked without --ai-message");
   } finally { f.cleanup(); }
 });
 
@@ -141,7 +143,9 @@ test("an explicit -m wins and the model is not called", async () => {
   const f = fixture();
   try {
     const dir = await featureWithWork(f);
-    const r = await f.run(dir, [...MERGE, "-m", "chore: mine"], async () => { throw new Error("must not be called"); });
+    let calls = 0;
+    const r = await f.run(dir, [...MERGE, "-m", "chore: mine"], async () => { calls++; return "feat: unused"; });
+    assert.equal(calls, 0, "an explicit -m never asks the model");
     assert.equal(r.success, true, r.output);
     assert.equal(git(f.repo, "log", "-1", "--format=%s"), "chore: mine");
   } finally { f.cleanup(); }

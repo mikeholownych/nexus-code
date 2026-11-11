@@ -8,6 +8,10 @@ import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinitio
 import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
+import { readSmallFile } from "./core/checkout_trust.js";
+
+/** A project `.env` larger than this is ignored (it is repository-controlled). */
+const MAX_PROJECT_ENV_BYTES = 256 * 1024;
 import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
 
 const installEnv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env");
@@ -117,7 +121,9 @@ export function loadEnvironment(): void {
   if (cwdEnv !== installEnv && fs.existsSync(cwdEnv)) {
     let project: Record<string, string> = {};
     try {
-      project = parseDotenv(fs.readFileSync(cwdEnv));
+      // The repository (a sandboxed agent's worktree, say) controls this file: never a blocking or unbounded read.
+      const text = readSmallFile(cwdEnv, MAX_PROJECT_ENV_BYTES);
+      if (text !== undefined) project = parseDotenv(Buffer.from(text));
     } catch {}
     for (const [key, value] of Object.entries(project)) {
       if (isProjectEnvKey(key)) projectEnvSettings[key] = value;

@@ -390,3 +390,42 @@ test("a path that is not valid UTF-8 cannot hide a planted repository: it is ref
     assert.match(String(nestedRepositoryReason(f.dir)), /not valid UTF-8/);
   } finally { f.cleanup(); }
 });
+
+test("ordinary files with names that are not valid UTF-8 do not make a worktree unusable; a gitlink or directory with such a name is still refused", async () => {
+  const { nestedRepositoryReason } = await import("../src/worktrunk/git.js");
+  const f = fixture("feat/latin1");
+  try {
+    const latin = Buffer.concat([Buffer.from(path.join(f.dir, "r")), Buffer.from([0xe9]), Buffer.from("sum")]);
+    fs.writeFileSync(latin, "resume\n"); // an untracked file named in latin-1
+    fs.mkdirSync(path.join(f.dir, "docs"));
+    fs.writeFileSync(Buffer.concat([Buffer.from(path.join(f.dir, "docs", "n")), Buffer.from([0xe9])]), "x\n"); // inside an untracked directory
+    assert.equal(nestedRepositoryReason(f.dir), undefined);
+    git(f.dir, "add", "-A");
+    git(f.dir, "-c", "commit.gpgsign=false", "-c", "user.email=t@e.c", "-c", "user.name=T", "commit", "-q", "-m", "latin-1 names");
+    assert.equal(nestedRepositoryReason(f.dir), undefined, "tracked too");
+    const sha = git(f.dir, "rev-parse", "HEAD");
+    execFileSync("git", ["update-index", "--index-info"], { cwd: f.dir, input: Buffer.concat([Buffer.from(`160000 ${sha}\tsub-`), Buffer.from([0xff]), Buffer.from("\n")]) });
+    assert.match(String(nestedRepositoryReason(f.dir)), /not valid UTF-8/);
+  } finally { f.cleanup(); }
+});
+
+test("refusal text shows control bytes from agent-controlled paths escaped, never raw", async () => {
+  const { UntrustedCheckoutError } = await import("../src/worktrunk/git.js");
+  const error = new UntrustedCheckoutError("/w/\u001b]52;c;x\u0007", "/w/\u001b[2K/.git is a repository nested inside the linked worktree /w", ["status"]);
+  assert.doesNotMatch(error.message, /[\u0000-\u001f\u007f-\u009f]/);
+  assert.match(error.message, /\\x1b\]52;c;x\\x07/);
+});
+
+test("a project .env that is a FIFO is ignored without blocking the host", async () => {
+  const { loadEnvironment } = await import("../src/config.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-envfifo-"));
+  const previous = process.cwd();
+  try {
+    execFileSync("mkfifo", [path.join(dir, ".env")]);
+    process.chdir(dir);
+    assert.doesNotThrow(() => loadEnvironment()); // a blocking read would hang this test until it times out
+  } finally {
+    process.chdir(previous);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

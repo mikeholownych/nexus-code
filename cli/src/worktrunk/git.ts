@@ -57,7 +57,9 @@ export class GitError extends Error {
 /** A checkout (or a repository nested in one) whose Git directory the sandboxed agent could have planted. */
 export class UntrustedCheckoutError extends GitError {
   constructor(cwd: string, reason: string, args: readonly string[]) {
-    super(`refusing to run Git in ${cwd}: it is not a trusted worktree of this repository (${reason})`, null, args);
+    // The paths come from the agent's worktree: control bytes (terminal escapes) are shown escaped, never raw.
+    const printable = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+    super(`refusing to run Git in ${printable(cwd)}: it is not a trusted worktree of this repository (${printable(reason)})`, null, args);
     this.name = "UntrustedCheckoutError";
   }
 }
@@ -95,13 +97,15 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
   const candidates = new Set<string>();
   // Large trees: the listings can be long, and one that does not fit is a refusal, not a pass.
   const listing = (args: string[]) => git(dir, args, { maxBuffer: LISTING_BUFFER }).stdout.split("\0");
-  // Paths are decoded as UTF-8: bytes that are not valid become U+FFFD and name nothing on disk, so such a path could
-  // hide a planted repository from this check while Git still descends into it. It is refused, not skipped.
+  // Paths are decoded as UTF-8: bytes that are not valid become U+FFFD and name nothing on disk, so a gitlink or a
+  // directory with such a name could hide a planted repository from this check while Git still descends into it. Those
+  // are refused, not skipped; an ordinary file with such a name is fine.
   const undecodable = (name: string) => name.includes("\uFFFD");
   for (const entry of listing(["ls-files", "-s", "-z"])) {
-    if (undecodable(entry)) return `a tracked path below ${dir} is not valid UTF-8; it cannot be checked for a planted repository`;
     const tab = entry.indexOf("\t"); // the path follows the first tab and may itself contain any character, a newline included
-    if (tab > 0 && /^160000 [0-9a-f]+ \d$/.test(entry.slice(0, tab))) candidates.add(entry.slice(tab + 1));
+    if (tab <= 0 || !/^160000 [0-9a-f]+ \d$/.test(entry.slice(0, tab))) continue; // only a gitlink can hide a repository
+    if (undecodable(entry)) return `a submodule path below ${dir} is not valid UTF-8; it cannot be checked for a planted repository`;
+    candidates.add(entry.slice(tab + 1));
   }
   // `--directory` keeps the listing short; Git collapses an untracked directory into one `dir/` entry, so a repository
   // planted anywhere below it is looked for on disk, within a budget.
@@ -109,8 +113,8 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
   // Git never reads a repository inside an ignored directory (`node_modules`) when it reports status: not scanned, not counted.
   const ignored = new Set(listing(["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"]).filter((entry) => entry.endsWith("/")).map((entry) => path.join(dir, entry.slice(0, -1))));
   for (const entry of listing(["ls-files", "-o", "--exclude-standard", "--directory", "-z"])) {
-    if (undecodable(entry)) return `an untracked path below ${dir} is not valid UTF-8; it cannot be checked for a planted repository`;
-    if (!entry.endsWith("/")) continue;
+    if (!entry.endsWith("/")) continue; // an ordinary untracked file, whatever its name, hides nothing
+    if (undecodable(entry)) return `an untracked directory below ${dir} is not valid UTF-8; it cannot be checked for a planted repository`;
     const found = gitDirectoriesBelow(path.join(dir, entry), budget, ignored);
     if (found === undefined) return `more than ${MAX_UNTRACKED_ENTRIES_SCANNED} entries sit in untracked directories below ${dir}; none can be checked for a planted repository`;
     if (found.undecodable !== undefined) return `a path below ${dir} is not valid UTF-8; it cannot be checked for a planted repository`;
@@ -137,7 +141,7 @@ function gitDirectoriesBelow(root: string, budget: number, skip: ReadonlySet<str
     try { names = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
     for (const entry of names) {
       if (++scanned > budget) return undefined;
-      if (entry.name.includes("\uFFFD")) return { repos, scanned, undecodable: path.join(dir, entry.name) };
+      if (entry.isDirectory() && entry.name.includes("\uFFFD")) return { repos, scanned, undecodable: path.join(dir, entry.name) };
       if (entry.name === ".git") repos.push(dir);
       else if (entry.isDirectory() && !skip.has(path.join(dir, entry.name))) pending.push(path.join(dir, entry.name));
     }
