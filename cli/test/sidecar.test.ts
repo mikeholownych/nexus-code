@@ -7,6 +7,9 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { ApplicationCore } from "../src/core/app.js";
+import { CheckpointManager } from "../src/checkpoint.js";
+import { runWorktreeCommand } from "../src/worktrunk/command.js";
+import { isSandboxAvailable } from "../src/sandbox.js";
 import { hasPendingStateRestore, restoreFromSources } from "../src/core/state_restore.js";
 import { SidecarOptions, SidecarServer } from "../src/sidecar.js";
 import { slashCatalog } from "../src/slash/catalog.js";
@@ -413,6 +416,25 @@ describe("SidecarServer: sessions and slash commands", () => {
     });
   });
 
+  test("after the agent moves into another workspace (a named worktree) turns are checkpointed there and /undo targets it", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, send, app, repo }) => {
+      const moved = makeRepo();
+      try {
+        app.getAgent().setWorkspace(moved); // what `run --worktree-branch` does inside the turn
+        await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+        await server.idle();
+        assert.equal(new CheckpointManager(moved).listCheckpoints().length, 1, "the snapshot is of the workspace the agent works in");
+        assert.equal(new CheckpointManager(repo).listCheckpoints().length, 0, "the launch checkout is not snapshotted");
+        fs.writeFileSync(path.join(moved, "edited.txt"), "edit\n");
+        fs.writeFileSync(path.join(repo, "unrelated.txt"), "keep\n");
+        await send({ type: "slash", id: "u1", command: "undo" });
+        await server.idle();
+        assert.equal(fs.existsSync(path.join(moved, "edited.txt")), false, "undo restored the agent's workspace");
+        assert.equal(fs.existsSync(path.join(repo, "unrelated.txt")), true, "the launch checkout is untouched");
+      } finally { fs.rmSync(moved, { recursive: true, force: true }); }
+    });
+  });
+
   test("sensitive checkpoint rejection asks before starting a read-only review turn", async () => {
     const replies = (n: number): Reply => n === 1
       ? { kind: "tools", calls: [{ name: "list_dir", args: { path: "." } }] }
@@ -724,6 +746,30 @@ describe("SidecarServer: sessions and slash commands", () => {
       const reply = events.find((e) => e.type === "slash.result");
       assert.equal(reply.success, true);
       assert.match(reply.output, /done-sleeping/);
+    });
+  });
+
+  test("cancelling /worktree merge --ai-message while the model is asked is accepted and merges nothing", async () => {
+    await withSidecar(() => ({ kind: "text", content: "feat: model message", delayMs: 3000 }), "auto", async ({ server, events, send, repo }) => {
+      const sh = (cwd: string, cmd: string) => execFileSync("sh", ["-c", cmd], { cwd, encoding: "utf8" }).trim();
+      await send({ type: "slash", id: "w1", command: "worktree", args: "switch -c feature/sidecar-cancel --no-copy" });
+      await server.idle();
+      const dir = path.join(repo, ".nexus", "worktrees", "feature-sidecar-cancel");
+      fs.writeFileSync(path.join(dir, "c.txt"), "c\n");
+      sh(dir, "git add c.txt && git commit -q -m c");
+      await send({ type: "slash", id: "w2", command: "cd", args: dir });
+      await server.idle();
+      const before = sh(repo, "git rev-parse HEAD");
+      await send({ type: "slash", id: "w3", command: "worktree", args: "merge ^ --ai-message --no-verify-receipt --reason sidecar-cancel" });
+      await new Promise((r) => setTimeout(r, 300)); // the model request is in flight
+      await send({ type: "cancel" });
+      await server.idle();
+      assert.equal(events.some((e) => e.type === "notice" && /cannot be cancelled/.test(e.text)), false, "the merge route is cancellable");
+      const reply = events.filter((e) => e.type === "slash.result").find((e) => e.id === "w3");
+      assert.equal(reply.success, false, reply.output);
+      assert.match(reply.output, /Cancelled/);
+      assert.equal(sh(repo, "git rev-parse HEAD"), before, "nothing was merged");
+      assert.ok(fs.existsSync(dir), "the worktree was not removed");
     });
   });
 
@@ -1147,5 +1193,68 @@ describe("sidecar process", () => {
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("SidecarServer: a named worktree is established before the first turn's checkpoint", { skip: !isSandboxAvailable("auto") && "no usable sandbox on this host" }, () => {
+  async function withNamedSession(
+    prepare: (repo: string, home: string) => void,
+    fn: (rig: { server: SidecarServer; send: Rig["send"]; repo: string; dir: string }) => Promise<void>,
+  ): Promise<void> {
+    const gw = await startGateway(readOnlyTurn);
+    const repo = makeRepo();
+    const home = makeHome();
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    const dir = path.join(repo, ".nexus", "worktrees", "feat-named");
+    let app: ApplicationCore | undefined;
+    try {
+      prepare(repo, home);
+      app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true, worktree: true, worktreeBranch: "feat/named" } as any);
+      const server = new SidecarServer({ app, mode: "auto", write: () => {} });
+      server.start();
+      try {
+        await fn({ server, send: (msg) => server.handleLine(JSON.stringify({ v: 1, ...msg })), repo, dir });
+      } finally {
+        await server.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
+        await server.idle();
+      }
+    } finally {
+      app?.shutdown();
+      await gw.close();
+      if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  test("a reused worktree: the first prompt is snapshotted in it, so /undo cannot reach back to an earlier session's checkpoint", async () => {
+    const created = (repo: string, home: string) => {
+      const made = runWorktreeCommand(["switch", "-c", "feat/named", "--no-copy"], { cwd: repo, home });
+      assert.equal(made.success, true, made.output);
+      const dir = path.join(repo, ".nexus", "worktrees", "feat-named");
+      fs.writeFileSync(path.join(dir, "early.txt"), "early session\n");
+      new CheckpointManager(dir).createCheckpoint("earlier session");
+      fs.writeFileSync(path.join(dir, "prelaunch.txt"), "edited between the sessions\n");
+    };
+    await withNamedSession(created, async ({ server, send, repo, dir }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+      await server.idle();
+      const inDir = new CheckpointManager(dir).listCheckpoints();
+      assert.equal(inDir.length, 2, "this session's first turn has its own snapshot in the worktree");
+      assert.equal(new CheckpointManager(repo).listCheckpoints().length, 0, "the launch checkout is not snapshotted");
+      await send({ type: "slash", id: "u1", command: "undo" });
+      await server.idle();
+      assert.equal(fs.readFileSync(path.join(dir, "prelaunch.txt"), "utf8"), "edited between the sessions\n", "work from before this launch survives /undo");
+    });
+  });
+
+  test("a worktree the first prompt creates: that prompt is snapshotted in it, not in the launch checkout", async () => {
+    await withNamedSession(() => {}, async ({ server, repo, dir, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "what is here?" });
+      await server.idle();
+      assert.equal(new CheckpointManager(dir).listCheckpoints().length, 1);
+      assert.equal(new CheckpointManager(repo).listCheckpoints().length, 0);
+    });
   });
 });

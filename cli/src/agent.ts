@@ -58,6 +58,11 @@ import { calculateContextBudget, countTokens, isContextAdmissible, isContextPres
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
+import { captureVerificationState, recordVerificationIfEligible } from "./worktrunk/verification.js";
+import { homeDir } from "./worktrunk/core.js";
+import { openRepo, currentEntry, NotARepositoryError } from "./worktrunk/repo.js";
+import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
+import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
@@ -924,6 +929,10 @@ export class AutonomousAgent {
   private modifiedFiles: Set<string> = new Set<string>();
   /** Pending recovered work has no authenticated pre-change verifier snapshot. */
   private verificationBaselineInvalidated: boolean = false;
+  /** The verifier baseline was taken in a linked worktree that already held uncommitted work: never certified by a receipt. */
+  private receiptBaselineUntrusted: boolean = false;
+  /** Whether `receiptBaselineUntrusted` has been judged for the current workspace (the session's own verified work must not turn it on later). */
+  private receiptBaselineJudged: boolean = false;
   /** A persisted baseline retained only as untrusted continuity evidence after recovery. */
   private untrustedRecoveredBaseline?: DurableTaskState["changeBaseline"];
   private recoveredOperation?: DurableTaskState["operation"];
@@ -1045,7 +1054,7 @@ export class AutonomousAgent {
   private activeTraceSpanId?: string;
   private activeCompactionTrace?: { span: SpanHandle; ended: boolean };
   private worktreeManager: WorktreeManager;
-  private activeWorktree?: { taskId: string; worktreePath: string; branch: string };
+  private activeWorktree?: { taskId: string; worktreePath: string; branch: string; kind?: "task" | "named" };
   private originalWorkspace?: string;
   private inheritedWorktreeScope?: { workspace: string; requireSandbox: true };
   private plannerClient: LocalLlmClient;
@@ -1629,6 +1638,8 @@ export class AutonomousAgent {
             worktreePath: this.activeWorktree.worktreePath,
             branch: this.activeWorktree.branch,
             createdAt: new Date().toISOString(),
+            kind: this.activeWorktree.kind ?? "task",
+            bindingVersion: WORKTREE_BINDING_VERSION,
           }
         : null,
       candidateId: this.activeValidationReceipt?.candidateId || null,
@@ -1714,6 +1725,7 @@ export class AutonomousAgent {
         taskId: state.worktreeBinding.taskId,
         worktreePath: state.worktreeBinding.worktreePath,
         branch: state.worktreeBinding.branch,
+        kind: state.worktreeBinding.kind ?? "task",
       };
       // Remember the checkout the task was resumed from so /merge and /discard can return there.
       this.originalWorkspace = this.originalWorkspace ?? this.primaryWorkspacePathIdentity.value;
@@ -1857,7 +1869,7 @@ export class AutonomousAgent {
     return this.worktreeManager;
   }
 
-  public getActiveWorktree(): { taskId: string; worktreePath: string; branch: string } | undefined {
+  public getActiveWorktree(): { taskId: string; worktreePath: string; branch: string; kind?: "task" | "named" } | undefined {
     return this.activeWorktree;
   }
 
@@ -1867,6 +1879,9 @@ export class AutonomousAgent {
   ): { success: boolean; taskId?: string; branch?: string; commitsMerged: number; error?: string } {
     if (!this.activeWorktree) {
       return { success: false, commitsMerged: 0, error: "No active worktree" };
+    }
+    if (this.activeWorktree.kind === "named") {
+      return { success: false, commitsMerged: 0, error: "This is a named worktree: merge it with `nexus worktree merge` (it needs a recorded verification) from inside it." };
     }
     const receiptToUse = receipt || this.activeValidationReceipt;
     const res = this.worktreeManager.mergeWorktree(
@@ -1887,6 +1902,9 @@ export class AutonomousAgent {
   public discardActiveWorktree(): { success: boolean; error?: string } {
     if (!this.activeWorktree) {
       return { success: false, error: "No active worktree" };
+    }
+    if (this.activeWorktree.kind === "named") {
+      return { success: false, error: "This is a named worktree: remove it with `nexus worktree remove <branch>`." };
     }
     const res = this.worktreeManager.discardWorktree(this.activeWorktree.taskId);
     if (res.success && this.originalWorkspace) {
@@ -2210,6 +2228,7 @@ export class AutonomousAgent {
       this.changeBaseline = null;
       return;
     }
+    this.judgeReceiptBaselineOnce(); // see the field: verification proceeds, no receipt is issued
     try {
       const tests = snapshotTests(this.config.workspace);
       const trustedDeliverables = [...(this.config.trustedDeliverableFiles ?? [])];
@@ -2467,9 +2486,50 @@ export class AutonomousAgent {
     return this.workspacePathIdentity;
   }
 
+  /** Judges, once per workspace, whether the session STARTED in a linked worktree the agent had already worked in. */
+  private judgeReceiptBaselineOnce(): void {
+    if (this.receiptBaselineJudged) return;
+    this.receiptBaselineJudged = true;
+    this.receiptBaselineUntrusted = this.linkedWorktreeStartsDirty();
+  }
+
+  /**
+   * Whether the workspace is a linked worktree that either holds uncommitted work or cannot be certified (a nested
+   * repository, a hidden edit, a dirty submodule). Fails closed there; a plain checkout or a non-repository is "no".
+   */
+  private linkedWorktreeStartsDirty(): boolean {
+    const workspace = this.config.workspace;
+    if (verifyCheckout(workspace).reason) return true; // a tampered pointer or a planted repository: not a plain checkout
+    let real: string;
+    try { real = fs.realpathSync(workspace); } catch { return false; }
+    // A registered linked worktree whose `.git` entry is missing or replaced is not a plain checkout either.
+    if (!fs.existsSync(path.join(real, ".git")) && replacedWorktreeReason(real)) return true;
+    let linked = false;
+    try {
+      const entry = currentEntry(openRepo(workspace));
+      linked = Boolean(entry && !entry.isMain);
+    } catch (err) {
+      return !(err instanceof NotARepositoryError); // a refusal or any other failure is not "no repository"
+    }
+    if (!linked) return false;
+    try { const state = captureVerificationState(workspace); return state === undefined || state.dirty; } catch { return true; }
+  }
+
+  /** True outside a worktree-isolated task, or inside a named linked worktree: where a verification receipt may be recorded. */
+  private isRecordableWorktree(): boolean {
+    return !this.activeWorktree ||
+      (this.activeWorktree.kind === "named" && this.worktreeManager.isLinkedWorktree(this.activeWorktree.worktreePath));
+  }
+
   public setWorkspace(newWorkspace: string): void {
     if (this.inheritedWorktreeScope && path.resolve(newWorkspace) !== path.resolve(this.inheritedWorktreeScope.workspace)) {
       throw new Error("Cannot change workspace outside the inherited worktree authority.");
+    }
+    // A named worktree that an explicit `nexus worktree merge` removed is no longer a binding: the session has to be
+    // able to leave it for the branch it was merged into.
+    if (this.activeWorktree?.kind === "named" && !fs.existsSync(this.activeWorktree.worktreePath)) {
+      this.activeWorktree = undefined;
+      this.originalWorkspace = undefined;
     }
     if (this.activeWorktree && !this.managedWorktreeWorkspaceSwitch) {
       throw new Error("Cannot switch workspaces while a speculative worktree is unresolved; merge or discard it first.");
@@ -2483,15 +2543,16 @@ export class AutonomousAgent {
     }
     if (!currentWorkspaceIdentityIsValid || selectedWorkspace.value !== this.workspacePathIdentity.value) {
       this.invalidateVerificationBaseline();
+      this.receiptBaselineJudged = false; // another workspace: judged afresh at its first baseline (re-selecting the same directory keeps both)
+      this.receiptBaselineUntrusted = false;
     }
-    if (selectedWorkspace.value === this.primaryWorkspacePathIdentity.value) {
-      try {
-        this.primaryWorkspacePathIdentity.assertCurrent();
-      } catch {
-        // Explicitly selecting the replacement rebinds persistence to the live directory,
-        // but the verifier baseline stays invalidated by the identity check above.
-        this.primaryWorkspacePathIdentity = selectedWorkspace;
-      }
+    try {
+      this.primaryWorkspacePathIdentity.assertCurrent();
+    } catch {
+      // The directory this session started in is gone or was replaced: an explicit selection of a live directory
+      // (the same path recreated, or the branch a named worktree was merged into) rebinds persistence to it, so
+      // checkpoints and session saves keep validating. The verifier baseline stays invalidated by the check above.
+      this.primaryWorkspacePathIdentity = selectedWorkspace;
     }
     const readOnly = this.isReadOnly();
     this.bridge.shutdown();
@@ -2544,6 +2605,28 @@ export class AutonomousAgent {
     this.applyReadOnlyAuthority(readOnly);
     this.setupSpineHandlers();
     this.resetConversation();
+  }
+
+  /**
+   * The shell bridge built at startup knows nothing of the worktree binding: re-create it with the worktree's sandbox
+   * requirement. For a session that already stands in the worktree, where switching workspaces (which does this and
+   * more) would also reset the conversation and objective.
+   */
+  private rebuildBridgeForIsolation(): void {
+    const readOnly = this.isReadOnly();
+    this.bridge.shutdown();
+    this.bridge = new RustCoreBridge(
+      this.config.workspace,
+      this.config.shell,
+      this.config.coreBinaryPath,
+      this.config.dryRun,
+      readOnly,
+      this.bridgeSandboxSetting(),
+      Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
+    );
+    this.bridge.setVerifierTimeoutSecs(this.config.verifierTimeoutSecs);
+    this.applyReadOnlyAuthority(readOnly);
+    this.setupSpineHandlers();
   }
 
   private bridgeSandboxSetting(): boolean | string | undefined {
@@ -4361,10 +4444,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
 
       const worktreeHasChanges = this.activeWorktree
-        ? this.worktreeManager.hasChanges(this.activeWorktree.taskId)
+        ? this.worktreeManager.bindingHasChanges(this.activeWorktree)
         : false;
       let verifierSucceeded = false;
       let hasExecuted = false;
+      // The linked worktree's state before the verifier runs: a receipt covers that state only.
+      let verificationStateBefore: ReturnType<typeof captureVerificationState>;
       let isDeliverableBound = false;
       let noApplicableVerifier = false;
 
@@ -4486,6 +4571,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             // The oracle owns the verifier's deadline (never an incidental bridge default); the runner enforces it.
             const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
             this.activity("verifying", { tool: verifierCommand });
+            verificationStateBefore = this.isRecordableWorktree() && !this.config.dryRun ? captureVerificationState(this.config.workspace) : undefined;
             const testRes = await runTestSuiteWithExecutor(
               this.config.workspace,
               (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }),
@@ -4605,6 +4691,21 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (this.verificationBaselineInvalidated) this.verificationBaselineInvalidated = false;
         this.setUnverifiedChanges(false);
       }
+      // A passing deliverable-bound run inside a named (linked) worktree is recorded for `nexus worktree merge`, which
+      // needs a verification for the exact state it merges. Recording never affects the task outcome. Recording runs
+      // host-side Git in the worktree, so its `.git` pointer is verified first (the agent could have rewritten it).
+      const recordableWorktree = this.isRecordableWorktree();
+      const isVerified = this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true;
+      recordVerificationIfEligible(this.config.workspace, {
+        unrecordableWorktree: !recordableWorktree || this.receiptBaselineUntrusted,
+        dryRun: Boolean(this.config.dryRun),
+        verifierSucceeded,
+        hasExecuted,
+        deliverableBound: isDeliverableBound,
+        verified: isVerified,
+        verifier: this.verificationEvidence?.command || this.config.authoritativeVerifierCommand?.trim() || "verifier",
+        before: verificationStateBefore,
+      });
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
       if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {
         this.modifiedFiles.clear();
@@ -5898,18 +5999,23 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
   private async runTurnImpl(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
     // The REPL calls runTurn directly. Route worktree-enabled turns through the
-    // same establishment and resolution boundary as one-shot `run` tasks.
-    if (this.config.worktree && this.activeWorktree && !this.worktreeRunTurnAuthorized) {
+    // same establishment and resolution boundary as one-shot `run` tasks. A retained
+    // named worktree is where the session keeps working; `run` reuses it.
+    if (this.config.worktree && this.activeWorktree && this.activeWorktree.kind !== "named" && !this.worktreeRunTurnAuthorized) {
       throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
     }
     if (this.config.worktree && !this.worktreeRunTurnAuthorized) {
       return await this.run(taskPrompt, onConfirm, options);
     }
+    if (!this.config.worktree) this.assertNamedBindingCurrent();
     if (this.activeTurn) throw new Error("A turn is already active; wait for it to finish or cancel it.");
     const authoritativeVerifier = this.config.authoritativeVerifierCommand?.trim();
     if (authoritativeVerifier && this.changeBaseline === undefined) {
       // Capture workspace-resolved operator verifier files before plugins or the model can change them.
       // Existing pending work without an earlier snapshot remains unverified rather than being blessed retroactively.
+      // A linked worktree the agent already worked in (an earlier session, another terminal) gives a baseline taken from
+      // files the agent may have rewritten: verification proceeds as usual, but no receipt is issued on that baseline.
+      this.judgeReceiptBaselineOnce();
       this.changeBaseline = {
         command: authoritativeVerifier,
         failed: false,
@@ -7259,7 +7365,62 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     };
   }
 
+  private assertWorktreeRunnable(): void {
+    if (!this.worktreeManager.isGitRepo()) {
+      throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
+    }
+    const configuredSandbox = this.config.sandbox === "bwrap" || this.config.sandbox === "docker"
+      ? this.config.sandbox
+      : "auto";
+    if (!isSandboxAvailable(configuredSandbox)) {
+      throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
+    }
+  }
+
+  /** Creates or reuses the `--worktree-branch` worktree and moves the session into it. */
+  private establishNamedWorktree(): void {
+    if (this.isReadOnly() || this.config.dryRun) {
+      throw new Error("Cannot create or reuse a named worktree in read-only or dry-run mode.");
+    }
+    const named = this.worktreeManager.ensureNamedWorktree(this.config.worktreeBranch!, homeDir());
+    // The binding belongs to this durable task; the worktree itself is addressed by its branch.
+    this.activeWorktree = { taskId: this.currentTaskId, worktreePath: named.path, branch: named.branch, kind: "named" };
+    this.originalWorkspace = this.config.workspace;
+    // Already standing in it (`--resume` launched inside the saved worktree): switching to the same directory would reset
+    // the conversation and objective that were just restored.
+    const standingInIt = (() => {
+      try { return fs.realpathSync(this.config.workspace) === fs.realpathSync(named.path); } catch { return false; }
+    })();
+    if (!standingInIt) this.switchWorktreeWorkspace(named.path);
+    else this.rebuildBridgeForIsolation();
+    console.log(pc.cyan(`🌲 ${named.created ? "Created" : "Reusing"} named git worktree: ${named.branch} at ${named.path}`));
+  }
+
+  /**
+   * For a frontend that snapshots the workspace before a turn: moves the session into the `--worktree-branch` worktree
+   * first, so that snapshot (and a later `/undo`) is of the worktree the turn edits, not the launch checkout. Does
+   * nothing once the session is in it, without the flag, or where `run` would refuse anyway (read-only, dry run).
+   */
+  public enterNamedWorktreeBeforeTurn(): void {
+    if (!this.config.worktree || !this.config.worktreeBranch || this.activeWorktree || this.isReadOnly() || this.config.dryRun) return;
+    this.assertWorktreeRunnable();
+    this.establishNamedWorktree();
+  }
+
+  /**
+   * A named binding (restored by `--resume` or kept between turns) must still be the registered linked worktree on its
+   * recorded branch, whatever flags this launch has: another terminal can switch its branch or replace it while stopped.
+   */
+  private assertNamedBindingCurrent(): void {
+    const retained = this.activeWorktree;
+    if (retained?.kind !== "named") return;
+    if (!this.worktreeManager.isRetainedNamedWorktree(retained.worktreePath, retained.branch)) {
+      throw new Error(`Cannot continue: ${retained.worktreePath} is no longer the registered linked worktree for ${retained.branch} (its branch may have been switched); restore it or start a new session.`);
+    }
+  }
+
   async run(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; step?: boolean }): Promise<TurnResult> {
+    if (!this.config.worktree) this.assertNamedBindingCurrent();
     this.ui.banner();
     console.log(`🎯 Task: ${safeTerminal(typeof taskPrompt === "string" ? taskPrompt : "[Multi-modal task input]")}\n`);
     console.log(`📁 Workspace: ${this.config.workspace}`);
@@ -7268,24 +7429,33 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
     this.verifiedWorktreeCompletion = false;
     this.activeValidationReceipt = undefined;
+    let continuingNamedWorktree = false;
     if (this.config.worktree) {
-      if (this.activeWorktree) {
-        throw new Error(`Cannot start a new task: unresolved worktree ${this.activeWorktree.taskId}; merge or discard it first.`);
+      // A task worktree must be merged or discarded before another task starts. A named worktree is kept by design,
+      // so later runs and REPL/TUI turns continue inside it; only a request for a different named worktree is refused.
+      const retained = this.activeWorktree;
+      continuingNamedWorktree = retained?.kind === "named";
+      if (retained && retained.kind !== "named") {
+        throw new Error(`Cannot start a new task: unresolved worktree ${retained.taskId}; merge or discard it first.`);
       }
-      if (!this.worktreeManager.isGitRepo()) {
-        throw new Error(`Cannot start worktree-isolated task: ${this.config.workspace} is not a valid git repository.`);
+      if (retained && this.config.worktreeBranch && this.config.worktreeBranch !== retained.branch) {
+        throw new Error(`Cannot start a new task: this session runs in the named worktree ${retained.branch} at ${retained.worktreePath}; start a new session for ${this.config.worktreeBranch}.`);
       }
-      const configuredSandbox = this.config.sandbox === "bwrap" || this.config.sandbox === "docker"
-        ? this.config.sandbox
-        : "auto";
-      if (!isSandboxAvailable(configuredSandbox)) {
-        throw new Error(`Cannot start worktree-isolated task: no usable shell sandbox is available (${configuredSandbox}).`);
+      this.assertWorktreeRunnable();
+      if (retained) {
+        // Still the worktree it was: another terminal can switch its branch or replace it between turns, so the same
+        // validation as the durable binding (Git lists it on the recorded branch, pointer, registry) runs again.
+        this.assertNamedBindingCurrent();
+        console.log(pc.cyan(`🌲 Continuing in named git worktree: ${retained.branch} at ${retained.worktreePath}`));
+      } else if (this.config.worktreeBranch) {
+        this.establishNamedWorktree();
+      } else {
+        const wt = this.worktreeManager.createWorktree();
+        this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch, kind: "task" };
+        this.originalWorkspace = this.config.workspace;
+        this.switchWorktreeWorkspace(wt.worktreePath);
+        console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
       }
-      const wt = this.worktreeManager.createWorktree();
-      this.activeWorktree = { taskId: wt.taskId, worktreePath: wt.worktreePath, branch: wt.branch };
-      this.originalWorkspace = this.config.workspace;
-      this.switchWorktreeWorkspace(wt.worktreePath);
-      console.log(pc.cyan(`🌲 Spun up speculative git worktree: ${wt.branch} at ${wt.worktreePath}`));
     }
 
     if (this.flightRecorder && !this.flightRecorder.isSessionActive()) {
@@ -7296,7 +7466,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       });
     }
 
-    if (!options?.resume) {
+    // Continuing in a retained named worktree is a follow-up, not a new task: keep the transcript, objective and findings.
+    if (!options?.resume && !continuingNamedWorktree) {
       this.resetConversation();
     }
     this.worktreeRunTurnAuthorized = true;
@@ -7324,7 +7495,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
     } finally {
       this.worktreeRunTurnAuthorized = false;
-      if (this.activeWorktree && this.config.worktree) {
+      if (this.activeWorktree?.kind === "named") {
+        console.log(pc.cyan(`🌲 Named worktree ${this.activeWorktree.branch} kept at ${this.activeWorktree.worktreePath}. Merge it with \`nexus worktree merge\` from inside it, or remove it with \`nexus worktree remove\`.`));
+      } else if (this.activeWorktree && this.config.worktree) {
         const hasChanges = this.worktreeManager.hasChanges(this.activeWorktree.taskId);
         if (hasChanges) {
           if (

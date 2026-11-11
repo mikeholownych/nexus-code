@@ -97,12 +97,13 @@ test("repl: a checkpoint-free turn releases the read-only checkpoint fallback, s
     const repl = Object.create(InteractiveRepl.prototype) as any;
     repl.config = app.getConfig();
     repl.agent = agent;
-    repl.checkpointManager = {
+    const manager = {
       createCheckpoint: () => {
         checkpoints++;
         throw new Error("synthetic checkpoint failure");
       },
     };
+    repl.app = { getCheckpointManager: () => manager }; // injected through the ApplicationCore seam
     repl.rl = { question: async () => answers.shift() };
 
     assert.equal(await repl.prepareTurnCheckpoint("Turn: first"), true);

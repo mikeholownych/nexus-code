@@ -3,17 +3,18 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { copyToClipboard, readFromClipboard } from "../clipboard.js";
-import { commitChanges, generateConventionalCommit, getGitInfo, workspaceStatus } from "../git.js";
+import { commitChanges, generateConventionalCommit, getGitInfo, trustedGitArgs, workspaceStatus } from "../git.js";
 import { HunkStager } from "../stager.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "../tester.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { PolicyContext } from "../core/approval_policy.js";
-import { isLegacyWorktreeArgs, runWorktreeCommand, tokenizeWorktreeArgs } from "../worktrunk/command.js";
+import { isLegacyWorktreeArgs, relocationAfter, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "../worktrunk/command.js";
+import { providerCompleter } from "../worktrunk/provider.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 import { MAX_PASTE } from "../protocol.js";
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  return execFileSync("git", [...trustedGitArgs(cwd), ...args], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
 }
 
 function workspace(ctx: SlashContext): string {
@@ -22,7 +23,7 @@ function workspace(ctx: SlashContext): string {
 
 function diff(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
-  if (!getGitInfo(cwd).isRepo) return reply("diff", NOT_A_REPO, false);
+  { const info = getGitInfo(cwd); if (!info.isRepo) return reply("diff", info.refusal ?? NOT_A_REPO, false); }
   try {
     const out = git(cwd, ["diff", "--no-color"]);
     if (out.trim()) return reply("diff", out.trimEnd(), true, { format: "diff" });
@@ -40,7 +41,7 @@ function diff(ctx: SlashContext): SlashOutcome {
 
 function gitStatus(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
-  if (!getGitInfo(cwd).isRepo) return reply("git", NOT_A_REPO, false);
+  { const info = getGitInfo(cwd); if (!info.isRepo) return reply("git", info.refusal ?? NOT_A_REPO, false); }
   try {
     return reply("git", workspaceStatus(cwd, "--short").trimEnd() || "Working tree clean.");
   } catch (err) {
@@ -50,7 +51,7 @@ function gitStatus(ctx: SlashContext): SlashOutcome {
 
 function stage(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
-  if (!getGitInfo(cwd).isRepo) return reply("stage", NOT_A_REPO, false);
+  { const info = getGitInfo(cwd); if (!info.isRepo) return reply("stage", info.refusal ?? NOT_A_REPO, false); }
   const stager = new HunkStager(cwd);
   if (ctx.args.trim() === "reset") {
     stager.unstage();
@@ -74,7 +75,7 @@ function stage(ctx: SlashContext): SlashOutcome {
 function commit(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
   const info = getGitInfo(cwd);
-  if (!info.isRepo) return reply("commit", NOT_A_REPO, false);
+  if (!info.isRepo) return reply("commit", info.refusal ?? NOT_A_REPO, false);
   if (info.dirtyCount === 0) return reply("commit", "Working tree clean: nothing to commit.");
   const message = ctx.args.trim();
   if (!message) {
@@ -122,14 +123,21 @@ function undo(ctx: SlashContext): SlashOutcome {
   return reply("undo", result.message, result.success);
 }
 
-function worktree(ctx: SlashContext): SlashOutcome {
+async function worktree(ctx: SlashContext): Promise<SlashOutcome> {
   const agent = ctx.host.app.getAgent();
   const active = agent.getActiveWorktree();
   const sub = ctx.args.trim().toLowerCase();
   // Legacy forms act on the speculative worktree of this run; everything else is the named-worktree command set.
   if (!isLegacyWorktreeArgs(sub)) {
-    const result = runWorktreeCommand(tokenizeWorktreeArgs(ctx.args), { cwd: workspace(ctx), readOnly: ctx.host.mode() === "read-only" });
-    return reply("worktree", result.output, result.success);
+    const cwd = workspace(ctx);
+    const result = await runWorktreeCommandAsync(tokenizeWorktreeArgs(ctx.args), { cwd, readOnly: ctx.host.mode() === "read-only" }, {
+      completer: providerCompleter(ctx.host.app.getConfig()),
+      signal: ctx.signal,
+    });
+    // A merge removes the worktree this session may be standing in: move it to the branch it was merged into.
+    const moveTo = relocationAfter(result, cwd);
+    if (moveTo) ctx.host.setWorkspace(moveTo);
+    return reply("worktree", moveTo ? `${result.output}\nWorkspace changed to ${moveTo}` : result.output, result.success);
   }
   if (sub === "merge" || sub === "discard") {
     if (!active) return reply("worktree", `No active speculative worktree to ${sub}.`, false);
@@ -236,7 +244,7 @@ function copy(ctx: SlashContext): SlashOutcome {
   let label: string;
   if (what === "diff") {
     const cwd = workspace(ctx);
-    if (!getGitInfo(cwd).isRepo) return reply("copy", NOT_A_REPO, false);
+    { const info = getGitInfo(cwd); if (!info.isRepo) return reply("copy", info.refusal ?? NOT_A_REPO, false); }
     text = git(cwd, ["diff"]);
     if (!text.trim()) return reply("copy", "No uncommitted changes to copy.", false);
     label = `the git diff (${text.split("\n").length} lines)`;
