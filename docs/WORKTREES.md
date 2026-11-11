@@ -63,7 +63,7 @@ ignored file and can therefore carry secrets such as `.env` into each worktree; 
 the branch to one commit (`--no-squash` keeps them), rebases onto the target (`--no-rebase` skips it), fast-forwards the
 target (never a merge commit) and removes the worktree and branch (`--no-remove` keeps them). The target's worktree must be
 clean. The state being merged (HEAD, plus uncommitted work) needs a recorded passing verification: a Nexus session records one
-when its deliverable-bound verifier passes inside that worktree, keyed by branch, head and tree, so a later edit or commit
+when its deliverable-bound verifier passes inside that worktree (the verifier must be the configured `--authoritative-verifier` or an independent one, never a discovered generic command), keyed by branch, head and tree, so a later edit or commit
 no longer matches. Without one, merge refuses unless you pass `--no-verify-receipt --reason "why"`; the waiver (branch, head,
 reason) is recorded in the registry. `--ai-message` asks your configured model for the commit message instead: it receives the diffstat and a diff of what will be
 committed, capped at 20,000 characters and redacted, labelled as untrusted data; the reply is validated (at most 100

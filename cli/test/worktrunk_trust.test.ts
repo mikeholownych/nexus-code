@@ -463,3 +463,21 @@ test("Git's own error line, which can carry an agent-chosen file name, is shown 
     assert.doesNotMatch(message, /[\u0000-\u001f\u007f-\u009f]/, "no raw control byte reaches the message");
   } finally { f.cleanup(); }
 });
+
+test("the checkpoint refusal never carries a raw control byte from an agent-chosen directory name", async () => {
+  const { CheckpointManager } = await import("../src/checkpoint.js");
+  const f = fixture("feat/cpbytes");
+  const previousHome = process.env.HOME;
+  process.env.HOME = f.home;
+  try {
+    fs.mkdirSync(path.join(f.dir, "x\u001b]52;c;eA==\u0007", ".git", "objects"), { recursive: true });
+    const manager = new CheckpointManager(f.dir);
+    try { manager.createCheckpoint("turn"); assert.fail("must refuse"); } catch (err) {
+      assert.match((err as Error).message, /not a trusted worktree/);
+      assert.doesNotMatch((err as Error).message, /[\u0000-\u001f\u007f-\u009f]/);
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    f.cleanup();
+  }
+});

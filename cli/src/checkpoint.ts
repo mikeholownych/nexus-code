@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { envWithoutConfiguredHooks } from "./core/git_hook_guard.js";
-import { nestedRepositoryReason, UntrustedCheckoutError } from "./worktrunk/git.js";
+import { nestedRepositoryReason, printable, UntrustedCheckoutError } from "./worktrunk/git.js";
 import crypto from "node:crypto";
 import {
   assertNoSensitivePersistenceContent,
@@ -933,7 +933,10 @@ export class CheckpointManager {
   /** The reason the workspace is a worktree host-side Git must not run in (a planted `.git` pointer or nested repository), or undefined. */
   private untrustedReason(): string | undefined {
     if (!this.isGit) return undefined;
-    try { return nestedRepositoryReason(this.workspace); } catch (err) {
+    try {
+      const reason = nestedRepositoryReason(this.workspace);
+      return reason === undefined ? undefined : printable(reason); // the reason can carry agent-chosen path bytes
+    } catch (err) {
       if (err instanceof UntrustedCheckoutError) return err.message;
       throw err; // git missing, a read error: not a verdict about the worktree
     }

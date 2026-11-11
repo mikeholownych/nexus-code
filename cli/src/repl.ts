@@ -1823,8 +1823,12 @@ export class InteractiveRepl {
               console.log(pc.green(`✔ ${res.message}\n`));
             } else {
               const cpName = arg ? arg : undefined;
-              const cp = this.app.getCheckpointManager().createCheckpoint(cpName);
-              console.log(pc.green(`✔ Checkpoint saved: ${pc.bold(cp.name)} (${cp.id})\n`));
+              try {
+                const cp = this.app.getCheckpointManager().createCheckpoint(cpName);
+                console.log(pc.green(`✔ Checkpoint saved: ${pc.bold(cp.name)} (${cp.id})\n`));
+              } catch (error: any) {
+                console.log(pc.red(`Checkpoint failed: ${formatDiagnosticForOutput(error)}\n`));
+              }
             }
             continue;
           } else if (cmd === "checkpoints") {
