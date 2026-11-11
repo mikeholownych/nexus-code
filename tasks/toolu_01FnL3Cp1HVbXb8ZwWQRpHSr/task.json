@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FnL3Cp1HVbXb8ZwWQRpHSr",
+  "agent_id": "a6652288632ec8041",
+  "subagent_type": "general-purpose",
+  "task_description": "Take over PR #434",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 64884,
+    "cache_read_tokens": 518164,
+    "output_tokens": 3536,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-11T19:29:59.009695686Z",
+  "completed_at": "2026-11-11T19:32:26.763086974Z"
+}
