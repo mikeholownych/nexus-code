@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017FPATfx7w974iLDGF44UWz",
+  "agent_id": "a99064c831cab869b",
+  "subagent_type": "general-purpose",
+  "task_description": "#469: invariant sweep and manual claims",
+  "token_usage": {
+    "input_tokens": 166,
+    "cache_creation_tokens": 214704,
+    "cache_read_tokens": 12709637,
+    "output_tokens": 90217,
+    "api_call_count": 78
+  },
+  "started_at": "2026-11-11T22:23:36.292582604Z",
+  "completed_at": "2026-11-11T22:45:55.810566381Z"
+}

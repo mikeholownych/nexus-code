@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01JLKPMuxdG2H2RSoLTjjLWx",
+  "agent_id": "a5b845d7dfe9b752e",
+  "subagent_type": "general-purpose",
+  "task_description": "Pre-push triple review PR469",
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 151547,
+    "cache_read_tokens": 2602089,
+    "output_tokens": 36970,
+    "api_call_count": 25
+  },
+  "started_at": "2026-11-11T22:45:41.607092851Z",
+  "completed_at": "2026-11-11T22:51:06.377297049Z"
+}
