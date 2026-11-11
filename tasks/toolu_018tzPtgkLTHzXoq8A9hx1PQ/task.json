@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_018tzPtgkLTHzXoq8A9hx1PQ",
+  "agent_id": "ab8ddba4a34118c62",
+  "subagent_type": "general-purpose",
+  "task_description": "Delta re-review",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 68609,
+    "cache_read_tokens": 552882,
+    "output_tokens": 12346,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-11T19:43:01.085649585Z",
+  "completed_at": "2026-11-11T19:44:50.842731541Z"
+}
