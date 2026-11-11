@@ -434,6 +434,8 @@ fn the_approval_panel_holds_its_invariants_across_its_whole_state_space() {
     let started = Instant::now();
     let clean = kinds("");
     let dirty = kinds(&bad());
+    // The number the status table in docs/v1.1.4/TUI-AUDIT-STATUS.md (D-01) quotes.
+    assert_eq!(clean.len(), 15, "update the number of review kinds in docs/v1.1.4/TUI-AUDIT-STATUS.md");
     let violations: Vec<String> = std::thread::scope(|scope| {
         let mut handles = Vec::new();
         for kind in &dirty {
@@ -459,8 +461,3 @@ fn the_approval_panel_holds_its_invariants_across_its_whole_state_space() {
     let report: Vec<String> = groups.iter().map(|(class, (count, first))| format!("{count} x {class}\n    e.g. {first}")).collect();
     assert!(violations.is_empty(), "{} violations in {:?}:\n{}", violations.len(), started.elapsed(), report.join("\n"));
 }
-
-
-
-
-

@@ -2765,12 +2765,16 @@ mod tests {
         );
         feed(&mut state, &[BUSY, request.as_str()]);
         state.composer = "one\ntwo\nthree\nfour\nfive\nsix".into();
-        // The heading is what the panel draws first; when even that and the decisions do not fit, the panel says to
-        // enlarge the terminal instead of drawing part of the review.
+        // Where the panel is drawn it opens with the action heading; where even that and the decisions do not fit, it
+        // says to enlarge the terminal instead of drawing part of the review.
         for height in [11, 12] {
-            let screen = draw(&state, 40, height);
-            assert!(screen.contains("Edit src/x.txt") || screen.contains("enlarge the terminal"), "{screen}");
-            assert!(!screen.contains("+B"), "{screen}");
+            let (screen, layout) = draw_measured(&state, 40, height);
+            if layout.approval_drawn {
+                assert!(screen.contains("Edit src/x.txt"), "{height}: {screen}");
+            } else {
+                assert!(screen.contains("enlarge the terminal"), "{height}: {screen}");
+            }
+            assert!(!screen.contains("+B"), "{height}: {screen}");
         }
     }
 
