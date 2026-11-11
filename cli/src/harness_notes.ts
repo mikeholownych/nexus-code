@@ -12,7 +12,7 @@ export function isHarnessNote(message: unknown): boolean {
 }
 
 /**
- * The opening text of every note a v1.1.3 Nexus wrote without a marker. Anchored on the fixed wording (and, where the
+ * The opening text of each kind of note a v1.1.3 Nexus pushed into the conversation without a marker (the producers in `agent.ts` at v1.1.3). Anchored on the fixed wording (and, where the
  * note has them, its counters), not on the bare `[Nexus` prefix.
  */
 const CUT_OFF_HEAD = /^\[Nexus: your previous reply was cut off at /;
@@ -21,7 +21,11 @@ const LEGACY_NOTE_HEADS: readonly RegExp[] = [
   /^\[Nexus continuation \d+\/\d+\] The operator's acceptance requirements are still open: /,
   /^\[Nexus: your reply was empty: no text and no tool call\./,
   CUT_OFF_HEAD,
-  /^\[Nexus: (?:Malformed native tool call dropped|Tool "[^"\n]*" (?:is not offered on this request|rejected: arguments required structural JSON repair))/,
+  /^\[Nexus: Malformed native tool call dropped: /,
+  /^\[Nexus: Tool "[^"\n]*" is not offered on this request and was not executed\./,
+  /^\[Nexus: Tool call "[^"\n]*" rejected: arguments required structural JSON repair /,
+  /^\[Nexus\] The output of \S+ has left your context \d+ times through compaction and you re-read it each time\. /,
+  /^\[Nexus\] \S+ returned the same result \d+ times on an unchanged workspace/,
 ];
 
 /**

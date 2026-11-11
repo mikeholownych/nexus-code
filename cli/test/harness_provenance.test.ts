@@ -189,11 +189,21 @@ describe("harness notes carry provenance", () => {
     }
   });
 
-  test("no Nexus note is pushed to the conversation without the marker", () => {
-    const source = fs.readFileSync(path.join(import.meta.dirname, "../src/agent.ts"), "utf8");
-    const pushes = [...source.matchAll(/this\.messages\.push\(([\s\S]{0,900}?)\);/g)].map((m) => m[1]);
-    const nexus = pushes.filter((p) => /\[Nexus|Notice\(|pendingRecoveryNote|\bnote\b/.test(p) && !/skill-note/.test(p));
-    assert.ok(nexus.length >= 7, `the note producers are found: ${nexus.length}`);
-    assert.ok(nexus.every((p) => p.startsWith("harnessNoteMessage(")), nexus.filter((p) => !p.startsWith("harnessNoteMessage(")).join("\n"));
+  test("every kind of note v1.1.3 wrote is migrated, in its real wording", () => {
+    const notes = [
+      "[Nexus recovery 2/3] You have called read_file with the same arguments 3 times on an unchanged workspace and received the same result each time. Repeating it will not change the outcome.",
+      "[Nexus continuation 1/2] The operator's acceptance requirements are still open: R1 [open] x. Continue working on them without waiting for the operator.",
+      "[Nexus: your reply was empty: no text and no tool call. It does not finish the task. This is step 2 of 6. Continue the task where you left off; call task_completed when it is done.]",
+      "[Nexus: your previous reply was cut off at the output limit before it finished. None of that reply was kept; it is not in this conversation. Continue the task.]",
+      "[Nexus: Malformed native tool call dropped: missing function object or name.]",
+      '[Nexus: Tool "run_command" is not offered on this request and was not executed.]',
+      '[Nexus: Tool call "write_file" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.]',
+      "[Nexus] The output of read_file has left your context 3 times through compaction and you re-read it each time. Before reading it again, write the facts you need.",
+      "[Nexus] run_command returned the same result 4 times on an unchanged workspace (a transient failure). Nexus spaces further re-runs.",
+    ];
+    for (const note of notes) {
+      const migrated = withHarnessProvenance([{ role: "system", content: "s" }, { role: "user", content: "go" }, { role: "assistant", content: "" }, { role: "user", content: note }]);
+      assert.equal(migrated[3].harness, "note", note);
+    }
   });
 });
