@@ -49,7 +49,8 @@ import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCa
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
-import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, SKILL_NOTE_PREFIX, isSkillNote, oneLine, withSkillNoteProvenance } from "./skills.js";
+import { isHarnessNote, withHarnessProvenance } from "./harness_notes.js";
+import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, findCatalogSpan, MAX_SKILL_MATCHES, isSkillNote, oneLine } from "./skills.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
@@ -513,6 +514,11 @@ function truncatedReplyNotice(calls: TruncatedCall[], allowance: number | undefi
     : " Keep each reply well under that size.";
   const dropped = calls.length ? "Nothing from that reply ran and no file was written" : "None of that reply was kept";
   return `[Nexus: your previous reply was cut off at ${limit} ${what}. ${dropped}; it is not in this conversation.${parts} Do not resend the same reply in one piece: it would be cut off again, and a second cut-off reply in a row ends the turn. This is ${position}. Continue the task.]`;
+}
+
+/** A note Nexus adds to the conversation as a user message; the marker, not the text, is what makes it one. */
+function harnessNoteMessage(content: string): ChatMessage {
+  return { role: "user", content, harness: "note" };
 }
 
 function cutResponseNotice(step: number, seconds: number): string {
@@ -1732,7 +1738,7 @@ export class AutonomousAgent {
       this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
     }
     this.activePlan = state.activePlan || [];
-    this.messages = withSkillNoteProvenance(state.messages || []);
+    this.messages = withHarnessProvenance(state.messages || []);
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
     // A ledger written by an earlier version lacks newer tracking fields (recovery, coverage): complete it now, before
@@ -2068,7 +2074,7 @@ export class AutonomousAgent {
   }
 
   public setMessages(msgs: ChatMessage[]): void {
-    this.messages = withSkillNoteProvenance(msgs);
+    this.messages = withHarnessProvenance(msgs);
   }
 
   /**
@@ -2108,7 +2114,7 @@ export class AutonomousAgent {
   ): void {
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
-    this.messages = withSkillNoteProvenance(msgs);
+    this.messages = withHarnessProvenance(msgs);
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
     if (this.objective) {
@@ -2886,16 +2892,6 @@ export class AutonomousAgent {
     return [messages[0], { role: "system", content: renderPinnedLedger(ledger, !inContext, budget, recovery) }, ...messages.slice(1)];
   }
 
-  /**
-   * Whether a user-role message is Nexus's own note, not something the operator asked for. The skill note is
-   * recognised by its provenance marker only, so operator text that begins with its prefix stays a request.
-   * Continuation, recovery, step and empty-reply notes are still recognised by their `[Nexus …]` text prefix
-   * (FINDINGS section E: moving them to provenance needs a migration for sessions saved by v1.1.3).
-   */
-  private harnessNote(message: ChatMessage, text: string): boolean {
-    return isSkillNote(message) || (/^\[Nexus[ :]/.test(text) && !text.startsWith(SKILL_NOTE_PREFIX));
-  }
-
   /** User messages the pinned ledger already carries (the objective and steering); compaction does not repeat them. */
   private pinnedUserText(text: string): boolean {
     if (!this.objective) return false;
@@ -3334,7 +3330,7 @@ export class AutonomousAgent {
         }
       }
       // Earlier requests are the operator's: Nexus's own notes are not tasks (CTX-06).
-      if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !this.harnessNote(message, contentText)) {
+      if (message.role === "user" && contentText && !this.pinnedUserText(contentText) && !isHarnessNote(message)) {
         if (!priorTasks.includes(contentText)) priorTasks.push(contentText);
       }
       if (message.role === "assistant" && message.tool_calls) {
@@ -3612,8 +3608,8 @@ export class AutonomousAgent {
    */
   private compactionCandidate(source: ChatMessage[], recentToolTurns: number, detailBudgetChars: number, unseenOutputChars?: number): { messages: ChatMessage[]; removedObservations: string[] } {
     const system = source[0];
-    // The operator's latest request; a skill note written after it is a hint, not the request.
-    const currentUserIndex = source.map((message, index) => message.role === "user" && !isSkillNote(message) ? index : -1).filter((index) => index >= 0).at(-1);
+    // The operator's latest request; a note Nexus wrote after it (skill note, recovery, notice) is not the request.
+    const currentUserIndex = source.map((message, index) => message.role === "user" && !isHarnessNote(message) ? index : -1).filter((index) => index >= 0).at(-1);
     const noteIndex = currentUserIndex !== undefined && isSkillNote(source[currentUserIndex + 1]) ? currentUserIndex + 1 : -1;
     const toolTurnStarts = source
       .map((message, index) => message.role === "assistant" && message.tool_calls?.length ? index : -1)
@@ -3740,7 +3736,7 @@ export class AutonomousAgent {
     let recorded = false;
 
     // The request the findings serve is the operator's latest, not a note Nexus added (CTX-06).
-    const lastUser = [...source].reverse().find((message) => message.role === "user" && !this.harnessNote(message, normalizeMessageContent(message.content ?? "").text.join("")));
+    const lastUser = [...source].reverse().find((message) => message.role === "user" && !isHarnessNote(message));
     const request = normalizeMessageContent(lastUser?.content ?? "").text.join("").slice(0, 8_000);
     const contextLimit = this.contextLimit();
     const inputBudget = contextLimit - this.getContextReserves().completion - countTokens(FINDINGS_INSTRUCTIONS) - countTokens(request) - 1_000;
@@ -6419,7 +6415,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         };
         const endStep = () => {
           if (pendingRecoveryNote) {
-            this.messages.push({ role: "user", content: pendingRecoveryNote });
+            this.messages.push(harnessNoteMessage(pendingRecoveryNote));
           }
           const stateAfter = this.workspaceStateIdentity();
           const evaluation = tracker.evaluateStep(cumulativeStep, {
@@ -6596,7 +6592,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             this.ui.stopSpinner(false, `Reply cut off at the output limit${allowance ? ` (${allowance} tokens)` : ""}; nothing from it ran`);
             console.warn(pc.dim(`↻ Asking the model to write it in parts: ${target}.`));
             tracker.intervention(cumulativeStep, "output_truncated", `reply cut off at the output limit (request ${err.requestId ?? requestId}): ${target}; nothing ran`);
-            this.messages.push({ role: "user", content: truncatedReplyNotice(err.truncatedCalls, allowance, stepPosition(currentStep, maxTotalSteps)) });
+            this.messages.push(harnessNoteMessage(truncatedReplyNotice(err.truncatedCalls, allowance, stepPosition(currentStep, maxTotalSteps))));
             stepsUsed = currentStep;
             endStep();
             continue;
@@ -6714,10 +6710,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (parsed.notices && parsed.notices.length > 0) {
             for (const notice of parsed.notices) {
               this.ui.stopSpinner(false, `[notice] ${notice}`);
-              this.messages.push({
-                role: "user",
-                content: `[Nexus: ${notice}]`,
-              });
+              this.messages.push(harnessNoteMessage(`[Nexus: ${notice}]`));
             }
             this.persistProgress({ messages: true });
             endStep();
@@ -6735,10 +6728,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (!replied && !previousReplyEmpty) {
             previousReplyEmpty = true;
             if (currentStep < maxTotalSteps) {
-              this.messages.push({
-                role: "user",
-                content: `[Nexus: your reply was empty: no text and no tool call. It does not finish the task. This is ${stepPosition(currentStep, maxTotalSteps)}. Continue the task where you left off; call task_completed when it is done.]`,
-              });
+              this.messages.push(harnessNoteMessage(`[Nexus: your reply was empty: no text and no tool call. It does not finish the task. This is ${stepPosition(currentStep, maxTotalSteps)}. Continue the task where you left off; call task_completed when it is done.]`));
             }
             this.persistProgress({ messages: true });
             endStep();
@@ -6751,13 +6741,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             try {
               this.observer?.onContinuation?.({ kind: "requirements", n: completionNudges, max: budget.maxCompletionNudges, detail: open.map((r) => r.id).join(", ") });
             } catch {}
-            this.messages.push({
-              role: "user",
-              content:
+            this.messages.push(harnessNoteMessage(
                 `[Nexus continuation ${completionNudges}/${budget.maxCompletionNudges}] The operator's acceptance requirements are still open: ` +
                 `${open.map((r) => `${r.id} [${r.status}] ${r.text}`).join("; ")}. Continue working on them without waiting for the operator. ` +
                 `If one cannot be done here, call update_requirements with status "blocked" (or "descoped") and a note giving the reason, then stop.`,
-            });
+            ));
             this.persistProgress({ messages: true });
             endStep();
             continue;
@@ -7594,7 +7582,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (err instanceof InferenceError && err.kind === "output_truncated" && !previousReplyTruncated) {
           previousReplyTruncated = true;
           tracker.intervention(cumulativeStep, "output_truncated", `reply cut off at the output limit: ${err.truncatedCalls.map((c) => c.name).join(", ") || "text"}; nothing ran`);
-          this.messages.push({ role: "user", content: truncatedReplyNotice(err.truncatedCalls, activeClient.getOutputAllowance?.(), `subagent step ${currentStep}`) });
+          this.messages.push(harnessNoteMessage(truncatedReplyNotice(err.truncatedCalls, activeClient.getOutputAllowance?.(), `subagent step ${currentStep}`)));
           tracker.evaluateStep(cumulativeStep, { stateBefore: state, stateAfter: state, verdicts: [] });
           currentStep++;
           continue;
@@ -7688,7 +7676,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             : `Error executing ${toolName}: ${receipt.error || "Unknown error"}`,
         });
       }
-      if (note) this.messages.push({ role: "user", content: note });
+      if (note) this.messages.push(harnessNoteMessage(note));
       const after = this.workspaceStateIdentity();
       tracker.evaluateStep(cumulativeStep, { stateBefore: state, stateAfter: after, verdicts });
       state = after;

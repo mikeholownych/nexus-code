@@ -66,6 +66,7 @@ import { routeSlash } from "./slash/router.js";
 import { surfaceFacts } from "./surface_facts.js";
 import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
+import { isHarnessNote, withHarnessProvenance } from "./harness_notes.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 
 export interface SidecarOptions {
@@ -973,7 +974,7 @@ export class SidecarServer {
     if (archiveNotice) this.emit({ type: "notice", text: archiveNotice });
     if (Array.isArray(session.activePlan)) this.app.getAgent().setActivePlan(session.activePlan);
     this.lastTurn = null;
-    this.emitHistory(session.id, session.messages, session.lastTurn);
+    this.emitHistory(session.id, withHarnessProvenance(session.messages), session.lastTurn);
     // The count of the conversation is in the history header shown just before; this names the session.
     return { ok: true, message: `Resumed session ${session.id}.` };
   }
@@ -990,7 +991,7 @@ export class SidecarServer {
     for (const m of messages) {
       const body = text(m);
       if (m.role === "user") {
-        if (!body.trim() || body.startsWith("[Nexus ")) continue;
+        if (!body.trim() || isHarnessNote(m)) continue;
         // Steering is stored as "[Operator steering <id>]: text": shown as steering, without the marker.
         const typed = body.replace(/(\n+\[(?:Git Status|Active Plan): [^\n]*\])+\s*$/, "");
         if (typed.startsWith(STEERING_PREFIX)) entries.push({ role: "steering", text: typed.slice(typed.indexOf("]:") + 2).trim() });

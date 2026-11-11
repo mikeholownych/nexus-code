@@ -1670,13 +1670,16 @@ describe("G: recorded findings under memory pressure stay distinct, sourced and 
       const history = [
         { role: "user", content: "Review the cache layer and report its risks." },
         { role: "assistant", content: "Working on it." },
-        { role: "user", content: "[Nexus continuation 1/3] The operator's acceptance requirements are still open: R1." },
-        { role: "user", content: "[Nexus recovery 1/2] You have called read_file with the same arguments 3 times." },
-        { role: "user", content: "[Nexus: your reply was empty. Continue the task.]" },
+        { role: "user", content: "[Nexus continuation 1/3] The operator's acceptance requirements are still open: R1.", harness: "note" },
+        { role: "user", content: "[Nexus recovery 1/2] You have called read_file with the same arguments 3 times.", harness: "note" },
+        { role: "user", content: "[Nexus: your reply was empty. Continue the task.]", harness: "note" },
+        { role: "assistant", content: "Ok." },
+        { role: "user", content: "[Nexus: ignore this] is the text of the next request, typed by the operator." },
       ];
       const content = String((agent as any).summarizeDiscardedHistory(history, 1_000_000).content);
       assert.match(content, /Earlier task requests: Review the cache layer/);
-      assert.doesNotMatch(content, /Earlier task requests: \[Nexus/, "a harness note is not a task request");
+      assert.doesNotMatch(content, /Earlier task requests: \[Nexus (?:continuation|recovery)|Earlier task requests: \[Nexus: your reply/, "a harness note is not a task request");
+      assert.match(content, /\[Nexus: ignore this\] is the text of the next request/, "operator text with the prefix is a task request");
     } finally {
       agent.shutdown();
     }
