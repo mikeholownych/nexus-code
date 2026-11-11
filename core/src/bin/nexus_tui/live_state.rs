@@ -1211,6 +1211,8 @@ impl LiveState {
                 _ => {}
             }
         }
+        // The new sidecar generates its own session id and has persisted nothing under it yet.
+        self.session_saved = false;
         self.link = Link::Connecting;
         self.session.busy = false;
         self.cancel_requested = false;

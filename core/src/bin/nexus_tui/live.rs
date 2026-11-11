@@ -837,6 +837,23 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
     }
 
     #[test]
+    fn a_restarted_sidecar_has_saved_nothing_so_the_breadcrumb_stays_silent_until_it_does() {
+        let ev = |line: &str| crate::protocol::parse_event(line).unwrap();
+        let session = |id: &str| format!(r#"{{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false,"session":"{id}"}}"#);
+        let mut state = LiveState::new();
+        state.apply(ev(&session("sess-1")));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t1","heading":"Done","line":"ok","turn":{}}"#));
+        assert!(maybe_format_exit_breadcrumb(&state).is_some());
+        // `r` after a crash: the new sidecar generates a fresh id and has persisted nothing under it.
+        state.restarted();
+        state.apply(ev(&session("sess-2")));
+        assert_eq!(maybe_format_exit_breadcrumb(&state), None, "sess-2 was never saved");
+        // Its first completed turn saves it, and then the breadcrumb names the new id.
+        state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t2","heading":"Done","line":"ok","turn":{}}"#));
+        assert_eq!(maybe_format_exit_breadcrumb(&state), Some(format_exit_breadcrumb("sess-2")));
+    }
+
+    #[test]
     fn launch_errors_read_as_plain_text_with_exit_status_1() {
         let mut stderr = Vec::new();
         assert_eq!(main(vec!["--bogus".into()], &mut stderr), 1);
