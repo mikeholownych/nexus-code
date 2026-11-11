@@ -958,12 +958,13 @@ impl LiveState {
             Event::CheckpointChoiceRequest { id, message } => {
                 self.overlay = Some(Overlay::CheckpointChoice { id, message, selected: None });
             }
-            Event::TurnResult { heading, line, turn, model_summary } => {
+            Event::TurnResult { heading, line, turn, model_summary, saved } => {
                 self.pending = None;
                 self.cancel_requested = false;
                 self.cancel_started = None;
                 self.activity = None;
-                self.session_saved = true;
+                // A turn whose record the sidecar could not write must not advertise a session to resume.
+                self.session_saved |= saved;
                 self.interrupt_running_tools();
                 self.close_approval();
                 let (summary, notes) = model_summary

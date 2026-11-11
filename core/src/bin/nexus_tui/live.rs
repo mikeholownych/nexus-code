@@ -854,6 +854,17 @@ case "$shutdown" in *'"type":"shutdown"'*) exit 0;; *) exit 8;; esac"#
     }
 
     #[test]
+    fn a_turn_whose_record_could_not_be_written_does_not_advertise_a_session_to_resume() {
+        let ev = |line: &str| crate::protocol::parse_event(line).unwrap();
+        let mut state = LiveState::new();
+        state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false,"session":"sess-1"}"#));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t1","heading":"Done","line":"ok","turn":{},"saved":false}"#));
+        assert_eq!(maybe_format_exit_breadcrumb(&state), None);
+        state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t2","heading":"Done","line":"ok","turn":{},"saved":true}"#));
+        assert!(maybe_format_exit_breadcrumb(&state).is_some());
+    }
+
+    #[test]
     fn launch_errors_read_as_plain_text_with_exit_status_1() {
         let mut stderr = Vec::new();
         assert_eq!(main(vec!["--bogus".into()], &mut stderr), 1);

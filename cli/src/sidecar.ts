@@ -647,9 +647,11 @@ export class SidecarServer {
       agent.setObserver(undefined);
       agent.setProgressListener(() => this.saveSession(this.sessionTitle));
     }
+    let saved = true;
     try {
       withDurableSync(() => this.saveSession(label, turn));
     } catch (err) {
+      saved = false;
       this.emit({ type: "notice", text: `The session could not be saved: ${errorText(err)}` });
     }
     const { heading, line } = summarizeTurn(turn);
@@ -665,6 +667,7 @@ export class SidecarServer {
       model_summary: summary
         ? { summary: summary.summary, ...(summary.notes ? { notes: summary.notes } : {}) }
         : null,
+      saved,
     });
   }
 

@@ -3196,6 +3196,26 @@ mod tests {
     }
 
     #[test]
+    fn the_model_panel_keeps_its_height_while_a_filter_is_typed() {
+        let mut state = ready();
+        for c in "/model".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        feed(&mut state, &[&CATALOG.replace("\"ID\"", "\"m1\"")]);
+        let height = |state: &LiveState| {
+            let screen = draw(state, 120, 40);
+            let rows: Vec<usize> = screen.lines().enumerate().filter(|(_, l)| l.contains('╰') || l.contains("Select model")).map(|(y, _)| y).collect();
+            rows.iter().max().unwrap() - rows.iter().min().unwrap() + 1
+        };
+        let before = height(&state);
+        for c in "zzzz".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            assert_eq!(height(&state), before, "typing {c} resized the panel");
+        }
+    }
+
+    #[test]
     fn model_picker_modal_height_is_clamped_proportionally_to_content() {
         let mut state = ready();
         for c in "/model".chars() {
@@ -3262,8 +3282,8 @@ fn render_models(frame: &mut Frame, area: Rect, picker: &Picker) {
     let wanted = match &picker.catalog {
         Fetch::Waiting | Fetch::Failed(_) => 8,
         Fetch::Ready(_) => {
-            let row_count = picker.rows().len() as u16;
-            (row_count + 5).clamp(8, 24)
+            let row_count = u16::try_from(picker.unfiltered_len()).unwrap_or(u16::MAX);
+            row_count.saturating_add(5).clamp(8, 24)
         }
     };
     let rect = modal(area, 96, wanted);
