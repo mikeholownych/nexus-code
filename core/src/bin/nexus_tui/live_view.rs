@@ -612,25 +612,12 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     buttons.extend(button(if narrow { "All later" } else { "Approve all later actions" }, Verdict::ApprovedForSession, "a"));
     buttons.extend(button("Deny", Verdict::Denied, "n"));
     let mut footer = markdown::wrap(buttons, width, Vec::new(), Vec::new());
-    let hint = match approval.notice {
-        // A key did not answer: say which and why, instead of silently doing nothing.
-        Some(notice) => vec![Span::styled(if narrow { notice.split(" — ").next().unwrap_or(notice) } else { notice }, Style::default().fg(Color::Yellow))],
-        None if approval.confirming => if narrow {
-            vec![Span::styled("enter", key), Span::styled(" confirms all · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)]
-        } else {
-            vec![
-                Span::styled("approve this and every later action (switches to auto)? ", Style::default().fg(Color::Yellow)),
-                Span::styled("enter", key),
-                Span::styled(" confirms · ", muted),
-                Span::styled("←→", key),
-                Span::styled(" back · ", muted),
-                Span::styled("esc", key),
-                Span::styled(" denies", muted),
-            ]
-        },
-        None => if narrow {
-            vec![Span::styled("y", key), Span::styled("/", muted), Span::styled("n", key), Span::styled(" or ", muted), Span::styled("←→ enter", key), Span::styled(" · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)]
-        } else {
+    // The line under the buttons: what answers the panel, or the question being asked (confirming), or why a key did
+    // not answer. Each state has variants from long to short; the first that fits in one row is used, else the shortest
+    // wraps. The panel always reserves the rows the default and the confirm line need, so asking the question or
+    // showing a notice never moves the change or makes the panel stop being answerable.
+    let default_hint = pick_hint(
+        vec![
             vec![
                 Span::styled("y", key),
                 Span::styled(" approve · ", muted),
@@ -646,9 +633,42 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
                 Span::styled(" scroll · ", muted),
                 Span::styled("esc", key),
                 Span::styled(" denies", muted),
-            ]
-        },
+            ],
+            vec![Span::styled("y", key), Span::styled("/", muted), Span::styled("n", key), Span::styled(" or ", muted), Span::styled("←→ enter", key), Span::styled(" · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)],
+        ],
+        width,
+    );
+    let ask = Style::default().fg(Color::Yellow);
+    let confirm_hint = pick_hint(
+        vec![
+            vec![
+                Span::styled("approve this and every later action (switches to auto)? ", ask),
+                Span::styled("enter", key),
+                Span::styled(" confirms · ", muted),
+                Span::styled("←→", key),
+                Span::styled(" back · ", muted),
+                Span::styled("esc", key),
+                Span::styled(" denies", muted),
+            ],
+            vec![Span::styled("approve all later actions? ", ask), Span::styled("enter", key), Span::styled(" confirms · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)],
+            vec![Span::styled("approve all later? ", ask), Span::styled("enter", key), Span::styled(" confirms · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)],
+            vec![Span::styled("enter", key), Span::styled(" confirms all · ", muted), Span::styled("esc", key), Span::styled(" denies", muted)],
+        ],
+        width,
+    );
+    let wrap_hint = |spans: Vec<Span<'static>>| markdown::wrap(spans, width, Vec::new(), Vec::new());
+    let hint_rows = wrap_hint(default_hint.clone()).len().max(wrap_hint(confirm_hint.clone()).len());
+    let mut hint = match approval.notice {
+        // A key did not answer: say which and why, instead of silently doing nothing.
+        Some(notice) => wrap_hint(pick_hint(
+            vec![vec![Span::styled(notice, ask)], vec![Span::styled(notice.split(" — ").next().unwrap_or(notice), ask)]],
+            width,
+        )),
+        None if approval.confirming => wrap_hint(confirm_hint),
+        None => wrap_hint(default_hint),
     };
+    hint.truncate(hint_rows);
+    hint.resize(hint_rows, Line::default());
     let lines: Vec<Line> = match &approval.patch {
         Some(patch) => {
             let geo = Geometry { width, indent: 1, num_width: diff_view::patch_num_width(patch) };
@@ -665,18 +685,30 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
             .flat_map(|line| markdown::wrap(vec![Span::styled(line.text.clone(), line_style(line.kind))], width, Vec::new(), vec![Span::raw("    ")]))
             .collect(),
     };
-    // The panel fits its content (heading, the change, decisions) and never needs more than the area; the hint row
-    // is the first thing dropped when space is short, then the gap rows.
+    // The panel fits its content (heading, the change, decisions, the hint rows) and never needs more than the area. What
+    // must be drawn for the panel to count as shown, in order: the heading, the buttons, the hint rows, and the change
+    // (a text that must be folded needs two body rows: one row and the fold marker). The gap rows come last.
     let available = usize::from(area.height.saturating_sub(2));
-    let fixed = head.len() + footer.len();
-    // The hint or notice never takes a row the text needs: text that must be folded needs two body rows (one row and
-    // the fold marker), so on a short terminal a refusal's notice is left out and the marker explains the refusal.
     let body_min = if lines.len() > 1 { 2 } else { usize::from(!lines.is_empty()) };
-    let with_hint = available >= fixed + 1 + 2 + body_min;
-    if with_hint {
-        footer.push(Line::from(hint));
+    let fits = available >= head.len() + footer.len() + hint_rows + body_min;
+    if fits {
+        footer.extend(hint);
+    } else {
+        // Nothing to answer: only the refusal, kept where the operator looks for the decisions.
+        footer = markdown::wrap(
+            vec![Span::styled(
+                ["enlarge the terminal to see the proposed change · esc denies", "enlarge the terminal · esc denies", "enlarge the terminal"]
+                    .into_iter()
+                    .find(|text| unicode_width::UnicodeWidthStr::width(*text) <= width)
+                    .unwrap_or("enlarge terminal"),
+                Style::default().fg(Color::Yellow),
+            )],
+            width,
+            Vec::new(),
+            Vec::new(),
+        );
     }
-    let gaps = usize::from(available >= head.len() + footer.len() + 2 + lines.len().min(1));
+    let gaps = usize::from(fits && available >= head.len() + footer.len() + 2 + body_min);
     let body_room = available.saturating_sub(head.len() + footer.len() + gaps * 2);
     let rows = lines.len().min(body_room);
     let height = (head.len() + footer.len() + gaps * 2 + rows + 2).min(usize::from(area.height));
@@ -689,8 +721,9 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
     frame.render_widget(block, rect);
-    let head_rows = u16::try_from(head.len()).unwrap_or(0).min(inner.height);
-    let footer_rows = u16::try_from(footer.len()).unwrap_or(0).min(inner.height.saturating_sub(head_rows));
+    // The decisions (or the refusal) take their rows before the heading does.
+    let footer_rows = u16::try_from(footer.len()).unwrap_or(0).min(inner.height);
+    let head_rows = u16::try_from(head.len()).unwrap_or(0).min(inner.height - footer_rows);
     let gap = u16::try_from(gaps).unwrap_or(0);
     let body = Rect {
         y: inner.y + head_rows + gap,
@@ -702,13 +735,9 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     let folded = lines.len() > usize::from(body.height);
     let viewport = usize::from(body.height).saturating_sub(usize::from(folded));
     let limit = lines.len().saturating_sub(viewport);
-    // Shown means: the heading, the decisions and at least one row of the change (when there is one) are on screen.
-    let drawn = usize::from(head_rows) == head.len() && footer_rows >= 1 && (lines.is_empty() || viewport >= 1);
-    if !drawn && footer_rows >= 1 {
-        // Not enough room to show the change: say so where the decisions are, and decide nothing until it fits.
-        let last = footer.len() - 1;
-        footer[last] = Line::from(Span::styled("enlarge the terminal to see the proposed change", Style::default().fg(Color::Yellow)));
-    }
+    // Shown means: the heading, the decisions, the hint rows and at least one row of the change (when there is one) are
+    // on screen.
+    let drawn = fits && usize::from(head_rows) == head.len() && usize::from(footer_rows) == footer.len() && (lines.is_empty() || viewport >= 1);
     let top = approval.scroll.min(limit);
     let total = lines.len();
     let mut shown: Vec<Line> = lines.into_iter().skip(top).take(viewport).collect();
@@ -731,6 +760,14 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     layout.approval_top = top;
     layout.approval_seen_to = (top + viewport).min(total);
     layout.approval_width = width;
+    layout.approval_body = body;
+}
+
+/// The first of `variants` (longest first) whose text fits `width` columns; the last (shortest) when none does.
+fn pick_hint(mut variants: Vec<Vec<Span<'static>>>, width: usize) -> Vec<Span<'static>> {
+    let fits = |spans: &Vec<Span<'static>>| spans.iter().map(|span| unicode_width::UnicodeWidthStr::width(span.content.as_ref())).sum::<usize>() <= width;
+    let at = variants.iter().position(fits).unwrap_or(variants.len() - 1);
+    variants.swap_remove(at)
 }
 
 fn line_style(kind: LineKind) -> Style {
@@ -2727,8 +2764,12 @@ mod tests {
         );
         feed(&mut state, &[BUSY, request.as_str()]);
         state.composer = "one\ntwo\nthree\nfour\nfive\nsix".into();
+        // The heading is what the panel draws first; when even that and the decisions do not fit, the panel says to
+        // enlarge the terminal instead of drawing part of the review.
         for height in [11, 12] {
-            assert_shows(&draw(&state, 40, height), &["Edit src/x.txt"]);
+            let screen = draw(&state, 40, height);
+            assert!(screen.contains("Edit src/x.txt") || screen.contains("enlarge the terminal"), "{screen}");
+            assert!(!screen.contains("+B"), "{screen}");
         }
     }
 
@@ -4118,13 +4159,14 @@ mod surface_tests {
     fn an_approval_too_small_to_show_its_change_cannot_be_decided() {
         let mut state = state(true);
         feed(&mut state, &[WRITE_APPROVAL]);
-        let (_, _) = screen(&mut state, 39, 9);
+        let (_, _) = screen(&mut state, 40, 10);
         let later = Instant::now() + std::time::Duration::from_secs(5);
-        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), later), None, "below 40x10 nothing is shown, nothing decides");
-        // At the minimum size the change itself is on screen, and then a deliberate key decides.
-        let (rows, _) = screen(&mut state, 40, 10);
+        assert_eq!(state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), later), None, "below 40x11 nothing is shown, nothing decides");
+        // At the minimum size the change and the hint are on screen, and then a deliberate key decides.
+        let (rows, _) = screen(&mut state, 40, 11);
         let all = rows.join("\n");
-        assert!(all.contains("+ { \"cache\": true }") || all.contains("+ {"), "the change is visible at 40x10:\n{all}");
+        assert!(all.contains("+ { \"cache\": true }") || all.contains("+ {"), "the change is visible at 40x11:\n{all}");
+        assert!(all.contains("esc denies"), "the hint is visible at 40x11:\n{all}");
         assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= 40));
         // Once shown, one deliberate key decides.
         let later = Instant::now() + std::time::Duration::from_secs(10);
@@ -4403,7 +4445,7 @@ mod surface_tests {
         );
         let t0 = Instant::now();
         let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
-        for (width, height) in [(40u16, 11u16), (60, 14), (100, 30)] {
+        for (width, height) in [(40u16, 12u16), (60, 14), (100, 30)] {
             let mut st = state(true);
             feed(&mut st, &[&request]);
             screen(&mut st, width, height);
@@ -4625,3 +4667,7 @@ mod surface_tests {
         assert!(rows.join("\n").contains("ZZTAILZZ"), "the end of a long line is shown: {rows:#?}");
     }
 }
+
+#[cfg(test)]
+#[path = "approval_sweep.rs"]
+mod approval_sweep;

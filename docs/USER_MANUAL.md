@@ -186,7 +186,8 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   - `y` approves and `n` denies. Enter takes the highlighted option, which is Approve when the panel opens; ←/→ (and
     Tab/Shift+Tab) move the highlight across all three options.
   - **Approve all later actions** (switches to auto mode) is never one key: `a`, or Enter on it, asks
-    `approve this and every later action?`. Enter or `a` confirms, but only 1 second or more after the question
+    `approve all later actions?` (a shorter form on a narrow panel), and Enter or `a` confirms only after that question
+    has been drawn, and only 1 second or more after it was asked
     (and after any ignored press), so a double tap or a held key does not, including a held key's first repeat. ←/→ go back, and other answers (`y`, `n`,
     Esc) still answer.
   - Esc denies, at any time. Keys with Ctrl, Alt, Super or Meta never answer, nor do bursts of keys or pastes (letters
@@ -206,14 +207,24 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
     Terminals that do not report key release cannot tell a held key from fast presses.
   - A command, script or diff longer than the panel shows `↓ n more rows below`. Approve and Approve all are refused
     (with a notice) until every row of it has been on screen, read from the top with ↓ or PageDown (End and other jumps
-    do not count the rows they skip, and a new terminal width starts the reading again); Deny never waits. Every row
-    of the panel shows control characters and bidirectional overrides as visible stand-ins (`␍`, `␛`, `<U+202E>`), and
-    long lines wrap. Zero-width, no-break and other invisible characters show as `<U+200D>`, `<U+00A0>` and the like
-    too, also inside emoji and right-to-left text: that is deliberate, since an invisible character in a command is
-    something to see before approving.
-  The panel is answerable only while its change is visible — on a window too small to show it, it asks you to enlarge
-  the terminal (Esc still denies). Approvals that arrive while another panel or approval is open wait in order; the
-  panel title shows how many are waiting.
+    do not count the rows they skip, and a new terminal width starts the reading again); Deny never waits. Long lines
+    wrap.
+  - Characters that a terminal would act on or that draw as nothing are shown as visible stand-ins in the panel's text
+    (the heading, paths, hunk labels, commands, scripts, arguments and file contents): control characters as control
+    pictures (`␍`, `␛`, `␡`), and these as `<U+XXXX>`: U+0080 to U+009F, U+061C, U+200E and U+200F, U+202A to U+202E and
+    U+2066 to U+2069 (bidirectional marks and overrides), U+00A0, U+00AD, U+034F, U+115F, U+1160, U+1680, U+17B4 and
+    U+17B5, U+180B to U+180F, U+2000 to U+200D (spaces, zero-width space, joiners), U+2028 to U+202F, U+205F to U+206F,
+    U+2800, U+3000, U+3164, U+FE00 to U+FE0F (variation selectors), U+FEFF, U+FFA0, U+FFF0 to U+FFFB, U+1BCA0 to
+    U+1BCA3, U+1D173 to U+1D17A and U+E0000 to U+E0FFF (tag characters). This also applies inside emoji and
+    right-to-left text, since an invisible character in a command is something to see before approving. Other zero-width
+    characters (combining marks, for example) are drawn as the terminal draws them.
+  The panel can be answered only while the screen shows its heading, the three buttons, the hint line under them (the
+  question when you asked to approve all later actions, or the reason a key did not answer) and at least one row of the
+  change. On a terminal too small for that, the panel shows only `enlarge the terminal` with `esc denies`; Esc still
+  denies and no other key answers. A one-line command fits at 60 columns by 11 rows with an empty draft, and a one-line
+  file change at 40 columns by 11 rows; text longer than the panel needs more rows, since the fold marker has its own row.
+  Approvals that arrive while another panel or approval is open wait in order; the panel title shows how many are
+  waiting.
 - **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
   diagnostic lines (progress chatter is dropped) and your draft; `r` starts a new agent, after which `/resume` reloads
   the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider: your prompts,

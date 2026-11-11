@@ -457,6 +457,8 @@ pub struct LiveLayout {
     pub approval_seen_to: usize,
     /// The columns those rows wrap to.
     pub approval_width: usize,
+    /// Where the change's rows are drawn (what a test reads back from the screen).
+    pub approval_body: ratatui::layout::Rect,
 }
 
 /// Tool calls whose result the turn banner already reports.

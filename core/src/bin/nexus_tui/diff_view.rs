@@ -415,13 +415,13 @@ pub fn visible_control(c: char) -> Option<String> {
 
 /// Approval rows only: everything `visible_control` shows, plus the characters that draw as nothing or as a blank
 /// (zero-width, no-break and other space characters, soft hyphen, variation selectors, tag characters, line and
-/// paragraph separators, braille blank). Ordinary prose never goes through this, so emoji and CJK text are unaffected.
+/// paragraph separators, braille blank, shorthand and musical format controls). Ordinary prose never goes through this, so emoji and CJK text are unaffected.
 pub fn approval_visible_control(c: char) -> Option<String> {
     visible_control(c).or_else(|| {
         let code = c as u32;
         match code {
             0xa0 | 0xad | 0x34f | 0x115f | 0x1160 | 0x1680 | 0x17b4..=0x17b5 | 0x180b..=0x180f | 0x2000..=0x200d | 0x2028..=0x202f | 0x205f..=0x206f | 0x2800 | 0x3000
-            | 0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff0..=0xfffb | 0xe0000..=0xe0fff => Some(format!("<U+{code:04X}>")),
+            | 0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff0..=0xfffb | 0x1bca0..=0x1bca3 | 0x1d173..=0x1d17a | 0xe0000..=0xe0fff => Some(format!("<U+{code:04X}>")),
             _ => None,
         }
     })
@@ -1273,7 +1273,7 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
 
     #[test]
     fn invisible_and_line_separator_characters_get_visible_stand_ins() {
-        for c in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{2028}', '\u{2029}', '\u{feff}', '\u{ad}', '\u{a0}', '\u{2000}', '\u{200a}', '\u{202f}', '\u{205f}', '\u{3000}', '\u{1680}', '\u{fe00}', '\u{fe0f}', '\u{e0100}', '\u{e01ef}', '\u{fff9}', '\u{fffb}', '\u{180b}', '\u{180d}', '\u{e0041}', '\u{2800}', '\u{17b4}', '\u{17b5}', '\u{180f}', '\u{206a}', '\u{206f}', '\u{fff0}', '\u{e0080}', '\u{e0fff}'] {
+        for c in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{2028}', '\u{2029}', '\u{feff}', '\u{ad}', '\u{a0}', '\u{2000}', '\u{200a}', '\u{202f}', '\u{205f}', '\u{3000}', '\u{1680}', '\u{fe00}', '\u{fe0f}', '\u{e0100}', '\u{e01ef}', '\u{fff9}', '\u{fffb}', '\u{180b}', '\u{180d}', '\u{e0041}', '\u{2800}', '\u{17b4}', '\u{17b5}', '\u{180f}', '\u{206a}', '\u{206f}', '\u{fff0}', '\u{e0080}', '\u{e0fff}', '\u{1bca0}', '\u{1bca3}', '\u{1d173}', '\u{1d17a}'] {
             let shown = approval_visible_control(c).unwrap_or_else(|| panic!("{:04X} is invisible and has no stand-in", c as u32));
             assert_eq!(shown, format!("<U+{:04X}>", c as u32));
             assert!(!approval_safe_text(&format!("a{c}b")).contains(c));
