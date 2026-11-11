@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01JbpCGGg7WCX32ArXYxzyRd",
+  "agent_id": "aa140e89ccaec744f",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix redaction encoded-key and dotted rows",
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 93860,
+    "cache_read_tokens": 2718542,
+    "output_tokens": 21645,
+    "api_call_count": 30
+  },
+  "started_at": "2026-11-11T19:32:26.32861686Z",
+  "completed_at": "2026-11-11T19:55:13.626893263Z"
+}
