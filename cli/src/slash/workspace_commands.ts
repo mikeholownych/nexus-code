@@ -23,7 +23,7 @@ function workspace(ctx: SlashContext): string {
 
 function diff(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
-  if (!getGitInfo(cwd).isRepo) return reply("diff", NOT_A_REPO, false);
+  { const info = getGitInfo(cwd); if (!info.isRepo) return reply("diff", info.refusal ?? NOT_A_REPO, false); }
   try {
     const out = git(cwd, ["diff", "--no-color"]);
     if (out.trim()) return reply("diff", out.trimEnd(), true, { format: "diff" });
@@ -41,7 +41,7 @@ function diff(ctx: SlashContext): SlashOutcome {
 
 function gitStatus(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
-  if (!getGitInfo(cwd).isRepo) return reply("git", NOT_A_REPO, false);
+  { const info = getGitInfo(cwd); if (!info.isRepo) return reply("git", info.refusal ?? NOT_A_REPO, false); }
   try {
     return reply("git", workspaceStatus(cwd, "--short").trimEnd() || "Working tree clean.");
   } catch (err) {
@@ -51,7 +51,7 @@ function gitStatus(ctx: SlashContext): SlashOutcome {
 
 function stage(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
-  if (!getGitInfo(cwd).isRepo) return reply("stage", NOT_A_REPO, false);
+  { const info = getGitInfo(cwd); if (!info.isRepo) return reply("stage", info.refusal ?? NOT_A_REPO, false); }
   const stager = new HunkStager(cwd);
   if (ctx.args.trim() === "reset") {
     stager.unstage();
@@ -75,7 +75,7 @@ function stage(ctx: SlashContext): SlashOutcome {
 function commit(ctx: SlashContext): SlashOutcome {
   const cwd = workspace(ctx);
   const info = getGitInfo(cwd);
-  if (!info.isRepo) return reply("commit", NOT_A_REPO, false);
+  if (!info.isRepo) return reply("commit", info.refusal ?? NOT_A_REPO, false);
   if (info.dirtyCount === 0) return reply("commit", "Working tree clean: nothing to commit.");
   const message = ctx.args.trim();
   if (!message) {
@@ -244,7 +244,7 @@ function copy(ctx: SlashContext): SlashOutcome {
   let label: string;
   if (what === "diff") {
     const cwd = workspace(ctx);
-    if (!getGitInfo(cwd).isRepo) return reply("copy", NOT_A_REPO, false);
+    { const info = getGitInfo(cwd); if (!info.isRepo) return reply("copy", info.refusal ?? NOT_A_REPO, false); }
     text = git(cwd, ["diff"]);
     if (!text.trim()) return reply("copy", "No uncommitted changes to copy.", false);
     label = `the git diff (${text.split("\n").length} lines)`;

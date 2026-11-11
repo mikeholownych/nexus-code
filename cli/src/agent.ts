@@ -59,6 +59,7 @@ import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
 import { WorktreeManager } from "./worktree.js";
 import { captureVerificationState, recordVerificationIfEligible } from "./worktrunk/verification.js";
+import { homeDir } from "./worktrunk/core.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
@@ -7340,7 +7341,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (this.isReadOnly() || this.config.dryRun) {
       throw new Error("Cannot create or reuse a named worktree in read-only or dry-run mode.");
     }
-    const named = this.worktreeManager.ensureNamedWorktree(this.config.worktreeBranch!, process.env.HOME || os.homedir());
+    const named = this.worktreeManager.ensureNamedWorktree(this.config.worktreeBranch!, homeDir());
     // The binding belongs to this durable task; the worktree itself is addressed by its branch.
     this.activeWorktree = { taskId: this.currentTaskId, worktreePath: named.path, branch: named.branch, kind: "named" };
     this.originalWorkspace = this.config.workspace;

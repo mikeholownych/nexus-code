@@ -78,6 +78,9 @@ export interface GitOptions {
 
 /** Submodule levels `nestedRepositoryReason` walks before refusing rather than guessing. */
 const MAX_SUBMODULE_DEPTH = 4;
+/** Entries read in untracked directories while looking for a planted repository, and the size of a file listing. */
+const MAX_UNTRACKED_ENTRIES_SCANNED = 100_000;
+const LISTING_BUFFER = 256 * 1024 * 1024;
 
 /**
  * Whether a repository the agent could have planted sits below `dir`: a gitlink in the index or an untracked directory
@@ -90,13 +93,21 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
   if (!own.gitDir) return undefined;
   if (depth > MAX_SUBMODULE_DEPTH) return `submodules are nested more than ${MAX_SUBMODULE_DEPTH} levels deep below ${dir}`;
   const candidates = new Set<string>();
-  for (const entry of git(dir, ["ls-files", "-s", "-z"]).stdout.split("\0")) {
+  // Large trees: the listings can be long, and one that does not fit is a refusal, not a pass.
+  const listing = (args: string[]) => git(dir, args, { maxBuffer: LISTING_BUFFER }).stdout.split("\0");
+  for (const entry of listing(["ls-files", "-s", "-z"])) {
     const match = /^160000 [0-9a-f]+ \d\t(.+)$/.exec(entry);
     if (match) candidates.add(match[1]);
   }
-  // Without `--directory` Git still lists a nested repository (at any depth) as one `dir/` entry.
-  for (const entry of git(dir, ["ls-files", "-o", "--exclude-standard", "-z"]).stdout.split("\0")) {
-    if (entry.endsWith("/")) candidates.add(entry.slice(0, -1));
+  // `--directory` keeps the listing short; Git collapses an untracked directory into one `dir/` entry, so a repository
+  // planted anywhere below it is looked for on disk, within a budget.
+  let budget = MAX_UNTRACKED_ENTRIES_SCANNED;
+  for (const entry of listing(["ls-files", "-o", "--exclude-standard", "--directory", "-z"])) {
+    if (!entry.endsWith("/")) continue;
+    const found = gitDirectoriesBelow(path.join(dir, entry), budget);
+    if (found === undefined) return `more than ${MAX_UNTRACKED_ENTRIES_SCANNED} entries sit in untracked directories below ${dir}; none can be checked for a planted repository`;
+    budget -= found.scanned;
+    for (const repo of found.repos) candidates.add(path.relative(dir, repo));
   }
   for (const rel of candidates) {
     const sub = path.join(dir, rel);
@@ -105,6 +116,24 @@ export function nestedRepositoryReason(dir: string, depth = 0): string | undefin
     if (reason) return reason;
   }
   return undefined;
+}
+
+/** Directories at or below `root` that hold a `.git`, and how many entries were read; undefined when `budget` runs out. */
+function gitDirectoriesBelow(root: string, budget: number): { repos: string[]; scanned: number } | undefined {
+  const repos: string[] = [];
+  const pending = [root];
+  let scanned = 0;
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    let names: fs.Dirent[];
+    try { names = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of names) {
+      if (++scanned > budget) return undefined;
+      if (entry.name === ".git") repos.push(dir);
+      else if (entry.isDirectory()) pending.push(path.join(dir, entry.name));
+    }
+  }
+  return { repos, scanned };
 }
 
 let hookEnvCache: { key: string; env: NodeJS.ProcessEnv } | undefined;

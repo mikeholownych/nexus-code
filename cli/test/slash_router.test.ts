@@ -355,7 +355,7 @@ describe("slash router: workspace commands", () => {
     });
   });
 
-  test("worktree merge --ai-message honours the command's cancel signal: a shutdown during the model request merges nothing", async () => {
+  test("worktree merge --ai-message with an already-aborted command signal merges nothing", async () => {
     await withRig(async ({ reply, repo, host }) => {
       assert.equal((await reply("worktree", "switch -c feature/slash-cancel --no-copy")).success, true);
       const dir = path.join(repo, ".nexus", "worktrees", "feature-slash-cancel");
@@ -364,7 +364,7 @@ describe("slash router: workspace commands", () => {
       host.setWorkspace(dir);
       const before = execSync("git rev-parse HEAD", { cwd: repo, encoding: "utf8" }).trim();
       const cancelled = new AbortController();
-      cancelled.abort(); // the shutdown lands while the model is being asked
+      cancelled.abort(); // aborted before the model is asked
       const out = await routeSlash(host, "worktree", "merge ^ --ai-message --no-verify-receipt --reason slash-cancel-fixture", cancelled.signal);
       assert.equal(out.kind, "reply");
       assert.equal((out as SlashReply).success, false, (out as SlashReply).output);

@@ -1,6 +1,6 @@
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import * as path from "node:path";
-import { PATHSPEC_MODE_ENV } from "./core/checkout_trust.js";
+import { PATHSPEC_MODE_ENV, verifyCheckout } from "./core/checkout_trust.js";
 import { nestedRepositoryReason } from "./worktrunk/git.js";
 import * as fs from "node:fs";
 
@@ -9,6 +9,8 @@ export interface GitInfo {
   branch: string;
   dirtyCount: number;
   formattedBadge: string;
+  /** Set when Git was refused (a worktree the sandboxed agent could have tampered with), so the cause is not mistaken for "not a repository". */
+  refusal?: string;
 }
 
 /**
@@ -28,16 +30,21 @@ function pathspecEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Host-side Git must not run in a worktree whose `.git` (or a nested repository) the sandboxed agent could have planted. */
-function assertTrustedCheckout(workspace: string): void {
-  const reason = nestedRepositoryReason(workspace); // the checkout itself, and any repository planted below it
+/**
+ * Host-side Git must not run in a worktree whose `.git` (or a nested repository) the sandboxed agent could have planted.
+ * Returns the `--git-dir`/`--work-tree` pair to run Git against (empty for a plain repository), so a pointer rewritten
+ * after this check is not re-read.
+ */
+function trustedGitArgs(workspace: string): string[] {
+  const checkout = verifyCheckout(workspace);
+  const reason = checkout.reason ?? nestedRepositoryReason(workspace); // the checkout itself, and any repository planted below it
   if (reason) throw new Error(`refusing to run Git in ${workspace}: it is not a trusted worktree (${reason})`);
+  return checkout.gitDir ? ["--git-dir", checkout.gitDir, "--work-tree", checkout.workTree!] : [];
 }
 
 /** `git status` in `format` for the workspace's repository, without Nexus state. Throws when git fails. */
 export function workspaceStatus(workspace: string, format: "--porcelain" | "--short"): string {
-  assertTrustedCheckout(workspace);
-  return execFileSync("git", ["status", format, ...WITHOUT_NEXUS_STATE], {
+  return execFileSync("git", [...trustedGitArgs(workspace), "status", format, ...WITHOUT_NEXUS_STATE], {
     cwd: workspace,
     env: pathspecEnv(),
     encoding: "utf-8",
@@ -48,8 +55,9 @@ export function workspaceStatus(workspace: string, format: "--porcelain" | "--sh
 
 /** The current branch; on an unborn branch (no commit yet) `rev-parse` fails, so read the symbolic ref instead. */
 function currentBranch(workspace: string): string {
+  const pin = trustedGitArgs(workspace);
   const run = (args: string[]) =>
-    execFileSync("git", args, { cwd: workspace, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    execFileSync("git", [...pin, ...args], { cwd: workspace, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   try {
     return run(["rev-parse", "--abbrev-ref", "HEAD"]);
   } catch {
@@ -73,12 +81,14 @@ export function getGitInfo(workspace: string): GitInfo {
       dirtyCount,
       formattedBadge,
     };
-  } catch {
+  } catch (err) {
+    const message = (err as Error)?.message ?? "";
     return {
       isRepo: false,
       branch: "",
       dirtyCount: 0,
       formattedBadge: "",
+      ...(message.startsWith("refusing to run Git") ? { refusal: message } : {}),
     };
   }
 }
@@ -194,7 +204,7 @@ export function conventionalCommitMessage(files: string[]): string {
 
 export function commitChanges(workspace: string, message: string): { success: boolean; hash?: string; error?: string } {
   try {
-    assertTrustedCheckout(workspace);
+    trustedGitArgs(workspace);
     const gitEnv = pathspecEnv();
     // Exclusions in `git add` do not remove paths that were already staged.
     // Restore only the internal state entries in the index, leaving their working

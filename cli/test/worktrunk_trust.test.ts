@@ -205,7 +205,9 @@ test("the session's own Git helpers and the checkpoint manager refuse a worktree
     const manager = new CheckpointManager(f.dir);
     const earlier = manager.createCheckpoint("before the pointer was rewritten"); // a real checkpoint, so a refusal is the guard's and not "not found"
     const marker = plantRepository(f, "feat/session", [`filter.plant.clean\u0000sh -c 'echo ran > @MARKER@; cat'`, `core.fsmonitor\u0000sh -c 'echo fsm > @MARKER@'`]);
-    assert.equal(getGitInfo(f.dir).isRepo, false, "no branch badge from a planted repository");
+    const info = getGitInfo(f.dir);
+    assert.equal(info.isRepo, false, "no branch badge from a planted repository");
+    assert.match(String(info.refusal), /not a trusted worktree/, "the cause is reported, not \"not a repository\"");
     const committed = commitChanges(f.dir, "chore: x");
     assert.equal(committed.success, false);
     assert.match(String(committed.error), /not a trusted worktree/);

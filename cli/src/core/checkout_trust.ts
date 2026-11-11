@@ -26,6 +26,9 @@ export function parseGitfilePointer(content: string): string | undefined {
   return target;
 }
 
+/** Directory entries examined beside a worktree when looking for its main repository. */
+const MAX_SIBLINGS_SCANNED = 500;
+
 /** Repositories this process has opened and their linked worktrees (from `git worktree list`, run where the operator is). */
 const knownCommonDirs = new Set<string>();
 const knownLinkedWorktrees = new Set<string>();
@@ -48,6 +51,12 @@ function replacedWorktreeReason(root: string): string | undefined {
   for (let dir = path.dirname(root); ; dir = path.dirname(dir)) {
     registries.add(path.join(dir, ".git", "worktrees"));
     if (path.dirname(dir) === dir) break;
+  }
+  // The sibling layout (`<repo>.<branch>` beside `<repo>`) puts the main repository next to the worktree, not above it.
+  for (const parent of [path.dirname(root), path.dirname(path.dirname(root))]) {
+    let children: string[] = [];
+    try { children = fs.readdirSync(parent).slice(0, MAX_SIBLINGS_SCANNED); } catch { /* unreadable */ }
+    for (const child of children) registries.add(path.join(parent, child, ".git", "worktrees"));
   }
   for (const registry of registries) {
     let names: string[];
