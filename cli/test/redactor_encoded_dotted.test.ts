@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { InformationFlowBoundary } from "../src/core/egress.js";
+import { InformationFlowBoundary, replaceValues } from "../src/core/egress.js";
 import { redactDiagnosticForOutput } from "../src/core/persistence_protection.js";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { corpus } from "./fixtures/redaction_monotone_corpus.js";
+import { corpus, redactedRanges } from "./fixtures/redaction_monotone_corpus.js";
 
 /** Synthetic keys only: no real credential appears here. */
 const ANTHROPIC_BODY = "api03-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1";
@@ -88,7 +89,7 @@ test("the same dotted continuation is redacted after other token kinds", () => {
 });
 
 test("length gates and the entropy threshold use the decoded length of an encoded token", () => {
-  // 25 characters encoded, 19 decoded (`Qx7/Km2Zp9+Vb4Lr8Tw`, all distinct, entropy 4.25 > 4.0): under the 20-character gate once decoded.
+  // 23 characters encoded, 19 decoded (`Qx7/Km2Zp9+Vb4Lr8Tw`, all distinct, entropy 4.25 > 4.0): under the 20-character gate once decoded.
   const short = "Qx7%2FKm2Zp9%2BVb4Lr8Tw";
   withFreshBoundary(() => assert.equal(redactDiagnosticForOutput(`id ${short} x`), `id ${short} x`));
   // One more decoded character and the same shape is redacted.
@@ -108,20 +109,53 @@ test("extending a key past a dot keeps keys inside the extension and elsewhere r
   });
 });
 
-test("redaction is monotone: every span redacted before this change is still redacted", () => {
+test("redaction is monotone: every character redacted before this change is still redacted", () => {
   const inputs = corpus();
-  const recorded = JSON.parse(readFileSync(new URL("./fixtures/redaction_base_spans.json", import.meta.url), "utf8")) as Record<string, number[][]>;
+  const recorded = JSON.parse(readFileSync(new URL("./fixtures/redaction_base_spans.json", import.meta.url), "utf8")) as
+    { count: number; digest: string; spans: Record<string, number[][]> };
+  assert.equal(inputs.length, recorded.count, "the corpus changed: regenerate fixtures/redaction_base_spans.json");
+  assert.equal(createHash("sha256").update(inputs.join("\u0000")).digest("hex"), recorded.digest, "the corpus changed: regenerate the fixture");
+  assert.ok(Object.keys(recorded.spans).length > 1000, "the fixture records the base spans");
   const boundary = new InformationFlowBoundary();
   const failures: string[] = [];
-  for (const [index, spans] of Object.entries(recorded)) {
+  for (const [index, ranges] of Object.entries(recorded.spans)) {
     const input = inputs[Number(index)];
-    const output = boundary.redactForTelemetry(input);
-    for (const [start, end] of spans) {
-      const secret = input.slice(start, end);
-      if (output.includes(secret)) failures.push(`${JSON.stringify(secret)} left in ${JSON.stringify(input)} -> ${JSON.stringify(output)}`);
+    const now = new Set<number>();
+    for (const [start, end] of redactedRanges(replaceValues, boundary.classifyText(input, []).map((c) => c.secret), input)) {
+      for (let i = start; i < end; i++) now.add(i);
+    }
+    for (const [start, end] of ranges) {
+      for (let i = start; i < end; i++) {
+        if (!now.has(i)) {
+          failures.push(`${JSON.stringify(input.slice(start, end))} at ${i} no longer redacted in ${JSON.stringify(input)}`);
+          break;
+        }
+      }
     }
   }
-  assert.deepEqual(failures.slice(0, 5), [], `${failures.length} spans redacted at the base are now left in clear`);
+  assert.deepEqual(failures.slice(0, 5), [], `${failures.length} ranges redacted at the base are now (partly) left in clear`);
+});
+
+test("a value that straddles the end of an extended key is still redacted whole", () => {
+  const key = "ghp_Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo";
+  // The extension stops before ".ab" (too short to be key material): the operator secret crosses the end of the extension.
+  const boundary = new InformationFlowBoundary({ explicitSecrets: ["A1b2C3d4.ab"] });
+  const output = boundary.redactForTelemetry(`${key}.A1b2C3d4.ab and more`);
+  assert.ok(!output.includes("A1b2") && !output.includes(".ab") && !output.includes("Qx7Km2"), output);
+});
+
+test("extensions cannot make the values to replace much larger than the text", () => {
+  // Every unit is a distinct, valid key whose encoded run reaches far past it: without a budget each value is ~1 KB.
+  const distinct = (count: number): string[] =>
+    Array.from({ length: count }, (_, i) => `sk-%2F${i.toString(36).padStart(8, "A")}-`);
+  const input = distinct(8000).join("");
+  withFreshBoundary(() => {
+    const started = performance.now();
+    redactDiagnosticForOutput(input);
+    assert.ok(performance.now() - started < 5000, `${input.length} chars took ${Math.round(performance.now() - started)}ms`);
+  });
+  const total = new InformationFlowBoundary().classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
+  assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
 });
 
 test("a long dotted high-entropy token is redacted whole", () => {

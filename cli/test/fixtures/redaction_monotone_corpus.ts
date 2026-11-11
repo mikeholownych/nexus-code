@@ -1,7 +1,7 @@
 /**
  * Inputs for the redaction monotonicity test: existing redaction shapes and templates plus generated adjacent, nested
- * and chained key shapes. All keys are synthetic. `redaction_base_spans.json` records the [start, end) spans the redactor classified in
- * each input before the encoded/dotted work (origin/main 29e7ebff).
+ * and chained key shapes. All keys are synthetic. `redaction_base_spans.json` records the [start, end) ranges of each input that the redactor
+ * replaced before the encoded/dotted work (origin/main 29e7ebff).
  */
 const KEYS = [
   "sk-ant-api03-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq",
@@ -40,3 +40,20 @@ export function corpus(): string[] {
   return [...out];
 }
 
+
+/** The [start, end) ranges of `text` that `replaceValues` replaces for these values, as the redactor itself replaces them. */
+export function redactedRanges(
+  replaceValues: (text: string, values: string[], replacement: (index: number, matched: string) => string) => string,
+  values: string[],
+  text: string,
+): number[][] {
+  const masked = replaceValues(text, values, (_index, matched) => "\u0000".repeat(matched.length));
+  const ranges: number[][] = [];
+  for (let i = 0; i < masked.length; i++) {
+    if (masked[i] !== "\u0000") continue;
+    const start = i;
+    while (i + 1 < masked.length && masked[i + 1] === "\u0000") i++;
+    ranges.push([start, i + 1]);
+  }
+  return ranges;
+}

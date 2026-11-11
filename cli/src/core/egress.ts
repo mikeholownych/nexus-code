@@ -433,10 +433,11 @@ function unescapeSlashes(value: string): string {
 
 /**
  * A "/" or "+" written other than plainly: percent-encoded (`%2F`, `%2B`, and once more encoded as `%252F`) or as a
- * look-alike (U+2215 division slash, U+2044 fraction slash, U+FF0F fullwidth solidus, U+FF0B fullwidth plus). Sticky:
+ * look-alike (U+2215 division slash, U+2044 fraction slash, U+FF0F fullwidth solidus, U+29F8 big solidus; U+FF0B
+ * fullwidth plus, U+FE62 small plus). Sticky:
  * `matchEncodedKeyChar` tests it at one position.
  */
-const ENCODED_KEY_CHAR = /%(?:25)?2[FfBb]|[\u2215\u2044\uFF0F\uFF0B]/y;
+const ENCODED_KEY_CHAR = /%(?:25)?2[FfBb]|[\u2215\u2044\uFF0F\u29F8\uFF0B\uFE62]/y;
 const ENCODED_KEY_CHARS = new RegExp(ENCODED_KEY_CHAR.source, "g");
 
 /** The length of the encoded "/" or "+" at `at`, or 0 when there is none. */
@@ -448,7 +449,7 @@ function matchEncodedKeyChar(text: string, at: number): number {
 
 /** The text as detection sees it: encoded and look-alike "/" and "+" written plainly. The redacted span is never this copy. */
 function normalizeKeyChars(value: string): string {
-  return value.replace(ENCODED_KEY_CHARS, (found) => (/[/\u2215\u2044\uFF0F]|2[Ff]$/.test(found) ? "/" : "+"));
+  return value.replace(ENCODED_KEY_CHARS, (found) => (/[/\u2215\u2044\uFF0F\u29F8]|2[Ff]$/.test(found) ? "/" : "+"));
 }
 
 function isBase64KeyChar(code: number): boolean {
@@ -514,21 +515,38 @@ const DOTTED_CONTINUATION_PATTERNS = new Set([
   "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN", "GOOGLE_API_KEY", "HUGGINGFACE_TOKEN", "SLACK_TOKEN", "JWT_TOKEN",
 ]);
 
+/** A "."-joined segment is key material when it is 6 or more characters with a digit, "/" or "+", or that do not split into words. */
+function isKeyMaterialSegment(segment: string): boolean {
+  return segment.length >= 6 && (/[0-9+/]/.test(segment) || !segment.split(/[_-]+/).every(isIdentifierPart));
+}
+
+/**
+ * How much longer than the text itself the redactor may make its values. Each extension (encoded run, dotted
+ * continuation) is charged to the budget of one classifyText call and is skipped once the budget is spent, so the values
+ * to replace stay within a constant factor of the text however it is crafted. Spent budget never removes an original match.
+ */
+interface ExtensionBudget { left: number }
+
 /**
  * A key followed by "." and more key characters keeps going: `sk-…RtBq.Xo2RtBq` is one credential, not a key and a
- * stray word. A dotted segment is key material when it is at least 6 characters and has a digit, "/" or "+", or does not
- * split into words: a sentence's full stop (`…RtBq.` then a space), a file extension (`.json`) and a word
- * (`.Models`, `.toString`, `.README`) end the key as before. Each segment is scanned once, so the cost stays linear.
+ * stray word; a sentence's full stop, a file extension (`.json`) and a word (`.Models`, `.toString`) end the key as
+ * before (`isKeyMaterialSegment`). Returns `end` itself when nothing continues it or the budget is spent.
  */
-function extendDottedKey(text: string, end: number): number {
+function extendDottedKey(text: string, end: number, budget: ExtensionBudget): number {
   const limit = end + MAX_EXTENSION;
-  while (text[end] === "." && end < limit) {
-    const segmentEnd = scanKeyRun(text, end + 1, true, limit);
-    const segment = normalizeKeyChars(text.slice(end + 1, segmentEnd));
-    if (segment.length < 6 || !(/[0-9+/]/.test(segment) || !segment.split(/[_-]+/).every(isIdentifierPart))) break;
-    end = segmentEnd;
+  let extended = end;
+  while (text[extended] === "." && extended < limit) {
+    const segmentEnd = scanKeyRun(text, extended + 1, true, limit);
+    if (!isKeyMaterialSegment(normalizeKeyChars(text.slice(extended + 1, segmentEnd)))) break;
+    extended = segmentEnd;
   }
-  return end;
+  return chargeExtension(end, extended, budget);
+}
+
+function chargeExtension(from: number, to: number, budget: ExtensionBudget): number {
+  if (to - from > budget.left) return from;
+  budget.left -= to - from;
+  return to;
 }
 
 /** Whether `text[at, end)` (an `sk-` run) is a base64 key: see `scanBase64Keys` for the rule. */
@@ -555,7 +573,7 @@ function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolea
  * skipped: a key inside it is found by the bounded patterns. Each start follows at most MAX_EXTENSION characters past
  * its original run, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
  */
-function scanBase64Keys(text: string): Array<{ start: number; end: number; name: string }> {
+function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: number; end: number; name: string }> {
   const found: Array<{ start: number; end: number; name: string }> = [];
   let from = 0;
   while (from < text.length) {
@@ -568,8 +586,8 @@ function scanBase64Keys(text: string): Array<{ start: number; end: number; name:
     const anthropic = text.startsWith("sk-ant-", at);
     const name = anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
     const runEnd = scanKeyRun(text, at + 3, false);
-    const encodedEnd = scanKeyRun(text, runEnd, true, runEnd + MAX_EXTENSION);
-    const extendedEnd = extendDottedKey(text, encodedEnd);
+    const encodedEnd = chargeExtension(runEnd, scanKeyRun(text, runEnd, true, runEnd + MAX_EXTENSION), budget);
+    const extendedEnd = extendDottedKey(text, encodedEnd, budget);
     for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
       if (!isBase64KeyRun(text, at, end, anthropic)) continue;
       let secretEnd = end;
@@ -601,7 +619,7 @@ interface PositionedMatch {
  * path display), and a key inside a Bearer match is still redacted where it occurs again unmatched. The result has
  * one entry per distinct value, longest first.
  */
-function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
+function resolveOverlaps(matches: PositionedMatch[], text: string): ClassifiedSecret[] {
   const order = matches.map((_, i) => i).sort(
     (a, b) => matches[a].start - matches[b].start || matches[b].end - matches[a].end || a - b
   );
@@ -629,6 +647,32 @@ function resolveOverlaps(matches: PositionedMatch[]): ClassifiedSecret[] {
       classified.push(match.item);
     }
   });
+  // Matches that overlap without one containing the other (a key and the operator secret that starts inside it and ends
+  // past it): replacement takes the longer value and skips the other, leaving the part of it past the first in clear. One
+  // more value, the union of the chain of such matches, is replaced first and covers all of them.
+  let chain: { start: number; end: number; best: ClassifiedSecret; partial: boolean } | undefined;
+  const closeChain = (): void => {
+    if (chain?.partial && !seen.has(text.slice(chain.start, chain.end))) {
+      const secret = text.slice(chain.start, chain.end);
+      seen.add(secret);
+      classified.push({ ...chain.best, secret });
+    }
+  };
+  for (const i of order) {
+    if (dropped.has(i)) continue;
+    const { start, end, item } = matches[i];
+    if (chain && start < chain.end) {
+      if (end > chain.end) {
+        chain.end = end;
+        chain.partial = true;
+      }
+      if (item.confidence > chain.best.confidence) chain.best = item;
+    } else {
+      closeChain();
+      chain = { start, end, best: item, partial: false };
+    }
+  }
+  closeChain();
   // Longest value first: a value that also occurs inside a longer one elsewhere is replaced after it, not through it.
   return classified.sort((a, b) => b.secret.length - a.secret.length);
 }
@@ -648,16 +692,15 @@ function looksLikeCredentialToken(token: string): boolean {
 }
 
 /**
- * A "."-joined token is key material only when it is unlike every ordinary dotted name: every segment is at least 6
- * characters of base64url characters with a digit, a capital after its first character, or a "+" (so no path, host name,
- * file name, version number, package or class name), and one segment is at least 16 characters that do not split into
- * words. The caller still applies the entropy threshold to the whole token.
+ * A "."-joined token is key material only when it is unlike every ordinary dotted name: every segment is base64url
+ * characters and `isKeyMaterialSegment` (so no path, host name, file name, version number, package or class name), and one
+ * segment is at least 16 characters. The caller still applies the entropy threshold to the whole token.
  */
 function isDottedKeyMaterial(plain: string): boolean {
   const segments = plain.split(".");
-  return segments.length >= 2 && segments.every((segment) =>
-    segment.length >= 6 && /^[a-zA-Z0-9+=_-]+$/.test(segment) && /[0-9A-Z+]/.test(segment.slice(1))) &&
-    segments.some((segment) => segment.length >= 16 && !segment.split(/[_-]+/).every(isIdentifierPart));
+  return segments.length >= 2 &&
+    segments.every((segment) => /^[a-zA-Z0-9+=_-]+$/.test(segment) && isKeyMaterialSegment(segment)) &&
+    segments.some((segment) => segment.length >= 16);
 }
 
 /** A number, a short tag such as `v1` or `x86`, or letters that split cleanly into words of two or more letters. */
@@ -1066,7 +1109,8 @@ export class InformationFlowBoundary {
     }
 
     // 2. Deterministic High-Confidence Patterns (DATA-002: Category 2)
-    for (const { start, end, name } of text.includes("sk-") ? scanBase64Keys(text) : []) {
+    const extensionBudget: ExtensionBudget = { left: text.length + MAX_EXTENSION };
+    for (const { start, end, name } of text.includes("sk-") ? scanBase64Keys(text, extensionBudget) : []) {
       matches.push({
         start,
         end,
@@ -1105,7 +1149,7 @@ export class InformationFlowBoundary {
         // value found only by its shorter form (the key on its own elsewhere in the text) is still redacted.
         const ends = [end];
         if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
-          const extended = extendDottedKey(text, end);
+          const extended = extendDottedKey(text, end, extensionBudget);
           if (extended > end) ends.push(extended);
         }
         for (const spanEnd of ends) {
@@ -1224,7 +1268,7 @@ export class InformationFlowBoundary {
       }
     }
 
-    return resolveOverlaps(matches);
+    return resolveOverlaps(matches, text);
   }
 
   /**
