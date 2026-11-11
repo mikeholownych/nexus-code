@@ -253,8 +253,9 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
       return m && m[3] === "0" ? [[m[4], { mode: m[1], oid: m[2] }] as const] : [];
     }));
     const baseModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"));
+    const ownModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER, ownIndex: true }).split("\0"));
     const modeChanges: string[] = [];
-    for (const [file, own] of modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER, ownIndex: true }).split("\0"))) {
+    for (const [file, own] of ownModes) {
       const atBaseEntry = baseModes.get(file);
       const exec = (m: string) => m === "100644" || m === "100755";
       if (atBaseEntry && atBaseEntry.mode !== own.mode && exec(atBaseEntry.mode) && exec(own.mode)) modeChanges.push(`${own.mode} ${atBaseEntry.oid}\t${file}\0`);
@@ -267,6 +268,14 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     ]);
     if (added.size) {
       git(["--literal-pathspecs", "add", "--force", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${[...added].join("\0")}\0` });
+      // Adding re-reads the mode from disk; a path the real index holds with another executable bit (a new script staged
+      // with --chmod=+x under core.filemode=false) keeps the real index's mode, as integration preserves it.
+      const addedModes = modeOf(git(["ls-files", "-s", "-z"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"));
+      for (const flag of ["+x", "-x"]) {
+        const want = flag === "+x" ? "100755" : "100644";
+        const paths = [...added].filter((f) => ownModes.get(f)?.mode === want && addedModes.get(f)?.mode !== undefined && addedModes.get(f)!.mode !== want);
+        if (paths.length) git(["--literal-pathspecs", "update-index", `--chmod=${flag}`, "-z", "--stdin"], { input: `${paths.join("\0")}\0` });
+      }
     }
     // Comparing worktree content runs a path's clean filter, so before any diff every path is checked for a filter or
     // diff driver the stripped attribute source did not neutralise ($GIT_DIR/info/attributes, or a worktree
