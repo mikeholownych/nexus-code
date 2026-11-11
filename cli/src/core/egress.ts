@@ -489,14 +489,20 @@ function bearerTokenLength(value: string): number {
   return head >= 16 ? head : 0;
 }
 
-/** The end of the run of key characters from `from`: a JSON-escaped `\/` and an encoded or look-alike "/" or "+" count. */
-function scanKeyRun(text: string, from: number): number {
+/** How far past a key the encoded run and the dotted continuation are followed: keys are short, and a bound keeps each key's cost constant. */
+const MAX_EXTENSION = 1024;
+
+/**
+ * The end of the run of key characters from `from`: a JSON-escaped `\/` counts as "/", and with `encoded` an encoded or
+ * look-alike "/" or "+" does too. The run stops at `limit`.
+ */
+function scanKeyRun(text: string, from: number, encoded: boolean, limit = text.length): number {
   let end = from;
-  while (end < text.length) {
+  while (end < limit) {
     const code = text.charCodeAt(end);
-    const encoded = code === 37 || code >= 0x2044 ? matchEncodedKeyChar(text, end) : 0; // "%" or a look-alike
-    if (encoded > 0) end += encoded;
-    else if (isBase64KeyChar(text.charCodeAt(end))) end++;
+    const unit = encoded && (code === 37 || code >= 0x2044) ? matchEncodedKeyChar(text, end) : 0; // "%" or a look-alike
+    if (unit > 0) end += unit;
+    else if (isBase64KeyChar(code)) end++;
     else if (text[end] === "\\" && text[end + 1] === "/") end += 2; // a JSON-escaped "/"
     else break;
   }
@@ -515,8 +521,9 @@ const DOTTED_CONTINUATION_PATTERNS = new Set([
  * (`.Models`, `.toString`, `.README`) end the key as before. Each segment is scanned once, so the cost stays linear.
  */
 function extendDottedKey(text: string, end: number): number {
-  while (text[end] === ".") {
-    const segmentEnd = scanKeyRun(text, end + 1);
+  const limit = end + MAX_EXTENSION;
+  while (text[end] === "." && end < limit) {
+    const segmentEnd = scanKeyRun(text, end + 1, true, limit);
     const segment = normalizeKeyChars(text.slice(end + 1, segmentEnd));
     if (segment.length < 6 || !(/[0-9+/]/.test(segment) || !segment.split(/[_-]+/).every(isIdentifierPart))) break;
     end = segmentEnd;
@@ -524,16 +531,29 @@ function extendDottedKey(text: string, end: number): number {
   return end;
 }
 
+/** Whether `text[at, end)` (an `sk-` run) is a base64 key: see `scanBase64Keys` for the rule. */
+function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolean): boolean {
+  const body = normalizeKeyChars(unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end)));
+  const separator = body.search(/[/+]/);
+  const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
+    isPathLike(body.slice(separator + 1));
+  return !plainKeyThenPath && body.length >= 20 && separator >= 0 && /[0-9A-Z+]/.test(body) && !isPathLike(body);
+}
+
 /**
  * `sk-` / `sk-ant-` keys whose body is base64 ("/" and "+" included), found in one left-to-right pass: from each `sk-`
  * at a word boundary take the maximal run of key characters (a JSON-escaped `\/` counts as "/") once, validate it,
- * and resume after it (the run takes encoded and look-alike "/" and "+" and a dotted continuation, see `scanKeyRun` and
- * `extendDottedKey`). Nothing of the run is trimmed: its last segment is key material whatever its letter case. A run is a key if its body is at least 20
- * characters, contains "/" or "+", has a digit, a capital or "+", and is not a path (`sk-learn/linear_model/Ridge2`,
- * see `isPathLike`). A plain key followed by a URL path (`sk-…RtBq/models`: the body before its first "/" is a 20-64
- * character plain key and the rest is a path) is left to the bounded `sk-` patterns, which stop at the "/".
- * Every `sk-` inside a run is skipped: a key inside it is found by the bounded patterns. Nothing is rescanned and
- * nothing is searched backwards, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
+ * and resume after it. Nothing of the run is trimmed: its last segment is key material whatever its letter case. A run
+ * is a key if its body is at least 20 characters, contains "/" or "+", has a digit, a capital or "+", and is not a path
+ * (`sk-learn/linear_model/Ridge2`, see `isPathLike`). A plain key followed by a URL path (`sk-…RtBq/models`: the body
+ * before its first "/" is a 20-64 character plain key and the rest is a path) is left to the bounded `sk-` patterns,
+ * which stop at the "/".
+ * Redaction only grows: the run as it always was is judged and kept exactly as before, and the longer runs (one that
+ * continues through an encoded or look-alike "/" or "+", and that run plus a dotted continuation, see `extendDottedKey`)
+ * are judged in addition, so a longer run that is rejected never hides the shorter one. Scanning resumes after the
+ * original run, so a key after a dot is found whatever the longer runs were. Every `sk-` inside the original run is
+ * skipped: a key inside it is found by the bounded patterns. Each start follows at most MAX_EXTENSION characters past
+ * its original run, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
  */
 function scanBase64Keys(text: string): Array<{ start: number; end: number; name: string }> {
   const found: Array<{ start: number; end: number; name: string }> = [];
@@ -545,18 +565,18 @@ function scanBase64Keys(text: string): Array<{ start: number; end: number; name:
       from = at + 1;
       continue;
     }
-    const end = extendDottedKey(text, scanKeyRun(text, at + 3));
     const anthropic = text.startsWith("sk-ant-", at);
-    const body = normalizeKeyChars(unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end)));
-    const separator = body.search(/[/+]/);
-    const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
-      isPathLike(body.slice(separator + 1));
-    if (!plainKeyThenPath && body.length >= 20 && separator >= 0 && /[0-9A-Z+]/.test(body) && !isPathLike(body)) {
+    const name = anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+    const runEnd = scanKeyRun(text, at + 3, false);
+    const encodedEnd = scanKeyRun(text, runEnd, true, runEnd + MAX_EXTENSION);
+    const extendedEnd = extendDottedKey(text, encodedEnd);
+    for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
+      if (!isBase64KeyRun(text, at, end, anthropic)) continue;
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
-      found.push({ start: at, end: secretEnd, name: anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY" });
+      found.push({ start: at, end: secretEnd, name });
     }
-    from = Math.max(end, at + 1);
+    from = Math.max(runEnd, at + 1);
   }
   return found;
 }
@@ -1073,10 +1093,6 @@ export class InformationFlowBoundary {
           continue;
         }
         let end = name === "BEARER_AUTH_HEADER" ? start + bearerTokenLength(text.slice(start, matchEnd)) : matchEnd;
-        if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
-          end = extendDottedKey(text, end);
-          re.lastIndex = Math.max(re.lastIndex, end); // resume after the extension: a chain of keys is scanned once
-        }
         while (end > start) {
           const ch = text.charCodeAt(end - 1);
           if (ch === 34 || ch === 39 || ch === 59 || ch === 44) { // ", ', ;, ,
@@ -1085,19 +1101,28 @@ export class InformationFlowBoundary {
             break;
           }
         }
-        const secretVal = text.slice(start, end);
-        if (secretVal.length >= 8 && !isReference(secretVal)) {
-          matches.push({
-            start,
-            end,
-            item: {
-              secret: secretVal,
-              classificationType: "PATTERN_DETERMINISTIC",
-              classifierId: `regex:${name.toLowerCase()}`,
-              confidence: 0.95,
-              patternName: name,
-            },
-          });
+        // The match as it always was is kept; a dotted continuation is a second, longer match (never a replacement), so a
+        // value found only by its shorter form (the key on its own elsewhere in the text) is still redacted.
+        const ends = [end];
+        if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
+          const extended = extendDottedKey(text, end);
+          if (extended > end) ends.push(extended);
+        }
+        for (const spanEnd of ends) {
+          const secretVal = text.slice(start, spanEnd);
+          if (secretVal.length >= 8 && !isReference(secretVal)) {
+            matches.push({
+              start,
+              end: spanEnd,
+              item: {
+                secret: secretVal,
+                classificationType: "PATTERN_DETERMINISTIC",
+                classifierId: `regex:${name.toLowerCase()}`,
+                confidence: 0.95,
+                patternName: name,
+              },
+            });
+          }
         }
       }
     }
@@ -1159,13 +1184,15 @@ export class InformationFlowBoundary {
       while (end > start && (text[end - 1] === "." || text[end - 1] === "!")) end--;
       const tok = text.slice(start, end);
       const plain = normalizeKeyChars(unescapeSlashes(tok));
+      // A token with an encoded or look-alike "/" or "+" is measured decoded; every other token keeps its own length.
+      const length = plain.length !== unescapeSlashes(tok).length ? plain.length : tok.length;
       if (
-        plain.length >= 20 &&
+        length >= 20 &&
         // Longer tokens are prose or data. A base64 run ("+" or "/", not a path) is still a secret up to 512 characters,
         // the size of long access tokens, unless it is a data-URI payload (`;base64,…`): then it is an embedded file.
         // A credential-sized token is classified wherever it stands, after `base64,` too.
-        (plain.length <= 128 ||
-          (plain.length <= 512 && /[+/]/.test(plain) && !isPathLike(plain) && !text.startsWith("base64,", start - 7))) &&
+        (length <= 128 ||
+          (length <= 512 && /[+/]/.test(plain) && !isPathLike(plain) && !text.startsWith("base64,", start - 7))) &&
         // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
         (originalTokens.has(tok) || looksLikeCredentialToken(plain)) &&
         !isReference(tok)
@@ -1179,7 +1206,7 @@ export class InformationFlowBoundary {
           !/^nexus-removed\/[0-9a-f]{10}-[0-9a-f]{8}$/.test(plain)) {
           const entropy = calculateShannonEntropy(plain);
           // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
-          const threshold = plain.length < 32 ? 4.0 : 4.5;
+          const threshold = length < 32 ? 4.0 : 4.5;
           if (entropy >= threshold) {
             matches.push({
               start,

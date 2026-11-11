@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InformationFlowBoundary } from "../src/core/egress.js";
 import { redactDiagnosticForOutput } from "../src/core/persistence_protection.js";
+import { readFileSync } from "node:fs";
+import { corpus } from "./fixtures/redaction_monotone_corpus.js";
 
 /** Synthetic keys only: no real credential appears here. */
 const ANTHROPIC_BODY = "api03-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1";
@@ -86,12 +88,40 @@ test("the same dotted continuation is redacted after other token kinds", () => {
 });
 
 test("length gates and the entropy threshold use the decoded length of an encoded token", () => {
-  // 18 decoded characters, 30 encoded: below the 20-character gate once decoded, so it is not classified.
-  const short = "Qx7%2FKm2%2BVb9%2FLrTz4";
+  // 25 characters encoded, 19 decoded (`Qx7/Km2Zp9+Vb4Lr8Tw`, all distinct, entropy 4.25 > 4.0): under the 20-character gate once decoded.
+  const short = "Qx7%2FKm2Zp9%2BVb4Lr8Tw";
   withFreshBoundary(() => assert.equal(redactDiagnosticForOutput(`id ${short} x`), `id ${short} x`));
-  // The same shape, long enough decoded, is redacted.
-  const long = "Qx7%2FKm2%2BVb9%2FLrTz4Wd8Ns3Hc6Yp1Jf5";
+  // One more decoded character and the same shape is redacted.
+  const long = "Qx7%2FKm2Zp9%2BVb4Lr8Tw5";
   assertRedactedEverywhere(long, long, "long encoded token");
+});
+
+test("extending a key past a dot keeps keys inside the extension and elsewhere redacted", () => {
+  withFreshBoundary(() => {
+    // The extension moves a "/" into the path exemption; the key after the dot must still be found.
+    const nested = redactDiagnosticForOutput("sk-cache.sk-Qx7Km2Vb9LrTz4/Models");
+    assert.ok(!nested.includes("Qx7Km2"), nested);
+    // The plain key is still replaced where it occurs on its own, whatever follows it elsewhere.
+    const text = "sk-0123456789abcdefghij.Xo2RtBq; saved prefix_sk-0123456789abcdefghij.log";
+    const output = redactDiagnosticForOutput(text);
+    assert.ok(!output.includes("0123456789abcdefghij") && !output.includes("Xo2RtBq"), output);
+  });
+});
+
+test("redaction is monotone: every span redacted before this change is still redacted", () => {
+  const inputs = corpus();
+  const recorded = JSON.parse(readFileSync(new URL("./fixtures/redaction_base_spans.json", import.meta.url), "utf8")) as Record<string, number[][]>;
+  const boundary = new InformationFlowBoundary();
+  const failures: string[] = [];
+  for (const [index, spans] of Object.entries(recorded)) {
+    const input = inputs[Number(index)];
+    const output = boundary.redactForTelemetry(input);
+    for (const [start, end] of spans) {
+      const secret = input.slice(start, end);
+      if (output.includes(secret)) failures.push(`${JSON.stringify(secret)} left in ${JSON.stringify(input)} -> ${JSON.stringify(output)}`);
+    }
+  }
+  assert.deepEqual(failures.slice(0, 5), [], `${failures.length} spans redacted at the base are now left in clear`);
 });
 
 test("a long dotted high-entropy token is redacted whole", () => {
