@@ -219,7 +219,8 @@ export function openRegular(root: string, relative: string, realpath: (p: string
     // A parent directory swapped for a link after the check above is followed by `open`: ask the kernel where the
     // descriptor really points. On Linux (the only v1 platform) a failed lookup fails closed; elsewhere the window stays narrowed.
     if (process.platform === "linux") {
-      const resolved = fs.readlinkSync(`/proc/self/fd/${fd}`);
+      let resolved: string;
+      try { resolved = fs.readlinkSync(`/proc/self/fd/${fd}`); } catch { fs.closeSync(fd); return "cannot"; }
       if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) { fs.closeSync(fd); return "cannot"; }
     }
     return { fd, size: st.size };
