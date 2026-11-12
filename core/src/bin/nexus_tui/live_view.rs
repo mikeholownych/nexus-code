@@ -77,6 +77,24 @@ fn phase_text(state: &LiveState) -> String {
 
 /// The busy line: spinner, phase, turn elapsed time, step and segment. Static text when the turn waits on the
 /// operator (no animation implies no progress is expected without them).
+/// Seconds the provider's stream has been silent, while it is reported stalled.
+fn stall_secs(state: &LiveState) -> Option<u64> {
+    let (reported, silent_secs) = state.stall?;
+    Some(silent_secs.saturating_add(state.now.saturating_duration_since(reported).as_secs()))
+}
+
+/// The busy line, or for a stalled stream on a line too narrow for it, shorter wording that keeps the silence and
+/// the way out (`no data 44 s · esc cancels`, then `no data 44 s`).
+fn fit_activity_line(state: &LiveState, max: usize) -> String {
+    let full = activity_line(state);
+    let Some(secs) = stall_secs(state) else { return full };
+    if full.chars().count() <= max {
+        return full;
+    }
+    let compact = format!(" no data {secs} s · esc cancels ");
+    if compact.chars().count() <= max { compact } else { format!(" no data {secs} s ") }
+}
+
 pub fn activity_line(state: &LiveState) -> String {
     let started = state.turn_started.unwrap_or(state.now);
     let elapsed = state.now.saturating_duration_since(started);
@@ -103,8 +121,7 @@ pub fn activity_line(state: &LiveState) -> String {
         _ => {}
     }
     // The provider has sent nothing for a while: say so, with the silence so far (the way out is the cancel hint).
-    if let Some((reported, silent_secs)) = state.stall {
-        let secs = silent_secs.saturating_add(state.now.saturating_duration_since(reported).as_secs());
+    if let Some(secs) = stall_secs(state) {
         parts.insert(0, format!("no data from the provider for {secs} s"));
     }
     let tail = if parts.is_empty() { String::new() } else { format!(" · {}", parts.join(" · ")) };
@@ -1294,6 +1311,8 @@ struct TranscriptFrame {
 /// (its top when it is taller than the window). While scrolled back, the window stays on the row it showed at its
 /// top (`LiveState::anchor`) as entries arrive or grow below it, so reading is never interrupted by a scroll jump.
 /// Only the entries needed to fill the window are laid out, so the cost follows the window, not the transcript.
+/// The exception is the anchored entry while scrolled back: it is laid out once per frame and wrapped from the
+/// anchored line to its end to find the distance to the bottom, so that frame costs O(that entry).
 fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> TranscriptFrame {
     let transcript = &state.transcript;
     let selected = state.selected.filter(|_| state.focus == Focus::Transcript);
@@ -1325,6 +1344,8 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
     let rows_of = |lines: &[Line<'_>]| lines.iter().map(|line| wrapped_rows(line, area.width)).sum::<usize>();
     let mut back = state.scroll_back;
     let mut anchored = None;
+    // The anchored entry's lines, laid out once for the anchor and reused by the walk below.
+    let mut anchor_lines: Option<(usize, Vec<Line<'_>>)> = None;
     let mut target = selected.filter(|_| state.follow);
     if back > 0
         && target.is_none()
@@ -1340,6 +1361,7 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
         let in_line = lines.get(line_index).map_or(0, |line| wrapped_rows(line, area.width));
         let row_in_line = row_in_line.min(in_line.saturating_sub(1));
         back = (from_line.saturating_sub(row_in_line) + below).saturating_sub(height);
+        anchor_lines = Some((entry, lines));
         anchored = Some(back);
     }
     // Walked from the newest line up: (line, its rows, entry index, the line's index in its entry, rows from the
@@ -1349,7 +1371,13 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
     let mut reached_top = true;
     'entries: for index in (0..transcript.len()).rev() {
         let below = total;
-        let entry_lines = lines_of(index);
+        let entry_lines = match anchor_lines.take() {
+            Some((anchored_entry, lines)) if anchored_entry == index => lines,
+            other => {
+                anchor_lines = other;
+                lines_of(index)
+            }
+        };
         for (line_index, line) in entry_lines.into_iter().enumerate().rev() {
             let rows = wrapped_rows(&line, area.width);
             total = total.saturating_add(rows);
@@ -1954,9 +1982,9 @@ fn composer_hint(state: &LiveState, max_hint: usize) -> Cow<'static, str> {
             return Cow::Owned(format!(" {} cancelling… ctrl-c again to quit ", spinner_frame(elapsed)));
         }
         (_, true) if !state.composer.is_empty() => {
-            return Cow::Owned(format!("{}· enter steers ", activity_line(state)));
+            return Cow::Owned(format!("{}· enter steers ", fit_activity_line(state, max_hint.saturating_sub(15))));
         }
-        (_, true) => return Cow::Owned(activity_line(state)),
+        (_, true) => return Cow::Owned(fit_activity_line(state, max_hint)),
         (_, false) if " enter send · shift+enter newline · ? help ".chars().count() > max_hint => {
             " enter send · ⇧↵ newline · ? help "
         }
@@ -2047,8 +2075,15 @@ mod tests {
         // The silence keeps counting on the TUI's own clock between reports.
         state.now = std::time::Instant::now() + std::time::Duration::from_secs(12);
         assert_shows(&draw(&state, 100, 12), &["no data from the provider for 42 s"]);
-        // Narrow terminals still say it, in fewer words, and never panic at tiny sizes.
-        assert_shows(&draw(&state, 40, 12), &["no data"]);
+        // Narrow terminals say it in fewer words and keep the way out visible; nothing is wider than the terminal.
+        let narrow = draw(&state, 40, 12);
+        assert_shows(&narrow, &["no data 42 s", "esc cancels"]);
+        // The buffer dump quotes each row; a row wider than the terminal would be longer than 40 cells plus quotes.
+        assert!(narrow.lines().filter(|l| l.starts_with('"')).all(|l| l.trim_end_matches(',').chars().count() <= 42), "{narrow}");
+        let mut typing = ready();
+        feed(&mut typing, &[BUSY, r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
+        typing.composer = "draft".into();
+        assert_shows(&draw(&typing, 40, 12), &["no data"]);
         for (w, h) in [(1, 1), (10, 2), (40, 1)] {
             draw(&state, w, h);
         }
@@ -3774,6 +3809,23 @@ mod diff_tests {
             let now = screen(&draw(&mut state, w, h));
             assert_eq!(top_row(&now), top, "the top row moved at {w}x{h}: {now:#?}");
         }
+    }
+
+    #[test]
+    fn a_scrolled_back_frame_over_a_five_thousand_line_streaming_entry_stays_fast() {
+        let mut state = state();
+        streamed(&mut state, 0, 5000);
+        draw(&mut state, 100, 30);
+        state.on_key(key(KeyCode::PageUp));
+        let top = top_row(&screen(&draw(&mut state, 100, 30)));
+        let started = std::time::Instant::now();
+        for n in 5000..5010 {
+            streamed(&mut state, n, n + 1);
+            draw(&mut state, 100, 30);
+        }
+        let per_frame = started.elapsed() / 10;
+        assert!(per_frame < std::time::Duration::from_millis(500), "a frame took {per_frame:?}");
+        assert_eq!(top_row(&screen(&draw(&mut state, 100, 30))), top, "and the top row is still fixed");
     }
 
     #[test]
