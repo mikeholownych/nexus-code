@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Y6B6D2MyV7HkEzy2GvAHQC",
+  "agent_id": "ab7abc3c6b97cd3a3",
+  "subagent_type": "reviewer",
+  "task_description": "Entire-style review round 2",
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 60890,
+    "cache_read_tokens": 858532,
+    "output_tokens": 12285,
+    "api_call_count": 19
+  },
+  "started_at": "2026-11-12T10:05:31.408541552Z",
+  "completed_at": "2026-11-12T10:07:50.426737204Z"
+}
