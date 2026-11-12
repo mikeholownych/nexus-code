@@ -444,8 +444,8 @@ pub struct LiveLayout {
     pub followed: Option<usize>,
     /// Columns the diff review can still pan right, and its content width.
     pub overlay_hlimit: usize,
-    /// The transcript row at the top of the window: (entry index, rows from that row to the end of its entry).
-    pub top: Option<(usize, usize)>,
+    /// The transcript row at the top of the window: (entry index, line index in the entry, row within the line).
+    pub top: Option<(usize, usize, usize)>,
     /// Set when the frame kept the window on `LiveState::anchor` while content arrived: the `scroll_back` it drew.
     pub anchored: Option<usize>,
     /// The approval panel was drawn with its heading, decisions and at least one row of the change visible.
@@ -498,6 +498,9 @@ pub struct LiveState {
     outbox: Vec<Action>,
     /// What the running turn last reported doing.
     pub activity: Option<Activity>,
+    /// The provider's stream is silent: (when the sidecar reported it, seconds of silence it reported). The silence
+    /// shown is this plus the time since, so it keeps counting between reports.
+    pub stall: Option<(Instant, u64)>,
     /// When the current turn started (this client's clock); drives the elapsed time while busy.
     pub turn_started: Option<Instant>,
     steer_seq: u64,
@@ -507,8 +510,10 @@ pub struct LiveState {
     pub now: Instant,
     /// Colours the terminal can show.
     pub depth: Depth,
-    /// While scrolled back: the row the window keeps at its top as entries arrive or grow below it.
-    pub anchor: Option<(usize, usize)>,
+    /// While scrolled back: the row the window keeps at its top as entries arrive or grow below it, as (entry index,
+    /// line index in the entry, row within the line). Counted from the start so an entry that grows (a streaming
+    /// answer) does not move it; the frame clamps it if the entry or the line shrank or the width changed.
+    pub anchor: Option<(usize, usize, usize)>,
     /// Transcript index of the newest entry the diff review can open.
     pub last_reviewable: Option<usize>,
     /// Output arrived below the window while the operator was scrolled back.
@@ -551,6 +556,7 @@ impl LiveState {
             panel_seq: 0,
             outbox: Vec::new(),
             activity: None,
+            stall: None,
             turn_started: None,
             steer_seq: 0,
             steer_texts: HashMap::new(),
@@ -817,6 +823,10 @@ impl LiveState {
     }
 
     fn apply_event(&mut self, event: Event) {
+        // Provider output or a tool starting means the stream is not silent any more.
+        if matches!(event, Event::AssistantDelta { .. } | Event::ToolStart { .. }) {
+            self.stall = None;
+        }
         if matches!(self.link, Link::Crashed { .. }) {
             return;
         }
@@ -856,9 +866,14 @@ impl LiveState {
                 if !busy {
                     self.turn_started = None;
                     self.activity = None;
+                    self.stall = None;
                 }
             }
+            Event::StreamStall { stalled, silent_secs } => {
+                self.stall = stalled.then(|| (Instant::now(), silent_secs));
+            }
             Event::Activity { phase, step, segment, tool, subject, max_steps, max_minutes } => {
+                self.stall = None;
                 if self.activity.as_ref().is_none_or(|previous| previous.step != step) {
                     self.assistant_break = true;
                 }

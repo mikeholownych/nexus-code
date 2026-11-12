@@ -1,0 +1,30 @@
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  local
+Line 148: streamed output for scrollback testing
+
+Line 149: streamed output for scrollback testing
+
+Line 150: streamed output for scrollback testing
+
+Line 151: streamed output for scrollback testing
+
+Line 152: streamed output for scrollback testing
+
+Line 153: streamed output for scrollback testing
+
+Line 154: streamed output for scrollback testing
+
+Line 155: streamed output for scrollback testing
+
+Line 156: streamed output for scrollback testing
+
+Line 157: streamed output for scrollback testing
+
+Line 158: streamed output for scrollback testing
+
+Line 159: streamed output for scrollback testing
+
+Line 160: streamed output for scrollback testing
+
+Line 161: streamed output for scrollback testing                     ↓ new output · pgdn · ctrl+end
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
