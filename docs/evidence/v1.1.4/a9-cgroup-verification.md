@@ -38,9 +38,9 @@ Command: `cd cli && NEXUS_EVAL_TEST_WORKSPACE_ROOT=/srv/nexus-qual/ws npx tsx --
 | resource contract: candidate memory, processes, storage and CPU are kernel-bounded and every process is reaped | FAIL: `compiler exposure could not be checked; refusing qualification` (`eval/isolate.mjs:582`, `isolatedArgv`) |
 | candidate sandbox and resource supervisor compose around a staged repository | FAIL: same error (`agentSandboxArgv`, `eval/isolate.mjs:711`) |
 
-The two failures happen before any cgroup is created, in the shell-sandbox compiler-exposure scan; this host has
-`/usr/bin/gcc` and `/usr/bin/cc` in the mounted system directories. The scan swallows the underlying exception, so the
-exact trigger was not diagnosed here. They are host-environment refusals, not limit failures, and they exercise
+The two failures happen before any cgroup is created, in the shell-sandbox compiler-exposure scan. This host has
+`/usr/bin/gcc` in the mounted system directories, which is a candidate cause, but the scan swallows the underlying exception, so the
+trigger was not diagnosed here. They are host-environment refusals, not limit failures, and they exercise
 `runIsolated`, not the evaluator-command path. They are not counted as verification. The evaluator-command path itself
 (`runArgv` -> `isolatedProcessArgv`) starts normally on this host. No test was skipped in this run.
 
@@ -51,17 +51,16 @@ exact trigger was not diagnosed here. They are host-environment refusals, not li
 `memoryBytes` 64 MiB, `tasks` 16, `cpuPercent` 50 (20 and 50 in the CPU checks), `workspaceRoot` the dedicated tmpfs;
 the gate runs the production `resourceProbeProblem` first.
 
-Skips, each printed with its reason, when: not Linux; no `/sys/fs/cgroup/cgroup.controllers`; the user manager does not
+When `NEXUS_EVAL_TEST_WORKSPACE_ROOT` is set (CI, `make test-ci`) an unmet prerequisite FAILS the checks instead of skipping, as `eval_integrity` does, so a lost delegation cannot turn CI green by skipping. Without it, skips are each printed with a reason, when: not Linux; no `/sys/fs/cgroup/cgroup.controllers`; the user manager does not
 delegate cpu, memory and pids; `XDG_RUNTIME_DIR` unset; `NEXUS_EVAL_TEST_WORKSPACE_ROOT` unset; Bubblewrap or prlimit
-missing; `resourceProbeProblem` non-null. Verified skip paths on this host:
+missing; pgrep missing; no `app.slice` under the user manager; no `cgroup.kill` (kernel before 5.14); `resourceProbeProblem` non-null. Verified on this host (the other skip conditions were not exercised):
 
 ```
 $ env -u NEXUS_EVAL_TEST_WORKSPACE_ROOT npx tsx --test test/evaluator_cgroup_limits.test.ts
 ℹ SKIPPED: NEXUS_EVAL_TEST_WORKSPACE_ROOT is unset: no dedicated capped tmpfs for the resource contract (run `make test-ci`)
 ℹ tests 9 / pass 1 / fail 0 / skipped 8
 $ NEXUS_EVAL_TEST_WORKSPACE_ROOT=/srv/nexus-qual/ws env -u XDG_RUNTIME_DIR npx tsx --test test/evaluator_cgroup_limits.test.ts
-ℹ SKIPPED: XDG_RUNTIME_DIR is unset: no systemd user manager session
-ℹ tests 9 / pass 1 / fail 0 / skipped 8
+ℹ pass 1 / fail 8 / skipped 0   (fixtures configured but no user manager: the checks FAIL rather than skip)
 ```
 
 Real run: `cd cli && NEXUS_EVAL_TEST_WORKSPACE_ROOT=/srv/nexus-qual/ws npx tsx --test test/evaluator_cgroup_limits.test.ts`
@@ -71,15 +70,15 @@ Real run: `cd cli && NEXUS_EVAL_TEST_WORKSPACE_ROOT=/srv/nexus-qual/ws npx tsx -
 
 | # | Check | Test | Result |
 |---|---|---|---|
-| 1 | Memory hog (`/usr/bin/tail /dev/zero`, unbounded buffer) OOM-killed at 64 MiB; operator told | `a memory hog is OOM-killed inside its cgroup, ...` | PASS |
-| 2 | Shell fork loop gets EAGAIN at `pids.max` 16 | `a shell that forks past pids.max gets EAGAIN ...` | PASS |
-| 3 | Real fork bomb (bash respawn loop) bounded at 16 pids, killed with its cgroup, host keeps forking | `a real fork bomb is bounded by pids.max ...` | PASS |
+| 1 | Memory hog (`/usr/bin/tail /dev/zero`, unbounded buffer) OOM-killed at 64 MiB; operator told | `a memory hog is OOM-killed inside its cgroup, reported as a memory-limit kill, and never exceeds its limit` | PASS |
+| 2 | Shell fork loop gets EAGAIN at `pids.max` 16 | `a shell that forks past pids.max gets EAGAIN and the supervisor records it` | PASS |
+| 3 | Real fork bomb (bash respawn loop) bounded at 16 pids, killed with its cgroup, `/usr/bin/true` still forks outside it (at least 80% of probes) | `a real fork bomb is bounded by pids.max and killed with its cgroup; fork keeps working outside it` | PASS |
 | 4 | CPU burner throttled at `cpu.max` 20% | `a CPU burner is throttled to cpu.max at 20% ...` | PASS |
 | 5 | CPU burner throttled at `cpu.max` 50% | `a CPU burner is throttled to cpu.max at 50% ...` | PASS |
 | 6 | Ordinary command under the same limits succeeds, no events | `a clean command under the same limits succeeds untouched ...` | PASS |
 | 7 | No user manager at runtime (`XDG_RUNTIME_DIR` unset; pointing at a dir with no bus): refuses, command never ran | `without a usable systemd user manager ... (fails closed)` | PASS |
 | 8 | Unwritable cgroup parent (`/sys/fs/cgroup` read-only bind): supervisor refuses before the command, command never ran | `when the cgroup parent is not writable ... (fails closed)` | PASS |
-| 9 | After every contained run: scope cgroup directory gone, no process carrying the run's marker left, supervisor `cleaned: true` | `assertCleanedUp` in checks 1 to 6 | PASS |
+| 9 | After every contained run: scope cgroup directory gone, no shell (argv carrying the run's marker) left, supervisor `cleaned: true` | `assertCleanedUp` in checks 1 to 6 | PASS |
 
 Raw output of the passing run (`console` lines are `t.diagnostic` output; the `supervisor-report` is the
 supervisor's final read of the payload cgroup's kernel files `memory.events`, `pids.events`, `cpu.stat`; the `raw` lines
@@ -138,12 +137,12 @@ Cleanup after the real runs: `systemctl --user list-units --all 'run-*.scope'` e
    other kernel or systemd version. In CI the same test runs on the hosted runner fixtures (`make test-ci` / CI step), not
    verified here.
 2. CPU throttling was measured at two quota ratios (20% with 2 loops, 50% with 3 loops) over 2 s windows only, on a
-   shared host with other work running; it is a bound within 1.5x the quota, not a precision measurement.
+   shared host with other work running; the test asserts throttling occurred, usage above 0 and at most 1.5x the quota. It is an upper bound, not a precision measurement (observed 1.05x to 1.06x).
 3. The workspace tmpfs here is 20 GiB (not the 128 MiB CI fixture), so the storage-cap (ENOSPC) path was not exercised; disk
    quota is the tmpfs size, not a cgroup limit, and is out of scope of this check.
 4. "Host unaffected" is evidenced by: the limits read back before the command, bounded `memory.peak` and `pids.peak`,
-   host `fork` still working during the bomb, and a coarse `MemAvailable` check. It is not a measurement of host
-   latency under the bomb.
+   and host-side `fork` of `/usr/bin/true` still working during the bomb (at least 80% of probes every 250 ms). It is not a
+   measurement of host latency under the bomb, and host memory was not sampled during the hog.
 5. Fail-closed without delegation was simulated (no user manager, no bus, read-only cgroup mount). A real host whose
    user manager lacks cpu/memory/pids delegation was not available; `scripts/ensure-ci-user-cgroups.sh` is the CI
    preparation and was not changed.
