@@ -17,7 +17,15 @@
  *                              complete. A function returning is not completion.
  *   unit PARKED                a qualified resource will be eligible again at a known time; nothing is held.
  *   unit WAITING_ON_DEPENDENCY a dependency is not COMPLETE (a BLOCKED dependency keeps it here: it never runs on
- *                              unfinished inputs).
+ *                              unfinished inputs). The one exception is a failure_debugger, whose input is the
+ *                              failure itself: a dependency BLOCKED on a run whose verifier did not pass (its
+ *                              `failedRun`) counts as satisfied for that role only, and only in an isolated operation (`state.git.isolate`): a
+ *                              non-isolated operation has no snapshot, so the debugger keeps waiting. A debugger that has COMPLETED
+ *                              is not run again if that dependency is later retried and fails a second time; the
+ *                              operator adds or retries a debugger unit for the new failure. A debugger works on
+ *                              exactly one failed candidate: with two or more failed dependencies it is BLOCKED
+ *                              before any checkout is made. Its snapshot is bound to that dependency's failed run
+ *                              (`failedRun.at`); a retry after a newer failure discards the old checkout.
  *   unit BLOCKED               no safe autonomous transition: terminal execution failure, unknown execution with
  *                              its replay budget spent, an interrupted tool, or no qualified resource. Carries one
  *                              structured decision; only an applied operator decision moves it on.
@@ -158,6 +166,11 @@ export interface WorkUnit {
     /** The verifier run behind the outcome, kept so dependent review units see it where nothing was integrated. */
     verification?: { command: string; status: string; hasExecutedTests: boolean };
   };
+  /**
+   * The verifier run behind the unit's latest failure, present only while that failure is its last outcome: a
+   * dependent failure_debugger of an isolated operation is given it as evidence while the unit waits on the operator.
+   */
+  failedRun?: { at: string; reason: string; summary: string; verification: { command: string; status: string; hasExecutedTests: boolean } };
   reroutes: Array<{ at: string; from: string; to: string; reason: string }>;
   runs: number;
   /** `runs` when the operator last authorized more attempts (the run budget counts from here). */
@@ -172,6 +185,8 @@ export interface WorkUnit {
   contextBudget?: number;
   /** Named inputs the unit's role contract requires (specialists); enforced before the unit starts. */
   inputs?: Record<string, string>;
+  /** Hash of the effective inputs last submitted in this unit's conversation; a resume repeats them only on change. */
+  renderedInputsHash?: string;
   /** Results the executor refused (for example a specialist output that failed its contract), most recent last. */
   rejectedOutputs?: StoredRejectedOutput[];
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
@@ -250,6 +265,13 @@ export interface OperationGitUnit {
   baseCommit: string;
   /** Integration tip after the unit was merged (absent until it is). */
   integratedCommit?: string;
+  /**
+   * The unit whose uncommitted candidate this branch was snapshotted from (a failure_debugger on a dependency BLOCKED
+   * on a failed verifier run). That candidate is unverified, so this branch is diagnostic and never integrated.
+   */
+  snapshotOf?: string;
+  /** The `failedRun.at` of the dependency run this snapshot was taken from; a newer failure takes a fresh snapshot. */
+  snapshotRun?: string;
 }
 
 /** Opt-in Git isolation for an operation (`spec.git.isolate`). */
@@ -402,7 +424,11 @@ export type UnitRunResult =
   | { kind: "resource_unavailable"; failure: InferenceFailure; condition: ResourceConditionRecord }
   /** Inference may have executed and its bounded replays are spent: never resubmitted elsewhere automatically. */
   | { kind: "execution_unknown"; failure: InferenceFailure }
-  | ({ kind: "failed" } & BlockSpec & { rejectedOutput?: RejectedOutput })
+  | ({ kind: "failed" } & BlockSpec & {
+      rejectedOutput?: RejectedOutput;
+      /** The attempt ran a verifier that did not pass: kept on the unit for a dependent failure_debugger. */
+      failedRun?: { summary: string; verification: { command: string; status: string; hasExecutedTests: boolean } };
+    })
   | { kind: "cancelled" };
 
 export type Decision =

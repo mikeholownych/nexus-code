@@ -240,6 +240,8 @@ export function restoreContextCheckpoint(
   delete unit.parked;
   delete unit.result;
   delete unit.pendingDecision;
+  // The restored conversation may predate inputs rendered since; forgetting the hash gives it the current ones on resume.
+  delete unit.renderedInputsHash;
   // Only this unit's escalation is resolved. Other decisions (for example the git or not-converging guard) are the
   // operator's to clear, so the operation stays blocked while any remain — the same rule Scheduler.resolve follows.
   const remaining = (state.blocked?.decisions ?? []).filter((decision) => decision.unitId !== unitId);

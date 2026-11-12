@@ -1,0 +1,40 @@
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Write src/new.ts                                                                                                      │
+│Proposed: create src/new.ts · +2 −0                                                                                   │
+│                                                                                                                      │
+│ ▎ @@ −0,0 +1,2 @@                                                                                                    │
+│ ▎   1 + export const a = 1;                                                                                          │
+│ ▎   2 + export const b = 2;                                                                                          │
+│                                                                                                                      │
+│▸y Approve   a Approve all later actions   n Deny                                                                     │
+│y approve · n deny · ←→/tab move, enter takes ▸ · ↑↓ scroll · esc denies                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · y approve · n deny · other typing goes to your draft ────────────────────────────────────────────────
+›

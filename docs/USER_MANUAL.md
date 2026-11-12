@@ -182,21 +182,49 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   six rows shows `line n of m`. Drafts are kept while panels are open and across a sidecar crash.
 - **Approvals.** A panel sized to its content states what is proposed and on which target (`Proposed: create
   config.json · +1 −0`), shows file changes with the diff view, and offers Approve, Approve all later actions and Deny.
-  No key decides until the panel has been on screen briefly, you have paused typing (about half a second, counted from
-  when it appeared or your last key) and, after you answered a previous request, a moment has passed (so a repeated `y`
-  answers only one request). Then:
-  - `y` approves and `n` denies — only if you were not typing or holding a draft when the panel appeared and have typed
-    nothing into it. Otherwise the panel says `typing ignored` and hides those letters.
-  - ←/→ choose Approve or Deny; Enter takes the choice once it has been on screen a moment (2 seconds on a panel you were
-    typing into, where ←/→ are easily cursor keys). On such a panel Approve takes Enter twice (the second confirms);
-    Deny takes one.
-  - **Approve all later actions** (switches to auto mode) is only reached with `a`, on a panel that shows the letters,
-    then Enter, then Enter again; Esc denies at that point and any other key cancels. Arrows never reach it.
-  - Esc denies (it too waits for the moment after a previous answer). Keys with Ctrl, Alt, Super or Meta never answer,
-    nor do Tab, bursts of keys or pastes. Delete and Backspace count as typing.
-  The panel is answerable only while its change is visible — on a window too small to show it, it asks you to enlarge
-  the terminal (Esc still denies), and timing starts again when it is drawn. Approvals that arrive while another panel
-  or approval is open wait in order; the panel title shows how many are waiting.
+  Every kind of approval (file changes, commands, the verifier) uses this one panel, and it answers at once:
+  - `y` approves and `n` denies. Enter takes the highlighted option, which is Approve when the panel opens; ←/→ (and
+    Tab/Shift+Tab) move the highlight across all three options.
+  - **Approve all later actions** (switches to auto mode) is never one key: `a`, or Enter on it, asks
+    `approve all later actions?` (a shorter form on a narrow panel), and Enter or `a` confirms only after that question
+    has been drawn, and only 1 second or more after it was asked
+    (and after any ignored press), so a double tap or a held key does not, including a held key's first repeat. ←/→ go back, and other answers (`y`, `n`,
+    Esc) still answer.
+  - Esc denies, at any time. Keys with Ctrl, Alt, Super or Meta never answer, nor do bursts of keys or pastes (letters
+    go to your draft in the order typed; Enter does nothing; Backspace and the arrows act as usual).
+  - Other typing goes to your draft (steering), so nothing you type is lost; it does not switch the letters off. While
+    you are in a run of typing (a key within about 0.3 seconds of the previous one), a `y`, `n` or `a` is a letter of
+    your text and goes to the draft, Enter is ignored, and the panel says `ignored: you were typing`; after a pause the
+    same key answers.
+  - Guards against accidents, and what they do not cover: when a key, Tab or paste was pressed in the second before the
+    panel was drawn (the Enter that sent the prompt, a letter you were typing, the `y` that answered the previous
+    request), decision keys are ignored with `ignored: panel just opened` until that input has been quiet for 1 second,
+    and each ignored key restarts the full second, so a held key (whose auto-repeat starts after an initial delay, 0.66
+    seconds by default on X11) stays inert until you let go. So a request that opens right after a key needs a pause of
+    about a second before it answers; one that opens after you were idle answers at once. Not covered: typing slower
+    than about 0.3 seconds per key that starts when no key was pressed in the second before the panel appeared; and a
+    held key whose first repeat comes more than 1 second after the press (a long repeat delay set for accessibility).
+    Terminals that do not report key release cannot tell a held key from fast presses.
+  - A command, script or diff longer than the panel shows `↓ n more rows below`. Approve and Approve all are refused
+    (with a notice) until every row of it has been on screen, read from the top with ↓ or PageDown (End and other jumps
+    do not count the rows they skip, and a new terminal width starts the reading again); Deny never waits. Long lines
+    wrap.
+  - Characters that a terminal would act on or that draw as nothing are shown as visible stand-ins in the panel's text
+    (the heading, paths, hunk labels, commands, scripts, arguments and file contents): control characters as control
+    pictures (`␍`, `␛`, `␡`), and these as `<U+XXXX>`: U+0080 to U+009F, U+061C, U+200E and U+200F, U+202A to U+202E and
+    U+2066 to U+2069 (bidirectional marks and overrides), U+00A0, U+00AD, U+034F, U+115F, U+1160, U+1680, U+17B4 and
+    U+17B5, U+180B to U+180F, U+2000 to U+200D (spaces, zero-width space, joiners), U+2028 to U+202F, U+205F to U+206F,
+    U+2800, U+3000, U+3164, U+FE00 to U+FE0F (variation selectors), U+FEFF, U+FFA0, U+FFF0 to U+FFFB, U+1BCA0 to
+    U+1BCA3, U+1D173 to U+1D17A and U+E0000 to U+E0FFF (tag characters). This also applies inside emoji and
+    right-to-left text, since an invisible character in a command is something to see before approving. Other zero-width
+    characters (combining marks, for example) are drawn as the terminal draws them.
+  The panel can be answered only while the screen shows its heading, the three buttons, the hint line under them (the
+  question when you asked to approve all later actions, or the reason a key did not answer) and at least one row of the
+  change. On a terminal too small for that, the panel shows only `enlarge the terminal` with `esc denies`; Esc still
+  denies and no other key answers. A one-line command fits at 60 columns by 11 rows with an empty draft, and a one-line
+  file change at 40 columns by 11 rows; text longer than the panel needs more rows, since the fold marker has its own row.
+  Approvals that arrive while another panel or approval is open wait in order; the panel title shows how many are
+  waiting.
 - **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
   diagnostic lines (progress chatter is dropped) and your draft; `r` starts a new agent, after which `/resume` reloads
   the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider: your prompts,

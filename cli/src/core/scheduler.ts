@@ -38,6 +38,18 @@ export class DecisionRejected extends Error {}
 
 export const isRequired = (u: Pick<WorkUnit, "required">): boolean => u.required !== false;
 
+/**
+ * Whether `dependency` is finished input for `u`: COMPLETE, or, for a failure_debugger in an isolated operation only,
+ * BLOCKED on a run whose verifier did not pass. The failure is that role's input, so waiting for the dependency to
+ * complete would wait for the evidence to disappear; a retried dependency is unfinished input again. Only an isolated
+ * operation gives the debugger a snapshot of the failed candidate: elsewhere it would run in the shared workspace on
+ * top of the blocked unit's uncommitted candidate, so it keeps waiting.
+ */
+function dependencySatisfied(u: WorkUnit, dependency: WorkUnit, isolated: boolean): boolean {
+  if (dependency.status === "COMPLETE") return true;
+  return isolated && u.role === "failure_debugger" && dependency.status === "BLOCKED" && dependency.failedRun !== undefined;
+}
+
 export class ConvergenceScheduler {
   constructor(
     readonly state: DurableOperationState,
@@ -83,11 +95,13 @@ export class ConvergenceScheduler {
     // an earlier assignment in the same batch may use its next qualified, eligible resource instead of waiting.
     const choices = new Map<string, Selection>();
     const reroutes = new Map<string, { resourceId: string; reason: string }>();
+    // The same fact OperationRunner uses to create its OperationGit: only then is there a snapshot worktree.
+    const isolated = Boolean(this.state.git?.isolate);
 
     for (const u of this.state.units) {
       if (TERMINAL.includes(u.status) || u.status === "RUNNING") continue;
       const deps = u.dependsOn.map((d) => this.unit(d));
-      if (deps.some((d) => d.status !== "COMPLETE")) {
+      if (deps.some((d) => !dependencySatisfied(u, d, isolated))) {
         u.status = "WAITING_ON_DEPENDENCY";
         delete u.parked;
         continue;
@@ -525,6 +539,8 @@ export class ConvergenceScheduler {
     }
     const resumed = unit.agentTaskId !== undefined;
     unit.status = "RUNNING";
+    // A new attempt's outcome is unknown until it settles: the previous failed run is no longer this unit's evidence.
+    delete unit.failedRun;
     unit.runs++;
     unit.assignment = { resourceId: resource.id, model: resource.model, since: at };
     if (!unit.modelsUsed.includes(resource.model)) unit.modelsUsed.push(resource.model);
@@ -544,6 +560,9 @@ export class ConvergenceScheduler {
     const at = new Date(this.now()).toISOString();
     const resourceId = u.assignment?.resourceId ?? "unknown";
     if (result.kind !== "cancelled") delete u.pendingDecision;
+    // Failed-run evidence describes the latest outcome only; any newer outcome replaces or clears it.
+    if (result.kind !== "cancelled") delete u.failedRun;
+    if (result.kind === "failed" && result.failedRun) u.failedRun = { at, reason: result.reason, ...result.failedRun };
     switch (result.kind) {
       case "completed":
         u.status = "COMPLETE";

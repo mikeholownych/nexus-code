@@ -684,3 +684,17 @@ test("a budget at or above the resource limit records the resource as the source
   await executor.run(work, resource, context());
   assert.equal(work.context?.source, "agent-estimate");
 });
+
+test("restoring a checkpoint forgets which inputs were rendered, so the restored conversation is given the current ones (01M70GYK9P)", () => {
+  const { store, state, workspace, stateRoot } = checkpointFixture();
+  try {
+    createContextCheckpoint(store.manager, state, "u1", "saw-diff-a", 1_800_000_000_000);
+    // The unit later renders newer inputs (diff B) into its conversation, then is restored to the diff-A conversation.
+    state.units[0].renderedInputsHash = "hash-of-diff-b";
+    restoreContextCheckpoint(store.manager, state, "u1", "saw-diff-a", 1_800_000_001_000);
+    assert.equal(state.units[0].renderedInputsHash, undefined, "the restored conversation never saw diff B");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});

@@ -95,6 +95,8 @@ export interface HarnessConfig {
   strictTokenCount?: boolean;
   sandbox?: boolean | string; // Linux namespace / bwrap / container isolation (default: false)
   worktree?: boolean;        // Isolated ephemeral git worktree execution (default: false)
+  /** A diagnostic run works on a snapshot of a failing candidate: its diagnosis completes it, so no completion verifier runs. */
+  diagnosticRun?: boolean;
   worktreeBranch?: string;   // Run in a named worktree for this branch instead of nexus/<task-id> (implies worktree; kept, never auto-merged)
   authoritativeVerifierCommand?: string; // Explicit trusted verifier: gates every task completion and authorizes automatic worktree merge
   /** Workspace-relative deliverable paths declared by the operator before the task starts. */
