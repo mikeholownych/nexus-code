@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0185XxDJuJ7msasSSjy2cLsF",
+  "agent_id": "aa97b649450cf4a8a",
+  "subagent_type": "reviewer",
+  "task_description": "Consolidation review of integration PR #480",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 43801,
+    "cache_read_tokens": 272804,
+    "output_tokens": 7635,
+    "api_call_count": 11
+  },
+  "started_at": "2026-11-12T02:35:42.156041404Z",
+  "completed_at": "2026-11-12T02:36:48.631033441Z"
+}
