@@ -890,33 +890,36 @@ export class LocalLlmClient {
    * tokenize fallback is not) that has answered before (a first-use reset is a real failure), within moments of the
    * attempt (a server that dies mid-generation fails later), and not after an abort or timeout; only a thrown fetch is
    * resent, never a response. A server that reads a request and then dies would see it again and again, so resends are
-   * budgeted per endpoint: at most `STALE_RESEND_BUDGET` in `STALE_RESEND_WINDOW_MS`, counted across requests and
-   * cleared when the endpoint answers a request without one. Once spent, the failure is reported as any other.
+   * budgeted: a resend that fails again is charged to its endpoint and kind of request (probe or POST), at most
+   * `STALE_RESEND_BUDGET` such failures in `STALE_RESEND_WINDOW_MS`, counted across requests and cleared when that
+   * kind of request succeeds without a resend. A first failure is free, so a burst of concurrent requests that all meet
+   * stale connections each still get their resend. Once the budget is spent the failure is reported as any other.
    */
   private async fetchResendingStale(url: string, init: RequestInit): Promise<Response> {
     const started = Date.now();
-    const origin = this.endpoints.find((ep) => url === ep || url.startsWith(`${ep}/`));
-    for (;;) {
+    const endpoint = this.endpoints.find((ep) => url === ep || url.startsWith(`${ep}/`));
+    const key = endpoint && `${endpoint} ${init.method ?? "GET"}`;
+    for (let resends = 0; ; resends++) {
       try {
         const response = await fetch(url, init);
-        if (origin) this.staleResends.delete(origin);
+        if (key && resends === 0) this.staleResends.delete(key);
         return response;
       } catch (err: any) {
         const closed = err?.name !== "TimeoutError" && err?.name !== "AbortError" && transportCauseChain(err).some((c) => c.code !== undefined && CONNECTION_CLOSED_CODES.has(c.code));
-        if (!closed || init.signal?.aborted || Date.now() - started > STALE_CONNECTION_WINDOW_MS || !origin || !this.hasEverSucceeded(origin) || !this.spendStaleResend(origin)) throw err;
+        if (!closed || init.signal?.aborted || Date.now() - started > STALE_CONNECTION_WINDOW_MS || !endpoint || !key || !this.hasEverSucceeded(endpoint)) throw err;
+        if (!this.mayResend(key, resends > 0) || resends >= STALE_RESEND_BUDGET) throw err;
       }
     }
   }
 
-  /** Takes one resend from `origin`'s budget; false when it is spent for the current window. */
-  private spendStaleResend(origin: string): boolean {
+  /** Whether `key` may be resent now; `failedResend` records that the previous resend failed too. */
+  private mayResend(key: string, failedResend: boolean): boolean {
     const now = this.resendClock();
-    let budget = this.staleResends.get(origin);
+    let budget = this.staleResends.get(key);
     if (!budget || now - budget.since > STALE_RESEND_WINDOW_MS) budget = { used: 0, since: now };
-    if (budget.used >= STALE_RESEND_BUDGET) return false;
-    budget.used++;
-    this.staleResends.set(origin, budget);
-    return true;
+    if (failedResend) budget.used++;
+    this.staleResends.set(key, budget);
+    return budget.used < STALE_RESEND_BUDGET;
   }
 
   /** True once `ep` has completed a request or healthy probe in this session (REQ-TUI-105). */
@@ -1106,7 +1109,7 @@ export class LocalLlmClient {
   public onStreamStall?: (event: StreamStallEvent) => void;
   /** Test seam: the clock the stall notice runs on. */
   public stallScheduler?: StallScheduler;
-  /** Resends spent per endpoint in the current window (see `fetchResendingStale`). */
+  /** Failed resends per endpoint and request kind in the current window (see `fetchResendingStale`). */
   private readonly staleResends = new Map<string, { used: number; since: number }>();
   /** The clock of the resend budget; a test replaces it. */
   public resendClock: () => number = Date.now;

@@ -162,6 +162,38 @@ describe("D-20: a healthy server that closes a reused connection is not an outag
     }
   });
 
+  test("concurrent requests that all meet stale connections each get their resend", async () => {
+    const race = await raceServer(() => ({ content: "hi" }));
+    try {
+      const client = new LocalLlmClient({ model: "m", endpoint: race.url, apiKey: "k" } as any);
+      for (let round = 0; round < 4; round++) {
+        await Promise.all(Array.from({ length: 6 }, () => client.chatCompletion(user, [])));
+      }
+      assert.ok(race.killed > 0, "connections were reused and killed (otherwise this test proves nothing)");
+    } finally {
+      await race.close();
+    }
+  });
+
+  test("a probe that succeeds does not clear the chat budget of a server that kills chat requests", async () => {
+    const race = await raceServer(() => ({ content: "hi" }));
+    try {
+      const client = new LocalLlmClient({ model: "m", endpoint: race.url, apiKey: "k" } as any);
+      client.resendClock = () => 1_000_000;
+      await client.chatCompletion(user, []);
+      race.killAll = true;
+      await assert.rejects(client.chatCompletion(user, []), (e: any) => e.kind === "network_error");
+      race.killAll = false;
+      await client.probeAvailability(undefined, { timeoutMs: 3_000 });
+      race.killAll = true;
+      const before = race.chats;
+      await assert.rejects(client.chatCompletion(user, []), (e: any) => e.kind === "network_error");
+      assert.equal(race.chats - before, 1, "the chat budget is still spent");
+    } finally {
+      await race.close();
+    }
+  });
+
   test("a write_file turn in auto mode on that server completes with no provider recovery and writes the file", async () => {
     const race = await raceServer((n) => (n % 2 === 1 ? { tool: { name: "write_file", args: { path: `out-${n}.txt`, content: "hello\n" } } } : { content: "wrote it" }));
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-d20-"));
