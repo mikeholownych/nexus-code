@@ -312,6 +312,9 @@ pub enum Event {
         format: Option<String>,
         #[serde(default)]
         composer: Option<String>,
+        /// Text to put on the terminal clipboard with an OSC 52 request (no clipboard tool was found).
+        #[serde(default)]
+        clipboard: Option<String>,
         /// Set when the command started a turn with this prompt; the turn's events follow under the same id.
         #[serde(default)]
         prompt: Option<String>,
@@ -818,9 +821,14 @@ mod tests {
                 output: "-a\n+b".into(),
                 format: Some("diff".into()),
                 composer: None,
+                clipboard: None,
                 prompt: None,
             })
         );
+        assert!(matches!(
+            parse_event(r#"{"v":1,"type":"slash.result","id":"s3","command":"copy","success":true,"output":"asked","clipboard":"a\u001b[2Jb"}"#),
+            Ok(Event::SlashResult { clipboard: Some(ref text), .. }) if text == "a\u{1b}[2Jb"
+        ));
         assert!(matches!(
             parse_event(r#"{"v":1,"type":"slash.result","id":"s2","command":"history","success":true,"output":"","prompt":"fix it"}"#),
             Ok(Event::SlashResult { prompt: Some(ref prompt), .. }) if prompt == "fix it"

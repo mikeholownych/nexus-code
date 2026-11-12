@@ -308,6 +308,48 @@ impl LiveApp {
     }
 }
 
+/// Longest text one OSC 52 request carries (100000 base64 characters, which most terminals accept).
+pub(crate) const OSC52_MAX_BYTES: usize = 74_994;
+
+/// Whether the OSC 52 clipboard write is wanted: on unless `NEXUS_OSC52` is `off` (also `0`, `false`, `no`, `none`).
+pub(crate) fn osc52_enabled(value: Option<&str>) -> bool {
+    mouse_enabled(value)
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// The OSC 52 request for `text`: `ESC ] 52 ; c ; <base64> BEL`. The text enters it only as base64, whose alphabet holds
+/// no control character, so model output cannot end the sequence or begin another. `None` when it is too large.
+pub(crate) fn osc52_sequence(text: &str) -> Option<String> {
+    (text.len() <= OSC52_MAX_BYTES).then(|| format!("\x1b]52;c;{}\x07", base64(text.as_bytes())))
+}
+
+/// Writes the queued clipboard request, if any, to the terminal. It runs on the main thread between frames, through the
+/// same writer the frames use, so it never interleaves with a draw.
+fn write_clipboard(out: &mut impl io::Write, state: &mut LiveState) -> io::Result<()> {
+    if let Some(text) = state.take_clipboard()
+        && let Some(sequence) = osc52_sequence(&text)
+    {
+        out.write_all(sequence.as_bytes())?;
+        out.flush()?;
+    }
+    Ok(())
+}
+
 /// The input modes this process switched on, so every exit path undoes exactly those (and only once).
 static MOUSE_ON: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_ON: AtomicBool = AtomicBool::new(false);
@@ -433,13 +475,21 @@ impl Drop for TerminalGuard {
     }
 }
 
+type LiveTerminal = ratatui::Terminal<ratatui::backend::CrosstermBackend<crate::theme::SgrWriter<io::Stdout>>>;
+
 pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     install_stop_signals();
     spawn_stop_watchdog();
     let guard = TerminalGuard;
     let depth = crate::theme::Depth::from_env();
     crate::theme::apply_backend_policy(depth);
-    let mut terminal = ratatui::try_init()?;
+    // `try_init` enters raw mode and the alternate screen and installs ratatui's restoring panic hook; its terminal
+    // writes plain stdout, so it is replaced by one whose writer turns 256-colour SGR into 16-colour SGR when needed.
+    drop(ratatui::try_init()?);
+    let mut terminal = LiveTerminal::new(ratatui::backend::CrosstermBackend::new(crate::theme::SgrWriter::new(
+        io::stdout(),
+        depth == crate::theme::Depth::Ansi16,
+    )))?;
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if std::thread::current().name() == Some("main") {
@@ -469,6 +519,7 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     app.state.depth = depth;
     app.state.shift_enter = shift_enter;
     app.state.mouse = mouse;
+    app.state.osc52 = osc52_enabled(std::env::var("NEXUS_OSC52").ok().as_deref());
     let result = event_loop(&mut terminal, &mut app);
     // The sidecar shutdown can take seconds: reports arriving meanwhile would reach the shell as text.
     end_session(restore_input_modes, drain_terminal_input, || {
@@ -494,7 +545,7 @@ pub fn format_exit_breadcrumb(session_id: &str) -> String {
     format!("Nexus session {session_id} saved. Resume with: nexus --resume {session_id}")
 }
 
-fn draw(terminal: &mut ratatui::DefaultTerminal, app: &mut LiveApp) -> io::Result<()> {
+fn draw(terminal: &mut LiveTerminal, app: &mut LiveApp) -> io::Result<()> {
     app.state.set_now(Instant::now());
     let mut layout = LiveLayout::default();
     terminal.draw(|frame| layout = render_live(frame, &app.state))?;
@@ -611,7 +662,7 @@ fn apply_wheel_run(state: &mut LiveState, first: MouseEvent, mut next: impl FnMu
 }
 
 fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut LiveTerminal,
     app: &mut LiveApp,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut redraw = true;
@@ -627,6 +678,8 @@ fn event_loop(
         }
         let (changed, _) = pump_guarding_approvals(app, &mut pending);
         redraw |= changed;
+        // Between frames, on this thread, through the writer the frames use: never inside a draw.
+        write_clipboard(terminal.backend_mut(), &mut app.state)?;
         let frame = app
             .state
             .animating()
@@ -725,6 +778,66 @@ fn event_loop(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn base64_matches_the_rfc_4648_vectors() {
+        for (plain, encoded) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
+            assert_eq!(base64(plain.as_bytes()), encoded, "{plain:?}");
+        }
+        assert_eq!(base64(&[0xff, 0xfe, 0xfd, 0x00]), "//79AA==");
+    }
+
+    #[test]
+    fn the_osc52_request_holds_the_text_only_as_base64_and_is_bounded() {
+        let hostile = "x\u{1b}]0;owned\u{7}\u{1b}[2J\u{9b}31m\u{202e}é\n";
+        let sequence = osc52_sequence(hostile).unwrap();
+        assert!(sequence.starts_with("\u{1b}]52;c;") && sequence.ends_with('\u{7}'));
+        let payload = &sequence["\u{1b}]52;c;".len()..sequence.len() - 1];
+        assert!(payload.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=')), "{payload:?}");
+        assert_eq!(sequence.matches('\u{1b}').count(), 1, "the only ESC is the framing one");
+        assert_eq!(sequence.matches('\u{7}').count(), 1, "the only BEL is the terminator");
+        assert!(osc52_sequence(&"a".repeat(OSC52_MAX_BYTES)).is_some());
+        assert!(osc52_sequence(&"a".repeat(OSC52_MAX_BYTES + 1)).is_none());
+        assert!(osc52_sequence(&"é".repeat(OSC52_MAX_BYTES / 2 + 1)).is_none(), "the limit is in bytes");
+        assert!(osc52_enabled(None) && osc52_enabled(Some("on")));
+        for off in ["off", "0", "false", "no", "none", " OFF "] {
+            assert!(!osc52_enabled(Some(off)), "{off}");
+        }
+    }
+
+    #[test]
+    fn a_queued_clipboard_request_is_written_once_through_the_terminal_writer_and_never_raw() {
+        let mut state = LiveState::new();
+        let mut out = Vec::new();
+        write_clipboard(&mut out, &mut state).unwrap();
+        assert!(out.is_empty(), "nothing queued, nothing written");
+        state.apply(
+            crate::protocol::parse_event(r#"{"v":1,"type":"slash.result","id":"s","command":"copy","success":true,"output":"asked","clipboard":"line\u001b]52;c;AAAA\u0007"}"#).unwrap(),
+        );
+        write_clipboard(&mut out, &mut state).unwrap();
+        let written = String::from_utf8(out.clone()).unwrap();
+        assert_eq!(written, format!("\u{1b}]52;c;{}\u{7}", base64("line\u{1b}]52;c;AAAA\u{7}".as_bytes())));
+        write_clipboard(&mut out, &mut state).unwrap();
+        assert_eq!(out.len(), written.len(), "written once");
+    }
+
+    #[test]
+    fn the_clipboard_request_passes_through_the_sixteen_colour_rewriter_untouched_between_frames() {
+        use ratatui::{Terminal, backend::CrosstermBackend};
+        let mut raw = Vec::new();
+        {
+            let mut terminal = Terminal::new(CrosstermBackend::new(crate::theme::SgrWriter::new(&mut raw, true))).unwrap();
+            let mut state = LiveState::new();
+            state.depth = crate::theme::Depth::Ansi16;
+            state.apply(crate::protocol::parse_event(r#"{"v":1,"type":"slash.result","id":"s","command":"copy","success":true,"output":"a","clipboard":"hi"}"#).unwrap());
+            terminal.draw(|frame| { render_live(frame, &state); }).unwrap();
+            write_clipboard(terminal.backend_mut(), &mut state).unwrap();
+        }
+        let text = String::from_utf8_lossy(&raw).into_owned();
+        assert!(text.contains("\u{1b}]52;c;aGk=\u{7}"), "{text:?}");
+        assert!(!text.contains("38;5;") && !text.contains("38;2;"), "{text:?}");
+        assert!(text.ends_with("\u{1b}]52;c;aGk=\u{7}"), "the request follows the frame, never inside it: {text:?}");
+    }
     #[test]
     fn mouse_capture_is_on_unless_the_operator_turns_it_off() {
         for on in [None, Some(""), Some("on"), Some("1"), Some("true"), Some("auto"), Some("garbage")] {
