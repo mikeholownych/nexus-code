@@ -250,6 +250,22 @@ test("a shell that forks past pids.max gets EAGAIN and the supervisor records it
   assert.ok(final.pidsMaxEvents >= 1, `pids.events max: ${JSON.stringify(final)}`);
   assertPeak(t, final, "pidsPeak", resources.tasks);
   assert.match(run.result.stderr, /Cannot fork|Resource temporarily unavailable|EAGAIN/i, "the shell's own fork failed with EAGAIN");
+  assert.notEqual(run.result.status, 0);
+  assert.match(run.result.error ?? "", /process limit/, "the operator is told the process limit was hit");
+  await assertCleanedUp(run);
+});
+
+test("a command that survives a refused fork and exits 0 is not turned into a failure", { timeout: 60_000 }, async (t) => {
+  const resources = await requireHost(t);
+  if (!resources) return;
+  // The program catches every refused fork and finishes cleanly: bash and dash both end non-zero after one.
+  const script = "import subprocess, sys\nkids = []\nfor _ in range(40):\n    try:\n        kids.append(subprocess.Popen(['/usr/bin/sleep', '2']))\n    except OSError:\n        pass\nfor k in kids:\n    k.kill()\nsys.exit(0)\n";
+  const run = await launch(resources, "/usr/bin/python3", ["-c", script], 20_000);
+  note(t, "pids-survived", run);
+  const final = reportOf(run);
+  assert.ok(final.pidsMaxEvents >= 1, `pids.events max: ${JSON.stringify(final)}`);
+  assert.equal(run.result.status, 0);
+  assert.equal(run.result.error, null, "a handled refusal is not a failure");
   await assertCleanedUp(run);
 });
 

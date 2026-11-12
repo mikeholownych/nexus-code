@@ -162,10 +162,13 @@ with `tsx --test` in parallel with other contract users, can create scopes and d
 5. Fail-closed without delegation was simulated (no user manager, no bus, read-only cgroup mount). A real host whose
    user manager lacks cpu/memory/pids delegation was not available; `scripts/ensure-ci-user-cgroups.sh` is the CI
    preparation and was not changed.
-6. Operator diagnostics are uneven (finding, not fixed here because the code is under `eval/`): a memory kill sets
-   `error` ("candidate command was killed by the memory limit"); a wall-clock kill sets `timedOut`; hitting `pids.max`
-   sets no `error` and no flag in `createContainedRunner`'s result (the command just sees EAGAIN and exits with its own
-   status, here 2 with `Cannot fork` on stderr; `pidsMaxEvents` stays only in the supervisor report that the runner
-   drops); CPU throttling is silent by design. The finding is for the `eval/` owner: surface `pidsMaxEvents > 0` from
-   `eval/evaluators/code/command.mjs` the way `oomKills` is.
+6. Operator diagnostics (was a finding; closed 2026-11-12 with the owner's authorization to edit `eval/`): a memory kill
+   sets `error` ("candidate command was killed by the memory limit"); a wall-clock kill sets `timedOut`; a fork refused
+   at `pids.max` now sets `error` ("candidate command hit the process limit (a fork was refused)") when the command did
+   not succeed, from `pidsMaxEvents` in the supervisor report (`eval/evaluators/code/command.mjs`). A command that
+   caught the refusal and exited 0 keeps `error: null`, so a handled refusal is not turned into a failure. Real-host
+   proof: the fork-loop test asserts the new `error`, and `a command that survives a refused fork and exits 0 is not
+   turned into a failure` (a Python program catching every refused fork; bash and dash both end non-zero after one,
+   which is why they cannot show this case) ends with status 0, `error: null` and `pidsMaxEvents` >= 1. CPU
+   throttling is silent by design.
 7. The two failing existing `eval_integrity` tests (above) were not fixed or diagnosed further.
