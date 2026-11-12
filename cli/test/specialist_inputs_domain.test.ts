@@ -459,3 +459,39 @@ test("gitlinkHunks renders added, modified and deleted pointers and leaves out p
   assert.match(r.text, /deleted file mode 160000[\s\S]*-Subproject commit b{40}/);
   assert.ok(!r.text.includes("plain.txt") && !r.text.includes("secret/sub"));
 });
+
+function subRepo(): string {
+  const sub = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sub-"));
+  sh(sub, "init", "-q", "-b", "main"); sh(sub, "config", "user.email", "a@b"); sh(sub, "config", "user.name", "t");
+  put(sub, "s.txt", "1\n"); sh(sub, "add", "-A"); sh(sub, "commit", "-qm", "s1");
+  return sub;
+}
+
+test("a file replaced by a submodule shows the new gitlink once", () => {
+  const sub = subRepo();
+  const d = repo({ "vendor/x": "plain file\n", "in/a.txt": "a\n" });
+  const base = sh(d, "rev-parse", "HEAD").trim();
+  sh(d, "rm", "-q", "vendor/x");
+  sh(d, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/x");
+  const r = plainCandidateDiff(d, base);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  if ("error" in r) return;
+  assert.equal(r.diff.split("new file mode 160000").length - 1, 1, r.diff);
+  assert.match(r.diff, /Subproject commit [0-9a-f]{40}/);
+});
+
+test("a submodule replaced by a regular file shows the file's content and the removed pointer", () => {
+  const sub = subRepo();
+  const d = repo();
+  sh(d, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"); sh(d, "commit", "-qm", "add sub");
+  const base = sh(d, "rev-parse", "HEAD").trim();
+  sh(d, "rm", "-q", "-f", "vendor/sub");
+  fs.rmSync(path.join(d, "vendor/sub"), { recursive: true, force: true });
+  put(d, "vendor/sub", "now a plain file\n");
+  sh(d, "add", "vendor/sub");
+  const r = plainCandidateDiff(d, base);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  if ("error" in r) return;
+  assert.match(r.diff, /deleted file mode 160000[\s\S]*-Subproject commit [0-9a-f]{40}/);
+  assert.ok(r.diff.includes("+now a plain file"), r.diff);
+});

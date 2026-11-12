@@ -490,8 +490,10 @@ export function gitlinkHunks(raw: string, allowed: (file: string) => boolean): {
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const meta = /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])\d*$/.exec(fields[i]);
     if (!meta) continue;
-    const [, oldMode, newMode, oldSha, newSha] = meta;
+    const [, oldMode, newMode, oldSha, newSha, status] = meta;
     if (oldMode !== "160000" && newMode !== "160000") continue;
+    // A file replaced by a submodule: the diff against the private index already prints that hunk (as the deletion plus the new gitlink).
+    if (status === "T" && oldMode !== "160000") continue;
     const file = fields[i + 1];
     if (!allowed(file)) { omitted++; continue; }
     const before = oldMode === "160000";
@@ -535,9 +537,14 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     git(["read-tree", "--end-of-options", commit]);
     // A path the real index no longer holds (`git rm --cached`, the file may stay on disk, ignored) is a deletion of the
     // candidate: take it out of the private index too, so the comparison with the base tree still reports it.
-    const staged = git(["diff-index", "--cached", "--name-status", "-z", "--relative", "--no-renames", commit], { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }).split("\0");
+    const stagedRaw = git(["diff-index", "--cached", "--raw", "-z", "--relative", "--no-renames", commit], { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER });
+    const staged = stagedRaw.split("\0");
     const stagedRemovals: string[] = [];
-    for (let i = 0; i + 1 < staged.length; i += 2) if (staged[i] === "D") stagedRemovals.push(staged[i + 1]);
+    for (let i = 0; i + 1 < staged.length; i += 2) {
+      const meta = /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ ([A-Z])\d*$/.exec(staged[i]);
+      // A deletion, or a submodule replaced by a file (then the file is shown as new content, not hidden behind the gitlink).
+      if (meta && (meta[3] === "D" || (meta[3] === "T" && meta[1] === "160000"))) stagedRemovals.push(staged[i + 1]);
+    }
     if (stagedRemovals.length) git(["update-index", "--force-remove", "-z", "--stdin"], { input: `${stagedRemovals.join("\0")}\0` });
     const mangled = undecodablePath((args) => git(args, { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }), commit);
     if (mangled !== undefined) return { error: `a path (${JSON.stringify(mangled.slice(0, 60))}) is not valid UTF-8 text and cannot be shown; rename it` };
@@ -566,7 +573,7 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     let diff = allowedTracked.length ? git(["diff", ...DIFF_RENDER, "--no-renames", "--ignore-submodules=all", "--relative", "--end-of-options", commit, "--", ...allowedTracked.map((p) => `:(literal)${p}`)]) : "";
     for (const file of allowedNew) diff += git(["diff", ...DIFF_RENDER, "--no-index", "--", "/dev/null", file], { okExit: [1] });
     // `--ignore-submodules=all` above keeps git out of the submodules' directories; their pointer changes come from the real index.
-    const pointers = gitlinkHunks(git(["diff-index", "--cached", "--raw", "-z", "--no-renames", "--relative", commit], { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }), (f) => inputPathProtection(security, f) === undefined);
+    const pointers = gitlinkHunks(stagedRaw, (f) => inputPathProtection(security, f) === undefined);
     diff += pointers.text;
     omitted += pointers.omitted;
     return { base: commit, diff, omitted, omittedNew, omittedNested };
