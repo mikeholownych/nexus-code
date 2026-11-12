@@ -610,6 +610,12 @@ function classifyTransportError(err: any, operatorSignal: AbortSignal | undefine
     : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId, transportCause, ...classification });
 }
 
+/** A connection reset or closed this soon after the attempt began, on an endpoint that answered before, is a keep-alive race. */
+const STALE_CONNECTION_WINDOW_MS = 2_000;
+/** A server that idle-closes one pooled connection has usually closed its siblings too: each resend uses one up. */
+const MAX_STALE_RESENDS = 3;
+const CONNECTION_CLOSED_CODES = new Set(["UND_ERR_SOCKET", "ECONNRESET", "EPIPE"]);
+
 export class LocalLlmClient {
   private endpoints: string[] = [];
   private activeEndpointIndex: number = 0;
@@ -872,6 +878,29 @@ export class LocalLlmClient {
         usageConfidence: pending()?.usage ? "provider" : notSent || !maybeBilled ? "none" : "uncertain",
       }, notSent ? undefined : this.workspace);
       throw err;
+    }
+  }
+
+  /**
+   * `fetch` that resends when a reused keep-alive connection was closed under the request (TUI audit D-20). On a healthy
+   * server an idle timeout can fire as the next request is written; the request then fails with `UND_ERR_SOCKET: other
+   * side closed` or ECONNRESET, which classified as a temporary outage and made the turn wait and print a notice.
+   * RFC 9112 section 9.3.1 allows resending in that case. It is done only for an endpoint that has answered before
+   * (a first-use reset is a real failure), within moments of the attempt (a server that dies mid-generation fails
+   * later), for a body that can be replayed and not after an abort or timeout. A refused or unresolvable host, TLS
+   * errors and HTTP errors are not resets and keep their ordinary handling.
+   */
+  private async fetchResendingStale(url: string, init: RequestInit): Promise<Response> {
+    const started = Date.now();
+    for (let resends = 0; ; resends++) {
+      try {
+        return await fetch(url, init);
+      } catch (err: any) {
+        const origin = this.endpoints.find((ep) => url.startsWith(ep));
+        const replayable = init.body == null || typeof init.body === "string";
+        const closed = err?.name !== "TimeoutError" && err?.name !== "AbortError" && transportCauseChain(err).some((c) => c.code !== undefined && CONNECTION_CLOSED_CODES.has(c.code));
+        if (resends >= MAX_STALE_RESENDS || !replayable || !closed || init.signal?.aborted || Date.now() - started > STALE_CONNECTION_WINDOW_MS || !origin || !this.hasEverSucceeded(origin)) throw err;
+      }
     }
   }
 
@@ -1544,7 +1573,7 @@ export class LocalLlmClient {
         ? { content: JSON.stringify({ messages: body.messages, ...(body.tools ? { tools: body.tools } : {}) }), ...body }
         : body;
       try {
-        res = await fetch(url, {
+        res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders(ep) },
           body: JSON.stringify(reqBody),
@@ -1592,7 +1621,7 @@ export class LocalLlmClient {
       const idx = (start + i) % total;
       const timeout = AbortSignal.timeout(opts.timeoutMs ?? 5_000);
       try {
-        const res = await fetch(`${this.endpoints[idx]}/models`, {
+        const res = await this.fetchResendingStale(`${this.endpoints[idx]}/models`, {
           headers: this.authorization(this.endpoints[idx]),
           signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
           ...this.fetchPolicy(),
@@ -1704,7 +1733,7 @@ export class LocalLlmClient {
       let res: Response;
       let data: ChatCompletionResponse;
       try {
-        res = await fetch(url, {
+        res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1882,7 +1911,7 @@ export class LocalLlmClient {
       const watchdog = this.createWatchdog(signal, currentEp, true);
       let res: Response;
       try {
-        res = await fetch(url, {
+        res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -2185,7 +2214,7 @@ export class LocalLlmClient {
       const watchdog = this.createWatchdog(signal, currentEp, stream);
       let res: Response;
       try {
-        res = await fetch(url, {
+        res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...this.authorization(url), ...this.providerHeaders(outbound.messages), "X-Request-ID": requestId },
           body: JSON.stringify(req.body),
@@ -2321,7 +2350,7 @@ export class LocalLlmClient {
 
       const outboundText = egressEvaluation.sanitizedText || text;
 
-      const res = await fetch(url, {
+      const res = await this.fetchResendingStale(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

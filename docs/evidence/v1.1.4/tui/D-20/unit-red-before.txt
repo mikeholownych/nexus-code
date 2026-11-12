@@ -1,0 +1,12 @@
+  ✖ six requests in a row all succeed on a server that kills every reused connection (137.959194ms)
+  ✖ a start-up probe that meets the same race is not a failed probe (51.244944ms)
+  ✔ a server that resets its first request is an outage at once: no hidden resend before it ever answered (18.572639ms)
+  ✖ a server that answered once and now resets everything is still an outage: bounded resends, then the ordinary failure (33.326412ms)
+⏳ Provider recovery (step 2): network_error, execution UNKNOWN; next check in 1s (request ddac5fc6-7a3c-4985-915a-6596f565dfa5).
+Fatal error communicating with LLM server: Inference request failed: fetch failed (cause: UND_ERR_SOCKET: other side closed)
+Inference network_error (origin: transport): Inference request failed: fetch failed (cause: UND_ERR_SOCKET: other side closed)
+  ✖ a write_file turn in auto mode on that server completes with no provider recovery and writes the file (6607.468022ms)
+✖ six requests in a row all succeed on a server that kills every reused connection (137.959194ms)
+  Error [InferenceError]: Inference request failed: fetch failed (cause: UND_ERR_SOCKET: other side closed)
+✖ a start-up probe that meets the same race is not a failed probe (51.244944ms)
+  AssertionError [ERR_ASSERTION]: probe 1: fetch failed (cause: UND_ERR_SOCKET: other side closed)
