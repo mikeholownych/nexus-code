@@ -29,6 +29,8 @@ interface Race {
   killAll: boolean;
   /** Chat requests it saw, killed or not. */
   chats: number;
+  /** When set every request is answered with HTTP 503 (a gateway that is up but unhealthy), never killed. */
+  status503?: boolean;
   close(): Promise<void>;
 }
 
@@ -50,6 +52,12 @@ async function raceServer(script: (n: number) => { content?: string; tool?: { na
     req.on("end", () => {
       const isChat = !req.url?.endsWith("/models");
       if (isChat) race.chats++;
+      if (race.status503) {
+        res.statusCode = 503;
+        res.setHeader("content-type", "application/json");
+        res.end('{"error":"unavailable"}');
+        return;
+      }
       if (opts.always || race.killAll || nth > 1) {
         race.killed++;
         req.socket.destroy();
@@ -157,6 +165,33 @@ describe("D-20: a healthy server that closes a reused connection is not an outag
       const again = race.chats;
       await assert.rejects(client.chatCompletion(user, []), (e: any) => e.kind === "network_error");
       assert.equal(race.chats - again, 4);
+    } finally {
+      await race.close();
+    }
+  });
+
+  test("a 5xx answer is not health: it does not clear the resend budget a server that keeps resetting has spent", async () => {
+    const race = await raceServer(() => ({ content: "hi" }));
+    try {
+      const client = new LocalLlmClient({ model: "m", endpoint: race.url, apiKey: "k" } as any);
+      let now = 1_000_000;
+      client.resendClock = () => now;
+      await client.chatCompletion(user, []);
+      race.killAll = true;
+      // Spend the budget: five rejected requests charge their resends (3 per minute).
+      for (let i = 0; i < 5; i++) {
+        await assert.rejects(client.chatCompletion(user, []), (e: any) => e.kind === "network_error");
+        now += 1_000;
+      }
+      // The gateway answers one request with a 503 (reached, not healthy): it must NOT hand the budget back.
+      race.killAll = false;
+      race.status503 = true;
+      await assert.rejects(client.chatCompletion(user, []));
+      race.status503 = false;
+      race.killAll = true;
+      const before = race.chats;
+      await assert.rejects(client.chatCompletion(user, []), (e: any) => e.kind === "network_error");
+      assert.equal(race.chats - before, 1, "the budget is still spent: no resend after a reset that follows a 503");
     } finally {
       await race.close();
     }

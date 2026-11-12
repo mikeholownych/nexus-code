@@ -902,7 +902,8 @@ export class LocalLlmClient {
     for (let resends = 0; ; resends++) {
       try {
         const response = await fetch(url, init);
-        if (key && resends === 0) this.staleResends.delete(key);
+        // Only an answer that is not a server error hands the budget back: a 5xx means the server was reached and unhealthy.
+        if (key && resends === 0 && response.status < 500) this.staleResends.delete(key);
         return response;
       } catch (err: any) {
         const closed = err?.name !== "TimeoutError" && err?.name !== "AbortError" && transportCauseChain(err).some((c) => c.code !== undefined && CONNECTION_CLOSED_CODES.has(c.code));
