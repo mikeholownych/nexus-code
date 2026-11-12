@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BMKBJmZDQRvFsatWjq3JRX",
+  "agent_id": "afac3f12f9fa296ec",
+  "subagent_type": "reviewer",
+  "task_description": "Independent review of polish G2 branch",
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 132651,
+    "cache_read_tokens": 3193970,
+    "output_tokens": 30048,
+    "api_call_count": 39
+  },
+  "started_at": "2026-11-12T09:55:59.17412876Z",
+  "completed_at": "2026-11-12T10:00:58.223301438Z"
+}
