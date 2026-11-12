@@ -42,8 +42,9 @@ function discoverScopeParent(): { dir: string } | { problem: string } {
   });
   const own = (probe.stdout ?? "").split("\n").find((line) => line.startsWith("0::"))?.slice(3);
   if (probe.status !== 0 || !own || !own.endsWith(".scope")) return { problem: `a probe scope did not report a transient scope cgroup (exit ${probe.status}: ${(probe.stderr ?? "").trim().slice(-200)}; cgroup "${own ?? ""}")` };
+  // Lexical check only: the probe scope has exited by now and systemd may already have removed an empty slice.
   const dir = path.dirname(path.join("/sys/fs/cgroup", own));
-  if (!fs.existsSync(path.join(dir, "cgroup.procs"))) return { problem: `transient scopes are not created under ${dir}: it is not a cgroup directory here` };
+  if (own.split("/").includes("..") || !dir.startsWith(`${USER_SERVICE}/`)) return { problem: `transient scopes are not created under ${USER_SERVICE}: the probe scope is in ${dir}` };
   return { dir };
 }
 
@@ -105,9 +106,7 @@ function readScopeDir(): string[] {
 /** Scope cgroups (under the user manager) whose payload leaf holds a process whose command line contains `marker`. */
 function scopesHolding(marker: string) {
   const found: string[] = [];
-  let entries: string[] = [];
-  entries = readScopeDir();
-  for (const entry of entries) {
+  for (const entry of readScopeDir()) {
     if (!entry.startsWith("run-") || !entry.endsWith(".scope")) continue;
     const procs = read(path.join(scopeParent(), entry, "payload", "cgroup.procs"));
     if (!procs) continue;
@@ -127,7 +126,9 @@ function listScopes(): Set<string> {
 function startSampler(marker: string): { stop: () => Sampled } {
   const scopes = new Set<string>();
   const raw: Record<string, string> = {};
+  let failure: unknown = null;
   const timer = setInterval(() => {
+    try {
     for (const scope of scopesHolding(marker)) {
       scopes.add(scope);
       for (const file of ["memory.events", "pids.events", "cpu.stat", "memory.max", "pids.max", "cpu.max", "memory.swap.max", "memory.oom.group"]) {
@@ -135,8 +136,10 @@ function startSampler(marker: string): { stop: () => Sampled } {
         if (text !== null) raw[file] = text.trim();
       }
     }
+    } catch (error) { failure ??= error; }
   }, 15);
-  return { stop: () => { clearInterval(timer); return { scopes: [...scopes], raw }; } };
+  // A scope-directory read error is rethrown here, in the awaiting test, not as an uncaught exception from the timer.
+  return { stop: () => { clearInterval(timer); if (failure) throw failure; return { scopes: [...scopes], raw }; } };
 }
 
 async function launch(resources: any, command: string, args: string[], timeoutMs: number, opts: { env?: Record<string, string | undefined>; cwd?: string } = {}): Promise<Run> {

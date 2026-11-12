@@ -138,14 +138,15 @@ Cleanup after the real runs: `systemctl --user list-units --all 'run-*.scope'` e
 The harness does not assume where transient scopes land: after the contract probe, the gate runs a real
 `systemd-run --user --scope` command, reads its cgroup from `/proc/self/cgroup`, and uses that scope's parent directory
 (here `/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice`) for the sampler and the before/after snapshot. If the probe
-does not report a transient scope cgroup, or its parent is not a cgroup directory, the checks skip (fail when the fixture
+does not report a transient scope cgroup, or it is not under the user manager's cgroup (checked lexically: the probe scope has exited by then and systemd may have removed an empty slice), the checks skip (fail when the fixture
 variable is set) with a message naming the cause. A missing directory later (systemd removed the empty slice) is read as
-"no scopes"; any other read error fails the test.
+"no scopes"; any other read error fails the test (the sampler rethrows it in the awaiting test).
 
-CI invocation: the file is run only through `cli/scripts/run_tests.mjs` (`npm --prefix cli test` in `.github/workflows/ci.yml`
+CI invocation: in the workflows and Makefile the file is run through `cli/scripts/run_tests.mjs` (`npm --prefix cli test` in `.github/workflows/ci.yml`
 lines 92 and 182 and `release.yml` line 107, and `make test` / `make test-ci`), which runs `tsx --test --test-concurrency=1`
-over every `cli/test/*.test.ts`, so test files do not run in parallel and the snapshot comparison does not see another
-test's scopes. Running the file by hand in parallel with other contract users on one host can; that is not a CI path.
+over every `cli/test/*.test.ts` (plus two `eval/*.test.mjs` files that create no scopes), so test files do not run in
+parallel inside that run. This holds for the single-tenant hosted runners only; other processes on a shared host, or a hand run
+with `tsx --test` in parallel with other contract users, can create scopes and disturb the snapshot comparison.
 
 ## What this does not show
 
