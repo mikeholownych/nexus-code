@@ -5924,17 +5924,27 @@ ${NEXUS_RUNTIME_IDENTITY}`;
    */
   public async probeEndpointProblem(signal?: AbortSignal, timeoutMs = 3_000): Promise<StartupEndpointProblem | undefined> {
     if (typeof this.client.probeAvailability !== "function") return undefined;
-    // After a resume the hosts probe right after restoring: inside the provider's window nothing is sent. The
-    // resumed turn waits it out and re-probes through live recovery, so no warning is lost.
-    if (this.isProviderWindowOpen()) return undefined;
     try {
       const clients = new Set<LocalLlmClient>([this.client]);
       if (this.cognitiveRoutingEnabled) {
         clients.add(this.plannerClient);
         clients.add(this.coderClient);
       }
+      // After a resume the hosts probe right after restoring: inside an endpoint's provider window nothing is sent to
+      // it. The resumed turn waits it out and re-probes through live recovery, so no warning is lost. Such an endpoint
+      // is unknown to the gate (never a definitive failure); the others are probed as usual.
+      const windowed = (endpoint: string) => this.windowsCovering([endpoint]).length > 0;
+      let notProbed = 0;
       const perClient = await Promise.all([...clients].map(async (client) => {
-        if (typeof client.probeEachEndpoint === "function") return { client, results: await client.probeEachEndpoint(signal, { timeoutMs }) };
+        if (typeof client.probeEachEndpoint === "function") {
+          const results = await client.probeEachEndpoint(signal, { timeoutMs, skip: windowed });
+          notProbed += this.clientEndpoints(client).length - results.length;
+          return { client, results };
+        }
+        if (this.clientWindowOpen(client)) {
+          notProbed++;
+          return { client, results: [] };
+        }
         const probe = await client.probeAvailability(signal, { timeoutMs });
         return { client, results: [{ endpoint: client.endpoint, probe }] };
       }));
@@ -5943,7 +5953,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (probe.available && probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) client.markSucceeded?.(endpoint);
         }
       }
-      return startupEndpointProblems(perClient.flatMap((c) => c.results));
+      return startupEndpointProblems(perClient.flatMap((c) => c.results), notProbed);
     } catch {
       return undefined;
     }

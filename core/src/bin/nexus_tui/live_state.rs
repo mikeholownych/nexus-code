@@ -867,6 +867,9 @@ impl LiveState {
 
     fn apply_event(&mut self, event: Event) {
         // The turn started: the prompt was accepted, so the copy of the draft (paste buffers included) is dropped.
+        // No turn id is compared on purpose: `activity` carries none, and a submit is only possible when no turn is
+        // pending (the previous `turn.result` cleared it), so the sidecar has nothing else to report until it has
+        // accepted or refused this prompt; a stray event could only come from a sidecar that is not the one we sent to.
         if matches!(event, Event::Activity { .. } | Event::AssistantDelta { .. } | Event::ToolStart { .. } | Event::TurnResult { .. }) {
             self.sent_prompt = None;
         }
@@ -5271,6 +5274,16 @@ mod tests {
         assert_eq!(state.transcript[sent_at + 1], Entry::Unsent(String::new()), "the paste block that went with it is gone too");
         assert_eq!(state.transcript.len(), sent_at + 3, "marked in place, nothing removed (indices stay valid)");
         assert_eq!(state.composer.display(state.composer.text()), "see [Pasted text #1: 2 lines]");
+    }
+
+    #[test]
+    fn a_turn_event_before_the_prompt_is_answered_drops_the_draft_copy_whatever_its_turn_id() {
+        // Pins the current behaviour the comment in `apply_event` explains: the first turn event ends the gate.
+        let mut state = ready();
+        type_text(&mut state, "first");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"assistant.delta","turn_id":"other","text":"x"}"#));
+        assert!(state.sent_prompt.is_none());
     }
 
     #[test]

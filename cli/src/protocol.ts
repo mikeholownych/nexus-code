@@ -430,9 +430,12 @@ export function noProviderRefusal(problem: { endpoint: string; endpoints?: strin
 export function noProviderNotice(problem: { kind: "unreachable" | "rejected"; endpoint: string; endpoints?: string[]; detail: string; blocking?: boolean; nothingThere?: boolean }): StatusNotice {
   if (problem.kind === "rejected" || problem.blocking === false) {
     // Only a warning: the start-up check can be refused where chat is not (a token not yet refreshed, a key limited to chat).
+    // With several endpoints that failed, each is named and the wording does not say how each failed (the detail does).
+    const many = (problem.endpoints?.length ?? 0) > 1;
+    const verb = many ? "did not pass" : problem.kind === "rejected" ? "rejected the credentials on" : "did not answer";
     return {
       text: redactSecrets(
-        `${problem.endpoint} ${problem.kind === "rejected" ? "rejected the credentials on" : "did not answer"} the start-up check. Nexus will still try your messages; ` +
+        `${many ? problem.endpoints!.join(", ") : problem.endpoint} ${verb} the start-up check. Nexus will still try your messages; ` +
           `if they fail, type /connect to sign in again or check the API key and the server. \`nexus doctor\` checks the setup.`,
       ),
       key: STARTUP_PROVIDER_KEY,

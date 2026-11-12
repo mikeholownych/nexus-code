@@ -1603,11 +1603,11 @@ export class LocalLlmClient {
 
   /**
    * Probes every endpoint of this connection (the primary and each failover) at once and keeps each result under its own
-   * endpoint: one endpoint's failure never replaces another's answer. No side effects (the active endpoint stays).
+   * endpoint (endpoints `skip` names are not sent anything and are left out): one endpoint's failure never replaces another's answer. No side effects (the active endpoint stays).
    */
-  async probeEachEndpoint(signal?: AbortSignal, opts: { timeoutMs?: number } = {}): Promise<Array<{ endpoint: string; probe: ProbeResult }>> {
-    const all = [...this.endpoints];
-    return Promise.all(all.map(async (endpoint, idx) => ({ endpoint, probe: await this.probeEndpointAt(idx, signal, opts.timeoutMs) })));
+  async probeEachEndpoint(signal?: AbortSignal, opts: { timeoutMs?: number; skip?: (endpoint: string) => boolean } = {}): Promise<Array<{ endpoint: string; probe: ProbeResult }>> {
+    const all = [...this.endpoints].map((endpoint, idx) => ({ endpoint, idx })).filter(({ endpoint }) => !opts.skip?.(endpoint));
+    return Promise.all(all.map(async ({ endpoint, idx }) => ({ endpoint, probe: await this.probeEndpointAt(idx, signal, opts.timeoutMs) })));
   }
 
   private async probeEndpointAt(idx: number, signal: AbortSignal | undefined, timeoutMs: number | undefined): Promise<ProbeResult> {

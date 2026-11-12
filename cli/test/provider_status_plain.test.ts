@@ -342,6 +342,91 @@ describe("D-07: the prompt gate, the start-up warning and the URL scrub", () => 
       }
     });
 
+    describe("a restored provider window is honoured per endpoint", () => {
+      /** An endpoint that counts what reaches it; /models answers 200. */
+      async function counting() {
+        const seen: string[] = [];
+        const server = http.createServer((req, res) => {
+          seen.push(`${req.method} ${req.url}`);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ data: [{ id: "m" }] }));
+        });
+        await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+        const port = (server.address() as net.AddressInfo).port;
+        return { url: `http://127.0.0.1:${port}/v1`, seen, close: async () => { server.closeAllConnections(); await new Promise((r) => server.close(r)); } };
+      }
+      const later = () => new Date(Date.now() + 3_600_000).toISOString();
+      const earlier = () => new Date(Date.now() - 1_000).toISOString();
+
+      async function run(windows: (urls: { primary: string; planner: string }) => Array<{ eligibleAt: string; endpoint?: string }>, fn: (r: { problem: any; primary: string[]; planner: string[]; coder: string[] }) => void, primaryUrl?: string) {
+        const primary = await counting();
+        const planner = await counting();
+        const coder = await counting();
+        try {
+          await sidecar(primaryUrl ?? primary.url, async ({ server }) => {
+            await (server as any).startupProbe;
+            const agent = (server as any).app.getAgent();
+            primary.seen.length = planner.seen.length = coder.seen.length = 0;
+            agent.resumedProviderWaits = windows({ primary: primaryUrl ?? primary.url, planner: planner.url });
+            const problem = await agent.probeEndpointProblem(undefined, 1_000);
+            fn({ problem, primary: primary.seen, planner: planner.seen, coder: coder.seen });
+          }, { plannerModel: "p", plannerEndpoint: planner.url, coderModel: "c", coderEndpoint: coder.url });
+        } finally {
+          await primary.close();
+          await planner.close();
+          await coder.close();
+        }
+      }
+
+      test("a window on the planner endpoint only: nothing reaches the planner before it ends, the others are probed", async () => {
+        await run(({ planner }) => [{ eligibleAt: later(), endpoint: planner }], ({ problem, primary, planner, coder }) => {
+          assert.deepEqual(planner, [], "no request inside the planner's window");
+          assert.ok(primary.some((r) => r.includes("/models")), "the primary is probed normally");
+          assert.ok(coder.some((r) => r.includes("/models")), "the coder is probed normally");
+          assert.equal(problem, undefined);
+        });
+      });
+
+      test("a window on the primary only: the primary gets nothing, the planner and coder are probed", async () => {
+        await run(({ primary }) => [{ eligibleAt: later(), endpoint: primary }], ({ primary, planner, coder }) => {
+          assert.deepEqual(primary, []);
+          assert.ok(planner.length > 0 && coder.length > 0);
+        });
+      });
+
+      test("an expired window is probed", async () => {
+        await run(({ planner }) => [{ eligibleAt: earlier(), endpoint: planner }], ({ planner }) => {
+          assert.ok(planner.some((r) => r.includes("/models")));
+        });
+      });
+
+      test("every candidate inside a window: no request anywhere, no problem, so the prompt is allowed", async () => {
+        await run(() => [{ eligibleAt: later() }], ({ problem, primary, planner, coder }) => {
+          assert.deepEqual([primary, planner, coder], [[], [], []]);
+          assert.equal(problem, undefined);
+        });
+      });
+
+      test("an endpoint in its window is unknown, never a definitive failure: a refused primary does not refuse the prompt", async () => {
+        await run(({ planner }) => [{ eligibleAt: later(), endpoint: planner }], ({ problem, planner }) => {
+          assert.deepEqual(planner, []);
+          assert.equal(problem?.blocking, false, JSON.stringify(problem));
+        }, "http://127.0.0.1:1/v1");
+        // The coder answers, but with the primary refused and the planner unknown nothing is definitive either way.
+      });
+    });
+
+    test("the warning names every endpoint that failed, not only the first", () => {
+      const refused = { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED)", codes: ["ECONNREFUSED"] } as any;
+      const http503 = { available: false, condition: "TEMPORARILY_UNAVAILABLE", httpStatus: 503, detail: "HTTP 503" } as any;
+      const ok = { available: true, condition: "AVAILABLE", httpStatus: 200 } as any;
+      const problem = startupEndpointProblems([{ endpoint: "http://a/v1", probe: http503 }, { endpoint: "http://b/v1", probe: refused }, { endpoint: "http://c/v1", probe: ok }])!;
+      const text = noProviderNotice(problem).text;
+      assert.match(text, /http:\/\/a\/v1, http:\/\/b\/v1 did not pass the start-up check/);
+      assert.doesNotMatch(text, /http:\/\/c\/v1/);
+      assert.equal(startupEndpointProblems([{ endpoint: "http://a/v1", probe: refused }], 1)!.blocking, false, "an unprobed candidate keeps a failure from being definitive");
+    });
+
     test("startupEndpointProblems keeps each endpoint's own result", () => {
       const refused = { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED)", codes: ["ECONNREFUSED"] } as any;
       const http503 = { available: false, condition: "TEMPORARILY_UNAVAILABLE", httpStatus: 503, detail: "HTTP 503" } as any;

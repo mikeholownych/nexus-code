@@ -338,12 +338,13 @@ export function startupEndpointProblem(endpoint: string, probe: ProbeResult): St
  * One diagnosis over every endpoint inference can use (primary, failovers, planner, coder), each probe kept under its own
  * endpoint. It is `blocking` only when EVERY endpoint failed at the connection (refused, DNS, TLS, reset): any answer
  * (an HTTP status, a timeout, a rejection) means a prompt may work, so the failed endpoints are only a warning.
+ * `notProbed` counts candidates left alone (inside a restored provider window): unknown, never a definitive failure.
  */
-export function startupEndpointProblems(results: ReadonlyArray<{ endpoint: string; probe: ProbeResult }>): StartupEndpointProblem | undefined {
+export function startupEndpointProblems(results: ReadonlyArray<{ endpoint: string; probe: ProbeResult }>, notProbed = 0): StartupEndpointProblem | undefined {
   const problems = results.map((r) => startupEndpointProblem(r.endpoint, r.probe));
   const found = problems.filter((p): p is StartupEndpointProblem => p !== undefined);
   if (found.length === 0) return undefined;
-  const allBlocking = found.length === results.length && found.every((p) => p.blocking);
+  const allBlocking = notProbed === 0 && found.length === results.length && found.every((p) => p.blocking);
   const first = found[0];
   const endpoints = [...new Set(found.map((p) => p.endpoint))];
   return {
