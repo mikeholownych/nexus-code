@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Bt2JCDGszvSKk5Qbc4HFgr",
+  "agent_id": "ae90b0d542328e3fb",
+  "subagent_type": "general-purpose",
+  "task_description": "TUI D-06 provider errors and D-07 first run",
+  "token_usage": {
+    "input_tokens": 134,
+    "cache_creation_tokens": 152989,
+    "cache_read_tokens": 7934952,
+    "output_tokens": 45380,
+    "api_call_count": 67
+  },
+  "started_at": "2026-11-12T02:39:42.968610594Z",
+  "completed_at": "2026-11-12T02:59:20.871861201Z"
+}
