@@ -1,0 +1,30 @@
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  local
+Line 58: streamed output for scrollback testing
+
+Line 59: streamed output for scrollback testing
+
+Line 60: streamed output for scrollback testing
+
+Line 61: streamed output for scrollback testing
+
+Line 62: streamed output for scrollback testing
+
+Line 63: streamed output for scrollback testing
+
+Line 64: streamed output for scrollback testing
+
+Line 65: streamed output for scrollback testing
+
+Line 66: streamed output for scrollback testing
+
+Line 67: streamed output for scrollback testing
+
+Line 68: streamed output for scrollback testing
+
+Line 69: streamed output for scrollback testing
+
+Line 70: streamed output for scrollback testing
+
+Line 71: streamed output for scrollback testing                      ↓ new output · pgdn · ctrl+end
+ ⠹ thinking · 0:02 · step 1 · esc cancels ──────────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it
