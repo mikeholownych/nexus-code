@@ -1225,21 +1225,21 @@ export class LocalLlmClient {
     );
   }
 
-  async listModels(): Promise<string[]> {
+  async listModels(signal?: AbortSignal): Promise<string[]> {
     return this.executeWithFailover("listModels", async (currentEp) => {
       await this.prepareCredential(currentEp);
       const query = this.conn.protocol === "anthropic-messages" ? "?limit=1000" : this.conn.providerId === "chatgpt" ? "?client_version=1.0.0" : "";
       const url = `${currentEp}/models${query}`;
       const res = await fetch(url, {
         headers: this.authorization(url),
-        signal: metadataSignal(),
+        signal: metadataSignal(signal),
         ...this.fetchPolicy(),
       });
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
         const retryRes = await fetch(url, {
           headers: this.authorization(url),
-          signal: metadataSignal(),
+          signal: metadataSignal(signal),
           ...this.fetchPolicy(),
         });
         if (retryRes.ok) return modelIds(await retryRes.json());

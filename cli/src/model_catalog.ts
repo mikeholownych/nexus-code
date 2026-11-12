@@ -9,11 +9,22 @@ import { createHash } from "node:crypto";
 import { credentialStorageHome, LocalLlmClient, operatorSetting } from "./client.js";
 import { applianceEndpointSelection, buildConfig, providerBaseUrl, providerKey } from "./config.js";
 import { resolveCredential } from "./credentials.js";
+import { scrubUrls } from "./core/endpoint_identity.js";
 import { originOf, PROVIDERS, providerDefinition, type ConnectMethod } from "./providers.js";
+import { redactSecrets } from "./ui.js";
 import type { HarnessConfig } from "./types.js";
 
 /** The appliance's id in the picker (it is not a cloud provider). */
 export const APPLIANCE = "appliance";
+/**
+ * The endpoint this session is running on when it is neither the appliance nor a cloud provider (a `-e` flag or the
+ * environment): the picker lists its own models, so the working endpoint and the current model are visible.
+ */
+export const SESSION_ENDPOINT = "session";
+
+/** A model list is untrusted server output: at most this many entries, each this long and printable. */
+const MAX_LISTED_MODELS = 1000;
+const MAX_MODEL_ID = 200;
 
 export interface CatalogProvider {
   id: string;
@@ -101,13 +112,51 @@ function cache(id: string, models: string[]): void {
   } catch {}
 }
 
-async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+async function withTimeout<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
   let t: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
   try {
-    return await Promise.race([p, new Promise<T>((_, rej) => { t = setTimeout(() => rej(new Error(`no answer within ${ms / 1000}s`)), ms); })]);
+    return await Promise.race([
+      p,
+      new Promise<T>((_, rej) => { t = setTimeout(() => rej(new Error(`no answer within ${ms / 1000}s`)), ms); }),
+      new Promise<T>((_, rej) => {
+        if (!signal) return;
+        onAbort = () => rej(new Error("cancelled"));
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
   } finally {
     clearTimeout(t);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
+}
+
+/** Printable, bounded model ids only: a server's list is not trusted to be short, textual or free of terminal controls. */
+function listedIds(ids: unknown[]): string[] {
+  const out: string[] = [];
+  for (const raw of ids) {
+    if (typeof raw !== "string") continue;
+    const id = raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim();
+    if (!id || id.length > MAX_MODEL_ID) continue;
+    out.push(id);
+    if (out.length >= MAX_LISTED_MODELS) break;
+  }
+  return out;
+}
+
+function sameEndpoint(a: string, b: string): boolean {
+  const norm = (u: string) => {
+    try {
+      const url = new URL(u.trim());
+      url.hash = "";
+      url.search = "";
+      return url.toString().replace(/\/+$/, "");
+    } catch {
+      return u.trim().replace(/\/+$/, "");
+    }
+  };
+  return norm(a) === norm(b);
 }
 
 /** The appliance connection, whatever provider is currently selected. */
@@ -156,25 +205,26 @@ export function connectionOf(providerId: string): { connected: boolean; source?:
   return { connected: false };
 }
 
-export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: number } = {}): Promise<Catalog> {
+export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<Catalog> {
   const timeoutMs = opts.timeoutMs ?? 8_000;
   const appliance = applianceConfig(config);
   const applianceClient = new LocalLlmClient(appliance);
   const providers: CatalogProvider[] = [];
   const models: CatalogModel[] = [];
 
-  const load = async (entry: CatalogProvider, create: () => { endpoint: string; list: () => Promise<string[]> }) => {
+  const load = async (entry: CatalogProvider, create: () => { endpoint: string; list: (signal?: AbortSignal) => Promise<string[]> }) => {
     let endpoint: string | undefined;
     try {
       const source = create();
       endpoint = source.endpoint;
-      const ids = (await withTimeout(source.list(), timeoutMs)).filter((id) => chatModel(entry.id, id));
+      const ids = listedIds(await withTimeout(source.list(opts.signal), timeoutMs, opts.signal)).filter((id) => chatModel(entry.id, id));
       cache(cacheId(entry.id, endpoint), ids);
       models.push(...ids.map((id) => ({ provider: entry.id, id })));
     } catch (err: any) {
       const old = endpoint ? cached(cacheId(entry.id, endpoint)) : undefined;
       entry.status = old ? "cached" : "error";
-      entry.error = String(err?.message ?? err).slice(0, 200);
+      // Provider error text can quote the URL it called (with its userinfo or query) or echo a credential.
+      entry.error = redactSecrets(scrubUrls(String(err?.message ?? err))).slice(0, 200);
       if (old) models.push(...old.map((id) => ({ provider: entry.id, id })));
     }
   };
@@ -188,7 +238,25 @@ export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: nu
     status: "ok",
   };
   providers.push(applianceEntry);
-  const jobs: Promise<void>[] = [load(applianceEntry, () => ({ endpoint: appliance.endpoint, list: () => applianceClient.listModels() }))];
+  const jobs: Promise<void>[] = [load(applianceEntry, () => ({ endpoint: appliance.endpoint, list: (signal) => applianceClient.listModels(signal) }))];
+
+  // A session run on `-e <url>` (or the environment) is on neither the appliance nor a cloud provider: list that.
+  const sessionEndpoint = config.provider ? undefined : config.endpoint;
+  const onSessionEndpoint = !!sessionEndpoint && !sameEndpoint(sessionEndpoint, appliance.endpoint);
+  if (onSessionEndpoint) {
+    const client = new LocalLlmClient(config);
+    const host = originOf(sessionEndpoint)?.replace(/^https?:\/\//, "");
+    const entry: CatalogProvider = {
+      id: SESSION_ENDPOINT,
+      label: host ? `This session (${host})` : "This session",
+      disclosure: client.disclosureOf(),
+      connected: true,
+      methods: [],
+      status: "ok",
+    };
+    providers.unshift(entry); // the endpoint that works heads the picker
+    jobs.push(load(entry, () => ({ endpoint: sessionEndpoint!, list: (signal) => client.listModels(signal) })));
+  }
 
   for (const def of Object.values(PROVIDERS)) {
     const c = connectionOf(def.id);
@@ -206,7 +274,7 @@ export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: nu
     providers.push(entry);
     if (c.connected) jobs.push(load(entry, () => {
       const provider = providerConfig(config, def.id);
-      return { endpoint: provider.endpoint, list: () => new LocalLlmClient(provider).listModels() };
+      return { endpoint: provider.endpoint, list: (signal) => new LocalLlmClient(provider).listModels(signal) };
     }));
   }
   await Promise.all(jobs);
@@ -216,7 +284,7 @@ export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: nu
   return {
     providers,
     models,
-    current: { provider: config.provider ?? APPLIANCE, model: config.model },
+    current: { provider: config.provider ?? (onSessionEndpoint ? SESSION_ENDPOINT : APPLIANCE), model: config.model },
     recent: readRecent(),
   };
 }

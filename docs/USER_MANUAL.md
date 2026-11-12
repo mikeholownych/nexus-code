@@ -227,14 +227,17 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   waiting.
 - **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
   diagnostic lines (progress chatter is dropped) and your draft; `r` starts a new agent, after which `/resume` reloads
-  the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider: your prompts,
+  the saved conversation. Resuming (`-r` or `/resume`; `/resume` with no id loads the most recent saved session other than the one you are in) shows the earlier conversation under a divider: your prompts,
   steering, the agent's replies, the tools it called (`· Read src/cache.ts`), and how the last turn ended. Diagnostics
   from turns that already finished are not shown as the cause of a later stop. Enter pressed while the agent is still
   starting sends the draft once it is ready.
 - **Steering.** Enter while the agent works sends the draft as steering. It shows in the transcript as
-  `↳ text · steering · queued`, then `applied` once the agent takes it at its next step. Steering that arrives as
-  the turn finishes starts a follow-up turn; steering that cannot be applied (the turn was cancelled, a command was
-  running, the agent stopped) is put back into the composer. Slash commands wait for idle, except read-only `/doctor`,
+  `↳ text · steering · applies at the next step`, then `applied` once the agent takes it. Each message stays its own
+  user message for the agent. A message that arrives as the turn finishes runs as its own follow-up turn (`runs as its
+  own turn next`); several of them run one turn each, in the order sent, never joined. Steering that cannot be applied
+  (the turn was cancelled, a command was running, the agent stopped) is put back into the composer; when more than one
+  comes back the draft holds them one per line, a notice says that Enter sends the draft as one message, and you can
+  edit or split it first. Slash commands wait for idle, except read-only `/doctor`,
   `/help` and `/receipt`.
 - **Paste buffers.** A multi-line or long paste becomes `[Pasted text #1: 24 lines]` in the composer; its content is
   submitted exactly as pasted (newlines in it never send, and a pasted `/exit` is text). Ctrl+O shows a buffer,

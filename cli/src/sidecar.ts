@@ -230,6 +230,7 @@ export class SidecarServer {
         void this.providerConnect(command.id, command.provider, command.method, command.key, command.endpoint);
         return;
       case "provider.cancel":
+        this.modelLists.get(command.id)?.abort();
         this.signIns.get(command.id)?.cancel();
         this.signIns.delete(command.id);
         cancelLocalEndpointSetup(command.id);
@@ -255,12 +256,21 @@ export class SidecarServer {
   /** Sign-ins in progress, by request id (provider.cancel stops one). */
   private signIns = new Map<string, { cancel(): void }>();
 
+  /** Model-list fetches in flight, by request id: a new list, provider.cancel or shutdown stops them. */
+  private modelLists = new Map<string, AbortController>();
+
   private async modelsList(id: string): Promise<void> {
+    // Only the newest list matters: the picker that asked for an older one is gone.
+    for (const older of this.modelLists.values()) older.abort();
+    const controller = new AbortController();
+    this.modelLists.set(id, controller);
     try {
-      const catalog = await buildCatalog(this.app.getConfig());
-      this.emit({ type: "models.catalog", id, ...catalog });
+      const catalog = await buildCatalog(this.app.getConfig(), { signal: controller.signal });
+      if (!controller.signal.aborted) this.emit({ type: "models.catalog", id, ...catalog });
     } catch (err) {
-      this.emit({ type: "error", id, code: "INTERNAL", message: errorText(err) });
+      if (!controller.signal.aborted) this.emit({ type: "error", id, code: "INTERNAL", message: errorText(err) });
+    } finally {
+      if (this.modelLists.get(id) === controller) this.modelLists.delete(id);
     }
   }
 
@@ -365,22 +375,21 @@ export class SidecarServer {
     this.steerAck(id, "deferred", "The turn is finishing; your message starts a follow-up turn as soon as it ends.");
   }
 
-  /** Runs deferred steering as one follow-up turn under the first message's id. */
+  /**
+   * Runs the oldest deferred message as its own follow-up turn under its own id. Later ones wait: when this turn
+   * ends the settle path starts the next, so each message is a separate user message and a separate turn, in the
+   * order sent, never joined into one (D-18).
+   */
   private startFollowUp(): void {
-    const followUps = this.followUps;
-    this.followUps = [];
-    const id = followUps[0].id;
-    const text = followUps.map((f) => f.text).join("\n\n");
-    this.runJob(id, undefined, (signal) =>
-      this.gatedTurn(id, text, signal, {
+    const next = this.followUps.shift()!;
+    this.runJob(next.id, undefined, (signal) =>
+      this.gatedTurn(next.id, next.text, signal, {
         admitted: () => {
-          for (const f of followUps) {
-            this.history.push(f.text.trim());
-            this.steerAck(f.id, "applied", "Applied as a follow-up turn.");
-          }
+          this.history.push(next.text.trim());
+          this.steerAck(next.id, "applied", "Applied as a follow-up turn.");
         },
         refused: (message) => {
-          for (const f of followUps) this.steerAck(f.id, "cancelled", `${message} Your message is back in the composer.`, f.text);
+          this.steerAck(next.id, "cancelled", `${message} Your message is back in the composer.`, next.text);
         },
       }),
     );
@@ -1092,6 +1101,7 @@ export class SidecarServer {
   private shutdown(): Promise<void> {
     for (const signIn of this.signIns.values()) signIn.cancel();
     this.signIns.clear();
+    for (const list of this.modelLists.values()) list.abort();
     this.shutdownPromise ??= (async () => {
       this.startupProbeAbort.abort();
       this.turnAbort?.abort(new Error("sidecar shutdown"));

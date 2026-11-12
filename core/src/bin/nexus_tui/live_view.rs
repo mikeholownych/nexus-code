@@ -539,7 +539,7 @@ const HELP: &[(&str, &str)] = &[
     ("backspace", "right after a paste buffer: remove it"),
     (
         "enter (working)",
-        "send steering: the agent applies it at its next step; esc cancels the turn",
+        "send steering for this turn (applied at its next step, never merged); esc cancels the turn",
     ),
     ("/", "slash commands: type / to list them, tab completes"),
     ("/model", "choose a model from the appliance or any connected cloud provider"),
@@ -1884,9 +1884,9 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
         } => {
             let (label, color) = match state {
                 SteerState::Sending => ("sending", ACCENT),
-                SteerState::Queued => ("queued for the next step", ACCENT),
+                SteerState::Queued => ("applies at the next step", ACCENT),
                 SteerState::Applied => ("applied", Color::Green),
-                SteerState::Deferred => ("starts a follow-up turn", ACCENT),
+                SteerState::Deferred => ("runs as its own turn next", ACCENT),
                 SteerState::Cancelled => ("not applied", Color::Yellow),
                 SteerState::Rejected => ("not applied", Color::Yellow),
                 SteerState::Duplicate => ("already received", MUTED),
@@ -3460,6 +3460,55 @@ mod tests {
         assert!(screen.contains("via Codex CLI"), "{screen}");
         assert!(screen.contains("+ Connect Anthropic"), "{screen}");
         assert!(screen.contains("ctrl+p"), "{screen}");
+    }
+
+    #[test]
+    fn the_picker_lists_the_session_endpoints_models_and_marks_the_current_one_at_every_width() {
+        // D-11: a session started with `-e <url> -m fake-model` showed "could not list models" for the appliance
+        // and neither the working endpoint nor the current model.
+        let catalog = r#"{"v":1,"type":"models.catalog","id":"m1","providers":[{"id":"session","label":"This session (127.0.0.1:18080)","disclosure":"local","connected":true,"methods":[],"status":"ok"},{"id":"appliance","label":"Appliance (localhost:1234)","disclosure":"local","connected":true,"methods":[],"status":"error","error":"fetch failed"}],"models":[{"provider":"session","id":"fake-model"},{"provider":"session","id":"other-model"}],"current":{"provider":"session","model":"fake-model"},"recent":[]}"#;
+        for width in [40u16, 60, 100] {
+            let mut state = ready();
+            for c in "/model".chars() {
+                state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
+            state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            feed(&mut state, &[catalog]);
+            let screen = draw(&state, width, 24);
+            assert!(screen.contains("● fake-model"), "the current model is marked at {width}: {screen}");
+            assert!(screen.contains("other-model"), "its other models are listed at {width}: {screen}");
+            assert!(screen.contains("This session"), "the endpoint is named at {width}: {screen}");
+            let session = screen.find("This session").unwrap();
+            assert!(session < screen.find("Appliance").unwrap_or(usize::MAX), "the working endpoint comes before the appliance at {width}: {screen}");
+        }
+    }
+
+    #[test]
+    fn steering_rows_say_what_will_happen_to_each_message_at_every_width() {
+        // D-18: every message typed while the agent works is labelled as steering for this turn, or as its own turn.
+        for width in [40u16, 60, 100] {
+            let mut state = ready();
+            feed(&mut state, &[BUSY]);
+            for (text, id) in [("SC:e500 go", "g1"), ("SC:reset go", "g2")] {
+                for c in text.chars() {
+                    state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+                }
+                state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                let _ = id;
+            }
+            feed(
+                &mut state,
+                &[
+                    r#"{"v":1,"type":"steer.ack","id":"g1","status":"queued","message":"queued"}"#,
+                    r#"{"v":1,"type":"steer.ack","id":"g2","status":"deferred","message":"deferred"}"#,
+                ],
+            );
+            let screen = draw(&state, width, 24);
+            assert!(screen.contains("SC:e500 go") && screen.contains("SC:reset go"), "both stay as separate rows at {width}: {screen}");
+            assert!(screen.contains("applies at the next step"), "{width}: {screen}");
+            assert!(screen.contains("runs as its own turn next"), "{width}: {screen}");
+            assert!(!screen.contains("queued for the next step"), "{width}: {screen}");
+        }
     }
 
     #[test]

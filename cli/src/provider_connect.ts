@@ -5,7 +5,7 @@
  */
 import { InferenceError, LocalLlmClient } from "./client.js";
 import { commitLocalEndpointSetup, removeCredential, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
-import { APPLIANCE, applianceConfig, chatModel, connectionOf, providerConfig, recordRecent, type ModelRef } from "./model_catalog.js";
+import { APPLIANCE, SESSION_ENDPOINT, applianceConfig, chatModel, connectionOf, providerConfig, recordRecent, type ModelRef } from "./model_catalog.js";
 import { openBrowser, startAuthFlow, type AuthPrompt } from "./oauth.js";
 import { disclosureClass, originOf, providerDefinition } from "./providers.js";
 import { activateApplianceEndpoint, applianceEndpointSelection, pendingApplianceEndpointKey, resetApplianceEndpointOverride, saveLocalEndpointSettings } from "./config.js";
@@ -274,6 +274,21 @@ export function selectModel(agent: AutonomousAgent, config: HarnessConfig, ref: 
         ? `Model: ${model} via the configured endpoint. Task content will be sent there.`
         : `Model: ${model} on the local appliance.`,
     };
+  }
+  if (ref.provider === SESSION_ENDPOINT) {
+    // The endpoint the session already runs on: only the model changes (endpoint, key and boundary stay as they are).
+    if (config.provider) return { ok: false, message: "This session is not using a custom endpoint any more; choose a model from the list." };
+    agent.setInferenceTarget({
+      provider: undefined,
+      endpoint: config.endpoint,
+      model,
+      apiKey: config.apiKey,
+      credentialOrigin: config.credentialOrigin,
+      authorizedDisclosureOrigins: config.authorizedDisclosureOrigins,
+    });
+    const disclosure = disclosureClass(config.endpoint, undefined, config.cloudRoutedOrigins);
+    const where = originOf(config.endpoint)?.replace(/^https?:\/\//, "") ?? "the session endpoint";
+    return { ok: true, message: disclosure === "cloud" ? `Model: ${model} via ${where}. Task content will be sent there.` : `Model: ${model} on ${where}.` };
   }
   const def = providerDefinition(ref.provider);
   if (!def) return { ok: false, message: `Unknown provider '${ref.provider}'.` };

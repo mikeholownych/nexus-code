@@ -618,6 +618,12 @@ impl LiveState {
                 self.composer.line_end();
             }
             self.composer.insert("\n");
+            // Enter would send everything in the draft as one message: say so, never join messages silently.
+            let lines = self.composer.text().split('\n').count();
+            self.transcript.push(Entry::Notice(format!(
+                "{} messages are now in the draft; Enter sends them as one message, so edit or split it first.",
+                lines.max(2)
+            )));
         }
         self.composer.paste(text);
     }
@@ -650,6 +656,11 @@ impl LiveState {
             Some(Overlay::Models(picker)) => picker.local_endpoint_setup_id.clone(),
             _ => None,
         };
+        // A list still being fetched is cancelled with the picker.
+        let listing = match &self.overlay {
+            Some(Overlay::Models(picker)) if matches!(picker.catalog, Fetch::Waiting) => Some(picker.request.clone()),
+            _ => None,
+        };
         let Some(Overlay::Models(picker)) = &mut self.overlay else {
             return None;
         };
@@ -660,7 +671,9 @@ impl LiveState {
         match picker.on_key(key)? {
             PickerIntent::Close => {
                 self.overlay = None;
-                local_setup_id.map(|id| Action::Send(Command::ProviderLocalCancel { id }))
+                local_setup_id
+                    .map(|id| Action::Send(Command::ProviderLocalCancel { id }))
+                    .or_else(|| listing.map(|id| Action::Send(Command::ProviderCancel { id })))
             }
             PickerIntent::Select { provider, model } => {
                 self.overlay = None;
@@ -2918,6 +2931,30 @@ mod tests {
     }
 
     #[test]
+    fn two_returned_messages_are_never_joined_silently() {
+        // D-18: two steering messages typed during a wait came back on Esc as one draft, and Enter then sent them as
+        // one prompt without a word about it.
+        let mut state = busy();
+        type_text(&mut state, "SC:e500 go");
+        state.on_key(key(KeyCode::Enter));
+        type_text(&mut state, "SC:reset go");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"SC:e500 go"}"#));
+        let notices = |state: &LiveState| state.transcript.iter().filter(|e| matches!(e, Entry::Notice(t) if t.contains("one message"))).count();
+        assert_eq!(notices(&state), 0, "the first returned message lands in an empty draft: nothing is joined yet");
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g2","status":"cancelled","message":"Not applied","text":"SC:reset go"}"#));
+        assert_eq!(state.composer.expand(state.composer.text()), "SC:e500 go\nSC:reset go", "both are kept, one per line");
+        assert_eq!(notices(&state), 1, "the join is announced: {:?}", state.transcript);
+        let Some(Entry::Notice(text)) = state.transcript.iter().rev().find(|e| matches!(e, Entry::Notice(t) if t.contains("one message"))) else { panic!() };
+        assert!(text.contains("2 messages") && text.contains("edit"), "{text}");
+        // A message typed by hand and then a returned one is the same join.
+        let mut typed = busy();
+        typed.composer = "draft already here".into();
+        typed.restore_draft("returned text");
+        assert_eq!(notices(&typed), 1);
+    }
+
+    #[test]
     fn steering_the_sidecar_never_acknowledged_returns_when_it_crashes() {
         let mut state = busy();
         type_text(&mut state, "add tests too");
@@ -4476,6 +4513,21 @@ mod tests {
         let outbox = state.take_outbox();
         assert!(matches!(outbox.as_slice(), [Action::Send(Command::ModelsList { .. })]), "reopens the picker for the provider");
         assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("anthropic")));
+    }
+
+    #[test]
+    fn closing_the_picker_while_models_are_still_being_listed_cancels_the_fetch() {
+        // D-11: the listing is bounded and cancellable; Esc on "Listing models" stops the sidecar's request.
+        let mut state = ready();
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id })));
+        assert!(!matches!(state.overlay, Some(Overlay::Models(_))));
+        // Once the list has arrived there is nothing to cancel.
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
     }
 
     #[test]
