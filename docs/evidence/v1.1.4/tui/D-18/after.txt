@@ -20,8 +20,8 @@ the composer.
 ↳ SC:reset go
   steering · not applied — Cancelled with the turn before it could start; your message is back in
 the composer.
-  ! Another message was added to the draft; Enter sends the whole draft as one message, so edit or
-split it first.
+  ! Another message was added to the draft; Enter sends the whole draft as one message; edit the
+draft if you want them sent separately.
 
  enter send · alt+enter or ctrl+j newline · ? help ─────────────────────────────────────────────────
 › SC:e500 go
