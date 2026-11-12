@@ -143,7 +143,7 @@ variable is set) with a message naming the cause. A missing directory later (sys
 "no scopes"; any other read error fails the test (the sampler rethrows it in the awaiting test).
 
 CI invocation: in the workflows and Makefile the file is run through `cli/scripts/run_tests.mjs` (`npm --prefix cli test` in `.github/workflows/ci.yml`
-lines 92 and 182 and `release.yml` line 107, and `make test` / `make test-ci`), which runs `tsx --test --test-concurrency=1`
+lines 92 and 182 and `release.yml` line 107, and `make test` / `make test-ci`, which run the same script through `npm --prefix cli run test:cli`, the same runner without `test:scope`), which runs `tsx --test --test-concurrency=1`
 over every `cli/test/*.test.ts` (plus two `eval/*.test.mjs` files that create no scopes), so test files do not run in
 parallel inside that run. This holds for the single-tenant hosted runners only; other processes on a shared host, or a hand run
 with `tsx --test` in parallel with other contract users, can create scopes and disturb the snapshot comparison.

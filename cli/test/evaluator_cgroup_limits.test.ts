@@ -100,7 +100,7 @@ async function requireHost(t: TestContext) {
 /** The scope directory's entries. It may be gone when no scope exists (systemd removes an empty slice): then none. Any other error is a failure, never an empty listing. */
 function readScopeDir(): string[] {
   try { return fs.readdirSync(scopeParent()); }
-  catch (error: any) { if (error?.code === "ENOENT") return []; throw error; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
 }
 
 /** Scope cgroups (under the user manager) whose payload leaf holds a process whose command line contains `marker`. */
