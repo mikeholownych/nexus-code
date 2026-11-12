@@ -13,7 +13,8 @@ import {
 } from "../src/core/operation_git.js";
 import { OperationRunner, type WorkUnitExecutor } from "../src/core/operation_runner.js";
 import { newOperation, type DurableOperationState, type UnitRunResult, type WorkUnit } from "../src/core/operation.js";
-import type { ResourceDescriptor } from "../src/core/resources.js";
+import { ResourceRegistry, type ResourceDescriptor } from "../src/core/resources.js";
+import { ConvergenceScheduler } from "../src/core/scheduler.js";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -1013,6 +1014,7 @@ test("a failure_debugger on a failed tester works on a snapshot of the tester's 
   state.git = newOperationGitState(p);
   ensureIntegrationWorktree(p, state.git);
   let debuggerSaw: { test?: string; scratch?: boolean } = {};
+  let debuggerDeps: unknown;
   const executor: WorkUnitExecutor = {
     async run(u, _resource, ctx) {
       const ws = ctx.workspace!;
@@ -1025,6 +1027,7 @@ test("a failure_debugger on a failed tester works on a snapshot of the tester's 
           failedRun: { summary: "1 failed", verification: { command: "test -f regression.test.txt && false", status: "FAILED", hasExecutedTests: true } },
         };
       }
+      debuggerDeps = ctx.dependencies;
       debuggerSaw = {
         test: fs.existsSync(path.join(ws, "regression.test.txt")) ? fs.readFileSync(path.join(ws, "regression.test.txt"), "utf8") : undefined,
       };
@@ -1035,6 +1038,7 @@ test("a failure_debugger on a failed tester works on a snapshot of the tester's 
   await new OperationRunner(state, { executor, clock: clock(), persist: () => {} }).run();
   assert.equal(state.units.find((u) => u.id === "debug")!.status, "COMPLETE", JSON.stringify(state.units.map((u) => [u.id, u.status])));
   assert.equal(debuggerSaw.test, "FAILING_REGRESSION_TEST\n", "the debugger reproduces against the tester's candidate, not the integration tip");
+  assert.deepEqual(debuggerDeps, [{ id: "verify", title: "verify", summary: "1 failed", verification: { command: "test -f regression.test.txt && false", status: "FAILED", hasExecutedTests: true }, failed: true }]);
   const tree = git(state.git!.integrationWorktree, ["ls-tree", "-r", "--name-only", "HEAD"]).split("\n").sort();
   assert.deepEqual(tree, ["file.txt"], "neither the tester's unverified work nor the debugger's scratch files are integrated");
   assert.equal(fs.readFileSync(path.join(state.git!.integrationWorktree, "file.txt"), "utf8"), "base\n");
@@ -1070,7 +1074,12 @@ test("a failure_debugger that depends on two failed units fails closed instead o
   assert.equal(debug.status, "BLOCKED", JSON.stringify(state.units.map((u) => [u.id, u.status])));
   assert.match(debug.blocked?.reason ?? "", /verify-a/);
   assert.match(debug.blocked?.reason ?? "", /verify-b/);
-  assert.ok(debug.blocked?.decision.options.some((o) => o.action.kind === "retry"), "the operator can retry once only one dependency still fails");
+  const offered = debug.blocked!.decision.options;
+  assert.ok(!offered.some((o) => o.action.kind === "retry"), "a retry would hit the same check and block again");
+  assert.deepEqual(offered.map((o) => o.action.kind), ["cancel_operation"], "a required debugger can only be stopped");
+  const sched = new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now());
+  sched.resolve(debug.blocked!.decision.id, offered[0].id);
+  assert.equal(state.status, "CANCELLED", "the offered option ends the operation");
   assert.equal(state.git!.units.debug, undefined, "no snapshot worktree was created");
 });
 
@@ -1176,4 +1185,33 @@ test("only a failure_debugger is ever told its workspace is diagnostic, whatever
   const executor: WorkUnitExecutor = { async run(_u, _r, ctx) { diagnostic = ctx.diagnostic; return completed({}); } };
   await new OperationRunner(state, { executor, clock: clock(), persist: () => {} }).run();
   assert.equal(diagnostic, undefined, "a tester must keep its completion oracle");
+});
+
+test("an advisory failure_debugger blocked on two failed units is offered only drop (no retry), and drop ends its block", async () => {
+  const root = repo();
+  const state = newOperation("op-dbg3", "fix it", [
+    { id: "verify-a", title: "verify a", role: "tester", prompt: "test a" },
+    { id: "verify-b", title: "verify b", role: "tester", prompt: "test b" },
+    { id: "debug", title: "debug", role: "failure_debugger", required: false, prompt: "find the cause", dependsOn: ["verify-a", "verify-b"] },
+  ] as any, [resource()], Date.now());
+  const p = plan(root, state.id);
+  state.git = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state.git);
+  const executor: WorkUnitExecutor = {
+    async run(u) {
+      if (u.id === "debug") return completed({ summary: "must not run" });
+      return {
+        kind: "failed", cause: "EXECUTION_FAILED", reason: "verifier failed", question: "q",
+        options: [{ label: "retry", action: { kind: "retry" } }],
+        failedRun: { summary: "1 failed", verification: { command: "false", status: "FAILED", hasExecutedTests: true } },
+      };
+    },
+  };
+  await new OperationRunner(state, { executor, clock: clock(), persist: () => {} }).run();
+  const debug = state.units.find((u) => u.id === "debug")!;
+  const offered = debug.blocked!.decision.options;
+  assert.deepEqual(offered.map((o) => o.action.kind), ["drop"]);
+  new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now()).resolve(debug.blocked!.decision.id, offered[0].id);
+  assert.equal(debug.dropped, true);
+  assert.equal(debug.blocked, undefined);
 });

@@ -35,7 +35,7 @@ export interface UnitRunContext {
   objective: string;
   /** The durable operation this unit belongs to. */
   operationId?: string;
-  /** Each dependency's result; `failed` marks one that is BLOCKED on a failed verifier run (failure_debugger units only). */
+  /** Each dependency's result; `failed` marks one that is BLOCKED on a failed verifier run (failure_debugger units of isolated operations only). */
   dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean }; failed?: true }>;
   /** Isolated operations: the commit the operation started from, which a review unit diffs against. */
   baseCommit?: string;
@@ -317,8 +317,9 @@ export class OperationRunner {
               kind: "failed",
               cause: "EXECUTION_FAILED",
               reason,
-              question: `${unit.title}: ${reason}. Give each failed unit its own failure_debugger, or stop?`,
-              options: [{ label: "retry", action: { kind: "retry" } }],
+              question: `${unit.title}: ${reason}. A retry would hit the same check; to debug each, give every failed unit its own failure_debugger in a new operation.`,
+              // No retry: nothing changes between attempts. The scheduler adds the terminal option (stop, or drop for advisory work).
+              options: [],
             };
           }
           const snapshotOf = failedDeps[0];
@@ -349,7 +350,7 @@ export class OperationRunner {
         const dep = this.scheduler.unit(id);
         // The verifier a dependency ran: its integration receipt (isolated operations) or, where nothing was
         // integrated, the verification its own completed result recorded. A dependency that has not completed can
-        // only be one BLOCKED on a failed verifier run (the scheduler admits a failure_debugger on that), so its
+        // only be one BLOCKED on a failed verifier run (the scheduler admits a failure_debugger on that in an isolated operation), so its
         // evidence is that run's.
         const receipt = [...(this.state.integrations ?? [])].reverse().find((entry) => entry.unitId === id);
         const failedRun = dep.result ? undefined : dep.failedRun;

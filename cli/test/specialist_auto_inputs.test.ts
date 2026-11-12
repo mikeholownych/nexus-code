@@ -225,18 +225,21 @@ test("an auto-collected diff over the role ceiling can be cleared with set_input
   assert.equal(second.kind, "completed");
 });
 
-test("replace_task on a security_reviewer records the scope change in the decision", async () => {
+test("replace_task on a security_reviewer replaces its scope, keeps the operator's note, and is reported as a decision event", async () => {
   const { ConvergenceScheduler } = await import("../src/core/scheduler.js");
   const { ResourceRegistry } = await import("../src/core/resources.js");
-  const { newOperation } = await import("../src/core/operation.js");
+  const { newOperation, unitBaseTask } = await import("../src/core/operation.js");
   const state = newOperation("op", "o", [{ id: "u1", role: "security_reviewer", prompt: "review src/auth only" }], [resource], Date.now());
   const sched = new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now());
   const u = state.units[0];
   u.status = "RUNNING";
   sched.apply("u1", { kind: "failed", cause: "CONTEXT_BUDGET", reason: "r", question: "q", options: [{ label: "replace", action: { kind: "replace_task" } }] });
   sched.resolve(u.blocked!.decision.id, u.blocked!.decision.options.find((o) => o.action.kind === "replace_task")!.id, "review everything");
-  const change = (u.decisions![0] as any).scopeChange;
-  assert.deepEqual(change, { from: "review src/auth only", to: "review everything" });
+  assert.equal(unitBaseTask(u.prompt), "review everything");
+  assert.equal(u.decisions![0].note, "review everything");
+  assert.equal("scopeChange" in u.decisions![0], false, "no field nothing reads");
+  const event = state.events.find((e) => e.type === "DECISION_APPLIED");
+  assert.match(event?.message ?? "", /operator chose "replace" \(review everything\)/);
 });
 
 test("the reproduction command is trusted only when the operator configured it; a previous unit's command is labelled untrusted", async () => {
@@ -368,7 +371,7 @@ test("a tester whose verifier failed hands that evidence on with its failure", a
   assert.match(failedRun?.summary ?? "", /2 tests failed in parser\.test\.ts/);
 });
 
-test("a failure_debugger that depends on a failed tester runs on the tester's failed verifier evidence", async () => {
+test("in a non-isolated operation a failure_debugger never runs on top of a failed tester's uncommitted candidate", async () => {
   const { OperationRunner } = await import("../src/core/operation_runner.js");
   const { newOperation } = await import("../src/core/operation.js");
   const state = newOperation("op", "Harden the parser", [
@@ -391,11 +394,8 @@ test("a failure_debugger that depends on a failed tester runs on the tester's fa
   };
   const out = await new OperationRunner(state, { executor, persist: () => {} }).run();
   assert.equal(out.units.find((u) => u.id === "verify")!.status, "BLOCKED", "the tester still awaits the operator");
-  assert.equal(out.units.find((u) => u.id === "debug")!.status, "COMPLETE", JSON.stringify(out.units.map((u) => [u.id, u.status])));
-  assert.equal(seen.length, 1);
-  const dep = seen[0].dependencies[0];
-  assert.deepEqual(dep.verification, { command: "npm test", status: "FAILED", hasExecutedTests: true });
-  assert.match(dep.summary, /2 tests failed/);
+  assert.equal(out.units.find((u) => u.id === "debug")!.status, "WAITING_ON_DEPENDENCY");
+  assert.equal(seen.length, 0, "the debugger was not started");
 });
 
 test("a BLOCKED dependency satisfies a failure_debugger only while it holds failed verifier evidence", async () => {
@@ -407,6 +407,7 @@ test("a BLOCKED dependency satisfies a failure_debugger only while it holds fail
     { id: "debug", role: "failure_debugger", prompt: "find the cause", dependsOn: ["verify"] },
     { id: "review", role: "reviewer", prompt: "review", dependsOn: ["verify"] },
   ], [resource], Date.now());
+  state.git = { isolate: true } as any;
   const sched = new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now());
   const statuses = () => Object.fromEntries(state.units.map((u) => [u.id, u.status]));
   const verify = state.units[0];
@@ -423,6 +424,26 @@ test("a BLOCKED dependency satisfies a failure_debugger only while it holds fail
   sched.resolve(verify.blocked!.decision.id, verify.blocked!.decision.options[0].id);
   sched.decide();
   assert.deepEqual(statuses(), { verify: "RUNNABLE", debug: "WAITING_ON_DEPENDENCY", review: "WAITING_ON_DEPENDENCY" }, "a retried tester is unfinished input again");
+});
+
+test("a failure_debugger is admitted past a failed dependency only in an isolated operation, and no other role ever is", async () => {
+  const { ConvergenceScheduler } = await import("../src/core/scheduler.js");
+  const { ResourceRegistry } = await import("../src/core/resources.js");
+  const { newOperation } = await import("../src/core/operation.js");
+  const roles = ["failure_debugger", "reviewer", "security_reviewer", "tester", "coder", "architect"];
+  for (const isolated of [false, true]) {
+    const state = newOperation("op", "o", [
+      { id: "verify", role: "tester", prompt: "run the tests" },
+      ...roles.map((role) => ({ id: `d-${role}`, role, prompt: "x", dependsOn: ["verify"] })),
+    ] as any, [resource], Date.now());
+    if (isolated) state.git = { isolate: true } as any;
+    const sched = new ConvergenceScheduler(state, new ResourceRegistry(state.resources), () => Date.now());
+    state.units[0].status = "RUNNING";
+    sched.apply("verify", { kind: "failed", cause: "EXECUTION_FAILED", reason: "r", question: "q", options: [{ label: "retry", action: { kind: "retry" } }], failedRun: { summary: "2 failed", verification: { command: "npm test", status: "FAILED", hasExecutedTests: true } } } as any);
+    sched.decide();
+    const admitted = state.units.filter((u) => u.id !== "verify" && u.status === "RUNNABLE").map((u) => u.role);
+    assert.deepEqual(admitted, isolated ? ["failure_debugger"] : [], `isolated=${isolated}`);
+  }
 });
 
 // ---------------------------------------------------------------- content of protected files cannot leave through new files; repo-configured commands never run

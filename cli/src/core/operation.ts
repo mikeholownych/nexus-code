@@ -19,7 +19,8 @@
  *   unit WAITING_ON_DEPENDENCY a dependency is not COMPLETE (a BLOCKED dependency keeps it here: it never runs on
  *                              unfinished inputs). The one exception is a failure_debugger, whose input is the
  *                              failure itself: a dependency BLOCKED on a run whose verifier did not pass (its
- *                              `failedRun`) counts as satisfied for that role only. A debugger that has COMPLETED
+ *                              `failedRun`) counts as satisfied for that role only, and only in an isolated operation (`state.git.isolate`): a
+ *                              non-isolated operation has no snapshot, so the debugger keeps waiting. A debugger that has COMPLETED
  *                              is not run again if that dependency is later retried and fails a second time; the
  *                              operator adds or retries a debugger unit for the new failure. A debugger works on
  *                              exactly one failed candidate: with two or more failed dependencies it is BLOCKED
@@ -129,8 +130,6 @@ export interface AppliedDecision {
   label: string;
   action: DecisionAction;
   note?: string;
-  /** replace_task on a unit whose scope is derived from its task (security_reviewer): what the scope was and became. */
-  scopeChange?: { from: string; to: string };
   at: string;
 }
 
@@ -169,7 +168,7 @@ export interface WorkUnit {
   };
   /**
    * The verifier run behind the unit's latest failure, present only while that failure is its last outcome: a
-   * dependent failure_debugger is given it as evidence while the unit waits on the operator.
+   * dependent failure_debugger of an isolated operation is given it as evidence while the unit waits on the operator.
    */
   failedRun?: { at: string; reason: string; summary: string; verification: { command: string; status: string; hasExecutedTests: boolean } };
   reroutes: Array<{ at: string; from: string; to: string; reason: string }>;

@@ -255,6 +255,25 @@ test("the plain diff leaves protected files out, including a moved one, and refu
   assert.ok("error" in plainCandidateDiff(t.wt, undefined));
 });
 
+test("the plain diff lists untracked files once and is otherwise unchanged", () => {
+  const d = repo({ "in/a.txt": "a\n" });
+  put(d, "in/a.txt", `a ${MARK}\n`); put(d, "in/new.txt", "brand new\n");
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-gitlog-"));
+  const log = path.join(bin, "calls.log");
+  const real = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\necho "$@" >> "${log}"\nexec "${real}" "$@"\n`, { mode: 0o755 });
+  const saved = process.env.PATH;
+  process.env.PATH = `${bin}:${saved}`;
+  let r: ReturnType<typeof plainCandidateDiff>;
+  try { r = plainCandidateDiff(d, undefined); } finally { process.env.PATH = saved; }
+  assert.ok(!("error" in r), JSON.stringify(r));
+  assert.match(r.diff, new RegExp(MARK));
+  assert.match(r.diff, /brand new/);
+  const listings = fs.readFileSync(log, "utf8").split("\n").filter((l) => /ls-files/.test(l) && /--others/.test(l) && !/--ignored|--cached/.test(l));
+  assert.equal(listings.length, 1, listings.join("\n"));
+  fs.rmSync(bin, { recursive: true, force: true });
+});
+
 test("a deleted tracked .gitattributes does not refuse the candidate", () => {
   const d = repo({ "in/a.txt": "a\n", ".gitattributes": "*.txt text\n" });
   fs.rmSync(path.join(d, ".gitattributes"));

@@ -39,13 +39,15 @@ export class DecisionRejected extends Error {}
 export const isRequired = (u: Pick<WorkUnit, "required">): boolean => u.required !== false;
 
 /**
- * Whether `dependency` is finished input for `u`: COMPLETE, or, for a failure_debugger only, BLOCKED on a run whose
- * verifier did not pass. The failure is that role's input, so waiting for the dependency to complete would wait for
- * the evidence to disappear; a retried dependency is unfinished input again.
+ * Whether `dependency` is finished input for `u`: COMPLETE, or, for a failure_debugger in an isolated operation only,
+ * BLOCKED on a run whose verifier did not pass. The failure is that role's input, so waiting for the dependency to
+ * complete would wait for the evidence to disappear; a retried dependency is unfinished input again. Only an isolated
+ * operation gives the debugger a snapshot of the failed candidate: elsewhere it would run in the shared workspace on
+ * top of the blocked unit's uncommitted candidate, so it keeps waiting.
  */
-function dependencySatisfied(u: WorkUnit, dependency: WorkUnit): boolean {
+function dependencySatisfied(u: WorkUnit, dependency: WorkUnit, isolated: boolean): boolean {
   if (dependency.status === "COMPLETE") return true;
-  return u.role === "failure_debugger" && dependency.status === "BLOCKED" && dependency.failedRun !== undefined;
+  return isolated && u.role === "failure_debugger" && dependency.status === "BLOCKED" && dependency.failedRun !== undefined;
 }
 
 export class ConvergenceScheduler {
@@ -93,11 +95,13 @@ export class ConvergenceScheduler {
     // an earlier assignment in the same batch may use its next qualified, eligible resource instead of waiting.
     const choices = new Map<string, Selection>();
     const reroutes = new Map<string, { resourceId: string; reason: string }>();
+    // The same fact OperationRunner uses to create its OperationGit: only then is there a snapshot worktree.
+    const isolated = Boolean(this.state.git?.isolate);
 
     for (const u of this.state.units) {
       if (TERMINAL.includes(u.status) || u.status === "RUNNING") continue;
       const deps = u.dependsOn.map((d) => this.unit(d));
-      if (deps.some((d) => !dependencySatisfied(u, d))) {
+      if (deps.some((d) => !dependencySatisfied(u, d, isolated))) {
         u.status = "WAITING_ON_DEPENDENCY";
         delete u.parked;
         continue;
@@ -436,8 +440,7 @@ export class ConvergenceScheduler {
         throw new DecisionRejected(`${action.resourceId} is outside ${u.title}'s trust boundary; that cannot be overridden by a decision.`);
       }
     }
-    const scopeChange = action.kind === "replace_task" && u.role === "security_reviewer" ? { from: unitBaseTask(u.prompt), to: text! } : undefined;
-    const applied: AppliedDecision = { decisionId, optionId, label: option.label, action, ...(text ? { note: text } : {}), ...(scopeChange ? { scopeChange } : {}), at: new Date(this.now()).toISOString() };
+    const applied: AppliedDecision = { decisionId, optionId, label: option.label, action, ...(text ? { note: text } : {}), at: new Date(this.now()).toISOString() };
     (u.decisions ??= []).push(applied);
     delete u.blocked;
     switch (action.kind) {

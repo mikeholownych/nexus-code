@@ -550,11 +550,11 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     if (mangled !== undefined) return { error: `a path (${JSON.stringify(mangled.slice(0, 60))}) is not valid UTF-8 text and cannot be shown; rename it` };
     // No content is compared (no clean filter can run) before every path is known to have no driver.
     const driverCheck = (files: string[]) => driverRefusal((args, input) => execFileSync("git", [...pin, ...GIT_SAFE, ...args], { cwd: root, env, encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"], timeout: 30_000, maxBuffer: GIT_MAX_BUFFER }), files);
-    const listed = [...git(["ls-files", "-z", "--cached"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"), ...git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0")].filter((p) => p && !p.endsWith("/"));
+    const others = git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
+    const listed = [...git(["ls-files", "-z", "--cached"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0"), ...others].filter((p) => p && !p.endsWith("/"));
     const early = driverCheck(listed);
     if (early) return { error: early };
     const tracked = git(["diff", "--name-only", "-z", ...DIFF_RENDER, "--ignore-submodules=all", "--relative", "--no-renames", "--end-of-options", commit, "--"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
-    const others = git(["ls-files", "-z", "--others", "--exclude-standard"], { maxBuffer: LISTING_MAX_BUFFER }).split("\0").filter(Boolean);
     const omittedNested = others.filter((p) => p.endsWith("/")).length;
     const untracked = others.filter((p) => !p.endsWith("/"));
     if (tracked.length + untracked.length > MAX_DIFF_PATHS) return { error: `the change touches more than ${MAX_DIFF_PATHS} paths; scope it with explicit inputs` };
