@@ -405,8 +405,22 @@ test("openRegular never returns a file reached through a link, a swapped parent,
   assert.equal(openRegular(d, "swapped/secret.txt"), "cannot", "a parent that resolves outside the root is refused");
   assert.equal(openRegular(d, "dir"), "cannot", "a directory is not a regular file");
   assert.equal(openRegular(d, "missing.txt"), "gone");
-  try { execFileSync("mkfifo", [path.join(d, "fifo")]); assert.equal(openRegular(d, "fifo"), "cannot"); } catch { /* no mkfifo */ }
+  let fifo = false;
+  try { execFileSync("mkfifo", [path.join(d, "fifo")]); fifo = true; } catch { /* no mkfifo on this host */ }
+  if (fifo) assert.equal(openRegular(d, "fifo"), "cannot", "a FIFO is never opened for reading");
   const ok = openRegular(d, "plain.txt");
   assert.ok(typeof ok === "object");
   if (typeof ok === "object") { assert.equal(fs.readFileSync(ok.fd, "utf8"), "p\n"); fs.closeSync(ok.fd); }
+});
+
+test("openRegular refuses a parent that is swapped for a link after the directory check (the descriptor itself is checked)", { skip: process.platform !== "linux" }, () => {
+  const d = repo();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-outside-"));
+  fs.writeFileSync(path.join(outside, "secret.txt"), "OUTSIDE_SECRET\n");
+  fs.symlinkSync(outside, path.join(d, "swapped"));
+  // Simulate the race: the directory check sees a path inside the root (as before the swap), `open` then follows the real link out.
+  const inRoot = path.join(fs.realpathSync(d), "inside");
+  fs.mkdirSync(inRoot);
+  const racing = (p: string) => (p.endsWith(`${path.sep}swapped`) ? inRoot : fs.realpathSync(p));
+  assert.equal(openRegular(d, "swapped/secret.txt", racing), "cannot", "the descriptor resolves outside the root and is refused");
 });

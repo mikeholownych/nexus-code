@@ -204,18 +204,24 @@ const SIGNIFICANT_LINE_MIN = 8;
  * Opens a regular file under `root` for reading, narrowing (not closing: Node has no `openat`) the window between a check and the read: the directory
  * must resolve inside `root`, the file is opened without following a final link (and without blocking on a FIFO), and
  * the descriptor itself must be a regular file. "gone" when it does not exist; "cannot" for anything else (a link, a
- * special file, a swapped parent, any error). The caller reads from and closes `fd`.
+ * special file, a parent swapped for a link (checked on the descriptor itself on Linux), any error). The caller reads from and closes `fd`.
  */
-export function openRegular(root: string, relative: string): { fd: number; size: number } | "gone" | "cannot" {
+export function openRegular(root: string, relative: string, realpath: (p: string) => string = fs.realpathSync): { fd: number; size: number } | "gone" | "cannot" {
   let fd: number | undefined;
   try {
     const full = path.join(root, relative);
-    const realRoot = fs.realpathSync(root);
-    const realDir = fs.realpathSync(path.dirname(full));
+    const realRoot = realpath(root);
+    const realDir = realpath(path.dirname(full));
     if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) return "cannot";
     fd = fs.openSync(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const st = fs.fstatSync(fd);
     if (!st.isFile()) { fs.closeSync(fd); return "cannot"; }
+    // A parent directory swapped for a link after the check above is followed by `open`: ask the kernel where the
+    // descriptor really points. On Linux (the only v1 platform) a failed lookup fails closed; elsewhere the window stays narrowed.
+    if (process.platform === "linux") {
+      const resolved = fs.readlinkSync(`/proc/self/fd/${fd}`);
+      if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) { fs.closeSync(fd); return "cannot"; }
+    }
     return { fd, size: st.size };
   } catch (err: any) {
     if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already closed */ } }
