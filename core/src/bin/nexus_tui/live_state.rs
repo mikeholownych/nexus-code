@@ -498,6 +498,9 @@ pub struct LiveState {
     outbox: Vec<Action>,
     /// What the running turn last reported doing.
     pub activity: Option<Activity>,
+    /// The provider's stream is silent: (when the sidecar reported it, seconds of silence it reported). The silence
+    /// shown is this plus the time since, so it keeps counting between reports.
+    pub stall: Option<(Instant, u64)>,
     /// When the current turn started (this client's clock); drives the elapsed time while busy.
     pub turn_started: Option<Instant>,
     steer_seq: u64,
@@ -553,6 +556,7 @@ impl LiveState {
             panel_seq: 0,
             outbox: Vec::new(),
             activity: None,
+            stall: None,
             turn_started: None,
             steer_seq: 0,
             steer_texts: HashMap::new(),
@@ -819,6 +823,10 @@ impl LiveState {
     }
 
     fn apply_event(&mut self, event: Event) {
+        // Provider output or a tool starting means the stream is not silent any more.
+        if matches!(event, Event::AssistantDelta { .. } | Event::ToolStart { .. }) {
+            self.stall = None;
+        }
         if matches!(self.link, Link::Crashed { .. }) {
             return;
         }
@@ -858,9 +866,14 @@ impl LiveState {
                 if !busy {
                     self.turn_started = None;
                     self.activity = None;
+                    self.stall = None;
                 }
             }
+            Event::StreamStall { stalled, silent_secs } => {
+                self.stall = stalled.then(|| (Instant::now(), silent_secs));
+            }
             Event::Activity { phase, step, segment, tool, subject, max_steps, max_minutes } => {
+                self.stall = None;
                 if self.activity.as_ref().is_none_or(|previous| previous.step != step) {
                     self.assistant_break = true;
                 }

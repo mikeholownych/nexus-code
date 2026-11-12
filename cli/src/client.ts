@@ -327,6 +327,32 @@ export function boundedProviderText(text: string): string {
 const metadataSignal = (signal?: AbortSignal): AbortSignal =>
   signal ? AbortSignal.any([signal, AbortSignal.timeout(METADATA_TIMEOUT_MS)]) : AbortSignal.timeout(METADATA_TIMEOUT_MS);
 
+/** Timers the stall notice runs on; a test passes its own clock instead of waiting. */
+export interface StallScheduler {
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+  now(): number;
+}
+
+/** The provider's stream went quiet (`stalled`, after `silentSecs` without a chunk) or sent data again. */
+export interface StreamStallEvent {
+  stalled: boolean;
+  silentSecs: number;
+}
+
+const realScheduler: StallScheduler = {
+  set: (fn, ms) => {
+    const t = setTimeout(fn, ms);
+    t.unref?.();
+    return t;
+  },
+  clear: (handle) => clearTimeout(handle as NodeJS.Timeout),
+  now: () => Date.now(),
+};
+
+/** Seconds of silence after which a stream is reported as stalled (LOCAL_LLM_STALL_NOTICE_MS; 0 turns it off). */
+const DEFAULT_STALL_NOTICE_MS = 30_000;
+
 /**
  * Watchdog for inference requests (first-byte, idle between chunks, and optional total timeout).
  * Reset on each streamed chunk (REQ-PRV-104).
@@ -336,13 +362,20 @@ export class StreamWatchdog {
   private timer?: NodeJS.Timeout;
   private totalTimer?: NodeJS.Timeout;
   private readonly callerAbortListener?: () => void;
+  private stallTimer?: unknown;
+  private stalled = false;
+  private lastChunkAt: number;
 
   constructor(
     private readonly firstByteMs: number,
     private readonly idleMs: number,
     private readonly totalMs: number,
     private readonly callerSignal?: AbortSignal,
+    /** Reports silence before the idle timeout would abort: `ms` without a chunk, once, and again when data returns. */
+    private readonly stall?: { ms: number; notify: (event: StreamStallEvent) => void; scheduler?: StallScheduler },
   ) {
+    this.lastChunkAt = this.clockNow();
+    this.armStall();
     if (this.callerSignal) {
       if (this.callerSignal.aborted) {
         this.ac.abort(this.callerSignal.reason);
@@ -374,11 +407,40 @@ export class StreamWatchdog {
     }
   }
 
+  private clockNow(): number {
+    return (this.stall?.scheduler ?? realScheduler).now();
+  }
+
+  private armStall(): void {
+    const stall = this.stall;
+    if (!stall || !(stall.ms > 0)) return;
+    const scheduler = stall.scheduler ?? realScheduler;
+    scheduler.clear(this.stallTimer);
+    this.stallTimer = scheduler.set(() => {
+      this.stalled = true;
+      try {
+        stall.notify({ stalled: true, silentSecs: Math.round(stall.ms / 1000) });
+      } catch {}
+    }, stall.ms);
+  }
+
   onChunk(): void {
     this.arm(this.idleMs, "Idle");
+    const stall = this.stall;
+    if (!stall) return;
+    if (this.stalled) {
+      this.stalled = false;
+      const silentSecs = Math.round((this.clockNow() - this.lastChunkAt) / 1000);
+      try {
+        stall.notify({ stalled: false, silentSecs });
+      } catch {}
+    }
+    this.lastChunkAt = this.clockNow();
+    this.armStall();
   }
 
   done(): void {
+    if (this.stall) (this.stall.scheduler ?? realScheduler).clear(this.stallTimer);
     clearTimeout(this.timer);
     clearTimeout(this.totalTimer);
     if (this.callerSignal && this.callerAbortListener) {
@@ -985,6 +1047,11 @@ export class LocalLlmClient {
     return {};
   }
 
+  /** Told when the provider's stream goes quiet for the stall interval and when it speaks again (the operator's status). */
+  public onStreamStall?: (event: StreamStallEvent) => void;
+  /** Test seam: the clock the stall notice runs on. */
+  public stallScheduler?: StallScheduler;
+
   private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string): StreamWatchdog {
     const disclosure = this.disclosureOf(currentEp ?? this.endpoint);
     const parseNum = (k: string) => {
@@ -997,7 +1064,15 @@ export class LocalLlmClient {
     const idleMs = parseNum("LOCAL_LLM_IDLE_TIMEOUT_MS") ?? 120_000;
     const defaultTotal = disclosure === "cloud" ? 900_000 : 0;
     const totalMs = parseNum("LOCAL_LLM_TIMEOUT_MS") ?? defaultTotal;
-    return new StreamWatchdog(firstByteMs, idleMs, totalMs, operatorSignal);
+    const notify = this.onStreamStall;
+    const stallMs = parseNum("LOCAL_LLM_STALL_NOTICE_MS") ?? DEFAULT_STALL_NOTICE_MS;
+    return new StreamWatchdog(
+      firstByteMs,
+      idleMs,
+      totalMs,
+      operatorSignal,
+      notify ? { ms: stallMs, notify, ...(this.stallScheduler ? { scheduler: this.stallScheduler } : {}) } : undefined,
+    );
   }
 
   public setTaskId(taskId?: string): void {

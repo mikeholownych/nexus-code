@@ -102,6 +102,11 @@ pub fn activity_line(state: &LiveState) -> String {
         }
         _ => {}
     }
+    // The provider has sent nothing for a while: say so, with the silence so far (the way out is the cancel hint).
+    if let Some((reported, silent_secs)) = state.stall {
+        let secs = silent_secs.saturating_add(state.now.saturating_duration_since(reported).as_secs());
+        parts.insert(0, format!("no data from the provider for {secs} s"));
+    }
     let tail = if parts.is_empty() { String::new() } else { format!(" · {}", parts.join(" · ")) };
     let cancel = if state.activity.as_ref().is_some_and(|a| a.phase == "approval") { "" } else { " · esc cancels" };
     format!(" {} {} · {}{tail}{cancel} ", spinner_frame(elapsed), phase_text(state), clock(elapsed))
@@ -2028,6 +2033,35 @@ mod tests {
         assert_ne!(a, b, "the next frame differs without any sidecar event");
         assert_eq!(spinner_frame(std::time::Duration::from_millis(0)), "⠋");
         assert_eq!(clock(std::time::Duration::from_secs(3725)), "1:02:05");
+    }
+
+    #[test]
+    fn a_silent_provider_is_reported_with_its_silence_and_the_way_out_and_clears_when_data_arrives() {
+        // D-08: the TUI never saw a stall; "thinking" ran on for minutes.
+        let mut state = ready();
+        feed(&mut state, &[BUSY, r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1}"#]);
+        assert!(!draw(&state, 100, 12).contains("no data from the provider"), "no stall before the sidecar reports one");
+        feed(&mut state, &[r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
+        let shown = draw(&state, 100, 12);
+        assert_shows(&shown, &["no data from the provider for 30 s", "esc cancels"]);
+        // The silence keeps counting on the TUI's own clock between reports.
+        state.now = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        assert_shows(&draw(&state, 100, 12), &["no data from the provider for 42 s"]);
+        // Narrow terminals still say it, in fewer words, and never panic at tiny sizes.
+        assert_shows(&draw(&state, 40, 12), &["no data"]);
+        for (w, h) in [(1, 1), (10, 2), (40, 1)] {
+            draw(&state, w, h);
+        }
+        // Any provider output ends it.
+        feed(&mut state, &[r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"hi"}"#]);
+        assert!(!draw(&state, 100, 12).contains("no data from the provider"));
+        // An explicit resume report ends it too, and a finished turn drops it.
+        feed(&mut state, &[r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
+        feed(&mut state, &[r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":false,"silent_secs":41}"#]);
+        assert!(!draw(&state, 100, 12).contains("no data from the provider"));
+        feed(&mut state, &[r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#, IDLE]);
+        feed(&mut state, &[BUSY]);
+        assert!(!draw(&state, 100, 12).contains("no data from the provider"));
     }
 
     #[test]

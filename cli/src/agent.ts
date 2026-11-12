@@ -194,6 +194,8 @@ export interface AgentObserver {
   onToolEnd?(event: { dispatch: number; callId: string; tool: string; success: boolean; output: string; error?: string }): void;
   /** The loop is waiting out (or has finished waiting out) a provider failure. `discardedPartialOutput`: deltas already sent for the failed submission are void. */
   onProviderRecovery?(event: { record: ProviderRecoveryRecord; discardedPartialOutput: boolean }): void;
+  /** The provider's stream went quiet for `silentSecs` (`stalled`), or sent data again. The turn is still running. */
+  onStreamStall?(event: { stalled: boolean; silentSecs: number }): void;
   /** What the turn is doing now; fires on each phase change so a display can animate without model tokens. */
   onActivity?(event: AgentActivity): void;
   /** A file-edit tool succeeded and changed its file: that operation's own before/after (never the git working tree). */
@@ -6527,6 +6529,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           endpoint: activeClient.endpoint,
         });
         const lengthGuard = { step: currentStep, cutAfterMs: 0 };
+        // Silence on the stream is told to the operator while the request is still waiting (the idle timeout is separate).
+        activeClient.onStreamStall = (event) => {
+          try {
+            this.observer?.onStreamStall?.(event);
+          } catch {}
+        };
         try {
           assistantMessage = await recovery.run(requestId, {
             submit: (s) => this.submitGenAiRequest(activeClient, () =>

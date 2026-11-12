@@ -210,6 +210,14 @@ pub enum Event {
         #[serde(default)]
         max_minutes: Option<u64>,
     },
+    /// The provider's stream went quiet (`stalled`) after `silent_secs` without a chunk, or spoke again.
+    #[serde(rename = "stream.stall")]
+    StreamStall {
+        #[serde(default)]
+        stalled: bool,
+        #[serde(default)]
+        silent_secs: u64,
+    },
     /// A file-edit tool changed a file: that operation's own diff, as a bounded preview.
     #[serde(rename = "file.diff")]
     FileDiff {

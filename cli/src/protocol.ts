@@ -72,6 +72,8 @@ export type SidecarEvent =
       };
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
+  /** The provider's stream has sent nothing for `silent_secs` (`stalled`), or sent data again. */
+  | { type: "stream.stall"; turn_id: string; stalled: boolean; silent_secs: number }
   /** What the running turn is doing; sent on every phase change, independent of model output. */
   | {
       type: "activity";

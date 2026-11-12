@@ -488,6 +488,8 @@ export class SidecarServer {
         const text = providerRecoveryNotice(record, discardedPartialOutput);
         if (text) this.emit({ type: "notice", text: text });
       },
+      onStreamStall: ({ stalled, silentSecs }) =>
+        this.emit({ type: "stream.stall", turn_id: turnId, stalled, silent_secs: silentSecs }),
       onActivity: ({ phase, step, segment, tool, subject }) =>
         this.emit({
           type: "activity",

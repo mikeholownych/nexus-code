@@ -199,6 +199,7 @@ const FREE_TEXT: Record<string, readonly string[] | string> = {
   hello: "static slash catalog",
   "session.state": "paths go through PATH_FIELDS; model id and enums",
   "assistant.delta": ["text"],
+  "stream.stall": "structured: a flag and a number of seconds",
   activity: ["tool", "subject"],
   "file.diff": ["path", "preview", "note"],
   "steer.ack": ["message", "text"],
