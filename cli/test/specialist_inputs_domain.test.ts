@@ -425,10 +425,15 @@ test("openRegular refuses a parent that is swapped for a link after the director
   assert.equal(openRegular(d, "swapped/secret.txt", racing), "cannot", "the descriptor resolves outside the root and is refused");
 });
 
-test("the plain fallback shows a submodule pointer update (and a submodule-only change is not empty) without opening the submodule", () => {
+function subRepo(): string {
   const sub = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sub-"));
   sh(sub, "init", "-q", "-b", "main"); sh(sub, "config", "user.email", "a@b"); sh(sub, "config", "user.name", "t");
   put(sub, "s.txt", "1\n"); sh(sub, "add", "-A"); sh(sub, "commit", "-qm", "s1");
+  return sub;
+}
+
+test("the plain fallback shows a submodule pointer update (and a submodule-only change is not empty) without opening the submodule", () => {
+  const sub = subRepo();
   const d = repo();
   sh(d, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"); sh(d, "commit", "-qm", "add sub");
   const base = sh(d, "rev-parse", "HEAD").trim();
@@ -459,13 +464,6 @@ test("gitlinkHunks renders added, modified and deleted pointers and leaves out p
   assert.match(r.text, /deleted file mode 160000[\s\S]*-Subproject commit b{40}/);
   assert.ok(!r.text.includes("plain.txt") && !r.text.includes("secret/sub"));
 });
-
-function subRepo(): string {
-  const sub = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sub-"));
-  sh(sub, "init", "-q", "-b", "main"); sh(sub, "config", "user.email", "a@b"); sh(sub, "config", "user.name", "t");
-  put(sub, "s.txt", "1\n"); sh(sub, "add", "-A"); sh(sub, "commit", "-qm", "s1");
-  return sub;
-}
 
 test("a file replaced by a submodule shows the new gitlink once", () => {
   const sub = subRepo();
