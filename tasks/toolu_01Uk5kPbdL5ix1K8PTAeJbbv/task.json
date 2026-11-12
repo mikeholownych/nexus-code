@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Uk5kPbdL5ix1K8PTAeJbbv",
+  "agent_id": "a9dd94ca2a79109ac",
+  "subagent_type": "reviewer",
+  "task_description": "Review #479 final redactor fix at 761f0b58",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 55789,
+    "cache_read_tokens": 210619,
+    "output_tokens": 22579,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-12T00:15:48.87120697Z",
+  "completed_at": "2026-11-12T00:19:03.751947388Z"
+}
