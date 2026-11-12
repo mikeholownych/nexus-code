@@ -493,9 +493,11 @@ function bearerTokenLength(value: string): number {
 const MAX_EXTENSION = 1024;
 /**
  * Extension scans one family (the `sk-` family, or one `DETERMINISTIC_PATTERNS` entry) may start in one classifyText
- * call. Worst-case extension work is families x this x MAX_EXTENSION whatever the text length, and so is the memory of the
- * extension values. Honest limit: only text with more than 1024 key-like candidates of one family ahead of a real key
- * can starve its extension; its plain form is always redacted (the original match is never dropped).
+ * call; an attempt is spent by each candidate (an `sk-` run or a pattern match) that a "." or, for `sk-`, an encoded
+ * character directly follows. Extension work is therefore at most families x this x ~3 KB whatever the text length;
+ * the extension values add at most about 3x the text (each extended value repeats its original run) plus that constant.
+ * Honest limit: only text with more than 1024 key-like candidates of one family ahead of a real key can starve its
+ * extension; its plain form is always redacted (the original match is never dropped).
  */
 const MAX_EXTENSION_ATTEMPTS_PER_FAMILY = 1024;
 

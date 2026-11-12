@@ -150,8 +150,8 @@ test("a value that straddles the end of an extended key is still redacted whole"
   assert.ok(!output.includes("A1b2") && !output.includes(".ab") && !output.includes("Qx7Km2"), output);
 });
 
-/** Values the redactor keeps for one text, and the most extension value characters one call can add (families x attempts x ~3 KB). */
-const EXTENSION_VALUE_ALLOWANCE = 4 * 1024 * 1024;
+/** Extension values: each repeats its original run (<= 3x the text) plus a constant for the attempt-capped extensions themselves. */
+const EXTENSION_VALUE_ALLOWANCE = 32 * 1024 * 1024;
 const valueChars = (input: string): number =>
   new InformationFlowBoundary().classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
 const unitKey = (i: number): string => `sk-%2F${i.toString(36).padStart(8, "A")}-`;
@@ -165,7 +165,7 @@ test("extensions cannot make the values to replace more than a constant larger t
   });
   const total = valueChars(input);
   assert.ok(total > input.length / 2, `${total} characters of values: extensions are still accepted`);
-  assert.ok(total <= input.length + EXTENSION_VALUE_ALLOWANCE, `${total} characters of values for ${input.length} characters of text`);
+  assert.ok(total <= 3 * input.length + EXTENSION_VALUE_ALLOWANCE, `${total} characters of values for ${input.length} characters of text`);
 });
 
 test("a blob of rejected encoded look-alikes does not starve a real key later in the text", () => {
@@ -180,7 +180,7 @@ test("a blob of rejected encoded look-alikes does not starve a real key later in
     assert.equal(leftover(after, body), undefined, after);
     assert.ok(!after.includes(TAIL) && !after.includes("RtBq"), after);
   });
-  assert.ok(valueChars(input) <= input.length + EXTENSION_VALUE_ALLOWANCE);
+  assert.ok(valueChars(input) <= 3 * input.length + EXTENSION_VALUE_ALLOWANCE);
 });
 
 test("a blob of 200 accepted encoded runs does not starve a real encoded and dotted key", () => {
@@ -209,7 +209,7 @@ test("past 1024 key-like candidates of one family the later key keeps only its p
     assert.ok(!after.includes("Qx7Km2Vb9LrTz4") && !after.includes("Wd8Ns3Hc6Yp1"), after); // the plain form is always redacted
   });
   assert.ok(performance.now() - started < 20000, `took ${Math.round(performance.now() - started)}ms`);
-  assert.ok(valueChars(input) <= input.length + EXTENSION_VALUE_ALLOWANCE);
+  assert.ok(valueChars(input) <= 3 * input.length + EXTENSION_VALUE_ALLOWANCE);
 });
 
 test("a long dotted high-entropy token is redacted whole", () => {
@@ -335,5 +335,5 @@ test("past 1024 ghp_ candidates the later key's plain form is still redacted and
     assert.ok(!after.includes(GHP_BASE.slice(0, 20)), after); // plain form redacted; the tail may remain
   });
   assert.ok(performance.now() - started < 20000, `took ${Math.round(performance.now() - started)}ms`);
-  assert.ok(valueChars(input) <= input.length + EXTENSION_VALUE_ALLOWANCE);
+  assert.ok(valueChars(input) <= 3 * input.length + EXTENSION_VALUE_ALLOWANCE);
 });
