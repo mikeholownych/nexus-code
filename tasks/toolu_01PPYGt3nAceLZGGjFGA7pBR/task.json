@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01PPYGt3nAceLZGGjFGA7pBR",
+  "agent_id": "a2f5db33de1dc7256",
+  "subagent_type": "reviewer",
+  "task_description": "Delta check of A9 at 1afe81aa",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 18439,
+    "cache_read_tokens": 68142,
+    "output_tokens": 2821,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-12T09:57:45.014411677Z",
+  "completed_at": "2026-11-12T09:58:17.649219398Z"
+}
