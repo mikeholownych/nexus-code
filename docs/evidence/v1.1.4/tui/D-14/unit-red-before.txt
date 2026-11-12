@@ -1,0 +1,7 @@
+Excerpt of `cargo test --bin nexus-tui` before the fix (3 failed, 350 others passed):
+  live_view::tests::the_status_does_not_say_thinking_while_text_streams            (status row kept "thinking" after assistant.delta)
+  live_view::tests::verifier_phases_read_as_plain_words_not_internal_labels         (row held "verifying (npm test (before the change))")
+  live_view::surface_tests::outcomes_read_as_words_with_cause_and_next_action_never_as_raw_fields
+      (new case: phase tool_settling must read "You stopped the turn while a tool was finishing."; the existing inference case now reads
+       "You stopped the turn while the model was answering." - that assertion was updated, it was the only stale one)
+After the fix: 353 passed (before D-11/D-18 tests were added).

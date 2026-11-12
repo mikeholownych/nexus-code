@@ -1,0 +1,7 @@
+Rust, with the join notice removed from restore_draft:
+  live_state::tests::two_returned_messages_are_never_joined_silently
+    assertion `left == right` failed: the join is announced: [User("long task"), Steer{g1 Cancelled}, Steer{g2 Cancelled}]   (no Notice)
+  live_view::tests::steering_rows_say_what_will_happen_to_each_message_at_every_width (40/60/100 columns): written with the label change, not run red on its own; the old label text it forbids is the audit's `queued for the next step`.
+TS, with the old startFollowUp (deferred messages joined with a blank line into one turn):
+  `npx tsx --test --test-name-pattern "D-18: messages deferred" test/sidecar_steering_diff.test.ts`  ->  ℹ pass 0, ℹ fail 1
+After the fix: sidecar_steering_diff.test.ts pass 18; cargo test --bin nexus-tui 357 passed.

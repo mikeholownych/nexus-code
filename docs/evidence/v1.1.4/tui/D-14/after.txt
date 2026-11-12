@@ -1,0 +1,74 @@
+# D-14 after: /tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/scratchpad/nexus-tui-after
+=== D-14 (a) 100 columns: text is streaming; status row: ' ⠦ writing · 0:00 · step 1 · esc cancels ───────────────────────────────────────────────────────────'
+--- (a) 100x24
+ NEXUS   app  model m  auto
+Here is the plan for the cache layer, streaming now
+
+ ⠦ writing · 0:00 · step 1 · esc cancels ───────────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+=== D-14 (b) 100 columns: verifier baseline run; status row: ' ⠏ checking npm test before your change · 0:00 · step 1 · esc cancels ──────────────────────────────'
+--- (b) 100x24
+ NEXUS   app  model m  auto
+
+                                              N E X U S
+
+                 Understand the work. Inspect the evidence. Keep the decision yours.
+
+                /help commands  ·  /model switch model  ·  /worktree manage worktree
+                         Type a prompt to begin · Esc cancels · Ctrl+C quits
+
+ ⠏ checking npm test before your change · 0:00 · step 1 · esc cancels ──────────────────────────────
+› type to steer the running turn · esc cancels it
+
+=== D-14 (a) 60 columns: text is streaming; status row: ' ⠦ writing · 0:00 · step 1 · esc cancels ───────────────────'
+--- (a) 60x24
+ NEXUS   app  model m  auto
+Here is the plan for the cache layer, streaming now
+
+ ⠦ writing · 0:00 · step 1 · esc cancels ───────────────────
+› type to steer the running turn · esc cancels it
+
+=== D-14 (b) 60 columns: verifier baseline run; status row: ' ⠏ checking npm test before your change · 0:00 · step 1…────'
+--- (b) 60x24
+ NEXUS   app  model m  auto
+
+                          N E X U S
+
+Understand the work. Inspect the evidence. Keep the decision
+                           yours.
+
+ /help commands  ·  /model switch model  ·  /worktree manage
+                          worktree
+     Type a prompt to begin · Esc cancels · Ctrl+C quits
+
+ ⠏ checking npm test before your change · 0:00 · step 1…────
+› type to steer the running turn · esc cancels it
+
+=== D-14 (a) 40 columns: text is streaming; status row: ' ⠦ writing · 0:00 · step 1 · esc ca…────'
+--- (a) 40x24
+ NEXUS   app  model m  auto
+Here is the plan for the cache layer,
+streaming now
+
+ ⠦ writing · 0:00 · step 1 · esc ca…────
+› type to steer · esc cancels
+
+=== D-14 (b) 40 columns: verifier baseline run; status row: ' ⠏ checking npm test before your ch…────'
+--- (b) 40x24
+ NEXUS   app  model m  auto
+
+                N E X U S
+
+    Understand the work. Inspect the
+   evidence. Keep the decision yours.
+
+ ⠏ checking npm test before your ch…────
+› type to steer · esc cancels
+
+=== D-14 (c) cancel wording
+--- (c) 100x24
+ NEXUS   app  model m  auto
+◌ Cancelled  You stopped the turn while a tool was finishing.
+
+

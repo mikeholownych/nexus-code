@@ -1,0 +1,6 @@
+Excerpt of `npx tsx --test test/slash_resume_other.test.ts` run before the fix (session_commands.ts unchanged):
+  /resume with no argument and no other session ...  AssertionError: actual: [ undefined ], expected: []   (resumeSession(undefined) was called)
+  /resume with no argument and nothing saved ...      AssertionError: actual: [ undefined ], expected: []
+  /resume with no argument resumes the most recent OTHER session ... (the call carried undefined, not "older")
+  (the fourth test, an explicit id or 'latest' passes through unchanged, passed before and after: a guard)
+After the fix: pass 4, fail 0.
