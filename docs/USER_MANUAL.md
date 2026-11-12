@@ -270,11 +270,12 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 
 ### Live TUI: newline key and mouse
 
-- **New line.** `Alt+Enter` and `Ctrl+J` insert a newline in every terminal; plain `Enter` sends. `Shift+Enter` also inserts a
-  newline, but only on terminals that speak the kitty keyboard protocol (kitty, WezTerm, foot, Ghostty and others that
-  answer the startup query); elsewhere it arrives as a plain `Enter` and sends the draft. The footer and `?` help name
-  `shift+enter` only when the terminal reported support, and `alt+enter` (`ctrl+j` in help) otherwise. The xterm
-  `modifyOtherKeys` encoding of Shift+Enter is not read.
+- **New line.** `Ctrl+J` inserts a newline in the draft in every terminal; `Alt+Enter` does where the terminal sends it
+  (not in Windows Terminal's default bindings, nor in macOS Terminal unless Option is set to act as Meta). Plain
+  `Enter` sends. `Shift+Enter` also inserts a newline, but only on terminals that speak the kitty keyboard protocol
+  (kitty, WezTerm, foot, Ghostty and others that answer the startup query); elsewhere it arrives as a plain `Enter`
+  and sends the draft. The footer and `?` help name `shift+enter` only when the terminal reported support, and
+  `alt+enter or ctrl+j` otherwise. The xterm `modifyOtherKeys` encoding of Shift+Enter is not read.
 - **Mouse.** Capture is on by default and asks the terminal only for button presses and the wheel. The wheel scrolls the
   transcript (three rows a notch), or the open panel, an approval's change included. A left click on a tool call
   selects it; a second click on the selected call opens its details, as `Enter` does. The mouse never answers an

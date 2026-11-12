@@ -37,7 +37,7 @@
   ✓ Read file28.ts
   ✓ Read file29.ts
   ✓ Read file30.ts                                           ↓ 9 more rows · pgdn · ctrl+end newest
- enter send · alt+enter newline · ? help ───────────────────────────────────────────────────────────
+ enter send · alt+enter or ctrl+j newline · ? help ─────────────────────────────────────────────────
 › ask Nexus · / for commands · ? for keys
 --- after ten wheel-down notches the newest card is on row 25
 --- ## after a left click on row 25 (ESC[<0;12;26M / m)

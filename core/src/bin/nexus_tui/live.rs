@@ -320,15 +320,28 @@ pub(crate) fn mouse_enabled(value: Option<&str>) -> bool {
 
 /// Asks the terminal for button presses and the wheel in SGR form (modes 1000 and 1006), and nothing else: no drag or
 /// motion reports, so the loop is not flooded and Shift-drag still selects text in the terminal's own way.
+#[cfg(unix)]
 pub(crate) struct WheelAndClick;
 
+#[cfg(unix)]
 impl crossterm::Command for WheelAndClick {
     fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
         f.write_str("\x1b[?1000h\x1b[?1006h")
     }
 }
 
-/// Undoes the input modes, in the order they were set. Safe to call from any exit path any number of times: the
+#[cfg(unix)]
+fn enable_mouse() -> io::Result<()> {
+    execute!(io::stdout(), WheelAndClick)
+}
+
+/// Windows consoles report mouse input through their own API, which crossterm's capture command drives.
+#[cfg(not(unix))]
+fn enable_mouse() -> io::Result<()> {
+    execute!(io::stdout(), crossterm::event::EnableMouseCapture)
+}
+
+/// Undoes the input modes (mouse, then keyboard protocol, then bracketed paste). Safe to call from any exit path any number of times: the
 /// panic hook runs it before the message is printed, the guard on every return and during unwinding.
 fn restore_input_modes() {
     let mut out = io::stdout();
@@ -388,7 +401,9 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = ratatui::try_init()?;
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        restore_input_modes();
+        if std::thread::current().name() == Some("main") {
+            restore_input_modes();
+        }
         previous_hook(info);
     }));
     // Each flag is set before its sequence is written, so a write that fails halfway is still undone.
@@ -407,13 +422,16 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     let mouse = mouse_enabled(std::env::var("NEXUS_TUI_MOUSE").ok().as_deref());
     if mouse {
         MOUSE_ON.store(true, Ordering::SeqCst);
-        execute!(io::stdout(), WheelAndClick)?;
+        enable_mouse()?;
     }
     let mut app = LiveApp::start(spec);
     app.state.depth = depth;
     app.state.shift_enter = shift_enter;
     app.state.mouse = mouse;
     let result = event_loop(&mut terminal, &mut app);
+    // Before the sidecar shutdown, which can take seconds: reports arriving meanwhile would reach the shell as text.
+    restore_input_modes();
+    while event::poll(Duration::ZERO).unwrap_or(false) && event::read().is_ok() {}
     app.handle(Action::Quit);
     drop(terminal);
     drop(guard);
@@ -489,7 +507,7 @@ fn drain_key_presses(first: KeyEvent, mut next: impl FnMut() -> io::Result<Optio
     while let Some(event) = next()? {
         match event {
             TermEvent::Key(key) if key.kind == KeyEventKind::Press => keys.push(key),
-            TermEvent::Key(_) => {}
+            TermEvent::Key(_) | TermEvent::Mouse(_) => {}
             other => {
                 *pending = Some(other);
                 break;
@@ -590,6 +608,9 @@ fn event_loop(
                     match event::read()? {
                         TermEvent::Key(next) if pasteable(&next) => keys.push(next),
                         TermEvent::Key(next) if next.kind != KeyEventKind::Press => {}
+                        // A wheel notch or click inside a burst does not end it (that would split a paste, or turn
+                        // a burst into a lone key press): it is dropped.
+                        TermEvent::Mouse(_) => {}
                         other => {
                             pending = Some(other);
                             break;
@@ -649,6 +670,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn capture_asks_for_buttons_and_wheel_in_sgr_form_and_no_motion() {
         let mut out = String::new();
@@ -675,6 +697,23 @@ mod tests {
         let with_resize = vec![TermEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)), TermEvent::Resize(80, 24)];
         assert_eq!(discard_queued_input(with_resize.into_iter()), (true, true), "a queued resize still redraws");
         assert_eq!(discard_queued_input(std::iter::once(TermEvent::Resize(80, 24))), (true, false), "a resize alone is not typing");
+    }
+
+    #[test]
+    fn a_mouse_event_is_not_typing_and_does_not_split_a_burst() {
+        use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let wheel = TermEvent::Mouse(MouseEvent { kind: MouseEventKind::ScrollUp, column: 3, row: 3, modifiers: KeyModifiers::NONE });
+        let click = TermEvent::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 3, row: 3, modifiers: KeyModifiers::NONE });
+        assert!(!is_typing(&wheel) && !is_typing(&click), "a mouse event is never typing");
+        // Input queued as an approval opens: mouse events are dropped with it and do not make the panel say a key was ignored.
+        assert_eq!(discard_queued_input(vec![wheel.clone(), click.clone()].into_iter()), (false, false));
+        // `y`, a wheel notch, then Enter at an approval is still one burst of two key presses.
+        let mut queue = vec![wheel, TermEvent::Key(press(KeyCode::Enter))].into_iter();
+        let mut pending = None;
+        let keys = drain_key_presses(press(KeyCode::Char('y')), || Ok(queue.next()), &mut pending).unwrap();
+        assert_eq!(keys, vec![press(KeyCode::Char('y')), press(KeyCode::Enter)]);
+        assert!(pending.is_none());
     }
 
     #[test]

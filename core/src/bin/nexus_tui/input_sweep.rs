@@ -1,7 +1,7 @@
 //! Input capabilities (audit D-09, D-10): which key makes a newline, what the hints advertise per terminal, and what
 //! the mouse may do. A mouse event never answers an approval, whatever it is and wherever it lands.
 use super::*;
-use crate::live_state::{Action, Entry, Focus, LiveLayout, LiveState, Overlay, Verdict};
+use crate::live_state::{Action, Entry, Focus, LiveLayout, LiveState, Overlay};
 use crate::protocol::parse_event;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend};
@@ -103,7 +103,7 @@ fn a_terminal_that_does_not_report_shift_enter_is_not_told_to_use_it() {
         state.shift_enter = false;
         let screen = draw(&mut state, width, 14).join("\n");
         assert!(!screen.contains("shift+enter") && !screen.contains('⇧'), "width {width}: {screen}");
-        assert!(screen.contains("alt+enter") || screen.contains("alt+↵"), "width {width}: the working key is advertised: {screen}");
+        assert!(screen.contains("ctrl+j newline"), "width {width}: the key every terminal can send is advertised: {screen}");
     }
 }
 
@@ -128,6 +128,7 @@ fn help_names_the_key_that_works_on_this_terminal_and_says_what_shift_enter_does
         state.overlay = Some(Overlay::Help { scroll: 0 });
         let screen = draw(&mut state, 110, 60).join("\n");
         assert!(screen.contains("alt+enter/ctrl+j"), "the documented keys are always listed: {screen}");
+        assert!(screen.contains("ctrl+j in every terminal"), "{screen}");
         if supported {
             assert!(screen.contains("this terminal reports it"), "{screen}");
             assert!(!screen.contains("would send"), "{screen}");
@@ -211,14 +212,40 @@ fn clicks_that_miss_a_tool_card_change_nothing() {
 }
 
 #[test]
-fn a_stale_layout_never_panics_or_selects_the_wrong_entry() {
+fn a_stale_layout_never_panics_or_selects_a_row_that_is_no_longer_a_tool_card() {
     let mut state = with_tools(6);
     draw(&mut state, 80, 24);
+    // Entries replaced since the frame was drawn: nothing at a stale index is a card, so no click selects.
+    state.transcript = (0..4).map(|i| Entry::Info(format!("n{i}"))).collect();
+    for row in 0..24 {
+        state.on_mouse(click(5, row));
+    }
+    assert_eq!(state.selected, None);
     state.transcript.clear();
     for row in 0..24 {
         state.on_mouse(click(5, row));
     }
     assert_eq!(state.selected, None);
+}
+
+#[test]
+fn a_click_on_the_scroll_badge_or_under_the_completion_list_selects_nothing() {
+    let mut state = with_tools(30);
+    draw(&mut state, 80, 24);
+    state.on_mouse(mouse(MouseEventKind::ScrollUp, 10, 5));
+    let rows = draw(&mut state, 80, 24);
+    // The badge ("more rows") sits on the last transcript row, over whatever entry is there.
+    let badge = rows.iter().position(|r| r.contains("more rows")).expect("scrolled back, so the badge is drawn") as u16;
+    state.on_mouse(click(70, badge));
+    assert_eq!((state.selected, state.focus), (None, Focus::Composer));
+    state.commands = vec![crate::protocol::SlashSpec { name: "diff".into(), usage: "/diff".into(), summary: "diff summary".into() }];
+    type_text(&mut state, "/");
+    assert!(state.completion().is_some());
+    draw(&mut state, 80, 24);
+    for row in 0..23 {
+        state.on_mouse(click(5, row));
+    }
+    assert_eq!(state.selected, None, "no card is selected through the completion list");
 }
 
 fn approval_state() -> (LiveState, Instant) {
@@ -314,7 +341,6 @@ fn mouse_events_leave_the_approval_guard_exactly_as_it_was() {
     assert_eq!(early_plain, None, "the guard held an early key");
     assert_eq!((early_plain, late_plain), (early_mouse.clone(), late_mouse.clone()), "mouse events changed no decision");
     assert!(matches!(late_mouse, Some(Action::Send(_))), "a deliberate key after the guard still approves: {late_mouse:?}");
-    let _ = Verdict::Approved;
 }
 
 #[test]

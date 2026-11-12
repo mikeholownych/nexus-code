@@ -1744,6 +1744,11 @@ impl LiveState {
         if column < area.x || column >= area.right() || row < area.y || row >= area.bottom() {
             return None;
         }
+        // The scroll badge covers the last row while scrolled back, and the completion list covers the rows above the
+        // composer: a click there is on neither card.
+        if self.completion().is_some() || (self.scroll_back > 0 && row + 1 == area.bottom()) {
+            return None;
+        }
         let index = *self.layout.row_entries.get(usize::from(row - area.y))?;
         if !self.transcript.get(index).is_some_and(Self::selectable) {
             return None;

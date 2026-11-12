@@ -551,11 +551,11 @@ fn help_rows(shift_enter: bool, mouse: bool) -> Vec<(&'static str, &'static str)
     for &(keys, text) in HELP {
         match keys {
             "@newline" if shift_enter => {
-                rows.push(("shift+enter", "new line (this terminal reports it)"));
-                rows.push(("alt+enter/ctrl+j", "new line (works in every terminal)"));
+                rows.push(("shift+enter", "new line in the draft (this terminal reports it)"));
+                rows.push(("alt+enter/ctrl+j", "new line in the draft (ctrl+j in every terminal; alt+enter where the terminal sends it)"));
             }
             "@newline" => {
-                rows.push(("alt+enter/ctrl+j", "new line (works in every terminal)"));
+                rows.push(("alt+enter/ctrl+j", "new line in the draft (ctrl+j in every terminal; alt+enter where the terminal sends it)"));
                 rows.push(("shift+enter", "not reported by this terminal: it sends a plain enter, which would send the prompt"));
             }
             "@mouse" if mouse => {
@@ -1993,11 +1993,12 @@ fn composer_hint(state: &LiveState, max_hint: usize) -> Cow<'static, str> {
                 " enter send · shift+enter newline · ? help "
             }
         }
+        // Ctrl+J is the one newline key every terminal can send; Alt+Enter depends on the terminal's Meta handling.
         (_, false) => {
-            if " enter send · alt+enter newline · ? help ".chars().count() > max_hint {
-                " ↵ send · alt+↵ newline · ? help "
+            if " enter send · alt+enter or ctrl+j newline · ? help ".chars().count() > max_hint {
+                " ↵ send · ctrl+j newline · ? help "
             } else {
-                " enter send · alt+enter newline · ? help "
+                " enter send · alt+enter or ctrl+j newline · ? help "
             }
         }
     };
@@ -2648,7 +2649,7 @@ mod tests {
         let screen = rows(&draw(&state, 40, 20));
         assert_eq!(screen[19], format!("  {}END", "x".repeat(400 % 38)));
         assert!(
-            screen[13].contains("send · alt+↵ newline"),
+            screen[13].contains("send · ctrl+j newline"),
             "composer is capped at 6 rows: {screen:#?}"
         );
     }
@@ -4076,7 +4077,7 @@ mod surface_tests {
         let mut idle = state(false);
         let (rows, _) = screen(&mut idle, 40, 14);
         let all = rows.join("\n");
-        assert!(all.contains("↵ send · alt+↵ newline · ? help"), "{all}");
+        assert!(all.contains("↵ send · ctrl+j newline · ? help"), "{all}");
         idle.shift_enter = true;
         let (rows, _) = screen(&mut idle, 40, 14);
         let all = rows.join("\n");
