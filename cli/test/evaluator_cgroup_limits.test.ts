@@ -146,7 +146,9 @@ const sh = (resources: any, script: string, timeoutMs: number, opts = {}) => lau
  * (populated by processes that do not carry this run's marker). An unpopulated new scope, or one still holding this
  * run's marker, is a leftover. Scopes the sampler saw must also be gone. No process carrying the marker survives.
  */
-async function assertCleanedUp(run: Run) {
+async function assertCleanedUp(run: Run, { mustHaveSeenScope = true } = {}) {
+  // Runs that live for 1 s or more cannot slip between 15 ms sampler ticks; without this the scope-directory check could be vacuous.
+  if (mustHaveSeenScope) assert.ok(run.sampled.scopes.length >= 1, "the sampler never saw this run's scope, so the scope-directory cleanup check would be vacuous");
   const leftovers = () => {
     const out: string[] = [];
     for (const name of listScopes()) {
@@ -166,6 +168,13 @@ async function assertCleanedUp(run: Run) {
   const pgrep = spawnSync("/usr/bin/pgrep", ["-f", run.marker], { encoding: "utf8" });
   assert.equal(pgrep.status, 1, `a process carrying the run marker survived: ${pgrep.stdout}`);
   assert.equal(run.final?.cleaned, true, JSON.stringify(run.final));
+}
+
+/** A peak bound (memory.peak, pids.peak) when the kernel exposes it; otherwise print that it was not checked. */
+function assertPeak(t: TestContext, final: Final, key: "memoryPeakBytes" | "pidsPeak", limit: number) {
+  if (!PEAKS) { t.diagnostic(`${key} bound NOT checked: this kernel does not expose memory.peak/pids.peak`); return; }
+  assert.equal(typeof final[key], "number", `${key} was not reported`);
+  assert.ok(final[key] <= limit, `${key} ${final[key]} exceeded ${limit}`);
 }
 
 function reportOf(run: Run): Final {
@@ -195,8 +204,7 @@ test("a memory hog is OOM-killed inside its cgroup, reported as a memory-limit k
   assert.equal(final.limits["memory.swap.max"], "0");
   assert.ok(final.oomKills >= 1, `memory.events oom_kill: ${JSON.stringify(final)}`);
   assert.ok(final.memoryMaxEvents >= 1);
-  if (PEAKS) { assert.equal(typeof final.memoryPeakBytes, "number", "memory.peak was not reported"); assert.ok(final.memoryPeakBytes <= resources.memoryBytes, `peak ${final.memoryPeakBytes} exceeded the limit`); }
-  else t.diagnostic("memory.peak/pids.peak are not exposed by this kernel: peak bounds NOT checked");
+  assertPeak(t, final, "memoryPeakBytes", resources.memoryBytes);
   assert.notEqual(run.result.status, 0);
   assert.equal(run.result.timedOut, false, "it died of the limit, not the wall clock");
   assert.match(run.result.error ?? "", /memory limit/, "the operator is told a limit was hit");
@@ -211,7 +219,7 @@ test("a shell that forks past pids.max gets EAGAIN and the supervisor records it
   const final = reportOf(run);
   assert.equal(final.limits["pids.max"], String(resources.tasks));
   assert.ok(final.pidsMaxEvents >= 1, `pids.events max: ${JSON.stringify(final)}`);
-  if (PEAKS) { assert.equal(typeof final.pidsPeak, "number", "pids.peak was not reported"); assert.ok(final.pidsPeak <= resources.tasks, `pids.peak ${final.pidsPeak} > ${resources.tasks}`); }
+  assertPeak(t, final, "pidsPeak", resources.tasks);
   assert.match(run.result.stderr, /Cannot fork|Resource temporarily unavailable|EAGAIN/i, "the shell's own fork failed with EAGAIN");
   await assertCleanedUp(run);
 });
@@ -219,7 +227,7 @@ test("a shell that forks past pids.max gets EAGAIN and the supervisor records it
 test("a real fork bomb is bounded by pids.max and killed with its cgroup; fork keeps working outside it", { timeout: 60_000 }, async (t) => {
   const resources = await requireHost(t);
   if (!resources) return;
-  // The classic bomb in a respawn loop, silenced (its error spam would hit the output cap), stopped by the wall clock, never outside the cgroup.
+  // The classic bomb in a respawn loop, silenced (its error spam would hit the output cap), stopped by the wall clock (or, if the group OOM kill comes first, by that), never outside the cgroup.
   // bash survives a failed fork (dash exits on the first one), so the loop keeps bombing until the clock stops it.
   const bomb = "b() { b | b & }; while :; do b 2>/dev/null; done";
   const during: number[] = [];
@@ -230,7 +238,7 @@ test("a real fork bomb is bounded by pids.max and killed with its cgroup; fork k
   const final = reportOf(run);
   assert.ok(run.result.timedOut === true || final.oomKills > 0, "the bomb ends by the wall clock (or a group OOM kill)");
   assert.ok(final.pidsMaxEvents >= 5, `pids.events max=${final.pidsMaxEvents}`);
-  if (PEAKS) { assert.equal(typeof final.pidsPeak, "number", "pids.peak was not reported"); assert.ok(final.pidsPeak <= resources.tasks, `pids.peak ${final.pidsPeak} > ${resources.tasks}`); }
+  assertPeak(t, final, "pidsPeak", resources.tasks);
   const forked = during.filter((status) => status === 0).length;
   t.diagnostic(`fork-bomb host-side /usr/bin/true probes every 250 ms during the run (exit statuses)=${JSON.stringify(during)}`);
   assert.ok(during.length >= 1 && forked === during.length, `the host could not fork while the bomb ran: ${JSON.stringify(during)}`);
@@ -275,8 +283,8 @@ test("a clean command under the same limits succeeds untouched (the limits do no
   assert.equal(run.result.error, null);
   assert.equal(run.final?.oomKills, 0);
   assert.equal(run.final?.pidsMaxEvents, 0);
-  assert.equal(run.final?.cpuThrottledUsec, 0);
-  await assertCleanedUp(run);
+  assert.ok(run.final?.cpuUsageUsec <= 0.5 * run.ms * 1000 * 1.1 + 100_000, "an ordinary command stays within its CPU quota");
+  await assertCleanedUp(run, { mustHaveSeenScope: false });
 });
 
 test("without a usable systemd user manager a configured contract refuses to run the command (fails closed)", { timeout: 60_000 }, async (t) => {
