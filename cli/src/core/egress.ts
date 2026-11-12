@@ -533,7 +533,7 @@ interface ExtensionBudget { left: number }
 /**
  * A key followed by "." and more key characters keeps going: `sk-…RtBq.Xo2RtBq` is one credential, not a key and a
  * stray word; a sentence's full stop, a file extension (`.json`) and a word (`.Models`, `.toString`) end the key as
- * before (`isKeyMaterialSegment`). Returns `end` itself when nothing continues it or the budget is spent.
+ * before (`isKeyMaterialSegment`). Returns `end` itself when nothing continues it.
  */
 function extendDottedKey(text: string, end: number): number {
   const limit = end + MAX_EXTENSION;
@@ -574,14 +574,14 @@ function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolea
  * continues through an encoded or look-alike "/" or "+", and that run plus a dotted continuation, see `extendDottedKey`)
  * are judged in addition, so a longer run that is rejected never hides the shorter one. Scanning resumes after the
  * original run, so a key after a dot is found whatever the longer runs were. Every `sk-` inside the original run is
- * skipped: a key inside it is found by the bounded patterns. The longer runs are charged to the extension budget, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
+ * skipped: a key inside it is found by the bounded patterns. Each longer run is scanned for at most MAX_EXTENSION characters and kept only while the extension budget lasts; rescans of already scanned text are capped (`rescanLeft`), so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
  */
 function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: number; end: number; name: string }> {
   const found: Array<{ start: number; end: number; name: string }> = [];
   // A key that starts past everything an earlier key's extension scanned adds fresh characters to the scan, so those
   // scans total at most the text. A key inside that region would rescan it (`sk-%2F` repeated): rescans draw on a
   // ceiling proportional to the text and stop extending once it is spent, so a crafted prefix costs linear time and
-  // never withholds the extension of a real key that comes after it.
+  // rarely withholds the extension of a real key that comes after it (one that starts inside the region the blob last scanned, with no separator, can still lose it once the ceiling is spent: the plain key is redacted as before).
   let scannedTo = 0;
   let rescanLeft = 16 * text.length;
   let from = 0;
@@ -601,9 +601,13 @@ function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: n
     const extendedEnd = mayExtend ? extendDottedKey(text, encodedEnd) : runEnd;
     if (rescan) rescanLeft -= 16 + extendedEnd - runEnd;
     scannedTo = Math.max(scannedTo, extendedEnd);
+    let chargedTo = runEnd; // the longer runs overlap: each is charged only for what the shorter ones did not take
     for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
       if (!isBase64KeyRun(text, at, end, anthropic)) continue;
-      if (end > runEnd && !chargeExtension(runEnd, end, budget)) continue;
+      if (end > runEnd) {
+        if (!chargeExtension(chargedTo, end, budget)) continue;
+        chargedTo = end;
+      }
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
       found.push({ start: at, end: secretEnd, name });
@@ -1141,7 +1145,7 @@ export class InformationFlowBoundary {
         // value found only by its shorter form (the key on its own elsewhere in the text) is still redacted.
         const ends = [end];
         if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
-          const extended = extendDottedKey(text, end);
+          const extended = extensionBudget.left > 0 ? extendDottedKey(text, end) : end;
           if (extended > end && chargeExtension(end, extended, extensionBudget)) ends.push(extended);
         }
         for (const spanEnd of ends) {
