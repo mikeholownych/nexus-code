@@ -444,8 +444,8 @@ pub struct LiveLayout {
     pub followed: Option<usize>,
     /// Columns the diff review can still pan right, and its content width.
     pub overlay_hlimit: usize,
-    /// The transcript row at the top of the window: (entry index, rows from that row to the end of its entry).
-    pub top: Option<(usize, usize)>,
+    /// The transcript row at the top of the window: (entry index, line index in the entry, row within the line).
+    pub top: Option<(usize, usize, usize)>,
     /// Set when the frame kept the window on `LiveState::anchor` while content arrived: the `scroll_back` it drew.
     pub anchored: Option<usize>,
     /// The approval panel was drawn with its heading, decisions and at least one row of the change visible.
@@ -507,8 +507,10 @@ pub struct LiveState {
     pub now: Instant,
     /// Colours the terminal can show.
     pub depth: Depth,
-    /// While scrolled back: the row the window keeps at its top as entries arrive or grow below it.
-    pub anchor: Option<(usize, usize)>,
+    /// While scrolled back: the row the window keeps at its top as entries arrive or grow below it, as (entry index,
+    /// line index in the entry, row within the line). Counted from the start so an entry that grows (a streaming
+    /// answer) does not move it; the frame clamps it if the entry or the line shrank or the width changed.
+    pub anchor: Option<(usize, usize, usize)>,
     /// Transcript index of the newest entry the diff review can open.
     pub last_reviewable: Option<usize>,
     /// Output arrived below the window while the operator was scrolled back.

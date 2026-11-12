@@ -1278,8 +1278,8 @@ struct TranscriptFrame {
     limit: usize,
     /// The `scroll_back` drawn.
     back: usize,
-    /// The row at the top of the window: (entry index, rows from it to the end of its entry).
-    top: Option<(usize, usize)>,
+    /// The row at the top of the window, counted from the start of its line (see `LiveState::anchor`).
+    top: Option<(usize, usize, usize)>,
     /// Set when the window was kept on `LiveState::anchor`: the `scroll_back` that took.
     anchored: Option<usize>,
 }
@@ -1323,26 +1323,32 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
     let mut target = selected.filter(|_| state.follow);
     if back > 0
         && target.is_none()
-        && let Some((entry, rows_in_entry)) = state.anchor
+        && let Some((entry, line_index, row_in_line)) = state.anchor
         && entry < transcript.len()
     {
         let below: usize = (entry + 1..transcript.len()).map(|i| rows_of(&lines_of(i))).sum();
-        back = (rows_in_entry + below).saturating_sub(height);
+        // Rows from the anchored row to the end of the entry as it is now. The anchor counts from the start of the
+        // line, so an entry that grows below it (a streaming answer) lengthens this and the window stays put.
+        let lines = lines_of(entry);
+        let line_index = line_index.min(lines.len().saturating_sub(1));
+        let from_line: usize = lines[line_index..].iter().map(|line| wrapped_rows(line, area.width)).sum();
+        let in_line = lines.get(line_index).map_or(0, |line| wrapped_rows(line, area.width));
+        let row_in_line = row_in_line.min(in_line.saturating_sub(1));
+        back = (from_line.saturating_sub(row_in_line) + below).saturating_sub(height);
         anchored = Some(back);
     }
-    // Walked from the newest line up: (line, its rows, entry index, rows from it to its entry's end, rows from it to
-    // the bottom).
+    // Walked from the newest line up: (line, its rows, entry index, the line's index in its entry, rows from the
+    // bottom through it).
     let mut tail = Vec::new();
     let mut total: usize = 0;
     let mut reached_top = true;
     'entries: for index in (0..transcript.len()).rev() {
         let below = total;
-        let mut in_entry = 0;
-        for line in lines_of(index).into_iter().rev() {
+        let entry_lines = lines_of(index);
+        for (line_index, line) in entry_lines.into_iter().enumerate().rev() {
             let rows = wrapped_rows(&line, area.width);
             total = total.saturating_add(rows);
-            in_entry += rows;
-            tail.push((line, rows, index, in_entry, total));
+            tail.push((line, rows, index, line_index, total));
             if target.is_none() && total >= height.saturating_add(back) {
                 reached_top = false;
                 break 'entries;
@@ -1370,8 +1376,8 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
     let reach = height.saturating_add(back);
     let top = tail
         .iter()
-        .find(|(_, _, _, _, to_bottom)| *to_bottom >= reach)
-        .map(|(_, _, index, in_entry, to_bottom)| (*index, in_entry - (to_bottom - reach)));
+        .find(|(.., to_bottom)| *to_bottom >= reach)
+        .map(|(_, _, index, line_index, to_bottom)| (*index, *line_index, to_bottom - reach));
     tail.reverse();
     let mut skipped = 0;
     let mut covered = 0;
@@ -3687,6 +3693,68 @@ mod diff_tests {
             assert!(markers.windows(2).all(|w| w[0] == w[1]), "{width}: {markers:?} {rows:#?}");
             assert!(rows.iter().any(|r| r.contains("字符")), "wide characters survive wrapping at {width}");
         }
+    }
+
+    /// The first screen row that shows a streamed `row NNNN` line: the transcript's top row while scrolled back.
+    fn top_row(rows: &[String]) -> String {
+        rows.iter().find(|r| r.contains("row 0")).cloned().unwrap_or_default().trim_end().to_string()
+    }
+
+    fn delta(state: &mut LiveState, text: &str) {
+        feed(state, &[&format!(r#"{{"v":1,"type":"assistant.delta","turn_id":"t2","text":{}}}"#, json(text))]);
+    }
+
+    fn streamed(state: &mut LiveState, from: usize, to: usize) {
+        for n in from..to {
+            delta(state, &format!("row {n:04}\n"));
+        }
+    }
+
+    #[test]
+    fn a_scrolled_back_view_keeps_its_top_row_while_one_answer_streams_below_it() {
+        // D-02: the answer is one growing entry; the anchor must be a row from its start, not from its end.
+        let mut state = state();
+        for i in 0..40 {
+            state.transcript.push(Entry::Info(format!("history {i}")));
+        }
+        streamed(&mut state, 0, 60);
+        draw(&mut state, 100, 30);
+        state.on_key(key(KeyCode::PageUp));
+        let before = screen(&draw(&mut state, 100, 30));
+        let top = top_row(&before);
+        assert!(top.contains("row 0"), "the window is inside the streaming answer: {before:#?}");
+        let mut n = 60;
+        while n < 140 {
+            streamed(&mut state, n, n + 3);
+            // A line that wraps (two rows at width 100) and a line that arrives in pieces.
+            delta(&mut state, &format!("{} wrapped\n", "w".repeat(150)));
+            delta(&mut state, "row ");
+            delta(&mut state, &format!("{:04}", n + 3));
+            n += 4;
+            let now = screen(&draw(&mut state, 100, 30));
+            assert_eq!(top_row(&now), top, "the top row moved after {n} rows: {now:#?}");
+        }
+        // A resize keeps the same line on top (the short lines wrap the same at both widths).
+        for (w, h) in [(70, 24), (40, 12), (100, 30)] {
+            let now = screen(&draw(&mut state, w, h));
+            assert_eq!(top_row(&now), top, "the top row moved at {w}x{h}: {now:#?}");
+        }
+    }
+
+    #[test]
+    fn a_scrolled_back_view_survives_tiny_terminals_and_a_shrinking_entry() {
+        let mut state = state();
+        streamed(&mut state, 0, 80);
+        draw(&mut state, 40, 12);
+        state.on_key(key(KeyCode::PageUp));
+        draw(&mut state, 40, 12);
+        for (w, h) in [(40, 12), (1, 1), (0, 0), (3, 2), (40, 3), (12, 40), (40, 12)] {
+            streamed(&mut state, 80, 82);
+            draw(&mut state, w, h);
+        }
+        // The anchored entry shrinks below the stored line: the anchor clamps instead of panicking.
+        state.anchor = Some((0, 9_999, 9_999));
+        draw(&mut state, 40, 12);
     }
 
     #[test]
