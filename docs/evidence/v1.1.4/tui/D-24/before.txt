@@ -1,0 +1,64 @@
+# D-24 capture, binary: before
+
+## colour (TERM=xterm-256color), 100 columns
+ NEXUS   app  model m  review mode
+Plan
+The cache sits in Loader.
+  ▎ ts
+  ▎ export class Cache {
+  ▎     get(key: string) { return this.map.get(key); }
+  ▎ }
+Notes
+• one
+• two
+✓ Done · verified
+ enter send · alt+enter or ctrl+j newline · ? help ─────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+## colour (TERM=xterm-256color), 40 columns
+ NEXUS   app  model m  review mode
+Plan
+The cache sits in Loader.
+  ▎ ts
+  ▎ export class Cache {
+  ▎     get(key: string) { return
+  ▎↪this.map.get(key); }
+  ▎ }
+Notes
+• one
+• two
+✓ Done · verified
+ ↵ send · ctrl+j newline · ? help ──────
+› ask Nexus · / commands · ? keys
+
+## NO_COLOR=1, 100 columns
+ NEXUS   app  model m  review mode
+Plan
+The cache sits in Loader.
+  ▎ ts
+  ▎ export class Cache {
+  ▎     get(key: string) { return this.map.get(key); }
+  ▎ }
+Notes
+• one
+• two
+✓ Done · verified
+ enter send · alt+enter or ctrl+j newline · ? help ─────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+## NO_COLOR=1, 40 columns
+ NEXUS   app  model m  review mode
+Plan
+The cache sits in Loader.
+  ▎ ts
+  ▎ export class Cache {
+  ▎     get(key: string) { return
+  ▎↪this.map.get(key); }
+  ▎ }
+Notes
+• one
+• two
+✓ Done · verified
+ ↵ send · ctrl+j newline · ? help ──────
+› ask Nexus · / commands · ? keys
+

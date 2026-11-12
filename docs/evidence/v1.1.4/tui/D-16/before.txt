@@ -1,0 +1,19 @@
+# D-16 capture, binary: before
+
+A fake sidecar answers a /copy that found no clipboard tool (`slash.result` with a `clipboard` field).
+
+## default
+   OSC 52 requests written to the terminal: []
+   raw ESC ] 0 ; (title) sequences written: 0
+   screen: No clipboard tool was found, so Nexus asked your terminal to copy the last reply.
+
+## NEXUS_OSC52=off
+   OSC 52 requests written to the terminal: []
+   raw ESC ] 0 ; (title) sequences written: 0
+   screen: No clipboard tool was found, so Nexus asked your terminal to copy the last reply.
+
+## TERM=xterm, no COLORTERM (16-colour writer)
+   OSC 52 requests written to the terminal: []
+   raw ESC ] 0 ; (title) sequences written: 0
+   screen: No clipboard tool was found, so Nexus asked your terminal to copy the last reply.
+
