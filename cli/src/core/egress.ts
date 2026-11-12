@@ -431,6 +431,26 @@ function unescapeSlashes(value: string): string {
   return value.includes("\\/") ? value.replaceAll("\\/", "/") : value;
 }
 
+/**
+ * A "/" or "+" written other than plainly: percent-encoded (`%2F`, `%2B`, and once more encoded as `%252F`) or as a
+ * look-alike (U+2215 division slash, U+2044 fraction slash, U+FF0F fullwidth solidus, U+29F8 big solidus; U+FF0B
+ * fullwidth plus, U+FE62 small plus). Sticky: `matchEncodedKeyChar` tests it at one position.
+ */
+const ENCODED_KEY_CHAR = /%(?:25)?2[FfBb]|[\u2215\u2044\uFF0F\u29F8\uFF0B\uFE62]/y;
+const ENCODED_KEY_CHARS = new RegExp(ENCODED_KEY_CHAR.source, "g");
+
+/** The length of the encoded "/" or "+" at `at`, or 0 when there is none. */
+function matchEncodedKeyChar(text: string, at: number): number {
+  ENCODED_KEY_CHAR.lastIndex = at;
+  const found = ENCODED_KEY_CHAR.exec(text);
+  return found ? found[0].length : 0;
+}
+
+/** The text as detection sees it: encoded and look-alike "/" and "+" written plainly. The redacted span is never this copy. */
+function normalizeKeyChars(value: string): string {
+  return value.replace(ENCODED_KEY_CHARS, (found) => (/[/\u2215\u2044\uFF0F\u29F8]|2[Ff]$/.test(found) ? "/" : "+"));
+}
+
 function isBase64KeyChar(code: number): boolean {
   return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
     code === 95 || code === 45 || code === 43 || code === 47; // _ - + /
@@ -469,19 +489,92 @@ function bearerTokenLength(value: string): number {
   return head >= 16 ? head : 0;
 }
 
+/** Longest extension past a key's original match: keys are short. */
+const MAX_EXTENSION = 1024;
+
+/**
+ * The end of the extension window of a candidate of one family: at most MAX_EXTENSION past its original end, never
+ * into the next candidate of the same family (which extends itself), never past the text. Windows of one family are
+ * disjoint by construction, so nothing earlier in the text can spend what a later key needs, and one family's total
+ * extension work is O(n); with F families the work is at most F x n x a constant, and each family's values add at most about
+ * 3n plus a constant (each extended value repeats its run once). One dot-joined chain that carries a candidate of every
+ * prefix feeds all families at once, so the whole-call total can reach about 15n to 17n value characters.
+ * Honest limit: a key's extension stops at the next candidate of the same family or after MAX_EXTENSION characters; the
+ * original match is never dropped. A real key whose own tail contains another candidate start (e.g. `.sk-` inside the
+ * tail) keeps the part past it only if that candidate itself redacts it, which a valid key does.
+ */
+function extensionLimit(text: string, end: number, nextStart: number | undefined): number {
+  return Math.max(end, Math.min(end + MAX_EXTENSION, nextStart ?? text.length, text.length));
+}
+
+/**
+ * The end of the run of key characters from `from`: a JSON-escaped `\/` counts as "/", and with `encoded` an encoded or
+ * look-alike "/" or "+" does too. The run stops at `limit`.
+ */
+function scanKeyRun(text: string, from: number, encoded: boolean, limit = text.length): number {
+  let end = from;
+  while (end < limit) {
+    const code = text.charCodeAt(end);
+    const unit = encoded && (code === 37 || code >= 0x2044) ? matchEncodedKeyChar(text, end) : 0; // "%" or a look-alike
+    if (unit > 0) {
+      if (end + unit > limit) break; // a unit never crosses the limit, so a bounded scan stays within its budget
+      end += unit;
+    } else if (isBase64KeyChar(code)) end++;
+    else if (text[end] === "\\" && text[end + 1] === "/" && end + 2 <= limit) end += 2; // a JSON-escaped "/"
+    else break;
+  }
+  return end;
+}
+
+/** Names of `DETERMINISTIC_PATTERNS`: credential kinds whose value, written as a "."-joined run, continues past a dot. JWT_TOKEN matches three segments (`eyJ.eyJ.sig`); material joined after them is part of the same value. */
+const DOTTED_CONTINUATION_PATTERNS = new Set([
+  "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN", "GOOGLE_API_KEY", "HUGGINGFACE_TOKEN", "SLACK_TOKEN", "JWT_TOKEN",
+]);
+
+/** A "."-joined segment is key material when it is 6 or more characters with a digit, "/" or "+", or does not split into words. */
+function isKeyMaterialSegment(segment: string): boolean {
+  return segment.length >= 6 && (/[0-9+/]/.test(segment) || !segment.split(/[_-]+/).every(isIdentifierPart));
+}
+
+/**
+ * A key followed by "." and more key characters keeps going: `sk-…RtBq.Xo2RtBq` is one credential, not a key and a
+ * stray word; a sentence's full stop, a file extension (`.json`) and a word (`.Models`, `.toString`) end the key as
+ * before (`isKeyMaterialSegment`). Stops at `limit`. Returns `end` itself when nothing continues it.
+ */
+function extendDottedKey(text: string, end: number, limit: number): number {
+  let extended = end;
+  while (text[extended] === "." && extended < limit) {
+    const segmentEnd = scanKeyRun(text, extended + 1, true, limit);
+    if (!isKeyMaterialSegment(normalizeKeyChars(text.slice(extended + 1, segmentEnd)))) break;
+    extended = segmentEnd;
+  }
+  return extended;
+}
+
+/** Whether `text[at, end)` (an `sk-` run) is a base64 key: see `scanBase64Keys` for the rule. */
+function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolean): boolean {
+  const body = normalizeKeyChars(unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end)));
+  const separator = body.search(/[/+]/);
+  const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
+    isPathLike(body.slice(separator + 1));
+  return !plainKeyThenPath && body.length >= 20 && separator >= 0 && /[0-9A-Z+]/.test(body) && !isPathLike(body);
+}
+
 /**
  * `sk-` / `sk-ant-` keys whose body is base64 ("/" and "+" included), found in one left-to-right pass: from each `sk-`
  * at a word boundary take the maximal run of key characters (a JSON-escaped `\/` counts as "/") once, validate it,
- * and resume after it. Nothing of the run
- * is trimmed: its last segment is key material whatever its letter case. A run is a key if its body is at least 20
- * characters, contains "/" or "+", has a digit, a capital or "+", and is not a path (`sk-learn/linear_model/Ridge2`,
- * see `isPathLike`). A plain key followed by a URL path (`sk-…RtBq/models`: the body before its first "/" is a 20-64
- * character plain key and the rest is a path) is left to the bounded `sk-` patterns, which stop at the "/".
- * Every `sk-` inside a run is skipped: a key inside it is found by the bounded patterns. Nothing is rescanned and
- * nothing is searched backwards, so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
+ * and resume after it. Nothing of the run is trimmed: its last segment is key material whatever its letter case. A run
+ * is a key if its body is at least 20 characters, contains "/" or "+", has a digit, a capital or "+", and is not a path
+ * (`sk-learn/linear_model/Ridge2`, see `isPathLike`). A plain key followed by a URL path (`sk-…RtBq/models`: the body
+ * before its first "/" is a 20-64 character plain key and the rest is a path) is left to the bounded `sk-` patterns,
+ * which stop at the "/".
+ * Invariant: redaction only grows. The original run is always judged and kept; longer runs (through an encoded
+ * "/" or "+", or a dotted continuation) are judged in addition. All candidates are collected first; each one extends
+ * within its own window (`extensionLimit`): up to MAX_EXTENSION past its run, never into the next candidate.
+ * Scanning resumes after the original run; a `sk-` inside it is left to the bounded patterns.
  */
 function scanBase64Keys(text: string): Array<{ start: number; end: number; name: string }> {
-  const found: Array<{ start: number; end: number; name: string }> = [];
+  const candidates: Array<{ at: number; runEnd: number; anthropic: boolean }> = [];
   let from = 0;
   while (from < text.length) {
     const at = text.indexOf("sk-", from);
@@ -490,24 +583,24 @@ function scanBase64Keys(text: string): Array<{ start: number; end: number; name:
       from = at + 1;
       continue;
     }
-    let end = at + 3;
-    while (end < text.length) {
-      if (isBase64KeyChar(text.charCodeAt(end))) end++;
-      else if (text[end] === "\\" && text[end + 1] === "/") end += 2; // a JSON-escaped "/"
-      else break;
-    }
-    const anthropic = text.startsWith("sk-ant-", at);
-    const body = unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end));
-    const separator = body.search(/[/+]/);
-    const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
-      isPathLike(body.slice(separator + 1));
-    if (!plainKeyThenPath && body.length >= 20 && separator >= 0 && /[0-9A-Z+]/.test(body) && !isPathLike(body)) {
+    const runEnd = scanKeyRun(text, at + 3, false);
+    candidates.push({ at, runEnd, anthropic: text.startsWith("sk-ant-", at) });
+    from = Math.max(runEnd, at + 1);
+  }
+  const found: Array<{ start: number; end: number; name: string }> = [];
+  candidates.forEach(({ at, runEnd, anthropic }, i) => {
+    const name = anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+    const continues = text[runEnd] === "." || matchEncodedKeyChar(text, runEnd) > 0;
+    const limit = extensionLimit(text, runEnd, candidates[i + 1]?.at);
+    const encodedEnd = continues ? scanKeyRun(text, runEnd, true, limit) : runEnd;
+    const extendedEnd = continues ? extendDottedKey(text, encodedEnd, limit) : runEnd;
+    for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
+      if (!isBase64KeyRun(text, at, end, anthropic)) continue;
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
-      found.push({ start: at, end: secretEnd, name: anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY" });
+      found.push({ start: at, end: secretEnd, name });
     }
-    from = Math.max(end, at + 1);
-  }
+  });
   return found;
 }
 
@@ -575,6 +668,18 @@ function looksLikeCredentialToken(token: string): boolean {
   // a base64 secret that happens to contain slashes also carries "+" or "=", or has at most one.
   if (token.startsWith("/") || (token.match(/\//g)?.length ?? 0) >= 2) return false;
   return !token.split(/[/._-]+/).every(isIdentifierPart);
+}
+
+/**
+ * A "."-joined token is key material only when it is unlike every ordinary dotted name: every segment is base64url
+ * characters and `isKeyMaterialSegment` (so no path, host name, file name, version number, package or class name), and one
+ * segment is at least 16 characters. The caller still applies the entropy threshold to the whole token.
+ */
+function isDottedKeyMaterial(plain: string): boolean {
+  const segments = plain.split(".");
+  return segments.length >= 2 &&
+    segments.every((segment) => /^[a-zA-Z0-9+=_-]+$/.test(segment) && isKeyMaterialSegment(segment)) &&
+    segments.some((segment) => segment.length >= 16);
 }
 
 /** A number, a short tag such as `v1` or `x86`, or letters that split cleanly into words of two or more letters. */
@@ -712,9 +817,11 @@ function findOccurrences(text: string, values: string[], budget: number): Array<
 /**
  * Replaces every occurrence of each value, in one pass over the text: the same result as `replaceAll` for each value in
  * turn (values in priority order, longest first as classifyText returns them; text already replaced is not matched
- * again), without one pass per value, which is quadratic for a text with thousands of distinct secrets. All occurrences
- * are found first; they are accepted in priority order unless they overlap text already accepted (a Fenwick tree counts
- * accepted positions); the output is built once from the accepted spans.
+ * again) unless two values overlap only partly (below), without one pass per value, which is quadratic for a text with thousands of distinct secrets. All occurrences
+ * are found first; they are accepted in priority order unless they lie inside text already accepted (a Fenwick tree
+ * counts accepted positions); the output is built once from the accepted spans. An occurrence that only partly overlaps
+ * accepted text would leave its other part in clear: the union replacement below is used instead, which replaces every
+ * part of every occurrence (the result then covers everything replaceAll in turn would, and more).
  *
  * Values that overlap themselves on a repetitive text (secrets that are suffixes of one another over a run of one
  * letter) can occur far more often than the text is long. Past one occurrence per character the replacement falls
@@ -744,7 +851,9 @@ export function replaceValues(
   const accepted: Array<[start: number, end: number, index: number]> = [];
   for (const [start, index] of occurrences) {
     const end = start + values[index].length;
-    if (countBefore(end) - countBefore(start) !== 0) continue;
+    const overlap = countBefore(end) - countBefore(start);
+    if (overlap === end - start) continue; // wholly inside text already accepted
+    if (overlap !== 0) return replaceUnion(text, values, replacement); // partly inside: the rest of it must not stay in clear
     accepted.push([start, end, index]);
     for (let position = start + 1; position <= end; position++) {
       for (let i = position; i <= text.length; i += i & -i) covered[i]++;
@@ -997,7 +1106,9 @@ export class InformationFlowBoundary {
       });
     }
     for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
+      // Each pattern is a family: its candidates are collected first, then each extends within its own window.
       const re = new RegExp(regex.source, `${regex.flags}d`);
+      const family: Array<{ start: number; end: number }> = [];
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
         // If capture group exists (e.g. Bearer token), extract captured secret, else fullMatch
@@ -1018,21 +1129,33 @@ export class InformationFlowBoundary {
             break;
           }
         }
-        const secretVal = text.slice(start, end);
-        if (secretVal.length >= 8 && !isReference(secretVal)) {
-          matches.push({
-            start,
-            end,
-            item: {
-              secret: secretVal,
-              classificationType: "PATTERN_DETERMINISTIC",
-              classifierId: `regex:${name.toLowerCase()}`,
-              confidence: 0.95,
-              patternName: name,
-            },
-          });
-        }
+        family.push({ start, end });
       }
+      family.forEach(({ start, end }, i) => {
+        // The original match is kept; a dotted continuation is a second, longer match (never a replacement), so a
+        // value found only by its shorter form (the key on its own elsewhere in the text) is still redacted.
+        const ends = [end];
+        if (DOTTED_CONTINUATION_PATTERNS.has(name) && text[end] === ".") {
+          const extended = extendDottedKey(text, end, extensionLimit(text, end, family[i + 1]?.start));
+          if (extended > end) ends.push(extended);
+        }
+        for (const spanEnd of ends) {
+          const secretVal = text.slice(start, spanEnd);
+          if (secretVal.length >= 8 && !isReference(secretVal)) {
+            matches.push({
+              start,
+              end: spanEnd,
+              item: {
+                secret: secretVal,
+                classificationType: "PATTERN_DETERMINISTIC",
+                classifierId: `regex:${name.toLowerCase()}`,
+                confidence: 0.95,
+                patternName: name,
+              },
+            });
+          }
+        }
+      });
     }
 
     // 3. Contextual / Heuristic Classifications (DATA-002: Category 3, DATA-003: Preserves LHS identifiers)
@@ -1091,27 +1214,30 @@ export class InformationFlowBoundary {
       let end = start + token[0].length;
       while (end > start && (text[end - 1] === "." || text[end - 1] === "!")) end--;
       const tok = text.slice(start, end);
-      const plain = unescapeSlashes(tok);
+      const plain = normalizeKeyChars(unescapeSlashes(tok));
+      // A token with an encoded or look-alike "/" or "+" is measured decoded; every other token keeps its own length.
+      const length = plain.length !== unescapeSlashes(tok).length ? plain.length : tok.length;
       if (
-        tok.length >= 20 &&
+        length >= 20 &&
         // Longer tokens are prose or data. A base64 run ("+" or "/", not a path) is still a secret up to 512 characters,
         // the size of long access tokens, unless it is a data-URI payload (`;base64,…`): then it is an embedded file.
         // A credential-sized token is classified wherever it stands, after `base64,` too.
-        (tok.length <= 128 ||
-          (tok.length <= 512 && /[+/]/.test(plain) && !isPathLike(plain) && !text.startsWith("base64,", start - 7))) &&
+        (length <= 128 ||
+          (length <= 512 && /[+/]/.test(plain) && !isPathLike(plain) && !text.startsWith("base64,", start - 7))) &&
         // A token the original tokenizer did not produce must look like a credential, not an identifier or a path.
         (originalTokens.has(tok) || looksLikeCredentialToken(plain)) &&
         !isReference(tok)
       ) {
-        // No dots: file paths and dotted names are not tokens (JWTs have their own pattern above). Nexus's own session
-        // ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy, and a redacted
-        // id made the session impossible to save or resume.
-        if (/^[a-zA-Z0-9+/=_-]+$/.test(plain) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain) &&
+        // A dotted token must be dotted key material (`isDottedKeyMaterial`): file paths, versions and host names are not
+        // tokens (JWTs have their own pattern above).
+        // Nexus's own session ids (date, time and a short random suffix) are identifiers: about 1 in 70 looked high-entropy,
+        // and a redacted id made the session impossible to save or resume.
+        if ((/^[a-zA-Z0-9+/=_-]+$/.test(plain) || isDottedKeyMaterial(plain)) && !/^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/.test(plain) &&
           // The temporary guard branch of `worktree remove` (`nexus-removed/<10 hex>-<8 hex>`): a redacted name cannot be undone by hand.
           !/^nexus-removed\/[0-9a-f]{10}-[0-9a-f]{8}$/.test(plain)) {
           const entropy = calculateShannonEntropy(plain);
           // Scaled entropy threshold: >= 4.0 for length 20-31, >= 4.5 for length >= 32
-          const threshold = tok.length < 32 ? 4.0 : 4.5;
+          const threshold = length < 32 ? 4.0 : 4.5;
           if (entropy >= threshold) {
             matches.push({
               start,
@@ -1298,7 +1424,7 @@ export class InformationFlowBoundary {
 
       const quarantinedSecrets: ClassifiedSecret[] = [];
       const sanitizedText = replaceValues(rawText, classifiedSecrets.map((item) => item.secret), (index, matched) => {
-        // `matched` is the exact text replaced: the secret itself, or a whole region of self-overlapping secrets, so
+        // `matched` is the exact text replaced: the secret itself, or a whole region of overlapping secrets, so
         // the token restores exactly what it replaced.
         const item = matched === classifiedSecrets[index].secret
           ? classifiedSecrets[index]

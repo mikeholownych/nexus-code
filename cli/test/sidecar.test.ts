@@ -145,6 +145,22 @@ describe("SidecarServer: session and turns", () => {
     });
   });
 
+  test("turn.result.saved is true for a normal turn and false when the turn failed before any message was added", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "x" });
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "turn.result" && e.turn_id === "t1").saved, true);
+    });
+    await withSidecar(readOnlyTurn, "auto", async ({ server, events, app, send }) => {
+      app.getAgent().runTurn = async () => { throw new Error("failed before the prompt was appended"); };
+      await send({ type: "prompt.submit", id: "t2", text: "x" });
+      await server.idle();
+      const result = events.find((e) => e.type === "turn.result" && e.turn_id === "t2");
+      assert.equal(result.saved, false);
+      assert.equal(app.getSessionManager().listSessions().length, 0, "nothing was written");
+    });
+  });
+
   test("a second prompt while busy is rejected with BUSY", async () => {
     await withSidecar(() => ({ kind: "text", content: "slow", delayMs: 1500 }), "auto", async ({ events, send }) => {
       await send({ type: "prompt.submit", id: "t1", text: "one" });
