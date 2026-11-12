@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0134x6CBwktHfRHF5f12ZYb1",
+  "agent_id": "ad9d5bf7d93429632",
+  "subagent_type": "reviewer",
+  "task_description": "Consolidation review of TUI integration PR #481",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 88090,
+    "cache_read_tokens": 1697377,
+    "output_tokens": 14981,
+    "api_call_count": 29
+  },
+  "started_at": "2026-11-12T04:56:01.822597464Z",
+  "completed_at": "2026-11-12T04:58:23.265182326Z"
+}
