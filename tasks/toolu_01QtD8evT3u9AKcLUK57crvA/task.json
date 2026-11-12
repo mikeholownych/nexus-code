@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01QtD8evT3u9AKcLUK57crvA",
+  "agent_id": "a7cdfcef71a5e0db5",
+  "subagent_type": "reviewer",
+  "task_description": "Delta review of #434 type-change push",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 14877,
+    "cache_read_tokens": 42126,
+    "output_tokens": 2128,
+    "api_call_count": 3
+  },
+  "started_at": "2026-11-12T00:39:09.257580705Z",
+  "completed_at": "2026-11-12T00:39:31.882932051Z"
+}
