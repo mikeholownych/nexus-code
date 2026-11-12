@@ -121,7 +121,7 @@ export function snapshotSupport(run: (args: string[]) => string, root: string, b
   try { format = run(["rev-parse", "--show-object-format"]).trim(); } catch (err: any) {
     if (!/ambiguous argument|unknown option|unknown revision/i.test(String(err?.stderr ?? ""))) throw err;
   }
-  if (format !== "sha1" && format !== "sha256") return refuse("git cannot report this repository's object format", "upgrade git (2.38+) or check the repository");
+  if (format !== "sha1" && format !== "sha256") return refuse("git cannot report this repository's object format", "upgrade git or check the repository");
   if (format !== "sha1") return refuse(`the repository uses the ${format} object format, which is not supported`, "no workaround");
   if (config.get("core.filemode") === "false") return refuse("core.filemode is false, so file modes are not read from disk", "set core.filemode=true");
   if (config.get("core.symlinks") === "false") return refuse("core.symlinks is false, so symlinks are checked out as files", "set core.symlinks=true");
