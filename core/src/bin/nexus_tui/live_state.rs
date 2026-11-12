@@ -200,6 +200,9 @@ pub struct Activity {
     /// The turn's step budget and time limit, when the sidecar reports them.
     pub max_steps: Option<u64>,
     pub max_minutes: Option<u64>,
+    /// Reply text has arrived during this phase and step (the model is writing, not only thinking). A new phase or
+    /// step starts without it.
+    pub text_streaming: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -629,6 +632,10 @@ impl LiveState {
                 self.composer.line_end();
             }
             self.composer.insert("\n");
+            // Enter would send everything in the draft as one message: say so, never join messages silently.
+            self.transcript.push(Entry::Notice(
+                "Another message was added to the draft; Enter sends the whole draft as one message; edit the draft if you want them sent separately.".into(),
+            ));
         }
         self.composer.paste(text);
     }
@@ -661,6 +668,11 @@ impl LiveState {
             Some(Overlay::Models(picker)) => picker.local_endpoint_setup_id.clone(),
             _ => None,
         };
+        // A list still being fetched is cancelled with the picker.
+        let listing = match &self.overlay {
+            Some(Overlay::Models(picker)) if matches!(picker.catalog, Fetch::Waiting) => Some(picker.request.clone()),
+            _ => None,
+        };
         let Some(Overlay::Models(picker)) = &mut self.overlay else {
             return None;
         };
@@ -671,7 +683,9 @@ impl LiveState {
         match picker.on_key(key)? {
             PickerIntent::Close => {
                 self.overlay = None;
-                local_setup_id.map(|id| Action::Send(Command::ProviderLocalCancel { id }))
+                local_setup_id
+                    .map(|id| Action::Send(Command::ProviderLocalCancel { id }))
+                    .or_else(|| listing.map(|id| Action::Send(Command::ProviderCancel { id })))
             }
             PickerIntent::Select { provider, model } => {
                 self.overlay = None;
@@ -934,7 +948,8 @@ impl LiveState {
                     Some(previous) if previous.phase == phase && previous.tool == tool => previous.since,
                     _ => Instant::now(),
                 };
-                self.activity = Some(Activity { phase, step, segment, tool, subject, since, max_steps, max_minutes });
+                let text_streaming = self.activity.as_ref().is_some_and(|previous| previous.phase == phase && previous.step == step && previous.text_streaming);
+                self.activity = Some(Activity { phase, step, segment, tool, subject, since, max_steps, max_minutes, text_streaming });
             }
             Event::FileDiff {
                 call_id,
@@ -987,13 +1002,18 @@ impl LiveState {
                 }
             }
             // One entry per model reply: text after a new step (a tool call, a continuation) starts a new one.
-            Event::AssistantDelta { turn_id, text } => match self.transcript.last_mut() {
-                Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id && !self.assistant_break => body.push_str(&text),
-                _ => {
-                    self.assistant_break = false;
-                    self.transcript.push(Entry::Assistant { turn_id, text });
+            Event::AssistantDelta { turn_id, text } => {
+                if let Some(activity) = self.activity.as_mut().filter(|_| !text.is_empty()) {
+                    activity.text_streaming = true;
                 }
-            },
+                match self.transcript.last_mut() {
+                    Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id && !self.assistant_break => body.push_str(&text),
+                    _ => {
+                        self.assistant_break = false;
+                        self.transcript.push(Entry::Assistant { turn_id, text });
+                    }
+                }
+            }
             Event::ToolStart { call_id, tool, subject, evidence } => {
                 if !HIDDEN_TOOLS.contains(&tool.as_str()) {
                     self.transcript.push(Entry::Tool {
@@ -2003,6 +2023,11 @@ impl LiveState {
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderLocalCancel { id }));
             }
+            Some(Overlay::Models(Picker { catalog: Fetch::Waiting, request, .. })) => {
+                let id = request.clone();
+                self.overlay = None;
+                return Some(Action::Send(Command::ProviderCancel { id }));
+            }
             Some(
                 Overlay::Help { .. }
                 | Overlay::Detail(_)
@@ -2718,9 +2743,18 @@ pub fn outcome_for(turn: &Value) -> Outcome {
         }
         ("COMPLETED", _, _) => ("Done · result not established".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
         ("INTERRUPTED", _, _) => {
-            let phase = turn["interruption"]["phase"].as_str().unwrap_or("work").replace('_', " ");
+            // The controller's phase names are internal; say when it was in the operator's words.
+            let when = match turn["interruption"]["phase"].as_str().unwrap_or("work") {
+                "inference" => "while the model was answering".to_string(),
+                "provider_wait" => "while waiting for the provider".to_string(),
+                "tool_dispatch" => "as tools were being started".to_string(),
+                "tool_settling" => "while a tool was finishing".to_string(),
+                "confirmation" => "while waiting for your approval".to_string(),
+                "between_steps" => "between steps".to_string(),
+                other => format!("during {}", other.replace('_', " ")),
+            };
             let skipped = turn["interruption"]["undispatchedToolCalls"].as_u64().unwrap_or(0);
-            let mut cause = format!("You stopped the turn during {phase}.");
+            let mut cause = format!("You stopped the turn {when}.");
             if skipped > 0 {
                 cause.push_str(&format!(" {skipped} planned tool call{} did not run.", if skipped == 1 { "" } else { "s" }));
             }
@@ -2946,6 +2980,30 @@ mod tests {
         state.on_key(key(KeyCode::Enter));
         state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g2","status":"rejected","message":"/test is running"}"#));
         assert_eq!(state.composer.expand(state.composer.text()), "line one\nline two", "text kept by the client when the ack carries none");
+    }
+
+    #[test]
+    fn two_returned_messages_are_never_joined_silently() {
+        // D-18: two steering messages typed during a wait came back on Esc as one draft, and Enter then sent them as
+        // one prompt without a word about it.
+        let mut state = busy();
+        type_text(&mut state, "SC:e500 go");
+        state.on_key(key(KeyCode::Enter));
+        type_text(&mut state, "SC:reset go");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"SC:e500 go"}"#));
+        let notices = |state: &LiveState| state.transcript.iter().filter(|e| matches!(e, Entry::Notice(t) if t.contains("one message"))).count();
+        assert_eq!(notices(&state), 0, "the first returned message lands in an empty draft: nothing is joined yet");
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g2","status":"cancelled","message":"Not applied","text":"SC:reset go"}"#));
+        assert_eq!(state.composer.expand(state.composer.text()), "SC:e500 go\nSC:reset go", "both are kept, one per line");
+        assert_eq!(notices(&state), 1, "the join is announced: {:?}", state.transcript);
+        let Some(Entry::Notice(text)) = state.transcript.iter().rev().find(|e| matches!(e, Entry::Notice(t) if t.contains("one message"))) else { panic!() };
+        assert!(text.contains("one message") && text.contains("edit"), "{text}");
+        // A message typed by hand and then a returned one is the same join.
+        let mut typed = busy();
+        typed.composer = "draft already here".into();
+        typed.restore_draft("returned text");
+        assert_eq!(notices(&typed), 1);
     }
 
     #[test]
@@ -4507,6 +4565,25 @@ mod tests {
         let outbox = state.take_outbox();
         assert!(matches!(outbox.as_slice(), [Action::Send(Command::ModelsList { .. })]), "reopens the picker for the provider");
         assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("anthropic")));
+    }
+
+    #[test]
+    fn closing_the_picker_while_models_are_still_being_listed_cancels_the_fetch() {
+        // D-11: the listing is bounded and cancellable; Esc on "Listing models" stops the sidecar's request.
+        let mut state = ready();
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id })));
+        assert!(!matches!(state.overlay, Some(Overlay::Models(_))));
+        // Once the list has arrived there is nothing to cancel.
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        // Ctrl+C closes a picker that is still listing the same way.
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::ProviderCancel { id })));
     }
 
     #[test]

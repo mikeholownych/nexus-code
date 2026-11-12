@@ -1,0 +1,13 @@
+Excerpt of `npx tsx --test test/model_picker_session_endpoint.test.ts` run before the fix (9 tests; 2 passed, 7 failed):
+  FAILED a session endpoint other than the appliance is listed with its models, and the current one is marked
+  FAILED no credential, userinfo or query reaches the catalog, in a label, a model id or an error
+  FAILED an endpoint that cannot be listed falls back to its last good list, per endpoint
+  FAILED the list is bounded: count and id length are capped, control characters are removed, non-strings are dropped
+  FAILED the fetch is bounded by its timeout and cancellable: an endpoint that never answers does not hold the picker
+  FAILED selecting a session-endpoint model keeps the endpoint and key, and is refused once a cloud provider is current
+  FAILED sidecar: provider.cancel for a models.list stops its fetch and no catalog is sent
+  (passed before and after as guards: the session endpoint equal to the appliance gives one row; a cloud provider session shows no extra row)
+Rust, with the picker's Esc-cancel line removed:
+  live_state::tests::closing_the_picker_while_models_are_still_being_listed_cancels_the_fetch
+    assertion `left == right` failed  left: None  right: Some(Send(ProviderCancel { id: "m1" }))
+After the fix: pass 9, fail 0; cargo test --bin nexus-tui 357 passed.

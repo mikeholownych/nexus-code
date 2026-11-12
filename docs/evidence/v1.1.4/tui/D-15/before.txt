@@ -1,0 +1,44 @@
+# D-15 before: /tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/scratchpad/nexus-tui-before
+=== D-15: one saved session, the one in use (starred); then /resume with no argument
+--- /sessions
+ NEXUS   nexus-polish-repo-e9q93krn  ⎇ main  model fake-model  mode: auto  context 4654/65536  local
+› say hello
+
+Hello from the fake model.
+
+✓ Done  No files changed, so there was nothing to verify.
+
+› /sessions
+  * session_20261112_094629_ub2ss8kk  2026-11-12T09:46:31  say hello · 3 messages
+
+  Load one with /resume <id>.
+
+ enter send · alt+enter or ctrl+j newline · ? help ─────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+--- /resume
+ NEXUS   nexus-polish-repo-e9q93krn  ⎇ main  model fake-model  mode: auto  context 4654/65536  local
+› say hello
+
+Hello from the fake model.
+
+✓ Done  No files changed, so there was nothing to verify.
+
+› /sessions
+  * session_20261112_094629_ub2ss8kk  2026-11-12T09:46:31  say hello · 3 messages
+
+  Load one with /resume <id>.
+
+› /resume
+  · Earlier conversation of session session_20261112_094629_ub2ss8kk (2 messages)
+
+› say hello
+
+Hello from the fake model.
+
+✓ Done  No files changed, so there was nothing to verify.
+  · Resumed session session_20261112_094629_ub2ss8kk.
+
+ enter send · alt+enter or ctrl+j newline · ? help ─────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+

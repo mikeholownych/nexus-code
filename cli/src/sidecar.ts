@@ -233,6 +233,7 @@ export class SidecarServer {
         void this.providerConnect(command.id, command.provider, command.method, command.key, command.endpoint);
         return;
       case "provider.cancel":
+        this.modelLists.get(command.id)?.abort();
         this.signIns.get(command.id)?.cancel();
         this.signIns.delete(command.id);
         cancelLocalEndpointSetup(command.id);
@@ -258,12 +259,21 @@ export class SidecarServer {
   /** Sign-ins in progress, by request id (provider.cancel stops one). */
   private signIns = new Map<string, { cancel(): void }>();
 
+  /** Model-list fetches in flight, by request id: a new list, provider.cancel or shutdown stops them. */
+  private modelLists = new Map<string, AbortController>();
+
   private async modelsList(id: string): Promise<void> {
+    // Only the newest list matters: the picker that asked for an older one is gone.
+    for (const older of this.modelLists.values()) older.abort();
+    const controller = new AbortController();
+    this.modelLists.set(id, controller);
     try {
-      const catalog = await buildCatalog(this.app.getConfig());
-      this.emit({ type: "models.catalog", id, ...catalog });
+      const catalog = await buildCatalog(this.app.getConfig(), { signal: controller.signal });
+      if (!controller.signal.aborted) this.emit({ type: "models.catalog", id, ...catalog });
     } catch (err) {
-      this.emit({ type: "error", id, code: "INTERNAL", message: errorText(err) });
+      if (!controller.signal.aborted) this.emit({ type: "error", id, code: "INTERNAL", message: errorText(err) });
+    } finally {
+      if (this.modelLists.get(id) === controller) this.modelLists.delete(id);
     }
   }
 
@@ -354,6 +364,12 @@ export class SidecarServer {
       this.steerAck(id, "rejected", `${name} is running, and steering applies to agent turns; your message is back in the composer.`, text);
       return;
     }
+    // Messages already waiting for their own turn come first: a later one never overtakes them.
+    if (this.followUps.length) {
+      this.followUps.push({ id, text });
+      this.steerAck(id, "deferred", "The turn is finishing; your message runs as its own follow-up turn once the turns before it have ended.");
+      return;
+    }
     const queued = this.app.getAgent().queueSteering(id, text);
     if (queued.status === "queued") {
       this.history.push(text.trim());
@@ -365,25 +381,25 @@ export class SidecarServer {
       return;
     }
     this.followUps.push({ id, text });
-    this.steerAck(id, "deferred", "The turn is finishing; your message starts a follow-up turn as soon as it ends.");
+    this.steerAck(id, "deferred", "The turn is finishing; your message runs as its own follow-up turn once the turns before it have ended.");
   }
 
-  /** Runs deferred steering as one follow-up turn under the first message's id. */
+  /**
+   * Runs the oldest deferred message as its own follow-up turn under its own id. Later ones wait: when this turn
+   * ends the settle path starts the next, so each message is a separate user message and a separate turn, in the
+   * order sent, never joined into one (D-18).
+   */
   private startFollowUp(): void {
-    const followUps = this.followUps;
-    this.followUps = [];
-    const id = followUps[0].id;
-    const text = followUps.map((f) => f.text).join("\n\n");
-    this.runJob(id, undefined, (signal) =>
-      this.gatedTurn(id, text, signal, {
+    const next = this.followUps.shift()!;
+    this.runJob(next.id, undefined, (signal) =>
+      this.gatedTurn(next.id, next.text, signal, {
         admitted: () => {
-          for (const f of followUps) {
-            this.history.push(f.text.trim());
-            this.steerAck(f.id, "applied", "Applied as a follow-up turn.");
-          }
+          this.history.push(next.text.trim());
+          this.steerAck(next.id, "applied", "Applied as a follow-up turn.");
         },
         refused: (message) => {
-          for (const f of followUps) this.steerAck(f.id, "cancelled", `${message} Your message is back in the composer.`, f.text);
+          // The messages behind it would be refused too: return them now, in order, rather than probing again for each.
+          for (const f of [next, ...this.followUps.splice(0)]) this.steerAck(f.id, "cancelled", `${message} Your message is back in the composer.`, f.text);
         },
       }),
     );
@@ -1052,6 +1068,7 @@ export class SidecarServer {
     if (!session) return { ok: false, message: `Session not found: ${id || "latest"}` };
     if (!Array.isArray(session.messages)) return { ok: false, message: `Session ${session.id} is unreadable: it has no message list.` };
     if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);
+    // The id changes together with the conversation, so a save after a partial restore never overwrites the previous session's record.
     this.sessionId = session.id;
     // What compaction replaced stays searchable after a resume (read_archive): only compactions this record committed.
     const archiveNotice = this.app.getAgent().restoreConversation(session, (committed) => this.app.getSessionManager().readArchivedHistory(session.id, committed));
@@ -1102,6 +1119,7 @@ export class SidecarServer {
   private shutdown(): Promise<void> {
     for (const signIn of this.signIns.values()) signIn.cancel();
     this.signIns.clear();
+    for (const list of this.modelLists.values()) list.abort();
     this.shutdownPromise ??= (async () => {
       this.startupProbeAbort.abort();
       this.turnAbort?.abort(new Error("sidecar shutdown"));
