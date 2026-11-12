@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_019jYQp4e4tE6JqMQrQP4q5n",
+  "agent_id": "acaa2a1153852cb75",
+  "task_description": "placeholder wait",
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 42451,
+    "cache_read_tokens": 0,
+    "output_tokens": 4,
+    "api_call_count": 1
+  },
+  "started_at": "2026-11-12T02:54:47.185210495Z",
+  "completed_at": "2026-11-12T02:54:51.574232189Z"
+}
