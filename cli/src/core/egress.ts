@@ -497,7 +497,8 @@ const MAX_EXTENSION = 1024;
  * into the next candidate of the same family (which extends itself), never past the text. Windows of one family are
  * disjoint by construction, so nothing earlier in the text can spend what a later key needs, and one family's total
  * extension work is O(n); with F families the work is at most F x n x a constant, and each family's values add at most about
- * 3n plus a constant (each extended value repeats its run once).
+ * 3n plus a constant (each extended value repeats its run once). One dot-joined chain that carries a candidate of every
+ * prefix feeds all families at once, so the whole-call total can reach about 15n to 17n value characters.
  * Honest limit: a key's extension stops at the next candidate of the same family or after MAX_EXTENSION characters; the
  * original match is never dropped. A real key whose own tail contains another candidate start (e.g. `.sk-` inside the
  * tail) keeps the part past it only if that candidate itself redacts it, which a valid key does.
