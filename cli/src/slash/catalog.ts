@@ -110,6 +110,8 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "worktree", usage: "/worktree [status|discard|list|path <branch>|switch [-c] <branch>|remove <branch>|copy-ignored|prune|merge [<target>|<flags>]]", summary: "Manage the speculative git worktree and named worktrees (a bare merge is the speculative one; merge ^ merges this named worktree into the default branch)", cancellable: true },
   { name: "audit", usage: "/audit [count]", summary: "Recent tool executions" },
   { name: "receipt", usage: "/receipt", summary: "Turn outcome, verifier evidence and validation receipt" },
+  // The terminal view answers this itself (it holds the raw cause of the last provider problem); listed so completion and help offer it.
+  { name: "details", usage: "/details", summary: "Raw cause of the last model provider problem" },
   { name: "test", usage: "/test [pattern]", summary: "Run the project's test suite", cancellable: true },
   { name: "copy", usage: "/copy [diff|code|last]", summary: "Copy the diff, code blocks or the last reply" },
   { name: "paste", usage: "/paste", summary: "Put the clipboard into the composer" },

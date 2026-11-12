@@ -11,11 +11,11 @@ import path from "node:path";
 import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
 import { encodeEvent, noProviderNotice, noProviderRefusal, providerRecoveryStatus } from "../src/protocol.js";
-import { startupEndpointProblem } from "../src/core/provider_recovery.js";
+import { startupEndpointProblem, startupEndpointProblems } from "../src/core/provider_recovery.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import http from "node:http";
 import net from "node:net";
-import { scrubUrls } from "../src/core/endpoint_identity.js";
+import { persistableEndpoint, scrubUrls } from "../src/core/endpoint_identity.js";
 import { makeHome, makeRepo, startGateway } from "./helpers/fixtures.js";
 import type { ProviderRecoveryRecord, RecoverySubmissionRecord } from "../src/core/turn.js";
 
@@ -224,13 +224,13 @@ async function rejectingModelsGateway(status: number) {
   return { url: `http://127.0.0.1:${port}/v1`, close: async () => { server.closeAllConnections(); await new Promise((r) => server.close(r)); await gw.close(); } };
 }
 
-describe("D-07 review round 2", () => {
-  async function sidecar(endpoint: string, fn: (r: { events: any[]; server: SidecarServer; repo: string; send: (m: object) => Promise<void> }) => Promise<void>) {
+describe("D-07: the prompt gate, the start-up warning and the URL scrub", () => {
+  async function sidecar(endpoint: string, fn: (r: { events: any[]; server: SidecarServer; repo: string; send: (m: object) => Promise<void> }) => Promise<void>, extra: Partial<HarnessConfig> = {}) {
     const repo = makeRepo();
     const home = makeHome();
     const previousHome = process.env.HOME;
     process.env.HOME = home;
-    const app = new ApplicationCore({ endpoint, model: "local-model", maxSteps: 5, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, approvalMode: "auto", fullAccess: true } as HarnessConfig);
+    const app = new ApplicationCore({ endpoint, model: "local-model", maxSteps: 5, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, approvalMode: "auto", fullAccess: true, ...extra } as HarnessConfig);
     const events: any[] = [];
     const server = new SidecarServer({ app, mode: "auto", write: (l) => events.push(JSON.parse(l)), historyFile: path.join(home, "history") });
     server.start();
@@ -246,6 +246,119 @@ describe("D-07 review round 2", () => {
       fs.rmSync(repo, { recursive: true, force: true });
     }
   }
+
+  describe("every endpoint inference can use decides the gate", () => {
+    const REFUSED = "http://127.0.0.1:1/v1";
+    const withFallback = async (fallback: string, fn: () => Promise<void>) => {
+      const previous = process.env.LOCAL_LLM_FALLBACK_ENDPOINTS;
+      process.env.LOCAL_LLM_FALLBACK_ENDPOINTS = fallback;
+      try {
+        await fn();
+      } finally {
+        if (previous === undefined) delete process.env.LOCAL_LLM_FALLBACK_ENDPOINTS;
+        else process.env.LOCAL_LLM_FALLBACK_ENDPOINTS = previous;
+      }
+    };
+
+    test("the primary's /models answers 503 while chat works and a failover endpoint refuses: the prompt runs", async () => {
+      const gw = await rejectingModelsGateway(503);
+      try {
+        await withFallback("http://127.0.0.1:2/v1", async () => {
+          await sidecar(gw.url, async ({ events, send, server }) => {
+            await (server as any).startupProbe;
+            assert.equal((server as any).providerProblem, undefined, "one answering endpoint is enough to try a prompt");
+            await send({ type: "prompt.submit", id: "t1", text: "hello" });
+            await server.idle();
+            assert.equal(events.some((e) => e.type === "error"), false, JSON.stringify(events.filter((e) => e.type === "error")));
+            assert.ok(events.some((e) => e.type === "turn.result"));
+          });
+        });
+      } finally {
+        await gw.close();
+      }
+    });
+
+    test("an offline primary with a reachable planner and coder: the prompt runs", async () => {
+      const gw = await startGateway(() => ({ kind: "text", content: "hi there" }));
+      try {
+        await sidecar(REFUSED, async ({ events, send, server }) => {
+          await (server as any).startupProbe;
+          assert.equal((server as any).providerProblem, undefined);
+          await send({ type: "prompt.submit", id: "t1", text: "hello" });
+          await server.idle();
+          assert.equal(events.some((e) => e.type === "error"), false, JSON.stringify(events.filter((e) => e.type === "error")));
+          assert.ok(events.some((e) => e.type === "turn.result"));
+        }, { plannerModel: "planner-model", plannerEndpoint: gw.url, coderModel: "coder-model", coderEndpoint: gw.url });
+      } finally {
+        await gw.close();
+      }
+    });
+
+    test("every candidate refused: the prompt is refused and the notice names each endpoint, without credentials", async () => {
+      await withFallback("http://127.0.0.1:2/v1", async () => {
+        await sidecar("http://user:PASSWORDVALUE@127.0.0.1:1/v1", async ({ events, send, server }) => {
+          await (server as any).startupProbe;
+          await send({ type: "prompt.submit", id: "t1", text: "hello" });
+          await server.idle();
+          const refusal = events.find((e) => e.type === "error" && e.id === "t1");
+          assert.equal(refusal?.code, "NO_PROVIDER", JSON.stringify(events.map((e) => [e.type, e.code])));
+          assert.match(refusal.message, /127\.0\.0\.1:1\/v1/);
+          assert.match(refusal.message, /127\.0\.0\.1:2\/v1/);
+          const notice = events.find((e) => e.key === "provider.startup");
+          assert.match(notice.text, /127\.0\.0\.1:2\/v1/);
+          assert.doesNotMatch(JSON.stringify(events), /PASSWORDVALUE/);
+          assert.equal(events.some((e) => e.type === "activity" || e.type === "turn.result"), false);
+        });
+      });
+    });
+
+    test("planner and coder refused with the primary offline too: refused, naming all three", async () => {
+      await sidecar(REFUSED, async ({ events, send, server }) => {
+        await (server as any).startupProbe;
+        await send({ type: "prompt.submit", id: "t1", text: "hello" });
+        await server.idle();
+        const refusal = events.find((e) => e.type === "error" && e.id === "t1");
+        assert.equal(refusal?.code, "NO_PROVIDER");
+        for (const port of [1, 3, 4]) assert.match(refusal.message, new RegExp(`127\\.0\\.0\\.1:${port}/v1`));
+      }, { plannerModel: "p", plannerEndpoint: "http://127.0.0.1:3/v1", coderModel: "c", coderEndpoint: "http://127.0.0.1:4/v1" });
+    });
+
+    test("a timing-out candidate is an answer: the prompt is allowed", async () => {
+      const sockets = new Set<net.Socket>();
+      const hang = net.createServer((sock) => { sockets.add(sock); });
+      await new Promise<void>((r) => hang.listen(0, "127.0.0.1", r));
+      const port = (hang.address() as net.AddressInfo).port;
+      try {
+        await withFallback(`http://127.0.0.1:${port}/v1`, async () => {
+          await sidecar(REFUSED, async ({ server }) => {
+            const problem = await (server as any).app.getAgent().probeEndpointProblem(undefined, 150);
+            assert.ok(problem);
+            assert.equal(problem.blocking, false, JSON.stringify(problem));
+          });
+        });
+      } finally {
+        for (const sock of sockets) sock.destroy();
+        await new Promise((r) => hang.close(r));
+      }
+    });
+
+    test("startupEndpointProblems keeps each endpoint's own result", () => {
+      const refused = { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED)", codes: ["ECONNREFUSED"] } as any;
+      const http503 = { available: false, condition: "TEMPORARILY_UNAVAILABLE", httpStatus: 503, detail: "HTTP 503" } as any;
+      const ok = { available: true, condition: "AVAILABLE", httpStatus: 200 } as any;
+      const both = startupEndpointProblems([{ endpoint: "http://a/v1", probe: http503 }, { endpoint: "http://b/v1", probe: refused }])!;
+      assert.equal(both.blocking, false);
+      assert.equal(both.endpoint, "http://a/v1");
+      assert.equal(both.detail, "HTTP 503", "the primary's HTTP result is not replaced by the failover's failure");
+      const all = startupEndpointProblems([{ endpoint: "http://a/v1", probe: refused }, { endpoint: "http://b/v1", probe: refused }])!;
+      assert.equal(all.blocking, true);
+      assert.deepEqual(all.endpoints, ["http://a/v1", "http://b/v1"]);
+      assert.equal(startupEndpointProblems([{ endpoint: "http://a/v1", probe: refused }, { endpoint: "http://b/v1", probe: ok }])!.blocking, false);
+      assert.equal(startupEndpointProblems([{ endpoint: "http://a/v1", probe: ok }]), undefined);
+      const single = startupEndpointProblems([{ endpoint: "http://a/v1", probe: refused }])!;
+      assert.deepEqual([single.blocking, single.nothingThere, single.endpoints], [true, true, undefined]);
+    });
+  });
 
   for (const status of [401, 403]) {
     test(`/models answers ${status} but chat works: the prompt runs, the start-up notice only warns`, async () => {
@@ -287,6 +400,17 @@ describe("D-07 review round 2", () => {
       const ack = events.filter((e) => e.type === "steer.ack" && e.id === "g2").map((a) => a.status);
       assert.deepEqual(ack, ["deferred", "cancelled"]);
       assert.equal(events.some((e) => e.type === "activity" || e.type === "turn.result"), false, "no turn ran");
+    });
+  });
+
+  test("/details reaches the sidecar as a plain reply: never gated, never a turn", async () => {
+    await sidecar("http://127.0.0.1:1/v1", async ({ events, send, server }) => {
+      await send({ type: "slash", id: "d1", command: "details", args: "" });
+      await server.idle();
+      const result = events.find((e) => e.type === "slash.result" && e.id === "d1");
+      assert.ok(result, JSON.stringify(events.map((e) => [e.type, e.code])));
+      assert.equal(result.success, true);
+      assert.equal(events.some((e) => e.type === "error" || e.type === "activity" || e.type === "turn.result"), false);
     });
   });
 
@@ -434,10 +558,52 @@ describe("D-07 review round 2", () => {
       ["Request cannot be constructed from a URL that includes credentials: https://u:abc/def@host/v1 (retry)", "Request cannot be constructed from a URL that includes credentials: https://host/v1 (retry)"],
     ];
     for (const [input, expected] of cut) assert.equal(scrubUrls(input), expected, input);
-    for (const same of ["https://host/path@x", "https://host:8080/a@b", "write to a@b.example about it", "file:///x", "https://h:99999/x@y"]) assert.equal(scrubUrls(same), same, same);
+    for (const same of ["https://host/path@x", "write to a@b.example about it", "file:///x", "https://host:8080/a/b", "https://h:99999/x"]) assert.equal(scrubUrls(same), same, same);
     const problem = startupEndpointProblem("https://u:abc/def@host/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "Request cannot be constructed from a URL that includes credentials: https://u:abc/def@host/v1", codes: [] } as any)!;
     for (const out of [problem.detail, problem.endpoint, noProviderNotice(problem).detail!, noProviderNotice(problem).text, noProviderRefusal(problem)]) {
       assert.doesNotMatch(out, /abc|def/, out);
+    }
+  });
+
+  test("scrubUrls cuts the forms the earlier regexes left (all-digit password, no trailing slash, space plus slash, ?/# in a password)", () => {
+    const cut: Array<[string, string]> = [
+      ["https://u:1234/x@h/v1", "https://h/v1"],
+      ["https://u:123456@h:8080", "https://h:8080"],
+      ["connect user:pass@db:5432 failed", "connect db:5432 failed"],
+      ["connect user:pass@db:5432", "connect db:5432"],
+      ["dial (user:pass@db:5432)", "dial (db:5432)"],
+      ["http://u:pa ss/w@h/x", "http://h/x"],
+      ["http://u:pa ss/w@h/x?key=SECRETVALUE and more", "http://h/x and more"],
+      ["https://u:p?w@host/v1", "https://host/v1"],
+      ["https://u:p#w@host/v1", "https://host/v1"],
+      ["//user:pass@host:9", "//host:9"],
+      ["see //user:pass@host/x now", "see //host/x now"],
+    ];
+    for (const [input, expected] of cut) {
+      const got = scrubUrls(input);
+      assert.equal(got, expected, input);
+      assert.doesNotMatch(got, /SECRETVALUE|pass|1234|123456|pa ss|p\?w|p#w/, input);
+    }
+    for (const stored of ["https://u:p?w@host/v1", "https://u:p#w@host/v1", "https://u:1234/x@h/v1/", "https://u:abc/def@h/v1?k=S"]) {
+      assert.match(persistableEndpoint(stored), /^https:\/\/(host|h)\/v1$/, stored);
+    }
+    // Ambiguous input is over-redacted rather than kept: the port-or-password reading is not told apart.
+    assert.equal(scrubUrls("http://host:abc/p@q"), "http://q");
+    assert.equal(scrubUrls("https://host:8080/a@b"), "https://b");
+    for (const same of ["https://host:8080/a/b", "http://localhost:1234 is down", "connect db:5432 failed", "mail a@b.example", "x:y@z"]) assert.equal(scrubUrls(same), same, same);
+  });
+
+  test("scrubUrls runs in linear time on hostile input (200 KB)", () => {
+    const size = 200_000;
+    const hostile = [
+      "a@".repeat(size / 2), "http://".repeat(size / 7), "u:p@".repeat(size / 4), "http://u:a ".repeat(size / 11) + "@",
+      "//".repeat(size / 2), "x:y@h:1 ".repeat(size / 8), "http://a:b/c@".repeat(size / 13), `http://u:${"p/".repeat(size / 2)}@h`,
+      `${"a:".repeat(size / 2)}@h:1`, "https://u:" + "1".repeat(size) + "/x@h", "@".repeat(size),
+    ];
+    for (const input of hostile) {
+      const started = Date.now();
+      scrubUrls(input);
+      assert.ok(Date.now() - started < 3_000, `${input.slice(0, 12)}... took ${Date.now() - started} ms`);
     }
   });
 
@@ -457,7 +623,7 @@ describe("D-07 review round 2", () => {
   });
 });
 
-describe("D-07 review follow-ups", () => {
+describe("D-07: early prompts and the recovery detail", () => {
   test("a prompt sent before the start-up probe ends is gated too", async () => {
     const repo = makeRepo();
     const home = makeHome();

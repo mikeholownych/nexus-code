@@ -420,13 +420,14 @@ export function providerRecoveryStatus(record: ProviderRecoveryRecord, discarded
 }
 
 /** The answer to a prompt sent while the provider is still down: short, because the start-up notice already gave the steps. */
-export function noProviderRefusal(problem: { endpoint: string; nothingThere?: boolean }): string {
-  const why = problem.nothingThere === false ? `could not connect to ${problem.endpoint}` : `nothing answers at ${problem.endpoint}`;
+export function noProviderRefusal(problem: { endpoint: string; endpoints?: string[]; nothingThere?: boolean }): string {
+  const named = problem.endpoints?.join(", ") ?? problem.endpoint;
+  const why = problem.nothingThere === false ? `could not connect to ${named}` : `nothing answers at ${named}`;
   return redactSecrets(`Not sent: no model is connected (${why}). Use /connect or start a local model server, then send it again.`);
 }
 
 /** First run with nothing to talk to: what is missing, what to do next, where to read more. The raw cause goes in `detail`. */
-export function noProviderNotice(problem: { kind: "unreachable" | "rejected"; endpoint: string; detail: string; blocking?: boolean; nothingThere?: boolean }): StatusNotice {
+export function noProviderNotice(problem: { kind: "unreachable" | "rejected"; endpoint: string; endpoints?: string[]; detail: string; blocking?: boolean; nothingThere?: boolean }): StatusNotice {
   if (problem.kind === "rejected" || problem.blocking === false) {
     // Only a warning: the start-up check can be refused where chat is not (a token not yet refreshed, a key limited to chat).
     return {
@@ -438,7 +439,8 @@ export function noProviderNotice(problem: { kind: "unreachable" | "rejected"; en
       detail: redactSecrets(problem.detail),
     };
   }
-  const missing = problem.nothingThere === false ? `No model is connected: Nexus could not connect to ${problem.endpoint}.` : `No model is connected: nothing answers at ${problem.endpoint}.`;
+  const named = problem.endpoints?.join(", ") ?? problem.endpoint;
+  const missing = problem.nothingThere === false ? `No model is connected: Nexus could not connect to ${named}.` : `No model is connected: nothing answers at ${named}.`;
   const text =
     `${missing} Next: type /connect to sign in or add an API key, or start a local model server (LM Studio, Ollama, llama.cpp) ` +
     `and send your message again. \`nexus doctor\` checks the setup; docs/CLOUD_PROVIDERS.md lists providers.`;

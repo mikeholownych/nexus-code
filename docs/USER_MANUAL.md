@@ -273,8 +273,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **New line.** `Ctrl+J` inserts a newline in the draft in every terminal; `Alt+Enter` does where the terminal sends it
   (not in Windows Terminal's default bindings, nor in macOS Terminal unless Option is set to act as Meta). Plain
   `Enter` sends. `Shift+Enter` also inserts a newline, but only on terminals that answer the kitty keyboard-protocol
-  query at startup (the protocol specification says kitty, WezTerm, foot and Ghostty do; the tests simulate a
-  terminal that answers and one that does not, and no real terminal emulator was run); elsewhere it arrives as a
+  query at startup (kitty, WezTerm, foot and Ghostty do); elsewhere it arrives as a
   plain `Enter` and sends the draft. The footer and `?` help name `shift+enter` only when the terminal answered, and
   `alt+enter or ctrl+j` otherwise. The xterm `modifyOtherKeys` encoding of Shift+Enter is not read. tmux and screen
   are treated as unsupported unless they pass the query through; use `Ctrl+J` there.
@@ -291,8 +290,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   characters in the draft (never `y`, `n` or `a` as a decision); set `NEXUS_TUI_MOUSE=off` there. On exit the mouse mode
   is switched off, input still in flight is dropped for up to 0.3 s before and after the sidecar shuts down, and the
   unread terminal input is flushed; that also drops anything you typed ahead during the shutdown, and a report still
-  in flight on a slow link after that can reach the shell. The tmux, screen, Windows and split-report behaviours
-  above are from the code and the protocols, not from runs on those terminals.
+  in flight on a slow link after that can reach the shell.
 
 ### Cancellation & Process Ownership
 

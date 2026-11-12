@@ -1065,9 +1065,9 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       const a = ctx.resumed as any;
       const eligibleAt = eligibleAtOf(ctx.interrupted);
       let probes = 0;
-      a.client.probeAvailability = async () => {
+      a.client.probeEachEndpoint = async () => {
         probes++;
-        return { available: true, condition: "AVAILABLE", httpStatus: 200 };
+        return [{ endpoint: a.client.endpoint, probe: { available: true, condition: "AVAILABLE", httpStatus: 200 } }];
       };
       assert.equal(await ctx.resumed.probeStartupEndpoint(), undefined, "a skipped probe warns about nothing");
       assert.equal(probes, 0, "no GET /models inside the window");

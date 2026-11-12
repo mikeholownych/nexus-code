@@ -317,6 +317,8 @@ export interface StartupEndpointProblem {
   blocking: boolean;
   /** The connection was refused or the host did not resolve: nothing is listening there (otherwise something answered badly). */
   nothingThere: boolean;
+  /** Every endpoint that failed when more than one did (primary, failovers, planner, coder): named in the notice; `endpoint` is the first. */
+  endpoints?: string[];
 }
 
 export function startupEndpointProblem(endpoint: string, probe: ProbeResult): StartupEndpointProblem | undefined {
@@ -330,6 +332,26 @@ export function startupEndpointProblem(endpoint: string, probe: ProbeResult): St
     return { kind: "rejected", endpoint: persistableEndpoint(endpoint), detail: `HTTP ${probe.httpStatus}`, blocking: false, nothingThere: false };
   }
   return undefined;
+}
+
+/**
+ * One diagnosis over every endpoint inference can use (primary, failovers, planner, coder), each probe kept under its own
+ * endpoint. It is `blocking` only when EVERY endpoint failed at the connection (refused, DNS, TLS, reset): any answer
+ * (an HTTP status, a timeout, a rejection) means a prompt may work, so the failed endpoints are only a warning.
+ */
+export function startupEndpointProblems(results: ReadonlyArray<{ endpoint: string; probe: ProbeResult }>): StartupEndpointProblem | undefined {
+  const problems = results.map((r) => startupEndpointProblem(r.endpoint, r.probe));
+  const found = problems.filter((p): p is StartupEndpointProblem => p !== undefined);
+  if (found.length === 0) return undefined;
+  const allBlocking = found.length === results.length && found.every((p) => p.blocking);
+  const first = found[0];
+  const endpoints = [...new Set(found.map((p) => p.endpoint))];
+  return {
+    ...first,
+    blocking: allBlocking,
+    nothingThere: allBlocking && found.every((p) => p.nothingThere),
+    ...(endpoints.length > 1 ? { endpoints } : {}),
+  };
 }
 
 /**

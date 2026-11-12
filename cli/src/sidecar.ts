@@ -32,7 +32,7 @@ export function readOnlySlashAllowed(command: string, args: string): boolean {
   const spec = findSlash(command);
   const name = spec?.name ?? command.trim().replace(/^\//, "").toLowerCase();
   const value = args.trim().toLowerCase();
-  if (["help", "status", "tokens", "diff", "git", "checkpoints", "audit", "receipt", "sessions", "exit", "mode", "clear", "history", "skills"].includes(name)) return true;
+  if (["help", "status", "tokens", "diff", "git", "checkpoints", "audit", "receipt", "details", "sessions", "exit", "mode", "clear", "history", "skills"].includes(name)) return true;
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
   if (name === "worktree") return isReadOnlyWorktreeArgs(value);
   if (name === "plan" || name === "requirements" || name === "knowledge") return !value;

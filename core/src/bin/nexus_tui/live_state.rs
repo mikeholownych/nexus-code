@@ -65,6 +65,8 @@ pub enum Entry {
     Command(String),
     /// The full text of a submitted prompt that held paste buffers (the prompt line shows their labels).
     Pasted(String),
+    /// A prompt the sidecar refused outright (no provider): it was put back in the composer, so the transcript marks it as not sent. Empty for the paste block that went with it.
+    Unsent(String),
     /// A message of a resumed conversation, shown under the resume divider.
     Earlier { role: String, text: String },
     /// A tool the agent called in a resumed conversation: name and subject (its result stays in the session record).
@@ -472,6 +474,15 @@ const WHEEL_ROWS: usize = 3;
 /// Tool calls whose result the turn banner already reports.
 const HIDDEN_TOOLS: &[&str] = &["task_completed"];
 
+/// The prompt just sent, kept until the turn is accepted: the id, the draft, and the transcript entries pushed for it
+/// (the prompt line, then the paste block when it held paste buffers).
+struct SentPrompt {
+    id: String,
+    draft: Draft,
+    entry: usize,
+    pasted: bool,
+}
+
 pub struct LiveState {
     pub link: Link,
     pub session: Session,
@@ -481,7 +492,7 @@ pub struct LiveState {
     /// Id of the submitted prompt the sidecar has not yet answered with a `turn.result`.
     pending: Option<String>,
     /// The draft as it was when the last prompt was sent (text, paste buffers, cursor), so a prompt the sidecar refuses outright can be put back whole.
-    sent_prompt: Option<(String, Draft)>,
+    sent_prompt: Option<SentPrompt>,
     /// The raw cause behind the latest provider notice, shown by `/details`.
     provider_cause: Option<String>,
     /// Ctrl-C or Esc already asked the running turn to stop; another Ctrl-C quits.
@@ -842,7 +853,23 @@ impl LiveState {
         }
     }
 
+    /// The refused prompt stays in the transcript where it was typed, marked as not sent (it is back in the composer):
+    /// the entries are replaced in place, so no index (scroll anchor, selection, review target) moves.
+    fn mark_unsent(&mut self, sent: &SentPrompt) {
+        if let Some(Entry::User(text)) = self.transcript.get(sent.entry) {
+            let text = text.clone();
+            self.transcript[sent.entry] = Entry::Unsent(text);
+            if sent.pasted && matches!(self.transcript.get(sent.entry + 1), Some(Entry::Pasted(_))) {
+                self.transcript[sent.entry + 1] = Entry::Unsent(String::new());
+            }
+        }
+    }
+
     fn apply_event(&mut self, event: Event) {
+        // The turn started: the prompt was accepted, so the copy of the draft (paste buffers included) is dropped.
+        if matches!(event, Event::Activity { .. } | Event::AssistantDelta { .. } | Event::ToolStart { .. } | Event::TurnResult { .. }) {
+            self.sent_prompt = None;
+        }
         // Provider output or a tool starting means the stream is not silent any more.
         if matches!(event, Event::AssistantDelta { .. } | Event::ToolStart { .. }) {
             self.stall = None;
@@ -1092,6 +1119,9 @@ impl LiveState {
             Event::Error { id, code, message } => {
                 // BUSY means the sidecar is still running a turn, so the composer stays locked.
                 if id.is_some() && id == self.pending && code != "BUSY" {
+                    if code != "NO_PROVIDER" {
+                        self.sent_prompt = None;
+                    }
                     self.pending = None;
                     self.session.busy = false;
                     self.cancel_requested = false;
@@ -1099,9 +1129,12 @@ impl LiveState {
                 }
                 if code == "NO_PROVIDER" {
                     // The sidecar refused a prompt that could only fail: the message says why, and the draft is not lost.
-                    if let Some((sent, draft)) = self.sent_prompt.take() {
-                        if id.as_deref() == Some(sent.as_str()) && self.composer.is_empty() {
-                            self.composer.restore_draft(&draft);
+                    if let Some(sent) = self.sent_prompt.take() {
+                        if id.as_deref() == Some(sent.id.as_str()) {
+                            self.mark_unsent(&sent);
+                            if self.composer.is_empty() {
+                                self.composer.restore_draft(&sent.draft);
+                            }
                         }
                     }
                     self.transcript.push(Entry::Notice(message));
@@ -2074,6 +2107,7 @@ impl LiveState {
         }
         self.turn_seq += 1;
         let pasted = display != text;
+        let entry = self.transcript.len();
         self.transcript.push(Entry::User(display));
         if pasted {
             self.transcript.push(Entry::Pasted(text.clone()));
@@ -2083,7 +2117,7 @@ impl LiveState {
         self.activity = None;
         let id = format!("t{}", self.turn_seq);
         self.pending = Some(id.clone());
-        self.sent_prompt = Some((id.clone(), sent));
+        self.sent_prompt = Some(SentPrompt { id: id.clone(), draft: sent, entry, pasted });
         Some(Action::Send(Command::PromptSubmit { id, text }))
     }
 
@@ -2145,7 +2179,7 @@ impl LiveState {
                     *t = text;
                     return;
                 }
-                Entry::User(_) | Entry::Banner { .. } => break,
+                Entry::User(_) | Entry::Unsent(_) | Entry::Banner { .. } => break,
                 _ => {}
             }
         }
@@ -5216,5 +5250,47 @@ mod tests {
         type_text(&mut state, "second");
         state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
         assert_eq!(state.composer.text(), "second");
+    }
+
+    #[test]
+    fn a_refused_prompt_stays_in_the_transcript_marked_not_sent_and_is_not_also_a_sent_prompt() {
+        let mut state = ready();
+        type_text(&mut state, "see ");
+        state.on_paste("line one\nline two");
+        state.on_key(key(KeyCode::Enter));
+        let sent_at = state.transcript.len() - 2;
+        assert!(matches!(state.transcript[sent_at], Entry::User(_)) && matches!(state.transcript[sent_at + 1], Entry::Pasted(_)));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert!(
+            !state.transcript.iter().any(|e| matches!(e, Entry::User(_) | Entry::Pasted(_))),
+            "no entry still claims the prompt was sent: {:?}",
+            state.transcript
+        );
+        assert_eq!(state.transcript[sent_at], Entry::Unsent("see [Pasted text #1: 2 lines]".into()));
+        assert_eq!(state.transcript[sent_at + 1], Entry::Unsent(String::new()), "the paste block that went with it is gone too");
+        assert_eq!(state.transcript.len(), sent_at + 3, "marked in place, nothing removed (indices stay valid)");
+        assert_eq!(state.composer.display(state.composer.text()), "see [Pasted text #1: 2 lines]");
+    }
+
+    #[test]
+    fn the_copy_of_the_draft_is_dropped_once_the_turn_is_accepted_and_again_when_it_ends() {
+        let mut state = ready();
+        type_text(&mut state, "first");
+        state.on_paste("secret\nbuffer");
+        state.on_key(key(KeyCode::Enter));
+        assert!(state.sent_prompt.is_some(), "kept while the sidecar may still refuse it");
+        state.apply(ev(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1}"#));
+        assert!(state.sent_prompt.is_none(), "accepted: the paste buffers are not kept");
+        // A refusal that arrives after acceptance (a stale id) changes nothing.
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert!(matches!(state.transcript.iter().find(|e| matches!(e, Entry::User(_) | Entry::Unsent(_))), Some(Entry::User(_))));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","heading":"h","line":"l","turn":{},"saved":false}"#));
+        assert!(state.sent_prompt.is_none());
+        // A turn that ends before any activity event (an error for the prompt) drops it too.
+        state.composer.take();
+        type_text(&mut state, "second");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t2","code":"INTERNAL","message":"boom"}"#));
+        assert!(state.sent_prompt.is_none());
     }
 }

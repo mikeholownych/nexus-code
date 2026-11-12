@@ -1657,6 +1657,17 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
                 ]));
             }
         }
+        Entry::Unsent(text) if text.is_empty() => {}
+        Entry::Unsent(text) => {
+            lines.push(Line::default());
+            for (index, row) in text.split('\n').enumerate() {
+                lines.push(Line::from(vec![
+                    Span::styled(if index == 0 { "› " } else { "  " }, muted),
+                    Span::styled(expand_tabs(row), muted),
+                ]));
+            }
+            lines.push(Line::from(Span::styled("  not sent: it is back in the composer", Style::default().fg(Color::Yellow))));
+        }
         Entry::Assistant { text, .. } => {
             lines.push(Line::default());
             lines.extend(markdown::render(text, width, ctx.pal, &prose(ctx.pal, false), ctx.streaming));
@@ -3135,6 +3146,14 @@ mod tests {
     }
 
     #[test]
+    fn help_lists_details_when_the_catalogue_offers_it() {
+        let mut state = ready();
+        state.commands = vec![spec("details", "/details", "Raw cause of the last model provider problem")];
+        state.overlay = Some(crate::live_state::Overlay::Help { scroll: 0 });
+        assert_shows(&draw(&state, 100, 60), &["/details", "Raw cause of the last model provider problem"]);
+    }
+
+    #[test]
     fn help_lists_the_slash_commands_after_the_keys() {
         let mut state = ready();
         state.commands = vec![spec("diff", "/diff", "Uncommitted changes as a diff")];
@@ -3908,6 +3927,39 @@ mod diff_tests {
             let now = screen(&draw(&mut state, w, h));
             assert_eq!(top_row(&now), top, "the top row moved at {w}x{h}: {now:#?}");
         }
+    }
+
+    #[test]
+    fn a_refused_prompt_is_marked_not_sent_in_place_and_the_scrolled_back_window_does_not_move() {
+        let mut state = state();
+        feed(&mut state, &[r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#]);
+        for i in 0..40 {
+            state.transcript.push(Entry::Info(format!("history {i}")));
+        }
+        draw(&mut state, 100, 30);
+        for c in "fix the bug".chars() {
+            state.on_key(key(KeyCode::Char(c)));
+        }
+        state.on_key(key(KeyCode::Enter));
+        let sent_at = state.transcript.len() - 1;
+        draw(&mut state, 100, 30);
+        // The operator scrolls back while the sidecar decides.
+        state.on_key(key(KeyCode::PageUp));
+        state.on_key(key(KeyCode::PageUp));
+        let before = screen(&draw(&mut state, 100, 30));
+        let (len, anchor) = (state.transcript.len(), state.anchor);
+        assert!(anchor.is_some() && state.scroll_back > 0, "scrolled back with an anchor");
+        feed(&mut state, &[r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#]);
+        assert!(matches!(state.transcript[sent_at], Entry::Unsent(_)));
+        assert_eq!(state.transcript.len(), len + 1, "only the notice was added; no entry moved");
+        assert_eq!(state.anchor, anchor, "the anchor still names the same row");
+        let after = screen(&draw(&mut state, 100, 30));
+        assert_eq!(before.iter().find(|r| r.contains("history")), after.iter().find(|r| r.contains("history")), "the top row is where it was");
+        // At the bottom the marked prompt reads as not sent and the composer holds the text.
+        state.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+        let bottom = screen(&draw(&mut state, 100, 30)).join("\n");
+        assert!(bottom.contains("not sent: it is back in the composer"), "{bottom}");
+        assert!(bottom.contains("› fix the bug"), "{bottom}");
     }
 
     #[test]

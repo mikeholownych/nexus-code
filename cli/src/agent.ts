@@ -119,7 +119,7 @@ import {
   realRecoveryClock,
   recoveryPolicyFromEnv,
   startupProblemWarning,
-  startupEndpointProblem,
+  startupEndpointProblems,
   type StartupEndpointProblem,
 } from "./core/provider_recovery.js";
 import { LocalTraceRecorder, type SpanHandle, type TraceAttributes, type TraceStatus } from "./core/trace.js";
@@ -5917,18 +5917,33 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     return problem ? startupProblemWarning(problem) : undefined;
   }
 
-  /** The same probe, structured: what is wrong (unreachable, credentials rejected) and the raw cause; undefined when usable. */
+  /**
+   * The same probe, structured: what is wrong (unreachable, credentials rejected) and the raw cause; undefined when usable.
+   * It covers every connection inference can use (the primary, its failover endpoints, the planner and the coder), each
+   * result kept under its own endpoint; the problem is `blocking` only when none of them is there.
+   */
   public async probeEndpointProblem(signal?: AbortSignal, timeoutMs = 3_000): Promise<StartupEndpointProblem | undefined> {
     if (typeof this.client.probeAvailability !== "function") return undefined;
     // After a resume the hosts probe right after restoring: inside the provider's window nothing is sent. The
     // resumed turn waits it out and re-probes through live recovery, so no warning is lost.
     if (this.isProviderWindowOpen()) return undefined;
     try {
-      const probe = await this.client.probeAvailability(signal, { timeoutMs });
-      if (probe.available && probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) {
-        this.client.markSucceeded?.(this.client.endpoint);
+      const clients = new Set<LocalLlmClient>([this.client]);
+      if (this.cognitiveRoutingEnabled) {
+        clients.add(this.plannerClient);
+        clients.add(this.coderClient);
       }
-      return startupEndpointProblem(this.client.endpoint, probe);
+      const perClient = await Promise.all([...clients].map(async (client) => {
+        if (typeof client.probeEachEndpoint === "function") return { client, results: await client.probeEachEndpoint(signal, { timeoutMs }) };
+        const probe = await client.probeAvailability(signal, { timeoutMs });
+        return { client, results: [{ endpoint: client.endpoint, probe }] };
+      }));
+      for (const { client, results } of perClient) {
+        for (const { endpoint, probe } of results) {
+          if (probe.available && probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) client.markSucceeded?.(endpoint);
+        }
+      }
+      return startupEndpointProblems(perClient.flatMap((c) => c.results));
     } catch {
       return undefined;
     }

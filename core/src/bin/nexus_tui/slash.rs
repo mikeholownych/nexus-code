@@ -186,6 +186,15 @@ mod tests {
     }
 
     #[test]
+    fn details_is_answered_locally_but_completes_like_receipt_when_the_catalogue_lists_it() {
+        let commands = catalogue(&["receipt", "details", "diff"]);
+        assert_eq!(names(matches(&commands, "/de")), vec!["details"]);
+        assert_eq!(names(matches(&commands, "/receipt")), vec!["receipt"]);
+        assert_eq!(parse("/details"), Some(Invocation::Details), "never sent to the sidecar as a command");
+        assert_eq!(parse("/receipt"), Some(Invocation::Receipt));
+    }
+
+    #[test]
     fn needs_args_ignores_optional_arguments() {
         assert!(needs_args("/tdd <issue>"));
         assert!(needs_args("/image <path> [prompt]"));

@@ -315,6 +315,8 @@ export const SESSION_HANDLERS: Record<string, SlashHandler> = {
   onboard,
   theme,
   receipt: ({ host }) => reply("receipt", receiptText(host.receipt())),
+  // The terminal view shows the raw provider cause itself; only a client without that view sends it here.
+  details: () => reply("details", "/details shows the raw cause of the last model provider problem in the Nexus terminal view; this client has none to show."),
   step: stepSlash,
   upgrade: upgradeSlash,
   exit: () => reply("exit", "Press q, or ctrl+c with an empty composer, to quit."),

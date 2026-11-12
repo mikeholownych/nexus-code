@@ -1590,29 +1590,46 @@ export class LocalLlmClient {
     let last: ProbeResult = { available: false, condition: "TEMPORARILY_UNAVAILABLE" };
     for (let i = 0; i < total; i++) {
       const idx = (start + i) % total;
-      const timeout = AbortSignal.timeout(opts.timeoutMs ?? 5_000);
-      try {
-        const res = await fetch(`${this.endpoints[idx]}/models`, {
-          headers: this.authorization(this.endpoints[idx]),
-          signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
-          ...this.fetchPolicy(),
-        });
-        const body = await res.text().catch(() => "");
-        if (res.status < 500 && res.status !== 429 && res.status !== 408) {
-          this.activeEndpointIndex = idx;
-          return { available: true, condition: "AVAILABLE", httpStatus: res.status };
-        }
-        const hints = providerHints(res.headers, body);
-        last = { ...classifyHttpFailure(res.status, hints, body), available: false, httpStatus: res.status, hints, detail: `HTTP ${res.status}` };
-      } catch (err: any) {
-        if (signal?.aborted) throw err;
-        const chain = transportCauseChain(err);
-        const { condition } = classifyTransportFailure(chain, "connect", err?.name === "TimeoutError");
-        last = { available: false, condition, detail: `${err?.message ?? err}${formatCause(chain)}`, ...(err?.name === "TimeoutError" ? { timedOut: true } : {}), codes: chain.flatMap((c) => (c.code ? [c.code] : [])) };
-        if (!TEMPORARY_CONDITIONS.has(condition)) return last;
+      last = await this.probeEndpointAt(idx, signal, opts.timeoutMs);
+      if (last.available) {
+        this.activeEndpointIndex = idx;
+        return last;
       }
+      // A transport failure that is not temporary (refused, DNS) ends the walk; an HTTP error moves on to the next endpoint.
+      if (last.httpStatus === undefined && !TEMPORARY_CONDITIONS.has(last.condition)) return last;
     }
     return last;
+  }
+
+  /**
+   * Probes every endpoint of this connection (the primary and each failover) at once and keeps each result under its own
+   * endpoint: one endpoint's failure never replaces another's answer. No side effects (the active endpoint stays).
+   */
+  async probeEachEndpoint(signal?: AbortSignal, opts: { timeoutMs?: number } = {}): Promise<Array<{ endpoint: string; probe: ProbeResult }>> {
+    const all = [...this.endpoints];
+    return Promise.all(all.map(async (endpoint, idx) => ({ endpoint, probe: await this.probeEndpointAt(idx, signal, opts.timeoutMs) })));
+  }
+
+  private async probeEndpointAt(idx: number, signal: AbortSignal | undefined, timeoutMs: number | undefined): Promise<ProbeResult> {
+    const timeout = AbortSignal.timeout(timeoutMs ?? 5_000);
+    try {
+      const res = await fetch(`${this.endpoints[idx]}/models`, {
+        headers: this.authorization(this.endpoints[idx]),
+        signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+        ...this.fetchPolicy(),
+      });
+      const body = await res.text().catch(() => "");
+      if (res.status < 500 && res.status !== 429 && res.status !== 408) {
+        return { available: true, condition: "AVAILABLE", httpStatus: res.status };
+      }
+      const hints = providerHints(res.headers, body);
+      return { ...classifyHttpFailure(res.status, hints, body), available: false, httpStatus: res.status, hints, detail: `HTTP ${res.status}` };
+    } catch (err: any) {
+      if (signal?.aborted) throw err;
+      const chain = transportCauseChain(err);
+      const { condition } = classifyTransportFailure(chain, "connect", err?.name === "TimeoutError");
+      return { available: false, condition, detail: `${err?.message ?? err}${formatCause(chain)}`, ...(err?.name === "TimeoutError" ? { timedOut: true } : {}), codes: chain.flatMap((c) => (c.code ? [c.code] : [])) };
+    }
   }
 
   async chatCompletion(

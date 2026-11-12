@@ -14,3 +14,4 @@ what is left in the tty once the TUI exits. `leak-control-10116153.txt` is the s
 parent shell reads the report text as typed input); `after.txt` is the fixed head (nothing; run three times by hand, all clean, one saved). Reports
 sent after the process has exited cannot be prevented by the program, so the flood is bounded to the quit window.
 The pty keeps sending reports after the program turned reporting off (a real terminal would not), and it is local, so it says nothing about SSH-style latency.
+The tmux, screen, Windows and split-report behaviours described in `docs/USER_MANUAL.md` ("Live TUI: newline key and mouse") are from the code and the protocols, not from runs on those terminals.
