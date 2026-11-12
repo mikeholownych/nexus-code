@@ -648,9 +648,9 @@ export class SidecarServer {
       agent.setObserver(undefined);
       agent.setProgressListener(() => this.saveSession(this.sessionTitle));
     }
-    let saved = true;
+    let saved: boolean;
     try {
-      withDurableSync(() => this.saveSession(label, turn));
+      saved = withDurableSync(() => this.saveSession(label, turn));
     } catch (err) {
       saved = false;
       this.emit({ type: "notice", text: `The session could not be saved: ${errorText(err)}` });
@@ -917,11 +917,11 @@ export class SidecarServer {
     this.app.getConfig().workspace = dir; // the app's checkpoint manager follows the workspace
   }
 
-  /** Same record the REPL saves after each turn. Skipped while the conversation holds only the system prompt. */
-  private saveSession(title?: string, turn?: TurnResult): void {
+  /** Same record the REPL saves after each turn. Skipped (false) while the conversation holds only the system prompt; true once written. */
+  private saveSession(title?: string, turn?: TurnResult): boolean {
     const agent = this.app.getAgent();
     const messages = agent.getMessages();
-    if (messages.length <= 1) return;
+    if (messages.length <= 1) return false;
     const config = this.app.getConfig();
     const now = new Date().toISOString();
     const manager = this.app.getSessionManager();
@@ -958,6 +958,7 @@ export class SidecarServer {
       },
       agent.getWorkspacePathIdentity(),
     );
+    return true;
   }
 
   private resumeSession(id?: string): { ok: boolean; message: string } {
