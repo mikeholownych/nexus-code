@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { AgentWorkUnitExecutor } from "../src/core/operation_runner_execution.js";
-import { candidateDiff, openRegular, plainCandidateDiff, snapshotSupport } from "../src/core/specialist_inputs.js";
+import { candidateDiff, gitlinkHunks, openRegular, plainCandidateDiff, snapshotSupport } from "../src/core/specialist_inputs.js";
 import { OperationGit, ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
 import type { WorkUnit } from "../src/core/operation.js";
 
@@ -423,4 +423,39 @@ test("openRegular refuses a parent that is swapped for a link after the director
   fs.mkdirSync(inRoot);
   const racing = (p: string) => (p.endsWith(`${path.sep}swapped`) ? inRoot : fs.realpathSync(p));
   assert.equal(openRegular(d, "swapped/secret.txt", racing), "cannot", "the descriptor resolves outside the root and is refused");
+});
+
+test("the plain fallback shows a submodule pointer update (and a submodule-only change is not empty) without opening the submodule", () => {
+  const sub = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sub-"));
+  sh(sub, "init", "-q", "-b", "main"); sh(sub, "config", "user.email", "a@b"); sh(sub, "config", "user.name", "t");
+  put(sub, "s.txt", "1\n"); sh(sub, "add", "-A"); sh(sub, "commit", "-qm", "s1");
+  const d = repo();
+  sh(d, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"); sh(d, "commit", "-qm", "add sub");
+  const base = sh(d, "rev-parse", "HEAD").trim();
+  const oldSha = sh(path.join(d, "vendor/sub"), "rev-parse", "HEAD").trim();
+  put(path.join(d, "vendor/sub"), "s.txt", "2\n");
+  sh(path.join(d, "vendor/sub"), "config", "user.email", "a@b"); sh(path.join(d, "vendor/sub"), "config", "user.name", "t");
+  sh(path.join(d, "vendor/sub"), "commit", "-qam", "s2");
+  const newSha = sh(path.join(d, "vendor/sub"), "rev-parse", "HEAD").trim();
+  sh(d, "add", "vendor/sub");
+  const r = plainCandidateDiff(d, base);
+  assert.ok(!("error" in r), JSON.stringify(r));
+  if ("error" in r) return;
+  assert.match(r.diff, /diff --git a\/vendor\/sub b\/vendor\/sub/);
+  assert.ok(r.diff.includes(`-Subproject commit ${oldSha}`) && r.diff.includes(`+Subproject commit ${newSha}`), r.diff);
+  // a mixed change shows both the file edit and the pointer
+  put(d, "in/a.txt", "edited\n");
+  const mixed = plainCandidateDiff(d, base);
+  assert.ok(!("error" in mixed) && /in\/a\.txt/.test(mixed.diff) && mixed.diff.includes(`+Subproject commit ${newSha}`));
+});
+
+test("gitlinkHunks renders added, modified and deleted pointers and leaves out protected paths", () => {
+  const A = "a".repeat(40), B = "b".repeat(40);
+  const raw = [`:000000 160000 ${"0".repeat(40)} ${A} A`, "new/sub", `:160000 160000 ${A} ${B} M`, "mod/sub", `:160000 000000 ${B} ${"0".repeat(40)} D`, "gone/sub", `:100644 100644 ${A} ${B} M`, "plain.txt", `:160000 160000 ${A} ${B} M`, "secret/sub", ""].join("\0");
+  const r = gitlinkHunks(raw, (f) => !f.startsWith("secret/"));
+  assert.equal(r.omitted, 1);
+  assert.match(r.text, /new file mode 160000[\s\S]*\+Subproject commit a{40}/);
+  assert.match(r.text, new RegExp(`-Subproject commit ${A}\\n\\+Subproject commit ${B}`));
+  assert.match(r.text, /deleted file mode 160000[\s\S]*-Subproject commit b{40}/);
+  assert.ok(!r.text.includes("plain.txt") && !r.text.includes("secret/sub"));
 });

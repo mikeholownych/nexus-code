@@ -479,6 +479,32 @@ function protectedMatcher(git: (args: string[], timeoutMs?: number) => string, r
 }
 
 /**
+ * Submodule pointer changes (gitlinks) from `git diff-index --cached --raw -z` output, as the "Subproject commit" hunks
+ * git itself prints. They come from the real index, so no submodule directory (agent-writable) is ever opened by git;
+ * a submodule's working-tree dirtiness is not part of the candidate. A path the policy protects is left out.
+ */
+export function gitlinkHunks(raw: string, allowed: (file: string) => boolean): { text: string; omitted: number } {
+  const fields = raw.split("\0");
+  let text = "";
+  let omitted = 0;
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const meta = /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])\d*$/.exec(fields[i]);
+    if (!meta) continue;
+    const [, oldMode, newMode, oldSha, newSha] = meta;
+    if (oldMode !== "160000" && newMode !== "160000") continue;
+    const file = fields[i + 1];
+    if (!allowed(file)) { omitted++; continue; }
+    const before = oldMode === "160000";
+    const after = newMode === "160000";
+    text += `diff --git a/${file} b/${file}\n`;
+    if (!before) text += `new file mode 160000\nindex 0000000..${newSha.slice(0, 7)}\n--- /dev/null\n+++ b/${file}\n@@ -0,0 +1 @@\n+Subproject commit ${newSha}\n`;
+    else if (!after) text += `deleted file mode 160000\nindex ${oldSha.slice(0, 7)}..0000000\n--- a/${file}\n+++ /dev/null\n@@ -1 +0,0 @@\n-Subproject commit ${oldSha}\n`;
+    else text += `index ${oldSha.slice(0, 7)}..${newSha.slice(0, 7)} 160000\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-Subproject commit ${oldSha}\n+Subproject commit ${newSha}\n`;
+  }
+  return { text, omitted };
+}
+
+/**
  * A plain candidate diff for review units when the repository state is outside the supported domain: `git diff <commit>`
  * through a private index that holds the base tree minus the real index's staged removals (so no index flag can hide a
  * file), `--no-renames`, plus the untracked files. The guards that do not depend on the domain still apply: the checkout
@@ -539,6 +565,10 @@ export function plainCandidateDiff(workspace: string, base: string | undefined, 
     }
     let diff = allowedTracked.length ? git(["diff", ...DIFF_RENDER, "--no-renames", "--ignore-submodules=all", "--relative", "--end-of-options", commit, "--", ...allowedTracked.map((p) => `:(literal)${p}`)]) : "";
     for (const file of allowedNew) diff += git(["diff", ...DIFF_RENDER, "--no-index", "--", "/dev/null", file], { okExit: [1] });
+    // `--ignore-submodules=all` above keeps git out of the submodules' directories; their pointer changes come from the real index.
+    const pointers = gitlinkHunks(git(["diff-index", "--cached", "--raw", "-z", "--no-renames", "--relative", commit], { ownIndex: true, maxBuffer: LISTING_MAX_BUFFER }), (f) => inputPathProtection(security, f) === undefined);
+    diff += pointers.text;
+    omitted += pointers.omitted;
     return { base: commit, diff, omitted, omittedNew, omittedNested };
   } catch (err: any) {
     if (err instanceof UntrustedCheckoutError) return { error: `automatic inputs are not available: ${err.message}` };
