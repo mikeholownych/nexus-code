@@ -1228,8 +1228,7 @@ fn render_composer(frame: &mut Frame, area: Rect, state: &LiveState, layout: &Co
             Rect { x: area.x + PREFIX_WIDTH, width: area.width.saturating_sub(PREFIX_WIDTH), height: 1, ..area },
         );
     }
-    let typing = !matches!(state.link, Link::Crashed { .. })
-        && state.overlay.is_none()
+    let typing = state.overlay.is_none()
         && state.focus == Focus::Composer
         && !state.closing;
     if typing && let Ok(row) = u16::try_from(layout.cursor.0 - top) {
@@ -1952,7 +1951,7 @@ fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, 
             Span::raw(" quit"),
         ]),
         Line::from(Span::styled(
-            "Your draft is kept. After r, /resume reloads the saved conversation.",
+            "Your draft is kept and shown below; r and q act only while it is empty (ctrl+r restarts; esc twice quits and discards the draft). After a restart, /resume reloads the saved conversation.",
             muted,
         )),
     ];
@@ -2025,6 +2024,8 @@ fn diagnostic_lines(stderr: &[String]) -> Vec<String> {
 fn composer_hint(state: &LiveState, max_hint: usize) -> Cow<'static, str> {
     let hint = match (&state.link, state.session.busy) {
         _ if state.closing => " shutting down the agent… ",
+        (Link::Crashed { .. }, _) if state.quit_asked => " esc again quits and discards your draft · ctrl+r restarts and keeps it ",
+        (Link::Crashed { .. }, _) if !state.composer.is_empty() => " ctrl+r restart · esc twice quits · your draft is kept ",
         (Link::Crashed { .. }, _) => " r restart · q quit ",
         _ if state.connecting() && state.submit_when_ready => " starting the agent… your message is sent when it is ready ",
         _ if state.connecting() => " starting the agent… ",
@@ -2543,10 +2544,37 @@ mod tests {
                 "at main (sidecar.js:1)",
                 "r restart the agent",
                 "q quit",
-                "Your draft is kept",
+                "Your draft is kept and shown below",
+                "ctrl+r restarts;",
+                "quits and discards the draft",
                 "/resume reloads the saved conversation",
             ],
         );
+    }
+
+    #[test]
+    fn the_stopped_sidecar_screen_shows_the_typed_draft_and_the_chords_that_apply_to_it() {
+        for (width, height) in [(100, 24), (60, 16), (40, 10)] {
+            let mut state = ready();
+            state.fail("The agent sidecar exited unexpectedly.".into(), Some(3), Vec::new());
+            for c in "hello".chars() {
+                state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
+            let screen = flat(&draw(&state, width, height));
+            assert_shows(&screen, &["› hello", "ctrl+r restart"]);
+            assert!(!screen.contains(" r restart · q quit "), "{screen}");
+        }
+        let mut state = ready();
+        state.fail("The agent sidecar exited unexpectedly.".into(), Some(3), Vec::new());
+        assert_shows(&flat(&draw(&state, 100, 24)), &[" r restart · q quit "]);
+        for (width, height) in [(100, 24), (60, 16), (40, 10)] {
+            let mut state = ready();
+            state.fail("The agent sidecar exited unexpectedly.".into(), Some(3), Vec::new());
+            state.on_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+            state.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            let screen = flat(&draw(&state, width, height));
+            assert_shows(&screen, &["› h", "esc again"]);
+        }
     }
 
     #[test]
@@ -2737,7 +2765,7 @@ mod tests {
                 "agent stopped",
                 "The agent sidecar exited unexpectedly while streaming a very long response. (exit code 3)",
                 "r restart the agent q quit",
-                "Your draft is kept.",
+                "Your draft is kept and shown below",
             ],
         );
         let tall = flat(&draw(&state, 40, 18));

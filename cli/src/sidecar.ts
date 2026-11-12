@@ -65,6 +65,7 @@ import {
   toolSummary,
   type ToolSummary,
 } from "./protocol.js";
+import { OSC52_MAX_BYTES } from "./clipboard.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
 import { surfaceFacts } from "./surface_facts.js";
@@ -894,6 +895,7 @@ export class SidecarServer {
         output: outcome.output,
         ...(outcome.format ? { format: outcome.format } : {}),
         ...(outcome.composer !== undefined ? { composer: outcome.composer } : {}),
+        ...(outcome.clipboard !== undefined ? { clipboard: outcome.clipboard } : {}),
       });
     });
   }
@@ -908,6 +910,7 @@ export class SidecarServer {
         command: outcome.command,
         success: outcome.success,
         output: outcome.output,
+        ...(outcome.clipboard !== undefined ? { clipboard: outcome.clipboard } : {}),
       });
     } catch (err) {
       this.emit({ type: "error", id, code: "INTERNAL", message: errorText(err) });
@@ -1186,20 +1189,8 @@ export function formatSafeSidecarStdoutSummary(chunk: string | Uint8Array): stri
   return `[sidecar debug] stdout chunk suppressed (${bytes} bytes)\n`;
 }
 
-/**
- * Sanitize text bound for a sink that is not a protocol event: the diff kept on disk, the evidence ledger, stderr
- * diagnostics. Events themselves are sanitized exactly once, by formatSafeSidecarEvent, so emit() call sites pass raw
- * text and never wrap it.
- */
-export function formatSafeSidecarText(value: string): string {
-  try {
-    const safe = redactForPersistence(value);
-    if (typeof safe !== "string") throw new Error("unexpected sanitized value type");
-    return visibleControls(redactSecrets(safe));
-  } catch {
-    return "[diagnostic suppressed: credential sanitization failed]";
-  }
-}
+export { formatSafeSidecarText } from "./safe_text.js";
+import { formatSafeSidecarText } from "./safe_text.js";
 
 /**
  * For a limit that applies to a fragment inside a larger sentence (so it cannot be a field limit): redact the full
@@ -1236,7 +1227,7 @@ export const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<
   "approval.request": { tool: 200, subject: MAX_TEXT_FIELD, preview: MAX_TEXT_FIELD },
   "checkpoint.choice.request": { message: MAX_TEXT_FIELD },
   "turn.result": { heading: MAX_TEXT_FIELD, line: MAX_TEXT_FIELD },
-  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: MAX_PASTE },
+  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: MAX_PASTE, clipboard: OSC52_MAX_BYTES },
   notice: { text: MAX_TEXT_FIELD, detail: MAX_TEXT_FIELD },
   error: { message: MAX_TEXT_FIELD },
   "provider.auth": { instructions: MAX_TEXT_FIELD },

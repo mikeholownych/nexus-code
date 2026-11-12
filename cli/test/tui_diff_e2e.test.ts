@@ -225,8 +225,8 @@ ptyTest("diff output in the real TUI: every edit kind, resizing, review, workspa
       const colours = depth.cells.flat().flatMap((c) => [c[1], c[2]]).filter(Boolean);
       assert.ok(!colours.some((c) => c[0] === "rgb"), `${name}: no 24-bit colour`);
       if (name === "mono") assert.equal(colours.length, 0, "monochrome sends no colour");
-      // crossterm writes the 16 standard colours as palette entries 0–15 (`38;5;n`): only those may appear.
-      if (name === "16") assert.ok(colours.every((c) => c[0] === "idx" && c[1] < 16), `16 colours: only entries 0–15 (${JSON.stringify(colours.find((c) => !(c[0] === "idx" && c[1] < 16)))})`);
+      // D-17: 16-colour terminals get the classic 30-37/90-97 (and 40-47/100-107) codes, never 256-colour `38;5;n`.
+      if (name === "16") assert.ok(colours.every((c) => c[0] === "ansi" && c[1] < 16), `16 colours: only the basic codes (${JSON.stringify(colours.find((c) => !(c[0] === "ansi" && c[1] < 16)))})`);
       const diffRows = depth.cells.filter((row) => row.some((c) => c[0] === "▎"));
       assert.ok(diffRows.length >= 2, `${name}: diff rows found`);
       if (name === "16" || name === "mono") assert.ok(!diffRows.flat().some((c) => c[2]), `${name}: diff rows have no backgrounds`);

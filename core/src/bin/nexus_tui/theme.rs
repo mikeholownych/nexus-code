@@ -55,6 +55,133 @@ pub fn apply_backend_policy(depth: Depth) {
     crossterm::style::force_color_output(depth != Depth::Mono);
 }
 
+/// A writer that turns the 256-colour SGR crossterm writes for named and low indexed colours (`38;5;0..15`, which
+/// 8/16-colour terminals and the Linux console ignore or misread) into the classic `30-37`/`90-97`/`40-47`/`100-107`
+/// codes. It buffers until `flush` (ratatui flushes once per frame), so a sequence is never split across two writes.
+/// Pass-through when `sixteen` is false.
+pub struct SgrWriter<W: std::io::Write> {
+    inner: W,
+    buf: Vec<u8>,
+    sixteen: bool,
+}
+
+impl<W: std::io::Write> SgrWriter<W> {
+    pub fn new(inner: W, sixteen: bool) -> Self {
+        SgrWriter { inner, buf: Vec::new(), sixteen }
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for SgrWriter<W> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.sixteen {
+            self.buf.extend_from_slice(data);
+            Ok(data.len())
+        } else {
+            self.inner.write(data)
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if !self.buf.is_empty() {
+            let out = rewrite_sgr(&self.buf);
+            self.buf.clear();
+            self.inner.write_all(&out)?;
+        }
+        self.inner.flush()
+    }
+}
+
+fn basic_code(index: u8, background: bool) -> u16 {
+    let base = if background { 40 } else { 30 };
+    u16::from(index) + if index < 8 { base } else { base + 52 }
+}
+
+/// Rewrites `CSI ... m` sequences whose `38;5;N` / `48;5;N` name one of the 16 basic colours. Everything else
+/// (other CSI, OSC strings such as a clipboard write, truncated sequences, plain text) is copied unchanged.
+pub fn rewrite_sgr(input: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        if input[i] != 0x1b {
+            out.push(input[i]);
+            i += 1;
+            continue;
+        }
+        match input.get(i + 1) {
+            Some(b'[') => {
+                let start = i + 2;
+                let mut end = start;
+                while end < input.len() && (0x20..=0x3f).contains(&input[end]) {
+                    end += 1;
+                }
+                match input.get(end) {
+                    Some(b'm') if input[start..end].iter().all(|b| b.is_ascii_digit() || *b == b';') => {
+                        out.extend_from_slice(b"\x1b[");
+                        out.extend_from_slice(rewrite_sgr_params(&input[start..end]).as_bytes());
+                        out.push(b'm');
+                        i = end + 1;
+                    }
+                    Some(_) => {
+                        out.extend_from_slice(&input[i..=end]);
+                        i = end + 1;
+                    }
+                    None => {
+                        out.extend_from_slice(&input[i..]);
+                        i = input.len();
+                    }
+                }
+            }
+            Some(b']') => {
+                // An OSC string runs to BEL or ST; it is copied whole.
+                let mut end = i + 2;
+                while end < input.len() && input[end] != 0x07 && !(input[end] == 0x1b && input.get(end + 1) == Some(&b'\\')) {
+                    end += 1;
+                }
+                let stop = if end < input.len() && input[end] == 0x1b { end + 2 } else { end + 1 };
+                let stop = stop.min(input.len());
+                out.extend_from_slice(&input[i..stop]);
+                i = stop;
+            }
+            _ => {
+                out.push(0x1b);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn rewrite_sgr_params(params: &[u8]) -> String {
+    let text = String::from_utf8_lossy(params);
+    let tokens: Vec<&str> = text.split(';').collect();
+    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        let background = tokens[i] == "48";
+        if (background || tokens[i] == "38") && tokens.get(i + 1) == Some(&"5") {
+            if let Some(index) = tokens.get(i + 2).and_then(|t| t.parse::<u8>().ok()).filter(|n| *n < 16) {
+                out.push(basic_code(index, background).to_string());
+                i += 3;
+                continue;
+            }
+            // Another indexed colour: copy the three tokens as they are.
+            let take = (i + 3).min(tokens.len());
+            out.extend(tokens[i..take].iter().map(|t| t.to_string()));
+            i = take;
+            continue;
+        }
+        if (background || tokens[i] == "38") && tokens.get(i + 1) == Some(&"2") {
+            let take = (i + 5).min(tokens.len());
+            out.extend(tokens[i..take].iter().map(|t| t.to_string()));
+            i = take;
+            continue;
+        }
+        out.push(tokens[i].to_string());
+        i += 1;
+    }
+    out.join(";")
+}
+
 /// Maps the colours of every cell to what `depth` can show. A no-op for 24-bit terminals.
 pub fn downsample(buffer: &mut Buffer, depth: Depth) {
     if depth == Depth::TrueColor {
@@ -214,6 +341,68 @@ mod tests {
         assert!(!mono.content[1].modifier.contains(Modifier::REVERSED), "cells without a background stay plain");
     }
 
+    /// `apply_backend_policy` is process-global: tests that depend on it take this lock.
+    static POLICY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn frame_bytes(depth: Depth, cells: &[(Color, Color)]) -> String {
+        use ratatui::{
+            backend::{Backend, CrosstermBackend},
+            layout::Rect,
+        };
+        let _policy = POLICY.lock().unwrap_or_else(|e| e.into_inner());
+        apply_backend_policy(depth);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, cells.len() as u16, 1));
+        for (cell, (fg, bg)) in buffer.content.iter_mut().zip(cells) {
+            cell.set_fg(*fg).set_bg(*bg);
+        }
+        downsample(&mut buffer, depth);
+        let mut output = Vec::new();
+        {
+            let mut backend = CrosstermBackend::new(SgrWriter::new(&mut output, depth == Depth::Ansi16));
+            backend.draw(buffer.content.iter().enumerate().map(|(i, cell)| (i as u16, 0u16, cell))).unwrap();
+            backend.flush().unwrap();
+        }
+        String::from_utf8(output).unwrap()
+    }
+
+    #[test]
+    fn sixteen_colour_frames_emit_30_37_and_90_97_never_256_or_24_bit_sgr() {
+        let output = frame_bytes(
+            Depth::Ansi16,
+            &[
+                (Color::Indexed(15), Color::Indexed(0)),
+                (Color::Indexed(8), Color::Indexed(9)),
+                (Color::Indexed(100), Color::Rgb(10, 200, 30)),
+                (Color::Indexed(7), Color::Indexed(12)),
+                (Color::Red, Color::DarkGray),
+            ],
+        );
+        for bad in ["38;5;", "48;5;", "38;2;", "48;2;"] {
+            assert!(!output.contains(bad), "{bad} in {output:?}");
+        }
+        for good in ["97;40", "90;101", "37;104", "31;100"] {
+            assert!(output.contains(good), "{good} missing in {output:?}");
+        }
+    }
+
+    #[test]
+    fn indexed_colours_below_16_keep_their_256_colour_sgr_on_256_colour_terminals() {
+        let output = frame_bytes(Depth::Ansi256, &[(Color::Indexed(15), Color::Indexed(0)), (Color::Indexed(200), Color::Reset)]);
+        assert!(output.contains("38;5;15;48;5;0") && output.contains("38;5;200"), "{output:?}");
+    }
+
+    #[test]
+    fn the_sgr_rewriter_touches_only_sgr_and_survives_odd_input() {
+        let rewrite = |s: &str| String::from_utf8(rewrite_sgr(s.as_bytes())).unwrap();
+        assert_eq!(rewrite("\x1b[1;38;5;9;48;5;2mhi\x1b[0m"), "\x1b[1;91;42mhi\x1b[0m");
+        assert_eq!(rewrite("\x1b[38;5;200m\x1b[38;2;1;2;3m"), "\x1b[38;5;200m\x1b[38;2;1;2;3m");
+        assert_eq!(rewrite("\x1b]52;c;OzU7MQ==\x07"), "\x1b]52;c;OzU7MQ==\x07", "OSC strings pass through untouched");
+        assert_eq!(rewrite("\x1b[1;1H\x1b[2J"), "\x1b[1;1H\x1b[2J");
+        assert_eq!(rewrite("text \x1b[38;5;1"), "text \x1b[38;5;1", "a truncated sequence is left alone");
+        assert_eq!(rewrite("38;5;1 plain"), "38;5;1 plain");
+        assert_eq!(rewrite("\x1b"), "\x1b");
+    }
+
     #[test]
     fn mono_frames_emit_no_colour_sgr_through_the_real_backend() {
         use ratatui::{
@@ -224,6 +413,7 @@ mod tests {
             widgets::{Paragraph, Widget},
         };
 
+        let _policy = POLICY.lock().unwrap_or_else(|e| e.into_inner());
         apply_backend_policy(Depth::Mono);
         let area = Rect::new(0, 0, 6, 1);
         let mut buffer = Buffer::empty(area);

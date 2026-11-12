@@ -1,0 +1,22 @@
+# D-19 capture, binary: after
+
+## the stopped-sidecar screen
+ NEXUS   agent stopped — not running
+× The agent sidecar stopped
+The agent sidecar exited unexpectedly. It was ended by signal 9 (SIGKILL).
+r restart the agent   q quit
+Your draft is kept and shown below; r and q act only while it is empty (ctrl+r restarts; esc twice
+quits and discards the draft). After a restart, /resume reloads the saved conversation.
+ r restart · q quit ────────────────────────────────────────────────────────────────────────────────
+›
+## after typed `hello`
+ ctrl+r restart · esc twice quits · your draft is kept ─────────────────────────────────────────────
+› hello
+## after then typed ` r and q` (r and q inside a draft)
+ ctrl+r restart · esc twice quits · your draft is kept ─────────────────────────────────────────────
+› hello r and q
+## after ctrl+r (restart; the new sidecar stays up)
+ NEXUS   app  model m  review mode
+  ! Started a new agent sidecar. It does not remember the conversation above.
+ enter send · alt+enter or ctrl+j newline · ? help ─────────────────────────────────────────────────
+› hello r and q

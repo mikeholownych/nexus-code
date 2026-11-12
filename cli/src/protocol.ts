@@ -140,6 +140,8 @@ export type SidecarEvent =
       format?: "diff";
       /** Text for the client to put into the composer. */
       composer?: string;
+      /** Text for the client to write to the terminal clipboard with OSC 52 (the client encodes it; at most OSC52_MAX_BYTES). */
+      clipboard?: string;
       /** The command started a turn with this prompt; the turn's events follow under the same id. */
       prompt?: string;
     }

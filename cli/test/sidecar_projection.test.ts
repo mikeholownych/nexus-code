@@ -208,7 +208,7 @@ const FREE_TEXT: Record<string, readonly string[] | string> = {
   "approval.request": ["tool", "subject", "preview"],
   "checkpoint.choice.request": ["message"],
   "turn.result": ["heading", "line"],
-  "slash.result": ["output", "prompt", "composer"],
+  "slash.result": ["output", "prompt", "composer", "clipboard"],
   notice: ["text", "detail"],
   history: "entries cut by HISTORY_LIMITS",
   "tool.detail": ["tool", "subject", "args", "output", "diff"],

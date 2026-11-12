@@ -1,0 +1,20 @@
+# D-17 capture, binary: after
+
+Raw SGR sequences the program wrote for the same screen (a tool card, a markdown reply with a code block).
+
+## TERM=xterm (no COLORTERM): 65 SGR sequences, 20 distinct
+   distinct: '0m' '1m' '22m' '23m' '2m' '30;106m' '32;49m' '33;40m' '33;49m' '39;40m' '39;49m' '39m' '3m' '49m' '59m' '90;40m' '90;49m' '96;49m' '97;40m' '97;49m'
+   256-colour `38;5;n`/`48;5;n`: False; 24-bit `38;2;`/`48;2;`: False; basic colour codes 30-37/90-97/40-47/100-107: True
+
+## TERM=linux (the Linux console): 65 SGR sequences, 20 distinct
+   distinct: '0m' '1m' '22m' '23m' '2m' '30;106m' '32;49m' '33;40m' '33;49m' '39;40m' '39;49m' '39m' '3m' '49m' '59m' '90;40m' '90;49m' '96;49m' '97;40m' '97;49m'
+   256-colour `38;5;n`/`48;5;n`: False; 24-bit `38;2;`/`48;2;`: False; basic colour codes 30-37/90-97/40-47/100-107: True
+
+## TERM=xterm-256color: 87 SGR sequences, 26 distinct
+   distinct: '0m' '1m' '22m' '23m' '2m' '38;5;0;48;5;81m' '38;5;103;48;5;233m' '38;5;103;49m' '38;5;159;48;5;234m' '38;5;15;48;5;233m' '38;5;15;48;5;234m' '38;5;15;49m' '38;5;189;48;5;234m' '38;5;223;49m' '38;5;239;49m' '38;5;2;49m' '38;5;3;48;5;233m' '38;5;81;49m' '38;5;8;49m' '39;48;5;233m' '39;48;5;234m' '39;49m' '39m' '3m' '49m' '59m'
+   256-colour `38;5;n`/`48;5;n`: True; 24-bit `38;2;`/`48;2;`: False; basic colour codes 30-37/90-97/40-47/100-107: False
+
+## TERM=xterm NO_COLOR=1: 30 SGR sequences, 9 distinct
+   distinct: '0m' '1m' '22m' '23m' '27m' '2m' '3m' '7m' 'm'
+   256-colour `38;5;n`/`48;5;n`: False; 24-bit `38;2;`/`48;2;`: False; basic colour codes 30-37/90-97/40-47/100-107: False
+
