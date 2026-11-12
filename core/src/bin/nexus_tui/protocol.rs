@@ -309,7 +309,15 @@ pub enum Event {
         prompt: Option<String>,
     },
     #[serde(rename = "notice")]
-    Notice { text: String },
+    Notice {
+        text: String,
+        /// A later notice with the same key replaces the earlier one on screen (a live status, not a log line).
+        #[serde(default)]
+        key: Option<String>,
+        /// The raw cause behind the text, for `/details`. Absent from an older sidecar.
+        #[serde(default)]
+        detail: Option<String>,
+    },
     /// A resumed session's recent conversation, oldest first.
     #[serde(rename = "history")]
     History {
@@ -812,9 +820,28 @@ mod tests {
         assert_eq!(
             parse_event(r#"{"v":1,"type":"notice","text":"Resumed session a (4 messages)."}"#),
             Ok(Event::Notice {
-                text: "Resumed session a (4 messages).".into()
+                text: "Resumed session a (4 messages).".into(),
+                key: None,
+                detail: None,
             })
         );
+    }
+
+    #[test]
+    fn a_notice_carries_an_optional_key_and_raw_cause_and_an_old_one_still_parses() {
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"notice","text":"Retry 2","key":"provider.recovery","detail":"HTTP 429"}"#),
+            Ok(Event::Notice {
+                text: "Retry 2".into(),
+                key: Some("provider.recovery".into()),
+                detail: Some("HTTP 429".into()),
+            })
+        );
+        // A newer sidecar's unknown fields are ignored, as for every event.
+        assert!(matches!(
+            parse_event(r#"{"v":1,"type":"notice","text":"x","key":"k","future":1}"#),
+            Ok(Event::Notice { key: Some(_), detail: None, .. })
+        ));
     }
 
     #[test]

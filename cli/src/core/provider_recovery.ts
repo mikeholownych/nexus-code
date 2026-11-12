@@ -291,12 +291,27 @@ export interface RecoveryControllerOptions {
 
 /** Startup probe diagnosis (REQ-TUI-105): names the endpoint URL, cause, and fix when unreachable or rejected. */
 export function startupEndpointWarning(endpoint: string, probe: ProbeResult): string | undefined {
-  if (!probe.available) {
-    const cause = probe.detail ? ` (${probe.detail})` : "";
-    return `Endpoint ${persistableEndpoint(endpoint)} is unreachable${cause}. Run \`nexus doctor\`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.`;
-  }
+  const problem = startupEndpointProblem(endpoint, probe);
+  return problem ? startupProblemWarning(problem) : undefined;
+}
+
+export function startupProblemWarning(problem: StartupEndpointProblem): string {
+  return problem.kind === "unreachable"
+    ? `Endpoint ${problem.endpoint} is unreachable${problem.detail ? ` (${problem.detail})` : ""}. Run \`nexus doctor\`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.`
+    : `Endpoint ${problem.endpoint} rejected credentials (${problem.detail}). Run \`nexus doctor\`, check ~/.config/nexus/config.env, or use /connect.`;
+}
+
+/** Why no model can be used right now, as the start-up probe found it (D-07). `detail` is the raw cause, for inspection only. */
+export interface StartupEndpointProblem {
+  kind: "unreachable" | "rejected";
+  endpoint: string;
+  detail: string;
+}
+
+export function startupEndpointProblem(endpoint: string, probe: ProbeResult): StartupEndpointProblem | undefined {
+  if (!probe.available) return { kind: "unreachable", endpoint: persistableEndpoint(endpoint), detail: probe.detail ?? "" };
   if (probe.httpStatus === 401 || probe.httpStatus === 403) {
-    return `Endpoint ${persistableEndpoint(endpoint)} rejected credentials (HTTP ${probe.httpStatus}). Run \`nexus doctor\`, check ~/.config/nexus/config.env, or use /connect.`;
+    return { kind: "rejected", endpoint: persistableEndpoint(endpoint), detail: `HTTP ${probe.httpStatus}` };
   }
   return undefined;
 }

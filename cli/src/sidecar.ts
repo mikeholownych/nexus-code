@@ -7,6 +7,7 @@ import { format as formatDiagnostic } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
+import type { StartupEndpointProblem } from "./core/provider_recovery.js";
 import { autoDetectModel, buildConfig, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
 import { isNexusDirPermissive } from "./doctor.js";
@@ -57,7 +58,9 @@ import {
   encodeEvent,
   parseCommand,
   projectTurn,
-  providerRecoveryNotice,
+  providerRecoveryStatus,
+  noProviderNotice,
+  noProviderRefusal,
   toolSubject,
   toolSummary,
 } from "./protocol.js";
@@ -112,6 +115,8 @@ export class SidecarServer {
   /** Title of the session record (the latest turn's prompt), kept by saves made outside a turn. */
   private sessionTitle?: string;
   private readonly startupProbeAbort = new AbortController();
+  /** Why start-up found no usable provider (D-07); cleared when a later probe succeeds. A prompt re-checks it before a turn starts. */
+  private providerProblem?: StartupEndpointProblem;
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -144,9 +149,10 @@ export class SidecarServer {
     if (isNexusDirPermissive()) {
       this.emit({ type: "notice", text: "your Nexus state is readable by other users; run `nexus doctor --fix`" });
     }
-    void this.app.getAgent().probeStartupEndpoint(this.startupProbeAbort.signal).then((warning) => {
-      if (warning && !this.shutdownPromise) {
-        this.emit({ type: "notice", text: warning });
+    void this.app.getAgent().probeEndpointProblem(this.startupProbeAbort.signal).then((problem) => {
+      if (problem && !this.shutdownPromise) {
+        this.providerProblem = problem;
+        this.emit({ type: "notice", ...noProviderNotice(problem) });
       }
     }).catch(() => {});
   }
@@ -458,7 +464,19 @@ export class SidecarServer {
   private submit(id: string, text: string): void {
     if (this.rejectBusy(id)) return;
     this.history.push(text.trim());
-    this.runJob(id, undefined, (signal) => this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal));
+    this.runJob(id, undefined, async (signal) => {
+      // Start-up found no usable provider: ask again before spending a turn on it (the operator may have connected
+      // one or started a server since), and refuse with the reason instead of entering a retry loop.
+      if (this.providerProblem) {
+        const problem = await this.app.getAgent().probeEndpointProblem(signal);
+        this.providerProblem = problem;
+        if (problem) {
+          this.emit({ type: "error", id, code: "NO_PROVIDER", message: noProviderRefusal(problem) });
+          return;
+        }
+      }
+      await this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal);
+    });
   }
 
   private observerFor(turnId: string): AgentObserver {
@@ -485,8 +503,8 @@ export class SidecarServer {
         });
       },
       onProviderRecovery: ({ record, discardedPartialOutput }) => {
-        const text = providerRecoveryNotice(record, discardedPartialOutput);
-        if (text) this.emit({ type: "notice", text: text });
+        const status = providerRecoveryStatus(record, discardedPartialOutput);
+        if (status) this.emit({ type: "notice", ...status });
       },
       onActivity: ({ phase, step, segment, tool, subject }) =>
         this.emit({
@@ -1139,7 +1157,7 @@ export const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<
   "checkpoint.choice.request": { message: MAX_TEXT_FIELD },
   "turn.result": { heading: MAX_TEXT_FIELD, line: MAX_TEXT_FIELD },
   "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: MAX_PASTE },
-  notice: { text: MAX_TEXT_FIELD },
+  notice: { text: MAX_TEXT_FIELD, detail: MAX_TEXT_FIELD },
   error: { message: MAX_TEXT_FIELD },
   "provider.auth": { instructions: MAX_TEXT_FIELD },
   "provider.result": { message: MAX_TEXT_FIELD },

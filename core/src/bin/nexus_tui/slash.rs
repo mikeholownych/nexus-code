@@ -7,6 +7,8 @@ pub enum Invocation {
     Quit,
     Help,
     Receipt,
+    /// `/details`: the raw cause of the last provider problem, answered by the view itself.
+    Details,
     /// `/model` without arguments: the model picker.
     Models,
     /// `/connect`: the picker's connect panel.
@@ -46,6 +48,7 @@ pub fn parse(draft: &str) -> Option<Invocation> {
         "exit" | "quit" | "q" => Invocation::Quit,
         "help" | "?" => Invocation::Help,
         "receipt" => Invocation::Receipt,
+        "details" => Invocation::Details,
         "model" if args.trim().is_empty() => Invocation::Models,
         "connect" if args.trim().is_empty() => Invocation::Connect,
         _ => Invocation::Remote {
@@ -129,6 +132,7 @@ mod tests {
         // `/tui` is no longer a live-view command; like any unknown name it goes to the sidecar, which says so.
         assert_eq!(parse("/tui"), Some(remote("tui", "")));
         assert_eq!(parse("/receipt"), Some(Invocation::Receipt));
+        assert_eq!(parse("/details"), Some(Invocation::Details));
         assert_eq!(parse("/model"), Some(Invocation::Models));
         assert_eq!(parse("/connect"), Some(Invocation::Connect));
         assert_eq!(parse("/model anthropic claude-x"), Some(remote("model", "anthropic claude-x")));

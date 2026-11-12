@@ -11,7 +11,7 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
 import { DurableStateManager } from "../src/core/state.js";
-import { projectTurn, providerRecoveryNotice } from "../src/protocol.js";
+import { projectTurn, providerRecoveryStatus } from "../src/protocol.js";
 import { DEFAULT_RECOVERY_POLICY, type RecoveryClock, type RecoveryPolicy } from "../src/core/provider_recovery.js";
 import type { ProviderRecoveryRecord, TurnResult } from "../src/core/turn.js";
 import { fakeClock, startGateway, type Gateway } from "./helpers/provider_fixture.js";
@@ -322,9 +322,9 @@ describe("operator surfaces", () => {
   };
 
   test("sidecar notices describe the wait and resume; probes are silent", () => {
-    assert.match(providerRecoveryNotice(record, true)!, /waiting 4s.*Work is preserved\. The partial response was discarded\./);
-    assert.equal(providerRecoveryNotice({ ...record, state: "PROBING" }, false), undefined);
-    assert.match(providerRecoveryNotice({ ...record, state: "RESUMED", waitedMs: 7000 }, false)!, /recovered after 7s/);
+    assert.match(providerRecoveryStatus(record, true)!.text, /next attempt in 4s.*Your work is kept\..*The partial response was discarded\./);
+    assert.equal(providerRecoveryStatus({ ...record, state: "PROBING" }, false), undefined);
+    assert.match(providerRecoveryStatus({ ...record, state: "RESUMED", waitedMs: 7000 }, false)!.text, /recovered after 7s/);
   });
 
   test("projected turns redact recovery submission messages", () => {
