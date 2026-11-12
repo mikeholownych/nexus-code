@@ -28,13 +28,19 @@ export function osc52Sequence(text: string): string {
 }
 
 /** Copies with a clipboard tool, else (SSH, tmux, a headless box) asks the terminal to do it through OSC 52. */
-export function copyWithFallback(text: string, env: Record<string, string | undefined> = process.env): ClipboardResult {
+export function copyWithFallback(
+  text: string,
+  env: Record<string, string | undefined> = process.env,
+  /** What the text becomes before it is sent to the terminal: the size check and the request use that form. */
+  sanitize: (text: string) => string = (t) => t,
+): ClipboardResult {
   const viaTool = copyToClipboard(text);
   if (viaTool.success) return viaTool;
   if (!osc52Enabled(env)) {
     return { success: false, error: `${viaTool.error} Terminal clipboard (OSC 52) is off: NEXUS_OSC52=off.` };
   }
-  const bytes = Buffer.byteLength(text, "utf8");
+  const sendable = sanitize(text);
+  const bytes = Buffer.byteLength(sendable, "utf8");
   if (bytes === 0) return { success: false, error: `${viaTool.error} There is nothing to copy.` };
   if (bytes > OSC52_MAX_BYTES) {
     return {
@@ -42,7 +48,7 @@ export function copyWithFallback(text: string, env: Record<string, string | unde
       error: `${viaTool.error} The text is ${bytes} bytes; the terminal clipboard (OSC 52) takes at most ${OSC52_MAX_BYTES}. Try /copy code, or install a clipboard tool.`,
     };
   }
-  return { success: true, text, osc52: text };
+  return { success: true, text, osc52: sendable };
 }
 
 /**

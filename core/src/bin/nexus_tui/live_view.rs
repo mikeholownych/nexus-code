@@ -1920,7 +1920,7 @@ fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, 
             Span::raw(" quit"),
         ]),
         Line::from(Span::styled(
-            "Your draft is kept and shown below; r and q act only while it is empty (ctrl+r restarts, esc quits). After a restart, /resume reloads the saved conversation.",
+            "Your draft is kept and shown below; r and q act only while it is empty (ctrl+r restarts; esc twice quits and discards the draft). After a restart, /resume reloads the saved conversation.",
             muted,
         )),
     ];
@@ -1993,7 +1993,8 @@ fn diagnostic_lines(stderr: &[String]) -> Vec<String> {
 fn composer_hint(state: &LiveState, max_hint: usize) -> Cow<'static, str> {
     let hint = match (&state.link, state.session.busy) {
         _ if state.closing => " shutting down the agent… ",
-        (Link::Crashed { .. }, _) if !state.composer.is_empty() => " ctrl+r restart · esc quit · your draft is kept ",
+        (Link::Crashed { .. }, _) if state.quit_asked => " esc again quits and discards your draft · ctrl+r restarts and keeps it ",
+        (Link::Crashed { .. }, _) if !state.composer.is_empty() => " ctrl+r restart · esc twice quits · your draft is kept ",
         (Link::Crashed { .. }, _) => " r restart · q quit ",
         _ if state.connecting() && state.submit_when_ready => " starting the agent… your message is sent when it is ready ",
         _ if state.connecting() => " starting the agent… ",
@@ -2457,7 +2458,8 @@ mod tests {
                 "r restart the agent",
                 "q quit",
                 "Your draft is kept and shown below",
-                "ctrl+r restarts, esc quits",
+                "ctrl+r restarts;",
+                "quits and discards the draft",
                 "/resume reloads the saved conversation",
             ],
         );
@@ -2478,6 +2480,14 @@ mod tests {
         let mut state = ready();
         state.fail("The agent sidecar exited unexpectedly.".into(), Some(3), Vec::new());
         assert_shows(&flat(&draw(&state, 100, 24)), &[" r restart · q quit "]);
+        for (width, height) in [(100, 24), (60, 16), (40, 10)] {
+            let mut state = ready();
+            state.fail("The agent sidecar exited unexpectedly.".into(), Some(3), Vec::new());
+            state.on_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+            state.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            let screen = flat(&draw(&state, width, height));
+            assert_shows(&screen, &["› h", "esc again"]);
+        }
     }
 
     #[test]

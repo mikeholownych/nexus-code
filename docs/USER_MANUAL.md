@@ -229,7 +229,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
   diagnostic lines (progress chatter is dropped) and your draft. Typing on that screen fills the draft, which is shown in
   the composer and kept across the restart. While the draft is empty, `r` starts a new agent and `q` quits; once it
-  holds text, `r` and `q` are just text and the same actions are `ctrl+r` and `esc` (so a typed `r` can never restart
+  holds text, `r` and `q` are just text and the same actions are `ctrl+r` and `esc` (`esc` over a draft only asks, `esc again quits and discards your draft`; a second `esc` in a row quits, any other key cancels the ask, `ctrl+c` quits at once) (so a typed `r` can never restart
   by accident; a draft that begins with `r` or `q` has to be started with another character and edited). Enter does not
   send to a stopped agent. After a restart, `/resume` reloads the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider: your prompts,
   steering, the agent's replies, the tools it called (`· Read src/cache.ts`), and how the last turn ended. Diagnostics

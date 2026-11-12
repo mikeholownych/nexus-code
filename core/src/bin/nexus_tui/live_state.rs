@@ -547,6 +547,8 @@ pub struct LiveState {
     pub mouse: bool,
     /// The terminal clipboard (OSC 52) may be written; `NEXUS_OSC52=off` clears it.
     pub osc52: bool,
+    /// On the stopped-sidecar screen with a draft: Esc was pressed once and the screen asks for it again.
+    pub quit_asked: bool,
     /// Text the live loop is to put on the terminal clipboard before the next frame (written once, then cleared).
     clipboard: Option<String>,
 }
@@ -587,6 +589,7 @@ impl LiveState {
             shift_enter: false,
             mouse: false,
             osc52: true,
+            quit_asked: false,
             clipboard: None,
             anchor: None,
             last_reviewable: None,
@@ -1871,7 +1874,13 @@ impl LiveState {
             // survives a restart), but cannot be sent to a stopped agent.
             let plain = !ctrl && !key.modifiers.contains(KeyModifiers::ALT);
             let empty = self.composer.is_empty();
+            // Esc with a draft only asks; a second Esc in a row quits and discards it. Any other key cancels the ask.
+            let esc_asked = std::mem::take(&mut self.quit_asked);
             return match key.code {
+                KeyCode::Esc if !empty && !esc_asked => {
+                    self.quit_asked = true;
+                    None
+                }
                 KeyCode::Char('r') if plain && empty => Some(Action::Restart),
                 KeyCode::Char('q') if plain && empty => Some(Action::Quit),
                 KeyCode::Char('r') if ctrl => Some(Action::Restart),
@@ -3967,8 +3976,16 @@ mod tests {
         assert_eq!(state.composer.text(), "hello r and q paste");
         // With text in the draft the restart and quit keys are chords that cannot be typed by accident.
         assert_eq!(state.on_key(ctrl('r')), Some(Action::Restart));
-        assert_eq!(state.on_key(ctrl('c')), Some(Action::Quit));
-        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Quit));
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Quit), "ctrl+c quits at once");
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None, "the first Esc over a draft only asks");
+        assert!(state.quit_asked);
+        assert_eq!(state.on_key(key(KeyCode::Char('x'))), None, "another key cancels the ask");
+        assert!(!state.quit_asked);
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Quit), "the second Esc in a row quits");
+        assert_eq!(state.composer.text(), "hello r and q pastex", "nothing was cleared by asking");
+        state.composer.clear();
+        state.composer.insert("hello r and q paste");
         // The draft survives the restart.
         state.restarted();
         assert_eq!(state.composer.text(), "hello r and q paste");

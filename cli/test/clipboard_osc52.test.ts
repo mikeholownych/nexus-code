@@ -5,7 +5,7 @@ import os from "node:os";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { OSC52_MAX_BYTES, copyWithFallback, osc52Enabled, osc52Sequence } from "../src/clipboard.js";
-import { formatSafeSidecarEvent } from "../src/sidecar.js";
+import { formatSafeSidecarEvent, formatSafeSidecarText } from "../src/sidecar.js";
 import { ApplicationCore } from "../src/core/app.js";
 import { CheckpointManager } from "../src/checkpoint.js";
 import { SlashHost } from "../src/slash/catalog.js";
@@ -62,6 +62,31 @@ describe("D-16: OSC 52 clipboard fallback", () => {
     });
   });
 
+  test("the size check applies to the sanitised text, so the reply and the TUI agree near the limit", () => {
+    withoutClipboardTools(() => {
+      // Each CR becomes a 3-byte glyph: 25000 CRs are 25000 bytes raw and 75000 sanitised.
+      const crs = "\r".repeat(25_000);
+      assert.equal(Buffer.byteLength(crs), 25_000);
+      assert.ok(Buffer.byteLength(formatSafeSidecarText(crs)) > OSC52_MAX_BYTES);
+      const refused = copyWithFallback(crs, {}, formatSafeSidecarText);
+      assert.equal(refused.success, false);
+      assert.match(refused.error ?? "", /bytes; the terminal clipboard \(OSC 52\) takes at most/);
+      // Just under the limit once sanitised: accepted, and what is sent is the sanitised text.
+      const fits = "\r".repeat(24_990) + "ab";
+      const ok = copyWithFallback(fits, {}, formatSafeSidecarText);
+      assert.equal(ok.success, true);
+      assert.ok(Buffer.byteLength(ok.osc52 ?? "") <= OSC52_MAX_BYTES);
+      assert.equal(ok.osc52, formatSafeSidecarText(fits));
+    });
+  });
+
+  test("the sanitised copy shows a CR as its glyph and replaces credential-looking text (the stated trade-off)", () => {
+    const text = formatSafeSidecarText("line one\r\nline two\nkey sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF end");
+    assert.ok(text.includes("line one\u240d\nline two\n"), JSON.stringify(text));
+    assert.doesNotMatch(text, /sk-ant-api03-abcdefghij/);
+    assert.match(text, /REDACTED|redacted/);
+  });
+
   test("/copy without a clipboard tool asks the terminal through the slash.result clipboard field and says what it did", async () => {
     const home = makeHome();
     const repo = makeRepo();
@@ -99,7 +124,7 @@ describe("D-16: OSC 52 clipboard fallback", () => {
       }
       assert.equal(outcome.kind, "reply");
       assert.equal(outcome.success, true, outcome.output);
-      assert.match(outcome.clipboard, /\+changed\x1b\[2J line/, "the raw text travels in the field (the sidecar's boundary sanitises it; the TUI sends it only as base64)");
+      assert.match(outcome.clipboard, /\+changed\u241b\[2J line/, "the field already holds the sanitised text (ESC shown as its glyph); the TUI sends it only as base64");
       assert.doesNotMatch(outcome.output, /\x1b/, "the message itself holds no raw text");
       assert.match(outcome.output, /No clipboard tool was found/);
       assert.match(outcome.output, /OSC 52/);
