@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0158onwr2tGiUBb8EqSUJ8wn",
+  "agent_id": "a3ef6ce7d6ed22858",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix #479 redactor budget starvation fully",
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 62766,
+    "cache_read_tokens": 1425151,
+    "output_tokens": 14346,
+    "api_call_count": 22
+  },
+  "started_at": "2026-11-12T00:05:29.197947072Z",
+  "completed_at": "2026-11-12T00:09:22.69371459Z"
+}
