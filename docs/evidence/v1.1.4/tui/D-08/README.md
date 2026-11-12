@@ -10,4 +10,4 @@ Captures at 8 s, 45 s, and 3 s after Esc. Default stall notice interval (30 s, `
 - `unit-red-before.txt`: `cli/test/stream_stall.test.ts` before the fix (2 of the original 3 fail; the 4th test, a non-streaming request never reports a stall, is a guard added in `737a5e62` and was not part of that red run). Rust:
   `live_view::tests::a_silent_provider_is_reported_with_its_silence_and_the_way_out_and_clears_when_data_arrives` failed before the fix.
 - Not changed: the existing idle timeout (120 s) still ends the request and provider recovery takes over (D-06).
-- 40 columns: unit proof only (a PTY capture was not taken): the same Rust test asserts at 40 columns that `no data 42 s` and `esc cancels` stay visible and no row is wider than the terminal; with a draft typed the line still says `no data`.
+- 40 columns: unit proof only (a PTY capture was not taken): the same Rust test asserts at 40 columns that `no data 42 s` and `esc cancels` stay visible and the wording fits without an ellipsis cut; with a draft typed the line still says `no data`.

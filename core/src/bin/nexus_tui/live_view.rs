@@ -75,15 +75,13 @@ fn phase_text(state: &LiveState) -> String {
     text
 }
 
-/// The busy line: spinner, phase, turn elapsed time, step and segment. Static text when the turn waits on the
-/// operator (no animation implies no progress is expected without them).
 /// Seconds the provider's stream has been silent, while it is reported stalled.
 fn stall_secs(state: &LiveState) -> Option<u64> {
     let (reported, silent_secs) = state.stall?;
     Some(silent_secs.saturating_add(state.now.saturating_duration_since(reported).as_secs()))
 }
 
-/// The busy line, or for a stalled stream on a line too narrow for it, shorter wording that keeps the silence and
+/// The busy line or, for a stalled stream on a line too narrow for it, shorter wording that keeps the silence and
 /// the way out (`no data 44 s · esc cancels`, then `no data 44 s`).
 fn fit_activity_line(state: &LiveState, max: usize) -> String {
     let full = activity_line(state);
@@ -95,6 +93,8 @@ fn fit_activity_line(state: &LiveState, max: usize) -> String {
     if compact.chars().count() <= max { compact } else { format!(" no data {secs} s ") }
 }
 
+/// The busy line: spinner, phase, turn elapsed time, step and segment. Static text when the turn waits on the
+/// operator (no animation implies no progress is expected without them).
 pub fn activity_line(state: &LiveState) -> String {
     let started = state.turn_started.unwrap_or(state.now);
     let elapsed = state.now.saturating_duration_since(started);
@@ -1312,7 +1312,7 @@ struct TranscriptFrame {
 /// top (`LiveState::anchor`) as entries arrive or grow below it, so reading is never interrupted by a scroll jump.
 /// Only the entries needed to fill the window are laid out, so the cost follows the window, not the transcript.
 /// The exception is the anchored entry while scrolled back: it is laid out once per frame and wrapped from the
-/// anchored line to its end to find the distance to the bottom, so that frame costs O(that entry).
+/// anchored line to its end to find the distance to the bottom, so that frame costs O(that entry plus the entries below it).
 fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> TranscriptFrame {
     let transcript = &state.transcript;
     let selected = state.selected.filter(|_| state.focus == Focus::Transcript);
@@ -2078,8 +2078,8 @@ mod tests {
         // Narrow terminals say it in fewer words and keep the way out visible; nothing is wider than the terminal.
         let narrow = draw(&state, 40, 12);
         assert_shows(&narrow, &["no data 42 s", "esc cancels"]);
-        // The buffer dump quotes each row; a row wider than the terminal would be longer than 40 cells plus quotes.
-        assert!(narrow.lines().filter(|l| l.starts_with('"')).all(|l| l.trim_end_matches(',').chars().count() <= 42), "{narrow}");
+        // Nothing was cut with an ellipsis: the wording fitted.
+        assert!(!narrow.contains('…'), "{narrow}");
         let mut typing = ready();
         feed(&mut typing, &[BUSY, r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
         typing.composer = "draft".into();
@@ -3766,7 +3766,7 @@ mod diff_tests {
 
     /// The first screen row that shows a streamed `row NNNN` line: the transcript's top row while scrolled back.
     fn top_row(rows: &[String]) -> String {
-        rows.iter().find(|r| r.contains("row 0")).cloned().unwrap_or_default().trim_end().to_string()
+        rows.iter().find(|r| r.contains("row ")).cloned().unwrap_or_default().trim_end().to_string()
     }
 
     fn delta(state: &mut LiveState, text: &str) {
@@ -3825,6 +3825,7 @@ mod diff_tests {
         }
         let per_frame = started.elapsed() / 10;
         assert!(per_frame < std::time::Duration::from_millis(500), "a frame took {per_frame:?}");
+        assert!(top.contains("row 4"), "the window is inside the long entry: {top}");
         assert_eq!(top_row(&screen(&draw(&mut state, 100, 30))), top, "and the top row is still fixed");
     }
 
