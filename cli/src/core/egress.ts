@@ -489,12 +489,29 @@ function bearerTokenLength(value: string): number {
   return head >= 16 ? head : 0;
 }
 
-/** How far past a key the encoded run and the dotted continuation are followed: keys are short. Each match gets its own allowance of this size; the per-call `ExtensionBudget` bounds what is kept. */
+/** How far past a key the encoded run and the dotted continuation are followed: keys are short. Every candidate key gets its own allowance of this size. */
 const MAX_EXTENSION = 1024;
-/** A rescan (a key inside an earlier key's window) may keep this many MAX_EXTENSIONs of extension per scan. */
-const RESCAN_QUOTA_FACTOR = 8;
-/** Rescans may scan this many characters per character of text before they stop extending (keeps work linear). */
-const RESCAN_WORK_FACTOR = 16;
+/**
+ * Extension scans one family (the `sk-` family, or one `DETERMINISTIC_PATTERNS` entry) may start in one classifyText
+ * call. Worst-case extension work is families x this x MAX_EXTENSION whatever the text length, and so is the memory of the
+ * extension values. Honest limit: only text with more than 1024 key-like candidates of one family ahead of a real key
+ * can starve its extension; its plain form is always redacted (the original match is never dropped).
+ */
+const MAX_EXTENSION_ATTEMPTS_PER_FAMILY = 1024;
+
+/** The per-call attempt counter of one extension-capable family. */
+interface ExtensionAttempts { left: number }
+
+function newExtensionAttempts(): ExtensionAttempts {
+  return { left: MAX_EXTENSION_ATTEMPTS_PER_FAMILY };
+}
+
+/** Spends one attempt; false (and nothing spent) when the family has none left. */
+function takeAttempt(attempts: ExtensionAttempts): boolean {
+  if (attempts.left <= 0) return false;
+  attempts.left--;
+  return true;
+}
 
 /**
  * The end of the run of key characters from `from`: a JSON-escaped `\/` counts as "/", and with `encoded` an encoded or
@@ -526,15 +543,6 @@ function isKeyMaterialSegment(segment: string): boolean {
 }
 
 /**
- * How much longer than the text itself the redactor may make its values. Every match scans its own extension
- * (encoded run, dotted continuation, each at most MAX_EXTENSION, so the work is linear in the text). Only an extension
- * that becomes a value is charged to the budget of one classifyText call, and it is kept only while the budget lasts,
- * so the values to replace stay within a constant factor of the text however it is crafted, and rejected runs (a blob
- * of `sk-%2F` look-alikes) cannot starve a real key later in the text. A spent budget never removes an original match.
- */
-interface ExtensionBudget { left: number }
-
-/**
  * A key followed by "." and more key characters keeps going: `sk-…RtBq.Xo2RtBq` is one credential, not a key and a
  * stray word; a sentence's full stop, a file extension (`.json`) and a word (`.Models`, `.toString`) end the key as
  * before (`isKeyMaterialSegment`). Returns `end` itself when nothing continues it.
@@ -548,18 +556,6 @@ function extendDottedKey(text: string, end: number): number {
     extended = segmentEnd;
   }
   return extended;
-}
-
-/** Takes the extension `from`..`to` out of the budget; false (nothing taken) when it does not fit. */
-function chargeExtension(from: number, to: number, budget: ExtensionBudget): boolean {
-  const cost = Math.max(0, to - from);
-  if (cost > budget.left) return false;
-  budget.left -= cost;
-  return true;
-}
-
-function newExtensionBudget(text: string): ExtensionBudget {
-  return { left: text.length + MAX_EXTENSION };
 }
 
 /** Whether `text[at, end)` (an `sk-` run) is a base64 key: see `scanBase64Keys` for the rule. */
@@ -580,17 +576,14 @@ function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolea
  * before its first "/" is a 20-64 character plain key and the rest is a path) is left to the bounded `sk-` patterns,
  * which stop at the "/".
  * Invariant: redaction only grows. The original run is always judged and kept; longer runs (through an encoded
- * "/" or "+", or a dotted continuation) are judged in addition and budgeted, so cost is linear on any input. Only a
- * key that starts past everything already scanned (`at >= scannedTo`) draws on the main budget, whose windows are
- * disjoint and so cannot exceed the text; a key inside an earlier window (a rescan) draws on a small separate quota.
+ * "/" or "+", or a dotted continuation) are judged in addition. Each run that something can continue (a "." or an
+ * encoded character right after it) extends on its own, up to MAX_EXTENSION, and takes one of the family's
+ * MAX_EXTENSION_ATTEMPTS_PER_FAMILY attempts; with none left the run keeps only its original form.
  * Scanning resumes after the original run; a `sk-` inside it is left to the bounded patterns.
  */
-function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: number; end: number; name: string }> {
+function scanBase64Keys(text: string): Array<{ start: number; end: number; name: string }> {
   const found: Array<{ start: number; end: number; name: string }> = [];
-  // Limitation: a key that starts inside a blob's window (no separator) can lose its extension once the rescan quota is spent; its plain key (20+ characters) is still redacted.
-  const rescanBudget: ExtensionBudget = { left: RESCAN_QUOTA_FACTOR * MAX_EXTENSION };
-  let scannedTo = 0;
-  let rescanLeft = RESCAN_WORK_FACTOR * text.length;
+  const attempts = newExtensionAttempts();
   let from = 0;
   while (from < text.length) {
     const at = text.indexOf("sk-", from);
@@ -602,21 +595,12 @@ function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: n
     const anthropic = text.startsWith("sk-ant-", at);
     const name = anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
     const runEnd = scanKeyRun(text, at + 3, false);
-    const rescan = at < scannedTo;
-    const mayExtend = !rescan || rescanLeft > 0;
-    const encodedEnd = mayExtend ? scanKeyRun(text, runEnd, true, runEnd + MAX_EXTENSION) : runEnd;
-    const extendedEnd = mayExtend ? extendDottedKey(text, encodedEnd) : runEnd;
-    if (rescan) rescanLeft -= 16 + extendedEnd - runEnd;
-    // A rescan pays only for the characters past what was already scanned (a dot-joined chain of keys costs ~its length)
-    const scannedBefore = scannedTo;
-    scannedTo = Math.max(scannedTo, extendedEnd);
-    let chargedTo = rescan ? Math.max(runEnd, scannedBefore) : runEnd; // the longer runs overlap: each is charged only for what the shorter ones did not take
+    const continues = text[runEnd] === "." || matchEncodedKeyChar(text, runEnd) > 0;
+    const extend = continues && takeAttempt(attempts);
+    const encodedEnd = extend ? scanKeyRun(text, runEnd, true, runEnd + MAX_EXTENSION) : runEnd;
+    const extendedEnd = extend ? extendDottedKey(text, encodedEnd) : runEnd;
     for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
       if (!isBase64KeyRun(text, at, end, anthropic)) continue;
-      if (end > runEnd) {
-        if (!chargeExtension(chargedTo, end, rescan ? rescanBudget : budget)) continue;
-        chargedTo = Math.max(chargedTo, end);
-      }
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
       found.push({ start: at, end: secretEnd, name });
@@ -1114,7 +1098,7 @@ export class InformationFlowBoundary {
     }
 
     // 2. Deterministic High-Confidence Patterns (DATA-002: Category 2)
-    for (const { start, end, name } of text.includes("sk-") ? scanBase64Keys(text, newExtensionBudget(text)) : []) {
+    for (const { start, end, name } of text.includes("sk-") ? scanBase64Keys(text) : []) {
       matches.push({
         start,
         end,
@@ -1128,12 +1112,8 @@ export class InformationFlowBoundary {
       });
     }
     for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
-      // Per pattern (patterns run one after another, not in text order), split as in `scanBase64Keys`: a match inside
-      // an earlier match's window of the same pattern is a rescan. One pattern's keys cannot spend another's budget.
-      const extensionBudget = newExtensionBudget(text);
-      const rescanBudget: ExtensionBudget = { left: RESCAN_QUOTA_FACTOR * MAX_EXTENSION };
-      let rescanLeft = RESCAN_WORK_FACTOR * text.length;
-      let scannedTo = 0;
+      // Each pattern is a family with its own attempt counter: one pattern's keys cannot spend another's.
+      const attempts = newExtensionAttempts();
       const re = new RegExp(regex.source, `${regex.flags}d`);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
@@ -1159,14 +1139,10 @@ export class InformationFlowBoundary {
         // value found only by its shorter form (the key on its own elsewhere in the text) is still redacted.
         const ends = [end];
         if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
-          const rescan = start < scannedTo;
-          const budget = rescan ? rescanBudget : extensionBudget;
-          const extended = (rescan ? rescanLeft > 0 : budget.left > 0) ? extendDottedKey(text, end) : end;
-          if (rescan) rescanLeft -= 16 + extended - end;
-          const scannedBefore = scannedTo;
-          if (extended > end) scannedTo = Math.max(scannedTo, extended);
-          // A rescan pays only for the characters past what was already scanned.
-          if (extended > end && chargeExtension(rescan ? Math.max(end, scannedBefore) : end, extended, budget)) ends.push(extended);
+          if (text[end] === "." && takeAttempt(attempts)) {
+            const extended = extendDottedKey(text, end);
+            if (extended > end) ends.push(extended);
+          }
         }
         for (const spanEnd of ends) {
           const secretVal = text.slice(start, spanEnd);
