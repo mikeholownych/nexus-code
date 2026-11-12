@@ -6,7 +6,7 @@ import type {
   ProviderRecoveryRecord,
   TransportCause,
 } from "./turn.js";
-import { persistableEndpoint } from "./endpoint_identity.js";
+import { persistableEndpoint, scrubUrls } from "./endpoint_identity.js";
 
 /** Conditions the agent loop waits out instead of failing the turn. */
 export const TEMPORARY_CONDITIONS: ReadonlySet<ProviderCondition> = new Set([
@@ -309,7 +309,7 @@ export interface StartupEndpointProblem {
 }
 
 export function startupEndpointProblem(endpoint: string, probe: ProbeResult): StartupEndpointProblem | undefined {
-  if (!probe.available) return { kind: "unreachable", endpoint: persistableEndpoint(endpoint), detail: probe.detail ?? "" };
+  if (!probe.available) return { kind: "unreachable", endpoint: persistableEndpoint(endpoint), detail: scrubUrls(probe.detail ?? "") };
   if (probe.httpStatus === 401 || probe.httpStatus === 403) {
     return { kind: "rejected", endpoint: persistableEndpoint(endpoint), detail: `HTTP ${probe.httpStatus}` };
   }

@@ -153,7 +153,9 @@ export class SidecarServer {
     }
     this.startupProbe = this.app.getAgent().probeEndpointProblem(this.startupProbeAbort.signal).then((problem) => {
       if (problem && !this.shutdownPromise) {
-        this.providerProblem = problem;
+        // Only "nothing answers" gates prompts. A rejection on /models is a warning: the chat path refreshes tokens and
+        // may accept a key the model list refuses, so the turn is left to decide.
+        if (problem.kind === "unreachable") this.providerProblem = problem;
         this.emit({ type: "notice", ...noProviderNotice(problem) });
       }
     }).catch(() => {});
@@ -333,9 +335,15 @@ export class SidecarServer {
       return;
     }
     if (!this.activeTurn) {
-      this.history.push(text.trim());
-      this.steerAck(id, "applied", "Nothing was running, so your message started a new turn.");
-      this.runJob(id, undefined, (signal) => this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal));
+      this.runJob(id, undefined, (signal) =>
+        this.gatedTurn(id, text, signal, {
+          admitted: () => {
+            this.history.push(text.trim());
+            this.steerAck(id, "applied", "Nothing was running, so your message started a new turn.");
+          },
+          refused: (message) => this.steerAck(id, "cancelled", `${message} Your message is back in the composer.`, text),
+        }),
+      );
       return;
     }
     if (this.activeSpec) {
@@ -353,7 +361,6 @@ export class SidecarServer {
       this.steerAck(id, "duplicate", "Already received; it is not applied again.");
       return;
     }
-    this.history.push(text.trim());
     this.followUps.push({ id, text });
     this.steerAck(id, "deferred", "The turn is finishing; your message starts a follow-up turn as soon as it ends.");
   }
@@ -364,8 +371,19 @@ export class SidecarServer {
     this.followUps = [];
     const id = followUps[0].id;
     const text = followUps.map((f) => f.text).join("\n\n");
-    for (const f of followUps) this.steerAck(f.id, "applied", "Applied as a follow-up turn.");
-    this.runJob(id, undefined, (signal) => this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal));
+    this.runJob(id, undefined, (signal) =>
+      this.gatedTurn(id, text, signal, {
+        admitted: () => {
+          for (const f of followUps) {
+            this.history.push(f.text.trim());
+            this.steerAck(f.id, "applied", "Applied as a follow-up turn.");
+          }
+        },
+        refused: (message) => {
+          for (const f of followUps) this.steerAck(f.id, "cancelled", `${message} Your message is back in the composer.`, f.text);
+        },
+      }),
+    );
   }
 
   private cancel(): void {
@@ -465,23 +483,38 @@ export class SidecarServer {
 
   private submit(id: string, text: string): void {
     if (this.rejectBusy(id)) return;
-    this.history.push(text.trim());
-    this.runJob(id, undefined, async (signal) => {
-      // Start-up found no usable provider: ask again before spending a turn on it (the operator may have connected
-      // one or started a server since), and refuse with the reason instead of entering a retry loop.
-      await this.startupProbe;
+    this.runJob(id, undefined, (signal) =>
+      this.gatedTurn(id, text, signal, {
+        admitted: () => this.history.push(text.trim()),
+        refused: (message) => this.emit({ type: "error", id, code: "NO_PROVIDER", message }),
+      }),
+    );
+  }
+
+  /**
+   * The one way a prompt, a steer that starts a turn and a follow-up start a turn. When start-up found nothing answering,
+   * it waits for that probe, asks again (the operator may have connected a provider or started a server since) and
+   * refuses with the reason rather than entering a retry loop. A cancelled probe says nothing about the provider: the
+   * gate stays and the turn does not run.
+   */
+  private async gatedTurn(
+    id: string,
+    text: string,
+    signal: AbortSignal,
+    hooks: { admitted?: () => void; refused: (message: string) => void },
+  ): Promise<void> {
+    await this.startupProbe;
+    if (this.providerProblem) {
+      const problem = await this.app.getAgent().probeEndpointProblem(signal);
+      if (signal.aborted) return;
+      this.providerProblem = problem?.kind === "unreachable" ? problem : undefined;
       if (this.providerProblem) {
-        const problem = await this.app.getAgent().probeEndpointProblem(signal);
-        // A cancelled probe says nothing about the provider: the gate stays.
-        if (signal.aborted) return;
-        this.providerProblem = problem;
-        if (problem) {
-          this.emit({ type: "error", id, code: "NO_PROVIDER", message: noProviderRefusal(problem) });
-          return;
-        }
+        hooks.refused(noProviderRefusal(this.providerProblem));
+        return;
       }
-      await this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal);
-    });
+    }
+    hooks.admitted?.();
+    await this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal);
   }
 
   private observerFor(turnId: string): AgentObserver {

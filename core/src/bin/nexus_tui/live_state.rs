@@ -474,8 +474,8 @@ pub struct LiveState {
     turn_seq: u64,
     /// Id of the submitted prompt the sidecar has not yet answered with a `turn.result`.
     pending: Option<String>,
-    /// The last prompt sent and its id, kept so a prompt the sidecar refuses outright (no provider) can be put back.
-    sent_prompt: Option<(String, String)>,
+    /// The composer as it was when the last prompt was sent (paste buffers included), so a prompt the sidecar refuses outright can be put back whole.
+    sent_prompt: Option<(String, Composer)>,
     /// The raw cause behind the latest provider notice, shown by `/details`.
     provider_cause: Option<String>,
     /// Ctrl-C or Esc already asked the running turn to stop; another Ctrl-C quits.
@@ -1072,9 +1072,9 @@ impl LiveState {
                 }
                 if code == "NO_PROVIDER" {
                     // The sidecar refused a prompt that could only fail: the message says why, and the draft is not lost.
-                    if let Some((sent, text)) = self.sent_prompt.take() {
-                        if id.as_deref() == Some(sent.as_str()) && self.composer.text().is_empty() {
-                            self.composer.insert(&text);
+                    if let Some((sent, draft)) = self.sent_prompt.take() {
+                        if id.as_deref() == Some(sent.as_str()) && self.composer.is_empty() {
+                            self.composer = draft;
                         }
                     }
                     self.transcript.push(Entry::Notice(message));
@@ -1957,6 +1957,7 @@ impl LiveState {
         if self.session.busy {
             return self.submit_while_busy(display, invocation);
         }
+        let sent = self.composer.clone();
         let text = self.composer.take();
         self.scroll_back = 0;
         self.focus = Focus::Composer;
@@ -1974,7 +1975,7 @@ impl LiveState {
         self.activity = None;
         let id = format!("t{}", self.turn_seq);
         self.pending = Some(id.clone());
-        self.sent_prompt = Some((id.clone(), text.clone()));
+        self.sent_prompt = Some((id.clone(), sent));
         Some(Action::Send(Command::PromptSubmit { id, text }))
     }
 
@@ -5066,6 +5067,17 @@ mod tests {
             "{:?}",
             state.transcript.last()
         );
+    }
+
+    #[test]
+    fn a_refused_prompt_with_a_paste_comes_back_as_the_paste_label_not_its_expansion() {
+        let mut state = ready();
+        type_text(&mut state, "see ");
+        state.on_paste("line one\nline two");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert_eq!(state.composer.display(state.composer.text()), "see [Pasted text #1: 2 lines]");
+        assert_eq!(state.composer.expand(state.composer.text()), "see line one\nline two");
     }
 
     #[test]

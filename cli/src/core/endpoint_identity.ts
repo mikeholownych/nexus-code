@@ -54,3 +54,8 @@ export function persistableEndpoint(endpoint: string | undefined): string | unde
 export function comparableEndpoint(endpoint: string): string {
   return persistableEndpoint(endpoint);
 }
+
+/** Free text with every URL in it cut down to `persistableEndpoint` form: no userinfo, query or fragment. */
+export function scrubUrls(text: string): string {
+  return text.replace(/https?:\/\/[^\s"'<>)\]]+/gi, (url) => persistableEndpoint(url));
+}

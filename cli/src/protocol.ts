@@ -4,6 +4,7 @@
  */
 import type { ProviderRecoveryRecord, TurnResult } from "./core/turn.js";
 import { redactSecrets } from "./ui.js";
+import { persistableEndpoint, scrubUrls } from "./core/endpoint_identity.js";
 import type { ApprovalReview } from "./approval_review.js";
 import type { SlashSpec } from "./slash/catalog.js";
 import type { EvidenceStatus, ReceiptSection } from "./evidence.js";
@@ -383,7 +384,7 @@ function rawProviderCause(record: ProviderRecoveryRecord): string {
     record.reason ? `recovery: ${record.reason}` : undefined,
     last?.requestId ? `request ${last.requestId}` : undefined,
   ];
-  return redactSecrets(parts.filter(Boolean).join("\n"));
+  return redactSecrets(scrubUrls(parts.filter(Boolean).join("\n")));
 }
 
 /**
@@ -393,7 +394,7 @@ function rawProviderCause(record: ProviderRecoveryRecord): string {
 export function providerRecoveryStatus(record: ProviderRecoveryRecord, discardedPartialOutput: boolean): StatusNotice | undefined {
   if (record.state === "PROBING") return undefined;
   const detail = rawProviderCause(record);
-  const where = record.endpoint ? ` at ${redactSecrets(record.endpoint)}` : "";
+  const where = record.endpoint ? ` at ${persistableEndpoint(record.endpoint)}` : "";
   const problem = providerProblemWords(record);
   switch (record.state) {
     case "WAITING": {
@@ -417,17 +418,21 @@ export function providerRecoveryStatus(record: ProviderRecoveryRecord, discarded
 }
 
 /** The answer to a prompt sent while the provider is still down: short, because the start-up notice already gave the steps. */
-export function noProviderRefusal(problem: { kind: "unreachable" | "rejected"; endpoint: string }): string {
-  const why = problem.kind === "rejected" ? `${problem.endpoint} rejected the credentials` : `nothing answers at ${problem.endpoint}`;
-  return redactSecrets(`Not sent: no model is connected (${why}). Use /connect or start a local model server, then send it again.`);
+export function noProviderRefusal(problem: { endpoint: string }): string {
+  return redactSecrets(`Not sent: no model is connected (nothing answers at ${problem.endpoint}). Use /connect or start a local model server, then send it again.`);
 }
 
 /** First run with nothing to talk to: what is missing, what to do next, where to read more. The raw cause goes in `detail`. */
 export function noProviderNotice(problem: { kind: "unreachable" | "rejected"; endpoint: string; detail: string }): StatusNotice {
-  const missing =
-    problem.kind === "rejected"
-      ? `No model is connected: ${problem.endpoint} rejected the credentials.`
-      : `No model is connected: nothing answers at ${problem.endpoint}.`;
+  if (problem.kind === "rejected") {
+    // Only a warning: the start-up check can be refused where chat is not (a token not yet refreshed, a key limited to chat).
+    return {
+      text: redactSecrets(`${problem.endpoint} rejected the credentials on the start-up check. Nexus will still try your messages; if they fail, type /connect to sign in again or check the API key. \`nexus doctor\` checks the setup.`),
+      key: STARTUP_PROVIDER_KEY,
+      detail: redactSecrets(problem.detail),
+    };
+  }
+  const missing = `No model is connected: nothing answers at ${problem.endpoint}.`;
   const text =
     `${missing} Next: type /connect to sign in or add an API key, or start a local model server (LM Studio, Ollama, llama.cpp) ` +
     `and send your message again. \`nexus doctor\` checks the setup; docs/CLOUD_PROVIDERS.md lists providers.`;

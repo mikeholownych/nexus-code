@@ -10,9 +10,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
-import { encodeEvent, noProviderNotice, providerRecoveryStatus } from "../src/protocol.js";
+import { encodeEvent, noProviderNotice, noProviderRefusal, providerRecoveryStatus } from "../src/protocol.js";
 import { startupEndpointProblem } from "../src/core/provider_recovery.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
+import http from "node:http";
 import { makeHome, makeRepo, startGateway } from "./helpers/fixtures.js";
 import type { ProviderRecoveryRecord, RecoverySubmissionRecord } from "../src/core/turn.js";
 
@@ -35,6 +36,11 @@ function record(failures: number, over: Partial<ProviderRecoveryRecord> = {}, la
     policy: { deadlineMs: 20 * 60_000, maxDelayMs: 15_000, maxUnknownReplays: 1 },
     ...over,
   };
+}
+
+async function until(done: () => boolean, ms = 5_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!done() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
 }
 
 const JARGON = /HTTP \d|execution|replay|PROBING|condition|NOT_EXECUTED|UNKNOWN|_/;
@@ -130,10 +136,12 @@ describe("D-07: first run without a provider", () => {
     assert.match(n.detail!, /ECONNREFUSED/);
   });
 
-  test("rejected credentials get their own wording", () => {
+  test("rejected credentials get their own wording, and say the messages are still tried", () => {
     const n = noProviderNotice(startupEndpointProblem("https://api.example.test/v1", { available: true, condition: "AVAILABLE", httpStatus: 401 } as any)!);
     assert.match(n.text, /rejected the credentials/i);
     assert.match(n.text, /\/connect/);
+    assert.match(n.text, /still try/i);
+    assert.doesNotMatch(n.text, /No model is connected/);
   });
 
   async function rig(endpoint: string, fn: (r: { events: any[]; send: (m: object) => Promise<void>; server: SidecarServer }) => Promise<void>) {
@@ -160,7 +168,7 @@ describe("D-07: first run without a provider", () => {
 
   test("a dead endpoint: the start-up notice is guidance, and a prompt is refused with the reason instead of retried", async () => {
     await rig("http://127.0.0.1:1/v1", async ({ events, send, server }) => {
-      for (let i = 0; i < 200 && !events.some((e) => e.type === "notice" && /No model is connected/.test(e.text)); i++) await new Promise((r) => setImmediate(r));
+      await until(() => events.some((e) => e.type === "notice" && /No model is connected/.test(e.text)));
       const start = events.find((e) => e.type === "notice" && /No model is connected/.test(e.text));
       assert.ok(start, JSON.stringify(events.map((e) => e.type)));
       assert.equal(start.key, "provider.startup");
@@ -188,6 +196,118 @@ describe("D-07: first run without a provider", () => {
       });
     } finally {
       await gw.close();
+    }
+  });
+});
+
+/** A gateway whose /models answers `status` while chat works, so only the start-up probe sees a rejection. */
+async function rejectingModelsGateway(status: number) {
+  const gw = await startGateway(() => ({ kind: "text", content: "hi there" }));
+  const target = new URL(gw.url);
+  const server = http.createServer((req, res) => {
+    if (req.url?.endsWith("/models")) {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "bad token" } }));
+      return;
+    }
+    const up = http.request({ host: target.hostname, port: target.port, path: req.url, method: req.method, headers: req.headers }, (r) => {
+      res.writeHead(r.statusCode ?? 502, r.headers);
+      r.pipe(res);
+    });
+    req.pipe(up);
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as any).port;
+  return { url: `http://127.0.0.1:${port}/v1`, close: async () => { server.closeAllConnections(); await new Promise((r) => server.close(r)); await gw.close(); } };
+}
+
+describe("D-07 review round 2", () => {
+  async function sidecar(endpoint: string, fn: (r: { events: any[]; server: SidecarServer; send: (m: object) => Promise<void> }) => Promise<void>) {
+    const repo = makeRepo();
+    const home = makeHome();
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    const app = new ApplicationCore({ endpoint, model: "local-model", maxSteps: 5, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, approvalMode: "auto", fullAccess: true } as HarnessConfig);
+    const events: any[] = [];
+    const server = new SidecarServer({ app, mode: "auto", write: (l) => events.push(JSON.parse(l)), historyFile: path.join(home, "history") });
+    server.start();
+    try {
+      await fn({ events, server, send: (m) => server.handleLine(JSON.stringify({ v: 1, ...m })) });
+    } finally {
+      await server.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
+      await server.idle();
+      app.shutdown();
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }
+
+  for (const status of [401, 403]) {
+    test(`/models answers ${status} but chat works: the prompt runs, the start-up notice only warns`, async () => {
+      const gw = await rejectingModelsGateway(status);
+      try {
+        await sidecar(gw.url, async ({ events, send, server }) => {
+          await until(() => events.some((e) => e.type === "notice" && e.key === "provider.startup"));
+          assert.match(events.find((e) => e.key === "provider.startup").text, /rejected the credentials/);
+          await send({ type: "prompt.submit", id: "t1", text: "hello" });
+          await server.idle();
+          assert.equal(events.some((e) => e.type === "error"), false, JSON.stringify(events.filter((e) => e.type === "error")));
+          assert.ok(events.some((e) => e.type === "turn.result"));
+        });
+      } finally {
+        await gw.close();
+      }
+    });
+  }
+
+  test("a steer that would start a turn on a dead provider is refused, not retried, and its text returns", async () => {
+    await sidecar("http://127.0.0.1:1/v1", async ({ events, send, server }) => {
+      await send({ type: "steer", id: "g1", text: "also do this" });
+      await server.idle();
+      const ack = events.filter((e) => e.type === "steer.ack" && e.id === "g1");
+      assert.deepEqual(ack.map((a) => a.status), ["cancelled"], JSON.stringify(ack));
+      assert.equal(ack[0].text, "also do this");
+      assert.match(ack[0].message, /no model is connected/i);
+      assert.equal(events.some((e) => e.type === "activity" || e.type === "turn.result"), false);
+    });
+  });
+
+  test("a follow-up deferred while the gate is mid-probe is refused too, never run ungated", async () => {
+    await sidecar("http://127.0.0.1:1/v1", async ({ events, send, server }) => {
+      const first = send({ type: "prompt.submit", id: "t1", text: "hello" });
+      await send({ type: "steer", id: "g2", text: "and this" });
+      await first;
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "error" && e.id === "t1")?.code, "NO_PROVIDER");
+      const ack = events.filter((e) => e.type === "steer.ack" && e.id === "g2").map((a) => a.status);
+      assert.deepEqual(ack, ["deferred", "cancelled"]);
+      assert.equal(events.some((e) => e.type === "activity" || e.type === "turn.result"), false, "no turn ran");
+    });
+  });
+
+  test("a refused prompt is not recorded in the prompt history", async () => {
+    await sidecar("http://127.0.0.1:1/v1", async ({ events, send, server }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "never-sent-text" });
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "error")?.code, "NO_PROVIDER");
+      assert.equal(((server as any).history as string[]).includes("never-sent-text"), false);
+    });
+  });
+
+  test("no credential in a URL survives into detail or text, on the start-up and the recovery paths", () => {
+    const urls = ["http://user:pass@127.0.0.1:1/v1", "https://TOKENVALUE@host.example/v1?key=SECRETVALUE#frag"];
+    for (const url of urls) {
+      const probeDetail = `fetch failed (cause: Request cannot be constructed from a URL that includes credentials: ${url}/models)`;
+      const problem = startupEndpointProblem(url, { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: probeDetail } as any)!;
+      const n = noProviderNotice(problem);
+      const refusal = noProviderRefusal(problem);
+      const rec = record(2, { endpoint: url }, { message: `connect failed for ${url}/chat/completions` });
+      const status = providerRecoveryStatus(rec, false)!;
+      for (const out of [n.text, n.detail!, refusal, status.text, status.detail!, problem.endpoint, problem.detail]) {
+        assert.doesNotMatch(out, /user:pass|TOKENVALUE|SECRETVALUE|frag/, out);
+      }
     }
   });
 });
