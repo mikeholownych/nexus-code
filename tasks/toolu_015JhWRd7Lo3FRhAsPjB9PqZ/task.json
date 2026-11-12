@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015JhWRd7Lo3FRhAsPjB9PqZ",
+  "agent_id": "a54605ae53ba6f373",
+  "subagent_type": "reviewer",
+  "task_description": "Review #434 fail-closed rounds (00ea64be to dfa28c45)",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 61614,
+    "cache_read_tokens": 220431,
+    "output_tokens": 18622,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-11T23:59:15.2020261Z",
+  "completed_at": "2026-11-12T00:01:51.934735976Z"
+}

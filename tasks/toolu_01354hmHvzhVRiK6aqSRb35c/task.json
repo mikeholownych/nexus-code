@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01354hmHvzhVRiK6aqSRb35c",
+  "agent_id": "a65226a63e3ac1e50",
+  "subagent_type": "general-purpose",
+  "task_description": "Pre-push delta review",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 114240,
+    "cache_read_tokens": 1501867,
+    "output_tokens": 46232,
+    "api_call_count": 16
+  },
+  "started_at": "2026-11-11T23:44:33.577879996Z",
+  "completed_at": "2026-11-11T23:50:55.588936931Z"
+}

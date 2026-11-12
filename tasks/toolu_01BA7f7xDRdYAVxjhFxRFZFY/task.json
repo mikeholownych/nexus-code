@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BA7f7xDRdYAVxjhFxRFZFY",
+  "agent_id": "ae1e4b99082594dad",
+  "subagent_type": "reviewer",
+  "task_description": "Delta review of PR #469 final push",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 16513,
+    "cache_read_tokens": 65114,
+    "output_tokens": 2027,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-11T23:02:32.791468006Z",
+  "completed_at": "2026-11-11T23:02:56.202182022Z"
+}
