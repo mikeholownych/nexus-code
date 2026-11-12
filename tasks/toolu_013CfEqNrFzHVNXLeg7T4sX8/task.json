@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_013CfEqNrFzHVNXLeg7T4sX8",
+  "agent_id": "ace6fd6f51ea56770",
+  "subagent_type": "reviewer",
+  "task_description": "Confirm #434 test dedupe is mechanical",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 10874,
+    "cache_read_tokens": 40529,
+    "output_tokens": 887,
+    "api_call_count": 3
+  },
+  "started_at": "2026-11-12T00:43:25.527183953Z",
+  "completed_at": "2026-11-12T00:43:39.760446471Z"
+}
