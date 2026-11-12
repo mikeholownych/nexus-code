@@ -360,6 +360,19 @@ describe("D-07 review round 2", () => {
     assert.match(noProviderRefusal(named), /could not connect/);
   });
 
+  test("a real refused connection yields the ECONNREFUSED code and the 'nothing answers' wording", async () => {
+    const probe = net.createServer();
+    await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+    const port = (probe.address() as net.AddressInfo).port;
+    await new Promise((r) => probe.close(r));
+    await sidecar(`http://127.0.0.1:${port}/v1`, async ({ server }) => {
+      const problem = await (server as any).app.getAgent().probeEndpointProblem(undefined, 1_000);
+      assert.equal(problem?.nothingThere, true, JSON.stringify(problem));
+      assert.equal(problem?.blocking, true);
+      assert.match(noProviderRefusal(problem), /nothing answers/);
+    });
+  });
+
   test("a cancel that lands mid-probe returns the message, keeps the gate and sends nothing", async () => {
     const sockets = new Set<net.Socket>();
     const hang = net.createServer((sock) => { sockets.add(sock); });
@@ -421,7 +434,7 @@ describe("D-07 review round 2", () => {
       ["Request cannot be constructed from a URL that includes credentials: https://u:abc/def@host/v1 (retry)", "Request cannot be constructed from a URL that includes credentials: https://host/v1 (retry)"],
     ];
     for (const [input, expected] of cut) assert.equal(scrubUrls(input), expected, input);
-    for (const same of ["https://host/path@x", "https://host:8080/a@b", "write to a@b.example about it", "file:///x"]) assert.equal(scrubUrls(same), same, same);
+    for (const same of ["https://host/path@x", "https://host:8080/a@b", "write to a@b.example about it", "file:///x", "https://h:99999/x@y"]) assert.equal(scrubUrls(same), same, same);
     const problem = startupEndpointProblem("https://u:abc/def@host/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "Request cannot be constructed from a URL that includes credentials: https://u:abc/def@host/v1", codes: [] } as any)!;
     for (const out of [problem.detail, problem.endpoint, noProviderNotice(problem).detail!, noProviderNotice(problem).text, noProviderRefusal(problem)]) {
       assert.doesNotMatch(out, /abc|def/, out);
