@@ -51,14 +51,15 @@ pub fn clock(elapsed: Duration) -> String {
     }
 }
 
-/// What the activity line says the agent is doing.
+/// What the activity line says the agent is doing. It carries no timer of its own: the line has exactly one, the
+/// turn's elapsed time (a provider wait also has its countdown in its transcript row).
 fn phase_text(state: &LiveState) -> String {
     let Some(activity) = &state.activity else {
         return "waiting for the agent".to_string();
     };
     let tool = activity.tool.as_deref().map(tool_verb);
     let subject = activity.subject.as_deref().map(one_line).filter(|s| !s.is_empty());
-    let mut text = match activity.phase.as_str() {
+    match activity.phase.as_str() {
         // Reply text is arriving: the model is writing, not thinking (D-14).
         "inference" if activity.text_streaming => "writing".to_string(),
         "inference" => "thinking".to_string(),
@@ -68,15 +69,7 @@ fn phase_text(state: &LiveState) -> String {
         "verifying" => verifier_text(activity.tool.as_deref()),
         "compacting" => "compacting the context".to_string(),
         other => other.replace('_', " "),
-    };
-    // A provider wait has its own countdown in the transcript row, so a second timer here would only add noise.
-    if !matches!(activity.phase.as_str(), "inference" | "compacting" | "provider_wait") {
-        let phase_elapsed = state.now.saturating_duration_since(activity.since);
-        if phase_elapsed >= Duration::from_secs(2) {
-            text.push_str(&format!(" {}", clock(phase_elapsed)));
-        }
     }
-    text
 }
 
 /// The controller labels its own verifier runs `<command> (before the change)` and `<command> (tests as they were
@@ -110,7 +103,8 @@ fn fit_activity_line(state: &LiveState, max: usize) -> String {
     if full.chars().count() <= max {
         return full;
     }
-    let compact = format!(" no data {secs} s · esc cancels ");
+    let approval = state.activity.as_ref().is_some_and(|a| a.phase == "approval");
+    let compact = if approval { format!(" no data {secs} s ") } else { format!(" no data {secs} s · esc cancels ") };
     if compact.chars().count() <= max { compact } else { format!(" no data {secs} s ") }
 }
 
@@ -1236,8 +1230,10 @@ fn render_composer(frame: &mut Frame, area: Rect, state: &LiveState, layout: &Co
     }
 }
 
-/// The status bar: identity only (workspace, branch, model, mode). Activity is shown once, on the composer line.
-/// Segments are dropped from the least important when the terminal is narrow.
+/// The status bar: identity and context use (workspace, branch, model, mode, `ctx N%`). Activity is shown once, on the
+/// composer line. Segments are dropped from the least important when the terminal is narrow, in this order (last
+/// dropped first): workspace, mode and read-only, model, context percent, branch, sandbox and trust, session id,
+/// endpoint kind; the context counts are added to the percent only when room is left.
 fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
     let session = &state.session;
     let muted = Style::default().fg(MUTED);
@@ -1248,43 +1244,46 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
         _ if state.connecting() => spans.push(Span::styled("  connecting to the agent…", muted)),
         Link::Crashed { .. } => spans.push(Span::styled("  agent stopped — not running", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
         _ => {
-            // (priority, spans): lower numbers are kept first.
-            let mut segments: Vec<(u8, Vec<Span>)> = vec![(0, vec![Span::styled(format!("  {}", session.workspace_name), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))])];
+            // (priority, spans, fuller wording used when room is left over): lower numbers are kept first.
+            let mut segments: Vec<(u8, Vec<Span>, Option<Vec<Span>>)> = vec![(0, vec![Span::styled(format!("  {}", session.workspace_name), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))], None)];
             if let Some(branch) = &session.branch {
                 let mut branch_spans = vec![Span::styled(format!("  ⎇ {branch}"), muted)];
                 if session.dirty > 0 {
                     branch_spans.push(Span::styled(format!(" ●{} changed", session.dirty), Style::default().fg(Color::Yellow)));
                 }
-                segments.push((3, branch_spans));
+                segments.push((4, branch_spans, None));
             }
-            segments.push((2, vec![Span::styled("  model ", muted), Span::styled(session.model.clone(), Style::default().fg(Color::White))]));
+            segments.push((2, vec![Span::styled("  model ", muted), Span::styled(session.model.clone(), Style::default().fg(Color::White))], None));
             // The session id (what /resume takes) is kept only when there is room for it.
             if let Some(id) = &session.session_id {
-                segments.push((5, vec![Span::styled(format!("  {id}"), muted)]));
+                segments.push((6, vec![Span::styled(format!("  {id}"), muted)], None));
             }
             // The mode is kept at every width: whether changes need approval is never hidden.
             if let Some(posture) = &session.posture {
                 let mode_color = if posture.mode == "review" { Color::Yellow } else { Color::White };
-                segments.push((1, vec![Span::styled(format!("  mode: {}", posture.mode), Style::default().fg(mode_color))]));
+                segments.push((1, vec![Span::styled(format!("  mode: {}", posture.mode), Style::default().fg(mode_color))], None));
                 let trust_str = if posture.trusted { "trusted" } else { "untrusted" };
-                segments.push((4, vec![
+                segments.push((5, vec![
                     Span::styled(format!(" · sandbox: {}", posture.sandbox), muted),
                     Span::styled(format!(" · workspace: {trust_str}"), muted),
-                ]));
+                ], None));
             } else if session.mode == "review" {
-                segments.push((1, vec![Span::styled("  review mode", Style::default().fg(Color::Yellow))]));
+                segments.push((1, vec![Span::styled("  review mode", Style::default().fg(Color::Yellow))], None));
             } else {
-                segments.push((1, vec![Span::styled(format!("  {}", session.mode), muted)]));
+                segments.push((1, vec![Span::styled(format!("  {}", session.mode), muted)], None));
             }
             // Read-only is a safety fact (kept at every width); context use and endpoint kind go first when narrow.
             if session.read_only == Some(true) {
-                segments.push((1, vec![Span::styled("  read-only", Style::default().fg(Color::Yellow))]));
+                segments.push((1, vec![Span::styled("  read-only", Style::default().fg(Color::Yellow))], None));
             }
-            if let (Some(used), Some(limit)) = (session.context_tokens, session.context_limit) {
-                segments.push((6, vec![Span::styled(format!("  context {used}/{limit}"), muted)]));
+            if let (Some(used), Some(limit)) = (session.context_tokens, session.context_limit) && limit > 0 {
+                // The percent is the part that stays when the line is narrow; the counts are added when there is room left.
+                let percent = used.saturating_mul(100) / limit;
+                let full = vec![Span::styled(format!("  context {used}/{limit} · {percent}%"), muted)];
+                segments.push((3, vec![Span::styled(format!("  ctx {percent}%"), muted)], Some(full)));
             }
             if let Some(kind) = &session.endpoint_kind {
-                segments.push((7, vec![Span::styled(format!("  {kind}"), muted)]));
+                segments.push((7, vec![Span::styled(format!("  {kind}"), muted)], None));
             }
             let room = usize::from(area.width).saturating_sub(7);
             let mut keep: Vec<bool> = vec![false; segments.len()];
@@ -1298,9 +1297,17 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
                     keep[i] = true;
                 }
             }
-            for (i, (_, segment)) in segments.into_iter().enumerate() {
-                if keep[i] {
-                    spans.extend(segment);
+            let width = |spans: &[Span]| -> usize { spans.iter().map(Span::width).sum() };
+            for (i, (_, segment, upgrade)) in segments.into_iter().enumerate() {
+                if !keep[i] {
+                    continue;
+                }
+                match upgrade {
+                    Some(full) if used - width(&segment) + width(&full) <= room => {
+                        used = used - width(&segment) + width(&full);
+                        spans.extend(full);
+                    }
+                    _ => spans.extend(segment),
                 }
             }
         }
@@ -2178,6 +2185,98 @@ mod tests {
         let line = activity_line(&state);
         assert_eq!(line.matches("0:10").count(), 1, "{line}");
         assert!(line.contains("esc cancels"), "{line}");
+    }
+
+    /// How many `m:ss` clocks a line shows.
+    fn clocks(text: &str) -> usize {
+        let chars: Vec<char> = text.chars().collect();
+        (1..chars.len().saturating_sub(2))
+            .filter(|&i| chars[i] == ':' && chars[i - 1].is_ascii_digit() && chars[i + 1].is_ascii_digit() && chars[i + 2].is_ascii_digit())
+            .count()
+    }
+
+    #[test]
+    fn no_phase_shows_two_timers_and_the_status_bar_shows_none() {
+        // D-27: `waiting for your approval 0:05 · 0:09` had a phase timer and a turn timer, neither labelled.
+        let phases = [
+            ("inference", ""),
+            ("tool", r#","tool":"run_command","subject":"make test""#),
+            ("approval", r#","tool":"write_file","subject":"x.txt""#),
+            ("provider_wait", ""),
+            ("verifying", r#","tool":"npm test""#),
+            ("compacting", ""),
+        ];
+        for (phase, extra) in phases {
+            let mut state = ready();
+            feed(&mut state, &[BUSY, &format!(r#"{{"v":1,"type":"activity","turn_id":"t1","phase":"{phase}","step":2,"segment":1{extra}}}"#)]);
+            let start = state.turn_started.unwrap();
+            for secs in [1u64, 9, 75] {
+                state.set_now(start + std::time::Duration::from_secs(secs));
+                let line = activity_line(&state);
+                assert_eq!(clocks(&line), 1, "{phase} at {secs} s: {line}");
+                let screen = draw(&state, 100, 12);
+                assert_eq!(clocks(screen.lines().next().unwrap()), 0, "the status bar shows no timer ({phase}): {screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_stall_during_an_approval_never_offers_esc_to_cancel_at_any_width() {
+        // The full line omits `esc cancels` while an approval is open; the compact one must agree.
+        let mut state = ready();
+        feed(&mut state, &[BUSY, r#"{"v":1,"type":"activity","turn_id":"t1","phase":"approval","step":1,"segment":1,"tool":"write_file","subject":"x.txt"}"#, r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
+        for max in [20usize, 30, 40, 60, 100, 140] {
+            let line = fit_activity_line(&state, max);
+            assert!(!line.contains("esc cancels"), "max {max}: {line}");
+        }
+        assert!(fit_activity_line(&state, 30).contains("no data 30 s"));
+        // Any other phase keeps the way out on the compact line.
+        feed(&mut state, &[r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1}"#, r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
+        assert!(fit_activity_line(&state, 40).contains("esc cancels"));
+    }
+
+    #[test]
+    fn the_status_bar_keeps_context_percent_and_the_session_id_when_there_is_room() {
+        // D-05: after the first turn the branch gains a changed count and the context grows; the bar must still show
+        // how full the context is at 80 columns, and the session id whenever it fits.
+        let session = r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"engineering/b0","mode":"review","git":{"branch":"main","dirty":2},"busy":false,"session":"session_20261112_143012_abcd1234","posture":{"mode":"review","sandbox":"off","trusted":true},"read_only":false,"context_tokens":11381,"context_limit":65536,"endpoint_kind":"local"}"#;
+        let mut state = ready();
+        feed(&mut state, &[session]);
+        for width in [60u16, 80, 100, 120, 160] {
+            let bar = draw(&state, width, 15).lines().next().unwrap().to_string();
+            assert!(bar.contains("17%"), "width {width}: the context percent is shown: {bar}");
+            // (the backend prints each row between two quote marks)
+            assert!(unicode_width::UnicodeWidthStr::width(bar.as_str()) <= usize::from(width) + 2, "{bar}");
+        }
+        let wide = draw(&state, 200, 15).lines().next().unwrap().to_string();
+        for want in ["session_20261112_143012_abcd1234", "context 11381/65536 · 17%", "sandbox: off", "workspace: trusted", "⎇ main", "local"] {
+            assert!(wide.contains(want), "200 columns lose nothing: missing {want}: {wide}");
+        }
+        // The session id is not cut short (it is what /resume takes): shown whole or not at all.
+        for width in 40..=160u16 {
+            let bar = draw(&state, width, 15).lines().next().unwrap().to_string();
+            assert!(!bar.contains("session_2") || bar.contains("session_20261112_143012_abcd1234"), "width {width}: {bar}");
+        }
+        // At 50 columns the context does not fit; nothing is invented in its place.
+        let narrow = draw(&state, 50, 15).lines().next().unwrap().to_string();
+        assert!(narrow.contains("mode: review") && narrow.contains("model ") && !narrow.contains('%'), "{narrow}");
+        // Without the facts (an older sidecar) there is no percent.
+        let mut old = ready();
+        feed(&mut old, &[r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#]);
+        assert!(!draw(&old, 100, 15).lines().next().unwrap().contains('%'));
+    }
+
+    #[test]
+    fn a_stalled_retry_wait_still_shows_one_timer() {
+        let mut state = ready();
+        feed(&mut state, &[BUSY, r#"{"v":1,"type":"activity","turn_id":"t1","phase":"provider_wait","step":1,"segment":1}"#, r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
+        let start = state.turn_started.unwrap();
+        state.set_now(start + std::time::Duration::from_secs(40));
+        for width in [40u16, 60, 100] {
+            let screen = draw(&state, width, 12);
+            let busy = screen.lines().find(|l| l.contains("no data")).expect("the stall is shown");
+            assert!(clocks(busy) <= 1, "width {width}: {busy}");
+        }
     }
 
     #[test]

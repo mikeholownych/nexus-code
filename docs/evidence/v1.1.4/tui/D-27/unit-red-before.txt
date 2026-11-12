@@ -1,0 +1,5 @@
+thread 'live_view::tests::no_phase_shows_two_timers_and_the_status_bar_shows_none' (1848596) panicked at src/bin/nexus_tui/live_view.rs:2190:17:
+assertion `left == right` failed: tool at 9 s:  ⠋ Run make test 0:08 · 0:09 · step 2 · esc cancels 
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

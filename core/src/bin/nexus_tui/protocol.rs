@@ -865,6 +865,22 @@ mod tests {
     }
 
     #[test]
+    fn a_stream_stall_parses_with_missing_and_unknown_fields() {
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#),
+            Ok(Event::StreamStall { stalled: true, silent_secs: 30 })
+        );
+        // Missing fields default to "spoke again" (not stalled, no silence): the safe reading of a bare event.
+        assert_eq!(parse_event(r#"{"v":1,"type":"stream.stall"}"#), Ok(Event::StreamStall { stalled: false, silent_secs: 0 }));
+        assert_eq!(parse_event(r#"{"v":1,"type":"stream.stall","stalled":true}"#), Ok(Event::StreamStall { stalled: true, silent_secs: 0 }));
+        // A newer sidecar's unknown field is ignored, as for every event.
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"stream.stall","stalled":true,"silent_secs":45,"future":{"a":1}}"#),
+            Ok(Event::StreamStall { stalled: true, silent_secs: 45 })
+        );
+    }
+
+    #[test]
     fn rejects_non_protocol_lines() {
         assert!(
             parse_event("Compiling harness")
