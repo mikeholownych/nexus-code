@@ -161,7 +161,7 @@ test("extensions cannot make the values to replace much larger than the text", (
     assert.ok(performance.now() - started < 5000, `${input.length} chars took ${Math.round(performance.now() - started)}ms`);
   });
   const total = new InformationFlowBoundary().classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
-  assert.ok(total > input.length, `${total} characters of values: the extensions are accepted until the budget is spent`);
+  assert.ok(total > input.length / 2, `${total} characters of values: fresh extensions are still accepted`);
   assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
 });
 
@@ -181,6 +181,33 @@ test("a blob of rejected encoded look-alikes does not starve a real key later in
   });
   const total = new InformationFlowBoundary().classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
   assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
+});
+
+test("a blob of accepted encoded runs does not starve a real key later in the text", () => {
+  const body = "Qx7Km2Vb9%2FLrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq";
+  const key = `sk-${body}${".Zk4Pq8Rt".repeat(20)}`; // a long tail: it must not fit in what a blob leaves of the budget
+  const units = Array.from({ length: 200 }, (_, i) => `sk-%2F${i.toString(36).padStart(8, "A")}-`).join("");
+  // each unit is itself a key (digit/capital, not a path), and each window reaches ~1 KB into the filler
+  const input = `${units}${"abcdefgh-".repeat(10000)} then ${key} end`;
+  const boundary = new InformationFlowBoundary();
+  assert.ok(boundary.classifyText(units, []).some((c) => c.secret.startsWith("sk-%2F")), "the blob units are keys");
+  withFreshBoundary(() => {
+    const started = performance.now();
+    const output = redactDiagnosticForOutput(input);
+    assert.ok(performance.now() - started < 5000, `took ${Math.round(performance.now() - started)}ms`);
+    const after = output.slice(output.lastIndexOf(" then ") + 6);
+    assert.ok(after.endsWith(" end") && after.length < 60, after);
+    assert.ok(!after.includes("Zk4Pq8Rt") && !after.includes("RtBq"), after);
+  });
+  const total = boundary.classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
+  assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
+});
+
+test("a real key inside a dense blob's window is still redacted (its extension may be dropped: known limitation)", () => {
+  const key = `sk-Qx7Km2Vb9%2FLrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq.${TAIL}`;
+  const units = Array.from({ length: 2000 }, (_, i) => `sk-%2F${i.toString(36).padStart(8, "A")}-`).join("");
+  const output = new InformationFlowBoundary().redactForTelemetry(`${units}${key}`);
+  assert.ok(!output.includes("Qx7Km2Vb9"), output.slice(-80));
 });
 
 test("a long dotted high-entropy token is redacted whole", () => {

@@ -553,6 +553,10 @@ function chargeExtension(from: number, to: number, budget: ExtensionBudget): boo
   return true;
 }
 
+function newExtensionBudget(text: string): ExtensionBudget {
+  return { left: text.length + MAX_EXTENSION };
+}
+
 /** Whether `text[at, end)` (an `sk-` run) is a base64 key: see `scanBase64Keys` for the rule. */
 function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolean): boolean {
   const body = normalizeKeyChars(unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end)));
@@ -570,18 +574,16 @@ function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolea
  * (`sk-learn/linear_model/Ridge2`, see `isPathLike`). A plain key followed by a URL path (`sk-…RtBq/models`: the body
  * before its first "/" is a 20-64 character plain key and the rest is a path) is left to the bounded `sk-` patterns,
  * which stop at the "/".
- * Redaction only grows: the original run is judged and kept, and the longer runs (one that
- * continues through an encoded or look-alike "/" or "+", and that run plus a dotted continuation, see `extendDottedKey`)
- * are judged in addition, so a longer run that is rejected never hides the shorter one. Scanning resumes after the
- * original run, so a key after a dot is found whatever the longer runs were. Every `sk-` inside the original run is
- * skipped: a key inside it is found by the bounded patterns. Each longer run is scanned for at most MAX_EXTENSION characters and kept only while the extension budget lasts; rescans of already scanned text are capped (`rescanLeft`), so the cost is linear however the input is crafted (`sk-sk-sk-...`, `sk-a sk-a ...`).
+ * Invariant: redaction only grows. The original run is always judged and kept; longer runs (through an encoded
+ * "/" or "+", or a dotted continuation) are judged in addition and budgeted, so cost is linear on any input. Only a
+ * key that starts past everything already scanned (`at >= scannedTo`) draws on the main budget, whose windows are
+ * disjoint and so cannot exceed the text; a key inside an earlier window (a rescan) draws on a small separate quota.
+ * Scanning resumes after the original run; a `sk-` inside it is left to the bounded patterns.
  */
 function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: number; end: number; name: string }> {
   const found: Array<{ start: number; end: number; name: string }> = [];
-  // A key that starts past everything an earlier key's extension scanned adds fresh characters to the scan, so those
-  // scans total at most the text. A key inside that region would rescan it (`sk-%2F` repeated): rescans draw on a
-  // ceiling proportional to the text and stop extending once it is spent, so a crafted prefix costs linear time and
-  // rarely withholds the extension of a real key that comes after it (one that starts inside the region the blob last scanned, with no separator, can still lose it once the ceiling is spent: the plain key is redacted as before).
+  // Limitation: a key that starts inside a blob's window (no separator) can lose its extension once the rescan quota is spent; its plain form is still redacted.
+  const rescanBudget: ExtensionBudget = { left: 8 * MAX_EXTENSION };
   let scannedTo = 0;
   let rescanLeft = 16 * text.length;
   let from = 0;
@@ -601,12 +603,10 @@ function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: n
     const extendedEnd = mayExtend ? extendDottedKey(text, encodedEnd) : runEnd;
     if (rescan) rescanLeft -= 16 + extendedEnd - runEnd;
     scannedTo = Math.max(scannedTo, extendedEnd);
-    let chargedTo = runEnd; // the longer runs overlap: each is charged only for what the shorter ones did not take
     for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
       if (!isBase64KeyRun(text, at, end, anthropic)) continue;
       if (end > runEnd) {
-        if (!chargeExtension(chargedTo, end, budget)) continue;
-        chargedTo = end;
+        if (!chargeExtension(runEnd, end, rescan ? rescanBudget : budget)) continue;
       }
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
@@ -1105,8 +1105,7 @@ export class InformationFlowBoundary {
     }
 
     // 2. Deterministic High-Confidence Patterns (DATA-002: Category 2)
-    const extensionBudget: ExtensionBudget = { left: text.length + MAX_EXTENSION };
-    for (const { start, end, name } of text.includes("sk-") ? scanBase64Keys(text, extensionBudget) : []) {
+    for (const { start, end, name } of text.includes("sk-") ? scanBase64Keys(text, newExtensionBudget(text)) : []) {
       matches.push({
         start,
         end,
@@ -1119,6 +1118,7 @@ export class InformationFlowBoundary {
         },
       });
     }
+    const extensionBudget = newExtensionBudget(text); // its own: a blob in the `sk-` scan cannot starve these
     for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
       const re = new RegExp(regex.source, `${regex.flags}d`);
       let match: RegExpExecArray | null;
