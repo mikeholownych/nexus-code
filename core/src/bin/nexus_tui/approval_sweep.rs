@@ -135,7 +135,7 @@ fn draw(state: &mut LiveState, width: u16, height: u16, mode: Mode) -> Frame {
             _ => layout = render_live(frame, state),
         })
         .unwrap();
-    state.note_layout(layout);
+    state.note_layout(layout.clone());
     let buffer = terminal.backend().buffer();
     let rows = (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect::<String>()).collect();
     Frame { notice, confirming, rows, layout, terminal }
@@ -189,7 +189,7 @@ fn check_answerable_frame(frame: &Frame, tag: &str, out: &mut Vec<String>) {
 
 /// Reads the rows of the change the frame drew into `doc`, by their index in the change.
 fn record(doc: &mut BTreeMap<usize, String>, frame: &Frame) {
-    let layout = frame.layout;
+    let layout = frame.layout.clone();
     let buffer = frame.terminal.backend().buffer();
     for row in 0..layout.overlay_rows {
         let y = layout.approval_body.y + u16::try_from(row).unwrap();

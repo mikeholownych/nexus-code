@@ -13,8 +13,8 @@ use std::{
 
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyCode, KeyEvent,
-        KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as TermEvent, KeyCode, KeyEvent,
+        KeyEventKind, KeyModifiers, MouseButton, MouseEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     },
     execute, terminal,
@@ -69,6 +69,7 @@ fn spawn_stop_watchdog() {
             std::thread::sleep(Duration::from_millis(50));
         }
         std::thread::sleep(STOP_WATCHDOG_GRACE);
+        restore_input_modes_unlocked();
         std::process::exit(1);
     });
 }
@@ -307,18 +308,73 @@ impl LiveApp {
     }
 }
 
-/// Restores the terminal on every exit path. ratatui's panic hook restores raw mode and the alternate screen
-/// but not bracketed paste or the keyboard protocol, so those are undone here, during unwinding as well.
-struct TerminalGuard {
-    keyboard_protocol: bool,
+/// The input modes this process switched on, so every exit path undoes exactly those (and only once).
+static MOUSE_ON: AtomicBool = AtomicBool::new(false);
+static KEYBOARD_ON: AtomicBool = AtomicBool::new(false);
+static PASTE_ON: AtomicBool = AtomicBool::new(false);
+
+/// Whether mouse capture is wanted: on unless `NEXUS_TUI_MOUSE` is `off` (also `0`, `false`, `no`, `none`).
+pub(crate) fn mouse_enabled(value: Option<&str>) -> bool {
+    !value.is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "0" | "false" | "no" | "none"))
 }
+
+/// Asks the terminal for button presses and the wheel in SGR form (modes 1000 and 1006), and nothing else: no drag or
+/// motion reports, so the loop is not flooded and Shift-drag still selects text in the terminal's own way.
+pub(crate) struct WheelAndClick;
+
+impl crossterm::Command for WheelAndClick {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        f.write_str("\x1b[?1000h\x1b[?1006h")
+    }
+}
+
+/// Undoes the input modes, in the order they were set. Safe to call from any exit path any number of times: the
+/// panic hook runs it before the message is printed, the guard on every return and during unwinding.
+fn restore_input_modes() {
+    let mut out = io::stdout();
+    if MOUSE_ON.swap(false, Ordering::SeqCst) {
+        let _ = execute!(out, DisableMouseCapture);
+    }
+    if KEYBOARD_ON.swap(false, Ordering::SeqCst) {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
+    if PASTE_ON.swap(false, Ordering::SeqCst) {
+        let _ = execute!(out, DisableBracketedPaste);
+    }
+}
+
+/// The same restore for the stop watchdog, which cannot risk waiting on the stdout lock a stuck loop may hold: raw
+/// bytes straight to the terminal.
+#[cfg(unix)]
+fn restore_input_modes_unlocked() {
+    let write = |bytes: &[u8]| {
+        // SAFETY: write(2) on a valid fd with a valid buffer; the result is ignored on purpose.
+        unsafe {
+            libc::write(libc::STDOUT_FILENO, bytes.as_ptr().cast(), bytes.len());
+        }
+    };
+    if MOUSE_ON.swap(false, Ordering::SeqCst) {
+        write(b"\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l");
+    }
+    if KEYBOARD_ON.swap(false, Ordering::SeqCst) {
+        write(b"\x1b[<1u");
+    }
+    if PASTE_ON.swap(false, Ordering::SeqCst) {
+        write(b"\x1b[?2004l");
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_input_modes_unlocked() {}
+
+/// Restores the terminal on every exit path. ratatui's panic hook restores raw mode and the alternate screen
+/// but not the input modes (mouse, bracketed paste, keyboard protocol), so those are undone here, during unwinding as
+/// well, and by a panic hook installed after ratatui's so they are off before the panic message is printed.
+struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        if self.keyboard_protocol {
-            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
-        }
-        let _ = execute!(io::stdout(), DisableBracketedPaste);
+        restore_input_modes();
         ratatui::restore();
     }
 }
@@ -326,23 +382,37 @@ impl Drop for TerminalGuard {
 pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     install_stop_signals();
     spawn_stop_watchdog();
-    let mut guard = TerminalGuard {
-        keyboard_protocol: false,
-    };
+    let guard = TerminalGuard;
     let depth = crate::theme::Depth::from_env();
     crate::theme::apply_backend_policy(depth);
     let mut terminal = ratatui::try_init()?;
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_input_modes();
+        previous_hook(info);
+    }));
+    // Each flag is set before its sequence is written, so a write that fails halfway is still undone.
+    PASTE_ON.store(true, Ordering::SeqCst);
     execute!(io::stdout(), EnableBracketedPaste)?;
-    // Lets Shift+Enter arrive as its own key on terminals that speak the kitty keyboard protocol.
-    if terminal::supports_keyboard_enhancement().unwrap_or(false) {
+    // Lets Shift+Enter arrive as its own key on terminals that speak the kitty keyboard protocol. Terminals that do
+    // not answer the query (tmux without extended keys, most others) send it as a plain Enter, so it is not advertised.
+    let shift_enter = terminal::supports_keyboard_enhancement().unwrap_or(false);
+    if shift_enter {
+        KEYBOARD_ON.store(true, Ordering::SeqCst);
         execute!(
             io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
-        guard.keyboard_protocol = true;
+    }
+    let mouse = mouse_enabled(std::env::var("NEXUS_TUI_MOUSE").ok().as_deref());
+    if mouse {
+        MOUSE_ON.store(true, Ordering::SeqCst);
+        execute!(io::stdout(), WheelAndClick)?;
     }
     let mut app = LiveApp::start(spec);
     app.state.depth = depth;
+    app.state.shift_enter = shift_enter;
+    app.state.mouse = mouse;
     let result = event_loop(&mut terminal, &mut app);
     app.handle(Action::Quit);
     drop(terminal);
@@ -549,6 +619,8 @@ fn event_loop(
                 None
             }
             TermEvent::Resize(_, _) => None,
+            // Wheel and left button only: releases and anything else neither act nor redraw.
+            TermEvent::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown | MouseEventKind::Down(MouseButton::Left)) => app.state.on_mouse(mouse),
             _ => continue,
         };
         redraw = true;
@@ -567,6 +639,27 @@ fn event_loop(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mouse_capture_is_on_unless_the_operator_turns_it_off() {
+        for on in [None, Some(""), Some("on"), Some("1"), Some("true"), Some("auto"), Some("garbage")] {
+            assert!(mouse_enabled(on), "{on:?}");
+        }
+        for off in ["off", "OFF", "Off", "0", "false", "no", "none", " off "] {
+            assert!(!mouse_enabled(Some(off)), "{off:?}");
+        }
+    }
+
+    #[test]
+    fn capture_asks_for_buttons_and_wheel_in_sgr_form_and_no_motion() {
+        let mut out = String::new();
+        crossterm::Command::write_ansi(&WheelAndClick, &mut out).unwrap();
+        assert_eq!(out, "\x1b[?1000h\x1b[?1006h", "press/release and wheel only: no drag or motion floods");
+        let mut off = String::new();
+        crossterm::Command::write_ansi(&DisableMouseCapture, &mut off).unwrap();
+        for mode in ["1000", "1002", "1003", "1006"] {
+            assert!(off.contains(&format!("?{mode}l")), "the restore turns {mode} off: {off:?}");
+        }
+    }
 
     #[test]
     fn input_queued_when_an_approval_opens_is_discarded() {

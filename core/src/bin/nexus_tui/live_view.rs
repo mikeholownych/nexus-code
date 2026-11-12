@@ -154,6 +154,8 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
             layout.followed = state.follow.then_some(drawn.back);
             layout.top = drawn.top;
             layout.anchored = drawn.anchored;
+            layout.transcript_area = rows[1];
+            layout.row_entries = drawn.row_entries;
         }
     }
     let max_hint = usize::from(area.width.saturating_sub(4));
@@ -197,7 +199,7 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
         }
         Some(Overlay::Help { scroll }) => {
             (layout.overlay_rows, layout.overlay_limit) =
-                render_help(frame, rows[1], *scroll, &state.commands);
+                render_help(frame, rows[1], *scroll, &state.commands, state.shift_enter, state.mouse);
         }
         Some(Overlay::Detail(detail)) => {
             (layout.overlay_rows, layout.overlay_limit) = render_detail(frame, rows[1], detail);
@@ -479,10 +481,7 @@ fn render_paste(frame: &mut Frame, area: Rect, state: &LiveState, number: u32, s
 const HELP: &[(&str, &str)] = &[
     ("", "Keys"),
     ("enter", "send the prompt"),
-    (
-        "shift+enter",
-        "new line (alt+enter where shift is not reported)",
-    ),
+    ("@newline", ""),
     (
         "↑ / ↓",
         "move between lines; recall earlier prompts from the first line",
@@ -519,6 +518,7 @@ const HELP: &[(&str, &str)] = &[
         "in the transcript: open the selected tool call's details",
     ),
     ("v", "in the transcript: open the receipt for the last turn"),
+    ("@mouse", ""),
     ("", ""),
     ("", "Diff review (ctrl+d, or enter on an edit)"),
     ("n / p", "next / previous hunk"),
@@ -543,6 +543,32 @@ const HELP: &[(&str, &str)] = &[
     ("esc", "deny"),
     ("other typing", "goes to your draft (steering); a key typed as the panel opens is ignored, and the panel says so"),
 ];
+
+/// The help rows, with the entries that depend on the terminal filled in: which key makes a newline here, and what
+/// the mouse does (or that its capture is off).
+fn help_rows(shift_enter: bool, mouse: bool) -> Vec<(&'static str, &'static str)> {
+    let mut rows = Vec::with_capacity(HELP.len() + 6);
+    for &(keys, text) in HELP {
+        match keys {
+            "@newline" if shift_enter => {
+                rows.push(("shift+enter", "new line (this terminal reports it)"));
+                rows.push(("alt+enter/ctrl+j", "new line (works in every terminal)"));
+            }
+            "@newline" => {
+                rows.push(("alt+enter/ctrl+j", "new line (works in every terminal)"));
+                rows.push(("shift+enter", "not reported by this terminal: it sends a plain enter, which would send the prompt"));
+            }
+            "@mouse" if mouse => {
+                rows.push(("wheel", "scroll the transcript, or the open panel; the mouse never answers an approval"));
+                rows.push(("click", "select a tool call; click it again to open its details"));
+                rows.push(("mouse capture", "hold shift (option in iTerm2 and macOS Terminal) while dragging to select text; NEXUS_TUI_MOUSE=off turns capture off"));
+            }
+            "@mouse" => rows.push(("mouse", "capture is off: your terminal selects and scrolls natively")),
+            _ => rows.push((keys, text)),
+        }
+    }
+    rows
+}
 
 /// A modal rectangle at the top of `area`: one column of margin each side, at most `max_width` wide and
 /// `wanted_height` tall, centred horizontally.
@@ -853,6 +879,8 @@ fn render_help(
     area: Rect,
     scroll: usize,
     commands: &[SlashSpec],
+    shift_enter: bool,
+    mouse: bool,
 ) -> (usize, usize) {
     let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let heading = Style::default()
@@ -860,13 +888,13 @@ fn render_help(
         .add_modifier(Modifier::BOLD);
     let white = Style::default().fg(Color::White);
     let help_width = usize::from(area.width.saturating_sub(2).min(96).saturating_sub(4));
-    let mut lines: Vec<Line> = HELP
-        .iter()
+    let mut lines: Vec<Line> = help_rows(shift_enter, mouse)
+        .into_iter()
         .flat_map(|(keys, text)| {
             if keys.is_empty() {
-                vec![Line::from(Span::styled(*text, heading))]
+                vec![Line::from(Span::styled(text, heading))]
             } else {
-                markdown::wrap(vec![Span::styled(*text, white)], help_width, vec![Span::styled(format!("  {keys:<17}"), key)], vec![Span::raw(" ".repeat(19))])
+                markdown::wrap(vec![Span::styled(text, white)], help_width, vec![Span::styled(format!("  {keys:<17}"), key)], vec![Span::raw(" ".repeat(19))])
             }
         })
         .collect();
@@ -1282,6 +1310,8 @@ struct TranscriptFrame {
     top: Option<(usize, usize)>,
     /// Set when the window was kept on `LiveState::anchor`: the `scroll_back` that took.
     anchored: Option<usize>,
+    /// The entry each row of the area shows, top to bottom (a row past the last entry has none).
+    row_entries: Vec<usize>,
 }
 
 /// Renders the transcript window `scroll_back` rows above the newest line, with the selected entry highlighted.
@@ -1373,6 +1403,14 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
         .find(|(_, _, _, _, to_bottom)| *to_bottom >= reach)
         .map(|(_, _, index, in_entry, to_bottom)| (*index, in_entry - (to_bottom - reach)));
     tail.reverse();
+    let mut row_entries = Vec::with_capacity(height);
+    let mut hidden = first_row;
+    for (_, rows, index, ..) in &tail {
+        let above = hidden.min(*rows);
+        hidden -= above;
+        let room = height.saturating_sub(row_entries.len());
+        row_entries.extend(std::iter::repeat_n(*index, (rows - above).min(room)));
+    }
     let mut skipped = 0;
     let mut covered = 0;
     let mut lines = Vec::new();
@@ -1397,7 +1435,7 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
     if back > 0 {
         render_scroll_badge(frame, area, back, state.unseen);
     }
-    TranscriptFrame { limit, back, top, anchored }
+    TranscriptFrame { limit, back, top, anchored, row_entries }
 }
 
 fn render_scroll_badge(frame: &mut Frame, area: Rect, rows_below: usize, unseen: bool) {
@@ -1946,10 +1984,22 @@ fn composer_hint(state: &LiveState, max_hint: usize) -> Cow<'static, str> {
             return Cow::Owned(format!("{}· enter steers ", activity_line(state)));
         }
         (_, true) => return Cow::Owned(activity_line(state)),
-        (_, false) if " enter send · shift+enter newline · ? help ".chars().count() > max_hint => {
-            " enter send · ⇧↵ newline · ? help "
+        // Only the newline key this terminal can really send is advertised: Shift+Enter arrives as plain enter (and
+        // sends the draft) unless the terminal speaks the kitty keyboard protocol.
+        (_, false) if state.shift_enter => {
+            if " enter send · shift+enter newline · ? help ".chars().count() > max_hint {
+                " enter send · ⇧↵ newline · ? help "
+            } else {
+                " enter send · shift+enter newline · ? help "
+            }
         }
-        (_, false) => " enter send · shift+enter newline · ? help ",
+        (_, false) => {
+            if " enter send · alt+enter newline · ? help ".chars().count() > max_hint {
+                " ↵ send · alt+↵ newline · ? help "
+            } else {
+                " enter send · alt+enter newline · ? help "
+            }
+        }
     };
     Cow::Borrowed(hint)
 }
@@ -2598,7 +2648,7 @@ mod tests {
         let screen = rows(&draw(&state, 40, 20));
         assert_eq!(screen[19], format!("  {}END", "x".repeat(400 % 38)));
         assert!(
-            screen[13].contains("enter send"),
+            screen[13].contains("send · alt+↵ newline"),
             "composer is capped at 6 rows: {screen:#?}"
         );
     }
@@ -4026,6 +4076,10 @@ mod surface_tests {
         let mut idle = state(false);
         let (rows, _) = screen(&mut idle, 40, 14);
         let all = rows.join("\n");
+        assert!(all.contains("↵ send · alt+↵ newline · ? help"), "{all}");
+        idle.shift_enter = true;
+        let (rows, _) = screen(&mut idle, 40, 14);
+        let all = rows.join("\n");
         assert!(all.contains("enter send · ⇧↵ newline · ? help"), "{all}");
         assert!(all.contains("ask Nexus · / commands · ? keys"), "{all}");
         assert!(!all.contains("shift+enter newline ·…"), "{all}");
@@ -4764,3 +4818,7 @@ mod surface_tests {
 #[cfg(test)]
 #[path = "approval_sweep.rs"]
 mod approval_sweep;
+
+#[cfg(test)]
+#[path = "input_sweep.rs"]
+mod input_sweep;

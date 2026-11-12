@@ -1,0 +1,20 @@
+# D-09 capture, binary: after: v1/v114-tui-input
+
+## terminal that answers the kitty keyboard query
+
+footer: enter send · shift+enter newline · ? help ───────────────────────────────────────────────────────── | › ask Nexus · / for commands · ? for keys
+help rows about newline: │  shift+enter      new line (this terminal reports it)                                        │ | │  alt+enter/ctrl+j new line (works in every terminal)                                         │
+`first`, Shift+Enter (ESC[13;2u), `second`: draft = ['› first', 'second']; prompts sent: 0
+`a`, Alt+Enter, `b`, Ctrl+J, `c`: draft = ['› a', 'b', 'c']; prompts sent: 0
+after Enter, the sidecar received: ['a\\nb\\nc']
+
+## terminal that does not (tmux without extended keys, most others)
+
+footer: enter send · alt+enter newline · ? help ─────────────────────────────────────────────────────────── | › ask Nexus · / for commands · ? for keys
+help rows about newline: │  alt+enter/ctrl+j new line (works in every terminal)                                         │ | │  shift+enter      not reported by this terminal: it sends a plain enter, which would send    │
+`a`, Alt+Enter, `b`, Ctrl+J, `c`: draft = ['› a', 'b', 'c']; prompts sent: 0
+after Enter, the sidecar received: ['a\\nb\\nc']
+
+Shift+Enter on this terminal is a plain CR; the sidecar received: ['half a prompt']
+(the footer above is what tells the user not to rely on it)
+

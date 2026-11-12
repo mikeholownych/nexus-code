@@ -268,6 +268,20 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   colour; `NEXUS_COLOR=truecolor|256|16|none` overrides. The `+`/`−` markers and labels carry the meaning at every
   depth.
 
+### Live TUI: newline key and mouse
+
+- **New line.** `Alt+Enter` and `Ctrl+J` insert a newline in every terminal; plain `Enter` sends. `Shift+Enter` also inserts a
+  newline, but only on terminals that speak the kitty keyboard protocol (kitty, WezTerm, foot, Ghostty and others that
+  answer the startup query); elsewhere it arrives as a plain `Enter` and sends the draft. The footer and `?` help name
+  `shift+enter` only when the terminal reported support, and `alt+enter` (`ctrl+j` in help) otherwise. The xterm
+  `modifyOtherKeys` encoding of Shift+Enter is not read.
+- **Mouse.** Capture is on by default and asks the terminal only for button presses and the wheel. The wheel scrolls the
+  transcript (three rows a notch), or the open panel, an approval's change included. A left click on a tool call
+  selects it; a second click on the selected call opens its details, as `Enter` does. The mouse never answers an
+  approval or any other question: clicks do nothing while a panel is open. Hold Shift while dragging (Option in iTerm2
+  and macOS Terminal) to select text with the terminal's own selection; `NEXUS_TUI_MOUSE=off` turns capture off
+  (`0`, `false`, `no` and `none` also do). The mouse mode is switched off again on quit and on SIGTERM.
+
 ### Cancellation & Process Ownership
 
 - **Cancelling in the TUI:** While a turn is running, pressing `Esc` or `Ctrl-C` sets `cancel_requested`. The footer immediately acknowledges the request:
