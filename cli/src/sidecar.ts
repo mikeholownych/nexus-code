@@ -155,7 +155,7 @@ export class SidecarServer {
       if (problem && !this.shutdownPromise) {
         // Only "nothing answers" gates prompts. A rejection on /models is a warning: the chat path refreshes tokens and
         // may accept a key the model list refuses, so the turn is left to decide.
-        if (problem.kind === "unreachable") this.providerProblem = problem;
+        if (problem.blocking) this.providerProblem = problem;
         this.emit({ type: "notice", ...noProviderNotice(problem) });
       }
     }).catch(() => {});
@@ -499,22 +499,26 @@ export class SidecarServer {
    */
   private async gatedTurn(
     id: string,
-    text: string,
+    text: string | any[],
     signal: AbortSignal,
     hooks: { admitted?: () => void; refused: (message: string) => void },
+    turnArgs?: { title?: string; checkpoint?: string; step?: boolean },
   ): Promise<void> {
+    // Cancelled while the gate was checking: the message is reported back (never silently dropped), not run.
+    const cancelled = "Cancelled before it was sent.";
     await this.startupProbe;
+    // With no known problem a cancel is the turn's own business (it reports INTERRUPTED); only the gate reports it here.
     if (this.providerProblem) {
       const problem = await this.app.getAgent().probeEndpointProblem(signal);
-      if (signal.aborted) return;
-      this.providerProblem = problem?.kind === "unreachable" ? problem : undefined;
+      if (signal.aborted) return hooks.refused(cancelled);
+      this.providerProblem = problem?.blocking ? problem : undefined;
       if (this.providerProblem) {
         hooks.refused(noProviderRefusal(this.providerProblem));
         return;
       }
     }
     hooks.admitted?.();
-    await this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal);
+    await this.turn(id, text, turnArgs?.title ?? String(text), turnArgs?.checkpoint ?? `Turn: ${String(text).slice(0, 30)}`, signal, turnArgs?.step);
   }
 
   private observerFor(turnId: string): AgentObserver {
@@ -840,8 +844,16 @@ export class SidecarServer {
       }
       if (outcome.kind === "turn") {
         this.activeSpec = undefined;
-        this.emit({ type: "slash.result", id, command: outcome.command, success: true, output: "", prompt: outcome.label });
-        await this.turn(id, outcome.prompt, outcome.title ?? outcome.label, outcome.checkpoint, signal, outcome.step);
+        await this.gatedTurn(
+          id,
+          outcome.prompt,
+          signal,
+          {
+            admitted: () => this.emit({ type: "slash.result", id, command: outcome.command, success: true, output: "", prompt: outcome.label }),
+            refused: (message) => this.emit({ type: "error", id, code: "NO_PROVIDER", message }),
+          },
+          { title: outcome.title ?? outcome.label, checkpoint: outcome.checkpoint, step: outcome.step },
+        );
         return;
       }
       if (outcome.command === "clear" && outcome.success) this.lastTurn = null;

@@ -222,7 +222,7 @@ async function rejectingModelsGateway(status: number) {
 }
 
 describe("D-07 review round 2", () => {
-  async function sidecar(endpoint: string, fn: (r: { events: any[]; server: SidecarServer; send: (m: object) => Promise<void> }) => Promise<void>) {
+  async function sidecar(endpoint: string, fn: (r: { events: any[]; server: SidecarServer; repo: string; send: (m: object) => Promise<void> }) => Promise<void>) {
     const repo = makeRepo();
     const home = makeHome();
     const previousHome = process.env.HOME;
@@ -232,7 +232,7 @@ describe("D-07 review round 2", () => {
     const server = new SidecarServer({ app, mode: "auto", write: (l) => events.push(JSON.parse(l)), historyFile: path.join(home, "history") });
     server.start();
     try {
-      await fn({ events, server, send: (m) => server.handleLine(JSON.stringify({ v: 1, ...m })) });
+      await fn({ events, server, repo, send: (m) => server.handleLine(JSON.stringify({ v: 1, ...m })) });
     } finally {
       await server.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
       await server.idle();
@@ -287,6 +287,38 @@ describe("D-07 review round 2", () => {
     });
   });
 
+  test("a slash command that starts a turn (/image) is gated like a prompt", async () => {
+    await sidecar("http://127.0.0.1:1/v1", async ({ events, send, server, repo }) => {
+      fs.writeFileSync(path.join(repo, "pic.png"), Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"));
+      await send({ type: "slash", id: "s1", command: "image", args: "pic.png describe" });
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "error" && e.id === "s1")?.code, "NO_PROVIDER", JSON.stringify(events.map((e) => [e.type, e.code, e.output])));
+      assert.equal(events.some((e) => e.type === "slash.result" && e.prompt), false, "no turn was announced");
+      assert.equal(events.some((e) => e.type === "activity" || e.type === "turn.result"), false);
+    });
+  });
+
+  test("/models answering 503 (a model still loading) or timing out does not block prompts", async () => {
+    const gw = await rejectingModelsGateway(503);
+    try {
+      await sidecar(gw.url, async ({ events, send, server }) => {
+        await until(() => events.some((e) => e.key === "provider.startup"));
+        const notice = events.find((e) => e.key === "provider.startup");
+        assert.match(notice.text, /did not answer the start-up check/);
+        assert.doesNotMatch(notice.text, /No model is connected/);
+        await send({ type: "prompt.submit", id: "t1", text: "hello" });
+        await server.idle();
+        assert.equal(events.some((e) => e.type === "error"), false);
+        assert.ok(events.some((e) => e.type === "turn.result"));
+      });
+    } finally {
+      await gw.close();
+    }
+    const timeout = startupEndpointProblem("http://localhost:1234/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "The operation was aborted due to timeout" } as any)!;
+    assert.equal(timeout.blocking, false);
+    assert.equal(startupEndpointProblem("http://localhost:1234/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", httpStatus: 429, detail: "HTTP 429" } as any)!.blocking, false);
+  });
+
   test("a refused prompt is not recorded in the prompt history", async () => {
     await sidecar("http://127.0.0.1:1/v1", async ({ events, send, server }) => {
       await send({ type: "prompt.submit", id: "t1", text: "never-sent-text" });
@@ -297,7 +329,7 @@ describe("D-07 review round 2", () => {
   });
 
   test("no credential in a URL survives into detail or text, on the start-up and the recovery paths", () => {
-    const urls = ["http://user:pass@127.0.0.1:1/v1", "https://TOKENVALUE@host.example/v1?key=SECRETVALUE#frag"];
+    const urls = ["http://u:pa)ss@127.0.0.1:1/v1", "ws://user:pass@127.0.0.1:1/v1", "http://user:pass@[::1]:1/v1", "http://user:pass@127.0.0.1:1/v1", "https://TOKENVALUE@host.example/v1?key=SECRETVALUE#frag"];
     for (const url of urls) {
       const probeDetail = `fetch failed (cause: Request cannot be constructed from a URL that includes credentials: ${url}/models)`;
       const problem = startupEndpointProblem(url, { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: probeDetail } as any)!;
@@ -306,7 +338,7 @@ describe("D-07 review round 2", () => {
       const rec = record(2, { endpoint: url }, { message: `connect failed for ${url}/chat/completions` });
       const status = providerRecoveryStatus(rec, false)!;
       for (const out of [n.text, n.detail!, refusal, status.text, status.detail!, problem.endpoint, problem.detail]) {
-        assert.doesNotMatch(out, /user:pass|TOKENVALUE|SECRETVALUE|frag/, out);
+        assert.doesNotMatch(out, /user:pass|u:pa|pa\)ss|TOKENVALUE|SECRETVALUE|frag/, out);
       }
     }
   });

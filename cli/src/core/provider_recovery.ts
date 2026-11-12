@@ -306,12 +306,21 @@ export interface StartupEndpointProblem {
   kind: "unreachable" | "rejected";
   endpoint: string;
   detail: string;
+  /**
+   * True only when the connection itself failed (refused, DNS): nothing is there, so a prompt cannot work. A timeout,
+   * an HTTP error from /models (503 while a model loads, 429) or a rejection says nothing about the chat path.
+   */
+  blocking: boolean;
 }
 
 export function startupEndpointProblem(endpoint: string, probe: ProbeResult): StartupEndpointProblem | undefined {
-  if (!probe.available) return { kind: "unreachable", endpoint: persistableEndpoint(endpoint), detail: scrubUrls(probe.detail ?? "") };
+  if (!probe.available) {
+    const detail = scrubUrls(probe.detail ?? "");
+    const blocking = probe.httpStatus === undefined && !/timeout|timed out|aborted/i.test(detail);
+    return { kind: "unreachable", endpoint: persistableEndpoint(endpoint), detail, blocking };
+  }
   if (probe.httpStatus === 401 || probe.httpStatus === 403) {
-    return { kind: "rejected", endpoint: persistableEndpoint(endpoint), detail: `HTTP ${probe.httpStatus}` };
+    return { kind: "rejected", endpoint: persistableEndpoint(endpoint), detail: `HTTP ${probe.httpStatus}`, blocking: false };
   }
   return undefined;
 }
