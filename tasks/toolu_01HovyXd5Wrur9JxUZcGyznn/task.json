@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HovyXd5Wrur9JxUZcGyznn",
+  "agent_id": "ab689619047792110",
+  "subagent_type": "general-purpose",
+  "task_description": "TUI D-02 scroll drift and D-08 stalled stream",
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 145528,
+    "cache_read_tokens": 5572905,
+    "output_tokens": 37277,
+    "api_call_count": 54
+  },
+  "started_at": "2026-11-12T02:39:31.369320704Z",
+  "completed_at": "2026-11-12T02:51:35.073116001Z"
+}
