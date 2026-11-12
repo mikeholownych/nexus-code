@@ -1,0 +1,10 @@
+# D-27 capture, binary: after: this branch
+
+Status bar (row 1) and the busy line, 3.5 s into each phase of a turn.
+
+inference      busy line: |⠋ thinking · 0:04 · step 2 · esc cancels ──────────────────────────────────────────────────────────|  clocks in it: 1; clocks in status bar: 0
+tool           busy line: |⠋ Run make test · 0:04 · step 2 · esc cancels ─────────────────────────────────────────────────────|  clocks in it: 1; clocks in status bar: 0
+approval       busy line: |⠋ waiting for your approval · 0:04 · step 2 ───────────────────────────────────────────────────────|  clocks in it: 1; clocks in status bar: 0
+provider_wait  busy line: |⠋ waiting for the inference provider · 0:04 · step 2 · esc cancels ────────────────────────────────|  clocks in it: 1; clocks in status bar: 0
+verifying      busy line: |⠋ verifying (npm test) · 0:04 · step 2 · esc cancels ──────────────────────────────────────────────|  clocks in it: 1; clocks in status bar: 0
+compacting     busy line: |⠋ compacting the context · 0:04 · step 2 · esc cancels ────────────────────────────────────────────|  clocks in it: 1; clocks in status bar: 0

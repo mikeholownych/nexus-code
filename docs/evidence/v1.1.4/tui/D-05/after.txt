@@ -1,0 +1,24 @@
+# D-05 capture, binary: after: this branch
+
+Row 1 of the screen (the status bar) after the first frame and after the first turn.
+
+160x30  first frame (no changes yet, context 0)
+  | NEXUS   app  ⎇ main  model engineering/b0  session_20261112_143012_abcd1234  mode: review · sandbox: off · workspace: trusted  context 0/65536 · 0%  local|
+160x30  after the first turn (2 changed, 11381 of 65536 context)
+  | NEXUS   app  ⎇ main ●2 changed  model engineering/b0  session_20261112_143012_abcd1234  mode: review · sandbox: off · workspace: trusted  ctx 17%  local|
+
+100x30  first frame (no changes yet, context 0)
+  | NEXUS   app  ⎇ main  model engineering/b0  mode: review · sandbox: off · workspace: trusted  ctx 0%|
+100x30  after the first turn (2 changed, 11381 of 65536 context)
+  | NEXUS   app  ⎇ main ●2 changed  model engineering/b0  mode: review  ctx 17%  local|
+
+80x24  first frame (no changes yet, context 0)
+  | NEXUS   app  ⎇ main  model engineering/b0  mode: review  ctx 0%  local|
+80x24  after the first turn (2 changed, 11381 of 65536 context)
+  | NEXUS   app  ⎇ main ●2 changed  model engineering/b0  mode: review  ctx 17%|
+
+50x15  first frame (no changes yet, context 0)
+  | NEXUS   app  model engineering/b0  mode: review|
+50x15  after the first turn (2 changed, 11381 of 65536 context)
+  | NEXUS   app  model engineering/b0  mode: review|
+
