@@ -13,8 +13,11 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import { trustedGitArgs } from "../git.js";
 import { ensureGitExclude } from "./git_exclude.js";
+import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv, snapshotSupport } from "./specialist_inputs.js";
 import { verifierTimeoutSecs } from "../tester.js";
 import type {
   IntegrationReceipt,
@@ -156,6 +159,8 @@ export interface UnitGitPreparation {
   branch: string;
   /** True when an existing worktree was reused (resume/retry). */
   reused: boolean;
+  /** True when a stale diagnostic snapshot was discarded for a fresh one: a conversation about the old one is void. */
+  snapshotReplaced?: boolean;
 }
 
 export class OperationGit {
@@ -192,12 +197,18 @@ export class OperationGit {
    * Give the unit a worktree branched from the integration tip. A recorded worktree is reused so a retry or a resume
    * continues on the same files; an operator restart throws the old worktree and branch away first.
    */
-  prepareUnit(unit: WorkUnit, options: { restart?: boolean } = {}): UnitGitPreparation {
+  prepareUnit(unit: WorkUnit, options: { restart?: boolean; snapshotOf?: string; snapshotRun?: string } = {}): UnitGitPreparation {
     const recorded = this.state.units[unit.id];
     const branch = recorded?.branch ?? `nexus/op-${this.plan.key}/${gitSlug(unit.id)}`;
     const worktree = recorded?.worktree ?? path.join(this.plan.baseDir, "units", gitSlug(unit.id));
 
-    const restart = Boolean(options.restart && recorded);
+    // A snapshot belongs to one failed run of its dependency. When the dependency has failed again since, the old
+    // checkout shows a candidate that no longer exists: discard it (it is diagnostic and never integrated).
+    const staleSnapshot = Boolean(recorded && options.snapshotOf
+      && (recorded.snapshotOf !== options.snapshotOf || recorded.snapshotRun !== options.snapshotRun));
+    const restart = Boolean((options.restart || staleSnapshot) && recorded);
+    // A restart onto a fresh snapshot builds it first: when it cannot be built the old worktree and branch are still there.
+    let snapshot = restart && options.snapshotOf ? this.snapshotCandidate(options.snapshotOf) : undefined;
     let restartBranch = branch;
     if (restart) {
       // The worktree may be gone while its registration survives; prune before deleting the branch, or `branch -D`
@@ -222,9 +233,12 @@ export class OperationGit {
       restartBranch = `${branch}-${gitSlug(`${unit.id}-${Date.now()}`)}`;
       branchExists = false;
     }
+    // A failure_debugger on a failed dependency starts from that dependency's candidate, which was never integrated.
+    snapshot ??= !branchExists && options.snapshotOf ? this.snapshotCandidate(options.snapshotOf) : undefined;
+    const startPoint = snapshot ?? this.currentTip();
     const add = () => branchExists
       ? gitResult(this.plan.repoRoot, ["worktree", "add", worktree, restartBranch])
-      : gitResult(this.plan.repoRoot, ["worktree", "add", "-b", restartBranch, worktree, this.currentTip()]);
+      : gitResult(this.plan.repoRoot, ["worktree", "add", "-b", restartBranch, worktree, startPoint]);
     // A worktree directory that disappeared outside Nexus leaves a registration behind; prune it, then add.
     gitResult(this.plan.repoRoot, ["worktree", "prune", "--expire", "now"]);
     let added = add();
@@ -237,10 +251,15 @@ export class OperationGit {
 
     const baseCommit = branchExists
       ? gitResult(this.plan.repoRoot, ["merge-base", this.plan.integrationBranch, restartBranch]).stdout.trim() || this.currentTip()
-      : this.currentTip();
+      : startPoint;
+    const snapshotOf = snapshot ? options.snapshotOf : branchExists ? recorded?.snapshotOf : undefined;
+    const snapshotRun = snapshot ? options.snapshotRun : branchExists ? recorded?.snapshotRun : undefined;
     // Only now is the old record replaced; a failed add leaves the previous entry intact so a retry can restart.
-    this.state.units[unit.id] = { branch: restartBranch, worktree, baseCommit };
-    return { workspace: worktree, branch: restartBranch, reused: false };
+    this.state.units[unit.id] = {
+      branch: restartBranch, worktree, baseCommit,
+      ...(snapshotOf ? { snapshotOf } : {}), ...(snapshotRun ? { snapshotRun } : {}),
+    };
+    return { workspace: worktree, branch: restartBranch, reused: false, ...(staleSnapshot && snapshot ? { snapshotReplaced: true } : {}) };
   }
 
   /**
@@ -407,6 +426,69 @@ export class OperationGit {
     };
     this.state.units[unit.id] = { ...entry, integratedCommit };
     return { kind: "integrated", receipt };
+  }
+
+  /**
+   * A commit of `unitId`'s worktree as it stands on top of its HEAD: everything in that unit's index (including files
+   * force-added past .gitignore), their worktree edits and deletions, and untracked non-ignored files. Built in a
+   * private copy of the unit's index so that unit's index, branch and files are untouched. Throws when it cannot be built:
+   * a debugger must not silently fall back to a tree without the failure it is meant to reproduce.
+   */
+  private snapshotCandidate(unitId: string): string {
+    const entry = this.state.units[unitId];
+    if (!entry || !fs.existsSync(entry.worktree)) throw new Error(`unit ${unitId}'s worktree is not available to snapshot`);
+    // Host-side git runs only where the checkout is trusted: the unit's model owns this worktree and may have replaced
+    // its `.git` pointer or planted a repository in it. Refused (throws) before anything is read or copied.
+    const pin = trustedGitArgs(entry.worktree);
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-candidate-snapshot-"));
+    // Pinned like the candidate diff: nothing the (model-written) worktree configures may run here. No inherited GIT_*,
+    // no fsmonitor or hooks, and attributes from a stripped copy of the worktree's own .gitattributes (filter and diff
+    // drivers removed, text/eol kept), so no clean filter runs; a driver assigned through $GIT_DIR/info/attributes
+    // refuses the snapshot instead of being run.
+    let attrs: ReturnType<typeof attributesTree>;
+    // `raw` keeps the output verbatim (NUL-separated listings: a path may start or end with whitespace); scalar results
+    // are trimmed.
+    const run = (args: string[], options: { input?: string; ownIndex?: boolean; raw?: boolean } = {}) => {
+      const out = execFileSync("git", [...pin, ...GIT_SAFE, ...args], {
+        cwd: entry.worktree, encoding: "utf8", stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS,
+        env: safeGitEnv(options.ownIndex ? undefined : path.join(scratch, "index"), attrs), maxBuffer: 256 * 1024 * 1024,
+        ...(options.input === undefined ? {} : { input: options.input }),
+      });
+      return options.raw ? out : out.trim();
+    };
+    try {
+      // Only a repository state the predicate covers is snapshotted (no sparse checkout, assume-unchanged or skip-worktree
+      // flags, gitlinks, unresolved merge, unreliable modes); anything else is refused with its reason, never guessed at.
+      const support = snapshotSupport((args) => run(args, { ownIndex: true, raw: true }), entry.worktree);
+      if ("unsupported" in support) throw new Error(`the failing candidate cannot be snapshotted: ${support.unsupported}; fix that state in the unit's worktree and retry, or stop`);
+      const ownIndex = run(["rev-parse", "--path-format=absolute", "--git-path", "index"], { ownIndex: true, raw: true }).replace(/\n$/, "");
+      try {
+        fs.copyFileSync(ownIndex, path.join(scratch, "index"));
+      } catch (err: any) {
+        // Only a repository without an index yet (nothing staged) starts from HEAD; any other failure would silently drop the unit's staged state.
+        if (err?.code !== "ENOENT") throw err;
+        run(["read-tree", "HEAD"]);
+      }
+      const listed = run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { raw: true }).split("\0").filter(Boolean);
+      // A directory entry (trailing slash) is an untracked nested git repository, which `git add` refuses or embeds: skipped, as in the candidate diff.
+      const nested = listed.filter((p) => p.endsWith("/"));
+      const files = listed.filter((p) => !p.endsWith("/"));
+      // The worktree's own .gitattributes without filter and diff assignments, as for the candidate diff, so text/eol
+      // normalization applies to the snapshot exactly as it would to the tester's own commit.
+      attrs = attributesTree(entry.worktree, scratch, files, pin);
+      const refusal = driverRefusal((args, input) => run(args, { input, raw: true }), files);
+      if (refusal) throw new Error(refusal);
+      run(["add", "-A", "--", ".", ...nested.map((p) => `:(exclude,literal)${p.slice(0, -1)}`)]);
+      const tree = run(["write-tree"]);
+      return run([...this.mechanicalGitConfig(), "commit-tree", tree, "-p", "HEAD", "-m", `nexus: snapshot of ${unitId}'s candidate for failure debugging`]);
+    } finally {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+
+  /** Whether the unit's branch is a diagnostic snapshot of another unit's unverified candidate (never integrated). */
+  isSnapshotUnit(unitId: string): boolean {
+    return this.state.units[unitId]?.snapshotOf !== undefined;
   }
 
   /** Remove a completed unit's clean worktree (its branch and receipt stay). */

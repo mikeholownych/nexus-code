@@ -38,6 +38,16 @@ export class DecisionRejected extends Error {}
 
 export const isRequired = (u: Pick<WorkUnit, "required">): boolean => u.required !== false;
 
+/**
+ * Whether `dependency` is finished input for `u`: COMPLETE, or, for a failure_debugger only, BLOCKED on a run whose
+ * verifier did not pass. The failure is that role's input, so waiting for the dependency to complete would wait for
+ * the evidence to disappear; a retried dependency is unfinished input again.
+ */
+function dependencySatisfied(u: WorkUnit, dependency: WorkUnit): boolean {
+  if (dependency.status === "COMPLETE") return true;
+  return u.role === "failure_debugger" && dependency.status === "BLOCKED" && dependency.failedRun !== undefined;
+}
+
 export class ConvergenceScheduler {
   constructor(
     readonly state: DurableOperationState,
@@ -87,7 +97,7 @@ export class ConvergenceScheduler {
     for (const u of this.state.units) {
       if (TERMINAL.includes(u.status) || u.status === "RUNNING") continue;
       const deps = u.dependsOn.map((d) => this.unit(d));
-      if (deps.some((d) => d.status !== "COMPLETE")) {
+      if (deps.some((d) => !dependencySatisfied(u, d))) {
         u.status = "WAITING_ON_DEPENDENCY";
         delete u.parked;
         continue;
@@ -426,7 +436,8 @@ export class ConvergenceScheduler {
         throw new DecisionRejected(`${action.resourceId} is outside ${u.title}'s trust boundary; that cannot be overridden by a decision.`);
       }
     }
-    const applied: AppliedDecision = { decisionId, optionId, label: option.label, action, ...(text ? { note: text } : {}), at: new Date(this.now()).toISOString() };
+    const scopeChange = action.kind === "replace_task" && u.role === "security_reviewer" ? { from: unitBaseTask(u.prompt), to: text! } : undefined;
+    const applied: AppliedDecision = { decisionId, optionId, label: option.label, action, ...(text ? { note: text } : {}), ...(scopeChange ? { scopeChange } : {}), at: new Date(this.now()).toISOString() };
     (u.decisions ??= []).push(applied);
     delete u.blocked;
     switch (action.kind) {
@@ -525,6 +536,8 @@ export class ConvergenceScheduler {
     }
     const resumed = unit.agentTaskId !== undefined;
     unit.status = "RUNNING";
+    // A new attempt's outcome is unknown until it settles: the previous failed run is no longer this unit's evidence.
+    delete unit.failedRun;
     unit.runs++;
     unit.assignment = { resourceId: resource.id, model: resource.model, since: at };
     if (!unit.modelsUsed.includes(resource.model)) unit.modelsUsed.push(resource.model);
@@ -544,6 +557,9 @@ export class ConvergenceScheduler {
     const at = new Date(this.now()).toISOString();
     const resourceId = u.assignment?.resourceId ?? "unknown";
     if (result.kind !== "cancelled") delete u.pendingDecision;
+    // Failed-run evidence describes the latest outcome only; any newer outcome replaces or clears it.
+    if (result.kind !== "cancelled") delete u.failedRun;
+    if (result.kind === "failed" && result.failedRun) u.failedRun = { at, reason: result.reason, ...result.failedRun };
     switch (result.kind) {
       case "completed":
         u.status = "COMPLETE";

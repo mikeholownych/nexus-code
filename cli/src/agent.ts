@@ -4458,6 +4458,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (
         (this.hasPendingModifications || worktreeHasChanges || this.configuredVerifierGatesCompletion()) &&
         !this.config.dryRun &&
+        !this.config.diagnosticRun &&
         !this.isReadOnly()
       ) {
         try {
@@ -7213,6 +7214,21 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         .join("; ")
         .slice(0, 300);
 
+    // A result that rests on observations compaction removed and the model never re-read may be recalled, not observed.
+    const contextEvidenceLost = () => {
+      const lost = Array.from(this.turnRemovedObservations);
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "CONTEXT_EVIDENCE_NOT_RETAINED",
+        detail: `${lost.length} tool output(s) removed by context compaction and not re-read: ${lost.slice(0, 3).join("; ")}`.slice(0, 300),
+      }));
+    };
+    // A diagnostic run works on a snapshot of a failing candidate and is never integrated: its report is the result, and
+    // no verifier can establish it (the candidate fails by definition), so what it wrote (reproduction scratch files in
+    // a worktree that is never integrated) is not pending verification.
+    if (this.config.diagnosticRun && !requirementsIncomplete) {
+      if (this.turnRemovedObservations.size > 0) return contextEvidenceLost();
+      return deepFreezeTurn(assertTurnResultInvariants({ ...base, unverifiedChangesPending: false, execution: "COMPLETED", outcome: "NOT_REQUIRED" }));
+    }
     // Execution COMPLETED: derive the engineering outcome strictly from verifier evidence.
     if (this.hasPendingModifications) {
       if (evidence?.status === "PASSED" && evidence?.hasExecutedTests === false) {
@@ -7324,13 +7340,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     }
     // No verifier backs a read-only result, so it rests on the observations the model saw. If compaction removed some
     // and the model never re-read them, the result may be recalled rather than observed: it is not established.
-    if (this.turnRemovedObservations.size > 0) {
-      const lost = Array.from(this.turnRemovedObservations);
-      return deepFreezeTurn(assertTurnResultInvariants({
-        ...base, execution: "COMPLETED", outcome: "UNVERIFIED", reason: "CONTEXT_EVIDENCE_NOT_RETAINED",
-        detail: `${lost.length} tool output(s) removed by context compaction and not re-read: ${lost.slice(0, 3).join("; ")}`.slice(0, 300),
-      }));
-    }
+    if (this.turnRemovedObservations.size > 0) return contextEvidenceLost();
     return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_REQUIRED" }));
   }
 

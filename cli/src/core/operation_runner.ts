@@ -35,7 +35,8 @@ export interface UnitRunContext {
   objective: string;
   /** The durable operation this unit belongs to. */
   operationId?: string;
-  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean } }>;
+  /** Each dependency's result; `failed` marks one that is BLOCKED on a failed verifier run (failure_debugger units only). */
+  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean }; failed?: true }>;
   /** Isolated operations: the commit the operation started from, which a review unit diffs against. */
   baseCommit?: string;
   /** Non-isolated operations: HEAD when the operation first ran (absent outside Git, or for older operations). */
@@ -52,6 +53,8 @@ export interface UnitRunContext {
   messages?: OperationMessage[];
   /** Isolated operations: the unit's worktree. Absent means the executor's configured workspace. */
   workspace?: string;
+  /** The workspace is a snapshot of another unit's failing candidate (never integrated): diagnosis, not a fix, completes it. */
+  diagnostic?: true;
   observeFailure(failure: InferenceFailure): ResourceConditionRecord | null;
   observeSuccess(): void;
   shouldYield(failure: InferenceFailure, plannedDelayMs: number): boolean;
@@ -301,7 +304,31 @@ export class OperationRunner {
       recoverMerged = !unit.pendingDecision?.restart && this.git.canRecoverMissingWorktree(unit.id);
       if (!recoverMerged) {
         try {
-          workspace = this.git.prepareUnit(unit, { restart: Boolean(unit.pendingDecision?.restart) }).workspace;
+          // A failure_debugger admitted on a dependency BLOCKED on a failed verifier run reproduces on that
+          // dependency's candidate, which was never integrated.
+          // Exactly one failed candidate per debugger keeps its input unambiguous: with two, either snapshot would
+          // silently hide the other failure, so the unit is blocked for the operator to split it instead.
+          const failedDeps = unit.role === "failure_debugger"
+            ? unit.dependsOn.filter((id) => { const dep = this.scheduler.unit(id); return dep.status === "BLOCKED" && dep.failedRun !== undefined; })
+            : [];
+          if (failedDeps.length > 1) {
+            const reason = `a failure_debugger reproduces one failed candidate, but ${failedDeps.join(", ")} all failed`;
+            return {
+              kind: "failed",
+              cause: "EXECUTION_FAILED",
+              reason,
+              question: `${unit.title}: ${reason}. Give each failed unit its own failure_debugger, or stop?`,
+              options: [{ label: "retry", action: { kind: "retry" } }],
+            };
+          }
+          const snapshotOf = failedDeps[0];
+          const snapshotRun = snapshotOf ? this.scheduler.unit(snapshotOf).failedRun!.at : undefined;
+          const prepared = this.git.prepareUnit(unit, {
+            restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf, snapshotRun } : {}),
+          });
+          workspace = prepared.workspace;
+          // The conversation (observations, tool results) is about the discarded candidate: start a new one.
+          if (prepared.snapshotReplaced) { delete unit.agentTaskId; delete unit.renderedInputsHash; }
           this.save();
         } catch (err: any) {
           return {
@@ -321,10 +348,13 @@ export class OperationRunner {
       dependencies: unit.dependsOn.map((id) => {
         const dep = this.scheduler.unit(id);
         // The verifier a dependency ran: its integration receipt (isolated operations) or, where nothing was
-        // integrated, the verification its own completed result recorded.
+        // integrated, the verification its own completed result recorded. A dependency that has not completed can
+        // only be one BLOCKED on a failed verifier run (the scheduler admits a failure_debugger on that), so its
+        // evidence is that run's.
         const receipt = [...(this.state.integrations ?? [])].reverse().find((entry) => entry.unitId === id);
-        const verification = receipt?.tests ?? dep.result?.verification;
-        return { id, title: dep.title, summary: dep.result?.summary ?? "", ...(verification ? { verification } : {}) };
+        const failedRun = dep.result ? undefined : dep.failedRun;
+        const verification = receipt?.tests ?? dep.result?.verification ?? failedRun?.verification;
+        return { id, title: dep.title, summary: dep.result?.summary ?? failedRun?.summary ?? "", ...(verification ? { verification } : {}), ...(failedRun ? { failed: true as const } : {}) };
       }),
       ...(this.state.git?.baseCommit ? { baseCommit: this.state.git.baseCommit } : {}),
       ...(!this.state.git && this.state.startCommit ? { startCommit: this.state.startCommit } : {}),
@@ -351,6 +381,7 @@ export class OperationRunner {
       observeSuccess: () => this.registry.observeSuccess(resource),
       shouldYield: (_f, delay) => this.shouldYield(unit, resource, delay),
       ...(workspace ? { workspace } : {}),
+      ...(workspace && unit.role === "failure_debugger" && this.git?.isSnapshotUnit(unit.id) ? { diagnostic: true as const } : {}),
     };
     try {
       if (recoverMerged) {
@@ -370,6 +401,15 @@ export class OperationRunner {
         this.save();
       }
       if (result.kind !== "completed" || !this.git) return result;
+      if (this.git.isSnapshotUnit(unit.id)) {
+        // Its branch carries another unit's unverified candidate: the diagnosis is the result, nothing is merged.
+        this.scheduler.emit("INTEGRATION_SKIPPED", `${unit.id} was not integrated: it ran on a snapshot of an unverified candidate.`, {
+          unitId: unit.id,
+          detail: { reason: "diagnostic_snapshot" },
+        });
+        this.reportPreservedWorktrees([unit.id]);
+        return result;
+      }
       return this.enqueueIntegration(unit, result);
     } catch (err: any) {
       if (signal?.aborted) return { kind: "cancelled" };

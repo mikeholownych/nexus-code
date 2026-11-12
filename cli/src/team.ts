@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SecurityManager } from "./security.js";
+import { inputPathProtection } from "./core/specialist_inputs.js";
 import { redactForPersistence } from "./core/persistence_protection.js";
 import { isRequired, newOperation, type DurableOperationState, type OperationEvent, type WorkUnit, type WorkUnitSpec } from "./core/operation.js";
 import { AgentWorkUnitExecutor, driveOperation, OperationStore, resourcesFromConfig, type WorkUnitExecutor } from "./core/operation_runner.js";
@@ -90,10 +91,8 @@ function readTeamFileInputs(workspace: string, files: Record<string, string>): R
     }
     if (real !== root && !real.startsWith(root + path.sep)) throw new Error(`Input '${name}': '${written}' is outside the workspace`);
     for (const candidate of [path.relative(root, file), path.relative(root, real)]) {
-      const check = security.isPathProtected(candidate);
-      // Nexus's own state directory is never an input, whatever the workspace policy lists.
-      if (candidate.split(path.sep).includes(".nexus")) throw new Error(`Input '${name}': '${written}' is inside .nexus and is protected`);
-      if (check.protected) throw new Error(`Input '${name}': '${written}' is protected (${check.reason})`);
+      const protection = inputPathProtection(security, candidate);
+      if (protection) throw new Error(`Input '${name}': '${written}' is protected (${protection})`);
     }
     const stat = fs.statSync(real);
     if (!stat.isFile() || stat.size > MAX_TEAM_FILE_INPUT_BYTES) throw new Error(`Input '${name}': '${written}' is not a regular file of at most ${MAX_TEAM_FILE_INPUT_BYTES} bytes`);

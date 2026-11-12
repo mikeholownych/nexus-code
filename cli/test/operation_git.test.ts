@@ -1002,3 +1002,178 @@ test("post-hoc recovery restores a branch deleted by a verifier", async () => {
   assert.equal(ops.currentTip(), mergedTip);
   assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "u1.txt"), "utf8"), "one\n");
 });
+
+test("a failure_debugger on a failed tester works on a snapshot of the tester's candidate, which is never integrated", async () => {
+  const root = repo();
+  const state = newOperation("op-dbg", "fix it", [
+    { id: "verify", title: "verify", role: "tester", prompt: "add a regression test" },
+    { id: "debug", title: "debug", role: "failure_debugger", prompt: "find the cause", dependsOn: ["verify"] },
+  ], [resource()], Date.now());
+  const p = plan(root, state.id);
+  state.git = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state.git);
+  let debuggerSaw: { test?: string; scratch?: boolean } = {};
+  const executor: WorkUnitExecutor = {
+    async run(u, _resource, ctx) {
+      const ws = ctx.workspace!;
+      if (u.id === "verify") {
+        fs.writeFileSync(path.join(ws, "regression.test.txt"), "FAILING_REGRESSION_TEST\n");
+        fs.writeFileSync(path.join(ws, "file.txt"), "tester edit\n");
+        return {
+          kind: "failed", cause: "EXECUTION_FAILED", reason: "verifier failed", question: "q",
+          options: [{ label: "retry", action: { kind: "retry" } }],
+          failedRun: { summary: "1 failed", verification: { command: "test -f regression.test.txt && false", status: "FAILED", hasExecutedTests: true } },
+        };
+      }
+      debuggerSaw = {
+        test: fs.existsSync(path.join(ws, "regression.test.txt")) ? fs.readFileSync(path.join(ws, "regression.test.txt"), "utf8") : undefined,
+      };
+      fs.writeFileSync(path.join(ws, "debug-notes.txt"), "scratch\n");
+      return completed({ summary: "cause found" });
+    },
+  };
+  await new OperationRunner(state, { executor, clock: clock(), persist: () => {} }).run();
+  assert.equal(state.units.find((u) => u.id === "debug")!.status, "COMPLETE", JSON.stringify(state.units.map((u) => [u.id, u.status])));
+  assert.equal(debuggerSaw.test, "FAILING_REGRESSION_TEST\n", "the debugger reproduces against the tester's candidate, not the integration tip");
+  const tree = git(state.git!.integrationWorktree, ["ls-tree", "-r", "--name-only", "HEAD"]).split("\n").sort();
+  assert.deepEqual(tree, ["file.txt"], "neither the tester's unverified work nor the debugger's scratch files are integrated");
+  assert.equal(fs.readFileSync(path.join(state.git!.integrationWorktree, "file.txt"), "utf8"), "base\n");
+  const testerWorktree = state.git!.units.verify.worktree;
+  assert.equal(git(testerWorktree, ["status", "--porcelain"]).length > 0, true, "the tester's worktree keeps its uncommitted work");
+  assert.equal(git(testerWorktree, ["rev-parse", "HEAD"]), state.git!.units.verify.baseCommit, "the tester's branch did not move");
+});
+
+test("a failure_debugger that depends on two failed units fails closed instead of snapshotting one of them (01M70ETZ)", async () => {
+  const root = repo();
+  const state = newOperation("op-dbg2", "fix it", [
+    { id: "verify-a", title: "verify a", role: "tester", prompt: "test a" },
+    { id: "verify-b", title: "verify b", role: "tester", prompt: "test b" },
+    { id: "debug", title: "debug", role: "failure_debugger", prompt: "find the cause", dependsOn: ["verify-a", "verify-b"] },
+  ], [resource()], Date.now());
+  const p = plan(root, state.id);
+  state.git = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state.git);
+  let debuggerRan = false;
+  const executor: WorkUnitExecutor = {
+    async run(u) {
+      if (u.id === "debug") { debuggerRan = true; return completed({ summary: "cause found" }); }
+      return {
+        kind: "failed", cause: "EXECUTION_FAILED", reason: "verifier failed", question: "q",
+        options: [{ label: "retry", action: { kind: "retry" } }],
+        failedRun: { summary: "1 failed", verification: { command: "false", status: "FAILED", hasExecutedTests: true } },
+      };
+    },
+  };
+  await new OperationRunner(state, { executor, clock: clock(), persist: () => {} }).run();
+  const debug = state.units.find((u) => u.id === "debug")!;
+  assert.equal(debuggerRan, false, "the debugger never runs on an arbitrary one of two failed candidates");
+  assert.equal(debug.status, "BLOCKED", JSON.stringify(state.units.map((u) => [u.id, u.status])));
+  assert.match(debug.blocked?.reason ?? "", /verify-a/);
+  assert.match(debug.blocked?.reason ?? "", /verify-b/);
+  assert.ok(debug.blocked?.decision.options.some((o) => o.action.kind === "retry"), "the operator can retry once only one dependency still fails");
+  assert.equal(state.git!.units.debug, undefined, "no snapshot worktree was created");
+});
+
+test("a debugger snapshot keeps files the tester force-added past .gitignore but did not commit (01M70EHSXT)", () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const tester = ops.prepareUnit(unit("verify")).workspace;
+  fs.writeFileSync(path.join(tester, ".gitignore"), "fixtures/\n");
+  fs.mkdirSync(path.join(tester, "fixtures"));
+  fs.writeFileSync(path.join(tester, "fixtures", "case.txt"), "FORCED_FIXTURE\n");
+  git(tester, ["add", "-f", "fixtures/case.txt"]);
+  fs.writeFileSync(path.join(tester, "fixtures", "case.txt"), "FORCED_FIXTURE edited after add\n");
+  fs.writeFileSync(path.join(tester, "fixtures", "noise.txt"), "ignored and never added\n");
+  const debug = ops.prepareUnit(unit("debug", { role: "failure_debugger" }), { snapshotOf: "verify", snapshotRun: "t1" }).workspace;
+  assert.equal(fs.readFileSync(path.join(debug, "fixtures", "case.txt"), "utf8"), "FORCED_FIXTURE edited after add\n");
+  assert.equal(fs.existsSync(path.join(debug, "fixtures", "noise.txt")), false, "ignored files the tester never added stay out");
+  assert.equal(fs.readFileSync(path.join(debug, ".gitignore"), "utf8"), "fixtures/\n");
+  assert.equal(git(tester, ["diff", "--cached", "--name-only"]), "fixtures/case.txt", "the tester's own index is untouched");
+});
+
+test("a retried debugger takes a fresh snapshot when its dependency failed again, and reuses it otherwise (01M70EHSWZ)", () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state);
+  const tester = ops.prepareUnit(unit("verify")).workspace;
+  fs.writeFileSync(path.join(tester, "file.txt"), "first failing candidate\n");
+  const debugUnit = unit("debug", { role: "failure_debugger" });
+  const first = ops.prepareUnit(debugUnit, { snapshotOf: "verify", snapshotRun: "2026-11-09T10:00:00.000Z" });
+  assert.equal(fs.readFileSync(path.join(first.workspace, "file.txt"), "utf8"), "first failing candidate\n");
+  fs.writeFileSync(path.join(first.workspace, "notes.txt"), "debugger scratch\n");
+
+  const same = ops.prepareUnit(debugUnit, { snapshotOf: "verify", snapshotRun: "2026-11-09T10:00:00.000Z" });
+  assert.equal(same.reused, true, "a retry against the same failed run continues in the same checkout");
+
+  fs.writeFileSync(path.join(tester, "file.txt"), "second failing candidate\n");
+  const second = ops.prepareUnit(debugUnit, { snapshotOf: "verify", snapshotRun: "2026-11-09T11:00:00.000Z" });
+  assert.equal(second.reused, false, "a new failed run of the dependency is a new candidate");
+  assert.equal(fs.readFileSync(path.join(second.workspace, "file.txt"), "utf8"), "second failing candidate\n");
+  assert.equal(fs.existsSync(path.join(second.workspace, "notes.txt")), false, "scratch from the stale snapshot is discarded");
+  assert.equal(state.units.debug.snapshotRun, "2026-11-09T11:00:00.000Z");
+});
+
+test("a debugger retried after its dependency failed again starts a new conversation on the fresh snapshot (01M70XYXN7)", async () => {
+  const root = repo();
+  const state = newOperation("op-dbg3", "fix it", [
+    { id: "verify", title: "verify", role: "tester", prompt: "test" },
+    { id: "debug", title: "debug", role: "failure_debugger", prompt: "find the cause", dependsOn: ["verify"] },
+  ], [resource()], Date.now());
+  const p = plan(root, state.id);
+  state.git = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state.git);
+  let verifyRuns = 0;
+  const debuggerSaw: Array<{ resumeReason?: string; boundTask?: string; file?: string; diagnostic?: true }> = [];
+  const executor: WorkUnitExecutor = {
+    async run(u, _resource, ctx) {
+      if (u.id === "verify") {
+        verifyRuns++;
+        fs.writeFileSync(path.join(ctx.workspace!, "file.txt"), `candidate ${verifyRuns}\n`);
+        return {
+          kind: "failed", cause: "EXECUTION_FAILED", reason: "verifier failed", question: "q",
+          options: [{ label: "retry", action: { kind: "retry" } }],
+          failedRun: { summary: `failed ${verifyRuns}`, verification: { command: "false", status: "FAILED", hasExecutedTests: true } },
+        };
+      }
+      debuggerSaw.push({ diagnostic: ctx.diagnostic, resumeReason: ctx.resumeReason, boundTask: u.agentTaskId, file: fs.readFileSync(path.join(ctx.workspace!, "file.txt"), "utf8") });
+      ctx.bindAgentTask?.(`task-${debuggerSaw.length}`);
+      return {
+        kind: "failed", cause: "EXECUTION_FAILED", reason: "debugger stopped", question: "q",
+        options: [{ label: "retry", action: { kind: "retry" } }],
+      };
+    },
+  };
+  const runner = new OperationRunner(state, { executor, clock: clock(), persist: () => {} });
+  await runner.run();
+  assert.equal(debuggerSaw.length, 1);
+  for (const id of ["verify", "debug"]) {
+    const decision = state.units.find((u) => u.id === id)!.blocked!.decision;
+    runner.scheduler.resolve(decision.id, decision.options.find((o) => o.label === "retry")!.id);
+  }
+  await runner.run();
+  assert.equal(debuggerSaw.length, 2, JSON.stringify(state.units.map((u) => [u.id, u.status])));
+  assert.equal(debuggerSaw[1].file, "candidate 2\n", "the retry works on the new candidate");
+  assert.equal(debuggerSaw[1].boundTask, undefined, "the old conversation, from the discarded candidate, is not resumed");
+  assert.equal(debuggerSaw[1].resumeReason, undefined);
+  assert.equal(debuggerSaw[0].diagnostic, true, "the debugger is told its workspace is a diagnostic snapshot");
+  assert.equal(debuggerSaw[1].diagnostic, true);
+});
+
+test("only a failure_debugger is ever told its workspace is diagnostic, whatever a hand-edited state file records", async () => {
+  const root = repo();
+  const state = newOperation("op-dbg4", "fix it", [{ id: "t", title: "t", role: "tester", prompt: "test" }], [resource()], Date.now());
+  const p = plan(root, state.id);
+  state.git = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state.git);
+  new OperationGit(p, state.git).prepareUnit(unit("t", { role: "tester" }));
+  state.git.units.t.snapshotOf = "elsewhere"; // a hand-edited state file
+  let diagnostic: boolean | undefined = true;
+  const executor: WorkUnitExecutor = { async run(_u, _r, ctx) { diagnostic = ctx.diagnostic; return completed({}); } };
+  await new OperationRunner(state, { executor, clock: clock(), persist: () => {} }).run();
+  assert.equal(diagnostic, undefined, "a tester must keep its completion oracle");
+});
