@@ -552,8 +552,9 @@ function extendDottedKey(text: string, end: number): number {
 
 /** Takes the extension `from`..`to` out of the budget; false (nothing taken) when it does not fit. */
 function chargeExtension(from: number, to: number, budget: ExtensionBudget): boolean {
-  if (to - from > budget.left) return false;
-  budget.left -= to - from;
+  const cost = Math.max(0, to - from);
+  if (cost > budget.left) return false;
+  budget.left -= cost;
   return true;
 }
 
@@ -606,13 +607,15 @@ function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: n
     const encodedEnd = mayExtend ? scanKeyRun(text, runEnd, true, runEnd + MAX_EXTENSION) : runEnd;
     const extendedEnd = mayExtend ? extendDottedKey(text, encodedEnd) : runEnd;
     if (rescan) rescanLeft -= 16 + extendedEnd - runEnd;
+    // A rescan pays only for the characters past what was already scanned (a dot-joined chain of keys costs ~its length)
+    const scannedBefore = scannedTo;
     scannedTo = Math.max(scannedTo, extendedEnd);
-    let chargedTo = runEnd; // the longer runs overlap: each is charged only for what the shorter ones did not take
+    let chargedTo = rescan ? Math.max(runEnd, scannedBefore) : runEnd; // the longer runs overlap: each is charged only for what the shorter ones did not take
     for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
       if (!isBase64KeyRun(text, at, end, anthropic)) continue;
       if (end > runEnd) {
         if (!chargeExtension(chargedTo, end, rescan ? rescanBudget : budget)) continue;
-        chargedTo = end;
+        chargedTo = Math.max(chargedTo, end);
       }
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
@@ -1160,8 +1163,10 @@ export class InformationFlowBoundary {
           const budget = rescan ? rescanBudget : extensionBudget;
           const extended = (rescan ? rescanLeft > 0 : budget.left > 0) ? extendDottedKey(text, end) : end;
           if (rescan) rescanLeft -= 16 + extended - end;
+          const scannedBefore = scannedTo;
           if (extended > end) scannedTo = Math.max(scannedTo, extended);
-          if (extended > end && chargeExtension(end, extended, budget)) ends.push(extended);
+          // A rescan pays only for the characters past what was already scanned.
+          if (extended > end && chargeExtension(rescan ? Math.max(end, scannedBefore) : end, extended, budget)) ends.push(extended);
         }
         for (const spanEnd of ends) {
           const secretVal = text.slice(start, spanEnd);

@@ -150,6 +150,7 @@ test("a value that straddles the end of an extended key is still redacted whole"
   assert.ok(!output.includes("A1b2") && !output.includes(".ab") && !output.includes("Qx7Km2"), output);
 });
 
+// The value-size bounds below are empirical, not guarantees: a rescan pays for the characters it adds, so short overlapping runs keep ~1 KB values until the rescan quota is spent (about 5n for the 14-character units).
 test("extensions cannot make the values to replace much larger than the text", () => {
   // Every unit starts a distinct run that reaches far past it: without a budget each value is ~1 KB.
   const distinct = (count: number): string[] =>
@@ -162,8 +163,7 @@ test("extensions cannot make the values to replace much larger than the text", (
   });
   const total = new InformationFlowBoundary().classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
   assert.ok(total > input.length / 2, `${total} characters of values: fresh extensions are still accepted`);
-  assert.ok(total <= 3 * input.length + 4096, // empirical bound, not a guarantee: the rescan quota can exceed it by ~16 KB
-     `${total} characters of values for ${input.length} characters of text`);
+  assert.ok(total <= 6 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
 });
 
 test("a blob of rejected encoded look-alikes does not starve a real key later in the text", () => {
@@ -181,8 +181,7 @@ test("a blob of rejected encoded look-alikes does not starve a real key later in
     assert.ok(!after.includes(TAIL) && !after.includes("RtBq"), after);
   });
   const total = new InformationFlowBoundary().classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
-  assert.ok(total <= 3 * input.length + 4096, // empirical bound, not a guarantee: the rescan quota can exceed it by ~16 KB
-     `${total} characters of values for ${input.length} characters of text`);
+  assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
 });
 
 test("a blob of accepted encoded runs does not starve a real key later in the text", () => {
@@ -202,8 +201,7 @@ test("a blob of accepted encoded runs does not starve a real key later in the te
     assert.ok(!after.includes("Zk4Pq8Rt") && !after.includes("RtBq"), after);
   });
   const total = boundary.classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
-  assert.ok(total <= 3 * input.length + 4096, // empirical bound, not a guarantee: the rescan quota can exceed it by ~16 KB
-     `${total} characters of values for ${input.length} characters of text`);
+  assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
 });
 
 test("a real key inside a dense blob's window is still redacted (its extension may be dropped: known limitation)", () => {
@@ -301,10 +299,23 @@ test("a pattern's keys located before another pattern's last match do not lose t
   const tok = (c: string): string => `ghp_Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaX${c}`;
   const longTail = (c: string): string => Array.from({ length: 100 }, (_, i) => `.Zk4Pq8${c}${String(i).padStart(2, "0")}`).join("");
   const block = Array.from({ length: 12 }, (_, i) => `${tok(String.fromCharCode(97 + i))}${longTail("A")}`).join(" ");
-  const target = `${tok("z")}${".Mn5Qr7Vw2".repeat(25)}`; // a tail longer than what the block leaves of the quota
+  const target = `${tok("z")}.Mn5Qr7Vw0${".Mn5Qr7Vw2".repeat(24)}`; // a tail longer than what the block leaves of the quota
   const input = `${block} then ${target} end sk-ant-${"Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1".repeat(2)}`;
   withFreshBoundary(() => {
     const after = redactDiagnosticForOutput(input).split(" then ")[1];
-    assert.ok(!after.includes("Mn5Qr7Vw2"), after);
+    assert.ok(!after.includes("Mn5Qr7Vw2") && !after.includes("Mn5Qr7Vw0"), after);
   });
+});
+
+test("a long dot-joined chain of keys does not lose the tail of its last key", () => {
+  const sk = "Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaX".slice(0, 33);
+  for (const prefix of ["ghp_", "sk-ant-", "sk-"]) {
+    for (const count of [40, 60, 100]) {
+      const chain = Array.from({ length: count }, (_, i) => `${prefix}${sk}${String(100 + i)}`).join(".");
+      withFreshBoundary(() => {
+        const output = redactDiagnosticForOutput(`${chain}.Mn5Qr7Vw2.Mn5Qr7Vw3 end`);
+        assert.ok(!output.includes("Mn5Qr7Vw2") && !output.includes("Mn5Qr7Vw3"), `${prefix} x${count}: ${output.slice(-80)}`);
+      });
+    }
+  }
 });
