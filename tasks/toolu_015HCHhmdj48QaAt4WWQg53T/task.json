@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015HCHhmdj48QaAt4WWQg53T",
+  "agent_id": "a4a9e6ca2e8e9cec9",
+  "subagent_type": "general-purpose",
+  "task_description": "TUI polish G3: D-16, D-17, D-19, D-24",
+  "token_usage": {
+    "input_tokens": 204,
+    "cache_creation_tokens": 225527,
+    "cache_read_tokens": 16445563,
+    "output_tokens": 79607,
+    "api_call_count": 102
+  },
+  "started_at": "2026-11-12T09:17:54.767476217Z",
+  "completed_at": "2026-11-12T09:49:20.95689805Z"
+}

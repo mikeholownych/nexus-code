@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DKeH7BB1tfExBLt7ApU6nb",
+  "agent_id": "a6fed8bf7305171f7",
+  "subagent_type": "reviewer",
+  "task_description": "Delta review of A9 at 12712965",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 23928,
+    "cache_read_tokens": 105258,
+    "output_tokens": 3854,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-12T09:49:31.396419431Z",
+  "completed_at": "2026-11-12T09:50:12.773857291Z"
+}
