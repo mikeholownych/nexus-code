@@ -195,6 +195,9 @@ pub struct Activity {
     /// The turn's step budget and time limit, when the sidecar reports them.
     pub max_steps: Option<u64>,
     pub max_minutes: Option<u64>,
+    /// Reply text has arrived during this phase and step (the model is writing, not only thinking). A new phase or
+    /// step starts without it.
+    pub text_streaming: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -901,7 +904,8 @@ impl LiveState {
                     Some(previous) if previous.phase == phase && previous.tool == tool => previous.since,
                     _ => Instant::now(),
                 };
-                self.activity = Some(Activity { phase, step, segment, tool, subject, since, max_steps, max_minutes });
+                let text_streaming = self.activity.as_ref().is_some_and(|previous| previous.phase == phase && previous.step == step && previous.text_streaming);
+                self.activity = Some(Activity { phase, step, segment, tool, subject, since, max_steps, max_minutes, text_streaming });
             }
             Event::FileDiff {
                 call_id,
@@ -954,13 +958,18 @@ impl LiveState {
                 }
             }
             // One entry per model reply: text after a new step (a tool call, a continuation) starts a new one.
-            Event::AssistantDelta { turn_id, text } => match self.transcript.last_mut() {
-                Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id && !self.assistant_break => body.push_str(&text),
-                _ => {
-                    self.assistant_break = false;
-                    self.transcript.push(Entry::Assistant { turn_id, text });
+            Event::AssistantDelta { turn_id, text } => {
+                if let Some(activity) = self.activity.as_mut().filter(|_| !text.is_empty()) {
+                    activity.text_streaming = true;
                 }
-            },
+                match self.transcript.last_mut() {
+                    Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id && !self.assistant_break => body.push_str(&text),
+                    _ => {
+                        self.assistant_break = false;
+                        self.transcript.push(Entry::Assistant { turn_id, text });
+                    }
+                }
+            }
             Event::ToolStart { call_id, tool, subject, evidence } => {
                 if !HIDDEN_TOOLS.contains(&tool.as_str()) {
                     self.transcript.push(Entry::Tool {
@@ -2669,9 +2678,18 @@ pub fn outcome_for(turn: &Value) -> Outcome {
         }
         ("COMPLETED", _, _) => ("Done · result not established".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
         ("INTERRUPTED", _, _) => {
-            let phase = turn["interruption"]["phase"].as_str().unwrap_or("work").replace('_', " ");
+            // The controller's phase names are internal; say when it was in the operator's words.
+            let when = match turn["interruption"]["phase"].as_str().unwrap_or("work") {
+                "inference" => "while the model was answering".to_string(),
+                "provider_wait" => "while waiting for the provider".to_string(),
+                "tool_dispatch" => "as tools were being started".to_string(),
+                "tool_settling" => "while a tool was finishing".to_string(),
+                "confirmation" => "while waiting for your approval".to_string(),
+                "between_steps" => "between steps".to_string(),
+                other => format!("during {}", other.replace('_', " ")),
+            };
             let skipped = turn["interruption"]["undispatchedToolCalls"].as_u64().unwrap_or(0);
-            let mut cause = format!("You stopped the turn during {phase}.");
+            let mut cause = format!("You stopped the turn {when}.");
             if skipped > 0 {
                 cause.push_str(&format!(" {skipped} planned tool call{} did not run.", if skipped == 1 { "" } else { "s" }));
             }

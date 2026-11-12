@@ -58,11 +58,13 @@ fn phase_text(state: &LiveState) -> String {
     let tool = activity.tool.as_deref().map(tool_verb);
     let subject = activity.subject.as_deref().map(one_line).filter(|s| !s.is_empty());
     let mut text = match activity.phase.as_str() {
+        // Reply text is arriving: the model is writing, not thinking (D-14).
+        "inference" if activity.text_streaming => "writing".to_string(),
         "inference" => "thinking".to_string(),
         "tool" => format!("{}{}", tool.unwrap_or_else(|| "running a tool".into()), subject.map(|s| format!(" {s}")).unwrap_or_default()),
         "approval" => "waiting for your approval".to_string(),
         "provider_wait" => "waiting for the inference provider".to_string(),
-        "verifying" => format!("verifying{}", activity.tool.as_deref().map(|t| format!(" ({t})")).unwrap_or_default()),
+        "verifying" => verifier_text(activity.tool.as_deref()),
         "compacting" => "compacting the context".to_string(),
         other => other.replace('_', " "),
     };
@@ -74,6 +76,23 @@ fn phase_text(state: &LiveState) -> String {
         }
     }
     text
+}
+
+/// The controller labels its own verifier runs `<command> (before the change)` and `<command> (tests as they were
+/// before the change)`; the operator reads what is being checked and why, with the command and no internal label.
+fn verifier_text(label: Option<&str>) -> String {
+    const BASELINE: &str = " (before the change)";
+    const ORIGINAL: &str = " (tests as they were before the change)";
+    let Some(label) = label.map(one_line).filter(|l| !l.is_empty()) else {
+        return "checking the result".to_string();
+    };
+    if let Some(command) = label.strip_suffix(BASELINE) {
+        format!("checking {command} before your change")
+    } else if let Some(command) = label.strip_suffix(ORIGINAL) {
+        format!("re-running the original tests: {command}")
+    } else {
+        format!("checking the result: {label}")
+    }
 }
 
 /// Seconds the provider's stream has been silent, while it is reported stalled.
@@ -2198,6 +2217,62 @@ mod tests {
         assert!(!draw(&state, 100, 12).contains("no data from the provider"));
     }
 
+    /// The activity line: the one row of `draw` that holds the spinner.
+    fn status_row(screen: &str) -> String {
+        screen.lines().find(|l| SPINNER.iter().any(|f| l.contains(f))).unwrap_or("").to_string()
+    }
+
+    #[test]
+    fn the_status_does_not_say_thinking_while_text_streams() {
+        // D-14 (a): `thinking · 0:03 · step 1` was shown while the answer was visibly arriving.
+        for width in [40u16, 60, 100] {
+            let mut state = ready();
+            feed(&mut state, &[BUSY, r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1}"#]);
+            let before = status_row(&draw(&state, width, 12));
+            assert!(before.contains("thinking"), "no text yet, so the model is thinking at {width}: {before}");
+            feed(&mut state, &[r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"Hello"}"#]);
+            let during = status_row(&draw(&state, width, 12));
+            assert!(!during.contains("thinking") && during.contains("writing"), "text is streaming at {width}: {during}");
+            // The next step (a tool call) is a new phase: the text flag does not leak into it.
+            feed(&mut state, &[r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":2,"segment":1}"#]);
+            let next = status_row(&draw(&state, width, 12));
+            assert!(next.contains("thinking"), "a new step starts by thinking at {width}: {next}");
+            // A finished turn and a new one start clean too.
+            feed(&mut state, &[r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"more"}"#, IDLE, BUSY, r#"{"v":1,"type":"activity","turn_id":"t2","phase":"inference","step":1,"segment":1}"#]);
+            assert!(status_row(&draw(&state, width, 12)).contains("thinking"), "a new turn starts by thinking at {width}");
+        }
+    }
+
+    #[test]
+    fn verifier_phases_read_as_plain_words_not_internal_labels() {
+        // D-14 (b): `verifying (npm test (before the change))` is the controller's own label, not what the operator sees.
+        let cases = [
+            ("npm test (before the change)", "checking npm test before your change", "(before the change)"),
+            ("npm test (tests as they were before the change)", "re-running the original tests: npm test", "(tests as they were"),
+            ("npm test", "checking the result: npm test", "verifying"),
+        ];
+        for (tool, wanted, hidden) in cases {
+            for width in [60u16, 100] {
+                let mut state = ready();
+                let event = format!(r#"{{"v":1,"type":"activity","turn_id":"t1","phase":"verifying","step":1,"segment":1,"tool":"{tool}"}}"#);
+                feed(&mut state, &[BUSY, event.as_str()]);
+                let row = status_row(&draw(&state, width, 12));
+                assert!(row.contains(wanted), "{tool} at {width}: {row}");
+                assert!(!row.contains(hidden), "{tool} at {width}: {row}");
+            }
+        }
+        // A narrow line still fits and still names a plain phase (clipped by the line fitting, never wider).
+        let mut state = ready();
+        feed(&mut state, &[BUSY, r#"{"v":1,"type":"activity","turn_id":"t1","phase":"verifying","step":1,"segment":1,"tool":"npm test (before the change)"}"#]);
+        let narrow = draw(&state, 40, 12);
+        assert!(narrow.lines().all(|l| l.chars().count() <= 42), "{narrow}"); // each row is quoted by the dump
+        assert!(!narrow.contains("verifying ("), "{narrow}");
+        // Without a command the phase still reads plainly.
+        let mut bare = ready();
+        feed(&mut bare, &[BUSY, r#"{"v":1,"type":"activity","turn_id":"t1","phase":"verifying","step":1,"segment":1}"#]);
+        assert!(status_row(&draw(&bare, 100, 12)).contains("checking the result"));
+    }
+
     #[test]
     fn the_indicator_says_what_it_waits_for_and_stops_on_completion_and_disconnection() {
         let mut state = ready();
@@ -4161,7 +4236,8 @@ mod surface_tests {
             (r#"{"execution":"COMPLETED","outcome":"VERIFIED","verification":{"command":"npm test"}}"#, "✓ Done · verified", Some("npm test passed")),
             (r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN"}"#, "! Done · not verified", Some("next: run /test")),
             (r#"{"execution":"COMPLETED","outcome":"NOT_ESTABLISHED","reason":"VERIFIER_FAILED","detail":"npm test"}"#, "× Verification failed", Some("npm test failed")),
-            (r#"{"execution":"INTERRUPTED","outcome":"NOT_ESTABLISHED","reason":"OPERATOR_INTERRUPT","interruption":{"phase":"inference","undispatchedToolCalls":0}}"#, "◌ Cancelled", Some("You stopped the turn during inference.")),
+            (r#"{"execution":"INTERRUPTED","outcome":"NOT_ESTABLISHED","reason":"OPERATOR_INTERRUPT","interruption":{"phase":"inference","undispatchedToolCalls":0}}"#, "◌ Cancelled", Some("You stopped the turn while the model was answering.")),
+            (r#"{"execution":"INTERRUPTED","outcome":"NOT_ESTABLISHED","reason":"OPERATOR_INTERRUPT","interruption":{"phase":"tool_settling","undispatchedToolCalls":0}}"#, "◌ Cancelled", Some("You stopped the turn while a tool was finishing.")),
             (r#"{"execution":"LIMIT_REACHED","outcome":"NOT_ESTABLISHED","reason":"STEP_BUDGET_EXHAUSTED","detail":"300 steps"}"#, "! Stopped at the step budget", Some("next: reply to continue")),
             (r#"{"execution":"FAILED","outcome":"NOT_ESTABLISHED","reason":"INFERENCE_FAILED","inferenceFailure":{"message":"HTTP 503 from the gateway"}}"#, "× Model request failed", Some("HTTP 503 from the gateway")),
             (r#"{"execution":"BLOCKED","outcome":"NOT_ESTABLISHED","reason":"CONTEXT_CAPACITY_EXCEEDED","detail":"9000+1000+500>8192"}"#, "× Context is full", Some("next: /compact")),
