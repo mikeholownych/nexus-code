@@ -155,9 +155,9 @@ const valueChars = (input: string): number =>
 const unitKey = (i: number): string => `sk-%2F${i.toString(36).padStart(8, "A")}-`;
 
 /**
- * The bounds of the disjoint-window design, asserted on every adversarial input: the values to replace total at most
- * about 3x the text (each extended value repeats its run once, windows of one family are disjoint), and the work is
- * linear, so inputs of up to 200 KB finish far inside a generous wall-clock bound.
+ * The value bound of the disjoint-window design, asserted on every adversarial input: the values to replace total at
+ * most about 3x the text (each extended value repeats its run once, windows of one family are disjoint). The wall
+ * clock here only catches a severe blowup; linearity itself is asserted by `assertLinear` (timings at two sizes).
  */
 function assertBounded(input: string): void {
   const started = performance.now();
@@ -165,6 +165,34 @@ function assertBounded(input: string): void {
   assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
   assert.ok(performance.now() - started < 20000, `took ${Math.round(performance.now() - started)}ms for ${input.length} characters`);
 }
+
+/** Best of three timings of one classification, in ms (the minimum is the least noisy estimate of the cost). */
+const bestTime = (input: string): number => {
+  let best = Infinity;
+  for (let i = 0; i < 3; i++) { const t = performance.now(); valueChars(input); best = Math.min(best, performance.now() - t); }
+  return best;
+};
+
+/**
+ * Linearity: four times the text costs about four times the time (a quadratic regression would cost sixteen times).
+ * The bound of 10x plus a fixed allowance leaves room for noise while still failing a superlinear extension window.
+ */
+function assertLinear(label: string, make: (size: number) => string): void {
+  const small = make(50_000);
+  const large = make(200_000);
+  const tSmall = bestTime(small);
+  const tLarge = bestTime(large);
+  assert.ok(tLarge <= 10 * tSmall + 250, `${label}: ${large.length} chars took ${Math.round(tLarge)}ms but ${small.length} chars took ${Math.round(tSmall)}ms (superlinear)`);
+}
+
+test("extension work is linear in the text for every blob and chain shape", () => {
+  const key = "ghp_Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo";
+  assertLinear("sk-%2F- blob", (n) => "sk-%2F-".repeat(Math.ceil(n / 7)));
+  assertLinear("sk-. blob", (n) => "sk-. ".repeat(Math.ceil(n / 5)));
+  assertLinear("accepted blob", (n) => Array.from({ length: Math.ceil(n / 15) }, (_, i) => unitKey(i)).join(""));
+  assertLinear("dotted ghp_ chain", (n) => Array.from({ length: Math.ceil(n / 52) }, () => `${key}.Zk4Pq8Rt01`).join("."));
+  assertLinear("space-separated dotted tokens", (n) => Array.from({ length: Math.ceil(n / 53) }, () => `${key}.Zk4Pq8Rt01 `).join(""));
+});
 
 /** Redacts `input` and checks that the text after the last " then " (the real key) holds none of its secret material. */
 function assertRealKeyGone(input: string, material: string[], label: string): void {
