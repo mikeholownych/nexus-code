@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MaQ9ZWBAL4srHan7FFk4mg",
+  "agent_id": "a8a88a25c51942410",
+  "subagent_type": "reviewer",
+  "task_description": "Pre-push review of resend budget",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 18168,
+    "cache_read_tokens": 66431,
+    "output_tokens": 3282,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-12T10:03:38.95519647Z",
+  "completed_at": "2026-11-12T10:04:14.969043027Z"
+}
