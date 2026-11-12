@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_016f4dmVWCFip7hx7AkwabnH",
+  "agent_id": "a275fca98350c125e",
+  "subagent_type": "reviewer",
+  "task_description": "Review #479 at ff662fa6",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 70095,
+    "cache_read_tokens": 773635,
+    "output_tokens": 36720,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-12T00:32:08.19888905Z",
+  "completed_at": "2026-11-12T00:37:38.237931191Z"
+}
