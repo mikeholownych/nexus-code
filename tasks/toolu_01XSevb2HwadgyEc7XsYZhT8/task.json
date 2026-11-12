@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01XSevb2HwadgyEc7XsYZhT8",
+  "agent_id": "a750a4e3cbe0fff36",
+  "subagent_type": "general-purpose",
+  "task_description": "Pre-push Entire reviews",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 112567,
+    "cache_read_tokens": 1965884,
+    "output_tokens": 22180,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-12T09:39:43.585525515Z",
+  "completed_at": "2026-11-12T09:43:21.523320579Z"
+}
