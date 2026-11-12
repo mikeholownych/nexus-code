@@ -2,8 +2,8 @@
  * ACC-INF-07 (REQ-TUI-105): Startup endpoint probe and first-contact recovery deadline.
  *
  * Verifies:
- * 1. SidecarServer.start() probes the endpoint (3 s GET /models) and emits a notice naming the unreachable
- *    endpoint URL, cause, and fix (`nexus doctor`, `~/.config/nexus/config.env`, `/connect`).
+ * 1. SidecarServer.start() probes the endpoint (3 s GET /models) and emits a notice naming the endpoint URL, that
+ *    nothing could be reached, and the next step (`/connect`, a local model server, `nexus doctor`).
  * 2. AutonomousAgent / ProviderRecoveryController bounds never-succeeded endpoints (`everSucceeded=false`)
  *    to 120 s (2 minutes) by default instead of the 20-minute mid-session recovery deadline, ending with
  *    actionable fix guidance.
@@ -123,15 +123,15 @@ print(json.dumps({"prompted": prompted, "exited": code is not None, "code": code
         const notice = events.find((e) => e.type === "notice" && /127\.0\.0\.1:9/.test(e.text));
         if (notice) {
           assert.match(notice.text, /http:\/\/127\.0\.0\.1:9\/v1/);
-          assert.match(notice.text, /unreachable/i);
+          assert.match(notice.text, /could not connect|nothing answers/i);
           assert.match(notice.text, /nexus doctor/);
-          assert.match(notice.text, /config\.env/);
           assert.match(notice.text, /\/connect/);
+          assert.ok(notice.key, "the start-up notice carries the key that lets later retry notices replace it");
           return;
         }
         await new Promise((r) => setTimeout(r, 25));
       }
-      assert.fail(`Expected unreachable endpoint notice, got events: ${JSON.stringify(events)}`);
+      assert.fail(`Expected a "could not connect" endpoint notice, got events: ${JSON.stringify(events)}`);
     } finally {
       await server.shutdown();
       fs.rmSync(repo, { recursive: true, force: true });
