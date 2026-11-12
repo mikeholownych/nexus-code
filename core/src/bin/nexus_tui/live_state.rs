@@ -1359,6 +1359,7 @@ impl LiveState {
         }
         // The new sidecar generates its own session id and has persisted nothing under it yet.
         self.session_saved = false;
+        self.quit_asked = false;
         self.link = Link::Connecting;
         self.session.busy = false;
         self.cancel_requested = false;
@@ -1375,6 +1376,7 @@ impl LiveState {
     pub fn on_paste_at(&mut self, text: &str, now: Instant) {
         // A paste is input just like typing: an approval panel that appears right after it starts with its guard on.
         self.last_key = Some(now);
+        self.quit_asked = false;
         if matches!(self.overlay, Some(Overlay::Paste { .. })) {
             return;
         }
@@ -3984,6 +3986,9 @@ mod tests {
         assert_eq!(state.on_key(key(KeyCode::Esc)), None);
         assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Quit), "the second Esc in a row quits");
         assert_eq!(state.composer.text(), "hello r and q pastex", "nothing was cleared by asking");
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        state.on_paste("!");
+        assert!(!state.quit_asked, "a paste cancels the ask like any other input");
         state.composer.clear();
         state.composer.insert("hello r and q paste");
         // The draft survives the restart.

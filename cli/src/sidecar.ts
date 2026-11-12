@@ -1161,20 +1161,8 @@ export function formatSafeSidecarStdoutSummary(chunk: string | Uint8Array): stri
   return `[sidecar debug] stdout chunk suppressed (${bytes} bytes)\n`;
 }
 
-/**
- * Sanitize text bound for a sink that is not a protocol event: the diff kept on disk, the evidence ledger, stderr
- * diagnostics. Events themselves are sanitized exactly once, by formatSafeSidecarEvent, so emit() call sites pass raw
- * text and never wrap it.
- */
-export function formatSafeSidecarText(value: string): string {
-  try {
-    const safe = redactForPersistence(value);
-    if (typeof safe !== "string") throw new Error("unexpected sanitized value type");
-    return visibleControls(redactSecrets(safe));
-  } catch {
-    return "[diagnostic suppressed: credential sanitization failed]";
-  }
-}
+export { formatSafeSidecarText } from "./safe_text.js";
+import { formatSafeSidecarText } from "./safe_text.js";
 
 /**
  * For a limit that applies to a fragment inside a larger sentence (so it cannot be a field limit): redact the full
