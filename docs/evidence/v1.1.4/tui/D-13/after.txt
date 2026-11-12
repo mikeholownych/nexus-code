@@ -1,0 +1,122 @@
+# D-13 after: the approval for delete_file, binary /tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/scratchpad/tpol-g1/debug/nexus-tui
+
+## delete notes.txt, 100x26
+ NEXUS   app  model m  review mode
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Delete notes.txt                                                                                  │
+│                                                                                                  │
+│notes.txt                                                                                         │
+│file · 34 B                                                                                       │
+│Only this file is removed.                                                                        │
+│start of the file:                                                                                │
+│▎ first line                                                                                      │
+│▎ second line                                                                                     │
+│▎ third line                                                                                      │
+│                                                                                                  │
+│▸y Approve   a Approve all later actions   n Deny                                                 │
+│y approve · n deny · ←→/tab move, enter takes ▸ · ↑↓ scroll · esc denies                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+ approval needed · y approve · n deny · other typing goes to your draft ────────────────────────────
+›
+
+## delete notes.txt, 40x30
+ NEXUS   app  model m  review mode
+╭ Approval needed ─────────────────────╮
+│Delete notes.txt                      │
+│                                      │
+│notes.txt                             │
+│file · 34 B                           │
+│Only this file is removed.            │
+│start of the file:                    │
+│▎ first line                          │
+│▎ second line                         │
+│▎ third line                          │
+│                                      │
+│▸y Approve   a All later   n Deny     [
+│y/n or ←→ enter · esc denies          │
+╰──────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+ approval needed · y approve · n de…────
+›
+
+## delete build, 100x26
+ NEXUS   app  model m  review mode
+╭ Approval needed ─────────────────────────────────────────────────────────────────────────────────╮
+│Delete build                                                                                      │
+│                                                                                                  │
+│build                                                                                             │
+│directory · 5 entries (3 files, 1 folder, 1 link) · 28 B                                          │
+│Everything inside it is removed. Links inside are removed, not followed.                          │
+│contents:                                                                                         │
+│▎ a.js                                                                                            │
+│▎ b.js                                                                                            │
+│▎ etc-link (link)                                                                                 │
+│▎ sub/                                                                                            │
+│▎ sub/c.js                                                                                        │
+│                                                                                                  │
+│▸y Approve   a Approve all later actions   n Deny                                                 │
+│y approve · n deny · ←→/tab move, enter takes ▸ · [38;2;103;232;249;49m↑↓ scroll · esc denies     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+ approval needed · y approve · n deny · other typing goes to your draft ────────────────────────────
+›
+
+## delete build, 40x30
+ NEXUS   app  model m  review mode
+╭ Approval needed ─────────────────────╮
+│Delete build                          │
+│                                      │
+│build                                 │
+│directory · 5 entries (3 files, 1     │
+│    folder, 1 link) · 28 B            │
+│Everything inside it is removed. Links│
+│    inside are removed, not followed. │
+│contents:                             │
+│▎ a.js                                │
+│▎ b.js                                │
+│▎ etc-link (link)                     │
+│▎ sub/                                │
+│▎ sub/c.js                            │
+│                                      │
+│▸y Approve   a All later   n Deny     │
+│y/n or ←→ enter · esc denies          │
+╰──────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+ approval needed · y approve · n de…────
+›
+
