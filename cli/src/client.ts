@@ -352,6 +352,8 @@ const realScheduler: StallScheduler = {
 
 /** Seconds of silence after which a stream is reported as stalled (LOCAL_LLM_STALL_NOTICE_MS; 0 turns it off). */
 const DEFAULT_STALL_NOTICE_MS = 30_000;
+/** Longest delay a Node timer takes; above it the timer fires at once. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * Watchdog for inference requests (first-byte, idle between chunks, and optional total timeout).
@@ -440,7 +442,16 @@ export class StreamWatchdog {
   }
 
   done(): void {
-    if (this.stall) (this.stall.scheduler ?? realScheduler).clear(this.stallTimer);
+    if (this.stall) {
+      (this.stall.scheduler ?? realScheduler).clear(this.stallTimer);
+      // A request that ends while silent (idle timeout, abort, retry) must not leave the notice standing.
+      if (this.stalled) {
+        this.stalled = false;
+        try {
+          this.stall.notify({ stalled: false, silentSecs: Math.round((this.clockNow() - this.lastChunkAt) / 1000) });
+        } catch {}
+      }
+    }
     clearTimeout(this.timer);
     clearTimeout(this.totalTimer);
     if (this.callerSignal && this.callerAbortListener) {
@@ -1052,7 +1063,7 @@ export class LocalLlmClient {
   /** Test seam: the clock the stall notice runs on. */
   public stallScheduler?: StallScheduler;
 
-  private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string): StreamWatchdog {
+  private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string, streaming = false): StreamWatchdog {
     const disclosure = this.disclosureOf(currentEp ?? this.endpoint);
     const parseNum = (k: string) => {
       const raw = process.env[k];
@@ -1071,7 +1082,7 @@ export class LocalLlmClient {
       idleMs,
       totalMs,
       operatorSignal,
-      notify ? { ms: stallMs, notify, ...(this.stallScheduler ? { scheduler: this.stallScheduler } : {}) } : undefined,
+      streaming && notify ? { ms: Math.min(stallMs, MAX_TIMER_MS), notify, ...(this.stallScheduler ? { scheduler: this.stallScheduler } : {}) } : undefined,
     );
   }
 
@@ -1868,7 +1879,7 @@ export class LocalLlmClient {
 
       const payload = this.outboundChatBody(currentEp, requestId, messages, tools);
 
-      const watchdog = this.createWatchdog(signal, currentEp);
+      const watchdog = this.createWatchdog(signal, currentEp, true);
       let res: Response;
       try {
         res = await fetch(url, {
@@ -2171,7 +2182,7 @@ export class LocalLlmClient {
       }
       const url = `${currentEp}${req.path}`;
       this.pending = { endpoint: currentEp };
-      const watchdog = this.createWatchdog(signal, currentEp);
+      const watchdog = this.createWatchdog(signal, currentEp, stream);
       let res: Response;
       try {
         res = await fetch(url, {

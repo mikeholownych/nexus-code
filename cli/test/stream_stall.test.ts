@@ -45,9 +45,10 @@ test("D-08: a stream with no chunk for the stall interval is reported once, with
   clock.advance(30_000);
   assert.deepEqual(events.at(-1), { stalled: true, silentSecs: 30 });
   dog.done();
+  assert.deepEqual(events.at(-1), { stalled: false, silentSecs: 30 }, "a request that ends while silent clears the notice");
   assert.equal(clock.pending(), 0, "no timer outlives the request");
   clock.advance(10_000_000);
-  assert.equal(events.length, 3);
+  assert.equal(events.length, 4);
 });
 
 test("D-08: a chunk before the interval keeps the stream quiet, and a finished request reports nothing", () => {
@@ -95,6 +96,28 @@ test("D-08: a provider that sends one chunk and goes silent is reported by the c
     const message = await answer;
     assert.equal(message.content, "starting... done");
     assert.equal(events.at(-1)?.stalled, false, "the resumed chunk clears the notice");
+    assert.equal(clock.pending(), 0);
+  } finally {
+    server.closeAllConnections?.();
+    server.close();
+  }
+});
+
+test("D-08: a non-streaming request on the same client never reports a stall", async () => {
+  const clock = fakeClock();
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const client = new LocalLlmClient({ model: "m", endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "k" } as any);
+    client.onStreamStall = () => assert.fail("no stall notice for a request without chunks");
+    client.stallScheduler = clock;
+    await client.chatCompletion([{ role: "user", content: "x" }], []);
     assert.equal(clock.pending(), 0);
   } finally {
     server.closeAllConnections?.();

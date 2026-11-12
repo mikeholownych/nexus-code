@@ -3768,7 +3768,8 @@ mod diff_tests {
             let now = screen(&draw(&mut state, 100, 30));
             assert_eq!(top_row(&now), top, "the top row moved after {n} rows: {now:#?}");
         }
-        // A resize keeps the same line on top (the short lines wrap the same at both widths).
+        // A resize keeps the same top row text (the checked lines are short, so they wrap the same at every width; a
+        // rewrapped anchored line is not covered, see the status row).
         for (w, h) in [(70, 24), (40, 12), (100, 30)] {
             let now = screen(&draw(&mut state, w, h));
             assert_eq!(top_row(&now), top, "the top row moved at {w}x{h}: {now:#?}");
