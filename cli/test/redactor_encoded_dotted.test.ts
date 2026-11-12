@@ -200,11 +200,11 @@ test("a blob of 200 accepted encoded runs does not starve a real encoded and dot
 });
 
 test("a real key whose tail contains sk- is redacted whole", () => {
-  const key = `sk-${REAL_BODY}.${TAIL}sk-Hq3Lm8Vb2Nz5Kd9Xc4Rt7Yp.${TAIL}`;
+  const key = `sk-${REAL_BODY}.${TAIL}-sk-Hq3Lm8Vb2Nz5Kd9Xc4Rt7Yp%2FMn5Qr7Vw2.Zk4Pq8Rt9Wm2Lx`;
   for (const [, render] of TEMPLATES) {
     withFreshBoundary(() => {
       const output = redactDiagnosticForOutput(render(key));
-      assert.ok(!output.includes("Qx7Km2") && !output.includes("Hq3Lm8") && !output.includes(TAIL), output);
+      assert.ok(!output.includes("Qx7Km2") && !output.includes("Hq3Lm8") && !output.includes("Zk4Pq8") && !output.includes(TAIL), output);
     });
   }
   assertBounded(key);

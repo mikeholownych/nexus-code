@@ -502,11 +502,11 @@ export function scanWorkForTest(): number {
  * The end of the extension window of a candidate of one family: at most MAX_EXTENSION past its original end, never
  * into the next candidate of the same family (which extends itself), never past the text. Windows of one family are
  * disjoint by construction, so nothing earlier in the text can spend what a later key needs, and one family's total
- * extension work is O(n); with F families the work is at most F x n x a constant, and the values add at most about 3n
- * plus a per-family constant (each extended value repeats its run once).
+ * extension work is O(n); with F families the work is at most F x n x a constant, and each family's values add at most about
+ * 3n plus a constant (each extended value repeats its run once).
  * Honest limit: a key's extension stops at the next candidate of the same family or after MAX_EXTENSION characters; the
- * original match is never dropped. A real key whose own tail contains another candidate start (e.g. `sk-` inside the
- * tail) is covered by that candidate's own window.
+ * original match is never dropped. A real key whose own tail contains another candidate start (e.g. `.sk-` inside the
+ * tail) keeps the part past it only if that candidate itself redacts it, which a valid key does.
  */
 function extensionLimit(text: string, end: number, nextStart: number | undefined): number {
   return Math.max(end, Math.min(end + MAX_EXTENSION, nextStart ?? text.length, text.length));
@@ -551,7 +551,6 @@ function extendDottedKey(text: string, end: number, limit: number): number {
   let extended = end;
   while (text[extended] === "." && extended < limit) {
     const segmentEnd = scanKeyRun(text, extended + 1, true, limit);
-    scanWork += segmentEnd - extended;
     if (!isKeyMaterialSegment(normalizeKeyChars(text.slice(extended + 1, segmentEnd)))) break;
     extended = segmentEnd;
   }
