@@ -11,5 +11,6 @@ only at code level (not exercised in the pty); the selection highlight is a colo
 
 The "wheel reports while quitting" case floods SGR wheel reports right after Ctrl+C and has the parent shell (`bash -c`) read
 what is left in the tty once the TUI exits. `leak-control-10116153.txt` is the same case on the previous head (the
-parent shell reads the report text as typed input); `after.txt` is the fixed head (nothing; 3 of 3 runs clean). Reports
+parent shell reads the report text as typed input); `after.txt` is the fixed head (nothing; run three times by hand, all clean, one saved). Reports
 sent after the process has exited cannot be prevented by the program, so the flood is bounded to the quit window.
+The pty keeps sending reports after the program turned reporting off (a real terminal would not), and it is local, so it says nothing about SSH-style latency.

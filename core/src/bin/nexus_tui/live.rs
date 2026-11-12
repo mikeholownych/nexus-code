@@ -29,7 +29,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 const EXIT_GRACE: Duration = Duration::from_secs(2);
 const INPUT_POLL: Duration = Duration::from_millis(30);
 /// Must outlast the graceful shutdown (SHUTDOWN_GRACE plus the sidecar's group and stderr waits).
-const STOP_WATCHDOG_GRACE: Duration = Duration::from_secs(6);
+const STOP_WATCHDOG_GRACE: Duration = Duration::from_secs(7);
 
 static STOP: AtomicBool = AtomicBool::new(false);
 /// Set with STOP but never cleared, so the watchdog sees a stop even after the event loop consumed it.
@@ -375,6 +375,10 @@ fn restore_input_modes_unlocked() {
     if PASTE_ON.swap(false, Ordering::SeqCst) {
         write(b"\x1b[?2004l");
     }
+    // SAFETY: tcflush is async-signal-safe and takes no lock.
+    unsafe {
+        libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
+    }
 }
 
 #[cfg(not(unix))]
@@ -385,10 +389,14 @@ fn restore_input_modes_unlocked() {}
 /// well, and by a panic hook installed after ratatui's so they are off before the panic message is printed.
 struct TerminalGuard;
 
-/// Reads and drops input until nothing arrives for `quiet` (at most `limit` events); returns how many were dropped.
-fn drain_input(mut next: impl FnMut(Duration) -> io::Result<Option<TermEvent>>, quiet: Duration, limit: usize) -> usize {
+/// Longest one drain runs, however much input keeps arriving (two drains plus the shutdown stay inside the watchdog).
+const DRAIN_BUDGET: Duration = Duration::from_millis(300);
+
+/// Reads and drops input until nothing arrives for `quiet` (at most `limit` events and `budget`); returns how many were dropped.
+fn drain_input(mut next: impl FnMut(Duration) -> io::Result<Option<TermEvent>>, quiet: Duration, limit: usize, budget: Duration) -> usize {
+    let deadline = Instant::now() + budget;
     let mut dropped = 0;
-    while dropped < limit && matches!(next(quiet), Ok(Some(_))) {
+    while dropped < limit && Instant::now() < deadline && matches!(next(quiet), Ok(Some(_))) {
         dropped += 1;
     }
     dropped
@@ -396,7 +404,7 @@ fn drain_input(mut next: impl FnMut(Duration) -> io::Result<Option<TermEvent>>, 
 
 /// Drops what the terminal sent that nothing will read (mouse reports still in flight when capture was turned off).
 fn drain_terminal_input() {
-    drain_input(|wait| Ok(if event::poll(wait)? { Some(event::read()?) } else { None }), Duration::from_millis(30), 4096);
+    drain_input(|wait| Ok(if event::poll(wait)? { Some(event::read()?) } else { None }), Duration::from_millis(30), 4096, DRAIN_BUDGET);
 }
 
 /// Discards unread bytes in the tty input queue, so none reaches the shell as typed text once cooked mode is back.
@@ -779,10 +787,13 @@ mod tests {
     #[test]
     fn input_in_flight_is_drained_until_quiet_and_never_forever() {
         let mut left = 5;
-        let dropped = drain_input(|_| Ok((left > 0).then(|| { left -= 1; TermEvent::Resize(1, 1) })), Duration::from_millis(1), 100);
+        let dropped = drain_input(|_| Ok((left > 0).then(|| { left -= 1; TermEvent::Resize(1, 1) })), Duration::from_millis(1), 100, Duration::from_secs(5));
         assert_eq!((dropped, left), (5, 0));
-        assert_eq!(drain_input(|_| Ok(Some(TermEvent::Resize(1, 1))), Duration::from_millis(1), 100), 100, "a flood is bounded");
-        assert_eq!(drain_input(|_| Err(io::Error::other("gone")), Duration::from_millis(1), 100), 0, "an error stops it");
+        assert_eq!(drain_input(|_| Ok(Some(TermEvent::Resize(1, 1))), Duration::from_millis(1), 100, Duration::from_secs(5)), 100, "a flood is bounded by count");
+        let started = Instant::now();
+        let slow = drain_input(|_| { std::thread::sleep(Duration::from_millis(20)); Ok(Some(TermEvent::Resize(1, 1))) }, Duration::from_millis(1), usize::MAX, Duration::from_millis(100));
+        assert!(slow < 20 && started.elapsed() < Duration::from_secs(2), "a slow flood is bounded by time: {slow}");
+        assert_eq!(drain_input(|_| Err(io::Error::other("gone")), Duration::from_millis(1), 100, Duration::from_secs(5)), 0, "an error stops it");
     }
 
     #[test]

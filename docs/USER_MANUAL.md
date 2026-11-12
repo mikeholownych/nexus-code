@@ -281,15 +281,18 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **Mouse.** Capture is on by default. On Unix it asks the terminal only for button presses and the wheel (on
   Windows crossterm's mouse capture also reports motion and drag). The wheel scrolls the
   transcript (three rows a notch), or the open panel, an approval's change included. A left click on a tool call
-  selects it; a second click on the selected call opens its details, as `Enter` does. The mouse never answers an
-  approval or any other question: clicks do nothing while a panel is open. Hold Shift while dragging (Option in iTerm2
+  selects it; a second click on the selected call opens its details, as `Enter` does. The mouse never approves anything
+  and clicks do nothing while a panel is open (a split report on a slow link, below, is the one way a mouse can end up
+  denying). Hold Shift while dragging (Option in iTerm2
   and macOS Terminal) to select text with the terminal's own selection; `NEXUS_TUI_MOUSE=off` turns capture off
   (`0`, `false`, `no` and `none` also do). Under tmux or screen the terminal only passes mouse events when mouse mode
   is on (`set -g mouse on`). On a slow or high-latency link a mouse report can arrive split: the first byte then reads
   as `Esc` (which denies an open approval and cancels a running turn, as it always does) and the rest as stray
   characters in the draft (never `y`, `n` or `a` as a decision); set `NEXUS_TUI_MOUSE=off` there. On exit the mouse mode
-  is switched off, input still in flight is dropped before and after the sidecar shuts down, and the unread terminal
-  input is flushed, so reports do not reach the shell.
+  is switched off, input still in flight is dropped for up to 0.3 s before and after the sidecar shuts down, and the
+  unread terminal input is flushed; that also drops anything you typed ahead during the shutdown, and a report still
+  in flight on a slow link after that can reach the shell. The tmux, screen, Windows and split-report behaviours
+  above are from the code and the protocols, not from runs on those terminals.
 
 ### Cancellation & Process Ownership
 
