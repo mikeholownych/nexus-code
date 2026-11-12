@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017F4JsU55hdq4Rx19S4xfcm",
+  "agent_id": "a4e7e897fc9103aec",
+  "subagent_type": "reviewer",
+  "task_description": "Independent review of TUI D-06/D-07 branch",
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 70371,
+    "cache_read_tokens": 1079407,
+    "output_tokens": 12951,
+    "api_call_count": 22
+  },
+  "started_at": "2026-11-12T03:06:40.730046743Z",
+  "completed_at": "2026-11-12T03:08:44.334389151Z"
+}

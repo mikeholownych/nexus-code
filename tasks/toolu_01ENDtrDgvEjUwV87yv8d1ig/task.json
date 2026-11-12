@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01ENDtrDgvEjUwV87yv8d1ig",
+  "agent_id": "a50fb1a9174a32663",
+  "subagent_type": "general-purpose",
+  "task_description": "TUI D-09 Shift+Enter and D-10 mouse",
+  "token_usage": {
+    "input_tokens": 184,
+    "cache_creation_tokens": 217260,
+    "cache_read_tokens": 14196874,
+    "output_tokens": 96698,
+    "api_call_count": 91
+  },
+  "started_at": "2026-11-12T02:39:55.918730549Z",
+  "completed_at": "2026-11-12T03:05:49.608492772Z"
+}
