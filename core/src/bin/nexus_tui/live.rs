@@ -375,36 +375,58 @@ fn draw(terminal: &mut ratatui::DefaultTerminal, app: &mut LiveApp) -> io::Resul
 
 /// A key a terminal without bracketed paste would deliver as part of pasted text.
 /// Applies pending sidecar messages. When they open an approval, input already queued (and a stashed event) is
-/// discarded. Returns whether the screen changed and whether an approval opened.
+/// discarded, and the panel says a key was ignored. Returns whether the screen changed and whether an approval opened.
 fn pump_guarding_approvals(app: &mut LiveApp, pending: &mut Option<TermEvent>) -> (bool, bool) {
     let before = app.state.approval_id().map(str::to_string);
     let mut changed = app.pump();
     let opened = app.state.approval_id().is_some_and(|id| before.as_deref() != Some(id));
     if opened {
+        let mut typed = false;
         if pending.as_ref().is_some_and(|event| !matches!(event, TermEvent::Resize(..))) {
+            typed = pending.as_ref().is_some_and(is_typing);
             *pending = None;
         }
         let queued = std::iter::from_fn(|| match event::poll(Duration::ZERO) {
             Ok(true) => event::read().ok(),
             _ => None,
         });
-        changed |= discard_queued_input(queued);
+        let (resized, queued_typing) = discard_queued_input(queued);
+        changed |= resized;
+        if typed || queued_typing {
+            app.state.note_approval_input_ignored();
+        }
     }
     (changed, opened)
 }
 
 /// Input that was already queued when an approval opened was typed before the operator could see the panel: it is
-/// discarded (keys and pastes), never read as a decision. Returns whether a resize was among it (the frame redraws).
+/// discarded (keys and pastes), never read as a decision. Returns whether a resize was among it (the frame redraws)
+/// and whether keys or a paste were (the panel says a key was ignored).
 // `fold`, not `any`: every queued event must be read and dropped; `any` would stop at a resize and leave keys queued.
-#[allow(clippy::unnecessary_fold)]
-fn discard_queued_input(queued: impl Iterator<Item = TermEvent>) -> bool {
-    queued.fold(false, |resized, event| resized || matches!(event, TermEvent::Resize(..)))
+fn discard_queued_input(queued: impl Iterator<Item = TermEvent>) -> (bool, bool) {
+    queued.fold((false, false), |(resized, typed), event| (resized || matches!(event, TermEvent::Resize(..)), typed || is_typing(&event)))
 }
 
-/// Several keys arriving together (typed faster than anyone decides, or pasted by a terminal without bracketed
-/// paste) never answer an approval; one deliberate key does.
-fn burst_may_answer(approval_open: bool, keys: usize) -> bool {
-    !approval_open || keys <= 1
+/// A key press or a paste (input the operator typed), as opposed to a resize, mouse or focus event.
+fn is_typing(event: &TermEvent) -> bool {
+    matches!(event, TermEvent::Key(key) if key.kind == KeyEventKind::Press) || matches!(event, TermEvent::Paste(_))
+}
+
+/// The key presses queued behind `first`, read until something else arrives (kept in `pending`). Several presses of
+/// any kind arriving together are typed faster than anyone decides, or pasted by a terminal without bracketed paste.
+fn drain_key_presses(first: KeyEvent, mut next: impl FnMut() -> io::Result<Option<TermEvent>>, pending: &mut Option<TermEvent>) -> io::Result<Vec<KeyEvent>> {
+    let mut keys = vec![first];
+    while let Some(event) = next()? {
+        match event {
+            TermEvent::Key(key) if key.kind == KeyEventKind::Press => keys.push(key),
+            TermEvent::Key(_) => {}
+            other => {
+                *pending = Some(other);
+                break;
+            }
+        }
+    }
+    Ok(keys)
 }
 
 fn pasteable(key: &KeyEvent) -> bool {
@@ -478,12 +500,20 @@ fn event_loop(
                 let (changed, opened) = pump_guarding_approvals(app, &mut pending);
                 redraw |= changed;
                 if opened && !matches!(event, TermEvent::Resize(..)) {
+                    if is_typing(&event) {
+                        app.state.note_approval_input_ignored();
+                    }
                     continue;
                 }
                 event
             }
         };
         let action = match event {
+            // Several presses at an open approval (a `Left` then a `y` at machine speed included) never answer it.
+            TermEvent::Key(key) if key.kind == KeyEventKind::Press && app.state.approval_id().is_some() && event::poll(Duration::ZERO)? => {
+                let keys = drain_key_presses(key, || Ok(if event::poll(Duration::ZERO)? { Some(event::read()?) } else { None }), &mut pending)?;
+                app.state.on_key_burst(keys)
+            }
             TermEvent::Key(key) if pasteable(&key) && event::poll(Duration::ZERO)? => {
                 let mut keys = vec![key];
                 while event::poll(Duration::ZERO)? {
@@ -497,10 +527,6 @@ fn event_loop(
                     }
                 }
                 match burst_text(&keys) {
-                    _ if !burst_may_answer(app.state.approval_id().is_some(), keys.len()) => {
-                        app.state.note_input_ignored_by_approval(Instant::now());
-                        None
-                    }
                     Some(text) => {
                         app.state.on_paste(&text);
                         None
@@ -543,7 +569,7 @@ fn event_loop(
 mod tests {
 
     #[test]
-    fn input_queued_when_an_approval_opens_is_discarded_and_bursts_never_decide() {
+    fn input_queued_when_an_approval_opens_is_discarded() {
         use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
         let queued = vec![
             TermEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),
@@ -551,17 +577,28 @@ mod tests {
             TermEvent::Paste("y\n".into()),
         ];
         let mut source = queued.into_iter();
-        assert!(!discard_queued_input(&mut source), "no resize among the queued input");
+        assert_eq!(discard_queued_input(&mut source), (false, true), "no resize among the queued input; keys were");
         assert!(source.next().is_none(), "everything queued was consumed, none of it handled");
         let with_resize = vec![TermEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)), TermEvent::Resize(80, 24)];
-        assert!(discard_queued_input(with_resize.into_iter()), "a queued resize still redraws");
-        assert!(!burst_may_answer(true, 3), "a burst never answers an approval");
-        assert!(burst_may_answer(true, 1), "a single deliberate key may");
-        assert!(burst_may_answer(false, 5), "bursts outside approvals are typing or paste as before");
+        assert_eq!(discard_queued_input(with_resize.into_iter()), (true, true), "a queued resize still redraws");
+        assert_eq!(discard_queued_input(std::iter::once(TermEvent::Resize(80, 24))), (true, false), "a resize alone is not typing");
+    }
+
+    #[test]
+    fn every_press_queued_at_an_open_approval_counts_toward_the_burst() {
+        use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let release = KeyEvent { kind: KeyEventKind::Release, state: KeyEventState::NONE, ..press(KeyCode::Char('y')) };
+        // `Left` was read first and `y` is queued behind it: both count, and the `y` is text, not an answer.
+        let mut queue = vec![TermEvent::Key(press(KeyCode::Char('y'))), TermEvent::Key(release), TermEvent::Resize(80, 24), TermEvent::Key(press(KeyCode::Char('n')))].into_iter();
+        let mut pending = None;
+        let keys = drain_key_presses(press(KeyCode::Left), || Ok(queue.next()), &mut pending).unwrap();
+        assert_eq!(keys, vec![press(KeyCode::Left), press(KeyCode::Char('y'))], "a release is skipped; the drain stops at the resize");
+        assert!(matches!(pending, Some(TermEvent::Resize(80, 24))));
     }
 
     use super::*;
-    use crate::live_state::{APPROVAL_GRACE, Detail, Entry, Loaded, Overlay, Verdict};
+    use crate::live_state::{Detail, Entry, Loaded, Overlay, Verdict};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::time::Instant;
 
@@ -660,26 +697,12 @@ exit 0"#
         pump_until(&mut app, |s| {
             matches!(s.overlay, Some(Overlay::Approval(_)))
         });
-        // No decision before the panel is on screen: the first frame marks it shown and starts the grace period.
+        // No decision before the panel is on screen: the first frame marks it shown.
         assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), Instant::now()), None);
-        // Drawn a moment after the operator last typed (so `y` may answer it).
-        app.state.note_approval_shown(Instant::now() + crate::live_state::APPROVAL_TYPING_RECENT);
-        let Some(Overlay::Approval(approval)) = &app.state.overlay else {
-            unreachable!("pump_until waited for the approval modal");
-        };
-        // The `y` pressed before the panel was drawn went into it: its letters are not answers. After the display grace
-        // and a pause, ← chooses Approve and Enter, once the choice has been on screen a moment, takes it.
-        let past_grace = approval.opened + APPROVAL_GRACE + crate::live_state::APPROVAL_QUIET;
-        assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), past_grace), None);
-        // Letters are off on this panel, so approving takes Enter twice.
-        assert_eq!(app.state.on_key_at(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), past_grace + crate::live_state::APPROVAL_TYPING_RECENT), None);
-        let approve = app
-            .state
-            .on_key_at(
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-                past_grace + crate::live_state::APPROVAL_TYPING_RECENT + crate::live_state::APPROVAL_CHOICE_SHOWN,
-            )
-            .unwrap();
+        // Drawn a moment after the operator last typed: one `y` approves.
+        let shown = Instant::now() + crate::live_state::APPROVAL_IN_FLIGHT;
+        app.state.note_approval_shown_and_read(shown);
+        let approve = app.state.on_key_at(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), shown).unwrap();
         assert!(app.handle(approve));
         pump_until(&mut app, |s| {
             !s.session.busy

@@ -34,6 +34,12 @@ fn line(kind: LineKind, text: impl Into<String>) -> ReviewLine {
     }
 }
 
+/// A row of a command or script as drawn: tabs as spaces, every other control character (a lone carriage return that
+/// would redraw the line, ESC) and bidirectional override shown as a visible stand-in, so what is displayed is what runs.
+fn safe_row(row: &str) -> String {
+    crate::diff_view::approval_safe_text(&row.replace('\t', "    "))
+}
+
 fn truncation_note() -> ReviewLine {
     line(
         LineKind::Meta,
@@ -41,7 +47,18 @@ fn truncation_note() -> ReviewLine {
     )
 }
 
+/// The rows the approval panel draws for a review. Every row passes through `safe_row` here, whatever its kind or
+/// field (a path, a hunk, a command, an argument), so no review text can reach the screen as a control character or an
+/// invisible one.
 pub fn review_lines(review: &Review) -> Vec<ReviewLine> {
+    let mut lines = review_rows(review);
+    for row in &mut lines {
+        row.text = safe_row(&row.text);
+    }
+    lines
+}
+
+fn review_rows(review: &Review) -> Vec<ReviewLine> {
     let mut lines = Vec::new();
     let truncated = match review {
         Review::Change {
@@ -362,5 +379,28 @@ mod tests {
             vec!["{", "  \"url\": \"u\"", "}"]
         );
         assert_eq!(review_lines(&Review::Unknown)[0].kind, LineKind::Meta);
+    }
+
+    #[test]
+    fn argument_rows_and_invisible_characters_are_shown_not_acted_on() {
+        let rows = review_lines(&Review::Args { text: "path\u{202e}gpj.exe\r\u{e0041}\u{2062}x".into(), truncated: false });
+        let text: String = rows.iter().map(|row| row.text.as_str()).collect();
+        for bad in ['\r', '\u{202e}', '\u{e0041}', '\u{2062}'] {
+            assert!(!text.contains(bad), "{bad:?} reached the screen text: {text:?}");
+        }
+        assert!(text.contains("<U+E0041>") && text.contains("<U+2062>"), "{text:?}");
+    }
+
+    #[test]
+    fn shell_and_verifier_rows_show_control_and_bidi_characters_instead_of_acting_on_them() {
+        let rows = review_lines(&Review::Shell { command: "echo safe\rrm -rf /\u{202e}txt.sh\x1b[2J".into() });
+        let text: String = rows.iter().map(|row| row.text.as_str()).collect();
+        for bad in ['\r', '\u{202e}', '\x1b'] {
+            assert!(!text.contains(bad), "{bad:?} reached the screen text: {text:?}");
+        }
+        assert!(text.contains("␍") && text.contains("<U+202E>") && text.contains("␛"), "stand-ins are visible: {text:?}");
+        let verifier = review_lines(&Review::Verifier { command: "npm test\rcurl x".into(), script: Some("echo \u{202e}hi".into()), detail: None });
+        let text: String = verifier.iter().map(|row| row.text.as_str()).collect();
+        assert!(!text.contains('\r') && !text.contains('\u{202e}'), "{text:?}");
     }
 }

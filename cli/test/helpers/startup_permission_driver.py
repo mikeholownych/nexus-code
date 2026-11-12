@@ -72,11 +72,9 @@ def main():
                     raise AssertionError(f"verifier approval did not show the command and script body: {session.clean_text()[-2000:]}")
                 if os.path.exists(os.path.join(plan["cwd"], "started")):
                     raise AssertionError("verifier began before approval")
-                # Select Approve after recent typing has disarmed letter shortcuts, then confirm twice.
-                session.pump(2.5)  # Let the panel render and settle before its navigation keys arrive.
-                session.send(b"\x1b[D", settle=2.2)
-                session.send(b"\r", settle=0.6)
-                session.send(b"\r", settle=0.2)
+                # The verifier approval uses the same panel as every other: one `y` approves.
+                session.pump(1.5)  # let the panel render; the Enter that sent /test keeps decision keys inert for 1 s
+                session.send(b"y", settle=0.2)
                 if plan.get("cancel"):
                     deadline = time.monotonic() + 15
                     started = os.path.join(plan["cwd"], "started")
