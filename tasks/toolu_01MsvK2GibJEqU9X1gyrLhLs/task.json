@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MsvK2GibJEqU9X1gyrLhLs",
+  "agent_id": "a4727a9dbfb0a079a",
+  "subagent_type": "reviewer",
+  "task_description": "Delta review of polish G3 at e059367a",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 25400,
+    "cache_read_tokens": 165639,
+    "output_tokens": 3559,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-12T10:05:15.682723668Z",
+  "completed_at": "2026-11-12T10:06:10.307651616Z"
+}
