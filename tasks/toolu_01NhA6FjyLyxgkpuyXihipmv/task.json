@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NhA6FjyLyxgkpuyXihipmv",
+  "agent_id": "a6978686a263c2f6f",
+  "subagent_type": "reviewer",
+  "task_description": "Pre-push triple review 2",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 41246,
+    "cache_read_tokens": 304947,
+    "output_tokens": 7752,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-12T10:00:31.327029394Z",
+  "completed_at": "2026-11-12T10:02:00.249774561Z"
+}
