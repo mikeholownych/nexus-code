@@ -252,6 +252,8 @@ export interface ProbeResult {
   detail?: string;
   /** The probe's own deadline fired (the connection may be fine, just slow). */
   timedOut?: boolean;
+  /** Error codes from the transport's cause chain (ECONNREFUSED, ENOTFOUND, ...): structured, never read from text. */
+  codes?: string[];
 }
 
 /**
@@ -321,7 +323,7 @@ export function startupEndpointProblem(endpoint: string, probe: ProbeResult): St
   if (!probe.available) {
     const detail = scrubUrls(probe.detail ?? "");
     const blocking = probe.httpStatus === undefined && !probe.timedOut;
-    const nothingThere = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|bad port/i.test(detail);
+    const nothingThere = (probe.codes ?? []).some((code) => code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "EAI_AGAIN");
     return { kind: "unreachable", endpoint: persistableEndpoint(endpoint), detail, blocking, nothingThere };
   }
   if (probe.httpStatus === 401 || probe.httpStatus === 403) {

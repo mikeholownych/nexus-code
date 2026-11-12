@@ -21,7 +21,11 @@ function trimTrailingSlashes(text: string): string {
   return text.slice(0, end);
 }
 
-/** The best effort for a value that is not a URL: cut at the first `?` or `#`, drop `userinfo@` after `scheme://`. */
+/**
+ * The best effort for a value that is not a URL: cut at the first `?` or `#`, drop `userinfo@` after `scheme://`.
+ * A password may hold a raw `/` (base64), which makes the URL unparseable and moves the `@` out of the authority:
+ * when the first segment looks like `user:password` (a colon not followed by a port) the userinfo is cut at the last `@`.
+ */
 function stripUnparseable(endpoint: string): string {
   let text = endpoint.trim();
   const cut = [text.indexOf("?"), text.indexOf("#")].filter((i) => i >= 0);
@@ -31,7 +35,8 @@ function stripUnparseable(endpoint: string): string {
     const rest = text.slice(schemeEnd + 3);
     const slash = rest.indexOf("/");
     const authority = slash < 0 ? rest : rest.slice(0, slash);
-    const at = authority.lastIndexOf("@");
+    const looksLikeUserinfo = /^[^@:]*:(?!\d+$)/.test(authority);
+    const at = authority.lastIndexOf("@") >= 0 ? authority.lastIndexOf("@") : looksLikeUserinfo ? rest.lastIndexOf("@") : -1;
     if (at >= 0) text = text.slice(0, schemeEnd + 3) + rest.slice(at + 1);
   }
   return trimTrailingSlashes(text);

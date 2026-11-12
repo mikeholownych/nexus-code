@@ -125,6 +125,7 @@ describe("D-07: first run without a provider", () => {
   const refused = startupEndpointProblem("http://localhost:1234/v1", {
     available: false, condition: "TEMPORARILY_UNAVAILABLE",
     detail: "fetch failed (cause: ECONNREFUSED <- ECONNREFUSED: connect ECONNREFUSED ::1:1234 <- ECONNREFUSED: connect ECONNREFUSED 127.0.0.1:1234)",
+    codes: ["ECONNREFUSED"],
   } as any)!;
 
   test("the notice says what is missing and the next steps, and keeps the raw cause out of the text", () => {
@@ -338,7 +339,7 @@ describe("D-07 review round 2", () => {
       for (const sock of sockets) sock.destroy();
       await new Promise((r) => hang.close(r));
     }
-    const named = startupEndpointProblem("http://api.timeout-llm.com/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED: connect ECONNREFUSED api.timeout-llm.com)" } as any)!;
+    const named = startupEndpointProblem("http://api.timeout-llm.com/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED: connect ECONNREFUSED api.timeout-llm.com)", codes: ["ECONNREFUSED"] } as any)!;
     assert.equal(named.blocking, true);
   });
 
@@ -351,21 +352,42 @@ describe("D-07 review round 2", () => {
       assert.doesNotMatch(noProviderNotice(p).text, /nothing answers/);
       assert.match(noProviderNotice(p).text, /could not connect/);
     }
-    const refused = startupEndpointProblem("http://localhost:1234/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED)" } as any)!;
+    const refused = startupEndpointProblem("http://localhost:1234/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED)", codes: ["ECONNREFUSED"] } as any)!;
     assert.match(noProviderRefusal(refused), /nothing answers/);
+    // A host whose NAME looks like an error code is not a refusal: only the structured code counts.
+    const named = startupEndpointProblem("https://econnrefused.example/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: UNABLE_TO_VERIFY_LEAF_SIGNATURE for econnrefused.example enotfound)", codes: ["UNABLE_TO_VERIFY_LEAF_SIGNATURE"] } as any)!;
+    assert.equal(named.nothingThere, false);
+    assert.match(noProviderRefusal(named), /could not connect/);
   });
 
-  test("a cancel during the gate is reported once and the gate is kept", async () => {
-    await sidecar("http://127.0.0.1:1/v1", async ({ events, send, server }) => {
-      await send({ type: "prompt.submit", id: "t1", text: "hello" });
-      await send({ type: "cancel" });
-      await server.idle();
-      const refused = events.filter((e) => e.type === "error" && e.id === "t1" && e.code === "NO_PROVIDER");
-      const results = events.filter((e) => e.type === "turn.result");
-      assert.equal(refused.length + results.length, 1, JSON.stringify(events.map((e) => [e.type, e.code])));
-      if (refused.length) assert.match(refused[0].message, /Cancelled before it was sent|nothing answers/);
-      assert.ok((server as any).providerProblem, "a cancelled probe leaves the gate in place");
-    });
+  test("a cancel that lands mid-probe returns the message, keeps the gate and sends nothing", async () => {
+    const sockets = new Set<net.Socket>();
+    const hang = net.createServer((sock) => { sockets.add(sock); });
+    await new Promise<void>((r) => hang.listen(0, "127.0.0.1", r));
+    const port = (hang.address() as net.AddressInfo).port;
+    try {
+      await sidecar(`http://127.0.0.1:${port}/v1`, async ({ events, send, server }) => {
+        await (server as any).startupProbe;
+        const known = startupEndpointProblem(`http://127.0.0.1:${port}/v1`, { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED)", codes: ["ECONNREFUSED"] } as any)!;
+        (server as any).providerProblem = known;
+        const before = sockets.size;
+        const submitted = send({ type: "prompt.submit", id: "t1", text: "hello" });
+        await until(() => sockets.size > before);
+        assert.ok(sockets.size > before, "the re-probe is in flight, held by the silent server");
+        await send({ type: "cancel" });
+        await submitted;
+        await server.idle();
+        const errors = events.filter((e) => e.type === "error" && e.id === "t1");
+        assert.equal(errors.length, 1, JSON.stringify(events.map((e) => [e.type, e.code])));
+        assert.equal(errors[0].code, "NO_PROVIDER");
+        assert.equal(errors[0].message, "Cancelled before it was sent.");
+        assert.equal(events.some((e) => e.type === "activity" || e.type === "turn.result"), false, "nothing was sent");
+        assert.equal((server as any).providerProblem, known, "the gate is kept");
+      });
+    } finally {
+      for (const sock of sockets) sock.destroy();
+      await new Promise((r) => hang.close(r));
+    }
   });
 
   test("a refused prompt is not recorded in the prompt history", async () => {
@@ -388,6 +410,21 @@ describe("D-07 review round 2", () => {
     for (const [input, expected] of cut) assert.equal(scrubUrls(input), expected, input);
     for (const same of ["mail a@b.example now", "mailto:a@b.example", "/home/a@b/file", "C:\\x\\y", "file:///x/y", "see // a comment about a@b", "http://host.example/v1"]) {
       assert.equal(scrubUrls(same), same, same);
+    }
+  });
+
+  test("scrubUrls cuts a password that holds a raw slash, and leaves look-alikes alone", () => {
+    const cut: Array<[string, string]> = [
+      ["https://u:abc/def@host/v1", "https://host/v1"],
+      ["https://u:abc/def/ghi@host/v1", "https://host/v1"],
+      ["https://u:abc/def@host/v1?key=SECRETVALUE", "https://host/v1"],
+      ["Request cannot be constructed from a URL that includes credentials: https://u:abc/def@host/v1 (retry)", "Request cannot be constructed from a URL that includes credentials: https://host/v1 (retry)"],
+    ];
+    for (const [input, expected] of cut) assert.equal(scrubUrls(input), expected, input);
+    for (const same of ["https://host/path@x", "https://host:8080/a@b", "write to a@b.example about it", "file:///x"]) assert.equal(scrubUrls(same), same, same);
+    const problem = startupEndpointProblem("https://u:abc/def@host/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "Request cannot be constructed from a URL that includes credentials: https://u:abc/def@host/v1", codes: [] } as any)!;
+    for (const out of [problem.detail, problem.endpoint, noProviderNotice(problem).detail!, noProviderNotice(problem).text, noProviderRefusal(problem)]) {
+      assert.doesNotMatch(out, /abc|def/, out);
     }
   });
 
