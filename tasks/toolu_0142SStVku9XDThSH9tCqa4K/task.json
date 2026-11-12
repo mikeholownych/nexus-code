@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0142SStVku9XDThSH9tCqa4K",
+  "agent_id": "af3921bad3af8ee7e",
+  "subagent_type": "reviewer",
+  "task_description": "Entire-style read-only review",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 108283,
+    "cache_read_tokens": 1998982,
+    "output_tokens": 23638,
+    "api_call_count": 28
+  },
+  "started_at": "2026-11-12T09:48:33.041185479Z",
+  "completed_at": "2026-11-12T09:52:46.419439705Z"
+}
