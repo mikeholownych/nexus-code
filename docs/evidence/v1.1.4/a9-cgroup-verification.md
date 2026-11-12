@@ -53,7 +53,7 @@ the gate runs the production `resourceProbeProblem` first.
 
 When `NEXUS_EVAL_TEST_WORKSPACE_ROOT` is set (CI, `make test-ci`) an unmet prerequisite FAILS the checks instead of skipping, as `eval_integrity` does, so a lost delegation cannot turn CI green by skipping. Without it, skips are each printed with a reason, when: not Linux; no `/sys/fs/cgroup/cgroup.controllers`; the user manager does not
 delegate cpu, memory and pids; `XDG_RUNTIME_DIR` unset; `NEXUS_EVAL_TEST_WORKSPACE_ROOT` unset; Bubblewrap or prlimit
-missing; pgrep missing; no `app.slice` under the user manager; no `cgroup.kill` (kernel before 5.14); `resourceProbeProblem` non-null. Verified on this host (the other skip conditions were not exercised):
+missing; pgrep missing; no `cgroup.kill` (kernel before 5.14); `resourceProbeProblem` non-null. A kernel without `memory.peak` or `pids.peak` runs the checks but reports the peak bounds as not checked. Verified on this host (the other skip conditions were not exercised):
 
 ```
 $ env -u NEXUS_EVAL_TEST_WORKSPACE_ROOT npx tsx --test test/evaluator_cgroup_limits.test.ts
@@ -72,7 +72,7 @@ Real run: `cd cli && NEXUS_EVAL_TEST_WORKSPACE_ROOT=/srv/nexus-qual/ws npx tsx -
 |---|---|---|---|
 | 1 | Memory hog (`/usr/bin/tail /dev/zero`, unbounded buffer) OOM-killed at 64 MiB; operator told | `a memory hog is OOM-killed inside its cgroup, reported as a memory-limit kill, and never exceeds its limit` | PASS |
 | 2 | Shell fork loop gets EAGAIN at `pids.max` 16 | `a shell that forks past pids.max gets EAGAIN and the supervisor records it` | PASS |
-| 3 | Real fork bomb (bash respawn loop) bounded at 16 pids, killed with its cgroup, `/usr/bin/true` still forks outside it (at least 80% of probes) | `a real fork bomb is bounded by pids.max and killed with its cgroup; fork keeps working outside it` | PASS |
+| 3 | Real fork bomb (bash respawn loop) bounded at 16 pids, killed with its cgroup, `/usr/bin/true` still forks outside it (every probe exits 0) | `a real fork bomb is bounded by pids.max and killed with its cgroup; fork keeps working outside it` | PASS |
 | 4 | CPU burner throttled at `cpu.max` 20% | `a CPU burner is throttled to cpu.max at 20% ...` | PASS |
 | 5 | CPU burner throttled at `cpu.max` 50% | `a CPU burner is throttled to cpu.max at 50% ...` | PASS |
 | 6 | Ordinary command under the same limits succeeds, no events | `a clean command under the same limits succeeds untouched ...` | PASS |
@@ -104,7 +104,7 @@ result={"status":137,"signal":"SIGKILL","timedOut":true,"error":null,...}
 supervisor-report={...,"pidsPeak":16,"pidsMaxEvents":41,"cpuThrottledUsec":164720,...,"cleaned":true,"signal":"SIGKILL"}
 raw pids.events="max 41"
 ```
-The test also forks `/usr/bin/true` from the host side every 250 ms during the bomb; all returned 0.
+The test also runs `/usr/bin/true` from the test process (outside the cgroup) every 250 ms during the bomb and requires every probe to exit 0 (at least one probe). The statuses are printed as the `fork-bomb host-side ... probes` diagnostic. This shows the test process could still fork; it is a weak signal about the host, not a latency measurement. The probe list of the earlier runs was not recorded.
 
 CPU burner at 20% (2 loops x 2 s, demand 4,000,000 us; quota over 2 s = 400,000 us):
 ```
@@ -116,9 +116,9 @@ CPU burner at 50% (3 loops x 2 s, demand 6,000,000 us; quota 1,000,000 us):
 supervisor-report={"limits":{...,"cpu.max":"50000 100000"},...,"cpuUsageUsec":1052959,"cpuThrottledUsec":5088045,...,"cleaned":true}
 raw cpu.stat="usage_usec 1049072\n...nr_periods 20\nnr_throttled 20\nthrottled_usec 4845720\n..."
 ```
-Usage is 1.06x and 1.05x the quota (the test allows 0.25x to 1.5x); the unthrottled run would use the full demand.
+Usage is 1.06x and 1.05x the quota (the test asserts usage above 0 and at most `quota x run wall time x 1.1 + 100 ms`, where run wall time includes sandbox start-up and kill); the unthrottled run would use the full demand.
 
-Control (`echo ok; sleep 0.3`): `status 0`, `error null`, `oomKills 0`, `pidsMaxEvents 0`, `nr_throttled 0`.
+Control (`echo ok; sleep 0.3`): `status 0`, `error null`, `oomKills 0`, `pidsMaxEvents 0`, `cpuThrottledUsec 0` (asserted; the earlier run's raw `cpu.stat` also showed `nr_throttled 0`).
 
 Fail closed:
 ```
@@ -134,14 +134,13 @@ Cleanup after the real runs: `systemctl --user list-units --all 'run-*.scope'` e
 ## What this does not show
 
 1. One host: kernel 6.8, systemd 255, Ubuntu, cgroup v2 only. No cgroup v1 host, no container without delegation, no
-   other kernel or systemd version. In CI the same test runs on the hosted runner fixtures (`make test-ci` / CI step), not
-   verified here.
+   other kernel or systemd version. This test has not run on a hosted CI runner; CI behaviour (fixtures, 128 MiB tmpfs, runner delegation) is unverified.
 2. CPU throttling was measured at two quota ratios (20% with 2 loops, 50% with 3 loops) over 2 s windows only, on a
    shared host with other work running; the test asserts throttling occurred, usage above 0 and at most 1.5x the quota. It is an upper bound, not a precision measurement (observed 1.05x to 1.06x).
 3. The workspace tmpfs here is 20 GiB (not the 128 MiB CI fixture), so the storage-cap (ENOSPC) path was not exercised; disk
    quota is the tmpfs size, not a cgroup limit, and is out of scope of this check.
-4. "Host unaffected" is evidenced by: the limits read back before the command, bounded `memory.peak` and `pids.peak`,
-   and host-side `fork` of `/usr/bin/true` still working during the bomb (at least 80% of probes every 250 ms). It is not a
+4. "Host unaffected" is evidenced by: the limits read back before the command, bounded `memory.peak` and `pids.peak` (when the kernel exposes them),
+   and host-side `fork` of `/usr/bin/true` from the test process still working during the bomb (every probe, every 250 ms). It is not a
    measurement of host latency under the bomb, and host memory was not sampled during the hog.
 5. Fail-closed without delegation was simulated (no user manager, no bus, read-only cgroup mount). A real host whose
    user manager lacks cpu/memory/pids delegation was not available; `scripts/ensure-ci-user-cgroups.sh` is the CI

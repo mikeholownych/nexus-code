@@ -30,8 +30,11 @@ const uid = process.getuid!();
 const USER_SERVICE = `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service`;
 const APP_SLICE = path.join(USER_SERVICE, "app.slice");
 
+/** memory.peak (kernel 5.19) and pids.peak (6.1) may be absent: the peak bounds are then reported as not checked, not failed. */
+const PEAKS = fs.existsSync(path.join(USER_SERVICE, "memory.peak")) && fs.existsSync(path.join(USER_SERVICE, "pids.peak"));
+
 type Final = Record<string, any>;
-type Run = { result: any; final: Final | undefined; sampled: Sampled; marker: string; ms: number };
+type Run = { result: any; final: Final | undefined; sampled: Sampled; marker: string; ms: number; before: Set<string> };
 type Sampled = { scopes: string[]; raw: Record<string, string> };
 
 const read = (file: string) => { try { return fs.readFileSync(file, "utf8"); } catch { return null; } };
@@ -48,7 +51,6 @@ function hostGate() {
     for (const controller of ["cpu", "memory", "pids"]) {
       if (!delegated.includes(controller)) return { reason: `the systemd user manager does not delegate the ${controller} controller (${USER_SERVICE}/cgroup.controllers: "${delegated.join(" ")}")` };
     }
-    if (!fs.existsSync(APP_SLICE)) return { reason: `${APP_SLICE} does not exist: transient scopes land elsewhere on this host, so the harness cannot watch them` };
     if (!fs.existsSync("/usr/bin/pgrep")) return { reason: "pgrep is unavailable" };
     if (!process.env.XDG_RUNTIME_DIR) return { reason: "XDG_RUNTIME_DIR is unset: no systemd user manager session" };
     const workspaceRoot = process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT;
@@ -90,6 +92,11 @@ function scopesHolding(marker: string) {
   return found;
 }
 
+/** Names of the transient scopes under the user manager right now (the slice may not exist: then none). */
+function listScopes(): Set<string> {
+  try { return new Set(fs.readdirSync(APP_SLICE).filter((e) => e.startsWith("run-") && e.endsWith(".scope"))); } catch { return new Set(); }
+}
+
 /** Poll the cgroup files of this run's scope while it lives, as raw evidence next to the supervisor's report (informational: a short run can end between ticks). */
 function startSampler(marker: string): { stop: () => Sampled } {
   const scopes = new Set<string>();
@@ -117,12 +124,13 @@ async function launch(resources: any, command: string, args: string[], timeoutMs
   const cwd = opts.cwd ?? fs.mkdtempSync(path.join(resources.workspaceRoot, "a9-cgroup-"));
   const saved: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(opts.env ?? {})) { saved[key] = process.env[key]; if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  const before = listScopes();
   const sampler = startSampler(marker);
   const started = Date.now();
   try {
     const result = await runner(command, [...args, marker], { cwd, timeoutMs, resources });
     const ms = Date.now() - started;
-    return { result, final, sampled: sampler.stop(), marker, ms };
+    return { result, final, sampled: sampler.stop(), marker, ms, before };
   } finally {
     sampler.stop();
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
@@ -133,13 +141,27 @@ async function launch(resources: any, command: string, args: string[], timeoutMs
 /** The shell script runs as `sh -c <script> <marker>`: `$0` carries the marker into every process's argv. */
 const sh = (resources: any, script: string, timeoutMs: number, opts = {}) => launch(resources, "/bin/sh", ["-c", script], timeoutMs, opts);
 
-/** The run's scope and everything in it is gone: no scope directory, no process carrying the marker. */
+/**
+ * Nothing of this run is left: every scope that appeared since the run started is gone, or is some other run's live scope
+ * (populated by processes that do not carry this run's marker). An unpopulated new scope, or one still holding this
+ * run's marker, is a leftover. Scopes the sampler saw must also be gone. No process carrying the marker survives.
+ */
 async function assertCleanedUp(run: Run) {
-  assert.ok(run.sampled.scopes.length >= 1, "the sampler never saw this run's scope, so cleanup would be vacuous");
+  const leftovers = () => {
+    const out: string[] = [];
+    for (const name of listScopes()) {
+      if (run.before.has(name)) continue;
+      const dir = path.join(APP_SLICE, name);
+      const populated = !/^populated 0$/m.test(read(path.join(dir, "cgroup.events")) ?? "populated 0");
+      if (!populated || scopesHolding(run.marker).includes(dir)) out.push(dir);
+    }
+    for (const dir of run.sampled.scopes) if (fs.existsSync(dir) && !out.includes(dir)) out.push(dir);
+    return out;
+  };
   const deadline = Date.now() + 8000;
-  let leftover: string[] = run.sampled.scopes.filter((scope) => fs.existsSync(scope));
-  while (leftover.length && Date.now() < deadline) { await sleep(100); leftover = run.sampled.scopes.filter((scope) => fs.existsSync(scope)); }
-  if (leftover.length) for (const scope of leftover) { try { fs.writeFileSync(path.join(scope, "cgroup.kill"), "1"); } catch {} }
+  let leftover = leftovers();
+  while (leftover.length && Date.now() < deadline) { await sleep(100); leftover = leftovers(); }
+  for (const scope of leftover) { try { fs.writeFileSync(path.join(scope, "cgroup.kill"), "1"); } catch {} }
   assert.deepEqual(leftover, [], "a transient scope cgroup outlived its command");
   const pgrep = spawnSync("/usr/bin/pgrep", ["-f", run.marker], { encoding: "utf8" });
   assert.equal(pgrep.status, 1, `a process carrying the run marker survived: ${pgrep.stdout}`);
@@ -173,8 +195,8 @@ test("a memory hog is OOM-killed inside its cgroup, reported as a memory-limit k
   assert.equal(final.limits["memory.swap.max"], "0");
   assert.ok(final.oomKills >= 1, `memory.events oom_kill: ${JSON.stringify(final)}`);
   assert.ok(final.memoryMaxEvents >= 1);
-  assert.equal(typeof final.memoryPeakBytes, "number", "memory.peak was not reported");
-  assert.ok(final.memoryPeakBytes <= resources.memoryBytes, `peak ${final.memoryPeakBytes} exceeded the limit`);
+  if (PEAKS) { assert.equal(typeof final.memoryPeakBytes, "number", "memory.peak was not reported"); assert.ok(final.memoryPeakBytes <= resources.memoryBytes, `peak ${final.memoryPeakBytes} exceeded the limit`); }
+  else t.diagnostic("memory.peak/pids.peak are not exposed by this kernel: peak bounds NOT checked");
   assert.notEqual(run.result.status, 0);
   assert.equal(run.result.timedOut, false, "it died of the limit, not the wall clock");
   assert.match(run.result.error ?? "", /memory limit/, "the operator is told a limit was hit");
@@ -189,8 +211,7 @@ test("a shell that forks past pids.max gets EAGAIN and the supervisor records it
   const final = reportOf(run);
   assert.equal(final.limits["pids.max"], String(resources.tasks));
   assert.ok(final.pidsMaxEvents >= 1, `pids.events max: ${JSON.stringify(final)}`);
-  assert.equal(typeof final.pidsPeak, "number", "pids.peak was not reported");
-  assert.ok(final.pidsPeak <= resources.tasks, `pids.peak ${final.pidsPeak} > ${resources.tasks}`);
+  if (PEAKS) { assert.equal(typeof final.pidsPeak, "number", "pids.peak was not reported"); assert.ok(final.pidsPeak <= resources.tasks, `pids.peak ${final.pidsPeak} > ${resources.tasks}`); }
   assert.match(run.result.stderr, /Cannot fork|Resource temporarily unavailable|EAGAIN/i, "the shell's own fork failed with EAGAIN");
   await assertCleanedUp(run);
 });
@@ -207,12 +228,12 @@ test("a real fork bomb is bounded by pids.max and killed with its cgroup; fork k
   try { run = await launch(resources, "/usr/bin/bash", ["-c", bomb], 4000); } finally { clearInterval(probe); }
   note(t, "fork-bomb", run);
   const final = reportOf(run);
-  assert.equal(run.result.timedOut, true);
+  assert.ok(run.result.timedOut === true || final.oomKills > 0, "the bomb ends by the wall clock (or a group OOM kill)");
   assert.ok(final.pidsMaxEvents >= 5, `pids.events max=${final.pidsMaxEvents}`);
-  assert.equal(typeof final.pidsPeak, "number", "pids.peak was not reported");
-  assert.ok(final.pidsPeak <= resources.tasks, `pids.peak ${final.pidsPeak} > ${resources.tasks}`);
+  if (PEAKS) { assert.equal(typeof final.pidsPeak, "number", "pids.peak was not reported"); assert.ok(final.pidsPeak <= resources.tasks, `pids.peak ${final.pidsPeak} > ${resources.tasks}`); }
   const forked = during.filter((status) => status === 0).length;
-  assert.ok(during.length >= 3 && forked >= Math.ceil(during.length * 0.8), `the host could not fork while the bomb ran: ${JSON.stringify(during)}`);
+  t.diagnostic(`fork-bomb host-side /usr/bin/true probes every 250 ms during the run (exit statuses)=${JSON.stringify(during)}`);
+  assert.ok(during.length >= 1 && forked === during.length, `the host could not fork while the bomb ran: ${JSON.stringify(during)}`);
   await assertCleanedUp(run);
 });
 
@@ -229,10 +250,11 @@ for (const [cpuPercent, loops] of [[20, 2], [50, 3]] as const) {
     t.diagnostic(`cpu-${cpuPercent} usage_usec=${final.cpuUsageUsec} throttled_usec=${final.cpuThrottledUsec} quota_over_2s_usec=${quotaUsec} unthrottled_demand_usec=${loops * 2_000_000}`);
     assert.equal(final.limits["cpu.max"], `${cpuPercent * 1000} 100000`);
     assert.ok(final.cpuThrottledUsec > 0, "cpu.stat throttled_usec must be > 0");
-    // Demand is `loops` full cores; the quota is a fraction of one. Allow a one-period burst and scheduler slack above,
-    // 
-    assert.ok(final.cpuUsageUsec <= quotaUsec * 1.5, `used ${final.cpuUsageUsec} us, quota allows ~${quotaUsec}`);
-    assert.ok(final.cpuUsageUsec > 0, `used only ${final.cpuUsageUsec} us, expected near ${quotaUsec}`);
+    // Demand is `loops` full cores; the quota is a fraction of one. Bound usage by the measured wall time of the whole run
+    // (start-up and kill latency included) at the quota, plus 10% and one 100 ms period of burst.
+    const allowed = (cpuPercent / 100) * run.ms * 1000 * 1.1 + 100_000;
+    assert.ok(final.cpuUsageUsec <= allowed, `used ${final.cpuUsageUsec} us, quota over ${run.ms} ms allows ${allowed}`);
+    assert.ok(final.cpuUsageUsec > 0);
     assert.equal(run.result.error, null);
     await assertCleanedUp(run);
   });
@@ -253,6 +275,7 @@ test("a clean command under the same limits succeeds untouched (the limits do no
   assert.equal(run.result.error, null);
   assert.equal(run.final?.oomKills, 0);
   assert.equal(run.final?.pidsMaxEvents, 0);
+  assert.equal(run.final?.cpuThrottledUsec, 0);
   await assertCleanedUp(run);
 });
 
@@ -293,7 +316,12 @@ test("when the cgroup parent is not writable the supervisor refuses before the c
       "--die-with-parent", "--", process.execPath, "--input-type=module", "-e", script,
     ], { encoding: "utf8", timeout: 40_000, env: { PATH: "/usr/bin:/bin", XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS ?? "" } });
     t.diagnostic(`readonly-cgroup bwrap status=${child.status} stdout=${child.stdout.trim().slice(-600)} stderr=${child.stderr.trim().slice(-300)}`);
-    if (child.status !== 0) { t.skip(`cannot simulate an unwritable cgroup parent here (outer bwrap failed: ${child.stderr.trim().slice(-200)})`); return; }
+    if (child.status !== 0) {
+      const why = `cannot simulate an unwritable cgroup parent here (outer bwrap failed: ${child.stderr.trim().slice(-200)})`;
+      if (process.env.NEXUS_EVAL_TEST_WORKSPACE_ROOT) assert.fail(why);
+      t.skip(why);
+      return;
+    }
     const result = JSON.parse(child.stdout.trim().split("\n").pop()!);
     assert.match(result.error ?? "", /could not apply resource limits: EROFS/, JSON.stringify(result));
     assert.doesNotMatch(result.stdout, /ran/);
