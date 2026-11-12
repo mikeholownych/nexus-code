@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { InformationFlowBoundary, replaceValues } from "../src/core/egress.js";
+import { InformationFlowBoundary, replaceValues, scanWorkForTest } from "../src/core/egress.js";
 import { redactDiagnosticForOutput } from "../src/core/persistence_protection.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -150,66 +150,70 @@ test("a value that straddles the end of an extended key is still redacted whole"
   assert.ok(!output.includes("A1b2") && !output.includes(".ab") && !output.includes("Qx7Km2"), output);
 });
 
-/** Extension values: each repeats its original run (<= 3x the text) plus a constant for the attempt-capped extensions themselves. */
-const EXTENSION_VALUE_ALLOWANCE = 32 * 1024 * 1024;
+const FAMILIES = 1 + InformationFlowBoundary.DETERMINISTIC_PATTERNS.length;
 const valueChars = (input: string): number =>
   new InformationFlowBoundary().classifyText(input, []).reduce((sum, item) => sum + item.secret.length, 0);
 const unitKey = (i: number): string => `sk-%2F${i.toString(36).padStart(8, "A")}-`;
 
-test("extensions cannot make the values to replace more than a constant larger than the text", () => {
-  const input = Array.from({ length: 8000 }, (_, i) => unitKey(i)).join("");
-  withFreshBoundary(() => {
-    const started = performance.now();
-    redactDiagnosticForOutput(input);
-    assert.ok(performance.now() - started < 20000, `${input.length} chars took ${Math.round(performance.now() - started)}ms`);
-  });
+/**
+ * The bounds of the disjoint-window design, asserted on every adversarial input: the values to replace total at most
+ * about 3x the text (each extended value repeats its run once, windows of one family are disjoint) and the scan work
+ * is linear in the text for each family.
+ */
+function assertBounded(input: string): void {
+  const work = scanWorkForTest();
   const total = valueChars(input);
-  assert.ok(total > input.length / 2, `${total} characters of values: extensions are still accepted`);
-  assert.ok(total <= 3 * input.length + EXTENSION_VALUE_ALLOWANCE, `${total} characters of values for ${input.length} characters of text`);
-});
+  assert.ok(total <= 3 * input.length + 4096, `${total} characters of values for ${input.length} characters of text`);
+  const spent = scanWorkForTest() - work;
+  assert.ok(spent <= 16 * input.length * FAMILIES, `${spent} characters scanned for ${input.length} characters of text`);
+}
 
-test("a blob of rejected encoded look-alikes does not starve a real key later in the text", () => {
-  const body = "Qx7Km2Vb9%2FLrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq";
-  const key = `sk-${body}.${TAIL}`;
-  const blob = "sk-%2F-".repeat(500) + "sk-a.".repeat(400) + "filler ".repeat(20000); // under 1024 candidates
-  const input = `${blob} then ${key} end`;
+/** Redacts `input` and checks that the text after the last " then " (the real key) holds none of its secret material. */
+function assertRealKeyGone(input: string, material: string[], label: string): void {
   withFreshBoundary(() => {
     const output = redactDiagnosticForOutput(input);
     const after = output.slice(output.lastIndexOf(" then ") + 6);
-    assert.ok(after.endsWith(" end") && after.length < 60, after);
-    assert.equal(leftover(after, body), undefined, after);
-    assert.ok(!after.includes(TAIL) && !after.includes("RtBq"), after);
+    assert.ok(after.endsWith(" end") && after.length < 60, `${label}: ${after}`);
+    for (const piece of material) assert.ok(!after.includes(piece), `${label}: "${piece}" left in ${after}`);
   });
-  assert.ok(valueChars(input) <= 3 * input.length + EXTENSION_VALUE_ALLOWANCE);
+}
+
+const REAL_BODY = "Qx7Km2Vb9%2FLrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq";
+const REAL_KEY = `sk-${REAL_BODY}.${TAIL}`;
+const REAL_PIECES = ["Qx7Km2", "Wd8Ns3", "RtBq", TAIL];
+
+test("a blob of cheap look-alikes of any size does not starve a real key later in the text", () => {
+  for (const unit of ["sk-%2F-", "sk-. "]) {
+    for (const n of [200, 2000, 20000]) {
+      const input = `${unit.repeat(n)} then ${REAL_KEY} end`;
+      assertRealKeyGone(input, REAL_PIECES, `${JSON.stringify(unit)} x ${n}`);
+      assertBounded(input);
+    }
+  }
 });
 
 test("a blob of 200 accepted encoded runs does not starve a real encoded and dotted key", () => {
-  const body = "Qx7Km2Vb9%2FLrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq";
-  const key = `sk-${body}${".Zk4Pq8Rt".repeat(20)}`;
   const units = Array.from({ length: 200 }, (_, i) => unitKey(i)).join("");
-  const input = `${units}${"abcdefgh-".repeat(10000)} then ${key} end`;
-  assert.ok(new InformationFlowBoundary().classifyText(units, []).some((c) => c.secret.startsWith("sk-%2F")), "the blob units are keys");
-  withFreshBoundary(() => {
-    const output = redactDiagnosticForOutput(input);
-    const after = output.slice(output.lastIndexOf(" then ") + 6);
-    assert.ok(after.endsWith(" end") && after.length < 60, after);
-    assert.ok(!after.includes("Zk4Pq8Rt") && !after.includes("RtBq"), after);
-  });
+  const input = `${units}${"abcdefgh-".repeat(10000)} then sk-${REAL_BODY}${".Zk4Pq8Rt".repeat(20)} end`;
+  assertRealKeyGone(input, ["Qx7Km2", "RtBq", "Zk4Pq8Rt"], "accepted blob");
+  assertBounded(input);
 });
 
-test("past 1024 key-like candidates of one family the later key keeps only its plain form (documented limit)", () => {
-  const key = "sk-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo2RtBq";
-  const target = `${key}%2FMn5Qr7Vw2.${TAIL}`;
-  const candidates = Array.from({ length: 1500 }, (_, i) => `${unitKey(i)}.Zk4Pq8Rt `).join("");
-  const input = `${candidates}then ${target} end`;
-  const started = performance.now();
-  withFreshBoundary(() => {
-    const output = redactDiagnosticForOutput(input);
-    const after = output.slice(output.lastIndexOf("then ") + 5);
-    assert.ok(!after.includes("Qx7Km2Vb9LrTz4") && !after.includes("Wd8Ns3Hc6Yp1"), after); // the plain form is always redacted
-  });
-  assert.ok(performance.now() - started < 20000, `took ${Math.round(performance.now() - started)}ms`);
-  assert.ok(valueChars(input) <= 3 * input.length + EXTENSION_VALUE_ALLOWANCE);
+test("a real key whose tail contains sk- is redacted whole", () => {
+  const key = `sk-${REAL_BODY}.${TAIL}sk-Hq3Lm8Vb2Nz5Kd9Xc4Rt7Yp.${TAIL}`;
+  for (const [, render] of TEMPLATES) {
+    withFreshBoundary(() => {
+      const output = redactDiagnosticForOutput(render(key));
+      assert.ok(!output.includes("Qx7Km2") && !output.includes("Hq3Lm8") && !output.includes(TAIL), output);
+    });
+  }
+  assertBounded(key);
+});
+
+test("the original match is always redacted even where its window is empty", () => {
+  const input = `${"sk-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0UaXo.".repeat(50)} end`;
+  withFreshBoundary(() => assert.ok(!redactDiagnosticForOutput(input).includes("Qx7Km2")));
+  assertBounded(input);
 });
 
 test("a long dotted high-entropy token is redacted whole", () => {
@@ -324,16 +328,13 @@ test("a dense chain of 100 dot-joined keys of three prefixes does not lose its l
   });
 });
 
-test("past 1024 ghp_ candidates the later key's plain form is still redacted and work stays small", () => {
+test("after 1500 ghp_ candidates the later key is redacted whole and work stays linear", () => {
   const candidates = Array.from({ length: 1500 }, (_, i) => `${ghp(String(i).padStart(4, "0"))}${dotted(2, "C")} `).join("");
   const target = `${ghp("zzzz")}${dotted(5, "T")}`;
   const input = `${candidates}then ${target} end`;
-  const started = performance.now();
   withFreshBoundary(() => {
     const output = redactDiagnosticForOutput(input);
-    const after = output.slice(output.lastIndexOf("then ") + 5);
-    assert.ok(!after.includes(GHP_BASE.slice(0, 20)), after); // plain form redacted; the tail may remain
+    assert.equal(output.slice(output.lastIndexOf("then ") + 5), "[REDACTED:GITHUB_TOKEN] end");
   });
-  assert.ok(performance.now() - started < 20000, `took ${Math.round(performance.now() - started)}ms`);
-  assert.ok(valueChars(input) <= 3 * input.length + EXTENSION_VALUE_ALLOWANCE);
+  assertBounded(input);
 });

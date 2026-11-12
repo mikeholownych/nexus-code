@@ -489,30 +489,27 @@ function bearerTokenLength(value: string): number {
   return head >= 16 ? head : 0;
 }
 
-/** How far past a key the encoded run and the dotted continuation are followed: keys are short. Every candidate key gets its own allowance of this size. */
+/** Longest extension past a key's original match: keys are short. */
 const MAX_EXTENSION = 1024;
-/**
- * Extension scans one family (the `sk-` family, or one `DETERMINISTIC_PATTERNS` entry) may start in one classifyText
- * call; an attempt is spent by each candidate (an `sk-` run or a pattern match) that a "." or, for `sk-`, an encoded
- * character directly follows. Extension work is therefore at most families x this x ~3 KB whatever the text length;
- * the extension values add at most about 3x the text (each extended value repeats its original run) plus that constant.
- * Honest limit: only text with more than 1024 key-like candidates of one family ahead of a real key can starve its
- * extension; its plain form is always redacted (the original match is never dropped).
- */
-const MAX_EXTENSION_ATTEMPTS_PER_FAMILY = 1024;
 
-/** The per-call attempt counter of one extension-capable family. */
-interface ExtensionAttempts { left: number }
-
-function newExtensionAttempts(): ExtensionAttempts {
-  return { left: MAX_EXTENSION_ATTEMPTS_PER_FAMILY };
+/** Characters the key scans examined since module load; read by tests only, to bound work by input size. */
+let scanWork = 0;
+export function scanWorkForTest(): number {
+  return scanWork;
 }
 
-/** Spends one attempt; false (and nothing spent) when the family has none left. */
-function takeAttempt(attempts: ExtensionAttempts): boolean {
-  if (attempts.left <= 0) return false;
-  attempts.left--;
-  return true;
+/**
+ * The end of the extension window of a candidate of one family: at most MAX_EXTENSION past its original end, never
+ * into the next candidate of the same family (which extends itself), never past the text. Windows of one family are
+ * disjoint by construction, so nothing earlier in the text can spend what a later key needs, and one family's total
+ * extension work is O(n); with F families the work is at most F x n x a constant, and the values add at most about 3n
+ * plus a per-family constant (each extended value repeats its run once).
+ * Honest limit: a key's extension stops at the next candidate of the same family or after MAX_EXTENSION characters; the
+ * original match is never dropped. A real key whose own tail contains another candidate start (e.g. `sk-` inside the
+ * tail) is covered by that candidate's own window.
+ */
+function extensionLimit(text: string, end: number, nextStart: number | undefined): number {
+  return Math.max(end, Math.min(end + MAX_EXTENSION, nextStart ?? text.length, text.length));
 }
 
 /**
@@ -531,6 +528,7 @@ function scanKeyRun(text: string, from: number, encoded: boolean, limit = text.l
     else if (text[end] === "\\" && text[end + 1] === "/" && end + 2 <= limit) end += 2; // a JSON-escaped "/"
     else break;
   }
+  scanWork += end - from + 1;
   return end;
 }
 
@@ -547,13 +545,13 @@ function isKeyMaterialSegment(segment: string): boolean {
 /**
  * A key followed by "." and more key characters keeps going: `sk-…RtBq.Xo2RtBq` is one credential, not a key and a
  * stray word; a sentence's full stop, a file extension (`.json`) and a word (`.Models`, `.toString`) end the key as
- * before (`isKeyMaterialSegment`). Returns `end` itself when nothing continues it.
+ * before (`isKeyMaterialSegment`). Stops at `limit`. Returns `end` itself when nothing continues it.
  */
-function extendDottedKey(text: string, end: number): number {
-  const limit = end + MAX_EXTENSION;
+function extendDottedKey(text: string, end: number, limit: number): number {
   let extended = end;
   while (text[extended] === "." && extended < limit) {
     const segmentEnd = scanKeyRun(text, extended + 1, true, limit);
+    scanWork += segmentEnd - extended;
     if (!isKeyMaterialSegment(normalizeKeyChars(text.slice(extended + 1, segmentEnd)))) break;
     extended = segmentEnd;
   }
@@ -562,6 +560,7 @@ function extendDottedKey(text: string, end: number): number {
 
 /** Whether `text[at, end)` (an `sk-` run) is a base64 key: see `scanBase64Keys` for the rule. */
 function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolean): boolean {
+  scanWork += end - at;
   const body = normalizeKeyChars(unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end)));
   const separator = body.search(/[/+]/);
   const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
@@ -578,14 +577,12 @@ function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolea
  * before its first "/" is a 20-64 character plain key and the rest is a path) is left to the bounded `sk-` patterns,
  * which stop at the "/".
  * Invariant: redaction only grows. The original run is always judged and kept; longer runs (through an encoded
- * "/" or "+", or a dotted continuation) are judged in addition. Each run that something can continue (a "." or an
- * encoded character right after it) extends on its own, up to MAX_EXTENSION, and takes one of the family's
- * MAX_EXTENSION_ATTEMPTS_PER_FAMILY attempts; with none left the run keeps only its original form.
+ * "/" or "+", or a dotted continuation) are judged in addition. All candidates are collected first; each one extends
+ * within its own window (`extensionLimit`): up to MAX_EXTENSION past its run, never into the next candidate.
  * Scanning resumes after the original run; a `sk-` inside it is left to the bounded patterns.
  */
 function scanBase64Keys(text: string): Array<{ start: number; end: number; name: string }> {
-  const found: Array<{ start: number; end: number; name: string }> = [];
-  const attempts = newExtensionAttempts();
+  const candidates: Array<{ at: number; runEnd: number; anthropic: boolean }> = [];
   let from = 0;
   while (from < text.length) {
     const at = text.indexOf("sk-", from);
@@ -594,21 +591,24 @@ function scanBase64Keys(text: string): Array<{ start: number; end: number; name:
       from = at + 1;
       continue;
     }
-    const anthropic = text.startsWith("sk-ant-", at);
-    const name = anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
     const runEnd = scanKeyRun(text, at + 3, false);
+    candidates.push({ at, runEnd, anthropic: text.startsWith("sk-ant-", at) });
+    from = Math.max(runEnd, at + 1);
+  }
+  const found: Array<{ start: number; end: number; name: string }> = [];
+  candidates.forEach(({ at, runEnd, anthropic }, i) => {
+    const name = anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
     const continues = text[runEnd] === "." || matchEncodedKeyChar(text, runEnd) > 0;
-    const extend = continues && takeAttempt(attempts);
-    const encodedEnd = extend ? scanKeyRun(text, runEnd, true, runEnd + MAX_EXTENSION) : runEnd;
-    const extendedEnd = extend ? extendDottedKey(text, encodedEnd) : runEnd;
+    const limit = extensionLimit(text, runEnd, candidates[i + 1]?.at);
+    const encodedEnd = continues ? scanKeyRun(text, runEnd, true, limit) : runEnd;
+    const extendedEnd = continues ? extendDottedKey(text, encodedEnd, limit) : runEnd;
     for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
       if (!isBase64KeyRun(text, at, end, anthropic)) continue;
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
       found.push({ start: at, end: secretEnd, name });
     }
-    from = Math.max(runEnd, at + 1);
-  }
+  });
   return found;
 }
 
@@ -1114,9 +1114,9 @@ export class InformationFlowBoundary {
       });
     }
     for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
-      // Each pattern is a family with its own attempt counter: one pattern's keys cannot spend another's.
-      const attempts = newExtensionAttempts();
+      // Each pattern is a family: its candidates are collected first, then each extends within its own window.
       const re = new RegExp(regex.source, `${regex.flags}d`);
+      const family: Array<{ start: number; end: number }> = [];
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
         // If capture group exists (e.g. Bearer token), extract captured secret, else fullMatch
@@ -1137,14 +1137,15 @@ export class InformationFlowBoundary {
             break;
           }
         }
+        family.push({ start, end });
+      }
+      family.forEach(({ start, end }, i) => {
         // The original match is kept; a dotted continuation is a second, longer match (never a replacement), so a
         // value found only by its shorter form (the key on its own elsewhere in the text) is still redacted.
         const ends = [end];
-        if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
-          if (text[end] === "." && takeAttempt(attempts)) {
-            const extended = extendDottedKey(text, end);
-            if (extended > end) ends.push(extended);
-          }
+        if (DOTTED_CONTINUATION_PATTERNS.has(name) && text[end] === ".") {
+          const extended = extendDottedKey(text, end, extensionLimit(text, end, family[i + 1]?.start));
+          if (extended > end) ends.push(extended);
         }
         for (const spanEnd of ends) {
           const secretVal = text.slice(start, spanEnd);
@@ -1162,7 +1163,7 @@ export class InformationFlowBoundary {
             });
           }
         }
-      }
+      });
     }
 
     // 3. Contextual / Heuristic Classifications (DATA-002: Category 3, DATA-003: Preserves LHS identifiers)
