@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01XCSmb8MMH849UggdDPxfQ3",
+  "agent_id": "a7097d95f9b1ae54f",
+  "subagent_type": "reviewer",
+  "task_description": "Delta review of polish G4 at 3d3b5216",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 34020,
+    "cache_read_tokens": 270778,
+    "output_tokens": 10078,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-12T10:11:20.575918387Z",
+  "completed_at": "2026-11-12T10:13:04.083697781Z"
+}
