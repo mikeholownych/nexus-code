@@ -4213,6 +4213,40 @@ mod surface_tests {
         assert!(rows.iter().any(|r| r.contains("asked the agent to continue (1 of 2)")), "the reason for the repeat is shown: {rows:#?}");
     }
 
+    /// D-13: a delete approval says what will go: the path, the kind, the size, the entry count and a listing, drawn
+    /// through the same approval rows as every other request (sanitised, wrapped, read in full before Approve).
+    #[test]
+    fn a_delete_approval_shows_the_target_its_size_and_a_listing_at_every_width() {
+        let text = "build\ndirectory \u{b7} 3 entries (2 files, 1 folder) \u{b7} 6 B\nEverything inside it is removed. Links inside are removed, not followed.\ncontents:\n\u{258e} a.js\n\u{258e} sub/\n\u{258e} sub/b.js";
+        let request = serde_json::json!({"v": 1, "type": "approval.request", "id": "approval-1", "turn_id": "t1", "tool": "delete_file", "subject": "build",
+            "preview": "{\n  \"path\": \"build\"\n}", "review": {"kind": "args", "text": text, "truncated": false}})
+        .to_string();
+        for width in [100u16, 60, 40, 20, 8, 1] {
+            let mut state = state(true);
+            feed(&mut state, &[request.as_str()]);
+            let (rows, terminal) = screen(&mut state, width, 30);
+            let all = rows.join("\n");
+            assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= usize::from(width)), "{width}: {all}");
+            assert!(terminal.backend().buffer().content.iter().all(|c| !c.symbol().chars().any(char::is_control)), "{width}");
+            if width >= 40 {
+                // The panel's own border is not part of the text: strip it, then the row breaks and spaces.
+                let flat: String = rows.iter().map(|r| r.trim().trim_start_matches('\u{2502}').trim_end_matches('\u{2502}')).collect::<Vec<_>>().join("").split_whitespace().collect::<Vec<_>>().join("");
+                for part in ["Deletebuild", "directory", "3entries(2files,1folder)", "6B", "Everythinginsideitisremoved", "\u{258e}a.js", "\u{258e}sub/b.js", "▸yApprove"] {
+                    assert!(flat.contains(part), "{width}: {part} missing\n{all}");
+                }
+                assert!(!all.contains("\"path\""), "{width}: no raw JSON: {all}");
+            }
+        }
+        // A request from a sidecar that sends only the raw arguments (an older one) is still drawn.
+        let mut state = state(true);
+        let old = serde_json::json!({"v": 1, "type": "approval.request", "id": "approval-2", "turn_id": "t1", "tool": "delete_file", "subject": "base.txt",
+            "preview": "{}", "review": {"kind": "args", "text": "{\n  \"path\": \"base.txt\"\n}", "truncated": false}})
+        .to_string();
+        feed(&mut state, &[old.as_str()]);
+        let (rows, _) = screen(&mut state, 80, 24);
+        assert!(rows.join("\n").contains("\"path\": \"base.txt\""), "{rows:#?}");
+    }
+
     /// D-12: a denied call reads as the operator's own decision, in a sentence, with no run time: the call never ran, and
     /// the time it waited for the decision is not a duration.
     #[test]

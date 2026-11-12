@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { redactSecrets } from "./ui.js";
+import { describeDeletion } from "./delete_preview.js";
 
 export const MAX_REVIEW_TEXT = 100_000;
 
@@ -69,6 +70,9 @@ export function approvalReview(tool: string, args: Record<string, any>, workspac
       const patch = capped(String(args.patch ?? ""));
       return { kind: "patch", path: file, patch: patch.text, truncated: patch.truncated };
     }
+    // Text, so an older client shows it as it shows any arguments; built without reading outside the workspace.
+    case "delete_file":
+      return { kind: "args", text: redactSecrets(describeDeletion(workspace, args)), truncated: false };
     case "run_command":
       return { kind: "command", command: redactSecrets(String(args.command ?? "")) };
     case "verifier": {

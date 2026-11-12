@@ -992,6 +992,16 @@ mod tests {
                 truncated: false
             })
         );
+        // A delete approval is text rows; fields a later sidecar adds beside them (structured facts) are ignored, and a
+        // request without them (an older sidecar) parses the same.
+        assert_eq!(
+            review(r#"{"kind":"args","text":"build\ndirectory \u00b7 3 entries","truncated":false,"delete":{"target":"directory","entries":3,"size":6}}"#),
+            Some(Review::Args { text: "build\ndirectory \u{b7} 3 entries".into(), truncated: false })
+        );
+        assert_eq!(
+            review(r#"{"kind":"args","text":"{\n  \"path\": \"base.txt\"\n}","truncated":false}"#),
+            Some(Review::Args { text: "{\n  \"path\": \"base.txt\"\n}".into(), truncated: false })
+        );
         assert_eq!(review(r#"{"kind":"hologram"}"#), Some(Review::Unknown));
     }
 }
