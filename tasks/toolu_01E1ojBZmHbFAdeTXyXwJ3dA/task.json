@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01E1ojBZmHbFAdeTXyXwJ3dA",
+  "agent_id": "aaa6d1b351674ee97",
+  "subagent_type": "reviewer",
+  "task_description": "Final delta check of D-06/D-07 at 76c5ae6f",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 55743,
+    "cache_read_tokens": 464539,
+    "output_tokens": 9795,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-12T03:56:25.862197893Z",
+  "completed_at": "2026-11-12T03:57:54.653538247Z"
+}

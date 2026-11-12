@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Y9vJYLnpjML6v9daYWy6cg",
+  "agent_id": "a573a1ec957988319",
+  "subagent_type": "reviewer",
+  "task_description": "Delta review of D-06/D-07 at 42b6ceca",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 50706,
+    "cache_read_tokens": 284999,
+    "output_tokens": 9668,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-12T03:45:44.937072916Z",
+  "completed_at": "2026-11-12T03:47:12.658258305Z"
+}

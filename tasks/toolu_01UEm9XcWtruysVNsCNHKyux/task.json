@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01UEm9XcWtruysVNsCNHKyux",
+  "agent_id": "ae6bb39a99a6aba14",
+  "subagent_type": "reviewer",
+  "task_description": "Delta review of #480 fix at 4754812d",
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 56292,
+    "cache_read_tokens": 531878,
+    "output_tokens": 7001,
+    "api_call_count": 14
+  },
+  "started_at": "2026-11-12T03:32:43.206814514Z",
+  "completed_at": "2026-11-12T03:33:55.749805293Z"
+}
