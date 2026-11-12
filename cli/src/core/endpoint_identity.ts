@@ -55,7 +55,14 @@ export function comparableEndpoint(endpoint: string): string {
   return persistableEndpoint(endpoint);
 }
 
-/** Free text with every URL in it cut down to `persistableEndpoint` form: no userinfo, query or fragment. */
+/**
+ * Free text with credentials cut out of every URL in it: userinfo (to the last `@` before the first `/`, whatever
+ * characters the password holds) in `//user:pass@host`, scheme-less `user:pass@host:port/path`, and any scheme URL
+ * reduced to `persistableEndpoint` form (no query or fragment). Text without such a shape is returned unchanged.
+ */
 export function scrubUrls(text: string): string {
-  return text.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (url) => persistableEndpoint(url));
+  return text
+    .replace(/(\/\/)[^\s\/@:"'<>]+:[^\/\n]*@/g, "$1")
+    .replace(/(?<![\w\/@.:-])[^\s\/@:"'<>]+:[^\s\/@"'<>]+@(?=[\w.-]+(?::\d+)?\/)/g, "")
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (url) => persistableEndpoint(url));
 }

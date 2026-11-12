@@ -1522,7 +1522,7 @@ export class LocalLlmClient {
         if (signal?.aborted) throw err;
         const chain = transportCauseChain(err);
         const { condition } = classifyTransportFailure(chain, "connect", err?.name === "TimeoutError");
-        last = { available: false, condition, detail: `${err?.message ?? err}${formatCause(chain)}` };
+        last = { available: false, condition, detail: `${err?.message ?? err}${formatCause(chain)}`, ...(err?.name === "TimeoutError" ? { timedOut: true } : {}) };
         if (!TEMPORARY_CONDITIONS.has(condition)) return last;
       }
     }

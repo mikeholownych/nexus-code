@@ -250,6 +250,8 @@ export interface ProbeResult {
   httpStatus?: number;
   hints?: ProviderHints;
   detail?: string;
+  /** The probe's own deadline fired (the connection may be fine, just slow). */
+  timedOut?: boolean;
 }
 
 /**
@@ -307,20 +309,23 @@ export interface StartupEndpointProblem {
   endpoint: string;
   detail: string;
   /**
-   * True only when the connection itself failed (refused, DNS): nothing is there, so a prompt cannot work. A timeout,
-   * an HTTP error from /models (503 while a model loads, 429) or a rejection says nothing about the chat path.
+   * True only when the connection itself failed (refused, DNS, TLS, reset): a prompt cannot work. A timeout, an HTTP
+   * error from /models (503 while a model loads, 429) or a rejection says nothing about the chat path.
    */
   blocking: boolean;
+  /** The connection was refused or the host did not resolve: nothing is listening there (otherwise something answered badly). */
+  nothingThere: boolean;
 }
 
 export function startupEndpointProblem(endpoint: string, probe: ProbeResult): StartupEndpointProblem | undefined {
   if (!probe.available) {
     const detail = scrubUrls(probe.detail ?? "");
-    const blocking = probe.httpStatus === undefined && !/timeout|timed out|aborted/i.test(detail);
-    return { kind: "unreachable", endpoint: persistableEndpoint(endpoint), detail, blocking };
+    const blocking = probe.httpStatus === undefined && !probe.timedOut;
+    const nothingThere = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|bad port/i.test(detail);
+    return { kind: "unreachable", endpoint: persistableEndpoint(endpoint), detail, blocking, nothingThere };
   }
   if (probe.httpStatus === 401 || probe.httpStatus === 403) {
-    return { kind: "rejected", endpoint: persistableEndpoint(endpoint), detail: `HTTP ${probe.httpStatus}`, blocking: false };
+    return { kind: "rejected", endpoint: persistableEndpoint(endpoint), detail: `HTTP ${probe.httpStatus}`, blocking: false, nothingThere: false };
   }
   return undefined;
 }

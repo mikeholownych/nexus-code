@@ -41,6 +41,15 @@ fn token_number(c: char) -> Option<u32> {
         .then(|| code - TOKEN_BASE)
 }
 
+/// What a draft is made of, without the recall history: enough to put a refused prompt back as it was typed.
+#[derive(Clone, Debug)]
+pub struct Draft {
+    text: String,
+    pastes: Vec<Paste>,
+    paste_seq: u32,
+    cursor: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Composer {
     text: String,
@@ -176,6 +185,20 @@ impl Composer {
             }
             out
         })
+    }
+
+    pub fn snapshot_draft(&self) -> Draft {
+        Draft { text: self.text.clone(), pastes: self.pastes.clone(), paste_seq: self.paste_seq, cursor: self.cursor }
+    }
+
+    /// Puts a snapshot back; the recall history, kept for the whole session, is left as it is.
+    pub fn restore_draft(&mut self, draft: &Draft) {
+        self.text = draft.text.clone();
+        self.pastes = draft.pastes.clone();
+        self.paste_seq = draft.paste_seq;
+        self.cursor = draft.cursor;
+        self.recall = None;
+        self.stash.clear();
     }
 
     /// A paste buffer by number, while the draft still holds it.
@@ -472,6 +495,23 @@ fn fit(label: &str, room: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restoring_a_draft_brings_back_its_text_and_pastes_but_keeps_the_history_made_since() {
+        let mut composer = Composer::default();
+        composer.insert("see ");
+        composer.paste("line one\nline two");
+        let draft = composer.snapshot_draft();
+        composer.take();
+        composer.insert("typed while waiting");
+        composer.take();
+        composer.restore_draft(&draft);
+        assert_eq!(composer.display(composer.text()), "see [Pasted text #1: 2 lines]");
+        assert_eq!(composer.expand(composer.text()), "see line one\nline two");
+        composer.clear();
+        composer.up();
+        assert_eq!(composer.text(), "typed while waiting", "the entry made while the gate ran is still there");
+    }
 
     #[test]
     fn multiline_and_long_pastes_become_buffers_that_expand_exactly() {

@@ -14,6 +14,8 @@ import { encodeEvent, noProviderNotice, noProviderRefusal, providerRecoveryStatu
 import { startupEndpointProblem } from "../src/core/provider_recovery.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import http from "node:http";
+import net from "node:net";
+import { scrubUrls } from "../src/core/endpoint_identity.js";
 import { makeHome, makeRepo, startGateway } from "./helpers/fixtures.js";
 import type { ProviderRecoveryRecord, RecoverySubmissionRecord } from "../src/core/turn.js";
 
@@ -314,9 +316,56 @@ describe("D-07 review round 2", () => {
     } finally {
       await gw.close();
     }
-    const timeout = startupEndpointProblem("http://localhost:1234/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "The operation was aborted due to timeout" } as any)!;
+    const timeout = startupEndpointProblem("http://localhost:1234/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "The operation was aborted due to timeout", timedOut: true } as any)!;
     assert.equal(timeout.blocking, false);
     assert.equal(startupEndpointProblem("http://localhost:1234/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", httpStatus: 429, detail: "HTTP 429" } as any)!.blocking, false);
+  });
+
+  test("a real fetch timeout is not a refusal; a host named like a timeout still is one", async () => {
+    // A server that accepts the connection and never answers: the probe's own timeout fires.
+    const sockets = new Set<net.Socket>();
+    const hang = net.createServer((sock) => { sockets.add(sock); });
+    await new Promise<void>((r) => hang.listen(0, "127.0.0.1", r));
+    const port = (hang.address() as net.AddressInfo).port;
+    try {
+      await sidecar(`http://127.0.0.1:${port}/v1`, async ({ server }) => {
+        const agent = (server as any).app.getAgent();
+        const problem = await agent.probeEndpointProblem(undefined, 150);
+        assert.ok(problem, "the timeout is reported");
+        assert.equal(problem.blocking, false, "a timeout does not gate prompts");
+      });
+    } finally {
+      for (const sock of sockets) sock.destroy();
+      await new Promise((r) => hang.close(r));
+    }
+    const named = startupEndpointProblem("http://api.timeout-llm.com/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED: connect ECONNREFUSED api.timeout-llm.com)" } as any)!;
+    assert.equal(named.blocking, true);
+  });
+
+  test("the refusal does not claim nothing answers when the connection failed some other way", () => {
+    const tls = startupEndpointProblem("https://h.example/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: UNABLE_TO_VERIFY_LEAF_SIGNATURE)" } as any)!;
+    const reset = startupEndpointProblem("https://h.example/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNRESET)" } as any)!;
+    for (const p of [tls, reset]) {
+      assert.doesNotMatch(noProviderRefusal(p), /nothing answers/);
+      assert.match(noProviderRefusal(p), /could not connect/);
+      assert.doesNotMatch(noProviderNotice(p).text, /nothing answers/);
+      assert.match(noProviderNotice(p).text, /could not connect/);
+    }
+    const refused = startupEndpointProblem("http://localhost:1234/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "fetch failed (cause: ECONNREFUSED)" } as any)!;
+    assert.match(noProviderRefusal(refused), /nothing answers/);
+  });
+
+  test("a cancel during the gate is reported once and the gate is kept", async () => {
+    await sidecar("http://127.0.0.1:1/v1", async ({ events, send, server }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "hello" });
+      await send({ type: "cancel" });
+      await server.idle();
+      const refused = events.filter((e) => e.type === "error" && e.id === "t1" && e.code === "NO_PROVIDER");
+      const results = events.filter((e) => e.type === "turn.result");
+      assert.equal(refused.length + results.length, 1, JSON.stringify(events.map((e) => [e.type, e.code])));
+      if (refused.length) assert.match(refused[0].message, /Cancelled before it was sent|nothing answers/);
+      assert.ok((server as any).providerProblem, "a cancelled probe leaves the gate in place");
+    });
   });
 
   test("a refused prompt is not recorded in the prompt history", async () => {
@@ -326,6 +375,20 @@ describe("D-07 review round 2", () => {
       assert.equal(events.find((e) => e.type === "error")?.code, "NO_PROVIDER");
       assert.equal(((server as any).history as string[]).includes("never-sent-text"), false);
     });
+  });
+
+  test("scrubUrls cuts every userinfo form and leaves other text alone", () => {
+    const cut: Array<[string, string]> = [
+      ["http://u:p'w@h/x", "http://h/x"],
+      ["http://u:pa ss@h/x", "http://h/x"],
+      ["//user:pass@host/x", "//host/x"],
+      ["connect user:pass@db:5432/x failed", "connect db:5432/x failed"],
+      ["https://TOKENVALUE@host.example/v1?key=SECRETVALUE", "https://host.example/v1"],
+    ];
+    for (const [input, expected] of cut) assert.equal(scrubUrls(input), expected, input);
+    for (const same of ["mail a@b.example now", "mailto:a@b.example", "/home/a@b/file", "C:\\x\\y", "file:///x/y", "see // a comment about a@b", "http://host.example/v1"]) {
+      assert.equal(scrubUrls(same), same, same);
+    }
   });
 
   test("no credential in a URL survives into detail or text, on the start-up and the recovery paths", () => {
