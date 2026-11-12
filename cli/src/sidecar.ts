@@ -17,7 +17,7 @@ import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn 
 import { getGitInfo } from "./git.js";
 import { redactSecrets, redactSecretPatterns } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
-import { EvidenceLedger, LastTurn, MAX_DETAIL, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
+import { DENIED_BY_OPERATOR, EvidenceLedger, LastTurn, MAX_DETAIL, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
 import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
 import type { ChatMessage, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
@@ -63,6 +63,7 @@ import {
   noProviderRefusal,
   toolSubject,
   toolSummary,
+  type ToolSummary,
 } from "./protocol.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
@@ -94,6 +95,8 @@ export class SidecarServer {
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
   private pendingApproval?: { id: string; settle: (approved: boolean) => void };
+  /** The last approval was settled by the operator's Deny, not by a cancel or a shutdown. */
+  private operatorDeclined = false;
   private pendingCheckpointChoice?: { id: string; choices: readonly CheckpointChoice[]; settle: (choice: CheckpointChoice) => void };
   private approvalSeq = 0;
   private shutdownPromise?: Promise<void>;
@@ -533,15 +536,19 @@ export class SidecarServer {
         open.set(dispatch, evidence);
         this.emit({ type: "tool.start", turn_id: turnId, call_id: callId, tool, subject, evidence });
       },
-      onToolEnd: ({ dispatch, callId, tool: rawTool, success, output, error }) => {
+      onToolEnd: ({ dispatch, callId, tool: rawTool, success, output, error, denied }) => {
         const tool = rawTool;
         const evidence = open.get(dispatch) ?? "";
         open.delete(dispatch);
-        this.evidence.end(evidence, success, output, error);
-        const summary = toolSummary(success, output, error);
+        const declined = denied === true && this.operatorDeclined;
+        if (denied === true) this.operatorDeclined = false;
+        this.evidence.end(evidence, success, output, error, declined);
+        // A denial is the operator's own decision: say so in a sentence, not the model-facing text.
+        const summary: ToolSummary = declined ? { summary: DENIED_BY_OPERATOR, lines: 1 } : toolSummary(success, output, error);
         this.emit({
           type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence,
           ...summary,
+          ...(declined ? { denied: true as const } : {}),
         });
       },
       onProviderRecovery: ({ record, discardedPartialOutput }) => {
@@ -735,6 +742,7 @@ export class SidecarServer {
   }
 
   private requestApproval(turnId: string, signal: AbortSignal, tool: string, args: Record<string, any>): Promise<boolean> {
+    this.operatorDeclined = false;
     if (this.alwaysApprove) return Promise.resolve(true);
     if (signal.aborted) return Promise.resolve(false);
     const id = `approval-${++this.approvalSeq}`;
@@ -771,6 +779,8 @@ export class SidecarServer {
       this.app.getAgent().setApprovalMode("auto");
       this.emitSessionState();
     }
+    // Only the operator's own Deny says "denied by you"; a cancelled turn or a shutdown settles the approval as false too.
+    this.operatorDeclined = !approved;
     pending.settle(approved);
   }
 

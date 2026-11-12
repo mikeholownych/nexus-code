@@ -124,6 +124,8 @@ export type SidecarEvent =
       exit_code?: number | null;
       duration_ms?: number;
       timed_out?: boolean;
+      /** The operator declined the call at its approval prompt (never set for a policy refusal). The call did not run. */
+      denied?: true;
     }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
   | { type: "checkpoint.choice.request"; id: string; turn_id: string; message: string }

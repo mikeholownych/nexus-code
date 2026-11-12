@@ -281,6 +281,9 @@ pub enum Event {
         duration_ms: Option<u64>,
         #[serde(default)]
         timed_out: bool,
+        /// The operator declined the call at its approval prompt: it never ran. Absent from older sidecars.
+        #[serde(default)]
+        denied: bool,
     },
     #[serde(rename = "approval.request")]
     ApprovalRequest {
@@ -628,6 +631,7 @@ mod tests {
                 exit_code: None,
                 duration_ms: None,
                 timed_out: false,
+                denied: false,
             })
         );
         assert_eq!(
@@ -987,6 +991,16 @@ mod tests {
                 text: "{}".into(),
                 truncated: false
             })
+        );
+        // A delete approval is text rows; fields a later sidecar adds beside them (structured facts) are ignored, and a
+        // request without them (an older sidecar) parses the same.
+        assert_eq!(
+            review(r#"{"kind":"args","text":"build\ndirectory \u00b7 3 entries","truncated":false,"delete":{"target":"directory","entries":3,"size":6}}"#),
+            Some(Review::Args { text: "build\ndirectory \u{b7} 3 entries".into(), truncated: false })
+        );
+        assert_eq!(
+            review(r#"{"kind":"args","text":"{\n  \"path\": \"base.txt\"\n}","truncated":false}"#),
+            Some(Review::Args { text: "{\n  \"path\": \"base.txt\"\n}".into(), truncated: false })
         );
         assert_eq!(review(r#"{"kind":"hologram"}"#), Some(Review::Unknown));
     }

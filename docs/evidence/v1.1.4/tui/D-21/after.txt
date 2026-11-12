@@ -1,0 +1,71 @@
+# D-21 after: the trust prompt in a pty
+
+## 100x30
+
+Trust this folder?
+
+/tmp/d21-e8o5nojp/an-example-project-with-a-fairly-long-directory-name
+
+Project instructions found: AGENTS.md
+
+Trusting this folder lets Nexus load its project instructions and workspace integrations, including
+any that change later. Trusting is remembered for this folder; the other choices ask again next
+time.
+
+Trust does not change tool approvals; those follow your permission settings.
+
+› Trust and continue
+  Continue without trusting
+  Exit
+
+↑↓ move · Enter select · Esc exit
+
+## 60x30
+
+Trust this folder?
+
+/tmp/d21-e8o5nojp/
+an-example-project-with-a-fairly-long-directory-name
+
+Project instructions found: AGENTS.md
+
+Trusting this folder lets Nexus load its project
+instructions and workspace integrations, including any that
+change later. Trusting is remembered for this folder; the
+other choices ask again next time.
+
+Trust does not change tool approvals; those follow your
+permission settings.
+
+› Trust and continue
+  Continue without trusting
+  Exit
+
+↑↓ move · Enter select · Esc exit
+
+## 40x30
+
+Trust this folder?
+
+/tmp/d21-e8o5nojp/
+an-example-project-with-a-fairly-long-di
+rectory-name
+
+Project instructions found: AGENTS.md
+
+Trusting this folder lets Nexus load its
+project instructions and workspace
+integrations, including any that change
+later. Trusting is remembered for this
+folder; the other choices ask again next
+time.
+
+Trust does not change tool approvals;
+those follow your permission settings.
+
+› Trust and continue
+  Continue without trusting
+  Exit
+
+↑↓ move · Enter select · Esc exit
+

@@ -1,0 +1,56 @@
+# D-21 before: the trust prompt in a pty
+
+## 100x30
+
+Trust this folder?
+↑↓ navigate · Enter select · Esc exit
+/tmp/d21-4nr_4spy/an-example-project-with-a-fairly-long-directory-name
+Load project instructions
+Check: AGENTS.md
+Trust remembered for this folder.
+Includes future project config changes.
+Trust loads project instructions and
+workspace integrations.
+Tool approvals use permission settings.
+Folder trust doesn't change approvals.
+
+› Trust and continue
+  Continue without trusting
+  Exit
+
+## 60x30
+
+Trust this folder?
+↑↓ navigate · Enter select · Esc exit
+…r_4spy/an-example-project-with-a-fairly-long-directory-name
+Load project instructions
+Check: AGENTS.md
+Trust remembered for this folder.
+Includes future project config changes.
+Trust loads project instructions and
+workspace integrations.
+Tool approvals use permission settings.
+Folder trust doesn't change approvals.
+
+› Trust and continue
+  Continue without trusting
+  Exit
+
+## 40x30
+
+Trust this folder?
+↑↓ navigate · Enter select · Esc exit
+…oject-with-a-fairly-long-directory-name
+Load project instructions
+Check: AGENTS.md
+Trust remembered for this folder.
+Includes future project config changes.
+Trust loads project instructions and
+workspace integrations.
+Tool approvals use permission settings.
+Folder trust doesn't change approvals.
+
+› Trust and continue
+  Continue without trusting
+  Exit
+

@@ -207,6 +207,40 @@ describe("SidecarServer: approvals", () => {
     });
   });
 
+  test("D-12: an operator denial reports a human sentence and no duration, never the model-facing text", async () => {
+    await withSidecar(writeTurn, "review", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "make x" });
+      const req = await waitForEvent(events, (e) => e.type === "approval.request");
+      await send({ type: "deny", id: req.id });
+      await server.idle();
+      const end = events.find((e) => e.type === "tool.end" && e.tool === "write_file");
+      assert.equal(end.success, false);
+      assert.equal(end.summary, "Denied by you");
+      assert.equal(end.denied, true);
+      assert.equal(end.duration_ms, undefined, "the wait for the decision is not the tool's run time");
+      assert.doesNotMatch(JSON.stringify(end), /Ask the user for clarification|rejected by the user/);
+      await send({ type: "tool.detail", id: "d1", evidence: end.evidence });
+      const detail = events.find((e) => e.type === "tool.detail");
+      assert.ok(detail, "the detail view answers");
+      assert.equal(detail.duration_ms, null, "the detail view has no run time either");
+      assert.equal(detail.output, "Denied by you");
+    });
+  });
+
+  test("a turn cancelled while an approval is pending is not reported as denied by you", async () => {
+    await withSidecar(writeTurn, "review", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "make x" });
+      await waitForEvent(events, (e) => e.type === "approval.request");
+      await send({ type: "cancel" });
+      await server.idle();
+      const ends = events.filter((e) => e.type === "tool.end" && e.tool === "write_file");
+      assert.equal(ends.length, 1, "the cancelled call is reported once");
+      assert.equal(ends[0].success, false);
+      assert.equal(ends[0].denied, undefined, "only the operator's Deny key says denied by you");
+      assert.notEqual(ends[0].summary, "Denied by you");
+    });
+  });
+
   test("approve lets the write happen", async () => {
     await withSidecar(writeTurn, "review", async ({ server, events, repo, send }) => {
       await send({ type: "prompt.submit", id: "t1", text: "make x" });
@@ -475,6 +509,7 @@ describe("SidecarServer: sessions and slash commands", () => {
       assert.ok(deniedWrite, "the attempted write receives a terminal denial event");
       assert.equal(deniedWrite.success, false);
       assert.match(deniedWrite.summary, /Read-only fallback/);
+      assert.equal(deniedWrite.denied, undefined, "a policy refusal is not the operator's denial");
       assert.equal(fs.existsSync(path.join(repo, "new.txt")), false);
       assert.ok(events.some((event) => event.type === "turn.result" && event.turn_id === "t-sensitive"));
 

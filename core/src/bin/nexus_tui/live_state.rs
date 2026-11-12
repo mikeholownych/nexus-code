@@ -113,6 +113,9 @@ impl Entry {
     }
 }
 
+/// What a call the operator declined says, in place of the model-facing sentence the sidecar sends the model.
+const DENIED_BY_YOU: &str = "Denied by you";
+
 /// A tool call's timing and, for commands, its output. Timing comes from this client's clock, so it is
 /// presentation, not identity: two runs compare equal when their output does.
 #[derive(Clone, Debug, Default)]
@@ -1005,15 +1008,23 @@ impl LiveState {
                     });
                 }
             }
-            Event::ToolEnd { call_id, tool, success, summary, lines, preview, exit_code, duration_ms, timed_out } => {
+            Event::ToolEnd { call_id, tool, success, summary, lines, preview, exit_code, duration_ms, timed_out, denied } => {
                 let open = self.transcript.iter_mut().rev().find(|entry| {
                     matches!(entry, Entry::Tool { call_id: id, tool: name, status: ToolStatus::Running, .. }
                         if *id == call_id && *name == tool)
                 });
                 if let Some(Entry::Tool { status, summary: slot, diff, run, .. }) = open {
                     *status = if success { ToolStatus::Succeeded } else { ToolStatus::Failed };
-                    *slot = summary;
-                    run.duration_ms = duration_ms.or_else(|| run.started.map(|t| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX)));
+                    if denied {
+                        // The operator's own decision, in a sentence. The call never ran, so the time it waited for the
+                        // decision is not a run time: none is shown.
+                        *status = ToolStatus::Failed;
+                        *slot = DENIED_BY_YOU.to_string();
+                        run.duration_ms = None;
+                    } else {
+                        *slot = summary;
+                        run.duration_ms = duration_ms.or_else(|| run.started.map(|t| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX)));
+                    }
                     if let Some(preview) = preview {
                         run.output = Some(ToolOutput { preview, lines, exit_code, timed_out });
                     }

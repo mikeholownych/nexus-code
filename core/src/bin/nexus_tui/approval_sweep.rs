@@ -85,6 +85,9 @@ fn kinds(bad: &str) -> Vec<Kind> {
         kind("patch two files", "patch_file", "x", serde_json::json!({"kind": "patch", "path": "x", "patch": format!("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-qn1\n+qn2\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-qn3{bad}\n+qn4"), "truncated": false}), &["qn1", "qn2", "qn3", "qn4"]),
         kind("patch no hunks", "patch_file", "x", serde_json::json!({"kind": "patch", "path": "x", "patch": format!("--- a/x\n+++ b/x\nBinary files differ{bad}"), "truncated": false}), &["Binaryfiles"]),
         kind("unknown tool", "zap_things", "x", serde_json::json!({"kind": "args", "text": format!("qz1{bad}"), "truncated": false}), &["qz1"]),
+        // D-13: what a delete says is shown, sanitised like any approval row, and read in full before Approve.
+        kind("delete directory", "delete_file", "build", serde_json::json!({"kind": "args", "text": format!("build{bad}\ndirectory \u{b7} 3 entries (2 files, 1 folder) \u{b7} 6 B\nEverything inside it is removed. Links inside are removed, not followed.\ncontents:\n\u{258e} qd1{bad}\n\u{258e} qd2/\n\u{258e} qd3/qd4\n\u{2026} 5 more entries not listed"), "truncated": false}), &["qd1", "qd2", "qd3", "qd4", "Everythinginsideitisremoved", "5moreentriesnotlisted"]),
+        kind("delete file", "delete_file", "n.txt", serde_json::json!({"kind": "args", "text": format!("n.txt{bad}\nfile \u{b7} 19 B\nOnly this file is removed.\nstart of the file:\n\u{258e} qf1{bad}\n\u{258e} qf2"), "truncated": false}), &["qf1", "qf2", "Onlythisfileisremoved"]),
         kind("future kind", "zap_things", "x", serde_json::json!({"kind": "future-kind"}), &["Thisrequesthasnopreview"]),
     ]
 }
@@ -435,7 +438,7 @@ fn the_approval_panel_holds_its_invariants_across_its_whole_state_space() {
     let clean = kinds("");
     let dirty = kinds(&bad());
     // The number the status table in docs/v1.1.4/TUI-AUDIT-STATUS.md (D-01) quotes.
-    assert_eq!(clean.len(), 15, "update the number of review kinds in docs/v1.1.4/TUI-AUDIT-STATUS.md");
+    assert_eq!(clean.len(), 17, "update the number of review kinds in docs/v1.1.4/TUI-AUDIT-STATUS.md");
     let violations: Vec<String> = std::thread::scope(|scope| {
         let mut handles = Vec::new();
         for kind in &dirty {
