@@ -201,7 +201,7 @@ const ADDED_FILE_MAX = 16 * 1024 * 1024;
 const SIGNIFICANT_LINE_MIN = 8;
 
 /**
- * Opens a regular file under `root` for reading without trusting the path between a check and the read: the directory
+ * Opens a regular file under `root` for reading, narrowing (not closing: Node has no `openat`) the window between a check and the read: the directory
  * must resolve inside `root`, the file is opened without following a final link (and without blocking on a FIFO), and
  * the descriptor itself must be a regular file. "gone" when it does not exist; "cannot" for anything else (a link, a
  * special file, a swapped parent, any error). The caller reads from and closes `fd`.
