@@ -234,11 +234,32 @@ function resume({ host, args }: SlashContext): SlashOutcome {
     return reply("resume", result.message, result.ok);
   }
   // No argument: "the latest" is usually the session already open, so reloading it would only discard the live
-  // conversation. Offer the most recent other one.
-  const other = host.app.getSessionManager().listSessions().find((s) => s.id !== host.sessionId());
-  if (!other) return reply("resume", "There is no other saved session to resume (the one you are in is already loaded). /sessions lists what is saved; /resume <id> loads one.", false);
-  const result = host.resumeSession(other.id);
-  return reply("resume", result.message, result.ok);
+  // conversation. Offer the most recent other one saved for this workspace (the session store is shared by every
+  // workspace, and the loader refuses another workspace's record), trying older ones when a newer cannot be loaded.
+  const here = comparableDir(host.app.getConfig().workspace);
+  const candidates = host.app.getSessionManager().listSessions().filter((s) => s.id !== host.sessionId() && comparableDir(s.workspace) === here);
+  const skipped: string[] = [];
+  for (const candidate of candidates) {
+    let result: { ok: boolean; message: string };
+    try {
+      result = host.resumeSession(candidate.id);
+    } catch (err) {
+      result = { ok: false, message: errorText(err) };
+    }
+    if (result.ok) return reply("resume", skipped.length ? `${result.message} (skipped ${skipped.join(", ")}: could not be loaded)` : result.message, true);
+    skipped.push(candidate.id);
+  }
+  const note = skipped.length ? ` Could not load: ${skipped.join(", ")}.` : "";
+  return reply("resume", `There is no other saved session in this workspace to resume.${note} /sessions lists what is saved; /resume <id> loads one.`, false);
+}
+
+function comparableDir(dir: string | undefined): string {
+  if (!dir) return "";
+  try {
+    return fs.realpathSync(dir);
+  } catch {
+    return path.resolve(dir);
+  }
 }
 
 /** Resolves history item `raw` (1-based) to a turn, or an out-of-range reply. */

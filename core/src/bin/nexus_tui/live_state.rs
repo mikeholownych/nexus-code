@@ -620,7 +620,7 @@ impl LiveState {
             self.composer.insert("\n");
             // Enter would send everything in the draft as one message: say so, never join messages silently.
             self.transcript.push(Entry::Notice(
-                "Another message was added to the draft; Enter sends the whole draft as one message, so edit or split it first.".into(),
+                "Another message was added to the draft; Enter sends the whole draft as one message; edit the draft if you want them sent separately.".into(),
             ));
         }
         self.composer.paste(text);

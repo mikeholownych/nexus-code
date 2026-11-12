@@ -119,16 +119,16 @@ describe("D-11: the picker shows the endpoint the session uses", () => {
     } finally { await session.close(); }
   });
 
-  test("the list is bounded: count and id length are capped, control characters are removed, non-strings are dropped", async () => {
+  test("the list is bounded: count and id length are capped, ids with control, bidi or zero-width characters are rejected whole, non-strings are dropped", async () => {
     const many = Array.from({ length: 5000 }, (_, i) => `m${i}`);
-    const session = await serve(models("evil\u001b[31m\nname", "x".repeat(5000), 42, null, ...many));
+    const session = await serve(models("evil\u001b[31m\nname", "gpt\u202e-4", "zero\u200bwidth", "line\u2028sep", "bom\ufeffid", "bell\u0007id", "x".repeat(5000), 42, null, "kept-id", ...many));
     try {
       process.env.LOCAL_LLM_ENDPOINT = "http://127.0.0.1:9/v1";
       const catalog = await buildCatalog(cfg({ endpoint: `${session.url}/v1`, model: "m1" }), { timeoutMs: 1500 });
       const list = catalog.models.filter((m) => m.provider === "session");
       assert.ok(list.length <= 1000, `${list.length}`);
-      assert.ok(list.every((m) => m.id.length <= 200 && !/[\u0000-\u001f\u007f-\u009f]/.test(m.id)), "ids are short and printable");
-      assert.ok(list.some((m) => m.id === "evil[31mname"), JSON.stringify(list.slice(0, 3)));
+      assert.ok(list.every((m) => m.id.length <= 200 && !/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(m.id)), "ids are short and printable");
+      assert.deepEqual(list.slice(0, 2).map((m) => m.id), ["kept-id", "m0"], "an id with such a character is dropped whole, never cleaned into another id");
     } finally { await session.close(); }
   });
 

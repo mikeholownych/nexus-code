@@ -132,14 +132,15 @@ async function withTimeout<T>(p: Promise<T>, ms: number, signal?: AbortSignal): 
   }
 }
 
-/** Printable, bounded model ids only: a server's list is not trusted to be short, textual or free of terminal controls. */
+/**
+ * Bounded model ids with no control, format (bidi, zero-width) or line-separator character. An id that has one is
+ * dropped, not cleaned: a cleaned id would differ from what the server lists and could be selected as another model.
+ */
 function listedIds(ids: unknown[]): string[] {
   const out: string[] = [];
   for (const raw of ids) {
-    if (typeof raw !== "string") continue;
-    const id = raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim();
-    if (!id || id.length > MAX_MODEL_ID) continue;
-    out.push(id);
+    if (typeof raw !== "string" || !raw.trim() || raw.length > MAX_MODEL_ID || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(raw)) continue;
+    out.push(raw.trim());
     if (out.length >= MAX_LISTED_MODELS) break;
   }
   return out;

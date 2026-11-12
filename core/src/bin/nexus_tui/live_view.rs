@@ -11,6 +11,7 @@ use ratatui::{
 
 use crate::composer::{ComposerLayout, PREFIX_WIDTH};
 use crate::diff_view::{self, CardContext, Fit, Geometry, Palette};
+use crate::diff_view::approval_safe_text;
 use crate::markdown::{self, Prose};
 use crate::live_state::{
     Approval, Detail, DiffReview, Entry, Focus, Link, LiveLayout, LiveState, Loaded, Overlay, ReceiptPanel,
@@ -539,7 +540,7 @@ const HELP: &[(&str, &str)] = &[
     ("backspace", "right after a paste buffer: remove it"),
     (
         "enter (working)",
-        "send steering for this turn (applied at its next step, never merged); esc cancels the turn",
+        "send steering for this turn (applied at its next step); esc cancels the turn and returns unsent messages to the draft",
     ),
     ("/", "slash commands: type / to list them, tab completes"),
     ("/model", "choose a model from the appliance or any connected cloud provider"),
@@ -3511,6 +3512,23 @@ mod tests {
     }
 
     #[test]
+    fn the_picker_draws_no_invisible_or_direction_changing_character_from_a_provider() {
+        // A provider's model ids and labels are untrusted: bidi controls and zero-width characters show as <U+XXXX>.
+        let catalog = r#"{"v":1,"type":"models.catalog","id":"m1","providers":[{"id":"session","label":"This session (evil\u202ehost)","disclosure":"local","connected":true,"methods":[],"status":"ok"}],"models":[{"provider":"session","id":"gpt\u202e-4\u200b"},{"provider":"session","id":"plain"}],"current":{"provider":"session","model":"plain"},"recent":[]}"#;
+        for width in [40u16, 60, 100] {
+            let mut state = ready();
+            for c in "/model".chars() {
+                state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
+            state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            feed(&mut state, &[catalog]);
+            let screen = draw(&state, width, 24);
+            assert!(!screen.contains('\u{202e}') && !screen.contains('\u{200b}'), "no raw control at {width}: {screen}");
+            assert!(screen.contains("<U+202E>"), "the stand-in is drawn at {width}: {screen}");
+        }
+    }
+
+    #[test]
     fn key_entry_is_masked_and_unofficial_sign_in_is_labelled() {
         let mut state = ready();
         for c in "/model".chars() {
@@ -3687,23 +3705,24 @@ fn render_models(frame: &mut Frame, area: Rect, picker: &Picker) {
                         Row::Header { title, detail } => {
                             in_recent = title == "Recent";
                             Line::from(vec![
-                                Span::styled(title.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                                Span::styled(if detail.is_empty() { String::new() } else { format!("  {detail}") }, Style::default().fg(MUTED)),
+                                Span::styled(approval_safe_text(title), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                                Span::styled(if detail.is_empty() { String::new() } else { format!("  {}", approval_safe_text(detail)) }, Style::default().fg(MUTED)),
                             ])
                         }
                         Row::Model { model, provider_label, current, .. } => {
                             let marker = if *current { "● " } else { "  " };
+                            let model = approval_safe_text(model);
                             let mut spans = vec![Span::styled(format!("  {marker}{model}"), if *current && !highlight { base.fg(ACCENT) } else { base })];
                             if filtered || in_recent {
-                                spans.push(Span::styled(format!("  {provider_label}"), if highlight { base } else { Style::default().fg(MUTED) }));
+                                spans.push(Span::styled(format!("  {}", approval_safe_text(provider_label)), if highlight { base } else { Style::default().fg(MUTED) }));
                             }
                             Line::from(spans)
                         }
                         Row::Connect { label, .. } => Line::from(Span::styled(
-                            format!("  + Connect {label}…"),
+                            format!("  + Connect {}…", approval_safe_text(label)),
                             if highlight { base } else { Style::default().fg(Color::Yellow) },
                         )),
-                        Row::Note(note) => Line::from(Span::styled(format!("  {note}"), Style::default().fg(MUTED).add_modifier(Modifier::ITALIC))),
+                        Row::Note(note) => Line::from(Span::styled(format!("  {}", approval_safe_text(note)), Style::default().fg(MUTED).add_modifier(Modifier::ITALIC))),
                     }
                 })
                 .collect();

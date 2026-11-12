@@ -364,7 +364,7 @@ export class SidecarServer {
     // Messages already waiting for their own turn come first: a later one never overtakes them.
     if (this.followUps.length) {
       this.followUps.push({ id, text });
-      this.steerAck(id, "deferred", "The turn is finishing; your message starts a follow-up turn as soon as it ends.");
+      this.steerAck(id, "deferred", "The turn is finishing; your message runs as its own follow-up turn once the turns before it have ended.");
       return;
     }
     const queued = this.app.getAgent().queueSteering(id, text);
@@ -378,7 +378,7 @@ export class SidecarServer {
       return;
     }
     this.followUps.push({ id, text });
-    this.steerAck(id, "deferred", "The turn is finishing; your message starts a follow-up turn as soon as it ends.");
+    this.steerAck(id, "deferred", "The turn is finishing; your message runs as its own follow-up turn once the turns before it have ended.");
   }
 
   /**
@@ -395,7 +395,8 @@ export class SidecarServer {
           this.steerAck(next.id, "applied", "Applied as a follow-up turn.");
         },
         refused: (message) => {
-          this.steerAck(next.id, "cancelled", `${message} Your message is back in the composer.`, next.text);
+          // The messages behind it would be refused too: return them now, in order, rather than probing again for each.
+          for (const f of [next, ...this.followUps.splice(0)]) this.steerAck(f.id, "cancelled", `${message} Your message is back in the composer.`, f.text);
         },
       }),
     );

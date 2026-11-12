@@ -237,7 +237,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   own turn next`); several of them run one turn each, in the order sent, never joined. Steering that cannot be applied
   (the turn was cancelled, a command was running, the agent stopped) is put back into the composer; when more than one
   comes back the draft holds them one per line, a notice says that Enter sends the draft as one message, and you can
-  edit or split it first. Slash commands wait for idle, except read-only `/doctor`,
+  edit the draft if you want them sent separately. Slash commands wait for idle, except read-only `/doctor`,
   `/help` and `/receipt`.
 - **Paste buffers.** A multi-line or long paste becomes `[Pasted text #1: 24 lines]` in the composer; its content is
   submitted exactly as pasted (newlines in it never send, and a pasted `/exit` is text). Ctrl+O shows a buffer,
