@@ -142,3 +142,10 @@ describe("D-16: OSC 52 clipboard fallback", () => {
     }
   });
 });
+
+test("only the exact sanitiser-failure placeholder means 'copy nothing': text that merely starts like it is copied", async () => {
+  const { sanitizeForTerminal } = await import("../src/slash/workspace_commands.js");
+  const { SANITIZATION_FAILED } = await import("../src/safe_text.js");
+  assert.equal(sanitizeForTerminal("[diagnostic suppressed: my own note about logging]"), "[diagnostic suppressed: my own note about logging]");
+  assert.equal(sanitizeForTerminal(SANITIZATION_FAILED), "", "the exact placeholder is what a failing sanitiser returns: nothing is copied");
+});

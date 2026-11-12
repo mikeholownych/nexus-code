@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { formatSafeSidecarText } from "../safe_text.js";
+import { SANITIZATION_FAILED, formatSafeSidecarText } from "../safe_text.js";
 import { copyWithFallback, readFromClipboard } from "../clipboard.js";
 import { commitChanges, generateConventionalCommit, getGitInfo, trustedGitArgs, workspaceStatus } from "../git.js";
 import { HunkStager } from "../stager.js";
@@ -240,9 +240,9 @@ function lastAssistant(ctx: SlashContext): string {
 }
 
 /** The sanitised form of a copy, or nothing when the sanitiser failed (it returns a placeholder then). */
-function sanitizeForTerminal(text: string): string {
+export function sanitizeForTerminal(text: string): string {
   const safe = formatSafeSidecarText(text);
-  return safe.startsWith("[diagnostic suppressed") ? "" : safe;
+  return safe === SANITIZATION_FAILED ? "" : safe;
 }
 
 function copy(ctx: SlashContext): SlashOutcome {
