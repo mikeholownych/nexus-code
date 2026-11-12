@@ -37,7 +37,7 @@ def tool(i):
 
 
 class Term:
-    def __init__(self, binary, script_body, log, kitty, env_extra=None, cols=100, rows=30):
+    def __init__(self, binary, script_body, log, kitty, env_extra=None, cols=100, rows=30, shell_tail=False):
         self.cols, self.rows, self.kitty = cols, rows, kitty
         self.screen = Screen(cols, rows)
         self.raw = b""
@@ -49,6 +49,10 @@ class Term:
         env.update(env_extra or {})
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
+            if shell_tail:
+                # The shell that started the TUI reads whatever input is left once it exits.
+                tail = '"$0" --live --node sh --sidecar "$1"; read -t 1 -n 300 -r left; printf "LEFTOVER=[%s]\\n" "$left" | cat -v'
+                os.execvpe("bash", ["bash", "-c", tail, binary, sidecar.name], env)
             os.execvpe(binary, [binary, "--live", "--node", "sh", "--sidecar", sidecar.name], env)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         self.answered = 0
@@ -232,6 +236,18 @@ def d10(binary, label):
     out.append(f"--- after ten wheel-down notches the newest card is on row {row}")
     t.send(f"\x1b[<0;12;{row + 1}M\x1b[<0;12;{row + 1}m" if row is not None else "")
     show(out, f"## after a left click on row {row} (ESC[<0;12;{row + 1}M / m)", t, (0, 30))
+    t.finish()
+    out.append("")
+    # wheel reports flooding in while quitting must not reach the shell that started the TUI
+    log = tempfile.mktemp()
+    t = Term(binary, sidecar(), log, False, shell_tail=True)
+    t.wait("enter send")
+    t.send("\x03", 0.0)
+    for _ in range(60):
+        t.send("\x1b[<64;20;10M" * 3, 0.004)
+    t.pump(2.5)
+    left = re.search(r"LEFTOVER=\[(.*?)\]", t.raw.decode("utf-8", "replace"))
+    out.append(f"## 180 wheel reports sent over ~0.4 s while quitting; what the parent shell then read as typed input: {left.group(1) if left else 'no shell output seen'!r}")
     t.finish()
     out.append("")
     # approvals are keyboard-only

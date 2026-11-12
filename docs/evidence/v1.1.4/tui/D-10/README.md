@@ -8,3 +8,8 @@ clicks on an approval's buttons send nothing. The before binary never turns mous
 not send it these reports; they are fed anyway to show it ignores them. The panic path is covered by the panic hook
 only at code level (not exercised in the pty); the selection highlight is a colour, not visible in these text dumps
 (the footer changing to the transcript hint shows the focus). Red-first unit output: `../D-09/red.txt` (both defects).
+
+The "wheel reports while quitting" case floods SGR wheel reports right after Ctrl+C and has the parent shell (`bash -c`) read
+what is left in the tty once the TUI exits. `leak-control-10116153.txt` is the same case on the previous head (the
+parent shell reads the report text as typed input); `after.txt` is the fixed head (nothing; 3 of 3 runs clean). Reports
+sent after the process has exited cannot be prevented by the program, so the flood is bounded to the quit window.

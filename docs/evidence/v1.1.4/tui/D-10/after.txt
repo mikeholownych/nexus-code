@@ -72,6 +72,8 @@
  transcript · ↑↓ scroll · [ ] tools · enter details · ctrl+d diff · v receipt · tab back ───────────
 ›
 
+## 180 wheel reports sent over ~0.4 s while quitting; what the parent shell then read as typed input: ''
+
 ## clicks on the Approve and Deny buttons (row 8, columns [4, 16, 46]) plus wheel and right-click
 approval panel still on screen: True; decisions sent to the sidecar: none
 then the keyboard `n` (after the guard): decisions sent: ['{"id":"approval-1","type":"deny","v":1}']

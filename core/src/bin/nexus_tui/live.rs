@@ -14,7 +14,7 @@ use std::{
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as TermEvent, KeyCode, KeyEvent,
-        KeyEventKind, KeyModifiers, MouseButton, MouseEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     },
     execute, terminal,
@@ -385,9 +385,42 @@ fn restore_input_modes_unlocked() {}
 /// well, and by a panic hook installed after ratatui's so they are off before the panic message is printed.
 struct TerminalGuard;
 
+/// Reads and drops input until nothing arrives for `quiet` (at most `limit` events); returns how many were dropped.
+fn drain_input(mut next: impl FnMut(Duration) -> io::Result<Option<TermEvent>>, quiet: Duration, limit: usize) -> usize {
+    let mut dropped = 0;
+    while dropped < limit && matches!(next(quiet), Ok(Some(_))) {
+        dropped += 1;
+    }
+    dropped
+}
+
+/// Drops what the terminal sent that nothing will read (mouse reports still in flight when capture was turned off).
+fn drain_terminal_input() {
+    drain_input(|wait| Ok(if event::poll(wait)? { Some(event::read()?) } else { None }), Duration::from_millis(30), 4096);
+}
+
+/// Discards unread bytes in the tty input queue, so none reaches the shell as typed text once cooked mode is back.
+fn flush_stdin() {
+    #[cfg(unix)]
+    // SAFETY: tcflush on the stdin descriptor has no memory effects; a failure (not a tty) is ignored.
+    unsafe {
+        libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
+    }
+}
+
+/// The order that keeps input bytes from the shell: stop the terminal reporting, drop what already arrived, run the
+/// slow shutdown (during which reports still in flight keep arriving), then drop those too.
+fn end_session(modes_off: impl FnOnce(), mut drain: impl FnMut(), shutdown: impl FnOnce()) {
+    modes_off();
+    drain();
+    shutdown();
+    drain();
+}
+
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         restore_input_modes();
+        flush_stdin();
         ratatui::restore();
     }
 }
@@ -429,10 +462,10 @@ pub fn run_live(spec: SidecarSpec) -> Result<(), Box<dyn std::error::Error>> {
     app.state.shift_enter = shift_enter;
     app.state.mouse = mouse;
     let result = event_loop(&mut terminal, &mut app);
-    // Before the sidecar shutdown, which can take seconds: reports arriving meanwhile would reach the shell as text.
-    restore_input_modes();
-    while event::poll(Duration::ZERO).unwrap_or(false) && event::read().is_ok() {}
-    app.handle(Action::Quit);
+    // The sidecar shutdown can take seconds: reports arriving meanwhile would reach the shell as text.
+    end_session(restore_input_modes, drain_terminal_input, || {
+        app.handle(Action::Quit);
+    });
     drop(terminal);
     drop(guard);
     if let Some(breadcrumb) = maybe_format_exit_breadcrumb(&app.state) {
@@ -546,6 +579,29 @@ fn burst_text(keys: &[KeyEvent]) -> Option<String> {
     )
 }
 
+fn is_wheel(mouse: &MouseEvent) -> bool {
+    matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
+}
+
+/// A wheel notch and the wheel notches queued right behind it: every one scrolls, but the screen is drawn once (a
+/// trackpad flings hundreds). The first other event is kept in `pending`.
+fn apply_wheel_run(state: &mut LiveState, first: MouseEvent, mut next: impl FnMut() -> io::Result<Option<TermEvent>>, pending: &mut Option<TermEvent>) -> io::Result<Option<Action>> {
+    let action = state.on_mouse(first);
+    for _ in 0..512 {
+        match next()? {
+            None => break,
+            Some(TermEvent::Mouse(mouse)) if is_wheel(&mouse) => {
+                state.on_mouse(mouse);
+            }
+            Some(other) => {
+                *pending = Some(other);
+                break;
+            }
+        }
+    }
+    Ok(action)
+}
+
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut LiveApp,
@@ -641,7 +697,8 @@ fn event_loop(
             }
             TermEvent::Resize(_, _) => None,
             // Wheel and left button only: releases and anything else neither act nor redraw.
-            TermEvent::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown | MouseEventKind::Down(MouseButton::Left)) => app.state.on_mouse(mouse),
+            TermEvent::Mouse(mouse) if is_wheel(&mouse) => apply_wheel_run(&mut app.state, mouse, || Ok(if event::poll(Duration::ZERO)? { Some(event::read()?) } else { None }), &mut pending)?,
+            TermEvent::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => app.state.on_mouse(mouse),
             _ => continue,
         };
         redraw = true;
@@ -697,6 +754,43 @@ mod tests {
         let with_resize = vec![TermEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)), TermEvent::Resize(80, 24)];
         assert_eq!(discard_queued_input(with_resize.into_iter()), (true, true), "a queued resize still redraws");
         assert_eq!(discard_queued_input(std::iter::once(TermEvent::Resize(80, 24))), (true, false), "a resize alone is not typing");
+    }
+
+    fn wheel(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent { kind, column: 3, row: 3, modifiers: KeyModifiers::NONE }
+    }
+
+    #[test]
+    fn a_run_of_wheel_notches_scrolls_each_and_is_drawn_once() {
+        let mut state = LiveState::new();
+        let mut queue = vec![TermEvent::Mouse(wheel(MouseEventKind::ScrollUp)); 4].into_iter();
+        let mut pending = None;
+        let action = apply_wheel_run(&mut state, wheel(MouseEventKind::ScrollUp), || Ok(queue.next()), &mut pending).unwrap();
+        assert_eq!((action, state.scroll_back), (None, 15), "five notches of three rows, in one call");
+        assert!(pending.is_none() && queue.next().is_none());
+        // Another kind of event ends the run and is kept for the loop.
+        let mut queue = vec![TermEvent::Mouse(wheel(MouseEventKind::ScrollDown)), TermEvent::Resize(80, 24), TermEvent::Mouse(wheel(MouseEventKind::ScrollDown))].into_iter();
+        apply_wheel_run(&mut state, wheel(MouseEventKind::ScrollDown), || Ok(queue.next()), &mut pending).unwrap();
+        assert_eq!(state.scroll_back, 9);
+        assert!(matches!(pending, Some(TermEvent::Resize(80, 24))));
+        assert_eq!(queue.len(), 1, "the notch behind the resize was not read");
+    }
+
+    #[test]
+    fn input_in_flight_is_drained_until_quiet_and_never_forever() {
+        let mut left = 5;
+        let dropped = drain_input(|_| Ok((left > 0).then(|| { left -= 1; TermEvent::Resize(1, 1) })), Duration::from_millis(1), 100);
+        assert_eq!((dropped, left), (5, 0));
+        assert_eq!(drain_input(|_| Ok(Some(TermEvent::Resize(1, 1))), Duration::from_millis(1), 100), 100, "a flood is bounded");
+        assert_eq!(drain_input(|_| Err(io::Error::other("gone")), Duration::from_millis(1), 100), 0, "an error stops it");
+    }
+
+    #[test]
+    fn the_session_ends_modes_off_then_drain_then_shutdown_then_drain_again() {
+        use std::cell::RefCell;
+        let log = RefCell::new(Vec::new());
+        end_session(|| log.borrow_mut().push("modes off"), || log.borrow_mut().push("drain"), || log.borrow_mut().push("shutdown"));
+        assert_eq!(*log.borrow(), ["modes off", "drain", "shutdown", "drain"]);
     }
 
     #[test]

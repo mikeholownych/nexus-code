@@ -272,16 +272,24 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 
 - **New line.** `Ctrl+J` inserts a newline in the draft in every terminal; `Alt+Enter` does where the terminal sends it
   (not in Windows Terminal's default bindings, nor in macOS Terminal unless Option is set to act as Meta). Plain
-  `Enter` sends. `Shift+Enter` also inserts a newline, but only on terminals that speak the kitty keyboard protocol
-  (kitty, WezTerm, foot, Ghostty and others that answer the startup query); elsewhere it arrives as a plain `Enter`
-  and sends the draft. The footer and `?` help name `shift+enter` only when the terminal reported support, and
-  `alt+enter or ctrl+j` otherwise. The xterm `modifyOtherKeys` encoding of Shift+Enter is not read.
-- **Mouse.** Capture is on by default and asks the terminal only for button presses and the wheel. The wheel scrolls the
+  `Enter` sends. `Shift+Enter` also inserts a newline, but only on terminals that answer the kitty keyboard-protocol
+  query at startup (the protocol specification says kitty, WezTerm, foot and Ghostty do; the tests simulate a
+  terminal that answers and one that does not, and no real terminal emulator was run); elsewhere it arrives as a
+  plain `Enter` and sends the draft. The footer and `?` help name `shift+enter` only when the terminal answered, and
+  `alt+enter or ctrl+j` otherwise. The xterm `modifyOtherKeys` encoding of Shift+Enter is not read. tmux and screen
+  are treated as unsupported unless they pass the query through; use `Ctrl+J` there.
+- **Mouse.** Capture is on by default. On Unix it asks the terminal only for button presses and the wheel (on
+  Windows crossterm's mouse capture also reports motion and drag). The wheel scrolls the
   transcript (three rows a notch), or the open panel, an approval's change included. A left click on a tool call
   selects it; a second click on the selected call opens its details, as `Enter` does. The mouse never answers an
   approval or any other question: clicks do nothing while a panel is open. Hold Shift while dragging (Option in iTerm2
   and macOS Terminal) to select text with the terminal's own selection; `NEXUS_TUI_MOUSE=off` turns capture off
-  (`0`, `false`, `no` and `none` also do). The mouse mode is switched off again on quit and on SIGTERM.
+  (`0`, `false`, `no` and `none` also do). Under tmux or screen the terminal only passes mouse events when mouse mode
+  is on (`set -g mouse on`). On a slow or high-latency link a mouse report can arrive split: the first byte then reads
+  as `Esc` (which denies an open approval and cancels a running turn, as it always does) and the rest as stray
+  characters in the draft (never `y`, `n` or `a` as a decision); set `NEXUS_TUI_MOUSE=off` there. On exit the mouse mode
+  is switched off, input still in flight is dropped before and after the sidecar shuts down, and the unread terminal
+  input is flushed, so reports do not reach the shell.
 
 ### Cancellation & Process Ownership
 

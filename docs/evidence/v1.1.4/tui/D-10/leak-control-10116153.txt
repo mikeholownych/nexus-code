@@ -1,0 +1,2 @@
+# flood-while-quitting case, binary 10116153 (before the drain/flush fix), same script, 1 of 3 identical runs
+## 180 wheel reports sent over ~0.4 s while quitting; what the parent shell then read as typed input: '4;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<64;20;10M^[[<6'

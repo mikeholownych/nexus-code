@@ -5,4 +5,4 @@
 in a pseudo-terminal (Screen reader of `cli/test/helpers/tui_pty_driver.py`) with a fake shell sidecar that logs the
 commands it receives. The pty plays two terminals: one that answers the kitty keyboard-protocol query and one that
 does not. Not run in tmux, a real kitty or a real VS Code terminal; the plain terminal here is what tmux without
-extended keys looks like to the program (no answer to the query). Red-first unit output: `red.txt`.
+extended keys looks like to the program (no answer to the query). Red-first unit output: `red.txt` (final tests against the behaviour stubbed back in a scratch copy; header says how).

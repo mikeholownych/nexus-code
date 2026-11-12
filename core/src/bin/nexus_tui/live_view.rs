@@ -561,7 +561,7 @@ fn help_rows(shift_enter: bool, mouse: bool) -> Vec<(&'static str, &'static str)
             "@mouse" if mouse => {
                 rows.push(("wheel", "scroll the transcript, or the open panel; the mouse never answers an approval"));
                 rows.push(("click", "select a tool call; click it again to open its details"));
-                rows.push(("mouse capture", "hold shift (option in iTerm2 and macOS Terminal) while dragging to select text; NEXUS_TUI_MOUSE=off turns capture off"));
+                rows.push(("mouse capture", "hold shift (option in iTerm2 and macOS Terminal) while dragging to select text; NEXUS_TUI_MOUSE=off turns capture off (use it on a slow or high-latency link, where a split report can leave stray characters in the draft)"));
             }
             "@mouse" => rows.push(("mouse", "capture is off: your terminal selects and scrolls natively")),
             _ => rows.push((keys, text)),
