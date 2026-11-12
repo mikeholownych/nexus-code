@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Mr7NauyNx9H9UZYs8hqcNJ",
+  "agent_id": "ac3445d1dd8b8e2f0",
+  "subagent_type": "reviewer",
+  "task_description": "Pre-push review of redactor budget",
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 52577,
+    "cache_read_tokens": 975546,
+    "output_tokens": 26414,
+    "api_call_count": 22
+  },
+  "started_at": "2026-11-12T00:09:15.354230012Z",
+  "completed_at": "2026-11-12T00:13:48.507457725Z"
+}
