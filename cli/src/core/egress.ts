@@ -491,6 +491,10 @@ function bearerTokenLength(value: string): number {
 
 /** How far past a key the encoded run and the dotted continuation are followed: keys are short. Each match gets its own allowance of this size; the per-call `ExtensionBudget` bounds what is kept. */
 const MAX_EXTENSION = 1024;
+/** A rescan (a key inside an earlier key's window) may keep this many MAX_EXTENSIONs of extension per scan. */
+const RESCAN_QUOTA_FACTOR = 8;
+/** Rescans may scan this many characters per character of text before they stop extending (keeps work linear). */
+const RESCAN_WORK_FACTOR = 16;
 
 /**
  * The end of the run of key characters from `from`: a JSON-escaped `\/` counts as "/", and with `encoded` an encoded or
@@ -582,10 +586,10 @@ function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolea
  */
 function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: number; end: number; name: string }> {
   const found: Array<{ start: number; end: number; name: string }> = [];
-  // Limitation: a key that starts inside a blob's window (no separator) can lose its extension once the rescan quota is spent; its plain form is still redacted.
-  const rescanBudget: ExtensionBudget = { left: 8 * MAX_EXTENSION };
+  // Limitation: a key that starts inside a blob's window (no separator) can lose its extension once the rescan quota is spent; its plain key (20+ characters) is still redacted.
+  const rescanBudget: ExtensionBudget = { left: RESCAN_QUOTA_FACTOR * MAX_EXTENSION };
   let scannedTo = 0;
-  let rescanLeft = 16 * text.length;
+  let rescanLeft = RESCAN_WORK_FACTOR * text.length;
   let from = 0;
   while (from < text.length) {
     const at = text.indexOf("sk-", from);
@@ -1120,11 +1124,13 @@ export class InformationFlowBoundary {
         },
       });
     }
-    // Its own budget, split as in `scanBase64Keys`: a match inside an earlier match's window is a rescan.
-    const extensionBudget = newExtensionBudget(text);
-    const rescanBudget: ExtensionBudget = { left: 8 * MAX_EXTENSION };
-    let scannedTo = 0;
     for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
+      // Per pattern (patterns run one after another, not in text order), split as in `scanBase64Keys`: a match inside
+      // an earlier match's window of the same pattern is a rescan. One pattern's keys cannot spend another's budget.
+      const extensionBudget = newExtensionBudget(text);
+      const rescanBudget: ExtensionBudget = { left: RESCAN_QUOTA_FACTOR * MAX_EXTENSION };
+      let rescanLeft = RESCAN_WORK_FACTOR * text.length;
+      let scannedTo = 0;
       const re = new RegExp(regex.source, `${regex.flags}d`);
       let match: RegExpExecArray | null;
       while ((match = re.exec(text)) !== null) {
@@ -1152,8 +1158,9 @@ export class InformationFlowBoundary {
         if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
           const rescan = start < scannedTo;
           const budget = rescan ? rescanBudget : extensionBudget;
-          const extended = budget.left > 0 ? extendDottedKey(text, end) : end;
-          scannedTo = Math.max(scannedTo, extended);
+          const extended = (rescan ? rescanLeft > 0 : budget.left > 0) ? extendDottedKey(text, end) : end;
+          if (rescan) rescanLeft -= 16 + extended - end;
+          if (extended > end) scannedTo = Math.max(scannedTo, extended);
           if (extended > end && chargeExtension(end, extended, budget)) ends.push(extended);
         }
         for (const spanEnd of ends) {
