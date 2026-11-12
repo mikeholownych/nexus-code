@@ -7,6 +7,7 @@ import { format as formatDiagnostic } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { AgentObserver } from "./agent.js";
+import type { StartupEndpointProblem } from "./core/provider_recovery.js";
 import { autoDetectModel, buildConfig, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
 import { isNexusDirPermissive } from "./doctor.js";
@@ -57,7 +58,9 @@ import {
   encodeEvent,
   parseCommand,
   projectTurn,
-  providerRecoveryNotice,
+  providerRecoveryStatus,
+  noProviderNotice,
+  noProviderRefusal,
   toolSubject,
   toolSummary,
 } from "./protocol.js";
@@ -112,6 +115,10 @@ export class SidecarServer {
   /** Title of the session record (the latest turn's prompt), kept by saves made outside a turn. */
   private sessionTitle?: string;
   private readonly startupProbeAbort = new AbortController();
+  /** Why start-up found no usable provider (D-07); cleared when a later probe succeeds. A prompt re-checks it before a turn starts. */
+  private providerProblem?: StartupEndpointProblem;
+  /** The start-up probe in flight (at most 3 s); a prompt waits for it so it is gated like any later one. */
+  private startupProbe: Promise<void> = Promise.resolve();
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -144,9 +151,12 @@ export class SidecarServer {
     if (isNexusDirPermissive()) {
       this.emit({ type: "notice", text: "your Nexus state is readable by other users; run `nexus doctor --fix`" });
     }
-    void this.app.getAgent().probeStartupEndpoint(this.startupProbeAbort.signal).then((warning) => {
-      if (warning && !this.shutdownPromise) {
-        this.emit({ type: "notice", text: warning });
+    this.startupProbe = this.app.getAgent().probeEndpointProblem(this.startupProbeAbort.signal).then((problem) => {
+      if (problem && !this.shutdownPromise) {
+        // Only "nothing answers" gates prompts. A rejection on /models is a warning: the chat path refreshes tokens and
+        // may accept a key the model list refuses, so the turn is left to decide.
+        if (problem.blocking) this.providerProblem = problem;
+        this.emit({ type: "notice", ...noProviderNotice(problem) });
       }
     }).catch(() => {});
   }
@@ -325,9 +335,15 @@ export class SidecarServer {
       return;
     }
     if (!this.activeTurn) {
-      this.history.push(text.trim());
-      this.steerAck(id, "applied", "Nothing was running, so your message started a new turn.");
-      this.runJob(id, undefined, (signal) => this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal));
+      this.runJob(id, undefined, (signal) =>
+        this.gatedTurn(id, text, signal, {
+          admitted: () => {
+            this.history.push(text.trim());
+            this.steerAck(id, "applied", "Nothing was running, so your message started a new turn.");
+          },
+          refused: (message) => this.steerAck(id, "cancelled", `${message} Your message is back in the composer.`, text),
+        }),
+      );
       return;
     }
     if (this.activeSpec) {
@@ -345,7 +361,6 @@ export class SidecarServer {
       this.steerAck(id, "duplicate", "Already received; it is not applied again.");
       return;
     }
-    this.history.push(text.trim());
     this.followUps.push({ id, text });
     this.steerAck(id, "deferred", "The turn is finishing; your message starts a follow-up turn as soon as it ends.");
   }
@@ -356,8 +371,19 @@ export class SidecarServer {
     this.followUps = [];
     const id = followUps[0].id;
     const text = followUps.map((f) => f.text).join("\n\n");
-    for (const f of followUps) this.steerAck(f.id, "applied", "Applied as a follow-up turn.");
-    this.runJob(id, undefined, (signal) => this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal));
+    this.runJob(id, undefined, (signal) =>
+      this.gatedTurn(id, text, signal, {
+        admitted: () => {
+          for (const f of followUps) {
+            this.history.push(f.text.trim());
+            this.steerAck(f.id, "applied", "Applied as a follow-up turn.");
+          }
+        },
+        refused: (message) => {
+          for (const f of followUps) this.steerAck(f.id, "cancelled", `${message} Your message is back in the composer.`, f.text);
+        },
+      }),
+    );
   }
 
   private cancel(): void {
@@ -457,8 +483,42 @@ export class SidecarServer {
 
   private submit(id: string, text: string): void {
     if (this.rejectBusy(id)) return;
-    this.history.push(text.trim());
-    this.runJob(id, undefined, (signal) => this.turn(id, text, text, `Turn: ${text.slice(0, 30)}`, signal));
+    this.runJob(id, undefined, (signal) =>
+      this.gatedTurn(id, text, signal, {
+        admitted: () => this.history.push(text.trim()),
+        refused: (message) => this.emit({ type: "error", id, code: "NO_PROVIDER", message }),
+      }),
+    );
+  }
+
+  /**
+   * The one way a prompt, a steer that starts a turn and a follow-up start a turn. When start-up found nothing answering,
+   * it waits for that probe, asks again (the operator may have connected a provider or started a server since) and
+   * refuses with the reason rather than entering a retry loop. A cancelled probe says nothing about the provider: the
+   * gate stays and the turn does not run.
+   */
+  private async gatedTurn(
+    id: string,
+    text: string | any[],
+    signal: AbortSignal,
+    hooks: { admitted?: () => void; refused: (message: string) => void },
+    turnArgs?: { title?: string; checkpoint?: string; step?: boolean },
+  ): Promise<void> {
+    // Cancelled while the gate was checking: the message is reported back (never silently dropped), not run.
+    const cancelled = "Cancelled before it was sent.";
+    await this.startupProbe;
+    // With no known problem a cancel is the turn's own business (it reports INTERRUPTED); only the gate reports it here.
+    if (this.providerProblem) {
+      const problem = await this.app.getAgent().probeEndpointProblem(signal);
+      if (signal.aborted) return hooks.refused(cancelled);
+      this.providerProblem = problem?.blocking ? problem : undefined;
+      if (this.providerProblem) {
+        hooks.refused(noProviderRefusal(this.providerProblem));
+        return;
+      }
+    }
+    hooks.admitted?.();
+    await this.turn(id, text, turnArgs?.title ?? String(text), turnArgs?.checkpoint ?? `Turn: ${String(text).slice(0, 30)}`, signal, turnArgs?.step);
   }
 
   private observerFor(turnId: string): AgentObserver {
@@ -485,8 +545,8 @@ export class SidecarServer {
         });
       },
       onProviderRecovery: ({ record, discardedPartialOutput }) => {
-        const text = providerRecoveryNotice(record, discardedPartialOutput);
-        if (text) this.emit({ type: "notice", text: text });
+        const status = providerRecoveryStatus(record, discardedPartialOutput);
+        if (status) this.emit({ type: "notice", ...status });
       },
       onStreamStall: ({ stalled, silentSecs }) =>
         this.emit({ type: "stream.stall", turn_id: turnId, stalled, silent_secs: silentSecs }),
@@ -786,8 +846,16 @@ export class SidecarServer {
       }
       if (outcome.kind === "turn") {
         this.activeSpec = undefined;
-        this.emit({ type: "slash.result", id, command: outcome.command, success: true, output: "", prompt: outcome.label });
-        await this.turn(id, outcome.prompt, outcome.title ?? outcome.label, outcome.checkpoint, signal, outcome.step);
+        await this.gatedTurn(
+          id,
+          outcome.prompt,
+          signal,
+          {
+            admitted: () => this.emit({ type: "slash.result", id, command: outcome.command, success: true, output: "", prompt: outcome.label }),
+            refused: (message) => this.emit({ type: "error", id, code: "NO_PROVIDER", message }),
+          },
+          { title: outcome.title ?? outcome.label, checkpoint: outcome.checkpoint, step: outcome.step },
+        );
         return;
       }
       if (outcome.command === "clear" && outcome.success) this.lastTurn = null;
@@ -1141,7 +1209,7 @@ export const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<
   "checkpoint.choice.request": { message: MAX_TEXT_FIELD },
   "turn.result": { heading: MAX_TEXT_FIELD, line: MAX_TEXT_FIELD },
   "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: MAX_PASTE },
-  notice: { text: MAX_TEXT_FIELD },
+  notice: { text: MAX_TEXT_FIELD, detail: MAX_TEXT_FIELD },
   error: { message: MAX_TEXT_FIELD },
   "provider.auth": { instructions: MAX_TEXT_FIELD },
   "provider.result": { message: MAX_TEXT_FIELD },

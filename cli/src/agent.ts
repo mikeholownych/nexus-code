@@ -118,7 +118,9 @@ import {
   RecoveryPolicy,
   realRecoveryClock,
   recoveryPolicyFromEnv,
-  startupEndpointWarning,
+  startupProblemWarning,
+  startupEndpointProblem,
+  type StartupEndpointProblem,
 } from "./core/provider_recovery.js";
 import { LocalTraceRecorder, type SpanHandle, type TraceAttributes, type TraceStatus } from "./core/trace.js";
 import {
@@ -5911,16 +5913,22 @@ ${NEXUS_RUNTIME_IDENTITY}`;
    * cause and fix (`nexus doctor`, `~/.config/nexus/config.env`, `/connect`) when unreachable or rejected; undefined when ok.
    */
   public async probeStartupEndpoint(signal?: AbortSignal): Promise<string | undefined> {
+    const problem = await this.probeEndpointProblem(signal);
+    return problem ? startupProblemWarning(problem) : undefined;
+  }
+
+  /** The same probe, structured: what is wrong (unreachable, credentials rejected) and the raw cause; undefined when usable. */
+  public async probeEndpointProblem(signal?: AbortSignal, timeoutMs = 3_000): Promise<StartupEndpointProblem | undefined> {
     if (typeof this.client.probeAvailability !== "function") return undefined;
     // After a resume the hosts probe right after restoring: inside the provider's window nothing is sent. The
     // resumed turn waits it out and re-probes through live recovery, so no warning is lost.
     if (this.isProviderWindowOpen()) return undefined;
     try {
-      const probe = await this.client.probeAvailability(signal, { timeoutMs: 3_000 });
+      const probe = await this.client.probeAvailability(signal, { timeoutMs });
       if (probe.available && probe.httpStatus !== undefined && probe.httpStatus >= 200 && probe.httpStatus < 300) {
         this.client.markSucceeded?.(this.client.endpoint);
       }
-      return startupEndpointWarning(this.client.endpoint, probe);
+      return startupEndpointProblem(this.client.endpoint, probe);
     } catch {
       return undefined;
     }

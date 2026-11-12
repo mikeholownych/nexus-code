@@ -66,7 +66,8 @@ fn phase_text(state: &LiveState) -> String {
         "compacting" => "compacting the context".to_string(),
         other => other.replace('_', " "),
     };
-    if activity.phase != "inference" && activity.phase != "compacting" {
+    // A provider wait has its own countdown in the transcript row, so a second timer here would only add noise.
+    if !matches!(activity.phase.as_str(), "inference" | "compacting" | "provider_wait") {
         let phase_elapsed = state.now.saturating_duration_since(activity.since);
         if phase_elapsed >= Duration::from_secs(2) {
             text.push_str(&format!(" {}", clock(phase_elapsed)));
@@ -1814,7 +1815,7 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
                 Line::from(Span::styled(format!("  {}", expand_tabs(row)), style))
             }));
         }
-        Entry::Info(text) => lines.push(Line::from(Span::styled(
+        Entry::Info(text) | Entry::Status { text, .. } => lines.push(Line::from(Span::styled(
             format!("  · {}", one_line(text)),
             muted,
         ))),
@@ -2061,6 +2062,53 @@ mod tests {
         assert_ne!(a, b, "the next frame differs without any sidecar event");
         assert_eq!(spinner_frame(std::time::Duration::from_millis(0)), "⠋");
         assert_eq!(clock(std::time::Duration::from_secs(3725)), "1:02:05");
+    }
+
+    // D-06 / D-07 on screen.
+    fn wait(n: u32) -> String {
+        format!(
+            r#"{{"v":1,"type":"notice","key":"provider.recovery","text":"Waiting for the model provider at http://127.0.0.1:18080/v1: the provider is rate limiting requests. Retry {n}, next attempt in 2s; gives up in about 19 min. Your work is kept. /details shows the raw error; esc cancels."}}"#
+        )
+    }
+
+    #[test]
+    fn a_long_wait_shows_one_status_row_with_the_counter_at_every_width() {
+        for width in [40u16, 60, 100] {
+            let mut state = ready();
+            feed(&mut state, &[BUSY]);
+            for n in 1..=13 {
+                feed(&mut state, &[&wait(n)]);
+            }
+            let screen = draw(&state, width, 24);
+            assert_eq!(screen.matches("Waiting for the model").count(), 1, "width {width}:\n{screen}");
+            assert_shows(&screen, &["Retry 13"]);
+            assert!(!screen.contains("Retry 12"), "width {width}:\n{screen}");
+        }
+    }
+
+    #[test]
+    fn the_wait_has_one_timer_not_two() {
+        let mut state = ready();
+        feed(&mut state, &[BUSY, r#"{"v":1,"type":"activity","turn_id":"t1","phase":"provider_wait","step":1,"segment":1}"#]);
+        let start = state.turn_started.unwrap();
+        state.set_now(start + std::time::Duration::from_secs(10));
+        let line = activity_line(&state);
+        assert_eq!(line.matches("0:10").count(), 1, "{line}");
+        assert!(line.contains("esc cancels"), "{line}");
+    }
+
+    #[test]
+    fn a_first_run_without_a_provider_shows_the_next_step_at_every_width() {
+        for width in [40u16, 60, 100] {
+            let mut state = ready();
+            feed(&mut state, &[r#"{"v":1,"type":"notice","key":"provider.startup","detail":"ECONNREFUSED","text":"No model is connected: nothing answers at http://localhost:1234/v1. Next: type /connect to sign in or add an API key, or start a local model server (LM Studio, Ollama, llama.cpp) and send your message again. `nexus doctor` checks the setup; docs/CLOUD_PROVIDERS.md lists providers."}"#]);
+            let screen = draw(&state, width, 24);
+            let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+            for needle in ["No model is connected", "/connect", "local model server", "CLOUD_PROVIDERS"] {
+                assert!(flat.contains(needle), "width {width}: missing {needle:?}\n{screen}");
+            }
+            assert!(!flat.contains("ECONNREFUSED"), "the raw cause is not in the text: {screen}");
+        }
     }
 
     #[test]

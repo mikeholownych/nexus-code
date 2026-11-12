@@ -237,7 +237,7 @@ describe("a provider's Retry-After survives suspend, restart and resume outside 
       await until(() => side.events.some((x) => x.e.type === "turn.result"), "the resumed turn's result", 60_000);
       assert.equal(arrivals.length, 2, "one request after the resume");
       assert.ok(arrivals[1] >= eligibleAt, `the resumed request (${new Date(arrivals[1]).toISOString()}) did not reach the provider before ${new Date(eligibleAt).toISOString()}`);
-      const waitNotice = side.notices().find((n) => /waiting \d+s before checking again/.test(String(n.e.text)));
+      const waitNotice = side.notices().find((n) => /next attempt in \d+s/.test(String(n.e.text)));
       assert.ok(waitNotice && waitNotice.at < arrivals[1], `a provider-wait notice is shown before the request: ${side.notices().map((n) => n.e.text).join(" | ")}`);
       await side.shutdown();
     } finally {

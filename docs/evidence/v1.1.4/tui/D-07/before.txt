@@ -1,0 +1,70 @@
+# D-07 before: after typing 'hello' + Enter (8 s later), 120x30
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  context 4058/65536  local
+  · Endpoint http://127.0.0.1:1/v1 is unreachable (fetch failed (cause: bad port)). Run `nexus doctor`, check
+LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.
+
+› hello
+  · Inference provider at http://127.0.0.1:1/v1 temporarily unavailable (network_error); waiting 1s before checking
+again. Work is preserved.
+  · Inference provider at http://127.0.0.1:1/v1 temporarily unavailable (network_error); waiting 2s before checking
+again. Work is preserved.
+  · Inference provider at http://127.0.0.1:1/v1 temporarily unavailable (network_error); waiting 2s before checking
+again. Work is preserved.
+  · Inference provider at http://127.0.0.1:1/v1 temporarily unavailable (network_error); waiting 7s before checking
+again. Work is preserved.
+
+ ⠏ waiting for the inference provider 0:07 · 0:07 · step 1 · esc cancels ───────────────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+# D-07 before: clean HOME, nothing listening at the endpoint, 120x30, after start-up
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  context 4058/65536  local
+  · Endpoint http://127.0.0.1:1/v1 is unreachable (fetch failed (cause: bad port)). Run `nexus doctor`, check
+LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+# D-07 before: after typing 'hello' + Enter (8 s later), 40x30
+ NEXUS   ws  ⎇ main  mode: review  local
+unreachable (fetch failed (cause: bad
+port)). Run `nexus doctor`, check
+LOCAL_LLM_ENDPOINT in
+~/.config/nexus/config.env, or use
+/connect.
+
+› hello
+  · Inference provider at
+http://127.0.0.1:1/v1 temporarily
+unavailable (network_error); waiting 1s
+before checking again. Work is
+preserved.
+  · Inference provider at
+http://127.0.0.1:1/v1 temporarily
+unavailable (network_error); waiting 2s
+before checking again. Work is
+preserved.
+  · Inference provider at
+http://127.0.0.1:1/v1 temporarily
+unavailable (network_error); waiting 3s
+before checking again. Work is
+preserved.
+  · Inference provider at
+http://127.0.0.1:1/v1 temporarily
+unavailable (network_error); waiting 4s
+before checking again. Work is
+preserved.
+ ⠏ waiting for the inference provid…────
+› type to steer · esc cancels
+
+# D-07 before: clean HOME, nothing listening at the endpoint, 40x30, after start-up
+ NEXUS   ws  ⎇ main  mode: review  local
+  · Endpoint http://127.0.0.1:1/v1 is
+unreachable (fetch failed (cause: bad
+port)). Run `nexus doctor`, check
+LOCAL_LLM_ENDPOINT in
+~/.config/nexus/config.env, or use
+/connect.
+
+ enter send · ⇧↵ newline · ? help ──────
+› ask Nexus · / commands · ? keys
+

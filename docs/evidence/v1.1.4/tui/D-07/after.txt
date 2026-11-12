@@ -1,0 +1,57 @@
+# D-07 after: after typing 'hello' + Enter (8 s later), 120x30
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  context 4058/65536  local
+  · No model is connected: nothing answers at http://127.0.0.1:1/v1. Next: type /connect to sign in or add an API key,
+or start a local model server (LM Studio, Ollama, llama.cpp) and send your message again. `nexus doctor` checks the
+setup; docs/CLOUD_PROVIDERS.md lists providers.
+
+› hello
+  ! Not sent: no model is connected (nothing answers at http://127.0.0.1:1/v1). Use /connect or start a local model
+server, then send it again.
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────
+› hello
+
+# D-07 after: clean HOME, nothing listening at the endpoint, 120x30, after start-up
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  context 4058/65536  local
+  · No model is connected: nothing answers at http://127.0.0.1:1/v1. Next: type /connect to sign in or add an API key,
+or start a local model server (LM Studio, Ollama, llama.cpp) and send your message again. `nexus doctor` checks the
+setup; docs/CLOUD_PROVIDERS.md lists providers.
+
+ enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+
+# D-07 after: after typing 'hello' + Enter (8 s later), 40x30
+ NEXUS   ws  ⎇ main  mode: review  local
+  · No model is connected: nothing
+answers at http://127.0.0.1:1/v1. Next:
+type /connect to sign in or add an API
+key, or start a local model server (LM
+Studio, Ollama, llama.cpp) and send your
+message again. `nexus doctor` checks the
+setup; docs/CLOUD_PROVIDERS.md lists
+providers.
+
+› hello
+  ! Not sent: no model is connected
+(nothing answers at
+http://127.0.0.1:1/v1). Use /connect or
+start a local model server, then send it
+again.
+
+ enter send · ⇧↵ newline · ? help ──────
+› hello
+
+# D-07 after: clean HOME, nothing listening at the endpoint, 40x30, after start-up
+ NEXUS   ws  ⎇ main  mode: review  local
+  · No model is connected: nothing
+answers at http://127.0.0.1:1/v1. Next:
+type /connect to sign in or add an API
+key, or start a local model server (LM
+Studio, Ollama, llama.cpp) and send your
+message again. `nexus doctor` checks the
+setup; docs/CLOUD_PROVIDERS.md lists
+providers.
+
+ enter send · ⇧↵ newline · ? help ──────
+› ask Nexus · / commands · ? keys
+

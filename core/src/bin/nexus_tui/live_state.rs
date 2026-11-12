@@ -1,6 +1,6 @@
 //! Live session state. Pure: protocol events and keys go in, actions come out. Outcomes are projected exactly as
 //! the sidecar reports them.
-use crate::composer::Composer;
+use crate::composer::{Composer, Draft};
 use crate::diff_view::{self, DiffCard, Patch};
 use crate::theme::Depth;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -59,6 +59,8 @@ pub enum Entry {
         notes: Option<String>,
     },
     Notice(String),
+    /// A live status the sidecar keeps updating (a provider wait): later notices with the same key replace its text.
+    Status { key: String, text: String },
     /// A slash or `!` command as the operator typed it.
     Command(String),
     /// The full text of a submitted prompt that held paste buffers (the prompt line shows their labels).
@@ -472,6 +474,10 @@ pub struct LiveState {
     turn_seq: u64,
     /// Id of the submitted prompt the sidecar has not yet answered with a `turn.result`.
     pending: Option<String>,
+    /// The draft as it was when the last prompt was sent (text, paste buffers, cursor), so a prompt the sidecar refuses outright can be put back whole.
+    sent_prompt: Option<(String, Draft)>,
+    /// The raw cause behind the latest provider notice, shown by `/details`.
+    provider_cause: Option<String>,
     /// Ctrl-C or Esc already asked the running turn to stop; another Ctrl-C quits.
     cancel_requested: bool,
     /// When cancel was requested.
@@ -540,6 +546,8 @@ impl LiveState {
             composer: Composer::default(),
             turn_seq: 0,
             pending: None,
+            sent_prompt: None,
+            provider_cause: None,
             cancel_requested: false,
             cancel_started: None,
             focus: Focus::Composer,
@@ -1077,7 +1085,17 @@ impl LiveState {
                     self.cancel_requested = false;
                     self.cancel_started = None;
                 }
-                self.transcript.push(Entry::Notice(format!("{code}: {message}")));
+                if code == "NO_PROVIDER" {
+                    // The sidecar refused a prompt that could only fail: the message says why, and the draft is not lost.
+                    if let Some((sent, draft)) = self.sent_prompt.take() {
+                        if id.as_deref() == Some(sent.as_str()) && self.composer.is_empty() {
+                            self.composer.restore_draft(&draft);
+                        }
+                    }
+                    self.transcript.push(Entry::Notice(message));
+                } else {
+                    self.transcript.push(Entry::Notice(format!("{code}: {message}")));
+                }
             }
             Event::SlashResult {
                 id,
@@ -1120,7 +1138,15 @@ impl LiveState {
                     None => {}
                 }
             }
-            Event::Notice { text } => self.transcript.push(Entry::Info(text)),
+            Event::Notice { text, key, detail } => {
+                if let Some(detail) = detail {
+                    self.provider_cause = Some(detail);
+                }
+                match key {
+                    Some(key) => self.put_status(key, text),
+                    None => self.transcript.push(Entry::Info(text)),
+                }
+            }
             Event::History { session, total, messages } => {
                 if total > 0 || !messages.is_empty() {
                     self.session_saved = true;
@@ -1946,6 +1972,7 @@ impl LiveState {
         if self.session.busy {
             return self.submit_while_busy(display, invocation);
         }
+        let sent = self.composer.snapshot_draft();
         let text = self.composer.take();
         self.scroll_back = 0;
         self.focus = Focus::Composer;
@@ -1963,6 +1990,7 @@ impl LiveState {
         self.activity = None;
         let id = format!("t{}", self.turn_seq);
         self.pending = Some(id.clone());
+        self.sent_prompt = Some((id.clone(), sent));
         Some(Action::Send(Command::PromptSubmit { id, text }))
     }
 
@@ -1979,6 +2007,11 @@ impl LiveState {
             Some(Invocation::Receipt) => {
                 self.composer.take();
                 return self.open_receipt();
+            }
+            Some(Invocation::Details) => {
+                self.composer.take();
+                self.show_details();
+                return None;
             }
             Some(Invocation::Quit) => return Some(Action::Quit),
             Some(Invocation::Remote { command, args }) if command == "doctor" && !args.split_whitespace().any(|a| a == "--fix") => {
@@ -2010,6 +2043,27 @@ impl LiveState {
         Some(Action::Send(Command::Steer { id, text }))
     }
 
+    /// A status row for `key`: the one this turn already shows is updated in place, otherwise a new row starts.
+    /// The search stops at the operator's prompt, so a later turn's wait never rewrites an earlier turn's row.
+    fn put_status(&mut self, key: String, text: String) {
+        for entry in self.transcript.iter_mut().rev() {
+            match entry {
+                Entry::Status { key: k, text: t } if *k == key => {
+                    *t = text;
+                    return;
+                }
+                Entry::User(_) | Entry::Banner { .. } => break,
+                _ => {}
+            }
+        }
+        self.transcript.push(Entry::Status { key, text });
+    }
+
+    fn show_details(&mut self) {
+        let text = self.provider_cause.clone().unwrap_or_else(|| "No provider error recorded in this session.".into());
+        self.transcript.push(Entry::Output { success: true, text, diff: false });
+    }
+
     fn invoke(&mut self, typed: String, invocation: Invocation) -> Option<Action> {
         match invocation {
             Invocation::Quit => Some(Action::Quit),
@@ -2018,6 +2072,10 @@ impl LiveState {
                 None
             }
             Invocation::Receipt => self.open_receipt(),
+            Invocation::Details => {
+                self.show_details();
+                None
+            }
             Invocation::Models => self.open_models(false, None),
             Invocation::Connect => self.open_models(true, None),
             Invocation::Remote { command, args } => {
@@ -4943,5 +5001,127 @@ mod tests {
             assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
             assert_eq!(state.on_key_at(key(KeyCode::Char('Y')), at(t0, 5200)), approve("approval-1", false), "Shift+y is y");
         }
+    }
+
+    // D-06 / D-07: provider status rows, raw cause, and the refused first-run prompt.
+    fn wait_notice(n: u32) -> String {
+        format!(
+            r#"{{"v":1,"type":"notice","key":"provider.recovery","detail":"condition RATE_LIMITED, HTTP 429 (attempt {n})","text":"Waiting for the model provider: the provider is rate limiting requests. Retry {n}, next attempt in 2s."}}"#
+        )
+    }
+
+    fn statuses(state: &LiveState) -> Vec<&str> {
+        state
+            .transcript
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Status { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn identical_provider_waits_collapse_into_one_row_with_a_counter() {
+        let mut state = ready();
+        for n in 1..=12 {
+            state.apply(ev(&wait_notice(n)));
+        }
+        let rows = statuses(&state);
+        assert_eq!(rows.len(), 1, "one row, not one per attempt: {rows:?}");
+        assert!(rows[0].contains("Retry 12"), "{rows:?}");
+        assert_eq!(state.transcript.len(), 1);
+    }
+
+    #[test]
+    fn a_new_turn_gets_its_own_status_row_and_other_notices_do_not_merge() {
+        let mut state = ready();
+        state.apply(ev(&wait_notice(1)));
+        state.apply(ev(r#"{"v":1,"type":"notice","text":"Resumed session a."}"#));
+        state.apply(ev(&wait_notice(2)));
+        assert_eq!(statuses(&state).len(), 1, "same turn: the row is updated even after another notice");
+        type_text(&mut state, "again");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(&wait_notice(1)));
+        assert_eq!(statuses(&state).len(), 2, "a later prompt starts a new row");
+    }
+
+    #[test]
+    fn details_shows_the_raw_cause_while_the_turn_waits() {
+        let mut state = ready();
+        type_text(&mut state, "go");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(&wait_notice(3)));
+        type_text(&mut state, "/details");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "answered locally, nothing is sent");
+        assert!(
+            matches!(state.transcript.last(), Some(Entry::Output { text, success: true, .. }) if text.contains("HTTP 429 (attempt 3)")),
+            "{:?}",
+            state.transcript.last()
+        );
+    }
+
+    #[test]
+    fn details_without_a_provider_error_says_so() {
+        let mut state = ready();
+        type_text(&mut state, "/details");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(state.transcript.last(), Some(Entry::Output { text, .. }) if text.contains("No provider error")));
+    }
+
+    #[test]
+    fn a_prompt_refused_for_want_of_a_provider_goes_back_to_the_composer_with_the_reason() {
+        let mut state = ready();
+        type_text(&mut state, "fix the bug");
+        assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::PromptSubmit { .. }))));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected: nothing answers at http://localhost:1234/v1. Next: type /connect."}"#));
+        assert!(!state.session.busy, "the composer is unlocked");
+        assert_eq!(state.composer.text(), "fix the bug", "the draft is not lost");
+        assert!(
+            matches!(state.transcript.last(), Some(Entry::Notice(t)) if t.starts_with("No model is connected") && !t.contains("NO_PROVIDER")),
+            "{:?}",
+            state.transcript.last()
+        );
+    }
+
+    #[test]
+    fn a_refused_prompt_with_a_paste_comes_back_as_the_paste_label_not_its_expansion() {
+        let mut state = ready();
+        type_text(&mut state, "see ");
+        state.on_paste("line one\nline two");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert_eq!(state.composer.display(state.composer.text()), "see [Pasted text #1: 2 lines]");
+        assert_eq!(state.composer.expand(state.composer.text()), "see line one\nline two");
+    }
+
+    #[test]
+    fn a_refused_prompt_keeps_the_recall_history_made_in_the_meantime() {
+        let mut state = ready();
+        type_text(&mut state, "first");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert_eq!(state.composer.text(), "first");
+        state.composer.take();
+        type_text(&mut state, "second");
+        state.on_key(key(KeyCode::Enter));
+        state.composer.insert("typed after the second send");
+        state.composer.take();
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t2","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert_eq!(state.composer.text(), "second");
+        state.composer.take();
+        state.composer.up();
+        state.composer.up();
+        assert_eq!(state.composer.text(), "typed after the second send", "history made after the send survives the restore");
+    }
+
+    #[test]
+    fn a_refused_prompt_does_not_overwrite_what_was_typed_meanwhile() {
+        let mut state = ready();
+        type_text(&mut state, "first");
+        state.on_key(key(KeyCode::Enter));
+        type_text(&mut state, "second");
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert_eq!(state.composer.text(), "second");
     }
 }
