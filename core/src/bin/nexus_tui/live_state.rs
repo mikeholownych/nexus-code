@@ -183,7 +183,7 @@ impl SteerState {
     }
 }
 
-/// What the running turn reported it is doing, and since when (this client's clock).
+/// What the running turn reported it is doing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Activity {
     pub phase: String,
@@ -191,7 +191,6 @@ pub struct Activity {
     pub segment: u64,
     pub tool: Option<String>,
     pub subject: Option<String>,
-    pub since: Instant,
     /// The turn's step budget and time limit, when the sidecar reports them.
     pub max_steps: Option<u64>,
     pub max_minutes: Option<u64>,
@@ -897,11 +896,7 @@ impl LiveState {
                 if self.activity.as_ref().is_none_or(|previous| previous.step != step) {
                     self.assistant_break = true;
                 }
-                let since = match &self.activity {
-                    Some(previous) if previous.phase == phase && previous.tool == tool => previous.since,
-                    _ => Instant::now(),
-                };
-                self.activity = Some(Activity { phase, step, segment, tool, subject, since, max_steps, max_minutes });
+                self.activity = Some(Activity { phase, step, segment, tool, subject, max_steps, max_minutes });
             }
             Event::FileDiff {
                 call_id,
@@ -2952,7 +2947,6 @@ mod tests {
         let first = state.activity.clone().unwrap();
         assert_eq!((first.step, first.segment, first.tool.as_deref()), (31, 2, Some("run_command")));
         state.apply(ev(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#));
-        assert_eq!(state.activity.as_ref().unwrap().since, first.since, "the same phase keeps its start time");
         state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"H","line":"L","turn":{"execution":"COMPLETED","outcome":"VERIFIED"},"model_summary":null}"#));
         assert!(state.activity.is_none());
         state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#));

@@ -1257,9 +1257,9 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
             if session.read_only == Some(true) {
                 segments.push((1, vec![Span::styled("  read-only", Style::default().fg(Color::Yellow))], None));
             }
-            if let (Some(used), Some(limit)) = (session.context_tokens, session.context_limit) {
+            if let (Some(used), Some(limit)) = (session.context_tokens, session.context_limit) && limit > 0 {
                 // The percent is the part that stays when the line is narrow; the counts are added when there is room left.
-                let percent = if limit == 0 { 0 } else { used.saturating_mul(100) / limit };
+                let percent = used.saturating_mul(100) / limit;
                 let full = vec![Span::styled(format!("  context {used}/{limit} · {percent}%"), muted)];
                 segments.push((3, vec![Span::styled(format!("  ctx {percent}%"), muted)], Some(full)));
             }
@@ -2225,9 +2225,9 @@ mod tests {
             let bar = draw(&state, width, 15).lines().next().unwrap().to_string();
             assert!(!bar.contains("session_2") || bar.contains("session_20261112_143012_abcd1234"), "width {width}: {bar}");
         }
-        // The session id survives a second session.state without it only if the sidecar sends it: nothing is invented.
+        // At 50 columns the context does not fit; nothing is invented in its place.
         let narrow = draw(&state, 50, 15).lines().next().unwrap().to_string();
-        assert!(narrow.contains("mode: review") && narrow.contains("model "), "{narrow}");
+        assert!(narrow.contains("mode: review") && narrow.contains("model ") && !narrow.contains('%'), "{narrow}");
         // Without the facts (an older sidecar) there is no percent.
         let mut old = ready();
         feed(&mut old, &[r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#]);

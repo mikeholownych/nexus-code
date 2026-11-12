@@ -896,7 +896,7 @@ export class LocalLlmClient {
       try {
         return await fetch(url, init);
       } catch (err: any) {
-        const origin = this.endpoints.find((ep) => url.startsWith(ep));
+        const origin = this.endpoints.find((ep) => url === ep || url.startsWith(`${ep}/`));
         const replayable = init.body == null || typeof init.body === "string";
         const closed = err?.name !== "TimeoutError" && err?.name !== "AbortError" && transportCauseChain(err).some((c) => c.code !== undefined && CONNECTION_CLOSED_CODES.has(c.code));
         if (resends >= MAX_STALE_RESENDS || !replayable || !closed || init.signal?.aborted || Date.now() - started > STALE_CONNECTION_WINDOW_MS || !origin || !this.hasEverSucceeded(origin)) throw err;
