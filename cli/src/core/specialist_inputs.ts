@@ -121,7 +121,7 @@ export function snapshotSupport(run: (args: string[]) => string, root: string, b
   try { format = run(["rev-parse", "--show-object-format"]).trim(); } catch (err: any) {
     if (!/ambiguous argument|unknown option|unknown revision/i.test(String(err?.stderr ?? ""))) throw err;
   }
-  if (format !== "sha1" && format !== "sha256") return refuse("git cannot report this repository's object format", "no workaround");
+  if (format !== "sha1" && format !== "sha256") return refuse("git cannot report this repository's object format", "upgrade git (2.38+) or check the repository");
   if (format !== "sha1") return refuse(`the repository uses the ${format} object format, which is not supported`, "no workaround");
   if (config.get("core.filemode") === "false") return refuse("core.filemode is false, so file modes are not read from disk", "set core.filemode=true");
   if (config.get("core.symlinks") === "false") return refuse("core.symlinks is false, so symlinks are checked out as files", "set core.symlinks=true");
@@ -201,6 +201,29 @@ const ADDED_FILE_MAX = 16 * 1024 * 1024;
 const SIGNIFICANT_LINE_MIN = 8;
 
 /**
+ * Opens a regular file under `root` for reading without trusting the path between a check and the read: the directory
+ * must resolve inside `root`, the file is opened without following a final link (and without blocking on a FIFO), and
+ * the descriptor itself must be a regular file. "gone" when it does not exist; "cannot" for anything else (a link, a
+ * special file, a swapped parent, any error). The caller reads from and closes `fd`.
+ */
+export function openRegular(root: string, relative: string): { fd: number; size: number } | "gone" | "cannot" {
+  let fd: number | undefined;
+  try {
+    const full = path.join(root, relative);
+    const realRoot = fs.realpathSync(root);
+    const realDir = fs.realpathSync(path.dirname(full));
+    if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) return "cannot";
+    fd = fs.openSync(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) { fs.closeSync(fd); return "cannot"; }
+    return { fd, size: st.size };
+  } catch (err: any) {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+    return err?.code === "ENOENT" ? "gone" : "cannot";
+  }
+}
+
+/**
  * The content of the protected files present in the workspace (tracked, untracked or ignored), for recognising a new
  * file that carries it. A new file is carried when it equals a protected file exactly (whatever its size) or shares a
  * significant line with one: a trimmed, non-comment line of at least 8 characters. Files inside `.nexus` take part by
@@ -216,28 +239,25 @@ function protectedContent(sources: Array<{ root: string; file: string }>): { car
     const structural = file.split(/[\\/]/).some((seg) => seg.toLowerCase() === ".nexus");
     // A name that is not valid UTF-8 was mangled by decoding: it cannot be found on disk, so it cannot be compared.
     if (file.includes("\uFFFD")) { complete = false; continue; }
-    let size: number;
-    try {
-      const st = fs.lstatSync(path.join(root, file));
-      if (!st.isFile()) {
-        // Nexus's own state is compared by exact content only and is not a credential source: a link there is left out.
-        // Any other protected path that is not a regular file (a link whose target would be read through, a special
-        // file, a directory in its place) cannot be compared: nothing new is kept because of it.
-        if (!structural) complete = false;
-        continue;
-      }
-      size = st.size;
-    } catch (err: any) {
-      // Gone from disk: there is nothing to copy from it (a deleted protected path is a protected change, handled by the caller).
-      if (err?.code !== "ENOENT") complete = false;
+    const opened = openRegular(root, file);
+    // Gone from disk: nothing to copy from it (a deleted protected path is a protected change, handled by the caller).
+    if (opened === "gone") continue;
+    if (opened === "cannot") {
+      // Nexus's own state is compared by exact content only and is not a credential source: a link there is left out.
+      // Any other protected path that cannot be read as a regular file (a link whose target would be read through, a
+      // special file, a directory in its place, an error) cannot be compared: nothing new is kept because of it.
+      if (!structural) complete = false;
       continue;
     }
-    // A large `.nexus` file (a flight log) is not a credential source: it is left out instead of failing every new file closed.
-    if (structural && size > SOURCE_FILE_MAX) continue;
-    if (!structural) total += size;
-    if (size > SOURCE_FILE_MAX || total > SOURCE_TOTAL_MAX) { complete = false; continue; }
     let data: Buffer;
-    try { data = fs.readFileSync(path.join(root, file)); } catch { complete = false; continue; }
+    try {
+      const size = opened.size;
+      // A large `.nexus` file (a flight log) is not a credential source: it is left out instead of failing every new file closed.
+      if (structural && size > SOURCE_FILE_MAX) continue;
+      if (!structural) total += size;
+      if (size > SOURCE_FILE_MAX || total > SOURCE_TOTAL_MAX) { complete = false; continue; }
+      data = fs.readFileSync(opened.fd);
+    } catch { complete = false; continue; } finally { fs.closeSync(opened.fd); }
     hashes.add(createHash("sha256").update(data).digest("hex"));
     if (structural) continue;
     for (const line of significantLines(data)) lines.add(line);
@@ -246,14 +266,14 @@ function protectedContent(sources: Array<{ root: string; file: string }>): { car
     carriedBy(dir: string, relative: string): boolean {
       if (!complete) return true;
       if (hashes.size === 0 && lines.size === 0) return false;
+      // Anything that is not a regular file is not read, and not shown either: a link to a directory is followed by `git diff --no-index`.
+      const opened = openRegular(dir, relative);
+      if (typeof opened === "string") return true;
       let data: Buffer;
       try {
-        const st = fs.lstatSync(path.join(dir, relative));
-        // Anything that is not a regular file is not read, and not shown either: a link to a directory is followed by `git diff --no-index`.
-        if (!st.isFile()) return true;
-        if (st.size > ADDED_FILE_MAX) return true;
-        data = fs.readFileSync(path.join(dir, relative));
-      } catch { return true; }
+        if (opened.size > ADDED_FILE_MAX) return true;
+        data = fs.readFileSync(opened.fd);
+      } catch { return true; } finally { fs.closeSync(opened.fd); }
       if (hashes.has(createHash("sha256").update(data).digest("hex"))) return true;
       for (const line of significantLines(data)) if (lines.has(line)) return true;
       return false;
@@ -452,12 +472,13 @@ function protectedMatcher(git: (args: string[], timeoutMs?: number) => string, r
 }
 
 /**
- * A plain candidate diff for review units when the repository state is outside the supported domain: tracked changes
- * against the base (`git diff`, no copy detection, no scratch index) plus untracked files. The same
- * guards apply that do not depend on the domain: the checkout is verified and pinned, no driver runs, protected paths
- * are left out, and a new file carrying protected content is omitted. It can be wrong where the predicate refuses (a
- * sparse checkout shows its absent files as deleted, an LFS pointer differs from its content), which is why the reviewer
- * is told it is a plain diff.
+ * A plain candidate diff for review units when the repository state is outside the supported domain: `git diff <commit>`
+ * through a private index that holds the base tree minus the real index's staged removals (so no index flag can hide a
+ * file), `--no-renames`, plus the untracked files. The guards that do not depend on the domain still apply: the checkout
+ * is verified and pinned, no driver runs, every path source (base tree, index, untracked) must be valid UTF-8 or it
+ * returns an error, protected paths are left out, and a new file is omitted when it carries protected content or when
+ * a protected source cannot be compared. It can be wrong where the predicate refuses (a sparse checkout shows its absent
+ * files as deleted, an LFS pointer differs from its content), which is why the reviewer is told it is a plain diff.
  */
 export function plainCandidateDiff(workspace: string, base: string | undefined, policyWorkspace?: string): CandidateDiff | { error: string } {
   const root = path.resolve(workspace);

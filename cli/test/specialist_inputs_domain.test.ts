@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { AgentWorkUnitExecutor } from "../src/core/operation_runner_execution.js";
-import { candidateDiff, plainCandidateDiff, snapshotSupport } from "../src/core/specialist_inputs.js";
+import { candidateDiff, openRegular, plainCandidateDiff, snapshotSupport } from "../src/core/specialist_inputs.js";
 import { OperationGit, ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
 import type { WorkUnit } from "../src/core/operation.js";
 
@@ -263,7 +263,7 @@ test("an object-format answer that is neither sha1 nor sha256 (for example git e
   const d = repo();
   const real = (args: string[]) => execFileSync("git", args, { cwd: d, encoding: "utf8" });
   const r = snapshotSupport((args) => (args.includes("--show-object-format") ? "--show-object-format\n" : real(args)), d);
-  assert.ok("unsupported" in r && /cannot report/.test(r.unsupported), JSON.stringify(r));
+  assert.ok("unsupported" in r && /cannot report/.test(r.unsupported) && /upgrade git \(2\.38\+\)/.test(r.unsupported), JSON.stringify(r));
   assert.deepEqual(snapshotSupport((args) => (args.includes("--show-object-format") ? "sha1\n" : real(args)), d), { ok: true });
 });
 
@@ -299,7 +299,7 @@ for (const [kind, make] of SOURCES) {
       try {
         for (const build of [candidateDiff, plainCandidateDiff]) {
           const r = build(d, undefined);
-          if ("error" in r) { assert.match(r.error, /automatic inputs are not available|git could not produce/); continue; }
+          assert.ok(!("error" in r), `${build.name} must give a result for this supported state: ${JSON.stringify(r)}`);
           assert.doesNotMatch(r.diff, LEAK, `${build.name} showed protected content`);
           assert.match(r.diff, new RegExp(MARK), "the ordinary change is still shown");
         }
@@ -392,4 +392,21 @@ test("a file with an undecodable name that existed at the base and was `git rm`'
   const real = (args: string[]) => execFileSync("git", args, { cwd: d, encoding: "utf8" });
   const support = snapshotSupport(real, d);
   assert.ok("unsupported" in support && /not valid UTF-8/.test(support.unsupported), JSON.stringify(support));
+});
+
+test("openRegular never returns a file reached through a link, a swapped parent, a FIFO or a directory", () => {
+  const d = repo();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-outside-"));
+  fs.writeFileSync(path.join(outside, "secret.txt"), "OUTSIDE_SECRET\n");
+  fs.symlinkSync(path.join(outside, "secret.txt"), path.join(d, "link.txt"));
+  fs.symlinkSync(outside, path.join(d, "swapped"));
+  put(d, "dir/f.txt", "f\n"); put(d, "plain.txt", "p\n");
+  assert.equal(openRegular(d, "link.txt"), "cannot", "a final-component link is not followed");
+  assert.equal(openRegular(d, "swapped/secret.txt"), "cannot", "a parent that resolves outside the root is refused");
+  assert.equal(openRegular(d, "dir"), "cannot", "a directory is not a regular file");
+  assert.equal(openRegular(d, "missing.txt"), "gone");
+  try { execFileSync("mkfifo", [path.join(d, "fifo")]); assert.equal(openRegular(d, "fifo"), "cannot"); } catch { /* no mkfifo */ }
+  const ok = openRegular(d, "plain.txt");
+  assert.ok(typeof ok === "object");
+  if (typeof ok === "object") { assert.equal(fs.readFileSync(ok.fd, "utf8"), "p\n"); fs.closeSync(ok.fd); }
 });
