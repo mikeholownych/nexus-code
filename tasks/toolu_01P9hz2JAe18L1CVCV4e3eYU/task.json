@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01P9hz2JAe18L1CVCV4e3eYU",
+  "agent_id": "a43755b396c9cf99b",
+  "subagent_type": "reviewer",
+  "task_description": "Independent review G1 branch",
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 96837,
+    "cache_read_tokens": 1441284,
+    "output_tokens": 22078,
+    "api_call_count": 25
+  },
+  "started_at": "2026-11-12T10:35:57.737004553Z",
+  "completed_at": "2026-11-12T10:39:30.561679757Z"
+}

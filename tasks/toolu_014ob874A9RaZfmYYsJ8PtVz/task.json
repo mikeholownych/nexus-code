@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014ob874A9RaZfmYYsJ8PtVz",
+  "agent_id": "a1a1ff1e05d7c6427",
+  "subagent_type": "reviewer",
+  "task_description": "Independent review G2 final delta",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 65904,
+    "cache_read_tokens": 881621,
+    "output_tokens": 16374,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-12T10:36:02.409701991Z",
+  "completed_at": "2026-11-12T10:38:47.655511725Z"
+}
