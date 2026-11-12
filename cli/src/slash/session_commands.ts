@@ -228,7 +228,16 @@ function save({ host, args }: SlashContext): SlashOutcome {
 }
 
 function resume({ host, args }: SlashContext): SlashOutcome {
-  const result = host.resumeSession(args.trim() || undefined);
+  const wanted = args.trim();
+  if (wanted) {
+    const result = host.resumeSession(wanted);
+    return reply("resume", result.message, result.ok);
+  }
+  // No argument: "the latest" is usually the session already open, so reloading it would only discard the live
+  // conversation. Offer the most recent other one.
+  const other = host.app.getSessionManager().listSessions().find((s) => s.id !== host.sessionId());
+  if (!other) return reply("resume", "There is no other saved session to resume (the one you are in is already loaded). /sessions lists what is saved; /resume <id> loads one.", false);
+  const result = host.resumeSession(other.id);
   return reply("resume", result.message, result.ok);
 }
 
