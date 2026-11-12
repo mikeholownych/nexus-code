@@ -3,7 +3,7 @@
 use crate::composer::{Composer, Draft};
 use crate::diff_view::{self, DiffCard, Patch};
 use crate::theme::Depth;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -435,7 +435,7 @@ pub enum Overlay {
 }
 
 /// What the last frame measured. Key handling uses it for page sizes, and it clamps scrolling at the top.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LiveLayout {
     pub transcript_rows: usize,
     /// Largest useful `scroll_back`; `usize::MAX` when the frame did not reach the top of the transcript.
@@ -461,7 +461,13 @@ pub struct LiveLayout {
     pub approval_width: usize,
     /// Where the change's rows are drawn (what a test reads back from the screen).
     pub approval_body: ratatui::layout::Rect,
+    /// Where the transcript was drawn, and the entry each of its rows belongs to (what a mouse click is matched against).
+    pub transcript_area: ratatui::layout::Rect,
+    pub row_entries: Vec<usize>,
 }
+
+/// Transcript rows one wheel notch moves.
+const WHEEL_ROWS: usize = 3;
 
 /// Tool calls whose result the turn banner already reports.
 const HIDDEN_TOOLS: &[&str] = &["task_completed"];
@@ -535,6 +541,10 @@ pub struct LiveState {
     assistant_break: bool,
     /// Whether this session has been saved/persisted to disk (e.g. after a completed turn or history restore).
     pub session_saved: bool,
+    /// The terminal reports Shift+Enter as its own key (kitty keyboard protocol): only then is it advertised.
+    pub shift_enter: bool,
+    /// Mouse capture is on: the wheel scrolls and a click selects a tool call.
+    pub mouse: bool,
 }
 
 impl LiveState {
@@ -570,6 +580,8 @@ impl LiveState {
             steer_texts: HashMap::new(),
             now: Instant::now(),
             depth: Depth::TrueColor,
+            shift_enter: false,
+            mouse: false,
             anchor: None,
             last_reviewable: None,
             unseen: false,
@@ -1716,6 +1728,85 @@ impl LiveState {
         self.on_key_at(key, Instant::now())
     }
 
+    /// Mouse input, reported only while capture is on. The wheel scrolls whatever has the screen (the transcript, or
+    /// the open panel, an approval's change included) and a left click on a tool call selects it, then opens it, as
+    /// `[`/`]` and enter do. Nothing here can answer an approval or any other question: clicks do nothing while a
+    /// panel is open, and no mouse event is typing (it neither arms nor shortens the approval guards).
+    pub fn on_mouse(&mut self, event: MouseEvent) -> Option<Action> {
+        let before = self.scroll_back;
+        let action = self.handle_mouse(event);
+        if self.scroll_back != before {
+            self.anchor = None;
+        }
+        action
+    }
+
+    fn handle_mouse(&mut self, event: MouseEvent) -> Option<Action> {
+        if matches!(self.link, Link::Crashed { .. }) {
+            return None;
+        }
+        let wheel_up = match event.kind {
+            MouseEventKind::ScrollUp => Some(true),
+            MouseEventKind::ScrollDown => Some(false),
+            _ => None,
+        };
+        match &mut self.overlay {
+            None => {}
+            Some(Overlay::Review(review)) => {
+                if let Some(up) = wheel_up {
+                    review.top = if up { review.top.saturating_sub(WHEEL_ROWS) } else { review.top.saturating_add(WHEEL_ROWS) };
+                }
+                return None;
+            }
+            Some(Overlay::Approval(_) | Overlay::Help { .. } | Overlay::Paste { .. } | Overlay::Detail(_) | Overlay::Receipt(_)) => {
+                if let Some(up) = wheel_up {
+                    for _ in 0..WHEEL_ROWS {
+                        self.scroll_overlay(if up { KeyCode::Up } else { KeyCode::Down });
+                    }
+                }
+                return None;
+            }
+            // Pickers and the checkpoint question are keyboard-only.
+            Some(_) => return None,
+        }
+        if let Some(up) = wheel_up {
+            self.scroll_back = if up { self.scroll_back.saturating_add(WHEEL_ROWS) } else { self.scroll_back.saturating_sub(WHEEL_ROWS) };
+            return None;
+        }
+        if event.kind == MouseEventKind::Down(MouseButton::Left) {
+            return self.click(event.column, event.row);
+        }
+        None
+    }
+
+    /// A click on a tool call (a row of its card in the last frame) selects it; on the selected one it opens its details.
+    fn click(&mut self, column: u16, row: u16) -> Option<Action> {
+        let area = self.layout.transcript_area;
+        if column < area.x || column >= area.right() || row < area.y || row >= area.bottom() {
+            return None;
+        }
+        // The scroll badge covers the last row while scrolled back, and the completion list covers the rows above the
+        // composer: a click there is on neither card.
+        if self.completion().is_some() || (self.scroll_back > 0 && row + 1 == area.bottom()) {
+            return None;
+        }
+        let index = *self.layout.row_entries.get(usize::from(row - area.y))?;
+        if !self.transcript.get(index).is_some_and(Self::selectable) {
+            return None;
+        }
+        if self.focus == Focus::Transcript && self.selected == Some(index) {
+            return self.open_detail();
+        }
+        self.focus = Focus::Transcript;
+        self.selected = Some(index);
+        None
+    }
+
+    /// Entries `[` and `]` stop at, and a click can select.
+    fn selectable(entry: &Entry) -> bool {
+        matches!(entry, Entry::Tool { .. } | Entry::Diff { .. }) || entry.reviewable()
+    }
+
     pub fn on_key_at(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
         let before = self.scroll_back;
         let action = self.handle_key(key, now);
@@ -1913,6 +2004,8 @@ impl LiveState {
         let composer = &mut self.composer;
         match key.code {
             KeyCode::Enter => composer.insert("\n"),
+            // LF: a newline key every terminal can send, whether or not it reports Shift+Enter.
+            KeyCode::Char('j') if ctrl && !alt => composer.insert("\n"),
             KeyCode::Backspace if ctrl || alt => composer.delete_word_back(),
             KeyCode::Backspace => composer.backspace(),
             KeyCode::Delete => composer.delete(),
@@ -2144,7 +2237,7 @@ impl LiveState {
             .transcript
             .iter()
             .enumerate()
-            .filter(|(_, entry)| matches!(entry, Entry::Tool { .. } | Entry::Diff { .. }) || entry.reviewable())
+            .filter(|(_, entry)| Self::selectable(entry))
             .map(|(index, _)| index)
             .collect();
         let Some(&newest) = tools.last() else {
@@ -3723,7 +3816,7 @@ mod tests {
             overlay_limit: 0,
             ..LiveLayout::default()
         };
-        state.note_layout(layout);
+        state.note_layout(layout.clone());
         assert_eq!(state.on_key(key(KeyCode::PageUp)), None);
         assert_eq!(state.scroll_back, 9, "pgup scrolls from the composer too");
         assert_eq!(state.on_key(key(KeyCode::Tab)), None);
@@ -3734,7 +3827,7 @@ mod tests {
         assert_eq!(state.on_key(key(KeyCode::Down)), None);
         assert_eq!(state.scroll_back, 10);
         assert_eq!(state.on_key(key(KeyCode::Home)), None);
-        state.note_layout(layout);
+        state.note_layout(layout.clone());
         assert_eq!(state.scroll_back, 50);
         assert_eq!(state.on_key(key(KeyCode::Char('G'))), None);
         assert_eq!(state.scroll_back, 0);
