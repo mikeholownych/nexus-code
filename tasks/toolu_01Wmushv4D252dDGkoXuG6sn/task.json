@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Wmushv4D252dDGkoXuG6sn",
+  "agent_id": "a73e5fc1100e9f82d",
+  "subagent_type": "reviewer",
+  "task_description": "Review G2 final delta",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 13484,
+    "cache_read_tokens": 41987,
+    "output_tokens": 1294,
+    "api_call_count": 3
+  },
+  "started_at": "2026-11-12T10:43:05.232156952Z",
+  "completed_at": "2026-11-12T10:43:23.67143055Z"
+}
