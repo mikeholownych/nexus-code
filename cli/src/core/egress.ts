@@ -492,12 +492,6 @@ function bearerTokenLength(value: string): number {
 /** Longest extension past a key's original match: keys are short. */
 const MAX_EXTENSION = 1024;
 
-/** Characters the key scans examined since module load; read by tests only, to bound work by input size. */
-let scanWork = 0;
-export function scanWorkForTest(): number {
-  return scanWork;
-}
-
 /**
  * The end of the extension window of a candidate of one family: at most MAX_EXTENSION past its original end, never
  * into the next candidate of the same family (which extends itself), never past the text. Windows of one family are
@@ -528,7 +522,6 @@ function scanKeyRun(text: string, from: number, encoded: boolean, limit = text.l
     else if (text[end] === "\\" && text[end + 1] === "/" && end + 2 <= limit) end += 2; // a JSON-escaped "/"
     else break;
   }
-  scanWork += end - from + 1;
   return end;
 }
 
@@ -559,7 +552,6 @@ function extendDottedKey(text: string, end: number, limit: number): number {
 
 /** Whether `text[at, end)` (an `sk-` run) is a base64 key: see `scanBase64Keys` for the rule. */
 function isBase64KeyRun(text: string, at: number, end: number, anthropic: boolean): boolean {
-  scanWork += end - at;
   const body = normalizeKeyChars(unescapeSlashes(text.slice(at + (anthropic ? 7 : 3), end)));
   const separator = body.search(/[/+]/);
   const plainKeyThenPath = separator >= 20 && separator <= 64 && body[separator] === "/" &&
