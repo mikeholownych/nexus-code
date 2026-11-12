@@ -233,7 +233,11 @@ describe("SidecarServer: approvals", () => {
       await waitForEvent(events, (e) => e.type === "approval.request");
       await send({ type: "cancel" });
       await server.idle();
-      for (const end of events.filter((e) => e.type === "tool.end")) assert.equal(end.denied, undefined, "only the operator's Deny key says denied by you");
+      const ends = events.filter((e) => e.type === "tool.end" && e.tool === "write_file");
+      assert.equal(ends.length, 1, "the cancelled call is reported once");
+      assert.equal(ends[0].success, false);
+      assert.equal(ends[0].denied, undefined, "only the operator's Deny key says denied by you");
+      assert.notEqual(ends[0].summary, "Denied by you");
     });
   });
 

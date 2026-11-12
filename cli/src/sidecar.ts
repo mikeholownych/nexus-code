@@ -742,6 +742,7 @@ export class SidecarServer {
   }
 
   private requestApproval(turnId: string, signal: AbortSignal, tool: string, args: Record<string, any>): Promise<boolean> {
+    this.operatorDeclined = false;
     if (this.alwaysApprove) return Promise.resolve(true);
     if (signal.aborted) return Promise.resolve(false);
     const id = `approval-${++this.approvalSeq}`;
@@ -754,7 +755,6 @@ export class SidecarServer {
       };
       signal.addEventListener("abort", onAbort, { once: true });
       this.pendingApproval = { id, settle };
-      this.operatorDeclined = false;
       this.emit({
         type: "approval.request",
         id,

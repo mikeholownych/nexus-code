@@ -32,6 +32,8 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
+/** What Rust's `str::trim` strips (Unicode White_Space): the engine trims the path this way before it resolves it. */
+const RUST_TRIM = /^[\t-\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\t-\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/g;
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 /** One row of text: tabs as spaces, every control, line break and bidirectional override replaced by a visible mark, so a name or a line of content can never start another row or hide what a row says. */
 const flat = (text: string) => text.replace(/\t/g, "    ").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, "\u{fffd}");
@@ -122,7 +124,10 @@ function peek(file: string, size: number): string[] {
     const bytes = buffer.subarray(0, read);
     if (bytes.includes(0)) return ["binary content not shown"];
     const more = size > read;
-    let lines = redactSecrets(bytes.toString("utf-8")).split(/\r?\n/);
+    // A key cut off by the read has no END line for the redaction to match: nothing of it after its BEGIN line is shown.
+    const text = bytes.toString("utf-8");
+    const begin = text.search(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/);
+    let lines = redactSecrets(begin >= 0 && !/-----END [A-Z0-9 ]*PRIVATE KEY-----/.test(text.slice(begin)) ? `${text.slice(0, begin)}[private key not shown]` : text).split(/\r?\n/);
     if (lines.at(-1) === "") lines.pop();
     else if (more && lines.length > 1) lines.pop(); // the read ended inside a line
     const rows = lines.slice(0, DELETE_PEEK_LINES).map((row) => `▎ ${cut(row)}`);
@@ -143,7 +148,7 @@ function peek(file: string, size: number): string[] {
  */
 export function describeDeletion(workspace: string, args: Record<string, any>, limit = DELETE_VISIT_LIMIT): string {
   const given = typeof args.path === "string" ? args.path : "";
-  const clean = given.trim().replace(/\\/g, "/");
+  const clean = given.replace(RUST_TRIM, "").replace(/\\/g, "/");
   const shown = cut(given);
   const recursive = args.recursive === true;
   const header = [shown || "(no path given)"];

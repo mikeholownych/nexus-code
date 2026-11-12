@@ -156,7 +156,7 @@ describe("D-13: a delete approval says what will be deleted", () => {
     assert.match(preview(alias, { path: path.join(ws, "file.txt") }), /file · 1 B/);
   });
 
-  test("a FIFO is never read, and a directory that is a link when the walk reaches it is not entered", () => {
+  test("a FIFO is reported as a special file and never opened; a plain subfolder is listed", () => {
     const ws = workspace();
     fs.mkdirSync(path.join(ws, "d", "sub"), { recursive: true });
     assert.match(preview(ws, { path: "d", recursive: true }), /sub\//);
@@ -188,6 +188,22 @@ describe("D-13: a delete approval says what will be deleted", () => {
     assert.equal(file.split("\n").filter((row) => row.startsWith("Only this file")).length, 1);
     assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/.test(file));
     assert.match(file, /▎ a.b {1,4}c\n▎ Only this file is removed\./, "content rows keep their marker");
+  });
+
+  test("the engine's trim (Rust White_Space, which includes U+0085) is the preview's trim", () => {
+    const ws = workspace();
+    fs.writeFileSync(path.join(ws, "f.txt"), "x");
+    assert.match(preview(ws, { path: "f.txt\u0085" }), /file · 1 B/);
+    assert.match(preview(ws, { path: "\u00a0f.txt\u3000" }), /file · 1 B/);
+  });
+
+  test("a private key cut off by the 4 KiB read is not shown", () => {
+    const ws = workspace();
+    const body = Array.from({ length: 120 }, (_, i) => `QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo${String(i).padStart(3, "0")}`).join("\n");
+    fs.writeFileSync(path.join(ws, "id_rsa"), `-----BEGIN RSA PRIVATE KEY-----\n${body}\n-----END RSA PRIVATE KEY-----\n`);
+    const text = preview(ws, { path: "id_rsa" });
+    assert.doesNotMatch(text, /QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo/);
+    assert.match(text, /private key/i);
   });
 
   test("a path that is not written the way it resolves says where it resolves", () => {
