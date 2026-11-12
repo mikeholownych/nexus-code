@@ -263,7 +263,7 @@ test("an object-format answer that is neither sha1 nor sha256 (for example git e
   const d = repo();
   const real = (args: string[]) => execFileSync("git", args, { cwd: d, encoding: "utf8" });
   const r = snapshotSupport((args) => (args.includes("--show-object-format") ? "--show-object-format\n" : real(args)), d);
-  assert.ok("unsupported" in r && /cannot report/.test(r.unsupported) && /upgrade git \(2\.38\+\)/.test(r.unsupported), JSON.stringify(r));
+  assert.ok("unsupported" in r && /cannot report/.test(r.unsupported) && /upgrade git or check the repository/.test(r.unsupported), JSON.stringify(r));
   assert.deepEqual(snapshotSupport((args) => (args.includes("--show-object-format") ? "sha1\n" : real(args)), d), { ok: true });
 });
 
