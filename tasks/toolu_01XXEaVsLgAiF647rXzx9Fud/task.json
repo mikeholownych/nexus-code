@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01XXEaVsLgAiF647rXzx9Fud",
+  "agent_id": "a6db578f89d24f685",
+  "subagent_type": "general-purpose",
+  "task_description": "Replace #479 redactor budgets with per-candidate allowance",
+  "started_at": "2026-11-12T00:39:02.871859866Z"
+}
