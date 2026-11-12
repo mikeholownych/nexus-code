@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0171CzgmnNKMkbe11d3oUaQu",
+  "agent_id": "aace7327de1a63535",
+  "subagent_type": "general-purpose",
+  "task_description": "A9 cgroup limits: verify on this host",
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 140458,
+    "cache_read_tokens": 3782994,
+    "output_tokens": 46702,
+    "api_call_count": 36
+  },
+  "started_at": "2026-11-12T09:18:26.764081265Z",
+  "completed_at": "2026-11-12T09:28:10.01642226Z"
+}
