@@ -14,11 +14,12 @@ turn prints `Provider recovery (step 2): network_error, execution UNKNOWN; next 
 
 Fix (`cli/src/client.ts`, `fetchResendingStale`): the inference POSTs and the availability probe resend when the request
 fails with a connection-closed code (`UND_ERR_SOCKET`, `ECONNRESET`, `EPIPE`) within 2 s of the attempt, on an endpoint that
-has answered before (a first-use reset is still an outage, sent once), for a string body, not after an abort or a timeout,
-at most three resends (a pool that closed one idle connection has usually closed its siblings). RFC 9112 section 9.3.1
+has answered before (a first-use reset is still an outage, sent once), not after an abort or a timeout, only for a URL under a
+configured endpoint, only a thrown fetch (never after a response), with a per-endpoint budget of 3 resends per 60 s counted across
+requests and cleared when the endpoint answers a request without one (a pool that closed one idle connection has usually closed its siblings). RFC 9112 section 9.3.1
 allows it; the recovery design already treats an unreceived inference response as safe to replay. Refused and unresolvable
 hosts, TLS and HTTP errors are not resends. A server that answered once and then resets everything is still an outage after
-four attempts (test). Keep-alive reuse is kept (`inference_transport.test.ts` "keep-alive connections are reused").
+four attempts, and over many requests costs only the budgeted resends (test: five rejected requests, eight sends; unbudgeted, 1005 with the budget raised). Keep-alive reuse is kept (`inference_transport.test.ts` "keep-alive connections are reused").
 
 The D-07 start-up probe: a probe that fails with a connection-level error is `blocking` and gives the start-up notice, but
 only a prompt-time re-probe can refuse a prompt, and it asks again first (`provider_status_plain.test.ts` "a prompt goes

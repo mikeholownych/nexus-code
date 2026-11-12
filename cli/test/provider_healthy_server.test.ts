@@ -138,6 +138,30 @@ describe("D-20: a healthy server that closes a reused connection is not an outag
     }
   });
 
+  test("a server that reads every request and then resets it is sent a bounded number of resends across requests", async () => {
+    const race = await raceServer(() => ({ content: "hi" }));
+    try {
+      const client = new LocalLlmClient({ model: "m", endpoint: race.url, apiKey: "k" } as any);
+      let now = 1_000_000;
+      client.resendClock = () => now;
+      await client.chatCompletion(user, []);
+      const before = race.chats;
+      race.killAll = true;
+      for (let i = 0; i < 5; i++) {
+        await assert.rejects(client.chatCompletion(user, []), (e: any) => e.kind === "network_error");
+        now += 1_000;
+      }
+      assert.equal(race.chats - before, 5 + 3, "five requests plus the three resends the endpoint is allowed per minute");
+      // A new window restores the budget.
+      now += 61_000;
+      const again = race.chats;
+      await assert.rejects(client.chatCompletion(user, []), (e: any) => e.kind === "network_error");
+      assert.equal(race.chats - again, 4);
+    } finally {
+      await race.close();
+    }
+  });
+
   test("a write_file turn in auto mode on that server completes with no provider recovery and writes the file", async () => {
     const race = await raceServer((n) => (n % 2 === 1 ? { tool: { name: "write_file", args: { path: `out-${n}.txt`, content: "hello\n" } } } : { content: "wrote it" }));
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-d20-"));

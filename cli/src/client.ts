@@ -613,7 +613,8 @@ function classifyTransportError(err: any, operatorSignal: AbortSignal | undefine
 /** A connection reset or closed this soon after the attempt began, on an endpoint that answered before, is a keep-alive race. */
 const STALE_CONNECTION_WINDOW_MS = 2_000;
 /** A server that idle-closes one pooled connection has usually closed its siblings too: each resend uses one up. */
-const MAX_STALE_RESENDS = 3;
+const STALE_RESEND_BUDGET = 3;
+const STALE_RESEND_WINDOW_MS = 60_000;
 const CONNECTION_CLOSED_CODES = new Set(["UND_ERR_SOCKET", "ECONNRESET", "EPIPE"]);
 
 export class LocalLlmClient {
@@ -885,23 +886,37 @@ export class LocalLlmClient {
    * `fetch` that resends when a reused keep-alive connection was closed under the request (TUI audit D-20). On a healthy
    * server an idle timeout can fire as the next request is written; the request then fails with `UND_ERR_SOCKET: other
    * side closed` or ECONNRESET, which classified as a temporary outage and made the turn wait and print a notice.
-   * RFC 9112 section 9.3.1 allows resending in that case. It is done only for an endpoint that has answered before
-   * (a first-use reset is a real failure), within moments of the attempt (a server that dies mid-generation fails
-   * later), for a body that can be replayed and not after an abort or timeout. A refused or unresolvable host, TLS
-   * errors and HTTP errors are not resets and keep their ordinary handling.
+   * RFC 9112 section 9.3.1 allows resending in that case. It is done only for a URL under a configured endpoint (the
+   * tokenize fallback is not) that has answered before (a first-use reset is a real failure), within moments of the
+   * attempt (a server that dies mid-generation fails later), and not after an abort or timeout; only a thrown fetch is
+   * resent, never a response. A server that reads a request and then dies would see it again and again, so resends are
+   * budgeted per endpoint: at most `STALE_RESEND_BUDGET` in `STALE_RESEND_WINDOW_MS`, counted across requests and
+   * cleared when the endpoint answers a request without one. Once spent, the failure is reported as any other.
    */
   private async fetchResendingStale(url: string, init: RequestInit): Promise<Response> {
     const started = Date.now();
-    for (let resends = 0; ; resends++) {
+    const origin = this.endpoints.find((ep) => url === ep || url.startsWith(`${ep}/`));
+    for (;;) {
       try {
-        return await fetch(url, init);
+        const response = await fetch(url, init);
+        if (origin) this.staleResends.delete(origin);
+        return response;
       } catch (err: any) {
-        const origin = this.endpoints.find((ep) => url === ep || url.startsWith(`${ep}/`));
-        const replayable = init.body == null || typeof init.body === "string";
         const closed = err?.name !== "TimeoutError" && err?.name !== "AbortError" && transportCauseChain(err).some((c) => c.code !== undefined && CONNECTION_CLOSED_CODES.has(c.code));
-        if (resends >= MAX_STALE_RESENDS || !replayable || !closed || init.signal?.aborted || Date.now() - started > STALE_CONNECTION_WINDOW_MS || !origin || !this.hasEverSucceeded(origin)) throw err;
+        if (!closed || init.signal?.aborted || Date.now() - started > STALE_CONNECTION_WINDOW_MS || !origin || !this.hasEverSucceeded(origin) || !this.spendStaleResend(origin)) throw err;
       }
     }
+  }
+
+  /** Takes one resend from `origin`'s budget; false when it is spent for the current window. */
+  private spendStaleResend(origin: string): boolean {
+    const now = this.resendClock();
+    let budget = this.staleResends.get(origin);
+    if (!budget || now - budget.since > STALE_RESEND_WINDOW_MS) budget = { used: 0, since: now };
+    if (budget.used >= STALE_RESEND_BUDGET) return false;
+    budget.used++;
+    this.staleResends.set(origin, budget);
+    return true;
   }
 
   /** True once `ep` has completed a request or healthy probe in this session (REQ-TUI-105). */
@@ -1091,6 +1106,10 @@ export class LocalLlmClient {
   public onStreamStall?: (event: StreamStallEvent) => void;
   /** Test seam: the clock the stall notice runs on. */
   public stallScheduler?: StallScheduler;
+  /** Resends spent per endpoint in the current window (see `fetchResendingStale`). */
+  private readonly staleResends = new Map<string, { used: number; since: number }>();
+  /** The clock of the resend budget; a test replaces it. */
+  public resendClock: () => number = Date.now;
 
   private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string, streaming = false): StreamWatchdog {
     const disclosure = this.disclosureOf(currentEp ?? this.endpoint);
@@ -1926,8 +1945,8 @@ export class LocalLlmClient {
         });
       } catch (err: any) {
         watchdog.done();
-        // No resend here: a rejected fetch does not prove the gateway never admitted the request, and a
-        // second attempt would replace this error with its own. Recovery belongs to the agent loop.
+        // A resend happens only inside fetchResendingStale (stale keep-alive, before any response byte); any other
+        // rejection goes to the agent loop.
         throw classifyTransportError(err, signal, requestId, "connect");
       }
 
