@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { routeSlash } from "../src/slash/router.js";
 import type { SlashHost, SlashReply } from "../src/slash/catalog.js";
 
-type Sess = string | { id: string; workspace: string; broken?: boolean };
+type Sess = string | { id: string; workspace: string; broken?: boolean; throws?: boolean };
 
 function rig(current: string, sessions: Sess[], workspace = "/w") {
   const asked: Array<string | undefined> = [];
@@ -19,7 +19,8 @@ function rig(current: string, sessions: Sess[], workspace = "/w") {
     },
     resumeSession: (id?: string) => {
       asked.push(id);
-      const hit = list.find((x) => x.id === id);
+      const hit = list.find((x) => x.id === id) as any;
+      if (hit?.throws) throw new Error("kaboom");
       return hit?.broken ? { ok: false, message: `Session not found: ${id}` } : { ok: true, message: `Resumed session ${id}.` };
     },
   } as unknown as SlashHost;
@@ -78,12 +79,19 @@ test("D-15: a newest session that cannot be loaded falls through to the next, na
   assert.deepEqual(asked, ["bad", "good"]);
   assert.equal(out.success, true);
   assert.match(out.output, /Resumed session good/);
-  assert.match(out.output, /skipped bad/);
+  assert.match(out.output, /skipped, could not be loaded: bad \(Session not found: bad\)/);
 });
 
 test("D-15: every candidate unloadable: the honest message names them", async () => {
   const { run } = rig("cur", ["cur", { id: "bad1", workspace: "/w", broken: true }, { id: "bad2", workspace: "/w", broken: true }]);
   const out = await run();
   assert.equal(out.success, false);
-  assert.match(out.output, /Could not load: bad1, bad2/);
+  assert.match(out.output, /Could not load: bad1 \(.*\), bad2/);
+});
+
+test("D-15: a candidate whose resume throws is skipped with its reason, not fatal", async () => {
+  const { run } = rig("cur", ["cur", { id: "boom", workspace: "/w", throws: true }, "good"]);
+  const out = await run();
+  assert.equal(out.success, true);
+  assert.match(out.output, /Resumed session good.*skipped, could not be loaded: boom \(kaboom\)/);
 });

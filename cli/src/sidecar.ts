@@ -1058,13 +1058,14 @@ export class SidecarServer {
     if (!session) return { ok: false, message: `Session not found: ${id || "latest"}` };
     if (!Array.isArray(session.messages)) return { ok: false, message: `Session ${session.id} is unreadable: it has no message list.` };
     if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);
-    this.sessionId = session.id;
     // What compaction replaced stays searchable after a resume (read_archive): only compactions this record committed.
     const archiveNotice = this.app.getAgent().restoreConversation(session, (committed) => this.app.getSessionManager().readArchivedHistory(session.id, committed));
     if (archiveNotice) this.emit({ type: "notice", text: archiveNotice });
     if (Array.isArray(session.activePlan)) this.app.getAgent().setActivePlan(session.activePlan);
     this.lastTurn = null;
     this.emitHistory(session.id, withHarnessProvenance(session.messages), session.lastTurn);
+    // Only a fully restored session becomes the current one: a throw above leaves the id as it was.
+    this.sessionId = session.id;
     // The count of the conversation is in the history header shown just before; this names the session.
     return { ok: true, message: `Resumed session ${session.id}.` };
   }

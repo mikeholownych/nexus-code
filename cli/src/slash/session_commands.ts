@@ -237,7 +237,9 @@ function resume({ host, args }: SlashContext): SlashOutcome {
   // conversation. Offer the most recent other one saved for this workspace (the session store is shared by every
   // workspace, and the loader refuses another workspace's record), trying older ones when a newer cannot be loaded.
   const here = comparableDir(host.app.getConfig().workspace);
-  const candidates = host.app.getSessionManager().listSessions().filter((s) => s.id !== host.sessionId() && comparableDir(s.workspace) === here);
+  const resolved = new Map<string, string>();
+  const dirOf = (dir: string) => resolved.get(dir) ?? (resolved.set(dir, comparableDir(dir)), resolved.get(dir)!);
+  const candidates = host.app.getSessionManager().listSessions().filter((s) => s.id !== host.sessionId() && dirOf(s.workspace) === here);
   const skipped: string[] = [];
   for (const candidate of candidates) {
     let result: { ok: boolean; message: string };
@@ -246,8 +248,8 @@ function resume({ host, args }: SlashContext): SlashOutcome {
     } catch (err) {
       result = { ok: false, message: errorText(err) };
     }
-    if (result.ok) return reply("resume", skipped.length ? `${result.message} (skipped ${skipped.join(", ")}: could not be loaded)` : result.message, true);
-    skipped.push(candidate.id);
+    if (result.ok) return reply("resume", skipped.length ? `${result.message} (skipped, could not be loaded: ${skipped.join(", ")})` : result.message, true);
+    skipped.push(`${candidate.id} (${oneLine(result.message).slice(0, 100)})`);
   }
   const note = skipped.length ? ` Could not load: ${skipped.join(", ")}.` : "";
   return reply("resume", `There is no other saved session in this workspace to resume.${note} /sessions lists what is saved; /resume <id> loads one.`, false);

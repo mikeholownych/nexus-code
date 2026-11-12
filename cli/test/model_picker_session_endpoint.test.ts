@@ -121,7 +121,7 @@ describe("D-11: the picker shows the endpoint the session uses", () => {
 
   test("the list is bounded: count and id length are capped, ids with control, bidi or zero-width characters are rejected whole, non-strings are dropped", async () => {
     const many = Array.from({ length: 5000 }, (_, i) => `m${i}`);
-    const session = await serve(models("evil\u001b[31m\nname", "gpt\u202e-4", "zero\u200bwidth", "line\u2028sep", "bom\ufeffid", "bell\u0007id", "x".repeat(5000), 42, null, "kept-id", ...many));
+    const session = await serve(models("evil\u001b[31m\nname", "gpt\u202e-4", "zero\u200bwidth", "line\u2028sep", "bom\ufeffid", "bell\u0007id", "x".repeat(5000), 42, null, "\u00a0padded", "kept-id", ...many));
     try {
       process.env.LOCAL_LLM_ENDPOINT = "http://127.0.0.1:9/v1";
       const catalog = await buildCatalog(cfg({ endpoint: `${session.url}/v1`, model: "m1" }), { timeoutMs: 1500 });

@@ -139,8 +139,8 @@ async function withTimeout<T>(p: Promise<T>, ms: number, signal?: AbortSignal): 
 function listedIds(ids: unknown[]): string[] {
   const out: string[] = [];
   for (const raw of ids) {
-    if (typeof raw !== "string" || !raw.trim() || raw.length > MAX_MODEL_ID || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(raw)) continue;
-    out.push(raw.trim());
+    if (typeof raw !== "string" || !raw.trim() || raw !== raw.trim() || raw.length > MAX_MODEL_ID || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(raw)) continue;
+    out.push(raw);
     if (out.length >= MAX_LISTED_MODELS) break;
   }
   return out;
