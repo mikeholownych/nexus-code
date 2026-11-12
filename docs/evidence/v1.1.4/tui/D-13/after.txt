@@ -11,7 +11,7 @@
 │start of the file:                                                                                │
 │▎ first line                                                                                      │
 │▎ second line                                                                                     │
-│▎ third line                                                                                      │
+│[38;5;15;49m▎ third line                                                                          │
 │                                                                                                  │
 │▸y Approve   a Approve all later actions   n Deny                                                 │
 │y approve · n deny · ←→/tab move, enter takes ▸ · ↑↓ scroll · esc denies                          │
@@ -70,13 +70,13 @@
 │Everything inside it is removed. Links inside are removed, not followed.                          │
 │contents:                                                                                         │
 │▎ a.js                                                                                            │
-│▎ b.js                                                                                            │
+│▎ b.js                                       [39;49m                                              │
 │▎ etc-link (link)                                                                                 │
 │▎ sub/                                                                                            │
 │▎ sub/c.js                                                                                        │
 │                                                                                                  │
 │▸y Approve   a Approve all later actions   n Deny                                                 │
-│y approve · n deny · ←→/tab move, enter takes ▸ · [38;2;103;232;249;49m↑↓ scroll · esc denies     │
+│y approve · n deny · ←→/tab move, enter takes ▸ · ↑↓ scroll · esc denies                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 

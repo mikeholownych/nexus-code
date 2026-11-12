@@ -95,6 +95,8 @@ export class SidecarServer {
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
   private pendingApproval?: { id: string; settle: (approved: boolean) => void };
+  /** The last approval was settled by the operator's Deny, not by a cancel or a shutdown. */
+  private operatorDeclined = false;
   private pendingCheckpointChoice?: { id: string; choices: readonly CheckpointChoice[]; settle: (choice: CheckpointChoice) => void };
   private approvalSeq = 0;
   private shutdownPromise?: Promise<void>;
@@ -538,13 +540,15 @@ export class SidecarServer {
         const tool = rawTool;
         const evidence = open.get(dispatch) ?? "";
         open.delete(dispatch);
-        this.evidence.end(evidence, success, output, error, denied === true);
+        const declined = denied === true && this.operatorDeclined;
+        if (denied === true) this.operatorDeclined = false;
+        this.evidence.end(evidence, success, output, error, declined);
         // A denial is the operator's own decision: say so in a sentence, not the model-facing text.
-        const summary: ToolSummary = denied === true ? { summary: DENIED_BY_OPERATOR, lines: 1 } : toolSummary(success, output, error);
+        const summary: ToolSummary = declined ? { summary: DENIED_BY_OPERATOR, lines: 1 } : toolSummary(success, output, error);
         this.emit({
           type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence,
           ...summary,
-          ...(denied === true ? { denied: true as const } : {}),
+          ...(declined ? { denied: true as const } : {}),
         });
       },
       onProviderRecovery: ({ record, discardedPartialOutput }) => {
@@ -750,6 +754,7 @@ export class SidecarServer {
       };
       signal.addEventListener("abort", onAbort, { once: true });
       this.pendingApproval = { id, settle };
+      this.operatorDeclined = false;
       this.emit({
         type: "approval.request",
         id,
@@ -774,6 +779,8 @@ export class SidecarServer {
       this.app.getAgent().setApprovalMode("auto");
       this.emitSessionState();
     }
+    // Only the operator's own Deny says "denied by you"; a cancelled turn or a shutdown settles the approval as false too.
+    this.operatorDeclined = !approved;
     pending.settle(approved);
   }
 

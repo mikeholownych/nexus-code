@@ -4,12 +4,13 @@
 
 Trust this folder?
 
-/tmp/d21-4feeoysp/an-example-project-with-a-fairly-long-directory-name
+/tmp/d21-e8o5nojp/an-example-project-with-a-fairly-long-directory-name
 
 Project instructions found: AGENTS.md
 
 Trusting this folder lets Nexus load its project instructions and workspace integrations, including
-any that change later. Nexus remembers your choice for this folder.
+any that change later. Trusting is remembered for this folder; the other choices ask again next
+time.
 
 Trust does not change tool approvals; those follow your permission settings.
 
@@ -23,14 +24,15 @@ Trust does not change tool approvals; those follow your permission settings.
 
 Trust this folder?
 
-/tmp/d21-4feeoysp/
+/tmp/d21-e8o5nojp/
 an-example-project-with-a-fairly-long-directory-name
 
 Project instructions found: AGENTS.md
 
 Trusting this folder lets Nexus load its project
 instructions and workspace integrations, including any that
-change later. Nexus remembers your choice for this folder.
+change later. Trusting is remembered for this folder; the
+other choices ask again next time.
 
 Trust does not change tool approvals; those follow your
 permission settings.
@@ -45,7 +47,7 @@ permission settings.
 
 Trust this folder?
 
-/tmp/d21-4feeoysp/
+/tmp/d21-e8o5nojp/
 an-example-project-with-a-fairly-long-di
 rectory-name
 
@@ -54,8 +56,9 @@ Project instructions found: AGENTS.md
 Trusting this folder lets Nexus load its
 project instructions and workspace
 integrations, including any that change
-later. Nexus remembers your choice for
-this folder.
+later. Trusting is remembered for this
+folder; the other choices ask again next
+time.
 
 Trust does not change tool approvals;
 those follow your permission settings.

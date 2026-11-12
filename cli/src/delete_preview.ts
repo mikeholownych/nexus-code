@@ -56,13 +56,23 @@ function walk(dir: string, limit: number): Walk {
   const stack: Array<{ abs: string; rel: string }> = [{ abs: dir, rel: "" }];
   while (stack.length > 0 && !out.truncated) {
     const { abs, rel } = stack.pop()!;
-    let entries: fs.Dirent[];
+    let entries: fs.Dirent[] = [];
+    let handle: fs.Dir | undefined;
     try {
-      entries = fs.readdirSync(abs, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      // A directory swapped for a link since it was listed is not entered; only as many entries are read as can still be counted.
+      if (!fs.lstatSync(abs).isDirectory()) continue;
+      handle = fs.opendirSync(abs);
+      for (let read = 0; read <= limit - out.counted; read++) {
+        const entry = handle.readSync();
+        if (!entry) break;
+        entries.push(entry);
+      }
     } catch {
       out.unreadable = true;
-      continue;
+    } finally {
+      try { handle?.closeSync(); } catch { /* nothing to release */ }
     }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const children: Array<{ abs: string; rel: string }> = [];
     for (const entry of entries) {
       if (out.counted >= limit) {
@@ -104,7 +114,9 @@ function peek(file: string, size: number): string[] {
   if (size === 0) return ["(empty file)"];
   let descriptor: number | undefined;
   try {
-    descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    // O_NONBLOCK: a file swapped for a FIFO since the lstat must not hang the sidecar; fstat then refuses anything but a file.
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    if (!fs.fstatSync(descriptor).isFile()) return ["content not shown"];
     const buffer = Buffer.alloc(Math.min(size, DELETE_PEEK_BYTES));
     const read = fs.readSync(descriptor, buffer, 0, buffer.length, 0);
     const bytes = buffer.subarray(0, read);
@@ -123,40 +135,56 @@ function peek(file: string, size: number): string[] {
   }
 }
 
-/** Human text for the delete approval; never throws. */
+/**
+ * Human text for the delete approval; never throws. It follows `delete_file` in core/src/file_ops.rs: the path is
+ * trimmed and its backslashes are slashes; an absolute path is canonicalised (a link is followed to what it points to);
+ * a relative path keeps its final link, which must resolve inside the workspace, outside `.git`, and not to the
+ * workspace root; a directory (or a link to one) needs `recursive`; removing a link removes the link only.
+ */
 export function describeDeletion(workspace: string, args: Record<string, any>, limit = DELETE_VISIT_LIMIT): string {
   const given = typeof args.path === "string" ? args.path : "";
+  const clean = given.trim().replace(/\\/g, "/");
   const shown = cut(given);
   const recursive = args.recursive === true;
+  const header = [shown || "(no path given)"];
+  const refused = (why: string) => [...header, `${why} · the delete will be refused. Nothing there is shown.`].join("\n");
+  const missing = () => [...header, "does not exist · the delete will fail."].join("\n");
   try {
     const root = fs.realpathSync(workspace);
-    const lexical = path.resolve(root, given);
-    const rel = path.relative(root, lexical);
-    const header = [shown || "(no path given)"];
-    if (rel && !rel.startsWith("..") && !path.isAbsolute(rel) && given.replace(/^\.\//, "") !== rel) header.push(`resolves to ${cut(rel)}`);
-    if (!given || !rel || rel.startsWith("..") || path.isAbsolute(rel)) {
-      return [...header, "outside the workspace, or not a file or folder inside it · the delete will be refused. Nothing there is shown."].join("\n");
+    const outsideText = (rel: string) => rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+    const hasGit = (target: string) => path.relative(root, target).split(path.sep).includes(".git");
+    let target: string;
+    if (!clean) return refused("no path given, or outside the workspace");
+    if (path.isAbsolute(clean)) {
+      // The engine canonicalises an absolute path: what it names is the real file or folder, never a link.
+      let real: string;
+      try { real = fs.realpathSync(clean); } catch { return refused("outside the workspace, or not there"); }
+      if (!inside(root, real)) return refused("outside the workspace");
+      target = real;
+    } else {
+      const lexical = path.resolve(root, clean);
+      if (outsideText(path.relative(root, lexical))) return refused("outside the workspace");
+      const shownRel = path.relative(root, lexical);
+      if (clean.replace(/^\.\//, "") !== shownRel) header.push(`resolves to ${cut(shownRel)}`);
+      let parent: string;
+      try { parent = fs.realpathSync(path.dirname(lexical)); } catch { return missing(); }
+      if (!inside(root, parent)) return refused("outside the workspace (through a link)");
+      target = path.join(parent, path.basename(lexical));
     }
-    let parent: string;
-    try {
-      parent = fs.realpathSync(path.dirname(lexical));
-    } catch {
-      return [...header, "does not exist · the delete will fail."].join("\n");
-    }
-    if (!inside(root, parent)) {
-      return [...header, "outside the workspace (through a link) · the delete will be refused. Nothing there is shown."].join("\n");
-    }
-    const target = path.join(parent, path.basename(lexical));
+    if (target === root) return refused("the workspace itself");
     let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(target);
-    } catch {
-      return [...header, "does not exist · the delete will fail."].join("\n");
-    }
+    try { stat = fs.lstatSync(target); } catch { return missing(); }
+    if (hasGit(target)) return refused("inside .git");
     if (stat.isSymbolicLink()) {
-      let pointsTo = "";
-      try { pointsTo = fs.readlinkSync(target); } catch { /* shown without it */ }
-      return [...header, `symbolic link${pointsTo ? ` -> ${cut(pointsTo)}` : ""}`, "Only the link is removed; what it points to is not touched or shown."].join("\n");
+      let real: string;
+      try { real = fs.realpathSync(target); } catch { return missing(); }
+      if (!inside(root, real)) return refused("a link that points outside the workspace");
+      if (real === root) return refused("a link to the workspace itself");
+      if (hasGit(real)) return refused("a link into .git");
+      const pointsTo = fs.readlinkSync(target);
+      const folder = fs.statSync(real).isDirectory();
+      if (folder && !recursive) return [...header, `symbolic link -> ${cut(pointsTo)}`, "This will be refused: a directory needs recursive=true, and the model did not set it."].join("\n");
+      return [...header, `symbolic link -> ${cut(pointsTo)}`, `Only the link is removed; the ${folder ? "folder" : "file"} it points to stays.`].join("\n");
     }
     if (stat.isFile()) {
       return [...header, `file · ${formatBytes(stat.size)}`, "Only this file is removed.", ...(stat.size === 0 ? [] : ["start of the file:"]), ...peek(target, stat.size)].join("\n");
@@ -178,7 +206,8 @@ export function describeDeletion(workspace: string, args: Record<string, any>, l
       if (found.unreadable) lines.push("some entries could not be read, so the count may be low");
       if (found.listing.length > 0) lines.push("contents:", ...found.listing.map((name) => `▎ ${cut(name)}`));
       const unlisted = found.counted - found.listing.length;
-      if (unlisted > 0 || found.truncated) lines.push(`… ${found.truncated && unlisted <= 0 ? "more" : unlisted} more entries not listed`);
+      if (found.truncated) lines.push(`… and more entries not listed (the count stopped at ${limit})`);
+      else if (unlisted > 0) lines.push(`… ${unlisted} more entries not listed`);
       return lines.join("\n");
     }
     return [...header, "special file (not a regular file or folder) · contents are not shown."].join("\n");

@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { approvalReview } from "../src/approval_review.js";
-import { DELETE_LISTING_ROWS, DELETE_VISIT_LIMIT } from "../src/delete_preview.js";
+import { execFileSync } from "node:child_process";
+import { DELETE_LISTING_ROWS, DELETE_VISIT_LIMIT, describeDeletion } from "../src/delete_preview.js";
 
 function workspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "nexus-delprev-"));
@@ -56,7 +57,7 @@ describe("D-13: a delete approval says what will be deleted", () => {
     assert.ok(text.length < 4000, `bounded text: ${text.length}`);
   });
 
-  test("a symlink is described, never followed: its target's contents, size and names stay out", () => {
+  test("a link that leaves the workspace is refused and nothing of its target is shown; a link inside a directory is one entry, not entered", () => {
     const ws = workspace();
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-delprev-out-"));
     fs.writeFileSync(path.join(outside, "secret.txt"), "TOPSECRETCONTENT\n".repeat(50));
@@ -64,17 +65,15 @@ describe("D-13: a delete approval says what will be deleted", () => {
     fs.symlinkSync(path.join(outside, "secret.txt"), path.join(ws, "filelink"));
     for (const name of ["dirlink", "filelink"]) {
       const text = preview(ws, { path: name, recursive: true });
-      assert.match(text, /symbolic link/);
-      assert.match(text, /Only the link is removed/);
-      assert.match(text, /symbolic link -> /, `${name}: where the link points`);
-      assert.doesNotMatch(text, /TOPSECRETCONTENT|▎/, `${name}: nothing from the target`);
-      assert.doesNotMatch(text, /850 B|entries/);
+      assert.match(text, /points outside the workspace/);
+      assert.match(text, /will be refused/);
+      assert.doesNotMatch(text, /TOPSECRETCONTENT|▎|secret\.txt|850 B|entries/, `${name}: nothing from the target`);
     }
-    // A link inside a directory is one entry; the walk does not enter it.
     fs.mkdirSync(path.join(ws, "d"));
     fs.symlinkSync(outside, path.join(ws, "d", "escape"));
     const dir = preview(ws, { path: "d", recursive: true });
     assert.match(dir, /1 entry \(1 link\)/);
+    assert.match(dir, /▎ escape \(link\)/);
     assert.doesNotMatch(dir, /secret\.txt/);
   });
 
@@ -113,6 +112,69 @@ describe("D-13: a delete approval says what will be deleted", () => {
     assert.ok(text.length < 4000);
     fs.writeFileSync(path.join(ws, "k.txt"), 'API_KEY="abcdef1234567890"\n');
     assert.doesNotMatch(preview(ws, { path: "k.txt" }), /abcdef1234567890/);
+  });
+
+  test("the preview follows the engine's rules for links and path spellings (core/src/file_ops.rs delete_file)", () => {
+    const ws = workspace();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-delprev-out-"));
+    fs.mkdirSync(path.join(ws, "real", "inner"), { recursive: true });
+    fs.writeFileSync(path.join(ws, "real", "inner", "keep.txt"), "keep");
+    fs.writeFileSync(path.join(ws, "file.txt"), "x");
+    fs.mkdirSync(path.join(ws, ".git"));
+    fs.symlinkSync(path.join(ws, "real"), path.join(ws, "indirlink"));
+    fs.symlinkSync(path.join(ws, "file.txt"), path.join(ws, "infilelink"));
+    fs.symlinkSync(path.join(ws, "nope"), path.join(ws, "dangling"));
+    fs.symlinkSync(outside, path.join(ws, "outlink"));
+    fs.symlinkSync(path.join(ws, ".git"), path.join(ws, "gitlink"));
+    fs.symlinkSync(ws, path.join(ws, "rootlink"));
+    // A relative link to a folder: refused without recursive, the link alone removed with it.
+    assert.match(preview(ws, { path: "indirlink" }), /will be refused: a directory needs recursive/i);
+    const withRecursive = preview(ws, { path: "indirlink", recursive: true });
+    assert.match(withRecursive, /symbolic link -> /);
+    assert.match(withRecursive, /Only the link is removed; the folder it points to stays/);
+    assert.match(preview(ws, { path: "infilelink" }), /Only the link is removed; the file it points to stays/);
+    // Dangling, escaping, into .git and to the root: the engine fails or refuses, so the preview says that and not "removed".
+    assert.match(preview(ws, { path: "dangling" }), /does not exist.*will fail/s);
+    for (const name of ["outlink", "gitlink", "rootlink"]) {
+      const text = preview(ws, { path: name, recursive: true });
+      assert.match(text, /will be refused/, name);
+      assert.doesNotMatch(text, /Only the link is removed/, name);
+    }
+    // An absolute path names its target: the engine canonicalises it, so a link is followed to what it points to.
+    const absolute = preview(ws, { path: path.join(ws, "indirlink"), recursive: true });
+    assert.match(absolute, /directory · /, "the absolute spelling deletes the real folder");
+    assert.doesNotMatch(absolute, /symbolic link/);
+    assert.match(preview(ws, { path: path.join(ws, "dangling") }), /will be refused/);
+    // Spellings the engine normalises: trim and backslashes; a name starting with two dots is inside, not outside.
+    assert.match(preview(ws, { path: " file.txt " }), /file · 1 B/);
+    assert.match(preview(ws, { path: "real\\inner\\keep.txt" }), /file · 4 B/);
+    fs.writeFileSync(path.join(ws, "..cache"), "c");
+    assert.match(preview(ws, { path: "..cache" }), /file · 1 B/);
+    // The workspace reached through a link (a non-real spelling) still resolves inside it.
+    const alias = path.join(outside, "ws-alias");
+    fs.symlinkSync(ws, alias);
+    assert.match(preview(alias, { path: path.join(ws, "file.txt") }), /file · 1 B/);
+  });
+
+  test("a FIFO is never read, and a directory that is a link when the walk reaches it is not entered", () => {
+    const ws = workspace();
+    fs.mkdirSync(path.join(ws, "d", "sub"), { recursive: true });
+    assert.match(preview(ws, { path: "d", recursive: true }), /sub\//);
+    execFileSync("mkfifo", [path.join(ws, "pipe")]);
+    assert.match(preview(ws, { path: "pipe" }), /special file/);
+  });
+
+  test("the walk reads at most the limit from a directory and says so exactly when more exist", () => {
+    const ws = workspace();
+    fs.mkdirSync(path.join(ws, "exact"));
+    for (let i = 0; i < 5; i++) fs.writeFileSync(path.join(ws, "exact", `f${i}`), "");
+    const exact = describeDeletion(ws, { path: "exact", recursive: true }, 5);
+    assert.match(exact, /directory · 5 entries/);
+    assert.doesNotMatch(exact, /at least/);
+    const over = describeDeletion(ws, { path: "exact", recursive: true }, 4);
+    assert.match(over, /at least 4 entries/);
+    assert.match(over, /and more entries not listed/);
+    assert.doesNotMatch(over, /more more/);
   });
 
   test("a name or content cannot forge a row of the preview: controls and line breaks are made visible", () => {

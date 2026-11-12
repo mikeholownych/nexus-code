@@ -219,17 +219,21 @@ describe("SidecarServer: approvals", () => {
       assert.equal(end.denied, true);
       assert.equal(end.duration_ms, undefined, "the wait for the decision is not the tool's run time");
       assert.doesNotMatch(JSON.stringify(end), /Ask the user for clarification|rejected by the user/);
+      await send({ type: "tool.detail", id: "d1", evidence: end.evidence });
       const detail = events.find((e) => e.type === "tool.detail");
-      if (detail) {
-        assert.equal(detail.duration_ms, null, "the detail view has no run time either");
-        assert.doesNotMatch(detail.output, /Ask the user for clarification/);
-      }
+      assert.ok(detail, "the detail view answers");
+      assert.equal(detail.duration_ms, null, "the detail view has no run time either");
+      assert.equal(detail.output, "Denied by you");
     });
   });
 
-  test("a call refused by policy (not by the operator) is not reported as denied by you", async () => {
-    await withSidecar(readOnlyTurn, "auto", async ({ events }) => {
-      for (const end of events.filter((e) => e.type === "tool.end")) assert.equal(end.denied, undefined);
+  test("a turn cancelled while an approval is pending is not reported as denied by you", async () => {
+    await withSidecar(writeTurn, "review", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "make x" });
+      await waitForEvent(events, (e) => e.type === "approval.request");
+      await send({ type: "cancel" });
+      await server.idle();
+      for (const end of events.filter((e) => e.type === "tool.end")) assert.equal(end.denied, undefined, "only the operator's Deny key says denied by you");
     });
   });
 
@@ -501,6 +505,7 @@ describe("SidecarServer: sessions and slash commands", () => {
       assert.ok(deniedWrite, "the attempted write receives a terminal denial event");
       assert.equal(deniedWrite.success, false);
       assert.match(deniedWrite.summary, /Read-only fallback/);
+      assert.equal(deniedWrite.denied, undefined, "a policy refusal is not the operator's denial");
       assert.equal(fs.existsSync(path.join(repo, "new.txt")), false);
       assert.ok(events.some((event) => event.type === "turn.result" && event.turn_id === "t-sensitive"));
 

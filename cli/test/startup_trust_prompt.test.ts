@@ -68,7 +68,7 @@ test("trust prompt offers explicit trust, continue-untrusted, and exit choices",
     assert.match(rendered, /Continue without trusting/);
     assert.match(rendered, /Exit/);
     const flat = rendered.split("\n").map((row) => row.trim()).join(" ").replace(/\s+/g, " ");
-    assert.match(flat, /Nexus remembers your choice for this folder\./);
+    assert.match(flat, /Trusting is remembered for this folder; the other choices ask again next time\./);
     assert.match(flat, /including any that change later\./);
     assert.match(flat, /Trust does not change tool approvals; those follow your permission settings\./);
     assert.ok(rendered.split("\n").every((line) => displayWidth(line) <= 40), rendered);
@@ -305,7 +305,7 @@ async function trustScreen(workspace: string, columns: number): Promise<string[]
 
 const TRUST_SENTENCES = [
   "Trusting this folder lets Nexus load its project instructions and workspace integrations, including any that change later.",
-  "Nexus remembers your choice for this folder.",
+  "Trusting is remembered for this folder; the other choices ask again next time.",
   "Trust does not change tool approvals; those follow your permission settings.",
 ];
 
@@ -353,5 +353,24 @@ test("D-21: a long path is wrapped whole across rows, never cut, and tiny termin
     }
   } finally {
     fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("D-21: the prompt is drawn again at the new width when the terminal is resized, and stops listening when it is answered", async () => {
+  const workspace = workspaceWithInstructions();
+  const terminal = mockTerminal(true, 100);
+  try {
+    const decision = promptWorkspaceTrust(workspace, { ...terminal, trustStore: { isTrusted: () => false, trust: () => {} } });
+    await new Promise((resolve) => setImmediate(resolve));
+    const mark = terminal.text.length;
+    terminal.output.columns = 40;
+    terminal.output.emit("resize");
+    const redrawn = terminal.text.slice(mark).replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "").split("\n");
+    assert.ok(redrawn.length > 5 && redrawn.every((row) => displayWidth(row) <= 40), redrawn.join("\n"));
+    terminal.input.emit("keypress", "\u001b", { name: "escape" });
+    assert.equal(await decision, "exit");
+    assert.equal(terminal.output.listenerCount("resize"), 0, "no listener is left behind");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 });

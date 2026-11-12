@@ -171,7 +171,7 @@ export function promptWorkspaceTrust(
         ...instructions,
         "",
         ...wrapProse(
-          "Trusting this folder lets Nexus load its project instructions and workspace integrations, including any that change later. Nexus remembers your choice for this folder.",
+          "Trusting this folder lets Nexus load its project instructions and workspace integrations, including any that change later. Trusting is remembered for this folder; the other choices ask again next time.",
           width,
         ),
         "",
@@ -187,6 +187,7 @@ export function promptWorkspaceTrust(
     const finish = (decision: WorkspaceTrustDecision) => {
       if (complete) return;
       complete = true;
+      output.removeListener("resize", render);
       input.removeListener("keypress", onKeypress);
       input.removeListener("close", onClose);
       try { input.setRawMode(oldRawMode); } catch {}
@@ -230,6 +231,7 @@ export function promptWorkspaceTrust(
     readline.emitKeypressEvents(input);
     input.on("keypress", onKeypress);
     input.once("close", onClose);
+    output.on("resize", render);
     try {
       input.setRawMode(true);
       input.resume();
