@@ -76,6 +76,15 @@ describe("D-11: the picker shows the endpoint the session uses", () => {
     } finally { await session.close(); }
   });
 
+  test("the session endpoint equals the appliance when only userinfo, query, case or a trailing slash differ", async () => {
+    const session = await serve(models("a"));
+    try {
+      process.env.LOCAL_LLM_ENDPOINT = `${session.url}/v1`;
+      const catalog = await buildCatalog(cfg({ endpoint: `${session.url.replace("http://", "http://u:p@")}/V1/`.replace("/V1/", "/v1/") + "?x=1", model: "a" }));
+      assert.equal(catalog.providers.some((p) => p.id === "session"), false);
+    } finally { await session.close(); }
+  });
+
   test("a cloud provider session shows no extra session row", async () => {
     const catalog = await buildCatalog(cfg({ provider: "openrouter", endpoint: "https://openrouter.ai/api/v1", model: "x/y" }), { timeoutMs: 300 });
     assert.equal(catalog.providers.some((p) => p.id === "session"), false);

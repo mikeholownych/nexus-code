@@ -619,11 +619,9 @@ impl LiveState {
             }
             self.composer.insert("\n");
             // Enter would send everything in the draft as one message: say so, never join messages silently.
-            let lines = self.composer.text().split('\n').count();
-            self.transcript.push(Entry::Notice(format!(
-                "{} messages are now in the draft; Enter sends them as one message, so edit or split it first.",
-                lines.max(2)
-            )));
+            self.transcript.push(Entry::Notice(
+                "Another message was added to the draft; Enter sends the whole draft as one message, so edit or split it first.".into(),
+            ));
         }
         self.composer.paste(text);
     }
@@ -1977,6 +1975,11 @@ impl LiveState {
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderLocalCancel { id }));
             }
+            Some(Overlay::Models(Picker { catalog: Fetch::Waiting, request, .. })) => {
+                let id = request.clone();
+                self.overlay = None;
+                return Some(Action::Send(Command::ProviderCancel { id }));
+            }
             Some(
                 Overlay::Help { .. }
                 | Overlay::Detail(_)
@@ -2946,7 +2949,7 @@ mod tests {
         assert_eq!(state.composer.expand(state.composer.text()), "SC:e500 go\nSC:reset go", "both are kept, one per line");
         assert_eq!(notices(&state), 1, "the join is announced: {:?}", state.transcript);
         let Some(Entry::Notice(text)) = state.transcript.iter().rev().find(|e| matches!(e, Entry::Notice(t) if t.contains("one message"))) else { panic!() };
-        assert!(text.contains("2 messages") && text.contains("edit"), "{text}");
+        assert!(text.contains("one message") && text.contains("edit"), "{text}");
         // A message typed by hand and then a returned one is the same join.
         let mut typed = busy();
         typed.composer = "draft already here".into();
@@ -4528,6 +4531,10 @@ mod tests {
         let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
         state.apply(catalog(&id));
         assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        // Ctrl+C closes a picker that is still listing the same way.
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::ProviderCancel { id })));
     }
 
     #[test]

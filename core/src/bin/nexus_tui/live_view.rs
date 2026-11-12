@@ -3489,12 +3489,11 @@ mod tests {
         for width in [40u16, 60, 100] {
             let mut state = ready();
             feed(&mut state, &[BUSY]);
-            for (text, id) in [("SC:e500 go", "g1"), ("SC:reset go", "g2")] {
+            for text in ["SC:e500 go", "SC:reset go"] {
                 for c in text.chars() {
                     state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
                 }
                 state.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-                let _ = id;
             }
             feed(
                 &mut state,

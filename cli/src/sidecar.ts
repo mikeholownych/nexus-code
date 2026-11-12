@@ -361,6 +361,12 @@ export class SidecarServer {
       this.steerAck(id, "rejected", `${name} is running, and steering applies to agent turns; your message is back in the composer.`, text);
       return;
     }
+    // Messages already waiting for their own turn come first: a later one never overtakes them.
+    if (this.followUps.length) {
+      this.followUps.push({ id, text });
+      this.steerAck(id, "deferred", "The turn is finishing; your message starts a follow-up turn as soon as it ends.");
+      return;
+    }
     const queued = this.app.getAgent().queueSteering(id, text);
     if (queued.status === "queued") {
       this.history.push(text.trim());

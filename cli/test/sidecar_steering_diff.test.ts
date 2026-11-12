@@ -122,6 +122,23 @@ describe("steering through the sidecar", () => {
     });
   });
 
+  test("D-18: a message sent while earlier follow-ups wait queues behind them, never ahead", async () => {
+    await withSidecar((n) => (n === 1 ? { kind: "text", content: "first", delayMs: 200 } : { kind: "text", content: `reply ${n}`, delayMs: 300 }), async ({ server, events, send, app }) => {
+      let calls = 0;
+      app.getAgent().queueSteering = () => (++calls <= 2 ? { status: "no_active_turn" } : { status: "queued" });
+      await send({ type: "prompt.submit", id: "t1", text: "go" });
+      await inference(events);
+      await send({ type: "steer", id: "g1", text: "one" });
+      await send({ type: "steer", id: "g2", text: "two" });
+      await waitUntil(() => acks(events, "g1").includes("applied"), 20_000);
+      await send({ type: "steer", id: "g3", text: "three" });
+      await waitUntil(() => events.filter((e) => e.type === "turn.result").length === 4, 20_000);
+      await server.idle();
+      assert.deepEqual(acks(events, "g3"), ["deferred", "applied"]);
+      assert.deepEqual(events.filter((e) => e.type === "turn.result").map((e) => e.turn_id), ["t1", "g1", "g2", "g3"]);
+    });
+  });
+
   test("D-18: cancelling while follow-ups wait returns every one of them separately", async () => {
     await withSidecar(() => ({ ...read("base.txt"), delayMs: 500 }), async ({ server, events, send, app }) => {
       app.getAgent().queueSteering = () => ({ status: "no_active_turn" });

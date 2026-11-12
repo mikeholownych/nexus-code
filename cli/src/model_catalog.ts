@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { credentialStorageHome, LocalLlmClient, operatorSetting } from "./client.js";
 import { applianceEndpointSelection, buildConfig, providerBaseUrl, providerKey } from "./config.js";
 import { resolveCredential } from "./credentials.js";
-import { scrubUrls } from "./core/endpoint_identity.js";
+import { comparableEndpoint, scrubUrls } from "./core/endpoint_identity.js";
 import { originOf, PROVIDERS, providerDefinition, type ConnectMethod } from "./providers.js";
 import { redactSecrets } from "./ui.js";
 import type { HarnessConfig } from "./types.js";
@@ -146,17 +146,7 @@ function listedIds(ids: unknown[]): string[] {
 }
 
 function sameEndpoint(a: string, b: string): boolean {
-  const norm = (u: string) => {
-    try {
-      const url = new URL(u.trim());
-      url.hash = "";
-      url.search = "";
-      return url.toString().replace(/\/+$/, "");
-    } catch {
-      return u.trim().replace(/\/+$/, "");
-    }
-  };
-  return norm(a) === norm(b);
+  return comparableEndpoint(a) === comparableEndpoint(b);
 }
 
 /** The appliance connection, whatever provider is currently selected. */

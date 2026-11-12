@@ -1,4 +1,4 @@
-# D-18 after: /tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/scratchpad/nexus-tui-after
+# D-18 after: /tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/scratchpad/tpol-g2/../nexus-tui-after
 === D-18: two prompts typed while the agent waits on the provider, then Esc, then Enter
 --- after typing both (each is steering)
  NEXUS   app  model m  auto
@@ -20,14 +20,15 @@ the composer.
 ↳ SC:reset go
   steering · not applied — Cancelled with the turn before it could start; your message is back in
 the composer.
-  ! 2 messages are now in the draft; Enter sends them as one message, so edit or split it first.
+  ! Another message was added to the draft; Enter sends the whole draft as one message, so edit or
+split it first.
 
  enter send · alt+enter or ctrl+j newline · ? help ─────────────────────────────────────────────────
 › SC:e500 go
   SC:reset go
 
 --- what the TUI sent to the sidecar (steer and prompt.submit commands)
-{"id":"g2039a917a2ed76-1","text":"SC:e500 go","type":"steer","v":1}
-{"id":"g2039a917a2ed76-2","text":"SC:reset go","type":"steer","v":1}
+{"id":"g221c6635cdab52-1","text":"SC:e500 go","type":"steer","v":1}
+{"id":"g221c6635cdab52-2","text":"SC:reset go","type":"steer","v":1}
 {"id":"t1","text":"SC:e500 go\nSC:reset go","type":"prompt.submit","v":1}
 
