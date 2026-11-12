@@ -28,7 +28,24 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const MIB = 1024 * 1024;
 const uid = process.getuid!();
 const USER_SERVICE = `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service`;
-const APP_SLICE = path.join(USER_SERVICE, "app.slice");
+/**
+ * Where transient scopes land on this host: the parent of the cgroup a real `systemd-run --user --scope` command reports in
+ * /proc/self/cgroup, discovered by the gate (never assumed). Unset until the gate has run; a use before then throws.
+ */
+let SCOPE_PARENT: string | null = null;
+const scopeParent = () => { if (!SCOPE_PARENT) throw new Error("the host gate has not discovered the scope directory"); return SCOPE_PARENT; };
+
+/** The directory transient scopes are created in, or why it cannot be found. Needs a working user manager. */
+function discoverScopeParent(): { dir: string } | { problem: string } {
+  const probe = spawnSync("/usr/bin/systemd-run", ["--user", "--scope", "--quiet", "--collect", "--", "/bin/cat", "/proc/self/cgroup"], {
+    encoding: "utf8", timeout: 15_000, env: { PATH: "/usr/bin:/bin", XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, ...(process.env.DBUS_SESSION_BUS_ADDRESS ? { DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS } : {}) },
+  });
+  const own = (probe.stdout ?? "").split("\n").find((line) => line.startsWith("0::"))?.slice(3);
+  if (probe.status !== 0 || !own || !own.endsWith(".scope")) return { problem: `a probe scope did not report a transient scope cgroup (exit ${probe.status}: ${(probe.stderr ?? "").trim().slice(-200)}; cgroup "${own ?? ""}")` };
+  const dir = path.dirname(path.join("/sys/fs/cgroup", own));
+  if (!fs.existsSync(path.join(dir, "cgroup.procs"))) return { problem: `transient scopes are not created under ${dir}: it is not a cgroup directory here` };
+  return { dir };
+}
 
 /** memory.peak (kernel 5.19) and pids.peak (6.1) may be absent: the peak bounds are then reported as not checked, not failed. */
 const PEAKS = fs.existsSync(path.join(USER_SERVICE, "memory.peak")) && fs.existsSync(path.join(USER_SERVICE, "pids.peak"));
@@ -63,6 +80,9 @@ function hostGate() {
     const resources = { cpuPercent: 50, memoryBytes: 64 * MIB, tasks: 16, storageBytes: tmpfs.blocks * tmpfs.bsize, workspaceRoot };
     const problem = resourceProbeProblem(resources);
     if (problem) return { reason: `the resource contract probe fails on this host: ${problem}` };
+    const discovered = discoverScopeParent();
+    if ("problem" in discovered) return { reason: discovered.problem };
+    SCOPE_PARENT = discovered.dir;
     return { reason: null, resources };
   })();
   return gate;
@@ -76,25 +96,31 @@ async function requireHost(t: TestContext) {
   return resources;
 }
 
+/** The scope directory's entries. It may be gone when no scope exists (systemd removes an empty slice): then none. Any other error is a failure, never an empty listing. */
+function readScopeDir(): string[] {
+  try { return fs.readdirSync(scopeParent()); }
+  catch (error: any) { if (error?.code === "ENOENT") return []; throw error; }
+}
+
 /** Scope cgroups (under the user manager) whose payload leaf holds a process whose command line contains `marker`. */
 function scopesHolding(marker: string) {
   const found: string[] = [];
   let entries: string[] = [];
-  try { entries = fs.readdirSync(APP_SLICE); } catch { return found; }
+  entries = readScopeDir();
   for (const entry of entries) {
     if (!entry.startsWith("run-") || !entry.endsWith(".scope")) continue;
-    const procs = read(path.join(APP_SLICE, entry, "payload", "cgroup.procs"));
+    const procs = read(path.join(scopeParent(), entry, "payload", "cgroup.procs"));
     if (!procs) continue;
     for (const pid of procs.split("\n").filter(Boolean)) {
-      if ((read(`/proc/${pid}/cmdline`) ?? "").includes(marker)) { found.push(path.join(APP_SLICE, entry)); break; }
+      if ((read(`/proc/${pid}/cmdline`) ?? "").includes(marker)) { found.push(path.join(scopeParent(), entry)); break; }
     }
   }
   return found;
 }
 
-/** Names of the transient scopes under the user manager right now (the slice may not exist: then none). */
+/** Names of the transient scopes under the user manager right now (the directory may not exist: then none). */
 function listScopes(): Set<string> {
-  try { return new Set(fs.readdirSync(APP_SLICE).filter((e) => e.startsWith("run-") && e.endsWith(".scope"))); } catch { return new Set(); }
+  return new Set(readScopeDir().filter((e) => e.startsWith("run-") && e.endsWith(".scope")));
 }
 
 /** Poll the cgroup files of this run's scope while it lives, as raw evidence next to the supervisor's report (informational: a short run can end between ticks). */
@@ -153,7 +179,7 @@ async function assertCleanedUp(run: Run, { mustHaveSeenScope = true } = {}) {
     const out: string[] = [];
     for (const name of listScopes()) {
       if (run.before.has(name)) continue;
-      const dir = path.join(APP_SLICE, name);
+      const dir = path.join(scopeParent(), name);
       const populated = !/^populated 0$/m.test(read(path.join(dir, "cgroup.events")) ?? "populated 0");
       if (!populated || scopesHolding(run.marker).includes(dir)) out.push(dir);
     }
