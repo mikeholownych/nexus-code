@@ -35,6 +35,7 @@ export function copyWithFallback(text: string, env: Record<string, string | unde
     return { success: false, error: `${viaTool.error} Terminal clipboard (OSC 52) is off: NEXUS_OSC52=off.` };
   }
   const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes === 0) return { success: false, error: `${viaTool.error} There is nothing to copy.` };
   if (bytes > OSC52_MAX_BYTES) {
     return {
       success: false,

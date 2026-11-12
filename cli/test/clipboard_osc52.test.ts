@@ -54,6 +54,7 @@ describe("D-16: OSC 52 clipboard fallback", () => {
       const big = copyWithFallback("x".repeat(OSC52_MAX_BYTES + 1), {});
       assert.equal(big.success, false);
       assert.match(big.error ?? "", new RegExp(`${OSC52_MAX_BYTES + 1} bytes.*${OSC52_MAX_BYTES}`, "s"));
+      assert.equal(copyWithFallback("", {}).success, false, "an empty OSC 52 payload would clear the clipboard");
       const edge = copyWithFallback("x".repeat(OSC52_MAX_BYTES), {});
       assert.equal(edge.success, true);
       // The limit is in bytes, not characters.
@@ -98,7 +99,7 @@ describe("D-16: OSC 52 clipboard fallback", () => {
       }
       assert.equal(outcome.kind, "reply");
       assert.equal(outcome.success, true, outcome.output);
-      assert.match(outcome.clipboard, /\+changed\x1b\[2J line/, "the raw text travels in the field (the sidecar's boundary and the TUI sanitise it)");
+      assert.match(outcome.clipboard, /\+changed\x1b\[2J line/, "the raw text travels in the field (the sidecar's boundary sanitises it; the TUI sends it only as base64)");
       assert.doesNotMatch(outcome.output, /\x1b/, "the message itself holds no raw text");
       assert.match(outcome.output, /No clipboard tool was found/);
       assert.match(outcome.output, /OSC 52/);

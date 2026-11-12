@@ -628,7 +628,9 @@ impl LiveState {
     /// A `/copy` that found no clipboard tool: the text is queued for an OSC 52 write by the live loop, which owns the
     /// terminal. Refused here, with a line saying so, when the switch is off or the text is too large for one request.
     fn request_clipboard(&mut self, text: String) {
-        if !self.osc52 {
+        if text.is_empty() {
+            // An empty OSC 52 payload clears the clipboard on xterm-family terminals.
+        } else if !self.osc52 {
             self.transcript.push(Entry::Notice("The terminal clipboard request was not sent: NEXUS_OSC52=off is set for the TUI.".into()));
         } else if text.len() > crate::live::OSC52_MAX_BYTES {
             self.transcript.push(Entry::Notice(format!(
@@ -1300,6 +1302,8 @@ impl LiveState {
     pub fn fail(&mut self, reason: String, code: Option<i32>, stderr: Vec<String>) {
         self.submit_when_ready = false;
         self.close_approval();
+        // No panel stays open on the stopped-sidecar screen: it would hide the draft the keys now edit.
+        self.overlay = None;
         self.interrupt_running_tools();
         self.session.busy = false;
         self.cancel_requested = false;
@@ -3990,9 +3994,20 @@ mod tests {
         assert_eq!(state.take_clipboard(), None);
         assert!(state.transcript.iter().any(|e| matches!(e, Entry::Notice(text) if text.contains("NEXUS_OSC52=off"))));
         state.osc52 = true;
+        state.apply(result(""));
+        assert_eq!(state.take_clipboard(), None, "an empty text would clear the clipboard");
         state.apply(result(&"x".repeat(crate::live::OSC52_MAX_BYTES + 1)));
         assert_eq!(state.take_clipboard(), None);
         assert!(state.transcript.iter().any(|e| matches!(e, Entry::Notice(text) if text.contains("over the"))));
+    }
+
+    #[test]
+    fn a_stopped_sidecar_closes_open_panels_so_the_draft_is_visible_and_r_still_restarts() {
+        let mut state = ready();
+        state.overlay = Some(Overlay::Help { scroll: 0 });
+        state.fail("x".into(), None, Vec::new());
+        assert!(state.overlay.is_none());
+        assert_eq!(state.on_key(key(KeyCode::Char('r'))), Some(Action::Restart));
     }
 
     #[test]

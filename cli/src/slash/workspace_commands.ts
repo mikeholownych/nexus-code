@@ -262,7 +262,7 @@ function copy(ctx: SlashContext): SlashOutcome {
       "copy",
       `No clipboard tool was found, so Nexus asked your terminal to copy ${label} (OSC 52, ${Buffer.byteLength(text, "utf8")} bytes). ` +
         "Nexus cannot confirm it: if nothing arrived, the terminal ignores OSC 52 (tmux needs `set -g set-clipboard on`; GNU screen is not supported). " +
-        "NEXUS_OSC52=off turns this fallback off.",
+        "Credential-looking text and control characters in it are replaced, as in /paste. NEXUS_OSC52=off turns this fallback off.",
       true,
       { clipboard: text },
     );
