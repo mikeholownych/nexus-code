@@ -17,7 +17,7 @@ import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn 
 import { getGitInfo } from "./git.js";
 import { redactSecrets, redactSecretPatterns } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
-import { EvidenceLedger, LastTurn, MAX_DETAIL, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
+import { DENIED_BY_OPERATOR, EvidenceLedger, LastTurn, MAX_DETAIL, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
 import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
 import type { ChatMessage, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
@@ -63,6 +63,7 @@ import {
   noProviderRefusal,
   toolSubject,
   toolSummary,
+  type ToolSummary,
 } from "./protocol.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
@@ -533,15 +534,17 @@ export class SidecarServer {
         open.set(dispatch, evidence);
         this.emit({ type: "tool.start", turn_id: turnId, call_id: callId, tool, subject, evidence });
       },
-      onToolEnd: ({ dispatch, callId, tool: rawTool, success, output, error }) => {
+      onToolEnd: ({ dispatch, callId, tool: rawTool, success, output, error, denied }) => {
         const tool = rawTool;
         const evidence = open.get(dispatch) ?? "";
         open.delete(dispatch);
-        this.evidence.end(evidence, success, output, error);
-        const summary = toolSummary(success, output, error);
+        this.evidence.end(evidence, success, output, error, denied === true);
+        // A denial is the operator's own decision: say so in a sentence, not the model-facing text.
+        const summary: ToolSummary = denied === true ? { summary: DENIED_BY_OPERATOR, lines: 1 } : toolSummary(success, output, error);
         this.emit({
           type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence,
           ...summary,
+          ...(denied === true ? { denied: true as const } : {}),
         });
       },
       onProviderRecovery: ({ record, discardedPartialOutput }) => {

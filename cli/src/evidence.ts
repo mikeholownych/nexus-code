@@ -94,9 +94,16 @@ export class EvidenceLedger {
     return evidence;
   }
 
-  end(evidence: string, success: boolean, output: string, error?: string): void {
+  end(evidence: string, success: boolean, output: string, error?: string, denied = false): void {
     const record = this.records.get(evidence);
     if (!record) return;
+    if (denied) {
+      // The call never ran: what the operator sees is their own decision, and the wait for it is not a run time.
+      record.status = "failed";
+      record.output = DENIED_BY_OPERATOR;
+      record.durationMs = null;
+      return;
+    }
     const parts = success || !error || error === output ? [output] : [output, error];
     record.status = success ? "succeeded" : "failed";
     record.output = clean(parts.filter(Boolean).map(redactedOutput).join("\n"));
@@ -121,6 +128,9 @@ export class EvidenceLedger {
     return this.records.get(evidence);
   }
 }
+
+/** What the operator is told when they decline a call (the model is told its own sentence, in the tool result). */
+export const DENIED_BY_OPERATOR = "Denied by you";
 
 export type ReceiptRow = [string, string];
 

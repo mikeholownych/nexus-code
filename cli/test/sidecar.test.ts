@@ -207,6 +207,32 @@ describe("SidecarServer: approvals", () => {
     });
   });
 
+  test("D-12: an operator denial reports a human sentence and no duration, never the model-facing text", async () => {
+    await withSidecar(writeTurn, "review", async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: "make x" });
+      const req = await waitForEvent(events, (e) => e.type === "approval.request");
+      await send({ type: "deny", id: req.id });
+      await server.idle();
+      const end = events.find((e) => e.type === "tool.end" && e.tool === "write_file");
+      assert.equal(end.success, false);
+      assert.equal(end.summary, "Denied by you");
+      assert.equal(end.denied, true);
+      assert.equal(end.duration_ms, undefined, "the wait for the decision is not the tool's run time");
+      assert.doesNotMatch(JSON.stringify(end), /Ask the user for clarification|rejected by the user/);
+      const detail = events.find((e) => e.type === "tool.detail");
+      if (detail) {
+        assert.equal(detail.duration_ms, null, "the detail view has no run time either");
+        assert.doesNotMatch(detail.output, /Ask the user for clarification/);
+      }
+    });
+  });
+
+  test("a call refused by policy (not by the operator) is not reported as denied by you", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ events }) => {
+      for (const end of events.filter((e) => e.type === "tool.end")) assert.equal(end.denied, undefined);
+    });
+  });
+
   test("approve lets the write happen", async () => {
     await withSidecar(writeTurn, "review", async ({ server, events, repo, send }) => {
       await send({ type: "prompt.submit", id: "t1", text: "make x" });

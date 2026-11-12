@@ -4213,6 +4213,44 @@ mod surface_tests {
         assert!(rows.iter().any(|r| r.contains("asked the agent to continue (1 of 2)")), "the reason for the repeat is shown: {rows:#?}");
     }
 
+    /// D-12: a denied call reads as the operator's own decision, in a sentence, with no run time: the call never ran, and
+    /// the time it waited for the decision is not a duration.
+    #[test]
+    fn a_denied_call_says_denied_by_you_with_no_duration_and_never_the_model_sentence() {
+        const MODEL: &str = "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.";
+        for width in [100u16, 60, 40, 20, 8, 1, 0] {
+            let mut state = state(true);
+            feed(
+                &mut state,
+                &[
+                    r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c1","tool":"delete_file","subject":"base.txt","evidence":"e1"}"#,
+                    // The wait for the decision: the sidecar measured 16.6 s, and the model-facing text is the summary.
+                    &format!(r#"{{"v":1,"type":"tool.end","turn_id":"t1","call_id":"c1","tool":"delete_file","success":false,"summary":"{MODEL}","lines":1,"evidence":"e1","duration_ms":16600,"denied":true}}"#),
+                ],
+            );
+            let (rows, _) = screen(&mut state, width.max(1), 30);
+            let all = rows.join("\n");
+            if width >= 40 {
+                let flat: String = all.split_whitespace().collect::<Vec<_>>().join(" ");
+                assert!(flat.contains("× Delete base.txt — Denied by you"), "{width}: {all}");
+                assert!(!all.contains("rejected") && !all.contains("clarification"), "{width}: the model sentence is not shown: {all}");
+                assert!(!all.contains("16.6s") && !all.contains("· 1"), "{width}: no duration for a denial: {all}");
+            }
+            assert!(rows.iter().all(|r| unicode_width::UnicodeWidthStr::width(r.as_str()) <= usize::from(width.max(1))), "{width}: {all}");
+        }
+        // The same call refused by something other than the operator (no `denied`) keeps its own words and run time.
+        let mut state = state(true);
+        feed(
+            &mut state,
+            &[
+                r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c1","tool":"delete_file","subject":"base.txt","evidence":"e1"}"#,
+                r#"{"v":1,"type":"tool.end","turn_id":"t1","call_id":"c1","tool":"delete_file","success":false,"summary":"Read-only mode violation","lines":1,"evidence":"e1","duration_ms":1500}"#,
+            ],
+        );
+        let (rows, _) = screen(&mut state, 100, 30);
+        assert!(rows.join("\n").contains("× Delete base.txt — Read-only mode violation · 1.5s"), "{rows:#?}");
+    }
+
     #[test]
     fn command_output_is_bounded_with_an_exact_count_and_failures_never_look_successful() {
         let mut state = state(true);

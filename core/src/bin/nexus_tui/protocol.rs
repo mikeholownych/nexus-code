@@ -281,6 +281,9 @@ pub enum Event {
         duration_ms: Option<u64>,
         #[serde(default)]
         timed_out: bool,
+        /// The operator declined the call at its approval prompt: it never ran. Absent from older sidecars.
+        #[serde(default)]
+        denied: bool,
     },
     #[serde(rename = "approval.request")]
     ApprovalRequest {
@@ -628,6 +631,7 @@ mod tests {
                 exit_code: None,
                 duration_ms: None,
                 timed_out: false,
+                denied: false,
             })
         );
         assert_eq!(
