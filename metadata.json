@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M76TET23H48ZBP6W1SR84VA8",
+  "strategy": "manual-commit",
+  "branch": "v1/v114-tui-scroll-stall",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 8681,
+    "cache_read_tokens": 4591563,
+    "output_tokens": 6301,
+    "api_call_count": 7,
+    "subagent_tokens": {
+      "input_tokens": 134,
+      "cache_creation_tokens": 202866,
+      "cache_read_tokens": 6399842,
+      "output_tokens": 65357,
+      "api_call_count": 67
+    }
+  },
+  "redaction": {
+    "replacements": 64,
+    "layers": {
+      "betterleaks": 5,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 63,
+      "key_context": 0,
+      "provider_token": 27,
+      "shell_stdin": 0
+    }
+  }
+}
