@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_016W2JNEdAj4PUfNGFmWBEWT",
+  "agent_id": "af40d92e2a8c576e5",
+  "subagent_type": "general-purpose",
+  "task_description": "Re-review fixed head",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 98398,
+    "cache_read_tokens": 1187109,
+    "output_tokens": 21235,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-12T09:53:39.993110554Z",
+  "completed_at": "2026-11-12T09:56:54.019631361Z"
+}
