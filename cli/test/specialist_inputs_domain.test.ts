@@ -120,6 +120,17 @@ test("in-domain snapshot is unchanged: tracked edit, untracked file and deletion
   assert.throws(() => sh(debug, "cat-file", "-e", "HEAD:out/b.txt"));
 });
 
+test("a new .gitattributes with text=auto keeps the snapshot self-contained once the private attribute store is gone", () => {
+  const t = tester();
+  put(t.wt, ".gitattributes", "* text=auto\n"); put(t.wt, "in/a.txt", "edited\n");
+  const debug = t.snapshot();
+  // Git reuses the attribute blob it finds in the private alternate store instead of writing its own copy; the snapshot must not depend on it.
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:.gitattributes"), "* text=auto\n");
+  assert.equal(sh(debug, "cat-file", "-p", "HEAD:in/a.txt"), "edited\n");
+  sh(debug, "fsck", "--connectivity-only", "--no-dangling");
+  assert.equal(fs.readFileSync(path.join(debug, ".gitattributes"), "utf8"), "* text=auto\n");
+});
+
 // Sweep: for every repository state in the table the result is either correct against an independent oracle (the
 // worktree's own `git diff HEAD`-equivalent content) or an explicit refusal; a wrong diff fails the test.
 const MARK = "SWEEP_EDIT_MARKER";

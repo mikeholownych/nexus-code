@@ -480,7 +480,15 @@ export class OperationGit {
       if (refusal) throw new Error(refusal);
       run(["add", "-A", "--", ".", ...nested.map((p) => `:(exclude,literal)${p.slice(0, -1)}`)]);
       const tree = run(["write-tree"]);
-      return run([...this.mechanicalGitConfig(), "commit-tree", tree, "-p", "HEAD", "-m", `nexus: snapshot of ${unitId}'s candidate for failure debugging`]);
+      const commit = run([...this.mechanicalGitConfig(), "commit-tree", tree, "-p", "HEAD", "-m", `nexus: snapshot of ${unitId}'s candidate for failure debugging`]);
+      // Git reuses an object it finds in the private attribute store (an alternate) instead of writing its own copy, so
+      // the snapshot would depend on a store removed below: pack everything the commit adds (alternate objects included)
+      // into the repository first.
+      if (attrs) {
+        const objects = run(["rev-parse", "--path-format=absolute", "--git-path", "objects"], { ownIndex: true });
+        run(["pack-objects", "--revs", "--quiet", path.join(objects, "pack", "pack")], { input: `${commit}\n^HEAD\n`, ownIndex: true });
+      }
+      return commit;
     } finally {
       fs.rmSync(scratch, { recursive: true, force: true });
     }
