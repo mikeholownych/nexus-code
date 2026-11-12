@@ -117,6 +117,8 @@ export class SidecarServer {
   private readonly startupProbeAbort = new AbortController();
   /** Why start-up found no usable provider (D-07); cleared when a later probe succeeds. A prompt re-checks it before a turn starts. */
   private providerProblem?: StartupEndpointProblem;
+  /** The start-up probe in flight (at most 3 s); a prompt waits for it so it is gated like any later one. */
+  private startupProbe: Promise<void> = Promise.resolve();
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -149,7 +151,7 @@ export class SidecarServer {
     if (isNexusDirPermissive()) {
       this.emit({ type: "notice", text: "your Nexus state is readable by other users; run `nexus doctor --fix`" });
     }
-    void this.app.getAgent().probeEndpointProblem(this.startupProbeAbort.signal).then((problem) => {
+    this.startupProbe = this.app.getAgent().probeEndpointProblem(this.startupProbeAbort.signal).then((problem) => {
       if (problem && !this.shutdownPromise) {
         this.providerProblem = problem;
         this.emit({ type: "notice", ...noProviderNotice(problem) });
@@ -467,8 +469,11 @@ export class SidecarServer {
     this.runJob(id, undefined, async (signal) => {
       // Start-up found no usable provider: ask again before spending a turn on it (the operator may have connected
       // one or started a server since), and refuse with the reason instead of entering a retry loop.
+      await this.startupProbe;
       if (this.providerProblem) {
         const problem = await this.app.getAgent().probeEndpointProblem(signal);
+        // A cancelled probe says nothing about the provider: the gate stays.
+        if (signal.aborted) return;
         this.providerProblem = problem;
         if (problem) {
           this.emit({ type: "error", id, code: "NO_PROVIDER", message: noProviderRefusal(problem) });

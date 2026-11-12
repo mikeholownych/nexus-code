@@ -6,7 +6,7 @@ setup; docs/CLOUD_PROVIDERS.md lists providers.
 
 › hello
   ! Not sent: no model is connected (nothing answers at http://127.0.0.1:1/v1). Use /connect or start a local model
-server, then send it again; your message is back in the composer.
+server, then send it again.
 
  enter send · shift+enter newline · ? help ─────────────────────────────────────────────────────────────────────────────
 › hello
@@ -36,8 +36,7 @@ providers.
 (nothing answers at
 http://127.0.0.1:1/v1). Use /connect or
 start a local model server, then send it
-again; your message is back in the
-composer.
+again.
 
  enter send · ⇧↵ newline · ? help ──────
 › hello

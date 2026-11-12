@@ -191,3 +191,34 @@ describe("D-07: first run without a provider", () => {
     }
   });
 });
+
+describe("D-07 review follow-ups", () => {
+  test("a prompt sent before the start-up probe ends is gated too", async () => {
+    const repo = makeRepo();
+    const home = makeHome();
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    const app = new ApplicationCore({ endpoint: "http://127.0.0.1:1/v1", model: "local-model", maxSteps: 5, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, approvalMode: "auto", fullAccess: true } as HarnessConfig);
+    const events: any[] = [];
+    const server = new SidecarServer({ app, mode: "auto", write: (l) => events.push(JSON.parse(l)), historyFile: path.join(home, "history") });
+    try {
+      server.start();
+      // Sent at once, before the start-up probe could have finished: still refused, not retried.
+      await server.handleLine(JSON.stringify({ v: 1, type: "prompt.submit", id: "t1", text: "hello" }));
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "error" && e.id === "t1")?.code, "NO_PROVIDER");
+      assert.ok((server as any).providerProblem, "the gate is kept");
+    } finally {
+      app.shutdown();
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("recovery keeps the earlier error in detail, labelled", () => {
+    const resumed = providerRecoveryStatus(record(2, { state: "RESUMED", waitedMs: 3_000 }), false)!;
+    assert.match(resumed.detail!, /^Recovered; the earlier error was:/);
+  });
+});

@@ -372,7 +372,7 @@ function providerProblemWords(record: ProviderRecoveryRecord): string {
 
 function minutesWords(ms: number): string {
   const minutes = Math.round(ms / 60_000);
-  return ms < 60_000 || minutes < 1 ? "under a minute" : `about ${minutes} min`;
+  return minutes < 1 ? "under a minute" : `about ${minutes} min`;
 }
 
 function rawProviderCause(record: ProviderRecoveryRecord): string {
@@ -404,7 +404,7 @@ export function providerRecoveryStatus(record: ProviderRecoveryRecord, discarded
       return { text: redactSecrets(text), key: PROVIDER_STATUS_KEY, detail };
     }
     case "RESUMED":
-      return { text: `The model provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} resumed.`, key: PROVIDER_STATUS_KEY, detail };
+      return { text: `The model provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} resumed.`, key: PROVIDER_STATUS_KEY, detail: `Recovered; the earlier error was:\n${detail}` };
     case "CANCELLED":
       return { text: "Stopped waiting for the model provider.", key: PROVIDER_STATUS_KEY, detail };
     default:
@@ -419,7 +419,7 @@ export function providerRecoveryStatus(record: ProviderRecoveryRecord, discarded
 /** The answer to a prompt sent while the provider is still down: short, because the start-up notice already gave the steps. */
 export function noProviderRefusal(problem: { kind: "unreachable" | "rejected"; endpoint: string }): string {
   const why = problem.kind === "rejected" ? `${problem.endpoint} rejected the credentials` : `nothing answers at ${problem.endpoint}`;
-  return redactSecrets(`Not sent: no model is connected (${why}). Use /connect or start a local model server, then send it again; your message is back in the composer.`);
+  return redactSecrets(`Not sent: no model is connected (${why}). Use /connect or start a local model server, then send it again.`);
 }
 
 /** First run with nothing to talk to: what is missing, what to do next, where to read more. The raw cause goes in `detail`. */
