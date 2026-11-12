@@ -37,7 +37,7 @@ export const GIT_SAFE = [
   "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null", "-c", "core.untrackedCache=false",
   "-c", "gc.auto=0", "-c", "maintenance.auto=false",
 ];
-/** Git's empty tree: as GIT_ATTR_SOURCE (Git 2.40+) it means the worktree's .gitattributes assign no attribute. */
+/** Git's empty tree: as GIT_ATTR_SOURCE (where git supports it) it means the worktree's .gitattributes assign no attribute. */
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /**
@@ -45,7 +45,7 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
  * are dropped, system config and system attributes are ignored, replace objects are off, and attributes come from
  * a tree of the worktree's own .gitattributes files with every filter and diff assignment removed (the empty tree when
  * there are none), so `text`/`eol` normalization still applies but no driver does. `$GIT_DIR/info/attributes` still
- * applies (and on Git older than 2.40 so do the worktree's .gitattributes), so a filter or diff driver assigned that
+ * applies (and where git does not support GIT_ATTR_SOURCE so do the worktree's .gitattributes), so a filter or diff driver assigned that
  * way is refused before any command could invoke it.
  */
 export function safeGitEnv(indexFile: string | undefined, attrs?: { tree: string; objects: string }): NodeJS.ProcessEnv {
@@ -177,7 +177,7 @@ const ATTR_BATCH = 1_000;
 
 /**
  * Refuses (returns why) when a filter or diff driver still applies to any of `files` under the pinned attribute
- * source, which only `$GIT_DIR/info/attributes` (or a worktree .gitattributes on Git before 2.40) can still assign.
+ * source, which only `$GIT_DIR/info/attributes` (or a worktree .gitattributes where git does not support GIT_ATTR_SOURCE) can still assign.
  * `run` is a pinned git call that takes stdin. Batched so a repository's size never becomes a failure.
  */
 export function driverRefusal(run: (args: string[], input: string) => string, files: string[]): string | undefined {
@@ -408,7 +408,7 @@ export function candidateDiff(workspace: string, base: string | undefined, polic
     }
     // Comparing worktree content runs a path's clean filter, so before any diff every path is checked for a filter or
     // diff driver the stripped attribute source did not neutralise ($GIT_DIR/info/attributes, or a worktree
-    // .gitattributes on Git before 2.40); one that applies is refused, never run. The check is batched so the
+    // .gitattributes where git does not support GIT_ATTR_SOURCE); one that applies is refused, never run. The check is batched so the
     // repository's size never turns into a failure.
     const refusal = driverRefusal((args, input) => git(args, { input }), listing([]));
     if (refusal) return { error: refusal };
