@@ -1595,7 +1595,7 @@ export class LocalLlmClient {
         this.activeEndpointIndex = idx;
         return last;
       }
-      // A transport failure that is not temporary (refused, DNS) ends the walk; an HTTP error moves on to the next endpoint.
+      // A transport failure that is not a temporary condition ends the walk; an HTTP error moves on to the next endpoint.
       if (last.httpStatus === undefined && !TEMPORARY_CONDITIONS.has(last.condition)) return last;
     }
     return last;

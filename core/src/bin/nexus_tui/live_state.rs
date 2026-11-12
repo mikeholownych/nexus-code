@@ -1152,6 +1152,7 @@ impl LiveState {
                 prompt,
             } => {
                 if command == "clear" && success {
+                    self.sent_prompt = None;
                     self.transcript.clear();
                     self.scroll_back = 0;
                     self.selected = None;

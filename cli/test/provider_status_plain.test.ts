@@ -558,7 +558,7 @@ describe("D-07: the prompt gate, the start-up warning and the URL scrub", () => 
       ["Request cannot be constructed from a URL that includes credentials: https://u:abc/def@host/v1 (retry)", "Request cannot be constructed from a URL that includes credentials: https://host/v1 (retry)"],
     ];
     for (const [input, expected] of cut) assert.equal(scrubUrls(input), expected, input);
-    for (const same of ["https://host/path@x", "write to a@b.example about it", "file:///x", "https://host:8080/a/b", "https://h:99999/x"]) assert.equal(scrubUrls(same), same, same);
+    for (const same of ["write to a@b.example about it", "file:///x", "https://host:8080/a/b", "https://h:99999/x"]) assert.equal(scrubUrls(same), same, same);
     const problem = startupEndpointProblem("https://u:abc/def@host/v1", { available: false, condition: "TEMPORARILY_UNAVAILABLE", detail: "Request cannot be constructed from a URL that includes credentials: https://u:abc/def@host/v1", codes: [] } as any)!;
     for (const out of [problem.detail, problem.endpoint, noProviderNotice(problem).detail!, noProviderNotice(problem).text, noProviderRefusal(problem)]) {
       assert.doesNotMatch(out, /abc|def/, out);
@@ -577,19 +577,29 @@ describe("D-07: the prompt gate, the start-up warning and the URL scrub", () => 
       ["https://u:p?w@host/v1", "https://host/v1"],
       ["https://u:p#w@host/v1", "https://host/v1"],
       ["//user:pass@host:9", "//host:9"],
+      ["https://u:1234?x@h/v1", "https://h/v1"],
+      ["https://sk_live#x@h/v1", "https://h/v1"],
+      ["https://abc/def==@h/v1", "https://h/v1"],
+      ["//host/v1?api_key=KEYVALUE", "//host/v1"],
+      ["dial u:p@[::1]:8080/x", "dial [::1]:8080/x"],
+      ["dial user:abc==@h:80 now", "dial h:80 now"],
       ["see //user:pass@host/x now", "see //host/x now"],
     ];
     for (const [input, expected] of cut) {
       const got = scrubUrls(input);
       assert.equal(got, expected, input);
-      assert.doesNotMatch(got, /SECRETVALUE|pass|1234|123456|pa ss|p\?w|p#w/, input);
+      assert.doesNotMatch(got, /SECRETVALUE|KEYVALUE|pass|1234|123456|pa ss|p\?w|p#w|sk_live|abc==/, input);
     }
-    for (const stored of ["https://u:p?w@host/v1", "https://u:p#w@host/v1", "https://u:1234/x@h/v1/", "https://u:abc/def@h/v1?k=S"]) {
+    assert.equal(persistableEndpoint("user:pw@host:8080/v1"), "host:8080/v1");
+    assert.equal(persistableEndpoint("//u:pw@host/v1"), "//host/v1");
+    assert.equal(persistableEndpoint("http://localhost:11434/v1"), "http://localhost:11434/v1");
+    for (const stored of ["https://u:p?w@host/v1", "https://u:1234?x@h/v1", "https://u:p#w@host/v1", "https://u:1234/x@h/v1/", "https://u:abc/def@h/v1?k=S"]) {
       assert.match(persistableEndpoint(stored), /^https:\/\/(host|h)\/v1$/, stored);
     }
     // Ambiguous input is over-redacted rather than kept: the port-or-password reading is not told apart.
     assert.equal(scrubUrls("http://host:abc/p@q"), "http://q");
     assert.equal(scrubUrls("https://host:8080/a@b"), "https://b");
+    assert.equal(scrubUrls("https://host/path@x"), "https://x");
     for (const same of ["https://host:8080/a/b", "http://localhost:1234 is down", "connect db:5432 failed", "mail a@b.example", "x:y@z"]) assert.equal(scrubUrls(same), same, same);
   });
 
