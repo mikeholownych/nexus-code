@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01CqEy4r1CHSiKXMWE6A3WpS",
+  "agent_id": "a1512d620e8a7cebf",
+  "subagent_type": "reviewer",
+  "task_description": "Entire-style review of TUI input diff",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 101742,
+    "cache_read_tokens": 2006461,
+    "output_tokens": 36232,
+    "api_call_count": 29
+  },
+  "started_at": "2026-11-12T02:54:19.454813648Z",
+  "completed_at": "2026-11-12T03:00:41.45301697Z"
+}
