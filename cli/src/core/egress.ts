@@ -603,10 +603,12 @@ function scanBase64Keys(text: string, budget: ExtensionBudget): Array<{ start: n
     const extendedEnd = mayExtend ? extendDottedKey(text, encodedEnd) : runEnd;
     if (rescan) rescanLeft -= 16 + extendedEnd - runEnd;
     scannedTo = Math.max(scannedTo, extendedEnd);
+    let chargedTo = runEnd; // the longer runs overlap: each is charged only for what the shorter ones did not take
     for (const end of new Set([runEnd, encodedEnd, extendedEnd])) {
       if (!isBase64KeyRun(text, at, end, anthropic)) continue;
       if (end > runEnd) {
-        if (!chargeExtension(runEnd, end, rescan ? rescanBudget : budget)) continue;
+        if (!chargeExtension(chargedTo, end, rescan ? rescanBudget : budget)) continue;
+        chargedTo = end;
       }
       let secretEnd = end;
       while (secretEnd < end + 2 && text[secretEnd] === "=") secretEnd++;
@@ -1118,7 +1120,10 @@ export class InformationFlowBoundary {
         },
       });
     }
-    const extensionBudget = newExtensionBudget(text); // its own: a blob in the `sk-` scan cannot starve these
+    // Its own budget, split as in `scanBase64Keys`: a match inside an earlier match's window is a rescan.
+    const extensionBudget = newExtensionBudget(text);
+    const rescanBudget: ExtensionBudget = { left: 8 * MAX_EXTENSION };
+    let scannedTo = 0;
     for (const { name, regex } of InformationFlowBoundary.DETERMINISTIC_PATTERNS) {
       const re = new RegExp(regex.source, `${regex.flags}d`);
       let match: RegExpExecArray | null;
@@ -1145,8 +1150,11 @@ export class InformationFlowBoundary {
         // value found only by its shorter form (the key on its own elsewhere in the text) is still redacted.
         const ends = [end];
         if (DOTTED_CONTINUATION_PATTERNS.has(name)) {
-          const extended = extensionBudget.left > 0 ? extendDottedKey(text, end) : end;
-          if (extended > end && chargeExtension(end, extended, extensionBudget)) ends.push(extended);
+          const rescan = start < scannedTo;
+          const budget = rescan ? rescanBudget : extensionBudget;
+          const extended = budget.left > 0 ? extendDottedKey(text, end) : end;
+          scannedTo = Math.max(scannedTo, extended);
+          if (extended > end && chargeExtension(end, extended, budget)) ends.push(extended);
         }
         for (const spanEnd of ends) {
           const secretVal = text.slice(start, spanEnd);

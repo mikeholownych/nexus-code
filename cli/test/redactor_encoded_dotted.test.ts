@@ -270,3 +270,25 @@ test("adversarial inputs finish within a time bound: long runs of sk-, escapes, 
     }
   });
 });
+
+test("fresh keys with encoded and dotted tails are charged once each and do not starve a later key", () => {
+  const unit = (i: number): string =>
+    `sk-Qx7Km2Vb9LrTz4Wd8Ns3Hc${String(100 + i)}+%2F${"a".repeat(865)}.Zk4Pq8R${i} `;
+  const key = "sk-Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1%2FJf5Ge0UaXo2RtBq.Mn5Qr7Vw2";
+  const input = `${Array.from({ length: 20 }, (_, i) => unit(i)).join("")} then ${key} end`;
+  withFreshBoundary(() => {
+    const after = redactDiagnosticForOutput(input).split(" then ")[1];
+    assert.ok(!after.includes("Mn5Qr7Vw2") && !after.includes("RtBq"), after);
+  });
+});
+
+test("a dot-joined blob of ghp_ tokens does not starve a later dotted key", () => {
+  const tok = (i: number): string => `ghp_${"Qx7Km2Vb9LrTz4Wd8Ns3Hc6Yp1Jf5Ge0Ua".slice(0, 32)}${String(1000 + i)}`;
+  const blob = Array.from({ length: 30 }, (_, i) => tok(i)).join(".");
+  const tail = Array.from({ length: 6 }, (_, i) => `Mn5Qr7Vw${i}`).join(".");
+  const input = `${blob} then ${tok(99)}.${tail} end`;
+  withFreshBoundary(() => {
+    const after = redactDiagnosticForOutput(input).split(" then ")[1];
+    assert.ok(!after.includes("Mn5Qr7Vw5") && !after.includes("Mn5Qr7Vw0"), after);
+  });
+});
