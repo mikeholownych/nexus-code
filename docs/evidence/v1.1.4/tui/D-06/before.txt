@@ -1,0 +1,75 @@
+# D-06 before: 'SC:e429 go' against a provider that answers 429 + retry-after 2, 120x30, 14 s after sending
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  context 4058/65536  local
+› SC:e429 go
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+
+ ⠏ waiting for the inference provider 0:13 · 0:13 · step 1 · esc cancels ───────────────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+# D-06 before: 'SC:e429 go' against a provider that answers 429 + retry-after 2, 40x30, 14 s after sending
+ NEXUS   ws  ⎇ main  mode: review  local
+http://127.0.0.1:18090/v1 rate limited
+(HTTP 429); waiting 2s before checking
+again. Work is preserved.
+  · Inference provider at
+http://127.0.0.1:18090/v1 rate limited
+(HTTP 429); waiting 2s before checking
+again. Work is preserved.
+  · Inference provider at
+http://127.0.0.1:18090/v1 rate limited
+(HTTP 429); waiting 2s before checking
+again. Work is preserved.
+  · Inference provider at
+http://127.0.0.1:18090/v1 rate limited
+(HTTP 429); waiting 2s before checking
+again. Work is preserved.
+  · Inference provider at
+http://127.0.0.1:18090/v1 rate limited
+(HTTP 429); waiting 2s before checking
+again. Work is preserved.
+  · Inference provider at
+http://127.0.0.1:18090/v1 rate limited
+(HTTP 429); waiting 2s before checking
+again. Work is preserved.
+  · Inference provider at
+http://127.0.0.1:18090/v1 rate limited
+(HTTP 429); waiting 2s before checking
+again. Work is preserved.
+ ⠏ waiting for the inference provid…────
+› type to steer · esc cancels
+
+# D-06 before: after /details
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  context 4058/65536  local
+› SC:e429 go
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  · Inference provider at http://127.0.0.1:18090/v1 rate limited (HTTP 429); waiting 2s before checking again. Work is
+preserved.
+  ! Commands run when the agent is idle (esc cancels the turn). Text without a leading / is sent as steering.
+
+ ⠋ waiting for the inference provider 0:14 · 0:15 · step 1 · esc cancels · enter steers ────────────────────────────────
+› /details
+
