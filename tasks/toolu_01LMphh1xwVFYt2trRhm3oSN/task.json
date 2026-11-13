@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LMphh1xwVFYt2trRhm3oSN",
+  "agent_id": "a463161a6aafa3207",
+  "subagent_type": "reviewer",
+  "task_description": "Local three-prompt review (test fixes)",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 39720,
+    "cache_read_tokens": 95651,
+    "output_tokens": 4844,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-13T02:53:49.106654992Z",
+  "completed_at": "2026-11-13T02:54:37.129918426Z"
+}
