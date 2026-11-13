@@ -47,7 +47,7 @@ export class LocalLlmClient {
     const state = globalThis.__wp1107MatrixFixture;
     state.calls++;
     if (state.failVllm && this.provider.provider === "vllm") return { content: "", tool_calls: [] };
-    if (state.throttle > 0) { state.throttle--; state.throttled = (state.throttled ?? 0) + 1; throw new Error('Inference error (HTTP 429): {"error":{"message":"request rate limit exceeded"}}'); }
+    if (state.throttle > 0) { state.throttle--; throw new Error('Inference error (HTTP 429): {"error":{"message":"request rate limit exceeded"}}'); }
     const name = offered[0].function.name;
     const args = name === "read_file" ? { path: "safe fixture", ...(this.provider.provider === "vllm" ? { start_line: null } : {}) }
       : name === "write_file" ? { path: "safe fixture", content: "fixture" }
@@ -643,6 +643,7 @@ test("matrix accepts the one symlink release archives ship: a relative node_modu
     ["confined link", "../dotenv/dist/index.cjs", null],
     ["escaping target", "../../../../../etc/passwd", /symlink|non-regular|confined/i],
     ["absolute target", "/etc/passwd", /symlink|non-regular|confined/i],
+    ["directory target (links chained through it would write outside)", "../", /not confined to a manifested file/i],
     ["target missing from the manifest", "../dotenv/dist/missing.cjs", /symlink|manifest|confined/i],
   ];
   for (const [label, target, expectedError] of cases) {

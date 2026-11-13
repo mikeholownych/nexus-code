@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 export const TOOL_NAMES = Object.freeze(["read_file", "write_file", "edit_file", "run_command"]);
 const PROVIDER_KIND = Object.freeze({ llamacpp: "llamacpp", vllm: "vllm", ollama: "ollama", gateway: "gateway" });
-const DIRECT_KINDS = Object.freeze(["llamacpp", "vllm", "ollama"]);
+const DIRECT_KINDS = Object.freeze(Object.keys(PROVIDER_KIND).filter((name) => name !== "gateway"));
 const digestPattern = /^sha256:[a-f0-9]{64}$/i;
 const PROVIDER_SET_MESSAGE = "llama.cpp, vLLM, and Ollama endpoints, or gateway-routed models";
 
@@ -284,6 +284,8 @@ function listArchiveEntries(archivePath) {
   if (types.at(-1) === "") types.pop();
   if (names.length === 0 || names.length !== types.length) throw new TypeError("candidate archive entry listing is malformed");
   const seen = new Set();
+  const regularFiles = new Set();
+  const links = [];
   for (let index = 0; index < names.length; index++) {
     const parsed = archiveEntryPath(names[index]);
     if (seen.has(parsed.relative)) throw new TypeError("candidate archive contains duplicate paths");
@@ -291,11 +293,21 @@ function listArchiveEntries(archivePath) {
     const type = types[index]?.[0];
     if (type === "l" && !parsed.directory) {
       const target = types[index].split(`${names[index]} -> `)[1];
-      if (resolveConfinedBinLink(parsed.relative.slice("nexus/".length), target) !== undefined) continue;
+      const resolved = resolveConfinedBinLink(parsed.relative.slice("nexus/".length), target);
+      if (resolved !== undefined) {
+        links.push({ relative: parsed.relative, resolved });
+        continue;
+      }
     }
     if ((parsed.directory && type !== "d") || (!parsed.directory && type !== "-")) {
       throw new TypeError("candidate archive contains a symlink, hard link, or non-regular entry");
     }
+    if (!parsed.directory) regularFiles.add(parsed.relative.slice("nexus/".length));
+  }
+  // tar extracts before the tree is verified: a link must resolve to a regular file in the archive and nothing may be written beneath a link.
+  for (const link of links) {
+    if (!regularFiles.has(link.resolved)) throw new TypeError("candidate archive contains a symlink that is not confined to a manifested file");
+    if (seen.has(`${link.relative}/`) || [...seen].some((entry) => entry.startsWith(`${link.relative}/`))) throw new TypeError("candidate archive writes beneath a symlink");
   }
   return names;
 }
