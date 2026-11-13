@@ -243,7 +243,8 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   comes back the draft holds them one per line, a notice says that Enter sends the draft as one message, and you can
   edit the draft if you want them sent separately. Slash commands wait for idle, except read-only `/doctor`,
   `/help` and `/receipt`.
-- **Paste buffers.** A multi-line or long paste becomes `[Pasted text #1: 24 lines]` in the composer; its content is
+- **Paste buffers.** A multi-line or long paste becomes `[Pasted text #1: 24 lines]` in the composer (a paste of up to
+  six lines also shows its first line beside the label: `[Pasted text #1: 4 lines] alpha…`); its content is
   submitted exactly as pasted (newlines in it never send, and a pasted `/exit` is text). Ctrl+O shows a buffer,
   Ctrl+X turns it back into editable text, Backspace after it removes it. Terminals without bracketed paste: a burst
   of keys with a line break inside it is treated as a paste.
