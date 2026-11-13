@@ -86,10 +86,14 @@ test("nexus connect local discovers and persists an endpoint without storing an 
   const previousLog = console.log;
   const previousError = console.error;
   const previousCredentialHome = credentialStorageHome();
+  // `connect local` writes config.env under the credential home: never the operator's real one.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-connect-local-"));
+  const realConfig = path.join(previousCredentialHome, ".config/nexus/config.env");
+  const realConfigBefore = fs.existsSync(realConfig) ? fs.readFileSync(realConfig, "utf8") : null;
   const output: string[] = [];
   const prompts = [`http://127.0.0.1:${address.port}/v1`, "", "1"];
   try {
-    setCredentialAuthority({}, previousCredentialHome);
+    setCredentialAuthority({}, home);
     console.log = (...values: unknown[]) => output.push(values.join(" "));
     console.error = (...values: unknown[]) => output.push(values.join(" "));
     const program = new Command();
@@ -103,8 +107,8 @@ test("nexus connect local discovers and persists an endpoint without storing an 
     assert.equal(process.exitCode, 0);
     assert.match(output.join("\n"), /Local endpoint configured/);
     assert.doesNotMatch(output.join("\n"), /local-secret/);
-    assert.match(fs.readFileSync(path.join(previousCredentialHome, ".config/nexus/config.env"), "utf8"), /LOCAL_LLM_MODEL="engineering\/local"/);
-    assert.equal(fs.existsSync(path.join(previousCredentialHome, ".config/nexus/credentials.json")), false);
+    assert.match(fs.readFileSync(path.join(home, ".config/nexus/config.env"), "utf8"), /LOCAL_LLM_MODEL="engineering\/local"/);
+    assert.equal(fs.existsSync(path.join(home, ".config/nexus/credentials.json")), false);
     assert.equal(prompts.length, 0);
   } finally {
     console.log = previousLog;
@@ -113,6 +117,8 @@ test("nexus connect local discovers and persists an endpoint without storing an 
     setCredentialAuthority({}, previousCredentialHome);
     server.closeAllConnections();
     server.close();
+    fs.rmSync(home, { recursive: true, force: true });
+    assert.equal(fs.existsSync(realConfig) ? fs.readFileSync(realConfig, "utf8") : null, realConfigBefore, "the test must not modify the operator's real config.env");
   }
 });
 
