@@ -9,12 +9,9 @@ export const TOOL_NAMES = Object.freeze(["read_file", "write_file", "edit_file",
 const PROVIDER_KIND = Object.freeze({ llamacpp: "llamacpp", vllm: "vllm", ollama: "ollama", gateway: "gateway" });
 const DIRECT_KINDS = Object.freeze(["llamacpp", "vllm", "ollama"]);
 const digestPattern = /^sha256:[a-f0-9]{64}$/i;
+const PROVIDER_SET_MESSAGE = "llama.cpp, vLLM, and Ollama endpoints, or gateway-routed models";
 
-/**
- * Digests pin a server image and model for the three direct servers. The homelab-ai gateway (DEC-16) is the only live
- * endpoint in this environment and cannot attest either, so a gateway entry may omit them (it is pinned by `limits_version`
- * instead); a digest that is present must still be well formed.
- */
+/** A gateway entry may omit the image and model digests it cannot attest (it is pinned by `limits_version`); a digest that is present must still be well formed. */
 function checkDigest(entry, field, message) {
   if (entry.provider === "gateway" && entry[field] === undefined) return;
   if (typeof entry[field] !== "string" || !digestPattern.test(entry[field])) throw new TypeError(message);
@@ -24,7 +21,7 @@ function checkDigest(entry, field, message) {
 function assertProviderSet(entries, what) {
   const gateway = entries.filter((entry) => entry?.provider === "gateway");
   if (gateway.length === 0) {
-    if (entries.length !== DIRECT_KINDS.length) throw new TypeError(`${what} must contain llama.cpp, vLLM, and Ollama endpoints, or gateway-routed models`);
+    if (entries.length !== DIRECT_KINDS.length) throw new TypeError(`${what} must contain ${PROVIDER_SET_MESSAGE}`);
     const kinds = new Set(entries.map((entry) => entry?.provider));
     if (kinds.size !== DIRECT_KINDS.length) throw new TypeError(`${what} repeats a provider identity or is missing one`);
     return;
@@ -171,6 +168,7 @@ function validateEndpoint(endpoint) {
   if (!Array.isArray(endpoint.serverFlags) || endpoint.serverFlags.some((flag) => typeof flag !== "string")) throw new TypeError("server flags identity must be a string array");
   if (endpoint.serverFlags.some((flag) => /api[-_]?key|token|secret|password|credential|authorization|bearer/i.test(flag))) throw new TypeError("server flags must omit credentials and authentication options");
   if (typeof endpoint.compatibilityMode !== "string" || !endpoint.compatibilityMode.trim()) throw new TypeError("compatibility mode identity is required");
+  if (endpoint.workers !== undefined && (!Array.isArray(endpoint.workers) || endpoint.workers.some((worker) => typeof worker !== "string" || !worker.trim()))) throw new TypeError("workers must be a list of non-empty strings");
   assertNonSecretMetadata(endpoint, "endpoint");
   if (!isRecord(endpoint.tools) || Object.keys(endpoint.tools).length !== TOOL_NAMES.length) throw new TypeError("attempt counts must include exactly the four allowlisted tools");
   const totals = { attempts: 0, native_valid: 0, repaired: 0, schema_invalid: 0, invalid: 0 };
@@ -208,7 +206,7 @@ export function validateMatrixEvidence(evidence) {
   if (!isRecord(evidence.candidate) || !sha256Pattern.test(evidence.candidate.archiveSha256) || !commitPattern.test(evidence.candidate.sourceCommit) || !commitPattern.test(evidence.candidate.sourceTree)) {
     throw new TypeError("candidate identity requires archive SHA-256, full source commit and source tree id");
   }
-  if (!Array.isArray(evidence.endpoints) || evidence.endpoints.length === 0) throw new TypeError("matrix evidence must contain llama.cpp, vLLM, and Ollama endpoints, or gateway-routed models");
+  if (!Array.isArray(evidence.endpoints) || evidence.endpoints.length === 0) throw new TypeError(`matrix evidence must contain ${PROVIDER_SET_MESSAGE}`);
   for (const endpoint of evidence.endpoints) validateEndpoint(endpoint);
   assertProviderSet(evidence.endpoints, "matrix evidence");
   return { valid: true, passed: evidence.endpoints.every((endpoint) => endpoint.passed) };
@@ -531,7 +529,6 @@ export async function runToolGrammarMatrix(options) {
     if (discovery?.state !== "supported" || detectedKind !== expectedKind) {
       throw new Error(`provider identity mismatch: configured ${expectedKind}, detected ${detectedKind ?? "unknown"}`);
     }
-    // The gateway attests no image or model digest, so its pinned version must equal the limits_version it advertises now.
     const workers = expectedKind === "gateway" ? [...(discovery.advertised?.workers ?? [])].sort() : undefined;
     if (expectedKind === "gateway" && discovery.advertised?.limitsVersion !== provider.serverVersion) {
       throw new Error(`gateway limits_version mismatch: pinned ${provider.serverVersion}, advertised ${discovery.advertised?.limitsVersion ?? "none"}`);

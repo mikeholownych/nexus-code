@@ -575,7 +575,9 @@ test("gateway-mode evidence accepts routed models without image or model digests
   const missingVersion = gatewayEndpoint("engineering/b0");
   delete missingVersion.serverVersion;
   assert.throws(() => validateMatrixEvidence(evidenceWith([missingVersion])), /version/i);
-  // Legacy runs still demand digests: the relaxation is for the gateway only.
+  const badWorkers = gatewayEndpoint("engineering/b0");
+  badWorkers.workers = [""];
+  assert.throws(() => validateMatrixEvidence(evidenceWith([badWorkers])), /workers/i);
   const legacy = identifiedEndpoint("llamacpp");
   delete legacy.imageDigest;
   assert.throws(() => validateMatrixEvidence(evidenceWith([legacy, identifiedEndpoint("vllm"), identifiedEndpoint("ollama")])), /digest/i);
@@ -598,7 +600,7 @@ test("gateway-mode runner binds the pinned version to the advertised limits_vers
     advertised: { via: "aihost_gateway", limitsVersion: version, workers: ["worker-b", "worker-a"] },
   });
   try {
-    globalThis.__wp1107MatrixFixture = { providers: { "http://127.0.0.1:8000/gw/v1": provider("limits-2026-11") }, calls: 0, failVllm: false };
+    globalThis.__wp1107MatrixFixture = { providers: { "http://127.0.0.1:8000/gw/v1": provider("limits-2026-11") }, calls: 0 };
     const evidence = await runToolGrammarMatrix({ ...candidate, providers: [provider("limits-2026-11")] });
     assert.equal(globalThis.__wp1107MatrixFixture.calls, 200);
     assert.equal(evidence.passed, true);
@@ -606,9 +608,15 @@ test("gateway-mode runner binds the pinned version to the advertised limits_vers
     assert.equal("imageDigest" in evidence.endpoints[0], false);
     assert.deepEqual(evidence.endpoints[0].workers, ["worker-a", "worker-b"]);
 
-    globalThis.__wp1107MatrixFixture = { providers: { "http://127.0.0.1:8000/gw/v1": provider("limits-OTHER") }, calls: 0, failVllm: false };
+    globalThis.__wp1107MatrixFixture = { providers: { "http://127.0.0.1:8000/gw/v1": provider("limits-OTHER") }, calls: 0 };
     await assert.rejects(runToolGrammarMatrix({ ...candidate, providers: [provider("limits-2026-11")] }), /limits_version/i);
     assert.equal(globalThis.__wp1107MatrixFixture.calls, 0, "a version mismatch must fail before any attempt");
+
+    const second = { ...provider("limits-2026-11"), modelName: "engineering/b1" };
+    await assert.rejects(runToolGrammarMatrix({ ...candidate, providers: [provider("limits-2026-11"), provider("limits-2026-11")] }), /repeats/i);
+    await assert.rejects(runToolGrammarMatrix({ ...candidate, providers: [provider("limits-2026-11"), second, { ...provider("limits-2026-11"), provider: "vllm", serverKind: "vllm", imageDigest: `sha256:${"c".repeat(64)}`, modelDigest: `sha256:${"d".repeat(64)}` }] }), /mix/i);
+    const noDigest = { ...provider("limits-2026-11"), provider: "vllm", serverKind: "vllm" };
+    await assert.rejects(runToolGrammarMatrix({ ...candidate, providers: [noDigest, { ...noDigest, provider: "llamacpp", serverKind: "llamacpp" }, { ...noDigest, provider: "ollama", serverKind: "ollama" }] }), /digest/i);
   } finally {
     delete globalThis.__wp1107MatrixFixture;
     fs.rmSync(root, { recursive: true, force: true });
