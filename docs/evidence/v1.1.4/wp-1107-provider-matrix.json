@@ -14,6 +14,7 @@
       "workers": [
         "b0-live-llama-deep-worker2"
       ],
+      "cacheBypass": true,
       "throttledRetries": 0,
       "requestIntervalMs": 1200,
       "contextSize": 65536,
@@ -85,6 +86,7 @@
       "workers": [
         "b0-live-llama-worker1"
       ],
+      "cacheBypass": true,
       "throttledRetries": 0,
       "requestIntervalMs": 1200,
       "contextSize": 65536,
@@ -120,10 +122,10 @@
         },
         "edit_file": {
           "attempts": 50,
-          "native_valid": 5,
+          "native_valid": 50,
           "repaired": 0,
           "schema_invalid": 0,
-          "invalid": 45,
+          "invalid": 0,
           "hybrid_attempts": 5,
           "hybrid_reasoning_present": 5,
           "hybrid_schema_valid": 5
@@ -141,10 +143,10 @@
       },
       "totals": {
         "attempts": 200,
-        "native_valid": 150,
+        "native_valid": 195,
         "repaired": 0,
         "schema_invalid": 0,
-        "invalid": 50
+        "invalid": 5
       },
       "passed": false
     }
