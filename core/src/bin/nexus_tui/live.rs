@@ -826,7 +826,13 @@ mod tests {
         use ratatui::{Terminal, backend::CrosstermBackend};
         let mut raw = Vec::new();
         {
-            let mut terminal = Terminal::new(CrosstermBackend::new(crate::theme::SgrWriter::new(&mut raw, true))).unwrap();
+            // A fixed viewport: `Terminal::new` asks the real terminal for its size (through `tput` when there is no tty), which
+            // fails under a parallel test run on CI; this test needs only the bytes the backend writes.
+            let mut terminal = Terminal::with_options(
+                CrosstermBackend::new(crate::theme::SgrWriter::new(&mut raw, true)),
+                ratatui::TerminalOptions { viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24)) },
+            )
+            .unwrap();
             let mut state = LiveState::new();
             state.depth = crate::theme::Depth::Ansi16;
             state.apply(crate::protocol::parse_event(r#"{"v":1,"type":"slash.result","id":"s","command":"copy","success":true,"output":"a","clipboard":"hi"}"#).unwrap());
