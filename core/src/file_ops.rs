@@ -211,8 +211,8 @@ fn is_binary_file_descriptor(mut file: &File) -> io::Result<bool> {
 /// Helper to verify a file is not binary
 #[allow(dead_code)]
 fn is_binary_file(path: &Path) -> io::Result<bool> {
-    let mut file = File::open(path)?;
-    is_binary_file_descriptor(&mut file)
+    let file = File::open(path)?;
+    is_binary_file_descriptor(&file)
 }
 
 pub fn read_file(args: ReadFileArgs, base_dir: &Path) -> Result<ReadFileResult, String> {
@@ -1264,13 +1264,13 @@ pub fn patch_file(args: PatchFileArgs, base_dir: &Path) -> Result<PatchFileResul
             in_hunk = true;
         }
 
-        if line.starts_with('-') {
-            current_old.push(line[1..].to_string());
-        } else if line.starts_with('+') {
-            current_new.push(line[1..].to_string());
-        } else if line.starts_with(' ') {
-            current_old.push(line[1..].to_string());
-            current_new.push(line[1..].to_string());
+        if let Some(rest) = line.strip_prefix('-') {
+            current_old.push(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix('+') {
+            current_new.push(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix(' ') {
+            current_old.push(rest.to_string());
+            current_new.push(rest.to_string());
         } else {
             current_old.push(line.to_string());
             current_new.push(line.to_string());
@@ -1361,10 +1361,7 @@ mod tests {
     impl Read for FailsAfterFirstRead {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             if self.0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "injected mid-stream failure",
-                ));
+                return Err(io::Error::other("injected mid-stream failure"));
             }
             self.0 = true;
             let bytes = b"first line\n";
@@ -1532,7 +1529,7 @@ mod tests {
         assert_eq!(small_info.line_count, Some(2));
         let empty_info = file_info(FileInfoArgs { path: "empty.txt".into() }, &dir).unwrap();
         assert_eq!(empty_info.line_count, Some(0));
-        assert_eq!(empty_info.is_binary, false);
+        assert!(!empty_info.is_binary);
         let limit_info = file_info(FileInfoArgs { path: "at-limit.txt".into() }, &dir).unwrap();
         assert_eq!(limit_info.size_bytes, MAX_READ_BYTES as u64);
         assert_eq!(limit_info.line_count, Some(MAX_READ_BYTES), "the exact read limit is still scanned");
@@ -1543,7 +1540,7 @@ mod tests {
             "a file above the read limit must not be scanned for its line count"
         );
         let big_binary_info = file_info(FileInfoArgs { path: "big.bin".into() }, &dir).unwrap();
-        assert_eq!(big_binary_info.is_binary, true, "binary detection does not depend on the read limit");
+        assert!(big_binary_info.is_binary, "binary detection does not depend on the read limit");
         assert_eq!(big_binary_info.line_count, None);
         fs::remove_dir_all(&dir).ok();
     }

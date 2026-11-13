@@ -157,18 +157,16 @@ pub fn git_log(args: GitLogArgs, base_dir: &Path) -> Result<GitLogResult, String
     revwalk.push_head().map_err(|e| format!("Failed to push HEAD: {e}"))?;
 
     let mut commits = Vec::new();
-    for id_res in revwalk.take(args.max_commits) {
-        if let Ok(id) = id_res {
-            if let Ok(commit) = repo.find_commit(id) {
-                let time_secs = commit.time().seconds();
-                let summary_str = commit.summary().ok().flatten().unwrap_or("").to_string();
-                commits.push(GitCommitEntry {
-                    id: id.to_string(),
-                    author: commit.author().name().unwrap_or("Unknown").to_string(),
-                    summary: summary_str,
-                    time_iso: format!("epoch_secs:{time_secs}"),
-                });
-            }
+    for id in revwalk.take(args.max_commits).flatten() {
+        if let Ok(commit) = repo.find_commit(id) {
+            let time_secs = commit.time().seconds();
+            let summary_str = commit.summary().ok().flatten().unwrap_or("").to_string();
+            commits.push(GitCommitEntry {
+                id: id.to_string(),
+                author: commit.author().name().unwrap_or("Unknown").to_string(),
+                summary: summary_str,
+                time_iso: format!("epoch_secs:{time_secs}"),
+            });
         }
     }
 
