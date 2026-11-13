@@ -58,20 +58,53 @@ function terminalCellWidth(value: string): number {
   return width;
 }
 
-function fitTerminalText(value: string, maxWidth: number): string {
-  if (terminalCellWidth(value) <= maxWidth) return value;
-  const segments = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value)].map(({ segment }) => segment);
-  const suffix: string[] = [];
-  let width = 1; // reserve one cell for the leading ellipsis
-  for (let index = segments.length - 1; index >= 0; index--) {
-    const segment = segments[index];
-    const segmentWidth = terminalCellWidth(segment);
-    if (width + segmentWidth > maxWidth) break;
-    suffix.unshift(segment);
-    width += segmentWidth;
+/**
+ * `tokens` laid out in rows of at most `width` cells, joined by `joiner` (a space for prose, nothing for a path split at
+ * its separators). A token wider than a row is split by grapheme, and one grapheme wider than the row stands alone,
+ * so every call makes progress at any width.
+ */
+function wrapTokens(tokens: string[], width: number, joiner: string): string[] {
+  const room = Math.max(1, Math.floor(width));
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const rows: string[] = [];
+  let row = "";
+  let rowWidth = 0;
+  const flush = () => {
+    if (row) rows.push(row);
+    row = "";
+    rowWidth = 0;
+  };
+  for (const token of tokens) {
+    if (!token) continue;
+    const tokenWidth = terminalCellWidth(token);
+    const gap = row ? terminalCellWidth(joiner) : 0;
+    if (row && rowWidth + gap + tokenWidth <= room) {
+      row += joiner + token;
+      rowWidth += gap + tokenWidth;
+      continue;
+    }
+    flush();
+    if (tokenWidth <= room) {
+      row = token;
+      rowWidth = tokenWidth;
+      continue;
+    }
+    for (const { segment } of segmenter.segment(token)) {
+      const segmentWidth = terminalCellWidth(segment);
+      if (row && rowWidth + segmentWidth > room) flush();
+      row += segment;
+      rowWidth += segmentWidth;
+    }
   }
-  return `…${suffix.join("")}`;
+  flush();
+  return rows;
 }
+
+const wrapProse = (text: string, width: number, indent = ""): string[] =>
+  wrapTokens(text.split(/\s+/), width - terminalCellWidth(indent), " ").map((row) => indent + row);
+
+/** A path as rows, broken after a separator where it can be, so a directory name is not cut when it need not be. */
+const wrapPath = (value: string, width: number): string[] => wrapTokens(value.match(/[^/]*\/?/g) ?? [], width, "");
 
 /** Project instructions are untrusted workspace input and are injected only after the operator explicitly trusts it. */
 export function trustedProjectRules(
@@ -123,32 +156,39 @@ export function promptWorkspaceTrust(
     let statusMessage: string | undefined;
 
     const render = () => {
-      const width = Math.max(32, output.columns ?? 80);
-      const fit = (value: string) => fitTerminalText(value, width);
-      const projectFile = instructionFile ? `Check: ${instructionFile}` : "No project instruction file found";
-      const rows = optionsText.map((text, index) => `${choice === index ? "›" : " "} ${text}`);
+      // A pty opened without a window size reports 0 columns (not undefined): that is an unknown width, drawn at 80.
+      const width = Number.isFinite(output.columns) && (output.columns as number) > 0 ? Math.floor(output.columns as number) : 80;
+      const rows = optionsText.flatMap((text, index) =>
+        wrapProse(text, width - 2).map((row, line) => `${line === 0 ? (choice === index ? "›" : " ") : " "} ${row}`));
+      const instructions = instructionFile
+        ? wrapProse(`Project instructions found: ${instructionFile}`, width)
+        : wrapProse("No project instruction file found in this folder.", width);
       output.write([
         "\u001b[2J\u001b[H",
-        "Trust this folder?",
-        "↑↓ navigate · Enter select · Esc exit",
-        fit(displayWorkspace),
-        "Load project instructions",
-        fit(projectFile),
-        "Trust remembered for this folder.",
-        "Includes future project config changes.",
-        "Trust loads project instructions and",
-        "workspace integrations.",
-        "Tool approvals use permission settings.",
-        "Folder trust doesn't change approvals.",
-        ...(statusMessage ? [fit(statusMessage)] : []),
+        ...wrapProse("Trust this folder?", width),
+        "",
+        ...wrapPath(displayWorkspace, width),
+        "",
+        ...instructions,
+        "",
+        ...wrapProse(
+          "Trusting this folder lets Nexus load its project instructions and workspace integrations, including any that change later. Trusting is remembered for this folder; the other choices ask again next time.",
+          width,
+        ),
+        "",
+        ...wrapProse("Trust does not change tool approvals; those follow your permission settings.", width),
+        ...(statusMessage ? ["", ...wrapProse(statusMessage, width)] : []),
         "",
         ...rows,
+        "",
+        ...wrapProse("↑↓ move · Enter select · Esc exit", width),
       ].join("\n"));
     };
 
     const finish = (decision: WorkspaceTrustDecision) => {
       if (complete) return;
       complete = true;
+      output.removeListener("resize", render);
       input.removeListener("keypress", onKeypress);
       input.removeListener("close", onClose);
       try { input.setRawMode(oldRawMode); } catch {}
@@ -192,6 +232,7 @@ export function promptWorkspaceTrust(
     readline.emitKeypressEvents(input);
     input.on("keypress", onKeypress);
     input.once("close", onClose);
+    output.on("resize", render);
     try {
       input.setRawMode(true);
       input.resume();

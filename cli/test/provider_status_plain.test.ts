@@ -8,6 +8,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { AutonomousAgent } from "../src/agent.js";
 import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
 import { encodeEvent, noProviderNotice, noProviderRefusal, providerRecoveryStatus } from "../src/protocol.js";
@@ -496,6 +497,31 @@ describe("D-07: the prompt gate, the start-up warning and the URL scrub", () => 
       assert.ok(result, JSON.stringify(events.map((e) => [e.type, e.code])));
       assert.equal(result.success, true);
       assert.equal(events.some((e) => e.type === "error" || e.type === "activity" || e.type === "turn.result"), false);
+    });
+  });
+
+  test("D-18: when the gate refuses the first follow-up, every message waiting behind it is returned too, in order, without another probe", async () => {
+    await sidecar("http://127.0.0.1:1/v1", async ({ events, send, server }) => {
+      const proto = AutonomousAgent.prototype as any;
+      const original = proto.probeEndpointProblem;
+      let probes = 0;
+      proto.probeEndpointProblem = function (...args: unknown[]) { probes++; return original.apply(this, args); };
+      try {
+        const first = send({ type: "prompt.submit", id: "t1", text: "hello" });
+        await send({ type: "steer", id: "g2", text: "and this" });
+        await send({ type: "steer", id: "g3", text: "and that" });
+        await first;
+        await server.idle();
+      } finally {
+        proto.probeEndpointProblem = original;
+      }
+      assert.equal(probes, 2, "one probe for the refused prompt and one for the first follow-up; g3 is returned with g2, not probed again");
+      const acks = events.filter((e) => e.type === "steer.ack").map((a) => `${a.id}:${a.status}`);
+      assert.deepEqual(acks, ["g2:deferred", "g3:deferred", "g2:cancelled", "g3:cancelled"]);
+      const back = events.filter((e) => e.type === "steer.ack" && e.status === "cancelled");
+      assert.deepEqual(back.map((a) => a.text), ["and this", "and that"]);
+      assert.match(back[1].message, /no model is connected/i);
+      assert.equal(events.some((e) => e.type === "activity" || e.type === "turn.result"), false, "no turn ran");
     });
   });
 

@@ -303,7 +303,16 @@ pub fn render(text: &str, width: usize, pal: &Palette, prose: &Prose, streaming:
                     2 => Style::default().fg(prose.heading).add_modifier(Modifier::BOLD),
                     _ => base.add_modifier(Modifier::BOLD),
                 };
-                out.extend(wrap(inline(title, style, prose, hide), width, Vec::new(), Vec::new()));
+                // Without colour only bold is left, and bold text reads as emphasis: a glyph names the level instead.
+                let marker = match (pal.mono, level) {
+                    (false, _) => "",
+                    (true, 1) => "◆ ",
+                    (true, 2) => "▸ ",
+                    (true, _) => "· ",
+                };
+                let hang = " ".repeat(UnicodeWidthStr::width(marker));
+                let first = if marker.is_empty() { Vec::new() } else { vec![Span::styled(marker, style)] };
+                out.extend(wrap(inline(title, style, prose, hide), width, first, if hang.is_empty() { Vec::new() } else { vec![Span::raw(hang)] }));
             }
             Block::Rule => out.push(Line::from(Span::styled("─".repeat(width.min(60)), muted))),
             Block::Paragraph(line) => out.extend(wrap(inline(line, base, prose, hide), width, Vec::new(), Vec::new())),
@@ -339,7 +348,12 @@ fn code_block(lang: &str, lines: &[&str], width: usize, pal: &Palette, prose: &P
     let syntax = fence_lang(lang);
     for line in lines {
         for (n, (mut spans, used)) in diff_view::content_rows(line, syntax, room - 1, Fit::Wrap, pal, prose.text, bg).into_iter().enumerate() {
-            let mut row = vec![bar_lead.clone(), Span::styled(if n == 0 { " " } else { "↪" }, base.fg(prose.muted))];
+            // A wrapped row replaces the bar with `↪` and keeps the code in the same column as the first row.
+            let mut row = if n == 0 {
+                vec![bar_lead.clone(), Span::styled(" ", base)]
+            } else {
+                vec![Span::styled("  ↪", Style::default().fg(prose.muted)), Span::styled(" ", base)]
+            };
             row.append(&mut spans);
             if used < room - 1 {
                 row.push(Span::styled(" ".repeat(room - 1 - used), base));
@@ -442,7 +456,7 @@ mod tests {
         let all = texts(&lines);
         assert!(all[0].starts_with("• a list") && all[1].starts_with("  "), "{all:#?}");
         assert!(all.iter().all(|l| UnicodeWidthStr::width(l.as_str()) <= 40), "{all:#?}");
-        assert!(all.iter().any(|l| l.contains("▎↪")), "continuation rows are marked: {all:#?}");
+        assert!(all.iter().any(|l| l.contains("↪ ")), "continuation rows are marked: {all:#?}");
     }
 
     #[test]
@@ -450,7 +464,7 @@ mod tests {
         let pal = diff_view::palette(Depth::TrueColor);
         let text = "```rust\nlet window = compute_the_size_of_the_terminal_window(width, height);\n```";
         let lines = render(text, 40, &pal, &prose(), false);
-        let code: Vec<&Line> = lines.iter().filter(|l| l.spans.first().is_some_and(|s| s.content.contains('▎')) && l.spans.len() > 2).collect();
+        let code: Vec<&Line> = lines.iter().filter(|l| l.spans.first().is_some_and(|s| s.content.contains('▎') || s.content.contains('↪')) && l.spans.len() > 2).collect();
         assert!(code.len() >= 2, "{:#?}", texts(&lines));
         for line in code {
             for span in line.spans.iter().skip(1) {
@@ -483,5 +497,35 @@ mod tests {
     fn control_characters_and_wide_text_are_safe() {
         let all = texts(&render("bell\u{7} esc\u{1b}[2J 字符 café ✅", 80, &diff_view::palette(Depth::TrueColor), &prose(), false));
         assert_eq!(all, vec!["bell␇ esc␛[2J 字符 café ✅"]);
+    }
+
+    #[test]
+    fn headings_carry_a_marker_without_colour_so_they_differ_from_bold_text() {
+        let text = "# Title\n## Plan\n### Notes\nbold: **x**";
+        let mono = texts(&render(text, 40, &diff_view::palette(Depth::Mono), &prose(), false));
+        assert_eq!(mono, vec!["◆ Title", "▸ Plan", "· Notes", "bold: x"]);
+        for depth in [Depth::TrueColor, Depth::Ansi256, Depth::Ansi16] {
+            let coloured = texts(&render(text, 40, &diff_view::palette(depth), &prose(), false));
+            assert_eq!(coloured, vec!["Title", "Plan", "Notes", "bold: x"], "{depth:?}: colour and weight carry the level");
+        }
+        // The marker counts toward the wrap width and never makes a row too wide.
+        let narrow = texts(&render("## a heading long enough to wrap onto a second row", 20, &diff_view::palette(Depth::Mono), &prose(), false));
+        assert!(narrow.len() >= 2 && narrow[0].starts_with("▸ a heading") && narrow[1].starts_with("  "), "{narrow:#?}");
+        assert!(narrow.iter().all(|l| UnicodeWidthStr::width(l.as_str()) <= 20), "{narrow:#?}");
+    }
+
+    #[test]
+    fn a_code_blocks_continuation_marker_sits_before_aligned_content_and_every_size_stays_in_bounds() {
+        let text = "```ts\nexport class A { x() { return 1; } }\n```";
+        for width in [0usize, 1, 5, 20, 40, 60, 100] {
+            let all = texts(&render(text, width, &diff_view::palette(Depth::Mono), &prose(), false));
+            let limit = width.max(20);
+            assert!(all.iter().all(|l| UnicodeWidthStr::width(l.as_str()) <= limit), "{width}: {all:#?}");
+        }
+        let all = texts(&render(text, 20, &diff_view::palette(Depth::Mono), &prose(), false));
+        assert_eq!(all[0], "  ▎ ts");
+        assert_eq!(all[1], "  ▎ export class A");
+        assert!(all[2].starts_with("  ↪ { x()"), "the marker replaces the bar, a space follows it, the code stays in its column: {all:#?}");
+        assert_eq!(all[1].find("export"), all[2].find("{ x()"), "content columns line up");
     }
 }

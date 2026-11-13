@@ -193,7 +193,7 @@ export interface AgentObserver {
   onAssistantDelta?(text: string): void;
   /** `dispatch` is unique per call within this agent; model call ids can repeat, even within one step. */
   onToolStart?(event: { dispatch: number; callId: string; tool: string; args: Record<string, any> }): void;
-  onToolEnd?(event: { dispatch: number; callId: string; tool: string; success: boolean; output: string; error?: string }): void;
+  onToolEnd?(event: { dispatch: number; callId: string; tool: string; success: boolean; output: string; error?: string; denied?: boolean }): void;
   /** The loop is waiting out (or has finished waiting out) a provider failure. `discardedPartialOutput`: deltas already sent for the failed submission are void. */
   onProviderRecovery?(event: { record: ProviderRecoveryRecord; discardedPartialOutput: boolean }): void;
   /** The provider's stream went quiet for `silentSecs` (`stalled`), or sent data again. The turn is still running. */
@@ -5424,7 +5424,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             "Rejected by user"
           );
         }
-        this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+        this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg, denied: true });
         return { receipt, shouldExit: false };
       }
     }

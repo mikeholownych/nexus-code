@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { copyToClipboard, readFromClipboard } from "../clipboard.js";
+import { SANITIZATION_FAILED, formatSafeSidecarText } from "../safe_text.js";
+import { copyWithFallback, readFromClipboard } from "../clipboard.js";
 import { commitChanges, generateConventionalCommit, getGitInfo, trustedGitArgs, workspaceStatus } from "../git.js";
 import { HunkStager } from "../stager.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "../tester.js";
@@ -238,6 +239,12 @@ function lastAssistant(ctx: SlashContext): string {
   return "";
 }
 
+/** The sanitised form of a copy, or nothing when the sanitiser failed (it returns a placeholder then). */
+export function sanitizeForTerminal(text: string): string {
+  const safe = formatSafeSidecarText(text);
+  return safe === SANITIZATION_FAILED ? "" : safe;
+}
+
 function copy(ctx: SlashContext): SlashOutcome {
   const what = ctx.args.trim().toLowerCase() || "last";
   let text: string;
@@ -255,8 +262,19 @@ function copy(ctx: SlashContext): SlashOutcome {
     text = blocks.length ? blocks.join("\n\n// ────────────────────────────\n\n") : last;
     label = blocks.length ? `${blocks.length} code block(s)` : `the last reply (${last.length} chars)`;
   }
-  const result = copyToClipboard(text);
-  return result.success ? reply("copy", `Copied ${label} to the clipboard.`) : reply("copy", `Clipboard error: ${result.error}`, false);
+  const result = copyWithFallback(text, process.env, sanitizeForTerminal);
+  if (!result.success) return reply("copy", `Clipboard error: ${result.error}`, false);
+  if (result.osc52 !== undefined) {
+    return reply(
+      "copy",
+      `No clipboard tool was found, so Nexus asked your terminal to copy ${label} (OSC 52, ${Buffer.byteLength(result.osc52, "utf8")} bytes). ` +
+        "Nexus cannot confirm it: if nothing arrived, the terminal ignores OSC 52 (tmux needs `set -g set-clipboard on`; GNU screen is not supported). " +
+        "Credential-looking text and control characters in it are replaced, as in /paste. NEXUS_OSC52=off turns this fallback off.",
+      true,
+      { clipboard: result.osc52 },
+    );
+  }
+  return reply("copy", `Copied ${label} to the clipboard.`);
 }
 
 function paste(): SlashOutcome {

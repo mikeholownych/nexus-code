@@ -228,8 +228,40 @@ function save({ host, args }: SlashContext): SlashOutcome {
 }
 
 function resume({ host, args }: SlashContext): SlashOutcome {
-  const result = host.resumeSession(args.trim() || undefined);
-  return reply("resume", result.message, result.ok);
+  const wanted = args.trim();
+  if (wanted) {
+    const result = host.resumeSession(wanted);
+    return reply("resume", result.message, result.ok);
+  }
+  // No argument: "the latest" is usually the session already open, so reloading it would only discard the live
+  // conversation. Offer the most recent other one saved for this workspace (the session store is shared by every
+  // workspace, and the loader refuses another workspace's record), trying older ones when a newer cannot be loaded.
+  const here = comparableDir(host.app.getConfig().workspace);
+  const resolved = new Map<string, string>();
+  const dirOf = (dir: string) => resolved.get(dir) ?? (resolved.set(dir, comparableDir(dir)), resolved.get(dir)!);
+  const candidates = host.app.getSessionManager().listSessions().filter((s) => s.id !== host.sessionId() && dirOf(s.workspace) === here);
+  const skipped: string[] = [];
+  for (const candidate of candidates) {
+    let result: { ok: boolean; message: string };
+    try {
+      result = host.resumeSession(candidate.id);
+    } catch (err) {
+      result = { ok: false, message: errorText(err) };
+    }
+    if (result.ok) return reply("resume", skipped.length ? `${result.message} (skipped, could not be loaded: ${skipped.join(", ")})` : result.message, true);
+    skipped.push(`${candidate.id} (${oneLine(result.message).slice(0, 100)})`);
+  }
+  const note = skipped.length ? ` Could not load: ${skipped.join(", ")}.` : "";
+  return reply("resume", `There is no other saved session in this workspace to resume.${note} /sessions lists what is saved; /resume <id> loads one.`, false);
+}
+
+function comparableDir(dir: string | undefined): string {
+  if (!dir) return "";
+  try {
+    return fs.realpathSync(dir);
+  } catch {
+    return path.resolve(dir);
+  }
 }
 
 /** Resolves history item `raw` (1-based) to a turn, or an out-of-range reply. */

@@ -99,6 +99,60 @@ describe("steering through the sidecar", () => {
     });
   });
 
+  test("D-18: messages deferred while the turn finishes each start their own follow-up turn, in order, never joined", async () => {
+    await withSidecar((n) => (n === 1 ? { kind: "text", content: "first", delayMs: 200 } : { kind: "text", content: `reply ${n}` }), async ({ server, events, send, app, gw }) => {
+      app.getAgent().queueSteering = () => ({ status: "no_active_turn" });
+      await send({ type: "prompt.submit", id: "t1", text: "go" });
+      await inference(events);
+      await send({ type: "steer", id: "g1", text: "SC:e500 go" });
+      await send({ type: "steer", id: "g2", text: "SC:reset go" });
+      await waitUntil(() => events.filter((e) => e.type === "turn.result").length === 3, 20_000);
+      await server.idle();
+      assert.deepEqual(acks(events, "g1"), ["deferred", "applied"]);
+      assert.deepEqual(acks(events, "g2"), ["deferred", "applied"]);
+      const userTexts = (gw.requests as any[]).flatMap((r) => (r.messages ?? []).filter((m: any) => m.role === "user").map((m: any) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))));
+      assert.ok(!userTexts.some((t) => t.includes("SC:e500 go") && t.includes("SC:reset go")), `no request carries both messages in one user message: ${JSON.stringify(userTexts)}`);
+      const order = events.filter((e) => e.type === "turn.result").map((e) => e.turn_id);
+      assert.deepEqual(order, ["t1", "g1", "g2"], "one turn per message, in the order sent");
+      const g2Applied = events.findIndex((e) => e.type === "steer.ack" && e.id === "g2" && e.status === "applied");
+      const g1Result = events.findIndex((e) => e.type === "turn.result" && e.turn_id === "g1");
+      assert.ok(g2Applied > g1Result, "the second message waits for the first one's turn to end");
+      const between = events.slice(g1Result + 1, events.findIndex((e) => e.type === "turn.result" && e.turn_id === "g2"));
+      assert.ok(!between.some((e) => e.type === "session.state" && e.busy === false), "no idle state between the follow-up turns");
+    });
+  });
+
+  test("D-18: a message sent while earlier follow-ups wait queues behind them, never ahead", async () => {
+    await withSidecar((n) => (n === 1 ? { kind: "text", content: "first", delayMs: 200 } : { kind: "text", content: `reply ${n}`, delayMs: 300 }), async ({ server, events, send, app }) => {
+      let calls = 0;
+      app.getAgent().queueSteering = () => (++calls <= 2 ? { status: "no_active_turn" } : { status: "queued" });
+      await send({ type: "prompt.submit", id: "t1", text: "go" });
+      await inference(events);
+      await send({ type: "steer", id: "g1", text: "one" });
+      await send({ type: "steer", id: "g2", text: "two" });
+      await waitUntil(() => acks(events, "g1").includes("applied"), 20_000);
+      await send({ type: "steer", id: "g3", text: "three" });
+      await waitUntil(() => events.filter((e) => e.type === "turn.result").length === 4, 20_000);
+      await server.idle();
+      assert.deepEqual(acks(events, "g3"), ["deferred", "applied"]);
+      assert.deepEqual(events.filter((e) => e.type === "turn.result").map((e) => e.turn_id), ["t1", "g1", "g2", "g3"]);
+    });
+  });
+
+  test("D-18: cancelling while follow-ups wait returns every one of them separately", async () => {
+    await withSidecar(() => ({ ...read("base.txt"), delayMs: 500 }), async ({ server, events, send, app }) => {
+      app.getAgent().queueSteering = () => ({ status: "no_active_turn" });
+      await send({ type: "prompt.submit", id: "t1", text: "look" });
+      await inference(events);
+      await send({ type: "steer", id: "g1", text: "one" });
+      await send({ type: "steer", id: "g2", text: "two" });
+      await send({ type: "cancel" });
+      await server.idle();
+      const returned = events.filter((e) => e.type === "steer.ack" && e.status === "cancelled").map((e) => [e.id, e.text]);
+      assert.deepEqual(returned, [["g1", "one"], ["g2", "two"]]);
+    });
+  });
+
   test("steering pending at cancel is returned to the client", async () => {
     await withSidecar(() => ({ ...read("base.txt"), delayMs: 500 }), async ({ server, events, send }) => {
       await send({ type: "prompt.submit", id: "t1", text: "look" });

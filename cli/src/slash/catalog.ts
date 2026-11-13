@@ -53,6 +53,8 @@ export interface SlashReply {
   format?: "diff";
   /** Text for the client to put into the composer. */
   composer?: string;
+  /** Text for the client to put on the terminal's clipboard with an OSC 52 request (no clipboard tool was found). */
+  clipboard?: string;
 }
 
 /** The command resolved to a prompt: the sidecar checkpoints, then runs it as a turn under the command's id. */
@@ -73,7 +75,7 @@ export type SlashHandler = (ctx: SlashContext) => SlashOutcome | Promise<SlashOu
 
 export const NOT_A_REPO = "This workspace is not inside a git repository.";
 
-export function reply(command: string, output: string, success = true, extra: Pick<SlashReply, "format" | "composer"> = {}): SlashReply {
+export function reply(command: string, output: string, success = true, extra: Pick<SlashReply, "format" | "composer" | "clipboard"> = {}): SlashReply {
   return { kind: "reply", command, success, output, ...extra };
 }
 

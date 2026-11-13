@@ -124,6 +124,8 @@ export type SidecarEvent =
       exit_code?: number | null;
       duration_ms?: number;
       timed_out?: boolean;
+      /** The operator declined the call at its approval prompt (never set for a policy refusal). The call did not run. */
+      denied?: true;
     }
   | { type: "approval.request"; id: string; turn_id: string; tool: string; subject: string; preview: string; review: ApprovalReview }
   | { type: "checkpoint.choice.request"; id: string; turn_id: string; message: string }
@@ -138,6 +140,8 @@ export type SidecarEvent =
       format?: "diff";
       /** Text for the client to put into the composer. */
       composer?: string;
+      /** Text for the client to write to the terminal clipboard with OSC 52 (the client encodes it; at most OSC52_MAX_BYTES). */
+      clipboard?: string;
       /** The command started a turn with this prompt; the turn's events follow under the same id. */
       prompt?: string;
     }

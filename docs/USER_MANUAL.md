@@ -129,8 +129,9 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   one; a time limit you set appears (`12 min left`) in its last quarter or last 15 minutes. It stops on completion, cancellation, failure or
   disconnection; an approval request replaces it with the approval hint. Lines too long for the window end in `…`.
 - **Transcript.** Replies are rendered Markdown: headings, emphasis, inline code, lists with hanging indents, block
-  quotes, fenced code in a gutter block with syntax colours (long lines wrap onto rows marked `↪`), and tables
-  aligned in columns (listed row by row when too wide). Each model reply is its own paragraph; when Nexus asks the
+  quotes, fenced code in a gutter block with syntax colours (long lines wrap onto rows that start with `↪` in place of the bar, the code staying in
+  its column), and tables
+  aligned in columns (listed row by row when too wide). Without colour (`NO_COLOR`) a glyph names each heading level (`◆` for `#`, `▸` for `##`, `·` for deeper ones), because bold alone reads as emphasis. Each model reply is its own paragraph; when Nexus asks the
   agent to continue on its own (open requirements, a repeated action), a quiet line says so. Commands show their exit
   code and line count, the exact number of earlier lines not shown (`… 115 earlier lines`) and the last 6 lines; Tab, `[`/`]` and
   Enter open the full record. Tools that took noticeable time show their duration. A pasted prompt shows the text that
@@ -226,15 +227,21 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   Approvals that arrive while another panel or approval is open wait in order; the panel title shows how many are
   waiting.
 - **Recovery.** If the agent sidecar stops, the screen names the exit code or signal, keeps the last relevant
-  diagnostic lines (progress chatter is dropped) and your draft; `r` starts a new agent, after which `/resume` reloads
-  the saved conversation. Resuming (`-r` or `/resume`) shows the earlier conversation under a divider: your prompts,
+  diagnostic lines (progress chatter is dropped) and your draft. Typing on that screen fills the draft, which is shown in
+  the composer and kept across the restart. While the draft is empty, `r` starts a new agent and `q` quits; once it
+  holds text, `r` and `q` are just text and the same actions are `ctrl+r` and `esc`. Over a draft the first `esc` only asks (`esc again quits and discards your draft`); a second `esc` in a row quits, any other key or a paste cancels the ask, and `ctrl+c` quits at once. So a typed `r` can never restart
+  by accident; a draft that begins with `r` or `q` has to be started with another character and edited). Enter does not
+  send to a stopped agent. After a restart, `/resume` reloads the saved conversation. Resuming (`-r` or `/resume`; `/resume` with no id loads the most recent saved session of this workspace other than the one you are in) shows the earlier conversation under a divider: your prompts,
   steering, the agent's replies, the tools it called (`· Read src/cache.ts`), and how the last turn ended. Diagnostics
   from turns that already finished are not shown as the cause of a later stop. Enter pressed while the agent is still
   starting sends the draft once it is ready.
 - **Steering.** Enter while the agent works sends the draft as steering. It shows in the transcript as
-  `↳ text · steering · queued`, then `applied` once the agent takes it at its next step. Steering that arrives as
-  the turn finishes starts a follow-up turn; steering that cannot be applied (the turn was cancelled, a command was
-  running, the agent stopped) is put back into the composer. Slash commands wait for idle, except read-only `/doctor`,
+  `↳ text · steering · applies at the next step`, then `applied` once the agent takes it. Each message stays its own
+  user message for the agent. A message that arrives as the turn finishes runs as its own follow-up turn (`runs as its
+  own turn next`); several of them run one turn each, in the order sent, never joined. Steering that cannot be applied
+  (the turn was cancelled, a command was running, the agent stopped) is put back into the composer; when more than one
+  comes back the draft holds them one per line, a notice says that Enter sends the draft as one message, and you can
+  edit the draft if you want them sent separately. Slash commands wait for idle, except read-only `/doctor`,
   `/help` and `/receipt`.
 - **Paste buffers.** A multi-line or long paste becomes `[Pasted text #1: 24 lines]` in the composer; its content is
   submitted exactly as pasted (newlines in it never send, and a pasted `/exit` is text). Ctrl+O shows a buffer,
@@ -266,7 +273,9 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **Colour.** 24-bit colour with `COLORTERM=truecolor`; otherwise 256 colours for a `TERM` naming them, else the 16
   standard colours (no row backgrounds: the changed text itself is green or red). `NO_COLOR` or `TERM=dumb` removes
   colour; `NEXUS_COLOR=truecolor|256|16|none` overrides. The `+`/`−` markers and labels carry the meaning at every
-  depth.
+  depth. On the 16 standard colours Nexus writes the classic `30-37`/`90-97` (foreground) and `40-47`/`100-107`
+  (background) codes, never 256-colour `38;5;n`, so 8/16-colour terminals and the Linux console show them; 256-colour
+  codes are used only where `TERM` names 256 colours.
 
 ### Live TUI: newline key and mouse
 
@@ -395,7 +404,7 @@ nexus (qwen2.5-coder) my-app ❯ !npm test
 | `/shell [bash\|zsh]` | Switch execution shell |
 | `/cd <path>` | Switch active workspace directory |
 | `/history [query\|!n]` | Fuzzy history search or re-execute item by index |
-| `/copy [diff\|code\|last]` | Copy diff, code blocks, or response to system clipboard |
+| `/copy [diff\|code\|last]` | Copy diff, code blocks, or response to system clipboard. With no clipboard tool (`wl-copy`, `xclip`, `xsel`, `pbcopy`: SSH, tmux, headless) the live TUI asks the terminal to copy it with an OSC 52 request instead (up to 74,994 bytes; larger text is refused, never cut). The terminal does not confirm it: terminals may ignore OSC 52, tmux needs `set -g set-clipboard on`, GNU screen is not supported. The text reaches the terminal only base64-encoded, after the same credential redaction and control-character handling as every sidecar message. `NEXUS_OSC52=off` (also `0`, `false`, `no`, `none`) turns the fallback off, and the older line-mode REPL does not use it. |
 | `/paste` | Paste clipboard content into prompt |
 | `/exit` or `/quit` | Exit session cleanly |
 

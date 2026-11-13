@@ -17,7 +17,7 @@ import { TurnResult, failedTurnFromError, lifecycleStatusForTurn, summarizeTurn 
 import { getGitInfo } from "./git.js";
 import { redactSecrets, redactSecretPatterns } from "./ui.js";
 import { approvalReview } from "./approval_review.js";
-import { EvidenceLedger, LastTurn, MAX_DETAIL, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
+import { DENIED_BY_OPERATOR, EvidenceLedger, LastTurn, MAX_DETAIL, MAX_DIFF_DETAIL, MAX_EVIDENCE, ReceiptSection, receiptSections, redactedJson } from "./evidence.js";
 import { countDiffLines, previewDiff, visibleControls } from "./file_diff.js";
 import type { ChatMessage, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
@@ -63,7 +63,9 @@ import {
   noProviderRefusal,
   toolSubject,
   toolSummary,
+  type ToolSummary,
 } from "./protocol.js";
+import { OSC52_MAX_BYTES } from "./clipboard.js";
 import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
 import { surfaceFacts } from "./surface_facts.js";
@@ -94,6 +96,8 @@ export class SidecarServer {
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
   private pendingApproval?: { id: string; settle: (approved: boolean) => void };
+  /** The last approval was settled by the operator's Deny, not by a cancel or a shutdown. */
+  private operatorDeclined = false;
   private pendingCheckpointChoice?: { id: string; choices: readonly CheckpointChoice[]; settle: (choice: CheckpointChoice) => void };
   private approvalSeq = 0;
   private shutdownPromise?: Promise<void>;
@@ -230,6 +234,7 @@ export class SidecarServer {
         void this.providerConnect(command.id, command.provider, command.method, command.key, command.endpoint);
         return;
       case "provider.cancel":
+        this.modelLists.get(command.id)?.abort();
         this.signIns.get(command.id)?.cancel();
         this.signIns.delete(command.id);
         cancelLocalEndpointSetup(command.id);
@@ -255,12 +260,21 @@ export class SidecarServer {
   /** Sign-ins in progress, by request id (provider.cancel stops one). */
   private signIns = new Map<string, { cancel(): void }>();
 
+  /** Model-list fetches in flight, by request id: a new list, provider.cancel or shutdown stops them. */
+  private modelLists = new Map<string, AbortController>();
+
   private async modelsList(id: string): Promise<void> {
+    // Only the newest list matters: the picker that asked for an older one is gone.
+    for (const older of this.modelLists.values()) older.abort();
+    const controller = new AbortController();
+    this.modelLists.set(id, controller);
     try {
-      const catalog = await buildCatalog(this.app.getConfig());
-      this.emit({ type: "models.catalog", id, ...catalog });
+      const catalog = await buildCatalog(this.app.getConfig(), { signal: controller.signal });
+      if (!controller.signal.aborted) this.emit({ type: "models.catalog", id, ...catalog });
     } catch (err) {
-      this.emit({ type: "error", id, code: "INTERNAL", message: errorText(err) });
+      if (!controller.signal.aborted) this.emit({ type: "error", id, code: "INTERNAL", message: errorText(err) });
+    } finally {
+      if (this.modelLists.get(id) === controller) this.modelLists.delete(id);
     }
   }
 
@@ -351,6 +365,12 @@ export class SidecarServer {
       this.steerAck(id, "rejected", `${name} is running, and steering applies to agent turns; your message is back in the composer.`, text);
       return;
     }
+    // Messages already waiting for their own turn come first: a later one never overtakes them.
+    if (this.followUps.length) {
+      this.followUps.push({ id, text });
+      this.steerAck(id, "deferred", "The turn is finishing; your message runs as its own follow-up turn once the turns before it have ended.");
+      return;
+    }
     const queued = this.app.getAgent().queueSteering(id, text);
     if (queued.status === "queued") {
       this.history.push(text.trim());
@@ -362,25 +382,25 @@ export class SidecarServer {
       return;
     }
     this.followUps.push({ id, text });
-    this.steerAck(id, "deferred", "The turn is finishing; your message starts a follow-up turn as soon as it ends.");
+    this.steerAck(id, "deferred", "The turn is finishing; your message runs as its own follow-up turn once the turns before it have ended.");
   }
 
-  /** Runs deferred steering as one follow-up turn under the first message's id. */
+  /**
+   * Runs the oldest deferred message as its own follow-up turn under its own id. Later ones wait: when this turn
+   * ends the settle path starts the next, so each message is a separate user message and a separate turn, in the
+   * order sent, never joined into one (D-18).
+   */
   private startFollowUp(): void {
-    const followUps = this.followUps;
-    this.followUps = [];
-    const id = followUps[0].id;
-    const text = followUps.map((f) => f.text).join("\n\n");
-    this.runJob(id, undefined, (signal) =>
-      this.gatedTurn(id, text, signal, {
+    const next = this.followUps.shift()!;
+    this.runJob(next.id, undefined, (signal) =>
+      this.gatedTurn(next.id, next.text, signal, {
         admitted: () => {
-          for (const f of followUps) {
-            this.history.push(f.text.trim());
-            this.steerAck(f.id, "applied", "Applied as a follow-up turn.");
-          }
+          this.history.push(next.text.trim());
+          this.steerAck(next.id, "applied", "Applied as a follow-up turn.");
         },
         refused: (message) => {
-          for (const f of followUps) this.steerAck(f.id, "cancelled", `${message} Your message is back in the composer.`, f.text);
+          // The messages behind it would be refused too: return them now, in order, rather than probing again for each.
+          for (const f of [next, ...this.followUps.splice(0)]) this.steerAck(f.id, "cancelled", `${message} Your message is back in the composer.`, f.text);
         },
       }),
     );
@@ -533,15 +553,19 @@ export class SidecarServer {
         open.set(dispatch, evidence);
         this.emit({ type: "tool.start", turn_id: turnId, call_id: callId, tool, subject, evidence });
       },
-      onToolEnd: ({ dispatch, callId, tool: rawTool, success, output, error }) => {
+      onToolEnd: ({ dispatch, callId, tool: rawTool, success, output, error, denied }) => {
         const tool = rawTool;
         const evidence = open.get(dispatch) ?? "";
         open.delete(dispatch);
-        this.evidence.end(evidence, success, output, error);
-        const summary = toolSummary(success, output, error);
+        const declined = denied === true && this.operatorDeclined;
+        if (denied === true) this.operatorDeclined = false;
+        this.evidence.end(evidence, success, output, error, declined);
+        // A denial is the operator's own decision: say so in a sentence, not the model-facing text.
+        const summary: ToolSummary = declined ? { summary: DENIED_BY_OPERATOR, lines: 1 } : toolSummary(success, output, error);
         this.emit({
           type: "tool.end", turn_id: turnId, call_id: callId, tool, success, evidence,
           ...summary,
+          ...(declined ? { denied: true as const } : {}),
         });
       },
       onProviderRecovery: ({ record, discardedPartialOutput }) => {
@@ -735,6 +759,7 @@ export class SidecarServer {
   }
 
   private requestApproval(turnId: string, signal: AbortSignal, tool: string, args: Record<string, any>): Promise<boolean> {
+    this.operatorDeclined = false;
     if (this.alwaysApprove) return Promise.resolve(true);
     if (signal.aborted) return Promise.resolve(false);
     const id = `approval-${++this.approvalSeq}`;
@@ -771,6 +796,8 @@ export class SidecarServer {
       this.app.getAgent().setApprovalMode("auto");
       this.emitSessionState();
     }
+    // Only the operator's own Deny says "denied by you"; a cancelled turn or a shutdown settles the approval as false too.
+    this.operatorDeclined = !approved;
     pending.settle(approved);
   }
 
@@ -868,6 +895,7 @@ export class SidecarServer {
         output: outcome.output,
         ...(outcome.format ? { format: outcome.format } : {}),
         ...(outcome.composer !== undefined ? { composer: outcome.composer } : {}),
+        ...(outcome.clipboard !== undefined ? { clipboard: outcome.clipboard } : {}),
       });
     });
   }
@@ -882,6 +910,7 @@ export class SidecarServer {
         command: outcome.command,
         success: outcome.success,
         output: outcome.output,
+        ...(outcome.clipboard !== undefined ? { clipboard: outcome.clipboard } : {}),
       });
     } catch (err) {
       this.emit({ type: "error", id, code: "INTERNAL", message: errorText(err) });
@@ -1042,6 +1071,7 @@ export class SidecarServer {
     if (!session) return { ok: false, message: `Session not found: ${id || "latest"}` };
     if (!Array.isArray(session.messages)) return { ok: false, message: `Session ${session.id} is unreadable: it has no message list.` };
     if (session.workspace && fs.existsSync(session.workspace)) this.setWorkspace(session.workspace);
+    // The id changes together with the conversation, so a save after a partial restore never overwrites the previous session's record.
     this.sessionId = session.id;
     // What compaction replaced stays searchable after a resume (read_archive): only compactions this record committed.
     const archiveNotice = this.app.getAgent().restoreConversation(session, (committed) => this.app.getSessionManager().readArchivedHistory(session.id, committed));
@@ -1092,6 +1122,7 @@ export class SidecarServer {
   private shutdown(): Promise<void> {
     for (const signIn of this.signIns.values()) signIn.cancel();
     this.signIns.clear();
+    for (const list of this.modelLists.values()) list.abort();
     this.shutdownPromise ??= (async () => {
       this.startupProbeAbort.abort();
       this.turnAbort?.abort(new Error("sidecar shutdown"));
@@ -1158,20 +1189,8 @@ export function formatSafeSidecarStdoutSummary(chunk: string | Uint8Array): stri
   return `[sidecar debug] stdout chunk suppressed (${bytes} bytes)\n`;
 }
 
-/**
- * Sanitize text bound for a sink that is not a protocol event: the diff kept on disk, the evidence ledger, stderr
- * diagnostics. Events themselves are sanitized exactly once, by formatSafeSidecarEvent, so emit() call sites pass raw
- * text and never wrap it.
- */
-export function formatSafeSidecarText(value: string): string {
-  try {
-    const safe = redactForPersistence(value);
-    if (typeof safe !== "string") throw new Error("unexpected sanitized value type");
-    return visibleControls(redactSecrets(safe));
-  } catch {
-    return "[diagnostic suppressed: credential sanitization failed]";
-  }
-}
+export { formatSafeSidecarText } from "./safe_text.js";
+import { formatSafeSidecarText } from "./safe_text.js";
 
 /**
  * For a limit that applies to a fragment inside a larger sentence (so it cannot be a field limit): redact the full
@@ -1208,7 +1227,7 @@ export const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<
   "approval.request": { tool: 200, subject: MAX_TEXT_FIELD, preview: MAX_TEXT_FIELD },
   "checkpoint.choice.request": { message: MAX_TEXT_FIELD },
   "turn.result": { heading: MAX_TEXT_FIELD, line: MAX_TEXT_FIELD },
-  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: MAX_PASTE },
+  "slash.result": { output: MAX_SLASH_OUTPUT, prompt: MAX_TEXT_FIELD, composer: MAX_PASTE, clipboard: OSC52_MAX_BYTES },
   notice: { text: MAX_TEXT_FIELD, detail: MAX_TEXT_FIELD },
   error: { message: MAX_TEXT_FIELD },
   "provider.auth": { instructions: MAX_TEXT_FIELD },

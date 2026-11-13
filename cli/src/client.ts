@@ -610,6 +610,13 @@ function classifyTransportError(err: any, operatorSignal: AbortSignal | undefine
     : new InferenceError("network_error", "transport", `Inference request failed: ${msg}`, { requestId, transportCause, ...classification });
 }
 
+/** A connection reset or closed this soon after the attempt began, on an endpoint that answered before, is a keep-alive race. */
+const STALE_CONNECTION_WINDOW_MS = 2_000;
+/** A server that idle-closes one pooled connection has usually closed its siblings too: each resend uses one up. */
+const STALE_RESEND_BUDGET = 3;
+const STALE_RESEND_WINDOW_MS = 60_000;
+const CONNECTION_CLOSED_CODES = new Set(["UND_ERR_SOCKET", "ECONNRESET", "EPIPE"]);
+
 export class LocalLlmClient {
   private endpoints: string[] = [];
   private activeEndpointIndex: number = 0;
@@ -875,6 +882,47 @@ export class LocalLlmClient {
     }
   }
 
+  /**
+   * `fetch` that resends when a reused keep-alive connection was closed under the request (TUI audit D-20). On a healthy
+   * server an idle timeout can fire as the next request is written; the request then fails with `UND_ERR_SOCKET: other
+   * side closed` or ECONNRESET, which classified as a temporary outage and made the turn wait and print a notice.
+   * RFC 9112 section 9.3.1 allows resending in that case. It is done only for a URL under a configured endpoint (the
+   * tokenize fallback is not) that has answered before (a first-use reset is a real failure), within moments of the
+   * attempt (a server that dies mid-generation fails later), and not after an abort or timeout; only a thrown fetch is
+   * resent, never a response. A server that reads a request and then dies would see it again and again, so resends are
+   * budgeted: a resend that fails again is charged to its endpoint and kind of request (probe or POST), at most
+   * `STALE_RESEND_BUDGET` such failures in `STALE_RESEND_WINDOW_MS`, counted across requests and cleared when that
+   * kind of request succeeds without a resend. A first failure is free, so a burst of concurrent requests that all meet
+   * stale connections each still get their resend. Once the budget is spent the failure is reported as any other.
+   */
+  private async fetchResendingStale(url: string, init: RequestInit): Promise<Response> {
+    const started = Date.now();
+    const endpoint = this.endpoints.find((ep) => url === ep || url.startsWith(`${ep}/`));
+    const key = endpoint && `${endpoint} ${init.method ?? "GET"}`;
+    for (let resends = 0; ; resends++) {
+      try {
+        const response = await fetch(url, init);
+        // Only an answer that is not a server error hands the budget back: a 5xx means the server was reached and unhealthy.
+        if (key && resends === 0 && response.status < 500) this.staleResends.delete(key);
+        return response;
+      } catch (err: any) {
+        const closed = err?.name !== "TimeoutError" && err?.name !== "AbortError" && transportCauseChain(err).some((c) => c.code !== undefined && CONNECTION_CLOSED_CODES.has(c.code));
+        if (!closed || init.signal?.aborted || Date.now() - started > STALE_CONNECTION_WINDOW_MS || !endpoint || !key || !this.hasEverSucceeded(endpoint)) throw err;
+        if (!this.mayResend(key, resends > 0) || resends >= STALE_RESEND_BUDGET) throw err;
+      }
+    }
+  }
+
+  /** Whether `key` may be resent now; `failedResend` records that the previous resend failed too. */
+  private mayResend(key: string, failedResend: boolean): boolean {
+    const now = this.resendClock();
+    let budget = this.staleResends.get(key);
+    if (!budget || now - budget.since > STALE_RESEND_WINDOW_MS) budget = { used: 0, since: now };
+    if (failedResend) budget.used++;
+    this.staleResends.set(key, budget);
+    return budget.used < STALE_RESEND_BUDGET;
+  }
+
   /** True once `ep` has completed a request or healthy probe in this session (REQ-TUI-105). */
   public hasEverSucceeded(ep: string = this.endpoint): boolean {
     return this.everSucceededEndpoints.has(ep);
@@ -1062,6 +1110,10 @@ export class LocalLlmClient {
   public onStreamStall?: (event: StreamStallEvent) => void;
   /** Test seam: the clock the stall notice runs on. */
   public stallScheduler?: StallScheduler;
+  /** Failed resends per endpoint and request kind in the current window (see `fetchResendingStale`). */
+  private readonly staleResends = new Map<string, { used: number; since: number }>();
+  /** The clock of the resend budget; a test replaces it. */
+  public resendClock: () => number = Date.now;
 
   private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string, streaming = false): StreamWatchdog {
     const disclosure = this.disclosureOf(currentEp ?? this.endpoint);
@@ -1225,21 +1277,21 @@ export class LocalLlmClient {
     );
   }
 
-  async listModels(): Promise<string[]> {
+  async listModels(signal?: AbortSignal): Promise<string[]> {
     return this.executeWithFailover("listModels", async (currentEp) => {
       await this.prepareCredential(currentEp);
       const query = this.conn.protocol === "anthropic-messages" ? "?limit=1000" : this.conn.providerId === "chatgpt" ? "?client_version=1.0.0" : "";
       const url = `${currentEp}/models${query}`;
       const res = await fetch(url, {
         headers: this.authorization(url),
-        signal: metadataSignal(),
+        signal: metadataSignal(signal),
         ...this.fetchPolicy(),
       });
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
         const retryRes = await fetch(url, {
           headers: this.authorization(url),
-          signal: metadataSignal(),
+          signal: metadataSignal(signal),
           ...this.fetchPolicy(),
         });
         if (retryRes.ok) return modelIds(await retryRes.json());
@@ -1544,7 +1596,7 @@ export class LocalLlmClient {
         ? { content: JSON.stringify({ messages: body.messages, ...(body.tools ? { tools: body.tools } : {}) }), ...body }
         : body;
       try {
-        res = await fetch(url, {
+        res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...this.authorization(url), "X-Request-ID": requestId, ...this.routingHeaders(ep) },
           body: JSON.stringify(reqBody),
@@ -1613,7 +1665,7 @@ export class LocalLlmClient {
   private async probeEndpointAt(idx: number, signal: AbortSignal | undefined, timeoutMs: number | undefined): Promise<ProbeResult> {
     const timeout = AbortSignal.timeout(timeoutMs ?? 5_000);
     try {
-      const res = await fetch(`${this.endpoints[idx]}/models`, {
+      const res = await this.fetchResendingStale(`${this.endpoints[idx]}/models`, {
         headers: this.authorization(this.endpoints[idx]),
         signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
         ...this.fetchPolicy(),
@@ -1721,7 +1773,7 @@ export class LocalLlmClient {
       let res: Response;
       let data: ChatCompletionResponse;
       try {
-        res = await fetch(url, {
+        res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1899,7 +1951,7 @@ export class LocalLlmClient {
       const watchdog = this.createWatchdog(signal, currentEp, true);
       let res: Response;
       try {
-        res = await fetch(url, {
+        res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1914,8 +1966,8 @@ export class LocalLlmClient {
         });
       } catch (err: any) {
         watchdog.done();
-        // No resend here: a rejected fetch does not prove the gateway never admitted the request, and a
-        // second attempt would replace this error with its own. Recovery belongs to the agent loop.
+        // A resend happens only inside fetchResendingStale (stale keep-alive, before any response byte); any other
+        // rejection goes to the agent loop.
         throw classifyTransportError(err, signal, requestId, "connect");
       }
 
@@ -2202,7 +2254,7 @@ export class LocalLlmClient {
       const watchdog = this.createWatchdog(signal, currentEp, stream);
       let res: Response;
       try {
-        res = await fetch(url, {
+        res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...this.authorization(url), ...this.providerHeaders(outbound.messages), "X-Request-ID": requestId },
           body: JSON.stringify(req.body),
@@ -2338,7 +2390,7 @@ export class LocalLlmClient {
 
       const outboundText = egressEvaluation.sanitizedText || text;
 
-      const res = await fetch(url, {
+      const res = await this.fetchResendingStale(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -1,0 +1,54 @@
+# D-12 after: deny a delete approval (the wait was 16.6 s), binary /tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/scratchpad/tpol-g1/debug/nexus-tui
+
+## 100x24 after pressing n
+ NEXUS   app  model m  review mode
+  × denied Delete base.txt
+  × Delete base.txt — Denied by you
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠏ waiting for the agent · 0:02 · esc cancels ──────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+## 40x24 after pressing n
+ NEXUS   app  model m  review mode
+  × denied Delete base.txt
+  × Delete base.txt — Denied by you
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ⠋ waiting for the agent · 0:03 · e…────
+› type to steer · esc cancels
+

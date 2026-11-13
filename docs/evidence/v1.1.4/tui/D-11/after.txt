@@ -1,0 +1,82 @@
+# D-11 after: /tmp/claude-1000/-home-mike-nexus-code/6473a60e-9fa2-4bd9-9d0c-35324295cf68/scratchpad/nexus-tui-after
+=== D-11 100 columns: session started with -e http://127.0.0.1:27951/v1 -m fake-model; /model
+--- /model at 100x30
+ NEXUS   nexus-polish-repo-rewfwd75  ⎇ main  model fake-model  mode: auto  context 4018/65536  local
+  ╭ Select model ────────────────────────────────────────────────────────────────────────────────╮
+  │› type to filter by provider or model                                                         │
+  │                                                                                              │
+  │This session (127.0.0.1:27951)  local                                                         │
+  │  ● fake-model                                                                                │
+  │    other-model                                                                               │
+  │Appliance (localhost:1234)  local · could not list models                                     │
+  │  no models listed: fetch failed                                                              │
+  │OpenRouter  cloud                                                                             │
+  │  + Connect OpenRouter…                                                                       │
+  │OpenAI  cloud                                                                                 │
+  │  + Connect OpenAI…                                                                           │
+  │Anthropic  cloud                                                                              │
+  │  + Connect Anthropic…[15;98H│
+  │ChatGPT plan  cloud                                                                           │
+  │  + Connect ChatGPT plan…                                                                     │
+  │GitHub Copilot  cloud                                                                         │
+  │  + Connect GitHub Copilot…                                                                   │
+  │ enter use  ctrl+p connect a provider  ↑↓ move  esc close                                     │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ esc close · ↑↓ scroll ─────────────────────────────────────────────────────────────────────────────
+›
+
+=== D-11 60 columns: session started with -e http://127.0.0.1:27951/v1 -m fake-model; /model
+--- /model at 60x30
+ NEXUS   nexus-polish-repo-rewfwd75  ⎇ main  mode: auto
+ ╭ Select model ──────────────────────────────────────────╮
+ │› type to filter by provider or model                   │
+ │                                                        │
+ │This session (127.0.0.1:27951)  local                   │
+ │  ● fake-model                                          │
+ │    other-model                                         │
+ │Appliance (localhost:1234)  local · could not list model│
+ │  no models listed: fetch failed                        │
+ │OpenRouter  cloud                                       │
+ │  + Connect OpenRouter…                                 │
+ │OpenAI  cloud                                           │
+ │  + Connect OpenAI…                                     │
+ │Anthropic  cloud         yours.                         │
+ │  + Connect Anthropic…                                  │
+ │[38;5;15;49mChatGPT plan  cloud                         │
+ │  + Connect ChatGPT plan…                               │
+ │GitHub Copilot  cloud                                   │
+ │  + Connect GitHub Copilot…                             │
+ │ enter use  ctrl+p connect a provider  ↑↓ move  esc clos│
+ ╰────────────────────────────────────────────────────────╯
+
+ esc close · ↑↓ scroll ─────────────────────────────────────
+›
+
+=== D-11 40 columns: session started with -e http://127.0.0.1:27951/v1 -m fake-model; /model
+--- /model at 40x30
+ NEXUS   nexus-polish-repo-rewfwd75
+ ╭ Select model ──────────────────────╮
+ │› type to filter by provider or mode│
+ │                                    │
+ │This session (127.0.0.1:27951)  loca│
+ │  ● fake-model                      │
+ │    other-model                     │
+ │Appliance (localhost:1234)  local · │
+ │  no models listed: fetch failed    │
+ │OpenRouter  cloud                   │
+ │  + Connect OpenRouter…             │
+ │OpenAI  cloud                       │
+ │  + Connect OpenAI…                 │
+ │Anthropic  cloud                    │
+ │  + Connect Anthropic…              │
+ │ChatGPT plan  cloud                 │
+ │  + Connect ChatGPT plan…           │
+ │GitHub Copilot  cloud               │
+ │  + Connect GitHub Copilot…         │
+ │ enter use  ctrl+p connect a provide│
+ ╰────────────────────────────────────╯
+
+ esc close · ↑↓ scroll ─────────────────
+›
+

@@ -113,6 +113,9 @@ impl Entry {
     }
 }
 
+/// What a call the operator declined says, in place of the model-facing sentence the sidecar sends the model.
+const DENIED_BY_YOU: &str = "Denied by you";
+
 /// A tool call's timing and, for commands, its output. Timing comes from this client's clock, so it is
 /// presentation, not identity: two runs compare equal when their output does.
 #[derive(Clone, Debug, Default)]
@@ -185,7 +188,7 @@ impl SteerState {
     }
 }
 
-/// What the running turn reported it is doing, and since when (this client's clock).
+/// What the running turn reported it is doing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Activity {
     pub phase: String,
@@ -193,10 +196,12 @@ pub struct Activity {
     pub segment: u64,
     pub tool: Option<String>,
     pub subject: Option<String>,
-    pub since: Instant,
     /// The turn's step budget and time limit, when the sidecar reports them.
     pub max_steps: Option<u64>,
     pub max_minutes: Option<u64>,
+    /// Reply text has arrived during this phase and step (the model is writing, not only thinking). A new phase or
+    /// step starts without it.
+    pub text_streaming: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -556,6 +561,12 @@ pub struct LiveState {
     pub shift_enter: bool,
     /// Mouse capture is on: the wheel scrolls and a click selects a tool call.
     pub mouse: bool,
+    /// The terminal clipboard (OSC 52) may be written; `NEXUS_OSC52=off` clears it.
+    pub osc52: bool,
+    /// On the stopped-sidecar screen with a draft: Esc was pressed once and the screen asks for it again.
+    pub quit_asked: bool,
+    /// Text the live loop is to put on the terminal clipboard before the next frame (written once, then cleared).
+    clipboard: Option<String>,
 }
 
 impl LiveState {
@@ -593,6 +604,9 @@ impl LiveState {
             depth: Depth::TrueColor,
             shift_enter: false,
             mouse: false,
+            osc52: true,
+            quit_asked: false,
+            clipboard: None,
             anchor: None,
             last_reviewable: None,
             unseen: false,
@@ -626,8 +640,35 @@ impl LiveState {
                 self.composer.line_end();
             }
             self.composer.insert("\n");
+            // Enter would send everything in the draft as one message: say so, never join messages silently.
+            self.transcript.push(Entry::Notice(
+                "Another message was added to the draft; Enter sends the whole draft as one message; edit the draft if you want them sent separately.".into(),
+            ));
         }
         self.composer.paste(text);
+    }
+
+    /// A `/copy` that found no clipboard tool: the text is queued for an OSC 52 write by the live loop, which owns the
+    /// terminal. Refused here, with a line saying so, when the switch is off or the text is too large for one request.
+    fn request_clipboard(&mut self, text: String) {
+        if text.is_empty() {
+            // An empty OSC 52 payload clears the clipboard on xterm-family terminals.
+        } else if !self.osc52 {
+            self.transcript.push(Entry::Notice("The terminal clipboard request was not sent: NEXUS_OSC52=off is set for the TUI.".into()));
+        } else if text.len() > crate::live::OSC52_MAX_BYTES {
+            self.transcript.push(Entry::Notice(format!(
+                "The terminal clipboard request was not sent: {} bytes is over the {} an OSC 52 request carries.",
+                text.len(),
+                crate::live::OSC52_MAX_BYTES
+            )));
+        } else {
+            self.clipboard = Some(text);
+        }
+    }
+
+    /// The text queued for the terminal clipboard, once.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard.take()
     }
 
     /// Commands queued while applying sidecar events.
@@ -658,6 +699,11 @@ impl LiveState {
             Some(Overlay::Models(picker)) => picker.local_endpoint_setup_id.clone(),
             _ => None,
         };
+        // A list still being fetched is cancelled with the picker.
+        let listing = match &self.overlay {
+            Some(Overlay::Models(picker)) if matches!(picker.catalog, Fetch::Waiting) => Some(picker.request.clone()),
+            _ => None,
+        };
         let Some(Overlay::Models(picker)) = &mut self.overlay else {
             return None;
         };
@@ -668,7 +714,9 @@ impl LiveState {
         match picker.on_key(key)? {
             PickerIntent::Close => {
                 self.overlay = None;
-                local_setup_id.map(|id| Action::Send(Command::ProviderLocalCancel { id }))
+                local_setup_id
+                    .map(|id| Action::Send(Command::ProviderLocalCancel { id }))
+                    .or_else(|| listing.map(|id| Action::Send(Command::ProviderCancel { id })))
             }
             PickerIntent::Select { provider, model } => {
                 self.overlay = None;
@@ -927,11 +975,8 @@ impl LiveState {
                 if self.activity.as_ref().is_none_or(|previous| previous.step != step) {
                     self.assistant_break = true;
                 }
-                let since = match &self.activity {
-                    Some(previous) if previous.phase == phase && previous.tool == tool => previous.since,
-                    _ => Instant::now(),
-                };
-                self.activity = Some(Activity { phase, step, segment, tool, subject, since, max_steps, max_minutes });
+                let text_streaming = self.activity.as_ref().is_some_and(|previous| previous.phase == phase && previous.step == step && previous.text_streaming);
+                self.activity = Some(Activity { phase, step, segment, tool, subject, max_steps, max_minutes, text_streaming });
             }
             Event::FileDiff {
                 call_id,
@@ -984,13 +1029,18 @@ impl LiveState {
                 }
             }
             // One entry per model reply: text after a new step (a tool call, a continuation) starts a new one.
-            Event::AssistantDelta { turn_id, text } => match self.transcript.last_mut() {
-                Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id && !self.assistant_break => body.push_str(&text),
-                _ => {
-                    self.assistant_break = false;
-                    self.transcript.push(Entry::Assistant { turn_id, text });
+            Event::AssistantDelta { turn_id, text } => {
+                if let Some(activity) = self.activity.as_mut().filter(|_| !text.is_empty()) {
+                    activity.text_streaming = true;
                 }
-            },
+                match self.transcript.last_mut() {
+                    Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id && !self.assistant_break => body.push_str(&text),
+                    _ => {
+                        self.assistant_break = false;
+                        self.transcript.push(Entry::Assistant { turn_id, text });
+                    }
+                }
+            }
             Event::ToolStart { call_id, tool, subject, evidence } => {
                 if !HIDDEN_TOOLS.contains(&tool.as_str()) {
                     self.transcript.push(Entry::Tool {
@@ -1005,15 +1055,23 @@ impl LiveState {
                     });
                 }
             }
-            Event::ToolEnd { call_id, tool, success, summary, lines, preview, exit_code, duration_ms, timed_out } => {
+            Event::ToolEnd { call_id, tool, success, summary, lines, preview, exit_code, duration_ms, timed_out, denied } => {
                 let open = self.transcript.iter_mut().rev().find(|entry| {
                     matches!(entry, Entry::Tool { call_id: id, tool: name, status: ToolStatus::Running, .. }
                         if *id == call_id && *name == tool)
                 });
                 if let Some(Entry::Tool { status, summary: slot, diff, run, .. }) = open {
                     *status = if success { ToolStatus::Succeeded } else { ToolStatus::Failed };
-                    *slot = summary;
-                    run.duration_ms = duration_ms.or_else(|| run.started.map(|t| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX)));
+                    if denied {
+                        // The operator's own decision, in a sentence. The call never ran, so the time it waited for the
+                        // decision is not a run time: none is shown.
+                        *status = ToolStatus::Failed;
+                        *slot = DENIED_BY_YOU.to_string();
+                        run.duration_ms = None;
+                    } else {
+                        *slot = summary;
+                        run.duration_ms = duration_ms.or_else(|| run.started.map(|t| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX)));
+                    }
                     if let Some(preview) = preview {
                         run.output = Some(ToolOutput { preview, lines, exit_code, timed_out });
                     }
@@ -1152,8 +1210,12 @@ impl LiveState {
                 output,
                 format,
                 composer,
+                clipboard,
                 prompt,
             } => {
+                if let Some(text) = clipboard {
+                    self.request_clipboard(text);
+                }
                 if command == "clear" && success {
                     self.sent_prompt = None;
                     self.transcript.clear();
@@ -1306,6 +1368,8 @@ impl LiveState {
     pub fn fail(&mut self, reason: String, code: Option<i32>, stderr: Vec<String>) {
         self.submit_when_ready = false;
         self.close_approval();
+        // No panel stays open on the stopped-sidecar screen: it would hide the draft the keys now edit.
+        self.overlay = None;
         self.interrupt_running_tools();
         self.session.busy = false;
         self.cancel_requested = false;
@@ -1358,6 +1422,7 @@ impl LiveState {
         }
         // The new sidecar generates its own session id and has persisted nothing under it yet.
         self.session_saved = false;
+        self.quit_asked = false;
         self.link = Link::Connecting;
         self.session.busy = false;
         self.cancel_requested = false;
@@ -1374,6 +1439,7 @@ impl LiveState {
     pub fn on_paste_at(&mut self, text: &str, now: Instant) {
         // A paste is input just like typing: an approval panel that appears right after it starts with its guard on.
         self.last_key = Some(now);
+        self.quit_asked = false;
         if matches!(self.overlay, Some(Overlay::Paste { .. })) {
             return;
         }
@@ -1396,7 +1462,7 @@ impl LiveState {
             }
             _ => {}
         }
-        if !matches!(self.link, Link::Crashed { .. }) && self.overlay.is_none() {
+        if self.overlay.is_none() {
             self.slash_pick = 0;
             self.slash_dismissed = false;
             self.composer.paste(text);
@@ -1868,11 +1934,26 @@ impl LiveState {
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if matches!(self.link, Link::Crashed { .. }) {
+            // `r` and `q` are commands only while the draft is empty; once there is text they are text, and the same
+            // actions are the chords ctrl+r and esc. Everything else edits the draft, which is kept and shown (and
+            // survives a restart), but cannot be sent to a stopped agent.
+            let plain = !ctrl && !key.modifiers.contains(KeyModifiers::ALT);
+            let empty = self.composer.is_empty();
+            // Esc with a draft only asks; a second Esc in a row quits and discards it. Any other key cancels the ask.
+            let esc_asked = std::mem::take(&mut self.quit_asked);
             return match key.code {
-                KeyCode::Char('r') if !ctrl => Some(Action::Restart),
-                KeyCode::Char('q') | KeyCode::Esc => Some(Action::Quit),
+                KeyCode::Esc if !empty && !esc_asked => {
+                    self.quit_asked = true;
+                    None
+                }
+                KeyCode::Char('r') if plain && empty => Some(Action::Restart),
+                KeyCode::Char('q') if plain && empty => Some(Action::Quit),
+                KeyCode::Char('r') if ctrl => Some(Action::Restart),
+                KeyCode::Esc => Some(Action::Quit),
                 KeyCode::Char('c') if ctrl => Some(Action::Quit),
-                _ => None,
+                // No panel can open on this screen, and the focus stays on the draft.
+                KeyCode::Char('o' | 'x' | 'd') if ctrl => None,
+                _ => self.on_composer_key(key),
             };
         }
         if key.code == KeyCode::Char('c') && ctrl {
@@ -1991,6 +2072,11 @@ impl LiveState {
                 let id = id.clone();
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderLocalCancel { id }));
+            }
+            Some(Overlay::Models(Picker { catalog: Fetch::Waiting, request, .. })) => {
+                let id = request.clone();
+                self.overlay = None;
+                return Some(Action::Send(Command::ProviderCancel { id }));
             }
             Some(
                 Overlay::Help { .. }
@@ -2707,9 +2793,18 @@ pub fn outcome_for(turn: &Value) -> Outcome {
         }
         ("COMPLETED", _, _) => ("Done · result not established".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
         ("INTERRUPTED", _, _) => {
-            let phase = turn["interruption"]["phase"].as_str().unwrap_or("work").replace('_', " ");
+            // The controller's phase names are internal; say when it was in the operator's words.
+            let when = match turn["interruption"]["phase"].as_str().unwrap_or("work") {
+                "inference" => "while the model was answering".to_string(),
+                "provider_wait" => "while waiting for the provider".to_string(),
+                "tool_dispatch" => "as tools were being started".to_string(),
+                "tool_settling" => "while a tool was finishing".to_string(),
+                "confirmation" => "while waiting for your approval".to_string(),
+                "between_steps" => "between steps".to_string(),
+                other => format!("during {}", other.replace('_', " ")),
+            };
             let skipped = turn["interruption"]["undispatchedToolCalls"].as_u64().unwrap_or(0);
-            let mut cause = format!("You stopped the turn during {phase}.");
+            let mut cause = format!("You stopped the turn {when}.");
             if skipped > 0 {
                 cause.push_str(&format!(" {skipped} planned tool call{} did not run.", if skipped == 1 { "" } else { "s" }));
             }
@@ -2938,6 +3033,30 @@ mod tests {
     }
 
     #[test]
+    fn two_returned_messages_are_never_joined_silently() {
+        // D-18: two steering messages typed during a wait came back on Esc as one draft, and Enter then sent them as
+        // one prompt without a word about it.
+        let mut state = busy();
+        type_text(&mut state, "SC:e500 go");
+        state.on_key(key(KeyCode::Enter));
+        type_text(&mut state, "SC:reset go");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"SC:e500 go"}"#));
+        let notices = |state: &LiveState| state.transcript.iter().filter(|e| matches!(e, Entry::Notice(t) if t.contains("one message"))).count();
+        assert_eq!(notices(&state), 0, "the first returned message lands in an empty draft: nothing is joined yet");
+        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g2","status":"cancelled","message":"Not applied","text":"SC:reset go"}"#));
+        assert_eq!(state.composer.expand(state.composer.text()), "SC:e500 go\nSC:reset go", "both are kept, one per line");
+        assert_eq!(notices(&state), 1, "the join is announced: {:?}", state.transcript);
+        let Some(Entry::Notice(text)) = state.transcript.iter().rev().find(|e| matches!(e, Entry::Notice(t) if t.contains("one message"))) else { panic!() };
+        assert!(text.contains("one message") && text.contains("edit"), "{text}");
+        // A message typed by hand and then a returned one is the same join.
+        let mut typed = busy();
+        typed.composer = "draft already here".into();
+        typed.restore_draft("returned text");
+        assert_eq!(notices(&typed), 1);
+    }
+
+    #[test]
     fn steering_the_sidecar_never_acknowledged_returns_when_it_crashes() {
         let mut state = busy();
         type_text(&mut state, "add tests too");
@@ -2990,7 +3109,6 @@ mod tests {
         let first = state.activity.clone().unwrap();
         assert_eq!((first.step, first.segment, first.tool.as_deref()), (31, 2, Some("run_command")));
         state.apply(ev(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#));
-        assert_eq!(state.activity.as_ref().unwrap().since, first.since, "the same phase keeps its start time");
         state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"H","line":"L","turn":{"execution":"COMPLETED","outcome":"VERIFIED"},"model_summary":null}"#));
         assert!(state.activity.is_none());
         state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#));
@@ -3928,9 +4046,6 @@ mod tests {
                 stderr: vec!["boom".into()]
             }
         );
-        assert_eq!(state.on_key(key(KeyCode::Char('x'))), None);
-        state.on_paste("ignored");
-        assert_eq!(state.composer, "");
         state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#));
         assert!(
             matches!(state.link, Link::Crashed { .. }),
@@ -3944,6 +4059,78 @@ mod tests {
         assert!(
             matches!(state.transcript.last(), Some(Entry::Notice(text)) if text.contains("does not remember"))
         );
+    }
+
+    #[test]
+    fn on_the_stopped_sidecar_screen_typing_fills_the_draft_and_r_q_act_only_on_an_empty_draft() {
+        let mut state = ready();
+        state.fail("The agent sidecar exited unexpectedly.".into(), Some(1), Vec::new());
+        // A character other than r or q starts a draft that is kept and shown; once there is text, r and q are text.
+        assert_eq!(state.on_key(key(KeyCode::Char('h'))), None);
+        for c in "ello r and q".chars() {
+            assert_eq!(state.on_key(key(KeyCode::Char(c))), None, "{c:?} typed into a draft is text, never a command");
+        }
+        assert_eq!(state.composer.text(), "hello r and q");
+        state.on_paste(" pasted");
+        assert_eq!(state.composer.text(), "hello r and q pasted", "a paste lands in the draft too");
+        assert_eq!(state.on_key(key(KeyCode::Backspace)), None);
+        assert_eq!(state.composer.text(), "hello r and q paste");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "Enter does not send to a stopped agent");
+        assert_eq!(state.composer.text(), "hello r and q paste");
+        // With text in the draft the restart and quit keys are chords that cannot be typed by accident.
+        assert_eq!(state.on_key(ctrl('r')), Some(Action::Restart));
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Quit), "ctrl+c quits at once");
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None, "the first Esc over a draft only asks");
+        assert!(state.quit_asked);
+        assert_eq!(state.on_key(key(KeyCode::Char('x'))), None, "another key cancels the ask");
+        assert!(!state.quit_asked);
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Quit), "the second Esc in a row quits");
+        assert_eq!(state.composer.text(), "hello r and q pastex", "nothing was cleared by asking");
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        state.on_paste("!");
+        assert!(!state.quit_asked, "a paste cancels the ask like any other input");
+        state.composer.clear();
+        state.composer.insert("hello r and q paste");
+        // The draft survives the restart.
+        state.restarted();
+        assert_eq!(state.composer.text(), "hello r and q paste");
+        // An empty draft: r and q are the commands again.
+        let mut empty = ready();
+        empty.fail("x".into(), None, Vec::new());
+        assert_eq!(empty.on_key(key(KeyCode::Char('q'))), Some(Action::Quit));
+        assert_eq!(empty.on_key(key(KeyCode::Char('r'))), Some(Action::Restart));
+        assert_eq!(empty.composer.text(), "");
+    }
+
+    #[test]
+    fn a_copy_result_queues_the_clipboard_text_once_and_the_switch_and_size_limit_refuse_it() {
+        let result = |clipboard: &str| {
+            ev(&format!(r#"{{"v":1,"type":"slash.result","id":"s1","command":"copy","success":true,"output":"asked the terminal","clipboard":"{clipboard}"}}"#))
+        };
+        let mut state = ready();
+        state.apply(result("hello\\u001b[2J"));
+        assert_eq!(state.take_clipboard().as_deref(), Some("hello\u{1b}[2J"));
+        assert_eq!(state.take_clipboard(), None, "written once");
+        state.osc52 = false;
+        state.apply(result("hello"));
+        assert_eq!(state.take_clipboard(), None);
+        assert!(state.transcript.iter().any(|e| matches!(e, Entry::Notice(text) if text.contains("NEXUS_OSC52=off"))));
+        state.osc52 = true;
+        state.apply(result(""));
+        assert_eq!(state.take_clipboard(), None, "an empty text would clear the clipboard");
+        state.apply(result(&"x".repeat(crate::live::OSC52_MAX_BYTES + 1)));
+        assert_eq!(state.take_clipboard(), None);
+        assert!(state.transcript.iter().any(|e| matches!(e, Entry::Notice(text) if text.contains("over the"))));
+    }
+
+    #[test]
+    fn a_stopped_sidecar_closes_open_panels_so_the_draft_is_visible_and_r_still_restarts() {
+        let mut state = ready();
+        state.overlay = Some(Overlay::Help { scroll: 0 });
+        state.fail("x".into(), None, Vec::new());
+        assert!(state.overlay.is_none());
+        assert_eq!(state.on_key(key(KeyCode::Char('r'))), Some(Action::Restart));
     }
 
     #[test]
@@ -4496,6 +4683,25 @@ mod tests {
         let outbox = state.take_outbox();
         assert!(matches!(outbox.as_slice(), [Action::Send(Command::ModelsList { .. })]), "reopens the picker for the provider");
         assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("anthropic")));
+    }
+
+    #[test]
+    fn closing_the_picker_while_models_are_still_being_listed_cancels_the_fetch() {
+        // D-11: the listing is bounded and cancellable; Esc on "Listing models" stops the sidecar's request.
+        let mut state = ready();
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id })));
+        assert!(!matches!(state.overlay, Some(Overlay::Models(_))));
+        // Once the list has arrived there is nothing to cancel.
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        state.apply(catalog(&id));
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
+        // Ctrl+C closes a picker that is still listing the same way.
+        type_text(&mut state, "/model");
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::ProviderCancel { id })));
     }
 
     #[test]

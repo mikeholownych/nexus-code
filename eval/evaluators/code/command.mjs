@@ -64,8 +64,12 @@ export function createContainedRunner(dependencies = {}) {
       const result = await runProcess(spec, { outputLimit: OUTPUT_LIMIT, resources });
       // The supervisor turns a killed payload into an exit code and keeps the evidence in its report; do not lose it.
       const killedByMemory = (result.resources?.oomKills ?? 0) > 0;
+      // A fork refused at pids.max is told only when the command did not succeed: a command that handled the refusal
+      // (retried, fell back) and finished cleanly is not turned into a failure.
+      const hitProcessLimit = (result.resources?.pidsMaxEvents ?? 0) > 0 && !(result.status === 0 && result.signal == null && result.timedOut !== true);
       const error = result.error ?? (result.overflow ? "candidate command exceeded the output limit" : result.containmentProblem
-        ?? (killedByMemory ? "candidate command was killed by the memory limit" : null));
+        ?? (killedByMemory ? "candidate command was killed by the memory limit" : null)
+        ?? (hitProcessLimit ? "candidate command hit the process limit (a fork was refused)" : null));
       return {
         status: Number.isInteger(result.status) ? result.status : null,
         signal: result.signal ?? result.resources?.signal ?? null,

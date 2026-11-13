@@ -1,0 +1,10 @@
+test live_view::tests::a_stall_during_an_approval_never_offers_esc_to_cancel_at_any_width ... FAILED
+test live_view::tests::the_status_bar_keeps_context_percent_and_the_session_id_when_there_is_room ... FAILED
+test live_view::tests::a_stalled_retry_wait_still_shows_one_timer ... ok
+test live_view::tests::no_phase_shows_two_timers_and_the_status_bar_shows_none ... FAILED
+---- live_view::tests::a_stall_during_an_approval_never_offers_esc_to_cancel_at_any_width stdout ----
+thread 'live_view::tests::a_stall_during_an_approval_never_offers_esc_to_cancel_at_any_width' (1879839) panicked at src/bin/nexus_tui/live_view.rs:2191:13:
+thread 'live_view::tests::the_status_bar_keeps_context_percent_and_the_session_id_when_there_is_room' (1879842) panicked at src/bin/nexus_tui/live_view.rs:2208:13:
+thread 'live_view::tests::no_phase_shows_two_timers_and_the_status_bar_shows_none' (1879841) panicked at src/bin/nexus_tui/live_view.rs:2177:17:
+assertion `left == right` failed: tool at 9 s:  ⠋ Run make test 0:08 · 0:09 · step 2 · esc cancels 
+test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 352 filtered out; finished in 0.03s

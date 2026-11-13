@@ -281,6 +281,9 @@ pub enum Event {
         duration_ms: Option<u64>,
         #[serde(default)]
         timed_out: bool,
+        /// The operator declined the call at its approval prompt: it never ran. Absent from older sidecars.
+        #[serde(default)]
+        denied: bool,
     },
     #[serde(rename = "approval.request")]
     ApprovalRequest {
@@ -312,6 +315,9 @@ pub enum Event {
         format: Option<String>,
         #[serde(default)]
         composer: Option<String>,
+        /// Text to put on the terminal clipboard with an OSC 52 request (no clipboard tool was found).
+        #[serde(default)]
+        clipboard: Option<String>,
         /// Set when the command started a turn with this prompt; the turn's events follow under the same id.
         #[serde(default)]
         prompt: Option<String>,
@@ -628,6 +634,7 @@ mod tests {
                 exit_code: None,
                 duration_ms: None,
                 timed_out: false,
+                denied: false,
             })
         );
         assert_eq!(
@@ -818,9 +825,14 @@ mod tests {
                 output: "-a\n+b".into(),
                 format: Some("diff".into()),
                 composer: None,
+                clipboard: None,
                 prompt: None,
             })
         );
+        assert!(matches!(
+            parse_event(r#"{"v":1,"type":"slash.result","id":"s3","command":"copy","success":true,"output":"asked","clipboard":"a\u001b[2Jb"}"#),
+            Ok(Event::SlashResult { clipboard: Some(ref text), .. }) if text == "a\u{1b}[2Jb"
+        ));
         assert!(matches!(
             parse_event(r#"{"v":1,"type":"slash.result","id":"s2","command":"history","success":true,"output":"","prompt":"fix it"}"#),
             Ok(Event::SlashResult { prompt: Some(ref prompt), .. }) if prompt == "fix it"
@@ -850,6 +862,22 @@ mod tests {
             parse_event(r#"{"v":1,"type":"notice","text":"x","key":"k","future":1}"#),
             Ok(Event::Notice { key: Some(_), detail: None, .. })
         ));
+    }
+
+    #[test]
+    fn a_stream_stall_parses_with_missing_and_unknown_fields() {
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#),
+            Ok(Event::StreamStall { stalled: true, silent_secs: 30 })
+        );
+        // Missing fields default to "spoke again" (not stalled, no silence): the safe reading of a bare event.
+        assert_eq!(parse_event(r#"{"v":1,"type":"stream.stall"}"#), Ok(Event::StreamStall { stalled: false, silent_secs: 0 }));
+        assert_eq!(parse_event(r#"{"v":1,"type":"stream.stall","stalled":true}"#), Ok(Event::StreamStall { stalled: true, silent_secs: 0 }));
+        // A newer sidecar's unknown field is ignored, as for every event.
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"stream.stall","stalled":true,"silent_secs":45,"future":{"a":1}}"#),
+            Ok(Event::StreamStall { stalled: true, silent_secs: 45 })
+        );
     }
 
     #[test]
@@ -987,6 +1015,16 @@ mod tests {
                 text: "{}".into(),
                 truncated: false
             })
+        );
+        // A delete approval is text rows; fields a later sidecar adds beside them (structured facts) are ignored, and a
+        // request without them (an older sidecar) parses the same.
+        assert_eq!(
+            review(r#"{"kind":"args","text":"build\ndirectory \u00b7 3 entries","truncated":false,"delete":{"target":"directory","entries":3,"size":6}}"#),
+            Some(Review::Args { text: "build\ndirectory \u{b7} 3 entries".into(), truncated: false })
+        );
+        assert_eq!(
+            review(r#"{"kind":"args","text":"{\n  \"path\": \"base.txt\"\n}","truncated":false}"#),
+            Some(Review::Args { text: "{\n  \"path\": \"base.txt\"\n}".into(), truncated: false })
         );
         assert_eq!(review(r#"{"kind":"hologram"}"#), Some(Review::Unknown));
     }

@@ -210,7 +210,8 @@ def main():
     s.wait_screen(lambda lines: has(lines, "stopped"), 15, "the crash screen")
     s.pump(0.5)
     shot(s, "22-crashed")
-    s.send("r", settle=0.3)
+    # The draft is not empty, so `r` would be text (D-19); ctrl+r is the restart the crash screen names for that case.
+    s.send("\x12", settle=0.3)
     # Wait on the current screen, not the output history (which still holds the hint from before the crash).
     s.wait_screen(lambda lines: has(lines, "enter send"), 30, "the restarted agent's idle hint")
     s.pump(0.5)

@@ -275,6 +275,8 @@ pub struct Palette {
     /// Background of code blocks and command output in the transcript.
     pub code_bg: Option<Color>,
     pub syntax: Option<Syntax>,
+    /// No colour at all (`NO_COLOR`, `TERM=dumb`): anything that colour would carry needs a glyph or a label.
+    pub mono: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -316,6 +318,7 @@ pub fn palette(depth: Depth) -> Palette {
             text: Color::Rgb(222, 228, 233),
             meta: Color::Rgb(125, 145, 158),
             code_bg: Some(Color::Rgb(22, 29, 38)),
+            mono: false,
             syntax: Some(Syntax {
                 keyword: Color::Rgb(212, 172, 255),
                 string: Color::Rgb(240, 202, 142),
@@ -325,6 +328,7 @@ pub fn palette(depth: Depth) -> Palette {
             }),
         },
         Depth::Ansi256 => Palette {
+            mono: false,
             add_bg: Some(Color::Indexed(22)),
             del_bg: Some(Color::Indexed(52)),
             add_fg: Color::Indexed(120),
@@ -357,6 +361,7 @@ pub fn palette(depth: Depth) -> Palette {
             meta: Color::DarkGray,
             code_bg: None,
             syntax: None,
+            mono: depth == Depth::Mono,
         },
     }
 }
