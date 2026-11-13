@@ -55,7 +55,7 @@ v1.0.0 (Baseline Freeze)            v1.1.0                              v1.2.0
 - **Gate G1.1-1 (Zero-Leak Tracing):** Local trace engine produces valid OTel GenAI spans for all turn steps without leaking environment credentials or writing outside `~/.local/share/nexus/traces/`.
 - **Gate G1.1-2 (Dataset Decoupling):** Evaluator executes 100% of benchmark tasks with zero leakage of `oracles.jsonl` to agent prompt context.
 - **Gate G1.1-3 (CLI Parity):** `nexus eval` executes cleanly from packaged binary installations without developer dependencies.
-- **Gate G1.1-4 (Constrained Decoding Reliability):** GBNF-constrained execution achieves >=99.5% valid JSON tool call syntax (minimizing syntax repair retries) across supported local inference endpoints (llama.cpp, vLLM, Ollama).
+- **Gate G1.1-4 (Constrained Decoding Reliability):** GBNF-constrained execution achieves >=99.5% valid JSON tool call syntax (minimizing syntax repair retries) across supported local inference endpoints (llama.cpp, vLLM, Ollama), measured through the homelab-ai gateway with per-kind profiles (DEC-16; owner restated 2026-11-13).
 - **Gate G1.1-5 (Zero Technical Debt & Zero Deprecated Packages):** Strictly 0 deprecated packages, 0 unmaintained dependencies, 0 CodeQL alerts, and 0 compiler warnings repository-wide. All 27 Dependabot PR upgrades pass unit/PTY suites, `cargo deny check`, automated npm registry deprecation scans, package reproducibility (`cmp`), and CLI option compatibility without breaking unprivileged sandbox invariants.
 
 ### 2.1 Dependabot Triage & Integration Matrix (WP-1108)

@@ -47,7 +47,7 @@ Split out of WP-1302 because these items edit `cli/src/parser.ts`, not `eval/`. 
 - A retained vLLM kind keeps `advertised.via` so request counting does not turn off; transient `/version` and Ollama `/api/version` failures must not downgrade a known kind.
 - Matrix provenance: bind the archive to the verified checkout content, not only to the commit id.
 - Decide the GBNF compiler: wire it to a consumer (llama.cpp `grammar`, vLLM `guided_json`, Ollama `format`) or remove the dead code. Hybrid reasoning grammars from the v1.1.0 roadmap are still unimplemented.
-- **Measure G1.1-4** (at least 99.5% valid tool-call JSON across supported provider endpoints) against live endpoints; this needs the shared `GATEWAY` claim. Until measured it stays "not met".
+- **Measure G1.1-4** (at least 99.5% valid tool-call JSON across supported provider endpoints) against live endpoints, which are the homelab-ai gateway only (DEC-16; no separate llama.cpp, vLLM or Ollama servers exist); this needs the shared `GATEWAY` claim. Until measured it stays "not met".
 - Test gaps: 404 and thrown-exception kind retention, `agent_observer` isolation of the two normaliser layers, required-null rejection.
 
 ### WP-1304 Evaluation CLI, tracing and redaction hygiene
