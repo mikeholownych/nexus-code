@@ -336,6 +336,25 @@ test("D-21: the trust copy wraps at the terminal width at 100, 60 and 40 columns
   }
 });
 
+test("D-21: a terminal that reports no width (0 or missing columns, e.g. a pty without a window size) draws at 80, not one character per row", async () => {
+  const workspace = workspaceWithInstructions();
+  try {
+    const at80 = await trustScreen(workspace, 80);
+    for (const unknown of [0, undefined, Number.NaN, -3]) {
+      const terminal = mockTerminal(true, 80);
+      (terminal.output as any).columns = unknown;
+      const decision = promptWorkspaceTrust(workspace, { ...terminal, trustStore: { isTrusted: () => false, trust: () => {} } });
+      await new Promise((resolve) => setImmediate(resolve));
+      const rows = terminal.text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "").split("\n");
+      terminal.input.emit("keypress", "\u001b", { name: "escape" });
+      await decision;
+      assert.deepEqual(rows, at80, `columns=${String(unknown)} must draw exactly as 80 columns`);
+    }
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("D-21: a long path is wrapped whole across rows, never cut, and tiny terminals never overflow or hang", async () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-trust-long-"));
   const workspace = path.join(parent, "a-very-long-project-directory-name-that-exceeds-a-narrow-terminal");
