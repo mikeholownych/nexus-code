@@ -107,6 +107,20 @@ export class ComparativeEvaluationHarness {
       if (trace.cycleDetected) target.cyclesDetected += 1;
     }
 
+    // Efficiency is only meaningful between configurations that ran the same tasks the same number of times.
+    const populations = new Map<string, Map<string, number>>();
+    for (const trace of traces) {
+      const counts = populations.get(trace.configId) ?? new Map<string, number>();
+      counts.set(trace.scenarioId, (counts.get(trace.scenarioId) ?? 0) + 1);
+      populations.set(trace.configId, counts);
+    }
+    const signature = (counts: Map<string, number>) => [...counts].sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, n]) => `${id}x${n}`).join(",");
+    const signatures = new Set([...populations.values()].map(signature));
+    if (signatures.size > 1) {
+      const detail = [...populations].map(([id, counts]) => `${id}: ${signature(counts)}`).join("; ");
+      throw new Error(`Traces come from different task populations, so their token totals cannot be compared (${detail})`);
+    }
+
     const baselineTokens = configA.totalTokens;
     configA.efficiencyScore = 0.0;
     configB.efficiencyScore =

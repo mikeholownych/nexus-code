@@ -24,8 +24,14 @@ export class CeriReportGenerator {
     const blockers: string[] = [];
     const executedEvaluationIds = new Set<string>();
 
+    let executedRuns = 0;
+    let comparedRuns = 0;
     for (const { manifest, comparison } of runs) {
-      executedEvaluationIds.add(manifest.evaluationId);
+      if (manifest.status === "COMPLETED" || manifest.status === "FAILED") {
+        executedRuns++;
+        executedEvaluationIds.add(manifest.evaluationId);
+        if (comparison?.isEligibleForComparison) comparedRuns++;
+      }
       if (manifest.status === "FAILED") failedRuns++;
       else if (manifest.status === "COMPLETED") passedRuns++;
 
@@ -48,7 +54,6 @@ export class CeriReportGenerator {
       }
     }
 
-    const executedRuns = runs.length;
     const executedEvaluations = executedEvaluationIds.size;
     const rawCoverage =
       executedEvaluations > 0 ? (executedEvaluations / Math.max(1, totalAvailableEvaluations)) * 100 : 0;
@@ -60,7 +65,9 @@ export class CeriReportGenerator {
       evaluationCoverage: {
         totalEvaluations: totalAvailableEvaluations,
         executedEvaluations,
+        scheduledRuns: runs.length,
         executedRuns,
+        comparedRuns,
         passedRuns,
         failedRuns,
       },
@@ -97,9 +104,16 @@ export class CeriReportGenerator {
     lines.push("");
 
     lines.push(`## 1. Executive Status & Release Gates`);
-    if (report.evaluationCoverage.executedRuns === 0) {
+    const anomalous =
+      report.evaluationCoverage.failedRuns > 0 ||
+      report.inconclusiveCount > 0 ||
+      report.infrastructureFailures > 0 ||
+      report.evaluatorDefects > 0 ||
+      report.flakyCount > 0 ||
+      report.incomparableCount > 0;
+    if (report.evaluationCoverage.executedRuns === 0 && !anomalous) {
       lines.push(`> [!WARNING]`);
-      lines.push(`> **NO EVALUATIONS EXECUTED:** Coverage is 0%. No capability or regression claims can be substantiated.`);
+      lines.push(`> **NO EVALUATIONS EXECUTED:** Coverage is 0% (${report.evaluationCoverage.scheduledRuns} run(s) scheduled, none finished). No capability or regression claims can be substantiated.`);
     } else if (report.blockers.length > 0) {
       lines.push(`> [!CAUTION]`);
       lines.push(`> **RELEASE BLOCKED:** ${report.blockers.length} confirmed regression blocker(s) detected.`);
@@ -109,22 +123,20 @@ export class CeriReportGenerator {
     } else if (report.regressions.candidates.length > 0) {
       lines.push(`> [!WARNING]`);
       lines.push(`> **QUALIFICATION IN PROGRESS:** ${report.regressions.candidates.length} regression candidate(s) awaiting reproduction runs.`);
-    } else if (
-      report.evaluationCoverage.failedRuns > 0 ||
-      report.inconclusiveCount > 0 ||
-      report.infrastructureFailures > 0 ||
-      report.evaluatorDefects > 0 ||
-      report.flakyCount > 0 ||
-      report.incomparableCount > 0
-    ) {
+    } else if (anomalous) {
       lines.push(`> [!WARNING]`);
       lines.push(
         `> **EVALUATION ANOMALIES DETECTED:** Non-zero failures (${report.evaluationCoverage.failedRuns}), inconclusive (${report.inconclusiveCount}), infrastructure failures (${report.infrastructureFailures}), evaluator defects (${report.evaluatorDefects}), flaky (${report.flakyCount}), or incomparable runs (${report.incomparableCount}). Further qualification required.`
       );
+    } else if (report.evaluationCoverage.comparedRuns < report.evaluationCoverage.executedRuns) {
+      lines.push(`> [!WARNING]`);
+      lines.push(
+        `> **INSUFFICIENT EVIDENCE:** ${report.evaluationCoverage.executedRuns - report.evaluationCoverage.comparedRuns} of ${report.evaluationCoverage.executedRuns} executed run(s) have no eligible baseline comparison, so no regression claim is made either way.`
+      );
     } else {
       lines.push(`> [!NOTE]`);
       lines.push(
-        `> **NO REGRESSIONS OBSERVED:** All executed evaluations (${report.evaluationCoverage.passedRuns}) completed cleanly and match or exceed baseline criteria.`
+        `> **NO REGRESSIONS OBSERVED:** All ${report.evaluationCoverage.comparedRuns} compared run(s) completed cleanly and match or exceed baseline criteria.`
       );
     }
     lines.push("");
@@ -133,7 +145,9 @@ export class CeriReportGenerator {
     lines.push(`| Metric | Value |`);
     lines.push(`|---|---|`);
     lines.push(`| Executed Evaluations | ${report.evaluationCoverage.executedEvaluations} / ${report.evaluationCoverage.totalEvaluations} |`);
+    lines.push(`| Scheduled Runs | ${report.evaluationCoverage.scheduledRuns} |`);
     lines.push(`| Executed Runs | ${report.evaluationCoverage.executedRuns} |`);
+    lines.push(`| Compared Runs | ${report.evaluationCoverage.comparedRuns} |`);
     lines.push(`| Passed Runs | ${report.evaluationCoverage.passedRuns} |`);
     lines.push(`| Failed Runs | ${report.evaluationCoverage.failedRuns} |`);
     lines.push(`| Confirmed Regressions | ${report.regressions.confirmed.length} |`);
