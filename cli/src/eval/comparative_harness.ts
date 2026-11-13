@@ -94,6 +94,7 @@ export class ComparativeEvaluationHarness {
 
     const scenarioIds = new Set<string>();
     const profiles = { configA, configB, configC };
+    const populations = new Map<string, Map<string, number>>(Object.keys(profiles).map((id) => [id, new Map<string, number>()]));
 
     for (const trace of traces) {
       if (!Object.hasOwn(profiles, trace.configId)) {
@@ -101,20 +102,17 @@ export class ComparativeEvaluationHarness {
       }
       const target = profiles[trace.configId];
       scenarioIds.add(trace.scenarioId);
+      const counts = populations.get(trace.configId)!;
+      counts.set(trace.scenarioId, (counts.get(trace.scenarioId) ?? 0) + 1);
       target.totalTurns += trace.turns;
       target.totalTokens += trace.tokensConsumed;
       if (trace.confirmationBiasDefectAccepted) target.confirmationBiasDefectsAccepted += 1;
       if (trace.cycleDetected) target.cyclesDetected += 1;
     }
 
-    // Efficiency is only meaningful between configurations that ran the same tasks the same number of times.
-    const populations = new Map<string, Map<string, number>>();
-    for (const trace of traces) {
-      const counts = populations.get(trace.configId) ?? new Map<string, number>();
-      counts.set(trace.scenarioId, (counts.get(trace.scenarioId) ?? 0) + 1);
-      populations.set(trace.configId, counts);
-    }
-    const signature = (counts: Map<string, number>) => [...counts].sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, n]) => `${id}x${n}`).join(",");
+    // Efficiency is only meaningful between configurations that ran the same tasks the same number of times,
+    // and a configuration with no traces has not run them.
+    const signature = (counts: Map<string, number>) => [...counts].sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, n]) => `${id}x${n}`).join(",") || "(none)";
     const signatures = new Set([...populations.values()].map(signature));
     if (signatures.size > 1) {
       const detail = [...populations].map(([id, counts]) => `${id}: ${signature(counts)}`).join("; ");

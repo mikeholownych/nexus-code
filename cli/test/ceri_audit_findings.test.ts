@@ -1,5 +1,4 @@
-// Regressions for the evidence-integrity audit of f327a410 (findings F01, F03, F05, F07). Each was reproduced
-// against the unfixed code first.
+// Regressions for the evidence-integrity audit of f327a410 (findings F01, F03, F05, F07).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CeriBaselineComparator } from "../src/ceri/baseline.js";
@@ -41,6 +40,10 @@ test("F01: only a terminal executed run can PASS, and an empty assertion set nev
   const running = CeriBaselineComparator.compareRuns(manifest("RUNNING"), { x: true }, baseline, { x: true });
   assert.equal(running.outcome, "INCONCLUSIVE");
   assert.equal(running.isEligibleForComparison, false);
+  for (const status of ["FAILED", "COMPLETED"] as const) {
+    assert.equal(CeriBaselineComparator.compareRuns(manifest(status), { x: true }, baseline, { x: true }).isEligibleForComparison !== false, true, status);
+  }
+  assert.equal(CeriBaselineComparator.compareRuns(manifest("MADE_UP" as RunStatus), { x: true }, baseline, { x: true }).outcome, "INCONCLUSIVE");
   const done = CeriBaselineComparator.compareRuns(manifest("COMPLETED"), { x: true }, baseline, { x: true });
   assert.equal(done.outcome, "PASS");
 });
@@ -72,23 +75,24 @@ test("F05: a malformed evaluation definition is refused", () => {
     deterministicAssertions: [{ id: "a1", description: "d" }], independentValidationCriteria: ["c"],
   };
   assert.doesNotThrow(() => validateEvaluationDefinition(good));
-  const bad: Array<[string, Record<string, unknown>]> = [
-    ["invalid domain", { domain: "made_up" }],
-    ["negative steps", { executionBudget: { maxSteps: -1, timeoutSeconds: 30 } }],
-    ["fractional steps", { executionBudget: { maxSteps: 1.5, timeoutSeconds: 30 } }],
-    ["NaN timeout", { executionBudget: { maxSteps: 5, timeoutSeconds: Number.NaN } }],
-    ["duplicate assertion ids", { deterministicAssertions: [{ id: "a1", description: "d" }, { id: "a1", description: "e" }] }],
-    ["assertion without a description", { deterministicAssertions: [{ id: "a1" }] }],
-    ["assertion that is not an object", { deterministicAssertions: ["a1"] }],
-    ["missing fixturePath", { fixturePath: undefined }],
-    ["expectedOutputs not strings", { expectedOutputs: [1] }],
-    ["authorizedTools not strings", { authorizedTools: [null] }],
+  const bad: Array<[string, Record<string, unknown>, RegExp]> = [
+    ["invalid domain", { domain: "made_up" }, /domain/],
+    ["negative steps", { executionBudget: { maxSteps: -1, timeoutSeconds: 30 } }, /executionBudget/],
+    ["fractional steps", { executionBudget: { maxSteps: 1.5, timeoutSeconds: 30 } }, /executionBudget/],
+    ["NaN timeout", { executionBudget: { maxSteps: 5, timeoutSeconds: Number.NaN } }, /executionBudget/],
+    ["duplicate assertion ids", { deterministicAssertions: [{ id: "a1", description: "d" }, { id: "a1", description: "e" }] }, /duplicate assertion id/],
+    ["assertion without a description", { deterministicAssertions: [{ id: "a1" }] }, /deterministicAssertions\[0\]/],
+    ["assertion that is not an object", { deterministicAssertions: ["a1"] }, /deterministicAssertions\[0\]/],
+    ["missing fixturePath", { fixturePath: undefined }, /fixturePath/],
+    ["expectedOutputs not strings", { expectedOutputs: [1] }, /expectedOutputs/],
+    ["authorizedTools not strings", { authorizedTools: [null] }, /authorizedTools/],
+    ["maxTokens not a positive integer", { executionBudget: { maxSteps: 5, timeoutSeconds: 30, maxTokens: 0 } }, /maxTokens/],
   ];
-  for (const [name, over] of bad) assert.throws(() => validateEvaluationDefinition({ ...good, ...over }), undefined, name);
+  for (const [name, over, why] of bad) assert.throws(() => validateEvaluationDefinition({ ...good, ...over }), why, name);
 });
 
 test("F07: traces from different task populations are not compared", () => {
-  const trace = (scenarioId: string, configId: "configA" | "configB", tokensConsumed: number) =>
+  const trace = (scenarioId: string, configId: "configA" | "configB" | "configC", tokensConsumed: number) =>
     ({ scenarioId, configId, turns: 1, tokensConsumed, confirmationBiasDefectAccepted: false, cycleDetected: false });
   assert.throws(
     () => ComparativeEvaluationHarness.evaluateTraces([trace("a", "configA", 1000), trace("different", "configB", 10)]),
@@ -98,6 +102,11 @@ test("F07: traces from different task populations are not compared", () => {
     () => ComparativeEvaluationHarness.evaluateTraces([trace("a", "configA", 1000), trace("a", "configA", 1000), trace("a", "configB", 10)]),
     /different task populations/,
   );
-  const ok = ComparativeEvaluationHarness.evaluateTraces([trace("a", "configA", 1000), trace("a", "configB", 500)]);
+  assert.throws(
+    () => ComparativeEvaluationHarness.evaluateTraces([trace("a", "configA", 1000), trace("a", "configB", 500)]),
+    /different task populations.*configC: \(none\)/,
+  );
+  const ok = ComparativeEvaluationHarness.evaluateTraces([trace("a", "configA", 1000), trace("a", "configB", 500), trace("a", "configC", 250)]);
   assert.equal(ok.profiles.configB.efficiencyScore, 50);
+  assert.equal(ok.profiles.configC.efficiencyScore, 75);
 });

@@ -1,20 +1,22 @@
 import { createHash } from "node:crypto";
 
-export type CapabilityDomain =
-  | "code_comprehension"
-  | "scoped_implementation"
-  | "multi_file_refactoring"
-  | "dependency_analysis"
-  | "tool_selection"
-  | "context_compaction"
-  | "session_persistence"
-  | "retry_backoff"
-  | "rate_limit_recovery"
-  | "model_escalation"
-  | "specialist_delegation"
-  | "independent_review"
-  | "authorization_enforcement"
-  | "workspace_isolation";
+export const CAPABILITY_DOMAINS = [
+  "code_comprehension",
+  "scoped_implementation",
+  "multi_file_refactoring",
+  "dependency_analysis",
+  "tool_selection",
+  "context_compaction",
+  "session_persistence",
+  "retry_backoff",
+  "rate_limit_recovery",
+  "model_escalation",
+  "specialist_delegation",
+  "independent_review",
+  "authorization_enforcement",
+  "workspace_isolation",
+] as const;
+export type CapabilityDomain = (typeof CAPABILITY_DOMAINS)[number];
 
 export interface DeterministicAssertion {
   id: string;
@@ -183,11 +185,8 @@ export interface CeriOperationalReport {
     totalEvaluations: number;
     /** Distinct evaluation ids with at least one run; coverage is computed from this, not from the run count. */
     executedEvaluations: number;
-    /** Runs that were created or scheduled, whatever became of them (RUNNING and NOT_EXECUTED included). */
     scheduledRuns: number;
-    /** Runs that reached a finished execution (COMPLETED or FAILED). Only these count toward coverage. */
     executedRuns: number;
-    /** Executed runs that have an eligible comparison against a baseline. */
     comparedRuns: number;
     passedRuns: number;
     failedRuns: number;
@@ -210,12 +209,6 @@ export interface CeriOperationalReport {
 /**
  * Validates that an EvaluationDefinition satisfies all structural requirements.
  */
-export const CAPABILITY_DOMAINS: readonly CapabilityDomain[] = [
-  "code_comprehension", "scoped_implementation", "multi_file_refactoring", "dependency_analysis", "tool_selection",
-  "context_compaction", "session_persistence", "retry_backoff", "rate_limit_recovery", "model_escalation",
-  "specialist_delegation", "independent_review", "authorization_enforcement", "workspace_isolation",
-];
-
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((v) => typeof v === "string");
 const isPositiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value > 0;
 
@@ -227,11 +220,10 @@ export function validateEvaluationDefinition(def: unknown): EvaluationDefinition
   if (!d.id || typeof d.id !== "string") throw new Error("Evaluation definition missing valid 'id'");
   if (!d.version || typeof d.version !== "string") throw new Error("Evaluation definition missing valid 'version'");
   if (!d.domain || typeof d.domain !== "string") throw new Error("Evaluation definition missing valid 'domain'");
-  if (!CAPABILITY_DOMAINS.includes(d.domain)) throw new Error(`Evaluation definition 'domain' '${d.domain}' is not a known capability domain`);
+  if (!CAPABILITY_DOMAINS.includes(d.domain)) throw new Error(`Evaluation definition 'domain' '${String(d.domain)}' is not a known capability domain`);
   if (!d.objective || typeof d.objective !== "string") throw new Error("Evaluation definition missing valid 'objective'");
   if (!d.fixturePath || typeof d.fixturePath !== "string") throw new Error("Evaluation definition missing valid 'fixturePath'");
   if (!isStringArray(d.expectedOutputs)) throw new Error("Evaluation definition 'expectedOutputs' must be an array of strings");
-  if (!Array.isArray(d.authorizedTools)) throw new Error("Evaluation definition 'authorizedTools' must be an array");
   if (!isStringArray(d.authorizedTools)) throw new Error("Evaluation definition 'authorizedTools' must be an array of strings");
   if (!d.executionBudget || !isPositiveInteger(d.executionBudget.maxSteps) || !isPositiveInteger(d.executionBudget.timeoutSeconds)) {
     throw new Error("Evaluation definition missing valid 'executionBudget' (maxSteps and timeoutSeconds are positive integers)");

@@ -416,7 +416,6 @@ export function parseIndependentReviewVerdict(
     if (suspectedDefects.length > 0) {
       finalVerdict = "REJECT";
     }
-    // Every unproven criterion is a required one: an ACCEPT cannot carry a requirement the reviewer could not confirm.
     if (unprovenCriteria.length > 0) {
       finalVerdict = "REJECT";
     }

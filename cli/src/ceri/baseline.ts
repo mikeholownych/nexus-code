@@ -137,8 +137,6 @@ export class CeriBaselineComparator {
       };
     }
 
-    // Only a run that reached a terminal executed state can be classified. RUNNING and any status this code does not
-    // know are not evidence of anything.
     if (manifest.status !== "COMPLETED" && manifest.status !== "FAILED") {
       return {
         baselineId: baseline.baselineId,
