@@ -79,7 +79,7 @@ def main():
     # 5. Text with no approval key, typed across the third approval panel's appearance, goes to the draft.
     typed = "try any test now then"  # contains y, a and n: inside a run of typing they are text
     seen_while_typing = False
-    first_seen = None  # index of the character after which the panel was first on screen
+    first_seen = None
     for index, ch in enumerate(typed):
         s.send(ch, settle=0.1)
         if has(s.color.lines(), "Approval needed"):
@@ -92,11 +92,10 @@ def main():
     s.wait_screen(lambda lines: has(lines, "Approval needed"), 10, "the third approval panel")
     s.pump(0.2)
     result["after_typing_across"] = {"decisions": decisions(commands), "panel_open": has(s.color.lines(), "Approval needed")}
-    # Input already queued when the panel opens is discarded on purpose (the panel says so), and how much of it that is
-    # depends on timing. What was typed after the panel was seen is text and must be in the draft; when the panel
-    # came after all the typing, all of it must be.
-    expected = typed if first_seen is None else typed[first_seen + 1:]
-    result["draft_kept"] = len(expected) < 3 or has(s.color.lines(), expected)
+    # Text queued when the panel opens is dropped by design (D-01), and the frame that shows the panel can lag the keys
+    # by one: only text typed after that point must be in the draft (all of it if the panel came after the typing).
+    expected = typed if first_seen is None else typed[first_seen + 2:]
+    result["draft_kept"] = has(s.color.lines(), expected)
     s.pump(1.4)  # every ignored key in the run restarted the one-second wait
     s.send("n", settle=0.5)
     result["after_typing_then_deny"] = decisions(commands)
