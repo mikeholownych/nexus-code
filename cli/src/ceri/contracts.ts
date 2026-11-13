@@ -1,20 +1,22 @@
 import { createHash } from "node:crypto";
 
-export type CapabilityDomain =
-  | "code_comprehension"
-  | "scoped_implementation"
-  | "multi_file_refactoring"
-  | "dependency_analysis"
-  | "tool_selection"
-  | "context_compaction"
-  | "session_persistence"
-  | "retry_backoff"
-  | "rate_limit_recovery"
-  | "model_escalation"
-  | "specialist_delegation"
-  | "independent_review"
-  | "authorization_enforcement"
-  | "workspace_isolation";
+export const CAPABILITY_DOMAINS = [
+  "code_comprehension",
+  "scoped_implementation",
+  "multi_file_refactoring",
+  "dependency_analysis",
+  "tool_selection",
+  "context_compaction",
+  "session_persistence",
+  "retry_backoff",
+  "rate_limit_recovery",
+  "model_escalation",
+  "specialist_delegation",
+  "independent_review",
+  "authorization_enforcement",
+  "workspace_isolation",
+] as const;
+export type CapabilityDomain = (typeof CAPABILITY_DOMAINS)[number];
 
 export interface DeterministicAssertion {
   id: string;
@@ -183,7 +185,9 @@ export interface CeriOperationalReport {
     totalEvaluations: number;
     /** Distinct evaluation ids with at least one run; coverage is computed from this, not from the run count. */
     executedEvaluations: number;
+    scheduledRuns: number;
     executedRuns: number;
+    comparedRuns: number;
     passedRuns: number;
     failedRuns: number;
   };
@@ -205,6 +209,9 @@ export interface CeriOperationalReport {
 /**
  * Validates that an EvaluationDefinition satisfies all structural requirements.
  */
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((v) => typeof v === "string");
+const isPositiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value > 0;
+
 export function validateEvaluationDefinition(def: unknown): EvaluationDefinition {
   if (!def || typeof def !== "object") {
     throw new Error("Evaluation definition must be a non-null object");
@@ -213,13 +220,31 @@ export function validateEvaluationDefinition(def: unknown): EvaluationDefinition
   if (!d.id || typeof d.id !== "string") throw new Error("Evaluation definition missing valid 'id'");
   if (!d.version || typeof d.version !== "string") throw new Error("Evaluation definition missing valid 'version'");
   if (!d.domain || typeof d.domain !== "string") throw new Error("Evaluation definition missing valid 'domain'");
+  if (!CAPABILITY_DOMAINS.includes(d.domain)) throw new Error(`Evaluation definition 'domain' '${String(d.domain)}' is not a known capability domain`);
   if (!d.objective || typeof d.objective !== "string") throw new Error("Evaluation definition missing valid 'objective'");
-  if (!Array.isArray(d.authorizedTools)) throw new Error("Evaluation definition 'authorizedTools' must be an array");
-  if (!d.executionBudget || typeof d.executionBudget.maxSteps !== "number" || typeof d.executionBudget.timeoutSeconds !== "number") {
-    throw new Error("Evaluation definition missing valid 'executionBudget'");
+  if (!d.fixturePath || typeof d.fixturePath !== "string") throw new Error("Evaluation definition missing valid 'fixturePath'");
+  if (!isStringArray(d.expectedOutputs)) throw new Error("Evaluation definition 'expectedOutputs' must be an array of strings");
+  if (!isStringArray(d.authorizedTools)) throw new Error("Evaluation definition 'authorizedTools' must be an array of strings");
+  if (!d.executionBudget || !isPositiveInteger(d.executionBudget.maxSteps) || !isPositiveInteger(d.executionBudget.timeoutSeconds)) {
+    throw new Error("Evaluation definition missing valid 'executionBudget' (maxSteps and timeoutSeconds are positive integers)");
+  }
+  if (d.executionBudget.maxTokens !== undefined && !isPositiveInteger(d.executionBudget.maxTokens)) {
+    throw new Error("Evaluation definition 'executionBudget.maxTokens' must be a positive integer");
   }
   if (!Array.isArray(d.deterministicAssertions)) {
     throw new Error("Evaluation definition 'deterministicAssertions' must be an array");
+  }
+  const seen = new Set<string>();
+  for (const [index, assertion] of d.deterministicAssertions.entries()) {
+    const a = assertion as Partial<DeterministicAssertion> | null;
+    if (!a || typeof a !== "object" || typeof a.id !== "string" || !a.id || typeof a.description !== "string" || !a.description) {
+      throw new Error(`Evaluation definition 'deterministicAssertions[${index}]' needs a non-empty id and description`);
+    }
+    if (seen.has(a.id)) throw new Error(`Evaluation definition has duplicate assertion id '${a.id}'`);
+    seen.add(a.id);
+  }
+  if (!isStringArray(d.independentValidationCriteria)) {
+    throw new Error("Evaluation definition 'independentValidationCriteria' must be an array of strings");
   }
   return d as EvaluationDefinition;
 }

@@ -41,8 +41,10 @@ test("validateEvaluationDefinition rejects invalid definition", () => {
       validateEvaluationDefinition({
         id: "test",
         version: "1.0",
-        domain: "invalid",
+        domain: "code_comprehension",
         objective: "obj",
+        fixturePath: "fixtures/x",
+        expectedOutputs: [],
         authorizedTools: "not-an-array",
       }),
     /authorizedTools/

@@ -137,6 +137,18 @@ export class CeriBaselineComparator {
       };
     }
 
+    if (manifest.status !== "COMPLETED" && manifest.status !== "FAILED") {
+      return {
+        baselineId: baseline.baselineId,
+        currentRunId: manifest.runId,
+        isEligibleForComparison: false,
+        outcome: "INCONCLUSIVE",
+        divergences: [],
+        confidence: 0.0,
+        explanation: `Run status '${String(manifest.status)}' is not a finished execution; nothing to compare.`,
+      };
+    }
+
     // 2. Check baseline comparability
     const comp = this.checkComparability(manifest, baseline);
     if (!comp.eligible) {
@@ -156,6 +168,18 @@ export class CeriBaselineComparator {
     const allAssertionIds = Array.from(
       new Set([...Object.keys(currentAssertions), ...Object.keys(baselineAssertions)])
     );
+
+    if (allAssertionIds.length === 0) {
+      return {
+        baselineId: baseline.baselineId,
+        currentRunId: manifest.runId,
+        isEligibleForComparison: false,
+        outcome: "INCONCLUSIVE",
+        divergences: [],
+        confidence: 0.0,
+        explanation: "Neither the run nor the baseline recorded any assertion; an empty comparison proves nothing.",
+      };
+    }
 
     const divergences: BaselineComparisonResult["divergences"] = [];
     let hasRegression = false;

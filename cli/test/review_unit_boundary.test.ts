@@ -103,6 +103,11 @@ test("a review unit completes only on a valid ACCEPT; prose, malformed or defect
   }
   assert.match(classify(verdict({ suspectedDefects: [{ path: "math.js", line: 1, description: "still subtracts" }] })).reason, /math\.js:1 still subtracts/);
 
+  // F04: an ACCEPT that names a criterion it could not prove is not an acceptance, and the operator is told which one.
+  const unproven = classify(verdict({ unprovenCriteria: ["Required crash recovery has not been demonstrated"] }));
+  assert.equal(unproven.kind, "failed");
+  assert.match(unproven.reason, /unproven: Required crash recovery has not been demonstrated/);
+
   // A non-review unit is not held to the verdict schema.
   const implementer = internals(executor).classify({ ...unit, role: "researcher" }, resource, done, "survey done", null, ctx, false);
   assert.equal(implementer.kind, "completed");

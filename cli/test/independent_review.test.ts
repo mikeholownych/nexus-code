@@ -334,3 +334,13 @@ test("a plain-diff hunk whose counts overstate its body cannot swallow the next 
 `;
   assert.deepEqual(extractModifiedFilesFromDiff(content), ["x.txt"]);
 });
+
+test("F04: an ACCEPT that lists an unproven criterion is a REJECT that keeps the criterion", () => {
+  const raw = JSON.stringify({ verdict: "ACCEPT", verifiedObservations: ["tests pass"], suspectedDefects: [], unprovenCriteria: ["Required crash recovery has not been demonstrated"], scopeViolations: [], reviewerConfidenceNote: "n" });
+  const result = parseIndependentReviewVerdict(raw);
+  assert.equal(result.verdict, "REJECT");
+  assert.deepEqual(result.unprovenCriteria, ["Required crash recovery has not been demonstrated"]);
+  assert.deepEqual(result.verifiedObservations, ["tests pass"], "the structured verdict is kept whole");
+  const clean = parseIndependentReviewVerdict(JSON.stringify({ verdict: "ACCEPT", verifiedObservations: [], suspectedDefects: [], unprovenCriteria: [], scopeViolations: [], reviewerConfidenceNote: "n" }));
+  assert.equal(clean.verdict, "ACCEPT");
+});

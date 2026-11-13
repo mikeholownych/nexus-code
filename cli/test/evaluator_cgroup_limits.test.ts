@@ -252,7 +252,9 @@ test("a shell that forks past pids.max gets EAGAIN and the supervisor records it
   assert.match(run.result.stderr, /Cannot fork|Resource temporarily unavailable|EAGAIN/i, "the shell's own fork failed with EAGAIN");
   assert.notEqual(run.result.status, 0);
   assert.match(run.result.error ?? "", /process limit/, "the operator is told the process limit was hit");
-  await assertCleanedUp(run);
+  // The refused fork ends this run in tens of milliseconds, which can fall between sampler ticks; the supervisor's own
+  // report above (limits and pidsMaxEvents read from the scope) is the proof that the scope existed.
+  await assertCleanedUp(run, { mustHaveSeenScope: false });
 });
 
 test("a command that survives a refused fork and exits 0 is not turned into a failure", { timeout: 60_000 }, async (t) => {

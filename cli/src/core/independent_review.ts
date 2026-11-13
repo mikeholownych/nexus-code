@@ -317,7 +317,8 @@ INSTRUCTIONS FOR INDEPENDENT REVIEWER:
 1. Do not assume the implementation is correct. The implementer's self-assessed narrative has been excluded.
 2. Evaluate the code diff against the objective requirements${pkg.authorizedScope ? " and authorized scope" : ""}.
 3. Check for regressions, unhandled edge cases, security boundaries, and incomplete logic.
-4. You MUST respond with a JSON block adhering strictly to this schema:
+4. "unprovenCriteria" lists every requirement you could not confirm from the evidence above. Any entry makes the verdict REJECT, so answer ACCEPT only with an empty list.
+5. You MUST respond with a JSON block adhering strictly to this schema:
 \`\`\`json
 {
   "verdict": "ACCEPT" | "REJECT",
@@ -413,6 +414,9 @@ export function parseIndependentReviewVerdict(
     }
 
     if (suspectedDefects.length > 0) {
+      finalVerdict = "REJECT";
+    }
+    if (unprovenCriteria.length > 0) {
       finalVerdict = "REJECT";
     }
 
