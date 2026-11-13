@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { recoverContentToolCall } from "./core/content_tool_call.js";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
@@ -1696,7 +1697,7 @@ export class LocalLlmClient {
     const response = await this.withReceipt(requestId, purpose, () =>
       this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
     );
-    return response;
+    return recoverContentToolCall(response, tools);
   }
 
   private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal): Promise<ChatMessage> {
@@ -1856,7 +1857,7 @@ export class LocalLlmClient {
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
       ),
     );
-    return response;
+    return recoverContentToolCall(response, tools);
   }
 
   /**

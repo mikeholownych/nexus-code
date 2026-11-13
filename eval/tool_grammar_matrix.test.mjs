@@ -69,6 +69,7 @@ export class LocalLlmClient {
       content: hybrid && !channel ? "<think>check arguments</think>" : "",
       ...(hybrid && channel ? { reasoning_content: "check arguments" } : {}),
       tool_calls: [{ function: { name, arguments: JSON.stringify(args) } }],
+      ...(this.provider.contentRecovered ? { toolCallSource: "content" } : {}),
     };
   }
 }
@@ -790,4 +791,31 @@ test("gateway runs send Cache-Control: no-cache, refuse a cached reply, and the 
   }
   const { cacheBypass: _omitted, ...withoutBypass } = gatewayEndpoint("engineering/b0");
   assert.throws(() => validateMatrixEvidence(evidenceWith([withoutBypass])), /cache was bypassed/i);
+});
+
+test("calls the candidate client recovered from reply text are counted in the evidence and validated", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gw-recovered-test-"));
+  const tools = [
+    ["read_file", { path: { type: "string" } }, ["path"]],
+    ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
+    ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
+    ["run_command", { command: { type: "string" } }, ["command"]],
+  ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const fixture = createCandidateFixture(root, "b".repeat(40), tools);
+  const gateway = {
+    provider: "gateway", serverKind: "gateway", endpointUrl: "http://127.0.0.1:8000/gw/v1", modelName: "engineering/deep",
+    serverVersion: "limits-2026-11", contextSize: 32768, sampling: { temperature: 0 }, toolChoice: "auto", serverFlags: [],
+    compatibilityMode: "gateway-openai-chat", advertised: { via: "aihost_gateway", limitsVersion: "limits-2026-11" }, contentRecovered: true,
+  };
+  try {
+    globalThis.__wp1107MatrixFixture = { providers: { [gateway.endpointUrl]: gateway }, calls: 0 };
+    const evidence = await runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [gateway] });
+    assert.equal(evidence.endpoints[0].contentRecovered, 200);
+    assert.equal(evidence.passed, true);
+  } finally {
+    delete globalThis.__wp1107MatrixFixture;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  for (const bad of [-1, 1.5, "3"]) assert.throws(() => validateMatrixEvidence(evidenceWith([{ ...gatewayEndpoint("engineering/b0"), contentRecovered: bad }])), /contentRecovered|count/i);
+  assert.equal(validateMatrixEvidence(evidenceWith([{ ...gatewayEndpoint("engineering/b0"), contentRecovered: 3 }])).valid, true);
 });

@@ -25,6 +25,8 @@ export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content?: string | null | any[];
   tool_calls?: ToolCall[];
+  /** Set when the client recovered `tool_calls` from the reply text because the server returned the call as content. Never sent to a provider. */
+  toolCallSource?: "content";
   tool_call_id?: string;
   name?: string;
   /**
