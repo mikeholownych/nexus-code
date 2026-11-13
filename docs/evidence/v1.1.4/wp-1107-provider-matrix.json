@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "candidate": {
+    "archiveSha256": "c7db133d81bfc74cca26d44107cc82701314d2ebae7a20f502977461adf80c33",
+    "sourceCommit": "072b8bfd762235ae7e830b2b7abdb25ebd085e75",
+    "sourceTree": "23a3e2c3ce93c6a60d6a9774508afb20990d3367"
+  },
+  "endpoints": [
+    {
+      "provider": "gateway",
+      "serverKind": "gateway",
+      "serverVersion": "84ddc710d57e76ca",
+      "modelName": "engineering/deep",
+      "workers": [
+        "b0-live-llama-deep-worker2"
+      ],
+      "throttledRetries": 0,
+      "requestIntervalMs": 1200,
+      "contextSize": 65536,
+      "sampling": {
+        "temperature": 0,
+        "max_tokens": 8192
+      },
+      "toolChoice": "auto",
+      "promptFixtureSha256": "563812f616d8e0f10c944c856dbe645ce7886d69623b4846d861aa4c3d2bc229",
+      "serverFlags": [],
+      "compatibilityMode": "gateway-openai-chat",
+      "attempts": 200,
+      "tools": {
+        "read_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "write_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "edit_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "run_command": {
+          "attempts": 50,
+          "native_valid": 5,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 45,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        }
+      },
+      "totals": {
+        "attempts": 200,
+        "native_valid": 155,
+        "repaired": 0,
+        "schema_invalid": 0,
+        "invalid": 45
+      },
+      "passed": false
+    },
+    {
+      "provider": "gateway",
+      "serverKind": "gateway",
+      "serverVersion": "a3c2fcbc2f2b977c",
+      "modelName": "engineering/lead-reasoning",
+      "workers": [
+        "b0-live-llama-worker1"
+      ],
+      "throttledRetries": 0,
+      "requestIntervalMs": 1200,
+      "contextSize": 65536,
+      "sampling": {
+        "temperature": 0,
+        "max_tokens": 8192
+      },
+      "toolChoice": "auto",
+      "promptFixtureSha256": "563812f616d8e0f10c944c856dbe645ce7886d69623b4846d861aa4c3d2bc229",
+      "serverFlags": [],
+      "compatibilityMode": "gateway-openai-chat",
+      "attempts": 200,
+      "tools": {
+        "read_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "write_file": {
+          "attempts": 50,
+          "native_valid": 45,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 5,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 0,
+          "hybrid_schema_valid": 0
+        },
+        "edit_file": {
+          "attempts": 50,
+          "native_valid": 5,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 45,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "run_command": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        }
+      },
+      "totals": {
+        "attempts": 200,
+        "native_valid": 150,
+        "repaired": 0,
+        "schema_invalid": 0,
+        "invalid": 50
+      },
+      "passed": false
+    }
+  ],
+  "passed": false
+}

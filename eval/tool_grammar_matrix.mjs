@@ -168,6 +168,9 @@ function validateEndpoint(endpoint) {
   if (!Array.isArray(endpoint.serverFlags) || endpoint.serverFlags.some((flag) => typeof flag !== "string")) throw new TypeError("server flags identity must be a string array");
   if (endpoint.serverFlags.some((flag) => /api[-_]?key|token|secret|password|credential|authorization|bearer/i.test(flag))) throw new TypeError("server flags must omit credentials and authentication options");
   if (typeof endpoint.compatibilityMode !== "string" || !endpoint.compatibilityMode.trim()) throw new TypeError("compatibility mode identity is required");
+  for (const field of ["throttledRetries", "requestIntervalMs"]) {
+    if (endpoint[field] !== undefined) assertCount(endpoint[field], field);
+  }
   if (endpoint.workers !== undefined && (!Array.isArray(endpoint.workers) || endpoint.workers.some((worker) => typeof worker !== "string" || !worker.trim()))) throw new TypeError("workers must be a list of non-empty strings");
   assertNonSecretMetadata(endpoint, "endpoint");
   if (!isRecord(endpoint.tools) || Object.keys(endpoint.tools).length !== TOOL_NAMES.length) throw new TypeError("attempt counts must include exactly the four allowlisted tools");
@@ -263,6 +266,17 @@ function archiveEntryPath(entry) {
   return { relative: parts.join("/"), directory };
 }
 
+/**
+ * Release archives ship exactly one kind of symlink: a relative link in `node_modules/.bin` that stays inside
+ * `node_modules`. `relative` is the package-relative path (no leading `nexus/`). Every other link is rejected.
+ */
+function resolveConfinedBinLink(relative, target) {
+  const binDir = "lib/cli/node_modules/.bin/";
+  if (!relative.startsWith(binDir) || typeof target !== "string" || !target || target.startsWith("/") || /[\r\n\\\0]/.test(target)) return undefined;
+  const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(relative), target));
+  return resolved.startsWith("lib/cli/node_modules/") && !resolved.startsWith(binDir) ? resolved : undefined;
+}
+
 function listArchiveEntries(archivePath) {
   const names = execFileSync("tar", ["-tzf", archivePath], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).split("\n");
   if (names.at(-1) === "") names.pop();
@@ -275,6 +289,10 @@ function listArchiveEntries(archivePath) {
     if (seen.has(parsed.relative)) throw new TypeError("candidate archive contains duplicate paths");
     seen.add(parsed.relative);
     const type = types[index]?.[0];
+    if (type === "l" && !parsed.directory) {
+      const target = types[index].split(`${names[index]} -> `)[1];
+      if (resolveConfinedBinLink(parsed.relative.slice("nexus/".length), target) !== undefined) continue;
+    }
     if ((parsed.directory && type !== "d") || (!parsed.directory && type !== "-")) {
       throw new TypeError("candidate archive contains a symlink, hard link, or non-regular entry");
     }
@@ -286,11 +304,18 @@ function verifyPackageTree(packageRoot) {
   const rootStat = fs.lstatSync(packageRoot);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new TypeError("candidate package root is not a real directory");
   const files = new Set();
+  const links = new Map();
   const walk = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const fullPath = path.join(directory, entry.name);
       const stat = fs.lstatSync(fullPath);
-      if (stat.isSymbolicLink()) throw new TypeError("candidate package contains a symlink");
+      if (stat.isSymbolicLink()) {
+        const relative = path.relative(packageRoot, fullPath).split(path.sep).join("/");
+        const target = fs.readlinkSync(fullPath);
+        if (resolveConfinedBinLink(relative, target) === undefined) throw new TypeError("candidate package contains a symlink");
+        links.set(relative, target);
+        continue;
+      }
       if (stat.isDirectory()) walk(fullPath);
       else if (stat.isFile()) files.add(path.relative(packageRoot, fullPath).split(path.sep).join("/"));
       else throw new TypeError("candidate package contains a non-regular file");
@@ -328,8 +353,11 @@ function verifyPackageTree(packageRoot) {
   for (const runtimePath of ["lib/cli/dist/client.js", "lib/cli/dist/core/capabilities.js", "lib/cli/dist/parser.js", "lib/cli/dist/core/tool_grammar_provider.js"]) {
     if (!actual.has(runtimePath)) throw new TypeError("candidate package is missing an installed runtime module");
   }
+  for (const [relative, target] of links) {
+    if (!expected.has(resolveConfinedBinLink(relative, target))) throw new TypeError(`candidate package symlink does not point at a manifested file: ${relative}`);
+  }
   expected.set("MANIFEST.sha256", sha256(fs.readFileSync(manifestPath)));
-  return expected;
+  return { files: expected, links };
 }
 
 function createVerifiedArchiveSnapshot(archivePath, expectedDigest) {
@@ -342,8 +370,8 @@ function createVerifiedArchiveSnapshot(archivePath, expectedDigest) {
     listArchiveEntries(snapshotArchive);
     execFileSync("tar", ["-xzf", snapshotArchive, "-C", snapshotRoot, "--no-same-owner", "--no-same-permissions"], { maxBuffer: 64 * 1024 * 1024 });
     const packageRoot = path.join(snapshotRoot, "nexus");
-    const packageFiles = verifyPackageTree(packageRoot);
-    return { snapshotRoot, packageRoot, packageFiles };
+    const { files: packageFiles, links: packageLinks } = verifyPackageTree(packageRoot);
+    return { snapshotRoot, packageRoot, packageFiles, packageLinks };
   } catch (error) {
     fs.rmSync(snapshotRoot, { recursive: true, force: true });
     throw error;
@@ -371,10 +399,13 @@ function validProviderIdentity(provider) {
     throw new TypeError("server flags must omit credentials and authentication options before inference");
   }
   if (typeof provider.compatibilityMode !== "string" || !provider.compatibilityMode.trim()) throw new TypeError("compatibility mode must be pinned before inference");
+  for (const field of ["requestIntervalMs", "rateLimitRetries", "rateLimitDelayMs"]) {
+    if (provider[field] !== undefined) assertCount(provider[field], field);
+  }
   return expected;
 }
 
-function verifyInstalledArchive(installRoot, archiveSha256, sourceCommit, expectedPackageFiles) {
+function verifyInstalledArchive(installRoot, archiveSha256, sourceCommit, expectedPackageFiles, expectedPackageLinks) {
   const resolvedInstallRoot = path.resolve(installRoot);
   const rootStat = fs.lstatSync(resolvedInstallRoot);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || fs.realpathSync(resolvedInstallRoot) !== resolvedInstallRoot) {
@@ -393,12 +424,18 @@ function verifyInstalledArchive(installRoot, archiveSha256, sourceCommit, expect
     throw new TypeError("installed candidate provenance does not bind the exact archive and source commit");
   }
   const installedFiles = new Map();
+  const installedLinks = new Map();
   const walk = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const fullPath = path.join(directory, entry.name);
       const relative = path.relative(resolvedInstallRoot, fullPath).split(path.sep).join("/");
       const stat = fs.lstatSync(fullPath);
-      if (stat.isSymbolicLink()) throw new TypeError("installed candidate package contains a symlink");
+      if (stat.isSymbolicLink()) {
+        const target = fs.readlinkSync(fullPath);
+        if (resolveConfinedBinLink(relative, target) === undefined) throw new TypeError("installed candidate package contains a symlink");
+        installedLinks.set(relative, target);
+        continue;
+      }
       if (stat.isDirectory()) walk(fullPath);
       else if (stat.isFile()) {
         if (relative !== ".provenance.json") installedFiles.set(relative, sha256(fs.readFileSync(fullPath)));
@@ -408,6 +445,9 @@ function verifyInstalledArchive(installRoot, archiveSha256, sourceCommit, expect
     }
   };
   walk(resolvedInstallRoot);
+  if (installedLinks.size !== expectedPackageLinks.size || [...expectedPackageLinks].some(([relative, target]) => installedLinks.get(relative) !== target)) {
+    throw new TypeError("installed candidate symlinks do not match the verified archive");
+  }
   if (installedFiles.size !== expectedPackageFiles.size || [...expectedPackageFiles.keys()].some((relative) => !installedFiles.has(relative))) {
     throw new TypeError("installed candidate package file set does not match the verified archive manifest");
   }
@@ -490,6 +530,9 @@ function verifyCheckoutContent(root, git, sourceTree) {
   }
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const isRateLimited = (error) => /\bHTTP 429\b/.test(String(error?.message ?? error));
+
 /** Invoke the exact installed candidate client for 50 attempts/tool and retain only non-secret aggregate evidence. */
 export async function runToolGrammarMatrix(options) {
   if (!options || typeof options.archivePath !== "string" || typeof options.installRoot !== "string") throw new TypeError("candidate archive and installed root are required");
@@ -505,7 +548,7 @@ export async function runToolGrammarMatrix(options) {
   if (options.archiveSha256.replace(/^sha256:/i, "").toLowerCase() !== archiveSha256) throw new TypeError("candidate archive SHA-256 does not match the pinned digest");
   const snapshot = createVerifiedArchiveSnapshot(archivePath, archiveSha256);
   try {
-    verifyInstalledArchive(options.installRoot, archiveSha256, options.sourceCommit, snapshot.packageFiles);
+    verifyInstalledArchive(options.installRoot, archiveSha256, options.sourceCommit, snapshot.packageFiles, snapshot.packageLinks);
     if (!Array.isArray(options.providers) || options.providers.length === 0) throw new TypeError("provider configurations are required");
     const configuredProviders = options.providers.map((provider) => {
       validProviderIdentity(provider);
@@ -538,6 +581,26 @@ export async function runToolGrammarMatrix(options) {
       attempts: 50, native_valid: 0, repaired: 0, schema_invalid: 0, invalid: 0,
       hybrid_attempts: 5, hybrid_reasoning_present: 0, hybrid_schema_valid: 0,
     }]));
+    // A rate-limited reply says nothing about tool-call validity, so a provider may budget retries for HTTP 429
+    // (spent retries are recorded); a refusal that outlasts the budget is still an invalid attempt.
+    const retryBudget = provider.rateLimitRetries ?? 0;
+    const interval = provider.requestIntervalMs ?? 0;
+    let throttledRetries = 0;
+    let lastStarted = 0;
+    const complete = async (messages, offered) => {
+      for (let retry = 0; ; retry++) {
+        const wait = lastStarted + interval - Date.now();
+        if (wait > 0) await sleep(wait);
+        lastStarted = Date.now();
+        try {
+          return await client.chatCompletion(messages, offered);
+        } catch (error) {
+          if (!isRateLimited(error) || retry >= retryBudget) throw error;
+          throttledRetries++;
+          await sleep(provider.rateLimitDelayMs ?? 0);
+        }
+      }
+    };
     for (const toolName of TOOL_NAMES) {
       const tool = providerTools.find((entry) => entry.function.name === toolName);
       const toolCounts = counts[toolName];
@@ -545,7 +608,7 @@ export async function runToolGrammarMatrix(options) {
         const hybrid = index < 5;
         let response;
         try {
-          response = await client.chatCompletion([{ role: "user", content: promptFor(toolName, hybrid) }], [tool]);
+          response = await complete([{ role: "user", content: promptFor(toolName, hybrid) }], [tool]);
         } catch {
           toolCounts.invalid++;
           continue;
@@ -562,7 +625,9 @@ export async function runToolGrammarMatrix(options) {
         });
         toolCounts[classification.category]++;
         const reasoningMatch = /<think>\s*([\s\S]*?)\s*<\/think>/i.exec(typeof response.content === "string" ? response.content : "");
-        const reasoningPresent = Boolean(reasoningMatch?.[1]?.trim());
+        // The gateway returns model reasoning in a separate reasoning_content channel rather than as a <think> block in content.
+        const channelReasoning = provider.provider === "gateway" && typeof response.reasoning_content === "string" && response.reasoning_content.trim() !== "";
+        const reasoningPresent = Boolean(reasoningMatch?.[1]?.trim()) || channelReasoning;
         if (hybrid && reasoningPresent) toolCounts.hybrid_reasoning_present++;
         if (hybrid && classification.schemaValid) toolCounts.hybrid_schema_valid++;
       }
@@ -578,6 +643,8 @@ export async function runToolGrammarMatrix(options) {
       modelName: provider.modelName,
       ...(provider.modelDigest !== undefined ? { modelDigest: provider.modelDigest } : {}),
       ...(workers && workers.length > 0 ? { workers } : {}),
+      ...(retryBudget > 0 ? { throttledRetries } : {}),
+      ...(interval > 0 ? { requestIntervalMs: interval } : {}),
       contextSize: provider.contextSize,
       sampling: provider.sampling,
       toolChoice: provider.toolChoice,

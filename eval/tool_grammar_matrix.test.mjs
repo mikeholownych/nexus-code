@@ -47,19 +47,25 @@ export class LocalLlmClient {
     const state = globalThis.__wp1107MatrixFixture;
     state.calls++;
     if (state.failVllm && this.provider.provider === "vllm") return { content: "", tool_calls: [] };
+    if (state.throttle > 0) { state.throttle--; state.throttled = (state.throttled ?? 0) + 1; throw new Error('Inference error (HTTP 429): {"error":{"message":"request rate limit exceeded"}}'); }
     const name = offered[0].function.name;
     const args = name === "read_file" ? { path: "safe fixture", ...(this.provider.provider === "vllm" ? { start_line: null } : {}) }
       : name === "write_file" ? { path: "safe fixture", content: "fixture" }
         : name === "edit_file" ? { path: "safe fixture", old_content: "a", new_content: "b" }
           : { command: "true" };
     const hybrid = messages[0].content.includes("<think>");
-    return { content: hybrid ? "<think>check arguments</think>" : "", tool_calls: [{ function: { name, arguments: JSON.stringify(args) } }] };
+    const channel = this.provider.reasoningChannel === "reasoning_content";
+    return {
+      content: hybrid && !channel ? "<think>check arguments</think>" : "",
+      ...(hybrid && channel ? { reasoning_content: "check arguments" } : {}),
+      tool_calls: [{ function: { name, arguments: JSON.stringify(args) } }],
+    };
   }
 }
 `);
 }
 
-function createCandidateFixture(root, _sourceCommit, tools, afterManifest = () => {}) {
+function createCandidateFixture(root, _sourceCommit, tools, afterManifest = () => {}, beforeManifest = () => {}) {
   const candidateCheckoutRoot = path.join(root, "checkout");
   fs.mkdirSync(candidateCheckoutRoot, { recursive: true });
   execFileSync("git", ["init", "-q", candidateCheckoutRoot]);
@@ -74,6 +80,7 @@ function createCandidateFixture(root, _sourceCommit, tools, afterManifest = () =
   const installRoot = path.join(root, "installed");
   fs.mkdirSync(packageRoot, { recursive: true });
   writeInstalledRuntimeFixture(packageRoot, tools);
+  beforeManifest(packageRoot);
   const files = [];
   const visit = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -88,7 +95,7 @@ function createCandidateFixture(root, _sourceCommit, tools, afterManifest = () =
   fs.writeFileSync(path.join(packageRoot, "MANIFEST.sha256"), manifest);
   afterManifest(packageRoot);
   execFileSync("tar", ["-czf", archivePath, "-C", root, "nexus"]);
-  fs.cpSync(packageRoot, installRoot, { recursive: true });
+  fs.cpSync(packageRoot, installRoot, { recursive: true, verbatimSymlinks: true });
   fs.writeFileSync(path.join(installRoot, ".provenance.json"), JSON.stringify({
     method: "installer",
     archiveSha256: createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex"),
@@ -617,6 +624,120 @@ test("gateway-mode runner binds the pinned version to the advertised limits_vers
     await assert.rejects(runToolGrammarMatrix({ ...candidate, providers: [provider("limits-2026-11"), second, { ...provider("limits-2026-11"), provider: "vllm", serverKind: "vllm", imageDigest: `sha256:${"c".repeat(64)}`, modelDigest: `sha256:${"d".repeat(64)}` }] }), /mix/i);
     const noDigest = { ...provider("limits-2026-11"), provider: "vllm", serverKind: "vllm" };
     await assert.rejects(runToolGrammarMatrix({ ...candidate, providers: [noDigest, { ...noDigest, provider: "llamacpp", serverKind: "llamacpp" }, { ...noDigest, provider: "ollama", serverKind: "ollama" }] }), /digest/i);
+  } finally {
+    delete globalThis.__wp1107MatrixFixture;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix accepts the one symlink release archives ship: a relative node_modules/.bin link to a manifested file", async () => {
+  const addTarget = (packageRoot) => {
+    fs.mkdirSync(path.join(packageRoot, "lib", "cli", "node_modules", "dotenv", "dist"), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "lib", "cli", "node_modules", "dotenv", "dist", "index.cjs"), "module.exports = {};\n");
+  };
+  const link = (target) => (packageRoot) => {
+    fs.mkdirSync(path.join(packageRoot, "lib", "cli", "node_modules", ".bin"), { recursive: true });
+    fs.symlinkSync(target, path.join(packageRoot, "lib", "cli", "node_modules", ".bin", "dotenv"));
+  };
+  const cases = [
+    ["confined link", "../dotenv/dist/index.cjs", null],
+    ["escaping target", "../../../../../etc/passwd", /symlink|non-regular|confined/i],
+    ["absolute target", "/etc/passwd", /symlink|non-regular|confined/i],
+    ["target missing from the manifest", "../dotenv/dist/missing.cjs", /symlink|manifest|confined/i],
+  ];
+  for (const [label, target, expectedError] of cases) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `wp1107-binlink-${label.replaceAll(" ", "-")}-`));
+    try {
+      const fixture = createCandidateFixture(root, "b".repeat(40), [], link(target), addTarget);
+      // A candidate that passes archive verification goes on to demand provider configurations.
+      await assert.rejects(runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [] }), expectedError ?? /provider configurations are required/i, label);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp1107-binlink-retargeted-"));
+  try {
+    const fixture = createCandidateFixture(root, "b".repeat(40), [], link("../dotenv/dist/index.cjs"), addTarget);
+    const installedLink = path.join(fixture.installRoot, "lib", "cli", "node_modules", ".bin", "dotenv");
+    fs.rmSync(installedLink);
+    fs.symlinkSync("../dotenv/dist/other.cjs", installedLink);
+    await assert.rejects(runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [] }), /symlink|installed/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gateway-mode runner retries HTTP 429 instead of scoring throttling as invalid tool calls, and records the retries", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gw-throttle-test-"));
+  const tools = [
+    ["read_file", { path: { type: "string" } }, ["path"]],
+    ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
+    ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
+    ["run_command", { command: { type: "string" } }, ["command"]],
+  ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const fixture = createCandidateFixture(root, "b".repeat(40), tools);
+  const candidate = candidateOptions(fixture);
+  const provider = (extra) => ({
+    provider: "gateway", serverKind: "gateway", endpointUrl: "http://127.0.0.1:8000/gw/v1", modelName: "engineering/b0",
+    serverVersion: "limits-2026-11", contextSize: 32768, sampling: { temperature: 0 }, toolChoice: "auto", serverFlags: [],
+    compatibilityMode: "gateway-openai-chat", advertised: { via: "aihost_gateway", limitsVersion: "limits-2026-11" }, ...extra,
+  });
+  try {
+    // The gateway throttles 70 requests, then serves: a budget that covers the throttling scores nothing invalid.
+    globalThis.__wp1107MatrixFixture = { providers: { "http://127.0.0.1:8000/gw/v1": provider({}) }, calls: 0, throttle: 70 };
+    const served = await runToolGrammarMatrix({ ...candidate, providers: [provider({ rateLimitRetries: 100, rateLimitDelayMs: 1 })] });
+    assert.equal(served.endpoints[0].totals.invalid, 0);
+    assert.equal(served.endpoints[0].totals.native_valid, 200);
+    assert.equal(served.endpoints[0].throttledRetries, 70);
+    assert.equal(served.passed, true);
+
+    // A gateway that keeps refusing past the retry budget still fails the alias honestly.
+    globalThis.__wp1107MatrixFixture = { providers: { "http://127.0.0.1:8000/gw/v1": provider({}) }, calls: 0, throttle: 1_000_000 };
+    const refused = await runToolGrammarMatrix({ ...candidate, providers: [provider({ rateLimitRetries: 2, rateLimitDelayMs: 1 })] });
+    assert.equal(refused.endpoints[0].totals.invalid, 200);
+    assert.equal(refused.endpoints[0].throttledRetries, 400);
+    assert.equal(refused.passed, false);
+
+    // Without a retry budget (the direct-server default) a 429 is an invalid attempt and nothing is recorded as throttled.
+    globalThis.__wp1107MatrixFixture = { providers: { "http://127.0.0.1:8000/gw/v1": provider({}) }, calls: 0, throttle: 3 };
+    const plain = await runToolGrammarMatrix({ ...candidate, providers: [provider({})] });
+    assert.equal(plain.endpoints[0].totals.invalid, 3);
+    assert.equal("throttledRetries" in plain.endpoints[0], false);
+  } finally {
+    delete globalThis.__wp1107MatrixFixture;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("matrix evidence accepts a non-negative integer throttledRetries and rejects anything else", () => {
+  const withRetries = (value) => ({ ...gatewayEndpoint("engineering/b0"), throttledRetries: value });
+  assert.equal(validateMatrixEvidence(evidenceWith([withRetries(0)])).valid, true);
+  assert.equal(validateMatrixEvidence(evidenceWith([withRetries(7)])).valid, true);
+  for (const bad of [-1, 1.5, "3", null]) assert.throws(() => validateMatrixEvidence(evidenceWith([withRetries(bad)])), /throttledRetries|count/i);
+});
+
+test("a gateway reasoning channel (reasoning_content) counts as hybrid reasoning", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gw-reasoning-test-"));
+  const tools = [
+    ["read_file", { path: { type: "string" } }, ["path"]],
+    ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
+    ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
+    ["run_command", { command: { type: "string" } }, ["command"]],
+  ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const fixture = createCandidateFixture(root, "b".repeat(40), tools);
+  const candidate = candidateOptions(fixture);
+  const gateway = {
+    provider: "gateway", serverKind: "gateway", endpointUrl: "http://127.0.0.1:8000/gw/v1", modelName: "engineering/deep",
+    serverVersion: "limits-2026-11", contextSize: 32768, sampling: { temperature: 0 }, toolChoice: "auto", serverFlags: [],
+    compatibilityMode: "gateway-openai-chat", advertised: { via: "aihost_gateway", limitsVersion: "limits-2026-11" },
+    reasoningChannel: "reasoning_content",
+  };
+  try {
+    globalThis.__wp1107MatrixFixture = { providers: { [gateway.endpointUrl]: gateway }, calls: 0 };
+    const evidence = await runToolGrammarMatrix({ ...candidate, providers: [gateway] });
+    assert.equal(evidence.endpoints[0].tools.read_file.hybrid_reasoning_present, 5);
+    assert.equal(evidence.passed, true);
   } finally {
     delete globalThis.__wp1107MatrixFixture;
     fs.rmSync(root, { recursive: true, force: true });
