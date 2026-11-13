@@ -6,7 +6,32 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 export const TOOL_NAMES = Object.freeze(["read_file", "write_file", "edit_file", "run_command"]);
-const PROVIDER_KIND = Object.freeze({ llamacpp: "llamacpp", vllm: "vllm", ollama: "ollama" });
+const PROVIDER_KIND = Object.freeze({ llamacpp: "llamacpp", vllm: "vllm", ollama: "ollama", gateway: "gateway" });
+const DIRECT_KINDS = Object.freeze(["llamacpp", "vllm", "ollama"]);
+const digestPattern = /^sha256:[a-f0-9]{64}$/i;
+
+/**
+ * Digests pin a server image and model for the three direct servers. The homelab-ai gateway (DEC-16) is the only live
+ * endpoint in this environment and cannot attest either, so a gateway entry may omit them (it is pinned by `limits_version`
+ * instead); a digest that is present must still be well formed.
+ */
+function checkDigest(entry, field, message) {
+  if (entry.provider === "gateway" && entry[field] === undefined) return;
+  if (typeof entry[field] !== "string" || !digestPattern.test(entry[field])) throw new TypeError(message);
+}
+
+/** Either the three direct servers exactly once each, or one or more distinct gateway-routed models; never a mix. */
+function assertProviderSet(entries, what) {
+  const gateway = entries.filter((entry) => entry?.provider === "gateway");
+  if (gateway.length === 0) {
+    if (entries.length !== DIRECT_KINDS.length) throw new TypeError(`${what} must contain llama.cpp, vLLM, and Ollama endpoints, or gateway-routed models`);
+    const kinds = new Set(entries.map((entry) => entry?.provider));
+    if (kinds.size !== DIRECT_KINDS.length) throw new TypeError(`${what} repeats a provider identity or is missing one`);
+    return;
+  }
+  if (gateway.length !== entries.length) throw new TypeError(`${what} must not mix gateway-routed models with direct servers`);
+  if (new Set(gateway.map((entry) => entry.modelName)).size !== gateway.length) throw new TypeError(`${what} repeats a provider identity (gateway model)`);
+}
 const sha256Pattern = /^(?:sha256:)?[a-f0-9]{64}$/i;
 const commitPattern = /^[a-f0-9]{40}$/i;
 const categories = ["native_valid", "repaired", "schema_invalid", "invalid"];
@@ -134,9 +159,9 @@ function validateEndpoint(endpoint) {
   const expected = PROVIDER_KIND[endpoint.provider];
   if (!expected || endpoint.serverKind !== expected) throw new TypeError("provider identity mismatch");
   if (typeof endpoint.serverVersion !== "string" || !endpoint.serverVersion.trim()) throw new TypeError("server identity requires a version");
-  if (typeof endpoint.imageDigest !== "string" || !/^sha256:[a-f0-9]{64}$/i.test(endpoint.imageDigest)) throw new TypeError("server identity requires an immutable image digest");
+  checkDigest(endpoint, "imageDigest", "server identity requires an immutable image digest");
   if (typeof endpoint.modelName !== "string" || !endpoint.modelName.trim()) throw new TypeError("model identity requires a name");
-  if (typeof endpoint.modelDigest !== "string" || !/^sha256:[a-f0-9]{64}$/i.test(endpoint.modelDigest)) throw new TypeError("model identity requires an immutable model digest");
+  checkDigest(endpoint, "modelDigest", "model identity requires an immutable model digest");
   assertCount(endpoint.contextSize, "context size");
   if (endpoint.contextSize === 0) throw new TypeError("context size must be positive");
   if (!isRecord(endpoint.sampling) || !Number.isFinite(endpoint.sampling.temperature)) throw new TypeError("sampling identity requires the temperature sent by the candidate");
@@ -183,14 +208,9 @@ export function validateMatrixEvidence(evidence) {
   if (!isRecord(evidence.candidate) || !sha256Pattern.test(evidence.candidate.archiveSha256) || !commitPattern.test(evidence.candidate.sourceCommit) || !commitPattern.test(evidence.candidate.sourceTree)) {
     throw new TypeError("candidate identity requires archive SHA-256, full source commit and source tree id");
   }
-  if (!Array.isArray(evidence.endpoints) || evidence.endpoints.length !== Object.keys(PROVIDER_KIND).length) throw new TypeError("matrix evidence must contain llama.cpp, vLLM, and Ollama endpoints");
-  const kinds = new Set();
-  for (const endpoint of evidence.endpoints) {
-    validateEndpoint(endpoint);
-    if (kinds.has(endpoint.provider)) throw new TypeError("matrix evidence repeats a provider identity");
-    kinds.add(endpoint.provider);
-  }
-  if (kinds.size !== 3) throw new TypeError("matrix evidence is missing a provider identity");
+  if (!Array.isArray(evidence.endpoints) || evidence.endpoints.length === 0) throw new TypeError("matrix evidence must contain llama.cpp, vLLM, and Ollama endpoints, or gateway-routed models");
+  for (const endpoint of evidence.endpoints) validateEndpoint(endpoint);
+  assertProviderSet(evidence.endpoints, "matrix evidence");
   return { valid: true, passed: evidence.endpoints.every((endpoint) => endpoint.passed) };
 }
 
@@ -341,9 +361,9 @@ function validProviderIdentity(provider) {
   if (!expected || provider.serverKind !== expected) throw new TypeError("configured provider identity is invalid");
   if (typeof provider.endpointUrl !== "string" || !provider.endpointUrl) throw new TypeError("provider endpoint is required");
   if (typeof provider.serverVersion !== "string" || !provider.serverVersion.trim()) throw new TypeError("server version must be pinned before inference");
-  if (typeof provider.imageDigest !== "string" || !/^sha256:[a-f0-9]{64}$/i.test(provider.imageDigest)) throw new TypeError("immutable server image digest must be pinned before inference");
+  checkDigest(provider, "imageDigest", "immutable server image digest must be pinned before inference");
   if (typeof provider.modelName !== "string" || !provider.modelName.trim()) throw new TypeError("model identity requires a name");
-  if (typeof provider.modelDigest !== "string" || !/^sha256:[a-f0-9]{64}$/i.test(provider.modelDigest)) throw new TypeError("immutable model digest must be pinned before inference");
+  checkDigest(provider, "modelDigest", "immutable model digest must be pinned before inference");
   if (!Number.isSafeInteger(provider.contextSize) || provider.contextSize <= 0) throw new TypeError("positive context size must be pinned before inference");
   if (!isRecord(provider.sampling) || !Number.isFinite(provider.sampling.temperature)) throw new TypeError("sampling temperature must be pinned before inference");
   if (provider.sampling.max_tokens !== undefined && (!Number.isSafeInteger(provider.sampling.max_tokens) || provider.sampling.max_tokens <= 0)) throw new TypeError("sampling max_tokens must be a positive integer");
@@ -488,11 +508,12 @@ export async function runToolGrammarMatrix(options) {
   const snapshot = createVerifiedArchiveSnapshot(archivePath, archiveSha256);
   try {
     verifyInstalledArchive(options.installRoot, archiveSha256, options.sourceCommit, snapshot.packageFiles);
-    if (!Array.isArray(options.providers) || options.providers.length !== 3) throw new TypeError("exactly one configuration per supported provider is required");
+    if (!Array.isArray(options.providers) || options.providers.length === 0) throw new TypeError("provider configurations are required");
     const configuredProviders = options.providers.map((provider) => {
       validProviderIdentity(provider);
       return provider;
     });
+    assertProviderSet(configuredProviders, "provider configuration");
     const runtime = await loadInstalledRuntime(snapshot.packageRoot);
   const tools = validateTools(runtime.tools);
   const clientFactory = runtime.clientFactory;
@@ -509,6 +530,11 @@ export async function runToolGrammarMatrix(options) {
     const detectedKind = client.getDetectedServerKind?.();
     if (discovery?.state !== "supported" || detectedKind !== expectedKind) {
       throw new Error(`provider identity mismatch: configured ${expectedKind}, detected ${detectedKind ?? "unknown"}`);
+    }
+    // The gateway attests no image or model digest, so its pinned version must equal the limits_version it advertises now.
+    const workers = expectedKind === "gateway" ? [...(discovery.advertised?.workers ?? [])].sort() : undefined;
+    if (expectedKind === "gateway" && discovery.advertised?.limitsVersion !== provider.serverVersion) {
+      throw new Error(`gateway limits_version mismatch: pinned ${provider.serverVersion}, advertised ${discovery.advertised?.limitsVersion ?? "none"}`);
     }
     const providerTools = validateTools(adaptToolsForServer(detectedKind, tools));
     const counts = Object.fromEntries(TOOL_NAMES.map((name) => [name, {
@@ -551,9 +577,10 @@ export async function runToolGrammarMatrix(options) {
       provider: provider.provider,
       serverKind: detectedKind,
       serverVersion: provider.serverVersion,
-      imageDigest: provider.imageDigest,
+      ...(provider.imageDigest !== undefined ? { imageDigest: provider.imageDigest } : {}),
       modelName: provider.modelName,
-      modelDigest: provider.modelDigest,
+      ...(provider.modelDigest !== undefined ? { modelDigest: provider.modelDigest } : {}),
+      ...(workers && workers.length > 0 ? { workers } : {}),
       contextSize: provider.contextSize,
       sampling: provider.sampling,
       toolChoice: provider.toolChoice,

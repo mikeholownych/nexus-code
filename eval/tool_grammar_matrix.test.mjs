@@ -41,7 +41,7 @@ export function adaptToolDefinitionsForServer(kind, definitions) {
   fs.writeFileSync(path.join(cliRoot, "client.js"), `
 export class LocalLlmClient {
   constructor(config) { const state = globalThis.__wp1107MatrixFixture; state.clientCreations = (state.clientCreations ?? 0) + 1; this.config = config; this.provider = state.providers[config.endpoint]; }
-  async discoverAdvertisement() { return { state: "supported" }; }
+  async discoverAdvertisement() { return { state: "supported", ...(this.provider.advertised ? { advertised: this.provider.advertised } : {}) }; }
   getDetectedServerKind() { return this.provider.serverKind; }
   async chatCompletion(messages, offered) {
     const state = globalThis.__wp1107MatrixFixture;
@@ -557,4 +557,60 @@ test("tool grammar matrix evidence is immutable and has a detached SHA-256 sidec
   assert.throws(() => writeEvidence(outputPath, evidenceWith()), /exist/i);
   assert.equal(createHash("sha256").update(fs.readFileSync(outputPath)).digest("hex"), result.sha256);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+function gatewayEndpoint(modelName, result = endpointResult(50)) {
+  const { imageDigest: _image, modelDigest: _model, ...rest } = identifiedEndpoint("gateway", result);
+  return { ...rest, serverKind: "gateway", serverVersion: "limits-2026-11", modelName, workers: ["worker-a"], serverFlags: [], compatibilityMode: "gateway-openai-chat" };
+}
+
+test("gateway-mode evidence accepts routed models without image or model digests, and nothing else", () => {
+  assert.equal(validateMatrixEvidence(evidenceWith([gatewayEndpoint("engineering/b0")])).valid, true);
+  assert.equal(validateMatrixEvidence(evidenceWith([gatewayEndpoint("engineering/b0"), gatewayEndpoint("engineering/b1")])).valid, true);
+  assert.throws(() => validateMatrixEvidence(evidenceWith([gatewayEndpoint("engineering/b0"), gatewayEndpoint("engineering/b0")])), /repeats/i);
+  assert.throws(() => validateMatrixEvidence(evidenceWith([gatewayEndpoint("engineering/b0"), identifiedEndpoint("vllm")])), /mix|gateway/i);
+  const badDigest = gatewayEndpoint("engineering/b0");
+  badDigest.modelDigest = "not-a-digest";
+  assert.throws(() => validateMatrixEvidence(evidenceWith([badDigest])), /digest/i);
+  const missingVersion = gatewayEndpoint("engineering/b0");
+  delete missingVersion.serverVersion;
+  assert.throws(() => validateMatrixEvidence(evidenceWith([missingVersion])), /version/i);
+  // Legacy runs still demand digests: the relaxation is for the gateway only.
+  const legacy = identifiedEndpoint("llamacpp");
+  delete legacy.imageDigest;
+  assert.throws(() => validateMatrixEvidence(evidenceWith([legacy, identifiedEndpoint("vllm"), identifiedEndpoint("ollama")])), /digest/i);
+});
+
+test("gateway-mode runner binds the pinned version to the advertised limits_version and records the workers", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gw-matrix-test-"));
+  const tools = [
+    ["read_file", { path: { type: "string" } }, ["path"]],
+    ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
+    ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
+    ["run_command", { command: { type: "string" } }, ["command"]],
+  ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const fixture = createCandidateFixture(root, "b".repeat(40), tools);
+  const candidate = candidateOptions(fixture);
+  const provider = (version) => ({
+    provider: "gateway", serverKind: "gateway", endpointUrl: "http://127.0.0.1:8000/gw/v1", modelName: "engineering/b0",
+    serverVersion: "limits-2026-11", contextSize: 32768, sampling: { temperature: 0 }, toolChoice: "auto", serverFlags: [],
+    compatibilityMode: "gateway-openai-chat",
+    advertised: { via: "aihost_gateway", limitsVersion: version, workers: ["worker-b", "worker-a"] },
+  });
+  try {
+    globalThis.__wp1107MatrixFixture = { providers: { "http://127.0.0.1:8000/gw/v1": provider("limits-2026-11") }, calls: 0, failVllm: false };
+    const evidence = await runToolGrammarMatrix({ ...candidate, providers: [provider("limits-2026-11")] });
+    assert.equal(globalThis.__wp1107MatrixFixture.calls, 200);
+    assert.equal(evidence.passed, true);
+    assert.deepEqual(evidence.endpoints.map((endpoint) => endpoint.serverKind), ["gateway"]);
+    assert.equal("imageDigest" in evidence.endpoints[0], false);
+    assert.deepEqual(evidence.endpoints[0].workers, ["worker-a", "worker-b"]);
+
+    globalThis.__wp1107MatrixFixture = { providers: { "http://127.0.0.1:8000/gw/v1": provider("limits-OTHER") }, calls: 0, failVllm: false };
+    await assert.rejects(runToolGrammarMatrix({ ...candidate, providers: [provider("limits-2026-11")] }), /limits_version/i);
+    assert.equal(globalThis.__wp1107MatrixFixture.calls, 0, "a version mismatch must fail before any attempt");
+  } finally {
+    delete globalThis.__wp1107MatrixFixture;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
