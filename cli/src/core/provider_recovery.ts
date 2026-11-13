@@ -6,7 +6,7 @@ import type {
   ProviderRecoveryRecord,
   TransportCause,
 } from "./turn.js";
-import { persistableEndpoint } from "./endpoint_identity.js";
+import { persistableEndpoint, scrubUrls } from "./endpoint_identity.js";
 
 /** Conditions the agent loop waits out instead of failing the turn. */
 export const TEMPORARY_CONDITIONS: ReadonlySet<ProviderCondition> = new Set([
@@ -250,6 +250,10 @@ export interface ProbeResult {
   httpStatus?: number;
   hints?: ProviderHints;
   detail?: string;
+  /** The probe's own deadline fired (the connection may be fine, just slow). */
+  timedOut?: boolean;
+  /** Error codes from the transport's cause chain (ECONNREFUSED, ENOTFOUND, ...): structured, never read from text. */
+  codes?: string[];
 }
 
 /**
@@ -291,14 +295,64 @@ export interface RecoveryControllerOptions {
 
 /** Startup probe diagnosis (REQ-TUI-105): names the endpoint URL, cause, and fix when unreachable or rejected. */
 export function startupEndpointWarning(endpoint: string, probe: ProbeResult): string | undefined {
+  const problem = startupEndpointProblem(endpoint, probe);
+  return problem ? startupProblemWarning(problem) : undefined;
+}
+
+export function startupProblemWarning(problem: StartupEndpointProblem): string {
+  return problem.kind === "unreachable"
+    ? `Endpoint ${problem.endpoint} is unreachable${problem.detail ? ` (${problem.detail})` : ""}. Run \`nexus doctor\`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.`
+    : `Endpoint ${problem.endpoint} rejected credentials (${problem.detail}). Run \`nexus doctor\`, check ~/.config/nexus/config.env, or use /connect.`;
+}
+
+/** Why no model can be used right now, as the start-up probe found it (D-07). `detail` is the raw cause, for inspection only. */
+export interface StartupEndpointProblem {
+  kind: "unreachable" | "rejected";
+  endpoint: string;
+  detail: string;
+  /**
+   * True only when the connection itself failed (refused, DNS, TLS, reset): a prompt cannot work. A timeout, an HTTP
+   * error from /models (503 while a model loads, 429) or a rejection says nothing about the chat path.
+   */
+  blocking: boolean;
+  /** The connection was refused or the host did not resolve: nothing is listening there (otherwise something answered badly). */
+  nothingThere: boolean;
+  /** Every endpoint that failed when more than one did (primary, failovers, planner, coder): named in the notice; `endpoint` is the first. */
+  endpoints?: string[];
+}
+
+export function startupEndpointProblem(endpoint: string, probe: ProbeResult): StartupEndpointProblem | undefined {
   if (!probe.available) {
-    const cause = probe.detail ? ` (${probe.detail})` : "";
-    return `Endpoint ${persistableEndpoint(endpoint)} is unreachable${cause}. Run \`nexus doctor\`, check LOCAL_LLM_ENDPOINT in ~/.config/nexus/config.env, or use /connect.`;
+    const detail = scrubUrls(probe.detail ?? "");
+    const blocking = probe.httpStatus === undefined && !probe.timedOut;
+    const nothingThere = (probe.codes ?? []).some((code) => code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "EAI_AGAIN");
+    return { kind: "unreachable", endpoint: persistableEndpoint(endpoint), detail, blocking, nothingThere };
   }
   if (probe.httpStatus === 401 || probe.httpStatus === 403) {
-    return `Endpoint ${persistableEndpoint(endpoint)} rejected credentials (HTTP ${probe.httpStatus}). Run \`nexus doctor\`, check ~/.config/nexus/config.env, or use /connect.`;
+    return { kind: "rejected", endpoint: persistableEndpoint(endpoint), detail: `HTTP ${probe.httpStatus}`, blocking: false, nothingThere: false };
   }
   return undefined;
+}
+
+/**
+ * One diagnosis over every endpoint inference can use (primary, failovers, planner, coder), each probe kept under its own
+ * endpoint. It is `blocking` only when EVERY endpoint failed at the connection (refused, DNS, TLS, reset): any answer
+ * (an HTTP status, a timeout, a rejection) means a prompt may work, so the failed endpoints are only a warning.
+ * `notProbed` counts candidates left alone (inside a restored provider window): unknown, never a definitive failure.
+ */
+export function startupEndpointProblems(results: ReadonlyArray<{ endpoint: string; probe: ProbeResult }>, notProbed = 0): StartupEndpointProblem | undefined {
+  const problems = results.map((r) => startupEndpointProblem(r.endpoint, r.probe));
+  const found = problems.filter((p): p is StartupEndpointProblem => p !== undefined);
+  if (found.length === 0) return undefined;
+  const allBlocking = notProbed === 0 && found.length === results.length && found.every((p) => p.blocking);
+  const first = found[0];
+  const endpoints = [...new Set(found.map((p) => p.endpoint))];
+  return {
+    ...first,
+    blocking: allBlocking,
+    nothingThere: allBlocking && found.every((p) => p.nothingThere),
+    ...(endpoints.length > 1 ? { endpoints } : {}),
+  };
 }
 
 /**

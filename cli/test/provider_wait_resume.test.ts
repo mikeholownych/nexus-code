@@ -237,7 +237,7 @@ describe("a provider's Retry-After survives suspend, restart and resume outside 
       await until(() => side.events.some((x) => x.e.type === "turn.result"), "the resumed turn's result", 60_000);
       assert.equal(arrivals.length, 2, "one request after the resume");
       assert.ok(arrivals[1] >= eligibleAt, `the resumed request (${new Date(arrivals[1]).toISOString()}) did not reach the provider before ${new Date(eligibleAt).toISOString()}`);
-      const waitNotice = side.notices().find((n) => /waiting \d+s before checking again/.test(String(n.e.text)));
+      const waitNotice = side.notices().find((n) => /next attempt in \d+s/.test(String(n.e.text)));
       assert.ok(waitNotice && waitNotice.at < arrivals[1], `a provider-wait notice is shown before the request: ${side.notices().map((n) => n.e.text).join(" | ")}`);
       await side.shutdown();
     } finally {
@@ -1065,9 +1065,11 @@ describe("the resumed provider wait (fake recovery clock)", () => {
       const a = ctx.resumed as any;
       const eligibleAt = eligibleAtOf(ctx.interrupted);
       let probes = 0;
-      a.client.probeAvailability = async () => {
-        probes++;
-        return { available: true, condition: "AVAILABLE", httpStatus: 200 };
+      // Like the real client: an endpoint the caller's `skip` names is sent nothing and left out of the answer.
+      a.client.probeEachEndpoint = async (_signal: unknown, opts?: { skip?: (endpoint: string) => boolean }) => {
+        const sent = [a.client.endpoint].filter((endpoint: string) => !opts?.skip?.(endpoint));
+        probes += sent.length;
+        return sent.map((endpoint: string) => ({ endpoint, probe: { available: true, condition: "AVAILABLE", httpStatus: 200 } }));
       };
       assert.equal(await ctx.resumed.probeStartupEndpoint(), undefined, "a skipped probe warns about nothing");
       assert.equal(probes, 0, "no GET /models inside the window");

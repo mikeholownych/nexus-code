@@ -1,9 +1,9 @@
 //! Live session state. Pure: protocol events and keys go in, actions come out. Outcomes are projected exactly as
 //! the sidecar reports them.
-use crate::composer::Composer;
+use crate::composer::{Composer, Draft};
 use crate::diff_view::{self, DiffCard, Patch};
 use crate::theme::Depth;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -59,10 +59,14 @@ pub enum Entry {
         notes: Option<String>,
     },
     Notice(String),
+    /// A live status the sidecar keeps updating (a provider wait): later notices with the same key replace its text.
+    Status { key: String, text: String },
     /// A slash or `!` command as the operator typed it.
     Command(String),
     /// The full text of a submitted prompt that held paste buffers (the prompt line shows their labels).
     Pasted(String),
+    /// A prompt the sidecar refused outright (no provider): it was put back in the composer, so the transcript marks it as not sent. Empty for the paste block that went with it.
+    Unsent(String),
     /// A message of a resumed conversation, shown under the resume divider.
     Earlier { role: String, text: String },
     /// A tool the agent called in a resumed conversation: name and subject (its result stays in the session record).
@@ -433,7 +437,7 @@ pub enum Overlay {
 }
 
 /// What the last frame measured. Key handling uses it for page sizes, and it clamps scrolling at the top.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LiveLayout {
     pub transcript_rows: usize,
     /// Largest useful `scroll_back`; `usize::MAX` when the frame did not reach the top of the transcript.
@@ -444,8 +448,8 @@ pub struct LiveLayout {
     pub followed: Option<usize>,
     /// Columns the diff review can still pan right, and its content width.
     pub overlay_hlimit: usize,
-    /// The transcript row at the top of the window: (entry index, rows from that row to the end of its entry).
-    pub top: Option<(usize, usize)>,
+    /// The transcript row at the top of the window: (entry index, line index in the entry, row within the line).
+    pub top: Option<(usize, usize, usize)>,
     /// Set when the frame kept the window on `LiveState::anchor` while content arrived: the `scroll_back` it drew.
     pub anchored: Option<usize>,
     /// The approval panel was drawn with its heading, decisions and at least one row of the change visible.
@@ -459,10 +463,25 @@ pub struct LiveLayout {
     pub approval_width: usize,
     /// Where the change's rows are drawn (what a test reads back from the screen).
     pub approval_body: ratatui::layout::Rect,
+    /// Where the transcript was drawn, and the entry each of its rows belongs to (what a mouse click is matched against).
+    pub transcript_area: ratatui::layout::Rect,
+    pub row_entries: Vec<usize>,
 }
+
+/// Transcript rows one wheel notch moves.
+const WHEEL_ROWS: usize = 3;
 
 /// Tool calls whose result the turn banner already reports.
 const HIDDEN_TOOLS: &[&str] = &["task_completed"];
+
+/// The prompt just sent, kept until the turn is accepted: the id, the draft, and the transcript entries pushed for it
+/// (the prompt line, then the paste block when it held paste buffers).
+struct SentPrompt {
+    id: String,
+    draft: Draft,
+    entry: usize,
+    pasted: bool,
+}
 
 pub struct LiveState {
     pub link: Link,
@@ -472,6 +491,10 @@ pub struct LiveState {
     turn_seq: u64,
     /// Id of the submitted prompt the sidecar has not yet answered with a `turn.result`.
     pending: Option<String>,
+    /// The draft as it was when the last prompt was sent (text, paste buffers, cursor), so a prompt the sidecar refuses outright can be put back whole.
+    sent_prompt: Option<SentPrompt>,
+    /// The raw cause behind the latest provider notice, shown by `/details`.
+    provider_cause: Option<String>,
     /// Ctrl-C or Esc already asked the running turn to stop; another Ctrl-C quits.
     cancel_requested: bool,
     /// When cancel was requested.
@@ -498,6 +521,9 @@ pub struct LiveState {
     outbox: Vec<Action>,
     /// What the running turn last reported doing.
     pub activity: Option<Activity>,
+    /// The provider's stream is silent: (when the sidecar reported it, seconds of silence it reported). The silence
+    /// shown is this plus the time since, so it keeps counting between reports.
+    pub stall: Option<(Instant, u64)>,
     /// When the current turn started (this client's clock); drives the elapsed time while busy.
     pub turn_started: Option<Instant>,
     steer_seq: u64,
@@ -507,8 +533,10 @@ pub struct LiveState {
     pub now: Instant,
     /// Colours the terminal can show.
     pub depth: Depth,
-    /// While scrolled back: the row the window keeps at its top as entries arrive or grow below it.
-    pub anchor: Option<(usize, usize)>,
+    /// While scrolled back: the row the window keeps at its top as entries arrive or grow below it, as (entry index,
+    /// line index in the entry, row within the line). Counted from the start so an entry that grows (a streaming
+    /// answer) does not move it; the frame clamps it if the entry or the line shrank or the width changed.
+    pub anchor: Option<(usize, usize, usize)>,
     /// Transcript index of the newest entry the diff review can open.
     pub last_reviewable: Option<usize>,
     /// Output arrived below the window while the operator was scrolled back.
@@ -524,6 +552,10 @@ pub struct LiveState {
     assistant_break: bool,
     /// Whether this session has been saved/persisted to disk (e.g. after a completed turn or history restore).
     pub session_saved: bool,
+    /// The terminal reports Shift+Enter as its own key (kitty keyboard protocol): only then is it advertised.
+    pub shift_enter: bool,
+    /// Mouse capture is on: the wheel scrolls and a click selects a tool call.
+    pub mouse: bool,
 }
 
 impl LiveState {
@@ -535,6 +567,8 @@ impl LiveState {
             composer: Composer::default(),
             turn_seq: 0,
             pending: None,
+            sent_prompt: None,
+            provider_cause: None,
             cancel_requested: false,
             cancel_started: None,
             focus: Focus::Composer,
@@ -551,11 +585,14 @@ impl LiveState {
             panel_seq: 0,
             outbox: Vec::new(),
             activity: None,
+            stall: None,
             turn_started: None,
             steer_seq: 0,
             steer_texts: HashMap::new(),
             now: Instant::now(),
             depth: Depth::TrueColor,
+            shift_enter: false,
+            mouse: false,
             anchor: None,
             last_reviewable: None,
             unseen: false,
@@ -816,7 +853,30 @@ impl LiveState {
         }
     }
 
+    /// The refused prompt stays in the transcript where it was typed, marked as not sent (it is back in the composer):
+    /// the entries are replaced in place, so no index (scroll anchor, selection, review target) moves.
+    fn mark_unsent(&mut self, sent: &SentPrompt) {
+        if let Some(Entry::User(text)) = self.transcript.get(sent.entry) {
+            let text = text.clone();
+            self.transcript[sent.entry] = Entry::Unsent(text);
+            if sent.pasted && matches!(self.transcript.get(sent.entry + 1), Some(Entry::Pasted(_))) {
+                self.transcript[sent.entry + 1] = Entry::Unsent(String::new());
+            }
+        }
+    }
+
     fn apply_event(&mut self, event: Event) {
+        // The turn started: the prompt was accepted, so the copy of the draft (paste buffers included) is dropped.
+        // No turn id is compared on purpose: `activity` carries none, and a submit is only possible when no turn is
+        // pending (the previous `turn.result` cleared it), so the sidecar has nothing else to report until it has
+        // accepted or refused this prompt; a stray event could only come from a sidecar that is not the one we sent to.
+        if matches!(event, Event::Activity { .. } | Event::AssistantDelta { .. } | Event::ToolStart { .. } | Event::TurnResult { .. }) {
+            self.sent_prompt = None;
+        }
+        // Provider output or a tool starting means the stream is not silent any more.
+        if matches!(event, Event::AssistantDelta { .. } | Event::ToolStart { .. }) {
+            self.stall = None;
+        }
         if matches!(self.link, Link::Crashed { .. }) {
             return;
         }
@@ -856,9 +916,14 @@ impl LiveState {
                 if !busy {
                     self.turn_started = None;
                     self.activity = None;
+                    self.stall = None;
                 }
             }
+            Event::StreamStall { stalled, silent_secs } => {
+                self.stall = stalled.then(|| (Instant::now(), silent_secs));
+            }
             Event::Activity { phase, step, segment, tool, subject, max_steps, max_minutes } => {
+                self.stall = None;
                 if self.activity.as_ref().is_none_or(|previous| previous.step != step) {
                     self.assistant_break = true;
                 }
@@ -1057,12 +1122,28 @@ impl LiveState {
             Event::Error { id, code, message } => {
                 // BUSY means the sidecar is still running a turn, so the composer stays locked.
                 if id.is_some() && id == self.pending && code != "BUSY" {
+                    if code != "NO_PROVIDER" {
+                        self.sent_prompt = None;
+                    }
                     self.pending = None;
                     self.session.busy = false;
                     self.cancel_requested = false;
                     self.cancel_started = None;
                 }
-                self.transcript.push(Entry::Notice(format!("{code}: {message}")));
+                if code == "NO_PROVIDER" {
+                    // The sidecar refused a prompt that could only fail: the message says why, and the draft is not lost.
+                    if let Some(sent) = self.sent_prompt.take() {
+                        if id.as_deref() == Some(sent.id.as_str()) {
+                            self.mark_unsent(&sent);
+                            if self.composer.is_empty() {
+                                self.composer.restore_draft(&sent.draft);
+                            }
+                        }
+                    }
+                    self.transcript.push(Entry::Notice(message));
+                } else {
+                    self.transcript.push(Entry::Notice(format!("{code}: {message}")));
+                }
             }
             Event::SlashResult {
                 id,
@@ -1074,6 +1155,7 @@ impl LiveState {
                 prompt,
             } => {
                 if command == "clear" && success {
+                    self.sent_prompt = None;
                     self.transcript.clear();
                     self.scroll_back = 0;
                     self.selected = None;
@@ -1105,7 +1187,15 @@ impl LiveState {
                     None => {}
                 }
             }
-            Event::Notice { text } => self.transcript.push(Entry::Info(text)),
+            Event::Notice { text, key, detail } => {
+                if let Some(detail) = detail {
+                    self.provider_cause = Some(detail);
+                }
+                match key {
+                    Some(key) => self.put_status(key, text),
+                    None => self.transcript.push(Entry::Info(text)),
+                }
+            }
             Event::History { session, total, messages } => {
                 if total > 0 || !messages.is_empty() {
                     self.session_saved = true;
@@ -1675,6 +1765,85 @@ impl LiveState {
         self.on_key_at(key, Instant::now())
     }
 
+    /// Mouse input, reported only while capture is on. The wheel scrolls whatever has the screen (the transcript, or
+    /// the open panel, an approval's change included) and a left click on a tool call selects it, then opens it, as
+    /// `[`/`]` and enter do. Nothing here can answer an approval or any other question: clicks do nothing while a
+    /// panel is open, and no mouse event is typing (it neither arms nor shortens the approval guards).
+    pub fn on_mouse(&mut self, event: MouseEvent) -> Option<Action> {
+        let before = self.scroll_back;
+        let action = self.handle_mouse(event);
+        if self.scroll_back != before {
+            self.anchor = None;
+        }
+        action
+    }
+
+    fn handle_mouse(&mut self, event: MouseEvent) -> Option<Action> {
+        if matches!(self.link, Link::Crashed { .. }) {
+            return None;
+        }
+        let wheel_up = match event.kind {
+            MouseEventKind::ScrollUp => Some(true),
+            MouseEventKind::ScrollDown => Some(false),
+            _ => None,
+        };
+        match &mut self.overlay {
+            None => {}
+            Some(Overlay::Review(review)) => {
+                if let Some(up) = wheel_up {
+                    review.top = if up { review.top.saturating_sub(WHEEL_ROWS) } else { review.top.saturating_add(WHEEL_ROWS) };
+                }
+                return None;
+            }
+            Some(Overlay::Approval(_) | Overlay::Help { .. } | Overlay::Paste { .. } | Overlay::Detail(_) | Overlay::Receipt(_)) => {
+                if let Some(up) = wheel_up {
+                    for _ in 0..WHEEL_ROWS {
+                        self.scroll_overlay(if up { KeyCode::Up } else { KeyCode::Down });
+                    }
+                }
+                return None;
+            }
+            // Pickers and the checkpoint question are keyboard-only.
+            Some(_) => return None,
+        }
+        if let Some(up) = wheel_up {
+            self.scroll_back = if up { self.scroll_back.saturating_add(WHEEL_ROWS) } else { self.scroll_back.saturating_sub(WHEEL_ROWS) };
+            return None;
+        }
+        if event.kind == MouseEventKind::Down(MouseButton::Left) {
+            return self.click(event.column, event.row);
+        }
+        None
+    }
+
+    /// A click on a tool call (a row of its card in the last frame) selects it; on the selected one it opens its details.
+    fn click(&mut self, column: u16, row: u16) -> Option<Action> {
+        let area = self.layout.transcript_area;
+        if column < area.x || column >= area.right() || row < area.y || row >= area.bottom() {
+            return None;
+        }
+        // The scroll badge covers the last row while scrolled back, and the completion list covers the rows above the
+        // composer: a click there is on neither card.
+        if self.completion().is_some() || (self.scroll_back > 0 && row + 1 == area.bottom()) {
+            return None;
+        }
+        let index = *self.layout.row_entries.get(usize::from(row - area.y))?;
+        if !self.transcript.get(index).is_some_and(Self::selectable) {
+            return None;
+        }
+        if self.focus == Focus::Transcript && self.selected == Some(index) {
+            return self.open_detail();
+        }
+        self.focus = Focus::Transcript;
+        self.selected = Some(index);
+        None
+    }
+
+    /// Entries `[` and `]` stop at, and a click can select.
+    fn selectable(entry: &Entry) -> bool {
+        matches!(entry, Entry::Tool { .. } | Entry::Diff { .. }) || entry.reviewable()
+    }
+
     pub fn on_key_at(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
         let before = self.scroll_back;
         let action = self.handle_key(key, now);
@@ -1872,6 +2041,8 @@ impl LiveState {
         let composer = &mut self.composer;
         match key.code {
             KeyCode::Enter => composer.insert("\n"),
+            // LF: a newline key every terminal can send, whether or not it reports Shift+Enter.
+            KeyCode::Char('j') if ctrl && !alt => composer.insert("\n"),
             KeyCode::Backspace if ctrl || alt => composer.delete_word_back(),
             KeyCode::Backspace => composer.backspace(),
             KeyCode::Delete => composer.delete(),
@@ -1931,6 +2102,7 @@ impl LiveState {
         if self.session.busy {
             return self.submit_while_busy(display, invocation);
         }
+        let sent = self.composer.snapshot_draft();
         let text = self.composer.take();
         self.scroll_back = 0;
         self.focus = Focus::Composer;
@@ -1939,6 +2111,7 @@ impl LiveState {
         }
         self.turn_seq += 1;
         let pasted = display != text;
+        let entry = self.transcript.len();
         self.transcript.push(Entry::User(display));
         if pasted {
             self.transcript.push(Entry::Pasted(text.clone()));
@@ -1948,6 +2121,7 @@ impl LiveState {
         self.activity = None;
         let id = format!("t{}", self.turn_seq);
         self.pending = Some(id.clone());
+        self.sent_prompt = Some(SentPrompt { id: id.clone(), draft: sent, entry, pasted });
         Some(Action::Send(Command::PromptSubmit { id, text }))
     }
 
@@ -1964,6 +2138,11 @@ impl LiveState {
             Some(Invocation::Receipt) => {
                 self.composer.take();
                 return self.open_receipt();
+            }
+            Some(Invocation::Details) => {
+                self.composer.take();
+                self.show_details();
+                return None;
             }
             Some(Invocation::Quit) => return Some(Action::Quit),
             Some(Invocation::Remote { command, args }) if command == "doctor" && !args.split_whitespace().any(|a| a == "--fix") => {
@@ -1995,6 +2174,27 @@ impl LiveState {
         Some(Action::Send(Command::Steer { id, text }))
     }
 
+    /// A status row for `key`: the one this turn already shows is updated in place, otherwise a new row starts.
+    /// The search stops at the operator's prompt, so a later turn's wait never rewrites an earlier turn's row.
+    fn put_status(&mut self, key: String, text: String) {
+        for entry in self.transcript.iter_mut().rev() {
+            match entry {
+                Entry::Status { key: k, text: t } if *k == key => {
+                    *t = text;
+                    return;
+                }
+                Entry::User(_) | Entry::Unsent(_) | Entry::Banner { .. } => break,
+                _ => {}
+            }
+        }
+        self.transcript.push(Entry::Status { key, text });
+    }
+
+    fn show_details(&mut self) {
+        let text = self.provider_cause.clone().unwrap_or_else(|| "No provider error recorded in this session.".into());
+        self.transcript.push(Entry::Output { success: true, text, diff: false });
+    }
+
     fn invoke(&mut self, typed: String, invocation: Invocation) -> Option<Action> {
         match invocation {
             Invocation::Quit => Some(Action::Quit),
@@ -2003,6 +2203,10 @@ impl LiveState {
                 None
             }
             Invocation::Receipt => self.open_receipt(),
+            Invocation::Details => {
+                self.show_details();
+                None
+            }
             Invocation::Models => self.open_models(false, None),
             Invocation::Connect => self.open_models(true, None),
             Invocation::Remote { command, args } => {
@@ -2071,7 +2275,7 @@ impl LiveState {
             .transcript
             .iter()
             .enumerate()
-            .filter(|(_, entry)| matches!(entry, Entry::Tool { .. } | Entry::Diff { .. }) || entry.reviewable())
+            .filter(|(_, entry)| Self::selectable(entry))
             .map(|(index, _)| index)
             .collect();
         let Some(&newest) = tools.last() else {
@@ -3650,7 +3854,7 @@ mod tests {
             overlay_limit: 0,
             ..LiveLayout::default()
         };
-        state.note_layout(layout);
+        state.note_layout(layout.clone());
         assert_eq!(state.on_key(key(KeyCode::PageUp)), None);
         assert_eq!(state.scroll_back, 9, "pgup scrolls from the composer too");
         assert_eq!(state.on_key(key(KeyCode::Tab)), None);
@@ -3661,7 +3865,7 @@ mod tests {
         assert_eq!(state.on_key(key(KeyCode::Down)), None);
         assert_eq!(state.scroll_back, 10);
         assert_eq!(state.on_key(key(KeyCode::Home)), None);
-        state.note_layout(layout);
+        state.note_layout(layout.clone());
         assert_eq!(state.scroll_back, 50);
         assert_eq!(state.on_key(key(KeyCode::Char('G'))), None);
         assert_eq!(state.scroll_back, 0);
@@ -4928,5 +5132,179 @@ mod tests {
             assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
             assert_eq!(state.on_key_at(key(KeyCode::Char('Y')), at(t0, 5200)), approve("approval-1", false), "Shift+y is y");
         }
+    }
+
+    // D-06 / D-07: provider status rows, raw cause, and the refused first-run prompt.
+    fn wait_notice(n: u32) -> String {
+        format!(
+            r#"{{"v":1,"type":"notice","key":"provider.recovery","detail":"condition RATE_LIMITED, HTTP 429 (attempt {n})","text":"Waiting for the model provider: the provider is rate limiting requests. Retry {n}, next attempt in 2s."}}"#
+        )
+    }
+
+    fn statuses(state: &LiveState) -> Vec<&str> {
+        state
+            .transcript
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Status { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn identical_provider_waits_collapse_into_one_row_with_a_counter() {
+        let mut state = ready();
+        for n in 1..=12 {
+            state.apply(ev(&wait_notice(n)));
+        }
+        let rows = statuses(&state);
+        assert_eq!(rows.len(), 1, "one row, not one per attempt: {rows:?}");
+        assert!(rows[0].contains("Retry 12"), "{rows:?}");
+        assert_eq!(state.transcript.len(), 1);
+    }
+
+    #[test]
+    fn a_new_turn_gets_its_own_status_row_and_other_notices_do_not_merge() {
+        let mut state = ready();
+        state.apply(ev(&wait_notice(1)));
+        state.apply(ev(r#"{"v":1,"type":"notice","text":"Resumed session a."}"#));
+        state.apply(ev(&wait_notice(2)));
+        assert_eq!(statuses(&state).len(), 1, "same turn: the row is updated even after another notice");
+        type_text(&mut state, "again");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(&wait_notice(1)));
+        assert_eq!(statuses(&state).len(), 2, "a later prompt starts a new row");
+    }
+
+    #[test]
+    fn details_shows_the_raw_cause_while_the_turn_waits() {
+        let mut state = ready();
+        type_text(&mut state, "go");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(&wait_notice(3)));
+        type_text(&mut state, "/details");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "answered locally, nothing is sent");
+        assert!(
+            matches!(state.transcript.last(), Some(Entry::Output { text, success: true, .. }) if text.contains("HTTP 429 (attempt 3)")),
+            "{:?}",
+            state.transcript.last()
+        );
+    }
+
+    #[test]
+    fn details_without_a_provider_error_says_so() {
+        let mut state = ready();
+        type_text(&mut state, "/details");
+        assert_eq!(state.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(state.transcript.last(), Some(Entry::Output { text, .. }) if text.contains("No provider error")));
+    }
+
+    #[test]
+    fn a_prompt_refused_for_want_of_a_provider_goes_back_to_the_composer_with_the_reason() {
+        let mut state = ready();
+        type_text(&mut state, "fix the bug");
+        assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::PromptSubmit { .. }))));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected: nothing answers at http://localhost:1234/v1. Next: type /connect."}"#));
+        assert!(!state.session.busy, "the composer is unlocked");
+        assert_eq!(state.composer.text(), "fix the bug", "the draft is not lost");
+        assert!(
+            matches!(state.transcript.last(), Some(Entry::Notice(t)) if t.starts_with("No model is connected") && !t.contains("NO_PROVIDER")),
+            "{:?}",
+            state.transcript.last()
+        );
+    }
+
+    #[test]
+    fn a_refused_prompt_with_a_paste_comes_back_as_the_paste_label_not_its_expansion() {
+        let mut state = ready();
+        type_text(&mut state, "see ");
+        state.on_paste("line one\nline two");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert_eq!(state.composer.display(state.composer.text()), "see [Pasted text #1: 2 lines]");
+        assert_eq!(state.composer.expand(state.composer.text()), "see line one\nline two");
+    }
+
+    #[test]
+    fn a_refused_prompt_keeps_the_recall_history_made_in_the_meantime() {
+        let mut state = ready();
+        type_text(&mut state, "first");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert_eq!(state.composer.text(), "first");
+        state.composer.take();
+        type_text(&mut state, "second");
+        state.on_key(key(KeyCode::Enter));
+        state.composer.insert("typed after the second send");
+        state.composer.take();
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t2","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert_eq!(state.composer.text(), "second");
+        state.composer.take();
+        state.composer.up();
+        state.composer.up();
+        assert_eq!(state.composer.text(), "typed after the second send", "history made after the send survives the restore");
+    }
+
+    #[test]
+    fn a_refused_prompt_does_not_overwrite_what_was_typed_meanwhile() {
+        let mut state = ready();
+        type_text(&mut state, "first");
+        state.on_key(key(KeyCode::Enter));
+        type_text(&mut state, "second");
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert_eq!(state.composer.text(), "second");
+    }
+
+    #[test]
+    fn a_refused_prompt_stays_in_the_transcript_marked_not_sent_and_is_not_also_a_sent_prompt() {
+        let mut state = ready();
+        type_text(&mut state, "see ");
+        state.on_paste("line one\nline two");
+        state.on_key(key(KeyCode::Enter));
+        let sent_at = state.transcript.len() - 2;
+        assert!(matches!(state.transcript[sent_at], Entry::User(_)) && matches!(state.transcript[sent_at + 1], Entry::Pasted(_)));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert!(
+            !state.transcript.iter().any(|e| matches!(e, Entry::User(_) | Entry::Pasted(_))),
+            "no entry still claims the prompt was sent: {:?}",
+            state.transcript
+        );
+        assert_eq!(state.transcript[sent_at], Entry::Unsent("see [Pasted text #1: 2 lines]".into()));
+        assert_eq!(state.transcript[sent_at + 1], Entry::Unsent(String::new()), "the paste block that went with it is gone too");
+        assert_eq!(state.transcript.len(), sent_at + 3, "marked in place, nothing removed (indices stay valid)");
+        assert_eq!(state.composer.display(state.composer.text()), "see [Pasted text #1: 2 lines]");
+    }
+
+    #[test]
+    fn a_turn_event_before_the_prompt_is_answered_drops_the_draft_copy_whatever_its_turn_id() {
+        // Pins the current behaviour the comment in `apply_event` explains: the first turn event ends the gate.
+        let mut state = ready();
+        type_text(&mut state, "first");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"assistant.delta","turn_id":"other","text":"x"}"#));
+        assert!(state.sent_prompt.is_none());
+    }
+
+    #[test]
+    fn the_copy_of_the_draft_is_dropped_once_the_turn_is_accepted_and_again_when_it_ends() {
+        let mut state = ready();
+        type_text(&mut state, "first");
+        state.on_paste("secret\nbuffer");
+        state.on_key(key(KeyCode::Enter));
+        assert!(state.sent_prompt.is_some(), "kept while the sidecar may still refuse it");
+        state.apply(ev(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1}"#));
+        assert!(state.sent_prompt.is_none(), "accepted: the paste buffers are not kept");
+        // A refusal that arrives after acceptance (a stale id) changes nothing.
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
+        assert!(matches!(state.transcript.iter().find(|e| matches!(e, Entry::User(_) | Entry::Unsent(_))), Some(Entry::User(_))));
+        state.apply(ev(r#"{"v":1,"type":"turn.result","heading":"h","line":"l","turn":{},"saved":false}"#));
+        assert!(state.sent_prompt.is_none());
+        // A turn that ends before any activity event (an error for the prompt) drops it too.
+        state.composer.take();
+        type_text(&mut state, "second");
+        state.on_key(key(KeyCode::Enter));
+        state.apply(ev(r#"{"v":1,"type":"error","id":"t2","code":"INTERNAL","message":"boom"}"#));
+        assert!(state.sent_prompt.is_none());
     }
 }

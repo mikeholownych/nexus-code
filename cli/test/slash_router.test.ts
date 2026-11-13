@@ -94,6 +94,19 @@ describe("slash router: session commands", () => {
     });
   });
 
+  test("/details (answered by the terminal view) is in the catalogue, completion and help, and the sidecar answers it without a turn", async () => {
+    const spec = slashCatalog().find((entry) => entry.name === "details");
+    assert.deepEqual(spec && [spec.usage, spec.summary], ["/details", "Raw cause of the last model provider problem"]);
+    assert.equal(SLASH_COMMANDS.filter((entry) => entry.name === "details").length, 1);
+    await withRig(async ({ reply, prompts }) => {
+      assert.ok((await reply("help")).output.includes("/details"));
+      const out = await reply("details");
+      assert.equal(out.success, true);
+      assert.match(out.output, /terminal view/);
+      assert.deepEqual(prompts, [], "nothing was run as a turn");
+    });
+  });
+
   test("unknown commands fail and point at /help", async () => {
     await withRig(async ({ reply }) => {
       const out = await reply("frobnicate");

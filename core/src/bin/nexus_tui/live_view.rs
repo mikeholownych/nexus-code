@@ -66,13 +66,32 @@ fn phase_text(state: &LiveState) -> String {
         "compacting" => "compacting the context".to_string(),
         other => other.replace('_', " "),
     };
-    if activity.phase != "inference" && activity.phase != "compacting" {
+    // A provider wait has its own countdown in the transcript row, so a second timer here would only add noise.
+    if !matches!(activity.phase.as_str(), "inference" | "compacting" | "provider_wait") {
         let phase_elapsed = state.now.saturating_duration_since(activity.since);
         if phase_elapsed >= Duration::from_secs(2) {
             text.push_str(&format!(" {}", clock(phase_elapsed)));
         }
     }
     text
+}
+
+/// Seconds the provider's stream has been silent, while it is reported stalled.
+fn stall_secs(state: &LiveState) -> Option<u64> {
+    let (reported, silent_secs) = state.stall?;
+    Some(silent_secs.saturating_add(state.now.saturating_duration_since(reported).as_secs()))
+}
+
+/// The busy line or, for a stalled stream on a line too narrow for it, shorter wording that keeps the silence and
+/// the way out (`no data 44 s · esc cancels`, then `no data 44 s`).
+fn fit_activity_line(state: &LiveState, max: usize) -> String {
+    let full = activity_line(state);
+    let Some(secs) = stall_secs(state) else { return full };
+    if full.chars().count() <= max {
+        return full;
+    }
+    let compact = format!(" no data {secs} s · esc cancels ");
+    if compact.chars().count() <= max { compact } else { format!(" no data {secs} s ") }
 }
 
 /// The busy line: spinner, phase, turn elapsed time, step and segment. Static text when the turn waits on the
@@ -101,6 +120,10 @@ pub fn activity_line(state: &LiveState) -> String {
             }
         }
         _ => {}
+    }
+    // The provider has sent nothing for a while: say so, with the silence so far (the way out is the cancel hint).
+    if let Some(secs) = stall_secs(state) {
+        parts.insert(0, format!("no data from the provider for {secs} s"));
     }
     let tail = if parts.is_empty() { String::new() } else { format!(" · {}", parts.join(" · ")) };
     let cancel = if state.activity.as_ref().is_some_and(|a| a.phase == "approval") { "" } else { " · esc cancels" };
@@ -154,6 +177,8 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
             layout.followed = state.follow.then_some(drawn.back);
             layout.top = drawn.top;
             layout.anchored = drawn.anchored;
+            layout.transcript_area = rows[1];
+            layout.row_entries = drawn.row_entries;
         }
     }
     let max_hint = usize::from(area.width.saturating_sub(4));
@@ -197,7 +222,7 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
         }
         Some(Overlay::Help { scroll }) => {
             (layout.overlay_rows, layout.overlay_limit) =
-                render_help(frame, rows[1], *scroll, &state.commands);
+                render_help(frame, rows[1], *scroll, &state.commands, state.shift_enter, state.mouse);
         }
         Some(Overlay::Detail(detail)) => {
             (layout.overlay_rows, layout.overlay_limit) = render_detail(frame, rows[1], detail);
@@ -479,10 +504,7 @@ fn render_paste(frame: &mut Frame, area: Rect, state: &LiveState, number: u32, s
 const HELP: &[(&str, &str)] = &[
     ("", "Keys"),
     ("enter", "send the prompt"),
-    (
-        "shift+enter",
-        "new line (alt+enter where shift is not reported)",
-    ),
+    ("@newline", ""),
     (
         "↑ / ↓",
         "move between lines; recall earlier prompts from the first line",
@@ -519,6 +541,7 @@ const HELP: &[(&str, &str)] = &[
         "in the transcript: open the selected tool call's details",
     ),
     ("v", "in the transcript: open the receipt for the last turn"),
+    ("@mouse", ""),
     ("", ""),
     ("", "Diff review (ctrl+d, or enter on an edit)"),
     ("n / p", "next / previous hunk"),
@@ -543,6 +566,32 @@ const HELP: &[(&str, &str)] = &[
     ("esc", "deny"),
     ("other typing", "goes to your draft (steering); a key typed as the panel opens is ignored, and the panel says so"),
 ];
+
+/// The help rows, with the entries that depend on the terminal filled in: which key makes a newline here, and what
+/// the mouse does (or that its capture is off).
+fn help_rows(shift_enter: bool, mouse: bool) -> Vec<(&'static str, &'static str)> {
+    let mut rows = Vec::with_capacity(HELP.len() + 6);
+    for &(keys, text) in HELP {
+        match keys {
+            "@newline" if shift_enter => {
+                rows.push(("shift+enter", "new line in the draft (this terminal reports it)"));
+                rows.push(("alt+enter/ctrl+j", "new line in the draft (ctrl+j in every terminal; alt+enter where the terminal sends it)"));
+            }
+            "@newline" => {
+                rows.push(("alt+enter/ctrl+j", "new line in the draft (ctrl+j in every terminal; alt+enter where the terminal sends it)"));
+                rows.push(("shift+enter", "not reported by this terminal: it sends a plain enter, which would send the prompt"));
+            }
+            "@mouse" if mouse => {
+                rows.push(("wheel", "scroll the transcript, or the open panel; the mouse never answers an approval"));
+                rows.push(("click", "select a tool call; click it again to open its details"));
+                rows.push(("mouse capture", "hold shift (option in iTerm2 and macOS Terminal) while dragging to select text; NEXUS_TUI_MOUSE=off turns capture off (use it on a slow or high-latency link, where a split report can leave stray characters in the draft)"));
+            }
+            "@mouse" => rows.push(("mouse", "capture is off: your terminal selects and scrolls natively")),
+            _ => rows.push((keys, text)),
+        }
+    }
+    rows
+}
 
 /// A modal rectangle at the top of `area`: one column of margin each side, at most `max_width` wide and
 /// `wanted_height` tall, centred horizontally.
@@ -853,6 +902,8 @@ fn render_help(
     area: Rect,
     scroll: usize,
     commands: &[SlashSpec],
+    shift_enter: bool,
+    mouse: bool,
 ) -> (usize, usize) {
     let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let heading = Style::default()
@@ -860,13 +911,13 @@ fn render_help(
         .add_modifier(Modifier::BOLD);
     let white = Style::default().fg(Color::White);
     let help_width = usize::from(area.width.saturating_sub(2).min(96).saturating_sub(4));
-    let mut lines: Vec<Line> = HELP
-        .iter()
+    let mut lines: Vec<Line> = help_rows(shift_enter, mouse)
+        .into_iter()
         .flat_map(|(keys, text)| {
             if keys.is_empty() {
-                vec![Line::from(Span::styled(*text, heading))]
+                vec![Line::from(Span::styled(text, heading))]
             } else {
-                markdown::wrap(vec![Span::styled(*text, white)], help_width, vec![Span::styled(format!("  {keys:<17}"), key)], vec![Span::raw(" ".repeat(19))])
+                markdown::wrap(vec![Span::styled(text, white)], help_width, vec![Span::styled(format!("  {keys:<17}"), key)], vec![Span::raw(" ".repeat(19))])
             }
         })
         .collect();
@@ -1278,10 +1329,12 @@ struct TranscriptFrame {
     limit: usize,
     /// The `scroll_back` drawn.
     back: usize,
-    /// The row at the top of the window: (entry index, rows from it to the end of its entry).
-    top: Option<(usize, usize)>,
+    /// The row at the top of the window, counted from the start of its line (see `LiveState::anchor`).
+    top: Option<(usize, usize, usize)>,
     /// Set when the window was kept on `LiveState::anchor`: the `scroll_back` that took.
     anchored: Option<usize>,
+    /// The entry each row of the area shows, top to bottom (a row past the last entry has none).
+    row_entries: Vec<usize>,
 }
 
 /// Renders the transcript window `scroll_back` rows above the newest line, with the selected entry highlighted.
@@ -1289,6 +1342,8 @@ struct TranscriptFrame {
 /// (its top when it is taller than the window). While scrolled back, the window stays on the row it showed at its
 /// top (`LiveState::anchor`) as entries arrive or grow below it, so reading is never interrupted by a scroll jump.
 /// Only the entries needed to fill the window are laid out, so the cost follows the window, not the transcript.
+/// The exception is the anchored entry while scrolled back: it is laid out once per frame and wrapped from the
+/// anchored line to its end to find the distance to the bottom, so that frame costs O(that entry plus the entries below it).
 fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> TranscriptFrame {
     let transcript = &state.transcript;
     let selected = state.selected.filter(|_| state.focus == Focus::Transcript);
@@ -1320,29 +1375,44 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
     let rows_of = |lines: &[Line<'_>]| lines.iter().map(|line| wrapped_rows(line, area.width)).sum::<usize>();
     let mut back = state.scroll_back;
     let mut anchored = None;
+    // The anchored entry's lines, laid out once for the anchor and reused by the walk below.
+    let mut anchor_lines: Option<(usize, Vec<Line<'_>>)> = None;
     let mut target = selected.filter(|_| state.follow);
     if back > 0
         && target.is_none()
-        && let Some((entry, rows_in_entry)) = state.anchor
+        && let Some((entry, line_index, row_in_line)) = state.anchor
         && entry < transcript.len()
     {
         let below: usize = (entry + 1..transcript.len()).map(|i| rows_of(&lines_of(i))).sum();
-        back = (rows_in_entry + below).saturating_sub(height);
+        // Rows from the anchored row to the end of the entry as it is now. The anchor counts from the start of the
+        // line, so an entry that grows below it (a streaming answer) lengthens this and the window stays put.
+        let lines = lines_of(entry);
+        let line_index = line_index.min(lines.len().saturating_sub(1));
+        let from_line: usize = lines[line_index..].iter().map(|line| wrapped_rows(line, area.width)).sum();
+        let in_line = lines.get(line_index).map_or(0, |line| wrapped_rows(line, area.width));
+        let row_in_line = row_in_line.min(in_line.saturating_sub(1));
+        back = (from_line.saturating_sub(row_in_line) + below).saturating_sub(height);
+        anchor_lines = Some((entry, lines));
         anchored = Some(back);
     }
-    // Walked from the newest line up: (line, its rows, entry index, rows from it to its entry's end, rows from it to
-    // the bottom).
+    // Walked from the newest line up: (line, its rows, entry index, the line's index in its entry, rows from the
+    // bottom through it).
     let mut tail = Vec::new();
     let mut total: usize = 0;
     let mut reached_top = true;
     'entries: for index in (0..transcript.len()).rev() {
         let below = total;
-        let mut in_entry = 0;
-        for line in lines_of(index).into_iter().rev() {
+        let entry_lines = match anchor_lines.take() {
+            Some((anchored_entry, lines)) if anchored_entry == index => lines,
+            other => {
+                anchor_lines = other;
+                lines_of(index)
+            }
+        };
+        for (line_index, line) in entry_lines.into_iter().enumerate().rev() {
             let rows = wrapped_rows(&line, area.width);
             total = total.saturating_add(rows);
-            in_entry += rows;
-            tail.push((line, rows, index, in_entry, total));
+            tail.push((line, rows, index, line_index, total));
             if target.is_none() && total >= height.saturating_add(back) {
                 reached_top = false;
                 break 'entries;
@@ -1370,9 +1440,17 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
     let reach = height.saturating_add(back);
     let top = tail
         .iter()
-        .find(|(_, _, _, _, to_bottom)| *to_bottom >= reach)
-        .map(|(_, _, index, in_entry, to_bottom)| (*index, in_entry - (to_bottom - reach)));
+        .find(|(.., to_bottom)| *to_bottom >= reach)
+        .map(|(_, _, index, line_index, to_bottom)| (*index, *line_index, to_bottom - reach));
     tail.reverse();
+    let mut row_entries = Vec::with_capacity(height);
+    let mut hidden = first_row;
+    for (_, rows, index, ..) in &tail {
+        let above = hidden.min(*rows);
+        hidden -= above;
+        let room = height.saturating_sub(row_entries.len());
+        row_entries.extend(std::iter::repeat_n(*index, (rows - above).min(room)));
+    }
     let mut skipped = 0;
     let mut covered = 0;
     let mut lines = Vec::new();
@@ -1397,7 +1475,7 @@ fn render_transcript(frame: &mut Frame, area: Rect, state: &LiveState) -> Transc
     if back > 0 {
         render_scroll_badge(frame, area, back, state.unseen);
     }
-    TranscriptFrame { limit, back, top, anchored }
+    TranscriptFrame { limit, back, top, anchored, row_entries }
 }
 
 fn render_scroll_badge(frame: &mut Frame, area: Rect, rows_below: usize, unseen: bool) {
@@ -1578,6 +1656,17 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
                     Span::styled(expand_tabs(row), white.add_modifier(Modifier::BOLD)),
                 ]));
             }
+        }
+        Entry::Unsent(text) if text.is_empty() => {}
+        Entry::Unsent(text) => {
+            lines.push(Line::default());
+            for (index, row) in text.split('\n').enumerate() {
+                lines.push(Line::from(vec![
+                    Span::styled(if index == 0 { "› " } else { "  " }, muted),
+                    Span::styled(expand_tabs(row), muted),
+                ]));
+            }
+            lines.push(Line::from(Span::styled("  not sent: it is back in the composer", Style::default().fg(Color::Yellow))));
         }
         Entry::Assistant { text, .. } => {
             lines.push(Line::default());
@@ -1775,7 +1864,7 @@ fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
                 Line::from(Span::styled(format!("  {}", expand_tabs(row)), style))
             }));
         }
-        Entry::Info(text) => lines.push(Line::from(Span::styled(
+        Entry::Info(text) | Entry::Status { text, .. } => lines.push(Line::from(Span::styled(
             format!("  · {}", one_line(text)),
             muted,
         ))),
@@ -1943,13 +2032,26 @@ fn composer_hint(state: &LiveState, max_hint: usize) -> Cow<'static, str> {
             return Cow::Owned(format!(" {} cancelling… ctrl-c again to quit ", spinner_frame(elapsed)));
         }
         (_, true) if !state.composer.is_empty() => {
-            return Cow::Owned(format!("{}· enter steers ", activity_line(state)));
+            return Cow::Owned(format!("{}· enter steers ", fit_activity_line(state, max_hint.saturating_sub(15))));
         }
-        (_, true) => return Cow::Owned(activity_line(state)),
-        (_, false) if " enter send · shift+enter newline · ? help ".chars().count() > max_hint => {
-            " enter send · ⇧↵ newline · ? help "
+        (_, true) => return Cow::Owned(fit_activity_line(state, max_hint)),
+        // Only the newline key this terminal can really send is advertised: Shift+Enter arrives as plain enter (and
+        // sends the draft) unless the terminal speaks the kitty keyboard protocol.
+        (_, false) if state.shift_enter => {
+            if " enter send · shift+enter newline · ? help ".chars().count() > max_hint {
+                " enter send · ⇧↵ newline · ? help "
+            } else {
+                " enter send · shift+enter newline · ? help "
+            }
         }
-        (_, false) => " enter send · shift+enter newline · ? help ",
+        // Ctrl+J is the one newline key every terminal can send; Alt+Enter depends on the terminal's Meta handling.
+        (_, false) => {
+            if " enter send · alt+enter or ctrl+j newline · ? help ".chars().count() > max_hint {
+                " ↵ send · ctrl+j newline · ? help "
+            } else {
+                " enter send · alt+enter or ctrl+j newline · ? help "
+            }
+        }
     };
     Cow::Borrowed(hint)
 }
@@ -2022,6 +2124,89 @@ mod tests {
         assert_ne!(a, b, "the next frame differs without any sidecar event");
         assert_eq!(spinner_frame(std::time::Duration::from_millis(0)), "⠋");
         assert_eq!(clock(std::time::Duration::from_secs(3725)), "1:02:05");
+    }
+
+    // D-06 / D-07 on screen.
+    fn wait(n: u32) -> String {
+        format!(
+            r#"{{"v":1,"type":"notice","key":"provider.recovery","text":"Waiting for the model provider at http://127.0.0.1:18080/v1: the provider is rate limiting requests. Retry {n}, next attempt in 2s; gives up in about 19 min. Your work is kept. /details shows the raw error; esc cancels."}}"#
+        )
+    }
+
+    #[test]
+    fn a_long_wait_shows_one_status_row_with_the_counter_at_every_width() {
+        for width in [40u16, 60, 100] {
+            let mut state = ready();
+            feed(&mut state, &[BUSY]);
+            for n in 1..=13 {
+                feed(&mut state, &[&wait(n)]);
+            }
+            let screen = draw(&state, width, 24);
+            assert_eq!(screen.matches("Waiting for the model").count(), 1, "width {width}:\n{screen}");
+            assert_shows(&screen, &["Retry 13"]);
+            assert!(!screen.contains("Retry 12"), "width {width}:\n{screen}");
+        }
+    }
+
+    #[test]
+    fn the_wait_has_one_timer_not_two() {
+        let mut state = ready();
+        feed(&mut state, &[BUSY, r#"{"v":1,"type":"activity","turn_id":"t1","phase":"provider_wait","step":1,"segment":1}"#]);
+        let start = state.turn_started.unwrap();
+        state.set_now(start + std::time::Duration::from_secs(10));
+        let line = activity_line(&state);
+        assert_eq!(line.matches("0:10").count(), 1, "{line}");
+        assert!(line.contains("esc cancels"), "{line}");
+    }
+
+    #[test]
+    fn a_first_run_without_a_provider_shows_the_next_step_at_every_width() {
+        for width in [40u16, 60, 100] {
+            let mut state = ready();
+            feed(&mut state, &[r#"{"v":1,"type":"notice","key":"provider.startup","detail":"ECONNREFUSED","text":"No model is connected: nothing answers at http://localhost:1234/v1. Next: type /connect to sign in or add an API key, or start a local model server (LM Studio, Ollama, llama.cpp) and send your message again. `nexus doctor` checks the setup; docs/CLOUD_PROVIDERS.md lists providers."}"#]);
+            let screen = draw(&state, width, 24);
+            let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+            for needle in ["No model is connected", "/connect", "local model server", "CLOUD_PROVIDERS"] {
+                assert!(flat.contains(needle), "width {width}: missing {needle:?}\n{screen}");
+            }
+            assert!(!flat.contains("ECONNREFUSED"), "the raw cause is not in the text: {screen}");
+        }
+    }
+
+    #[test]
+    fn a_silent_provider_is_reported_with_its_silence_and_the_way_out_and_clears_when_data_arrives() {
+        // D-08: the TUI never saw a stall; "thinking" ran on for minutes.
+        let mut state = ready();
+        feed(&mut state, &[BUSY, r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1}"#]);
+        assert!(!draw(&state, 100, 12).contains("no data from the provider"), "no stall before the sidecar reports one");
+        feed(&mut state, &[r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
+        let shown = draw(&state, 100, 12);
+        assert_shows(&shown, &["no data from the provider for 30 s", "esc cancels"]);
+        // The silence keeps counting on the TUI's own clock between reports.
+        state.now = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        assert_shows(&draw(&state, 100, 12), &["no data from the provider for 42 s"]);
+        // Narrow terminals say it in fewer words and keep the way out visible; nothing is wider than the terminal.
+        let narrow = draw(&state, 40, 12);
+        assert_shows(&narrow, &["no data 42 s", "esc cancels"]);
+        // Nothing was cut with an ellipsis: the wording fitted.
+        assert!(!narrow.contains('…'), "{narrow}");
+        let mut typing = ready();
+        feed(&mut typing, &[BUSY, r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
+        typing.composer = "draft".into();
+        assert_shows(&draw(&typing, 40, 12), &["no data"]);
+        for (w, h) in [(1, 1), (10, 2), (40, 1)] {
+            draw(&state, w, h);
+        }
+        // Any provider output ends it.
+        feed(&mut state, &[r#"{"v":1,"type":"assistant.delta","turn_id":"t1","text":"hi"}"#]);
+        assert!(!draw(&state, 100, 12).contains("no data from the provider"));
+        // An explicit resume report ends it too, and a finished turn drops it.
+        feed(&mut state, &[r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#]);
+        feed(&mut state, &[r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":false,"silent_secs":41}"#]);
+        assert!(!draw(&state, 100, 12).contains("no data from the provider"));
+        feed(&mut state, &[r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#, IDLE]);
+        feed(&mut state, &[BUSY]);
+        assert!(!draw(&state, 100, 12).contains("no data from the provider"));
     }
 
     #[test]
@@ -2598,7 +2783,7 @@ mod tests {
         let screen = rows(&draw(&state, 40, 20));
         assert_eq!(screen[19], format!("  {}END", "x".repeat(400 % 38)));
         assert!(
-            screen[13].contains("enter send"),
+            screen[13].contains("send · ctrl+j newline"),
             "composer is capped at 6 rows: {screen:#?}"
         );
     }
@@ -2958,6 +3143,14 @@ mod tests {
         );
         let y = u16::try_from(picked).unwrap();
         assert_eq!(terminal.backend().buffer()[(1, y)].bg, ACCENT);
+    }
+
+    #[test]
+    fn help_lists_details_when_the_catalogue_offers_it() {
+        let mut state = ready();
+        state.commands = vec![spec("details", "/details", "Raw cause of the last model provider problem")];
+        state.overlay = Some(crate::live_state::Overlay::Help { scroll: 0 });
+        assert_shows(&draw(&state, 100, 60), &["/details", "Raw cause of the last model provider problem"]);
     }
 
     #[test]
@@ -3689,6 +3882,120 @@ mod diff_tests {
         }
     }
 
+    /// The first screen row that shows a streamed `row NNNN` line: the transcript's top row while scrolled back.
+    fn top_row(rows: &[String]) -> String {
+        rows.iter().find(|r| r.contains("row ")).cloned().unwrap_or_default().trim_end().to_string()
+    }
+
+    fn delta(state: &mut LiveState, text: &str) {
+        feed(state, &[&format!(r#"{{"v":1,"type":"assistant.delta","turn_id":"t2","text":{}}}"#, json(text))]);
+    }
+
+    fn streamed(state: &mut LiveState, from: usize, to: usize) {
+        for n in from..to {
+            delta(state, &format!("row {n:04}\n"));
+        }
+    }
+
+    #[test]
+    fn a_scrolled_back_view_keeps_its_top_row_while_one_answer_streams_below_it() {
+        // D-02: the answer is one growing entry; the anchor must be a row from its start, not from its end.
+        let mut state = state();
+        for i in 0..40 {
+            state.transcript.push(Entry::Info(format!("history {i}")));
+        }
+        streamed(&mut state, 0, 60);
+        draw(&mut state, 100, 30);
+        state.on_key(key(KeyCode::PageUp));
+        let before = screen(&draw(&mut state, 100, 30));
+        let top = top_row(&before);
+        assert!(top.contains("row 0"), "the window is inside the streaming answer: {before:#?}");
+        let mut n = 60;
+        while n < 140 {
+            streamed(&mut state, n, n + 3);
+            // A line that wraps (two rows at width 100) and a line that arrives in pieces.
+            delta(&mut state, &format!("{} wrapped\n", "w".repeat(150)));
+            delta(&mut state, "row ");
+            delta(&mut state, &format!("{:04}", n + 3));
+            n += 4;
+            let now = screen(&draw(&mut state, 100, 30));
+            assert_eq!(top_row(&now), top, "the top row moved after {n} rows: {now:#?}");
+        }
+        // A resize keeps the same top row text (the checked lines are short, so they wrap the same at every width; a
+        // rewrapped anchored line is not covered, see the status row).
+        for (w, h) in [(70, 24), (40, 12), (100, 30)] {
+            let now = screen(&draw(&mut state, w, h));
+            assert_eq!(top_row(&now), top, "the top row moved at {w}x{h}: {now:#?}");
+        }
+    }
+
+    #[test]
+    fn a_refused_prompt_is_marked_not_sent_in_place_and_the_scrolled_back_window_does_not_move() {
+        let mut state = state();
+        feed(&mut state, &[r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#]);
+        for i in 0..40 {
+            state.transcript.push(Entry::Info(format!("history {i}")));
+        }
+        draw(&mut state, 100, 30);
+        for c in "fix the bug".chars() {
+            state.on_key(key(KeyCode::Char(c)));
+        }
+        state.on_key(key(KeyCode::Enter));
+        let sent_at = state.transcript.len() - 1;
+        draw(&mut state, 100, 30);
+        // The operator scrolls back while the sidecar decides.
+        state.on_key(key(KeyCode::PageUp));
+        state.on_key(key(KeyCode::PageUp));
+        let before = screen(&draw(&mut state, 100, 30));
+        let (len, anchor) = (state.transcript.len(), state.anchor);
+        assert!(anchor.is_some() && state.scroll_back > 0, "scrolled back with an anchor");
+        feed(&mut state, &[r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#]);
+        assert!(matches!(state.transcript[sent_at], Entry::Unsent(_)));
+        assert_eq!(state.transcript.len(), len + 1, "only the notice was added; no entry moved");
+        assert_eq!(state.anchor, anchor, "the anchor still names the same row");
+        let after = screen(&draw(&mut state, 100, 30));
+        assert_eq!(before.iter().find(|r| r.contains("history")), after.iter().find(|r| r.contains("history")), "the top row is where it was");
+        // At the bottom the marked prompt reads as not sent and the composer holds the text.
+        state.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+        let bottom = screen(&draw(&mut state, 100, 30)).join("\n");
+        assert!(bottom.contains("not sent: it is back in the composer"), "{bottom}");
+        assert!(bottom.contains("› fix the bug"), "{bottom}");
+    }
+
+    #[test]
+    fn a_scrolled_back_frame_over_a_five_thousand_line_streaming_entry_stays_fast() {
+        let mut state = state();
+        streamed(&mut state, 0, 5000);
+        draw(&mut state, 100, 30);
+        state.on_key(key(KeyCode::PageUp));
+        let top = top_row(&screen(&draw(&mut state, 100, 30)));
+        let started = std::time::Instant::now();
+        for n in 5000..5010 {
+            streamed(&mut state, n, n + 1);
+            draw(&mut state, 100, 30);
+        }
+        let per_frame = started.elapsed() / 10;
+        assert!(per_frame < std::time::Duration::from_millis(500), "a frame took {per_frame:?}");
+        assert!(top.contains("row 4"), "the window is inside the long entry: {top}");
+        assert_eq!(top_row(&screen(&draw(&mut state, 100, 30))), top, "and the top row is still fixed");
+    }
+
+    #[test]
+    fn a_scrolled_back_view_survives_tiny_terminals_and_a_shrinking_entry() {
+        let mut state = state();
+        streamed(&mut state, 0, 80);
+        draw(&mut state, 40, 12);
+        state.on_key(key(KeyCode::PageUp));
+        draw(&mut state, 40, 12);
+        for (w, h) in [(40, 12), (1, 1), (0, 0), (3, 2), (40, 3), (12, 40), (40, 12)] {
+            streamed(&mut state, 80, 82);
+            draw(&mut state, w, h);
+        }
+        // The anchored entry shrinks below the stored line: the anchor clamps instead of panicking.
+        state.anchor = Some((0, 9_999, 9_999));
+        draw(&mut state, 40, 12);
+    }
+
     #[test]
     fn ctrl_d_opens_the_complete_diff_and_esc_returns_with_the_draft_and_position_kept() {
         let mut state = state();
@@ -4024,6 +4331,10 @@ mod surface_tests {
     #[test]
     fn narrow_composer_hints_are_complete_at_forty_columns() {
         let mut idle = state(false);
+        let (rows, _) = screen(&mut idle, 40, 14);
+        let all = rows.join("\n");
+        assert!(all.contains("↵ send · ctrl+j newline · ? help"), "{all}");
+        idle.shift_enter = true;
         let (rows, _) = screen(&mut idle, 40, 14);
         let all = rows.join("\n");
         assert!(all.contains("enter send · ⇧↵ newline · ? help"), "{all}");
@@ -4764,3 +5075,7 @@ mod surface_tests {
 #[cfg(test)]
 #[path = "approval_sweep.rs"]
 mod approval_sweep;
+
+#[cfg(test)]
+#[path = "input_sweep.rs"]
+mod input_sweep;

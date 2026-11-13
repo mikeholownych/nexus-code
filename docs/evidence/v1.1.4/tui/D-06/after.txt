@@ -1,0 +1,34 @@
+# D-06 after: 'SC:e429 go' against a provider that answers 429 + retry-after 2, 120x30, 14 s after sending
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  context 4058/65536  local
+› SC:e429 go
+  · Waiting for the model provider at http://127.0.0.1:18090/v1: the provider is rate limiting requests. Retry 7, next
+attempt in 2s; gives up in about 20 min. Your work is kept. /details shows the raw error; esc cancels.
+
+ ⠏ waiting for the inference provider · 0:13 · step 1 · esc cancels ────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it
+
+# D-06 after: 'SC:e429 go' against a provider that answers 429 + retry-after 2, 40x30, 14 s after sending
+ NEXUS   ws  ⎇ main  mode: review  local
+› SC:e429 go
+  · Waiting for the model provider at
+http://127.0.0.1:18090/v1: the provider
+is rate limiting requests. Retry 6, next
+attempt in 2s; gives up in about 20 min.
+Your work is kept. /details shows the
+raw error; esc cancels.
+
+ ⠏ waiting for the inference provid…────
+› type to steer · esc cancels
+
+# D-06 after: after /details
+ NEXUS   ws  ⎇ main  model fake-model  mode: review · sandbox: off · workspace: trusted  context 4058/65536  local
+› SC:e429 go
+  · Waiting for the model provider at http://127.0.0.1:18090/v1: the provider is rate limiting requests. Retry 7, next
+attempt in 2s; gives up in about 20 min. Your work is kept. /details shows the raw error; esc cancels.
+  condition RATE_LIMITED, HTTP 429, http_error, execution NOT_EXECUTED
+  Inference error (HTTP 429): {"error":{"message":"Rate limit exceeded","type":"rate_limit"}}
+  request d269f364-aa06-4569-9d90-a5499ce7760c
+
+ ⠙ waiting for the inference provider · 0:15 · step 1 · esc cancels ────────────────────────────────────────────────────
+› type to steer the running turn · esc cancels it
+

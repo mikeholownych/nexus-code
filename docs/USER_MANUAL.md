@@ -268,6 +268,30 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   colour; `NEXUS_COLOR=truecolor|256|16|none` overrides. The `+`/`−` markers and labels carry the meaning at every
   depth.
 
+### Live TUI: newline key and mouse
+
+- **New line.** `Ctrl+J` inserts a newline in the draft in every terminal; `Alt+Enter` does where the terminal sends it
+  (not in Windows Terminal's default bindings, nor in macOS Terminal unless Option is set to act as Meta). Plain
+  `Enter` sends. `Shift+Enter` also inserts a newline, but only on terminals that answer the kitty keyboard-protocol
+  query at startup (kitty, WezTerm, foot and Ghostty do); elsewhere it arrives as a
+  plain `Enter` and sends the draft. The footer and `?` help name `shift+enter` only when the terminal answered, and
+  `alt+enter or ctrl+j` otherwise. The xterm `modifyOtherKeys` encoding of Shift+Enter is not read. tmux and screen
+  are treated as unsupported unless they pass the query through; use `Ctrl+J` there.
+- **Mouse.** Capture is on by default. On Unix it asks the terminal only for button presses and the wheel (on
+  Windows crossterm's mouse capture also reports motion and drag). The wheel scrolls the
+  transcript (three rows a notch), or the open panel, an approval's change included. A left click on a tool call
+  selects it; a second click on the selected call opens its details, as `Enter` does. The mouse never approves anything
+  and clicks do nothing while a panel is open (a split report on a slow link, below, is the one way a mouse can end up
+  denying). Hold Shift while dragging (Option in iTerm2
+  and macOS Terminal) to select text with the terminal's own selection; `NEXUS_TUI_MOUSE=off` turns capture off
+  (`0`, `false`, `no` and `none` also do). Under tmux or screen the terminal only passes mouse events when mouse mode
+  is on (`set -g mouse on`). On a slow or high-latency link a mouse report can arrive split: the first byte then reads
+  as `Esc` (which denies an open approval and cancels a running turn, as it always does) and the rest as stray
+  characters in the draft (never `y`, `n` or `a` as a decision); set `NEXUS_TUI_MOUSE=off` there. On exit the mouse mode
+  is switched off, input still in flight is dropped for up to 0.3 s before and after the sidecar shuts down, and the
+  unread terminal input is flushed; that also drops anything you typed ahead during the shutdown, and a report still
+  in flight on a slow link after that can reach the shell.
+
 ### Cancellation & Process Ownership
 
 - **Cancelling in the TUI:** While a turn is running, pressing `Esc` or `Ctrl-C` sets `cancel_requested`. The footer immediately acknowledges the request:

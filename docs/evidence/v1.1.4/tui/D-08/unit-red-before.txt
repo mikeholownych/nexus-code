@@ -1,0 +1,8 @@
+✖ D-08: a stream with no chunk for the stall interval is reported once, with the silence, and resumes on the next chunk (9.424425ms)
+✔ D-08: a chunk before the interval keeps the stream quiet, and a finished request reports nothing (1.116155ms)
+✖ D-08: a provider that sends one chunk and goes silent is reported by the client, then the answer completes (101.190243ms)
+ℹ pass 1
+ℹ fail 2
+✖ failing tests:
+✖ D-08: a stream with no chunk for the stall interval is reported once, with the silence, and resumes on the next chunk (9.424425ms)
+✖ D-08: a provider that sends one chunk and goes silent is reported by the client, then the answer completes (101.190243ms)

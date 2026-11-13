@@ -1,0 +1,79 @@
+# D-10 capture, binary: after: v1/v114-tui-input
+
+## terminal modes written (default), in order, whole run to a normal quit: ['1049h', '2004h', '?u', '1000h', '1006h', '1006l', '1003l', '1002l', '1000l', '2004l', '1049l']
+   (start ['1049h', '2004h', '?u', '1000h', '1006h']; at exit the rest)
+## SIGTERM (default): modes written after the signal: ['1006l', '1003l', '1002l', '1000l', '2004l', '1049l']
+
+## terminal modes written (NEXUS_TUI_MOUSE=off), in order, whole run to a normal quit: ['1049h', '2004h', '?u', '2004l', '1049l']
+   (start ['1049h', '2004h', '?u']; at exit the rest)
+## SIGTERM (NEXUS_TUI_MOUSE=off): modes written after the signal: ['2004l', '1049l']
+
+--- ## after three wheel-up notches (ESC[<64;20;10M x3)
+ NEXUS   app  model m  review mode
+  ✓ Read file04.ts
+  ✓ Read file05.ts
+  ✓ Read file06.ts
+  ✓ Read file07.ts
+  ✓ Read file08.ts
+  ✓ Read file09.ts
+  ✓ Read file10.ts
+  ✓ Read file11.ts
+  ✓ Read file12.ts
+  ✓ Read file13.ts
+  ✓ Read file14.ts
+  ✓ Read file15.ts
+  ✓ Read file16.ts
+  ✓ Read file17.ts
+  ✓ Read file18.ts
+  ✓ Read file19.ts
+  ✓ Read file20.ts
+  ✓ Read file21.ts
+  ✓ Read file22.ts
+  ✓ Read file23.ts
+  ✓ Read file24.ts
+  ✓ Read file25.ts
+  ✓ Read file26.ts
+  ✓ Read file27.ts
+  ✓ Read file28.ts
+  ✓ Read file29.ts
+  ✓ Read file30.ts                                           ↓ 9 more rows · pgdn · ctrl+end newest
+ enter send · alt+enter or ctrl+j newline · ? help ─────────────────────────────────────────────────
+› ask Nexus · / for commands · ? for keys
+--- after ten wheel-down notches the newest card is on row 25
+--- ## after a left click on row 25 (ESC[<0;12;26M / m)
+ NEXUS   app  model m  review mode
+  ✓ Read file13.ts
+  ✓ Read file14.ts
+  ✓ Read file15.ts
+  ✓ Read file16.ts
+  ✓ Read file17.ts
+  ✓ Read file18.ts
+  ✓ Read file19.ts
+  ✓ Read file20.ts
+  ✓ Read file21.ts
+  ✓ Read file22.ts
+  ✓ Read file23.ts
+  ✓ Read file24.ts
+  ✓ Read file25.ts
+  ✓ Read file26.ts
+  ✓ Read file27.ts
+  ✓ Read file28.ts
+  ✓ Read file29.ts
+  ✓ Read file30.ts
+  ✓ Read file31.ts
+  ✓ Read file32.ts
+  ✓ Read file33.ts
+  ✓ Read file34.ts
+  ✓ Read file35.ts
+  ✓ Read file36.ts
+  ✓ Read file37.ts
+  ✓ Read file38.ts
+  ✓ Read file39.ts
+ transcript · ↑↓ scroll · [ ] tools · enter details · ctrl+d diff · v receipt · tab back ───────────
+›
+
+## 180 wheel reports sent over ~0.4 s while quitting; what the parent shell then read as typed input: ''
+
+## clicks on the Approve and Deny buttons (row 8, columns [4, 16, 46]) plus wheel and right-click
+approval panel still on screen: True; decisions sent to the sidecar: none
+then the keyboard `n` (after the guard): decisions sent: ['{"id":"approval-1","type":"deny","v":1}']

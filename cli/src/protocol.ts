@@ -4,6 +4,7 @@
  */
 import type { ProviderRecoveryRecord, TurnResult } from "./core/turn.js";
 import { redactSecrets } from "./ui.js";
+import { persistableEndpoint, scrubUrls } from "./core/endpoint_identity.js";
 import type { ApprovalReview } from "./approval_review.js";
 import type { SlashSpec } from "./slash/catalog.js";
 import type { EvidenceStatus, ReceiptSection } from "./evidence.js";
@@ -20,7 +21,7 @@ export const MAX_PASTE = 100_000;
 export const MAX_SUMMARY = 160;
 export const MAX_SLASH_OUTPUT = 32_000;
 
-export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "NOT_FOUND" | "INTERNAL";
+export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "NOT_FOUND" | "INTERNAL" | "NO_PROVIDER";
 
 /** Lines of a file diff shown in the transcript; the full diff is in the tool call's detail record. */
 export const DIFF_PREVIEW_LINES = 40;
@@ -72,6 +73,8 @@ export type SidecarEvent =
       };
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
+  /** The provider's stream has sent nothing for `silent_secs` (`stalled`), or sent data again. */
+  | { type: "stream.stall"; turn_id: string; stalled: boolean; silent_secs: number }
   /** What the running turn is doing; sent on every phase change, independent of model output. */
   | {
       type: "activity";
@@ -138,7 +141,12 @@ export type SidecarEvent =
       /** The command started a turn with this prompt; the turn's events follow under the same id. */
       prompt?: string;
     }
-  | { type: "notice"; text: string }
+  /**
+   * `key`: a later notice with the same key replaces this one on screen (a live status, not a log line).
+   * `detail`: the raw cause, redacted, for the operator to inspect on request. Both are optional, so an older
+   * client shows `text` as it always did.
+   */
+  | { type: "notice"; text: string; key?: string; detail?: string }
   /** A resumed session's recent conversation (user and assistant text only), oldest first; `total` counts all of it. */
   | { type: "history"; session: string; total: number; messages: HistoryEntry[] }
   | {
@@ -340,24 +348,106 @@ export function projectTurn(turn: TurnResult): TurnResult {
   };
 }
 
-/** One-line operator notice for a provider recovery transition; PROBING produces none. */
-export function providerRecoveryNotice(record: ProviderRecoveryRecord, discardedPartialOutput: boolean): string | undefined {
+/** The notice key of every provider-wait line: one live row that each transition replaces. */
+export const PROVIDER_STATUS_KEY = "provider.recovery";
+export const STARTUP_PROVIDER_KEY = "provider.startup";
+
+export interface StatusNotice {
+  text: string;
+  key: string;
+  /** The raw cause (redacted); never part of `text`. */
+  detail?: string;
+}
+
+/** What went wrong, in words an operator can act on. */
+function providerProblemWords(record: ProviderRecoveryRecord): string {
   const last = record.submissions[record.submissions.length - 1];
-  const condition = record.condition.toLowerCase().replace(/_/g, " ");
-  const discarded = discardedPartialOutput ? " The partial response was discarded." : "";
-  const where = record.endpoint ? ` at ${record.endpoint}` : "";
+  const status = last?.httpStatus;
+  if (record.condition === "AUTH_FAILURE" || status === 401 || status === 403) return "the provider rejected the credentials";
+  if (record.condition === "QUOTA_EXHAUSTED" || status === 402) return "the provider account is out of quota";
+  if (record.condition === "RATE_LIMITED" || status === 429) return "the provider is rate limiting requests";
+  if (record.condition === "OVERLOADED" || status === 503 || status === 529) return "the provider is overloaded";
+  if (record.condition === "DRAINING") return "the provider is restarting";
+  if (last?.kind === "timeout") return "the provider did not answer in time";
+  if (last?.kind === "network_error" || record.condition === "TEMPORARILY_UNAVAILABLE") return "the provider cannot be reached";
+  return "the provider returned an error";
+}
+
+function minutesWords(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  return minutes < 1 ? "under a minute" : `about ${minutes} min`;
+}
+
+function rawProviderCause(record: ProviderRecoveryRecord): string {
+  const last = record.submissions[record.submissions.length - 1];
+  const parts = [
+    `condition ${record.condition}${last?.httpStatus ? `, HTTP ${last.httpStatus}` : ""}${last ? `, ${last.kind}, execution ${last.execution}` : ""}`,
+    last?.message,
+    record.reason ? `recovery: ${record.reason}` : undefined,
+    last?.requestId ? `request ${last.requestId}` : undefined,
+  ];
+  return redactSecrets(scrubUrls(parts.filter(Boolean).join("\n")));
+}
+
+/**
+ * The provider-wait status line for one recovery transition (PROBING produces none). Every transition carries the
+ * same `key`, so the client shows one row that changes instead of a line per attempt (D-06).
+ */
+export function providerRecoveryStatus(record: ProviderRecoveryRecord, discardedPartialOutput: boolean): StatusNotice | undefined {
+  if (record.state === "PROBING") return undefined;
+  const detail = rawProviderCause(record);
+  const where = record.endpoint ? ` at ${persistableEndpoint(record.endpoint)}` : "";
+  const problem = providerProblemWords(record);
   switch (record.state) {
     case "WAITING": {
       const secs = record.nextAttemptAt ? Math.max(0, Math.round((Date.parse(record.nextAttemptAt) - Date.parse(record.updatedAt)) / 1000)) : 0;
-      return `Inference provider${where} ${condition} (${last?.httpStatus ? `HTTP ${last.httpStatus}` : last?.kind ?? "failure"}); waiting ${secs}s before checking again. Work is preserved.${discarded}`;
+      const left = minutesWords(Math.max(0, record.policy.deadlineMs - record.waitedMs));
+      const discarded = discardedPartialOutput ? " The partial response was discarded." : "";
+      const text = `Waiting for the model provider${where}: ${problem}. Retry ${record.submissions.length}, next attempt in ${secs}s; gives up in ${left}. Your work is kept. /details shows the raw error; esc cancels.${discarded}`;
+      return { text: redactSecrets(text), key: PROVIDER_STATUS_KEY, detail };
     }
     case "RESUMED":
-      return `Inference provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} resumed.`;
-    case "PROBING":
-      return undefined;
+      return { text: `The model provider recovered after ${Math.round(record.waitedMs / 1000)}s; step ${record.step} resumed.`, key: PROVIDER_STATUS_KEY, detail: `Recovered; the earlier error was:\n${detail}` };
+    case "CANCELLED":
+      return { text: "Stopped waiting for the model provider.", key: PROVIDER_STATUS_KEY, detail };
     default:
-      return redactSecrets(`Provider recovery ${record.state.toLowerCase()}: ${record.reason ?? condition}`);
+      return {
+        text: redactSecrets(`Nexus stopped retrying the model provider${where}: ${problem}. Check the connection or use /connect, then send your message again. /details shows the raw error.`),
+        key: PROVIDER_STATUS_KEY,
+        detail,
+      };
   }
+}
+
+/** The answer to a prompt sent while the provider is still down: short, because the start-up notice already gave the steps. */
+export function noProviderRefusal(problem: { endpoint: string; endpoints?: string[]; nothingThere?: boolean }): string {
+  const named = problem.endpoints?.join(", ") ?? problem.endpoint;
+  const why = problem.nothingThere === false ? `could not connect to ${named}` : `nothing answers at ${named}`;
+  return redactSecrets(`Not sent: no model is connected (${why}). Use /connect or start a local model server, then send it again.`);
+}
+
+/** First run with nothing to talk to: what is missing, what to do next, where to read more. The raw cause goes in `detail`. */
+export function noProviderNotice(problem: { kind: "unreachable" | "rejected"; endpoint: string; endpoints?: string[]; detail: string; blocking?: boolean; nothingThere?: boolean }): StatusNotice {
+  if (problem.kind === "rejected" || problem.blocking === false) {
+    // Only a warning: the start-up check can be refused where chat is not (a token not yet refreshed, a key limited to chat).
+    // With several endpoints that failed, each is named and the wording does not say how each failed (the detail does).
+    const many = (problem.endpoints?.length ?? 0) > 1;
+    const verb = many ? "did not pass" : problem.kind === "rejected" ? "rejected the credentials on" : "did not answer";
+    return {
+      text: redactSecrets(
+        `${many ? problem.endpoints!.join(", ") : problem.endpoint} ${verb} the start-up check. Nexus will still try your messages; ` +
+          `if they fail, type /connect to sign in again or check the API key and the server. \`nexus doctor\` checks the setup.`,
+      ),
+      key: STARTUP_PROVIDER_KEY,
+      detail: redactSecrets(problem.detail),
+    };
+  }
+  const named = problem.endpoints?.join(", ") ?? problem.endpoint;
+  const missing = problem.nothingThere === false ? `No model is connected: Nexus could not connect to ${named}.` : `No model is connected: nothing answers at ${named}.`;
+  const text =
+    `${missing} Next: type /connect to sign in or add an API key, or start a local model server (LM Studio, Ollama, llama.cpp) ` +
+    `and send your message again. \`nexus doctor\` checks the setup; docs/CLOUD_PROVIDERS.md lists providers.`;
+  return { text: redactSecrets(text), key: STARTUP_PROVIDER_KEY, detail: redactSecrets(problem.detail) };
 }
 
 /** Lines of a command's output carried in `tool.end` for the transcript preview. */

@@ -327,6 +327,34 @@ export function boundedProviderText(text: string): string {
 const metadataSignal = (signal?: AbortSignal): AbortSignal =>
   signal ? AbortSignal.any([signal, AbortSignal.timeout(METADATA_TIMEOUT_MS)]) : AbortSignal.timeout(METADATA_TIMEOUT_MS);
 
+/** Timers the stall notice runs on; a test passes its own clock instead of waiting. */
+export interface StallScheduler {
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+  now(): number;
+}
+
+/** The provider's stream went quiet (`stalled`, after `silentSecs` without a chunk) or sent data again. */
+export interface StreamStallEvent {
+  stalled: boolean;
+  silentSecs: number;
+}
+
+const realScheduler: StallScheduler = {
+  set: (fn, ms) => {
+    const t = setTimeout(fn, ms);
+    t.unref?.();
+    return t;
+  },
+  clear: (handle) => clearTimeout(handle as NodeJS.Timeout),
+  now: () => Date.now(),
+};
+
+/** Seconds of silence after which a stream is reported as stalled (LOCAL_LLM_STALL_NOTICE_MS; 0 turns it off). */
+const DEFAULT_STALL_NOTICE_MS = 30_000;
+/** Longest delay a Node timer takes; above it the timer fires at once. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 /**
  * Watchdog for inference requests (first-byte, idle between chunks, and optional total timeout).
  * Reset on each streamed chunk (REQ-PRV-104).
@@ -336,13 +364,20 @@ export class StreamWatchdog {
   private timer?: NodeJS.Timeout;
   private totalTimer?: NodeJS.Timeout;
   private readonly callerAbortListener?: () => void;
+  private stallTimer?: unknown;
+  private stalled = false;
+  private lastChunkAt: number;
 
   constructor(
     private readonly firstByteMs: number,
     private readonly idleMs: number,
     private readonly totalMs: number,
     private readonly callerSignal?: AbortSignal,
+    /** Reports silence before the idle timeout would abort: `ms` without a chunk, once, and again when data returns. */
+    private readonly stall?: { ms: number; notify: (event: StreamStallEvent) => void; scheduler?: StallScheduler },
   ) {
+    this.lastChunkAt = this.clockNow();
+    this.armStall();
     if (this.callerSignal) {
       if (this.callerSignal.aborted) {
         this.ac.abort(this.callerSignal.reason);
@@ -374,11 +409,49 @@ export class StreamWatchdog {
     }
   }
 
+  private clockNow(): number {
+    return (this.stall?.scheduler ?? realScheduler).now();
+  }
+
+  private armStall(): void {
+    const stall = this.stall;
+    if (!stall || !(stall.ms > 0)) return;
+    const scheduler = stall.scheduler ?? realScheduler;
+    scheduler.clear(this.stallTimer);
+    this.stallTimer = scheduler.set(() => {
+      this.stalled = true;
+      try {
+        stall.notify({ stalled: true, silentSecs: Math.round(stall.ms / 1000) });
+      } catch {}
+    }, stall.ms);
+  }
+
   onChunk(): void {
     this.arm(this.idleMs, "Idle");
+    const stall = this.stall;
+    if (!stall) return;
+    if (this.stalled) {
+      this.stalled = false;
+      const silentSecs = Math.round((this.clockNow() - this.lastChunkAt) / 1000);
+      try {
+        stall.notify({ stalled: false, silentSecs });
+      } catch {}
+    }
+    this.lastChunkAt = this.clockNow();
+    this.armStall();
   }
 
   done(): void {
+    if (this.stall) {
+      (this.stall.scheduler ?? realScheduler).clear(this.stallTimer);
+      // A request that ends while silent (idle timeout, abort, retry) must not leave the notice standing.
+      if (this.stalled) {
+        this.stalled = false;
+        try {
+          this.stall.notify({ stalled: false, silentSecs: Math.round((this.clockNow() - this.lastChunkAt) / 1000) });
+        } catch {}
+      }
+    }
     clearTimeout(this.timer);
     clearTimeout(this.totalTimer);
     if (this.callerSignal && this.callerAbortListener) {
@@ -985,7 +1058,12 @@ export class LocalLlmClient {
     return {};
   }
 
-  private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string): StreamWatchdog {
+  /** Told when the provider's stream goes quiet for the stall interval and when it speaks again (the operator's status). */
+  public onStreamStall?: (event: StreamStallEvent) => void;
+  /** Test seam: the clock the stall notice runs on. */
+  public stallScheduler?: StallScheduler;
+
+  private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string, streaming = false): StreamWatchdog {
     const disclosure = this.disclosureOf(currentEp ?? this.endpoint);
     const parseNum = (k: string) => {
       const raw = process.env[k];
@@ -997,7 +1075,15 @@ export class LocalLlmClient {
     const idleMs = parseNum("LOCAL_LLM_IDLE_TIMEOUT_MS") ?? 120_000;
     const defaultTotal = disclosure === "cloud" ? 900_000 : 0;
     const totalMs = parseNum("LOCAL_LLM_TIMEOUT_MS") ?? defaultTotal;
-    return new StreamWatchdog(firstByteMs, idleMs, totalMs, operatorSignal);
+    const notify = this.onStreamStall;
+    const stallMs = parseNum("LOCAL_LLM_STALL_NOTICE_MS") ?? DEFAULT_STALL_NOTICE_MS;
+    return new StreamWatchdog(
+      firstByteMs,
+      idleMs,
+      totalMs,
+      operatorSignal,
+      streaming && notify ? { ms: Math.min(stallMs, MAX_TIMER_MS), notify, ...(this.stallScheduler ? { scheduler: this.stallScheduler } : {}) } : undefined,
+    );
   }
 
   public setTaskId(taskId?: string): void {
@@ -1504,29 +1590,46 @@ export class LocalLlmClient {
     let last: ProbeResult = { available: false, condition: "TEMPORARILY_UNAVAILABLE" };
     for (let i = 0; i < total; i++) {
       const idx = (start + i) % total;
-      const timeout = AbortSignal.timeout(opts.timeoutMs ?? 5_000);
-      try {
-        const res = await fetch(`${this.endpoints[idx]}/models`, {
-          headers: this.authorization(this.endpoints[idx]),
-          signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
-          ...this.fetchPolicy(),
-        });
-        const body = await res.text().catch(() => "");
-        if (res.status < 500 && res.status !== 429 && res.status !== 408) {
-          this.activeEndpointIndex = idx;
-          return { available: true, condition: "AVAILABLE", httpStatus: res.status };
-        }
-        const hints = providerHints(res.headers, body);
-        last = { ...classifyHttpFailure(res.status, hints, body), available: false, httpStatus: res.status, hints, detail: `HTTP ${res.status}` };
-      } catch (err: any) {
-        if (signal?.aborted) throw err;
-        const chain = transportCauseChain(err);
-        const { condition } = classifyTransportFailure(chain, "connect", err?.name === "TimeoutError");
-        last = { available: false, condition, detail: `${err?.message ?? err}${formatCause(chain)}` };
-        if (!TEMPORARY_CONDITIONS.has(condition)) return last;
+      last = await this.probeEndpointAt(idx, signal, opts.timeoutMs);
+      if (last.available) {
+        this.activeEndpointIndex = idx;
+        return last;
       }
+      // A transport failure that is not a temporary condition ends the walk; an HTTP error moves on to the next endpoint.
+      if (last.httpStatus === undefined && !TEMPORARY_CONDITIONS.has(last.condition)) return last;
     }
     return last;
+  }
+
+  /**
+   * Probes every endpoint of this connection (the primary and each failover) at once and keeps each result under its own
+   * endpoint (endpoints `skip` names are not sent anything and are left out): one endpoint's failure never replaces another's answer. No side effects (the active endpoint stays).
+   */
+  async probeEachEndpoint(signal?: AbortSignal, opts: { timeoutMs?: number; skip?: (endpoint: string) => boolean } = {}): Promise<Array<{ endpoint: string; probe: ProbeResult }>> {
+    const all = [...this.endpoints].map((endpoint, idx) => ({ endpoint, idx })).filter(({ endpoint }) => !opts.skip?.(endpoint));
+    return Promise.all(all.map(async ({ endpoint, idx }) => ({ endpoint, probe: await this.probeEndpointAt(idx, signal, opts.timeoutMs) })));
+  }
+
+  private async probeEndpointAt(idx: number, signal: AbortSignal | undefined, timeoutMs: number | undefined): Promise<ProbeResult> {
+    const timeout = AbortSignal.timeout(timeoutMs ?? 5_000);
+    try {
+      const res = await fetch(`${this.endpoints[idx]}/models`, {
+        headers: this.authorization(this.endpoints[idx]),
+        signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+        ...this.fetchPolicy(),
+      });
+      const body = await res.text().catch(() => "");
+      if (res.status < 500 && res.status !== 429 && res.status !== 408) {
+        return { available: true, condition: "AVAILABLE", httpStatus: res.status };
+      }
+      const hints = providerHints(res.headers, body);
+      return { ...classifyHttpFailure(res.status, hints, body), available: false, httpStatus: res.status, hints, detail: `HTTP ${res.status}` };
+    } catch (err: any) {
+      if (signal?.aborted) throw err;
+      const chain = transportCauseChain(err);
+      const { condition } = classifyTransportFailure(chain, "connect", err?.name === "TimeoutError");
+      return { available: false, condition, detail: `${err?.message ?? err}${formatCause(chain)}`, ...(err?.name === "TimeoutError" ? { timedOut: true } : {}), codes: chain.flatMap((c) => (c.code ? [c.code] : [])) };
+    }
   }
 
   async chatCompletion(
@@ -1793,7 +1896,7 @@ export class LocalLlmClient {
 
       const payload = this.outboundChatBody(currentEp, requestId, messages, tools);
 
-      const watchdog = this.createWatchdog(signal, currentEp);
+      const watchdog = this.createWatchdog(signal, currentEp, true);
       let res: Response;
       try {
         res = await fetch(url, {
@@ -2096,7 +2199,7 @@ export class LocalLlmClient {
       }
       const url = `${currentEp}${req.path}`;
       this.pending = { endpoint: currentEp };
-      const watchdog = this.createWatchdog(signal, currentEp);
+      const watchdog = this.createWatchdog(signal, currentEp, stream);
       let res: Response;
       try {
         res = await fetch(url, {
