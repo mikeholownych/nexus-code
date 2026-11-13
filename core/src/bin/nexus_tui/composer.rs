@@ -21,6 +21,9 @@ pub struct Paste {
     pub content: String,
 }
 
+/// A paste of this many lines or fewer shows its first line beside the label in the composer (D-25).
+const PREVIEW_MAX_LINES: usize = 6;
+
 impl Paste {
     /// `[Pasted text #1: 24 lines]`, or the character count for one long line.
     pub fn label(&self) -> String {
@@ -32,22 +35,19 @@ impl Paste {
             format!("[Pasted text #{}: {} chars]", self.number, self.content.chars().count())
         }
     }
-}
 
-/// A paste of this many lines or fewer shows its first line beside the label in the composer (D-25).
-const PREVIEW_MAX_LINES: usize = 6;
-
-impl Paste {
     /// The composer row text: the label, and for a short multi-line paste its first non-blank line, so the user
     /// can see what was pasted without ctrl+o. The label alone is what the transcript and the sent prompt show.
     fn row_label(&self) -> String {
         let label = self.label();
-        let lines = self.content.lines().count();
-        if lines == 0 || lines > PREVIEW_MAX_LINES || !self.content.contains('\n') {
+        if !self.content.contains('\n') || self.content.lines().count() > PREVIEW_MAX_LINES {
             return label;
         }
         match self.content.lines().map(str::trim).find(|line| !line.is_empty()) {
-            Some(first) => format!("{label} {}…", first.replace('\t', " ")),
+            Some(first) => {
+                let first: String = first.chars().filter(|c| !c.is_control() || *c == '\t').collect();
+                format!("{label} {}…", first.replace('\t', " "))
+            }
             None => label,
         }
     }
@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn a_short_paste_shows_its_first_line_and_a_long_one_only_the_label() {
-        // D-25: a 4-line paste used to show only "[Pasted text #1: 4 lines]".
+        // D-25: a short paste used to show only the label.
         let mut composer = Composer::default();
         composer.paste("\n  alpha one\nbeta\ngamma\ndelta");
         assert_eq!(composer.layout(80).rows, vec!["[Pasted text #1: 5 lines] alpha one…".to_string()]);
@@ -600,9 +600,12 @@ mod tests {
         let mut long = Composer::default();
         long.paste(&"row\n".repeat(24));
         assert_eq!(long.layout(80).rows, vec!["[Pasted text #1: 24 lines]".to_string()]);
+        let mut coloured = Composer::default();
+        coloured.paste("\u{1b}[31merror\u{7}\nnext");
+        assert_eq!(coloured.layout(80).rows, vec!["[Pasted text #1: 2 lines] [31merror…".to_string()], "control characters never reach the row");
         let mut narrow = Composer::default();
         narrow.paste("alpha one\nbeta");
-        assert!(narrow.layout(20).rows.iter().all(|row| row.width() <= 18), "{:?}", narrow.layout(20).rows);
+        assert_eq!(narrow.layout(20).rows, vec!["[Pasted text #1: …".to_string(), String::new()], "the row is cut to the room, label first");
     }
 
     fn typed(text: &str) -> Composer {

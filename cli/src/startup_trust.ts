@@ -157,7 +157,8 @@ export function promptWorkspaceTrust(
 
     const render = () => {
       // A pty opened without a window size reports 0 columns (not undefined): that is an unknown width, drawn at 80.
-      const width = Number.isFinite(output.columns) && (output.columns as number) > 0 ? Math.floor(output.columns as number) : 80;
+      const columns = output.columns ?? 0;
+      const width = columns > 0 ? Math.floor(columns) : 80;
       const rows = optionsText.flatMap((text, index) =>
         wrapProse(text, width - 2).map((row, line) => `${line === 0 ? (choice === index ? "›" : " ") : " "} ${row}`));
       const instructions = instructionFile

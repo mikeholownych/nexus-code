@@ -342,7 +342,7 @@ test("D-21: a terminal that reports no width (0 or missing columns, e.g. a pty w
     const at80 = await trustScreen(workspace, 80);
     for (const unknown of [0, undefined, Number.NaN, -3]) {
       const terminal = mockTerminal(true, 80);
-      (terminal.output as any).columns = unknown;
+      (terminal.output as { columns?: number }).columns = unknown;
       const decision = promptWorkspaceTrust(workspace, { ...terminal, trustStore: { isTrusted: () => false, trust: () => {} } });
       await new Promise((resolve) => setImmediate(resolve));
       const rows = terminal.text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "").split("\n");
