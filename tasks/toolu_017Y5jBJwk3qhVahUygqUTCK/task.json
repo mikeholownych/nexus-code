@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017Y5jBJwk3qhVahUygqUTCK",
+  "agent_id": "a21e5a7100d14b253",
+  "subagent_type": "reviewer",
+  "task_description": "Local Code Review",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 35113,
+    "cache_read_tokens": 212170,
+    "output_tokens": 4002,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-13T02:04:41.616833334Z",
+  "completed_at": "2026-11-13T02:05:27.860843346Z"
+}
