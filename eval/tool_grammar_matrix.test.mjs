@@ -15,10 +15,12 @@ import {
 
 // Stand-in for the gateway's HTTP side: the fixture client posts here so the matrix's cache interception sees real header traffic.
 globalThis.__wp1107SeenCacheControl = [];
-globalThis.fetch = async (_url, init) => {
+const gatewayStubFetch = async (_url, init) => {
   globalThis.__wp1107SeenCacheControl.push(new Headers(init?.headers).get("cache-control"));
   return new Response("{}", { headers: { "x-aihost-cache": globalThis.__wp1107CacheState ?? "BYPASS" } });
 };
+
+globalThis.fetch = gatewayStubFetch;
 
 const schema = {
   type: "object",
@@ -767,7 +769,7 @@ test("gateway runs send Cache-Control: no-cache, refuse a cached reply, and the 
     serverVersion: "limits-2026-11", contextSize: 32768, sampling: { temperature: 0 }, toolChoice: "auto", serverFlags: [],
     compatibilityMode: "gateway-openai-chat", advertised: { via: "aihost_gateway", limitsVersion: "limits-2026-11" },
   };
-  const savedFetch = globalThis.fetch;
+  const savedFetch = gatewayStubFetch;
   try {
     globalThis.__wp1107MatrixFixture = { providers: { [gateway.endpointUrl]: gateway }, calls: 0 };
     globalThis.__wp1107SeenCacheControl.length = 0;
