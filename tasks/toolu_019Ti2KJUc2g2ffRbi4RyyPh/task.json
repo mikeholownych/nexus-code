@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019Ti2KJUc2g2ffRbi4RyyPh",
+  "agent_id": "a52acdac60dd1da99",
+  "subagent_type": "general-purpose",
+  "task_description": "Local Slop Review prompt",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 50414,
+    "cache_read_tokens": 370446,
+    "output_tokens": 3590,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-13T12:35:20.143100158Z",
+  "completed_at": "2026-11-13T12:35:58.908888613Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Y6LzFjEhzEJZrhfyCmbsAF",
+  "agent_id": "a78490661e6a489a2",
+  "subagent_type": "general-purpose",
+  "task_description": "Local Security Review prompt",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 54459,
+    "cache_read_tokens": 324842,
+    "output_tokens": 2179,
+    "api_call_count": 6
+  },
+  "started_at": "2026-11-13T12:35:18.005883371Z",
+  "completed_at": "2026-11-13T12:35:43.706042271Z"
+}
