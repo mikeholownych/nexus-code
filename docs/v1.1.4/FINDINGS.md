@@ -176,6 +176,7 @@ One row per clause of PLAN.md section 5 "Production bar". A row closes only with
 | I-4 | Owner dogfood acceptance of the exact release head: a comment on the release PR naming the head sha and the terminal(s) used | release | OPEN |
 | I-5 | G1.1-4 measured with counts: 200 attempts per live endpoint, pass = `native_valid * 1000 >= attempts * 995`, zero invalid (`docs/v1.1.4/G1.1-4-LIVE-MATRIX.md`); cross-reference the section B WP-1107 G1.1-4 row | WP-1303 | OPEN; not run (needs the shared `GATEWAY` claim) |
 | I-6 | GBNF live smoke on the owner's llama.cpp host passes, then `toolGrammarDefault` is flipped on in a one-line commit citing the evidence | WP-1303 | OPEN; `toolGrammarDefault` is `false` (see `01M6KXHHJ3VQ`) |
+| I-7 | Entire Findings gate on the last two integration PRs | release | WAIVED by the owner, 2026-11-12 (Entire out of credits; owner decision "Waive Entire, record it"): PR #481 and #482 merged on independent reviewer ACCEPTs, green required CI and the integrator's diff check. Recorded in `docs/releases/v1.1.4-rc.1.md`; not an Entire pass |
 
 ## J. WP-1317 D-04 follow-ups (docs/v1.1.4/TUI-AUDIT.md)
 

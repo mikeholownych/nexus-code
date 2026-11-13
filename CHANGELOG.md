@@ -8,6 +8,8 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [v1.1.4] - Unreleased
 
+Candidate notes: [`docs/releases/v1.1.4-rc.1.md`](docs/releases/v1.1.4-rc.1.md) (ledger closed except the listed items; qualification pending).
+
 ### Fixed
 
 - A turn suspended while waiting out a provider's Retry-After (429/503) now resumes inside that window correctly: `nexus run --resume`, the TUI (`--resume`) and `nexus operation resume` wait until the recorded eligible time before the first request, shown as the usual provider-wait status, instead of sending it at once. The wait is skipped when you resume against a different endpoint, and bounded by the recovery deadline (`LOCAL_LLM_RECOVERY_DEADLINE_MS`, default 20 min); Ctrl-C during it suspends again with the same eligible time (#471).
