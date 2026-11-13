@@ -171,6 +171,7 @@ function validateEndpoint(endpoint) {
   for (const field of ["throttledRetries", "requestIntervalMs"]) {
     if (endpoint[field] !== undefined) assertCount(endpoint[field], field);
   }
+  if (endpoint.serverKind === "gateway" && endpoint.cacheBypass !== true) throw new TypeError("gateway evidence must record that the response cache was bypassed");
   if (endpoint.workers !== undefined && (!Array.isArray(endpoint.workers) || endpoint.workers.some((worker) => typeof worker !== "string" || !worker.trim()))) throw new TypeError("workers must be a list of non-empty strings");
   assertNonSecretMetadata(endpoint, "endpoint");
   if (!isRecord(endpoint.tools) || Object.keys(endpoint.tools).length !== TOOL_NAMES.length) throw new TypeError("attempt counts must include exactly the four allowlisted tools");
@@ -275,6 +276,30 @@ function resolveConfinedBinLink(relative, target) {
   if (!relative.startsWith(binDir) || typeof target !== "string" || !target || target.startsWith("/") || /[\r\n\\\0]/.test(target)) return undefined;
   const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(relative), target));
   return resolved.startsWith("lib/cli/node_modules/") && !resolved.startsWith(binDir) ? resolved : undefined;
+}
+
+/**
+ * The gateway caches temperature-0 replies by request, so repeated identical attempts would measure one reply many times.
+ * While a gateway provider runs, every chat request carries `Cache-Control: no-cache` and every answered request must report
+ * `x-aihost-cache: BYPASS`; anything else means the attempts were not independent samples.
+ */
+function interceptGatewayCache(endpointUrl) {
+  const realFetch = globalThis.fetch;
+  const target = `${endpointUrl.replace(/\/+$/, "")}/chat/completions`;
+  const stats = { answered: 0, notBypassed: 0 };
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url !== target) return realFetch(input, init);
+    const headers = new Headers(init?.headers);
+    headers.set("Cache-Control", "no-cache");
+    const response = await realFetch(input, { ...init, headers });
+    if (response.ok) {
+      stats.answered++;
+      if (response.headers.get("x-aihost-cache")?.toUpperCase() !== "BYPASS") stats.notBypassed++;
+    }
+    return response;
+  };
+  return { stats, restore: () => { globalThis.fetch = realFetch; } };
 }
 
 function listArchiveEntries(archivePath) {
@@ -613,36 +638,44 @@ export async function runToolGrammarMatrix(options) {
         }
       }
     };
-    for (const toolName of TOOL_NAMES) {
-      const tool = providerTools.find((entry) => entry.function.name === toolName);
-      const toolCounts = counts[toolName];
-      for (let index = 0; index < 50; index++) {
-        const hybrid = index < 5;
-        let response;
-        try {
-          response = await complete([{ role: "user", content: promptFor(toolName, hybrid) }], [tool]);
-        } catch {
-          toolCounts.invalid++;
-          continue;
+    const gatewayCache = expectedKind === "gateway" ? interceptGatewayCache(provider.endpointUrl) : undefined;
+    try {
+      for (const toolName of TOOL_NAMES) {
+        const tool = providerTools.find((entry) => entry.function.name === toolName);
+        const toolCounts = counts[toolName];
+        for (let index = 0; index < 50; index++) {
+          const hybrid = index < 5;
+          let response;
+          try {
+            response = await complete([{ role: "user", content: promptFor(toolName, hybrid) }], [tool]);
+          } catch {
+            toolCounts.invalid++;
+            continue;
+          }
+          const calls = Array.isArray(response?.tool_calls) ? response.tool_calls : [];
+          if (calls.length !== 1 || calls[0]?.function?.name !== toolName) {
+            toolCounts.invalid++;
+            continue;
+          }
+          const classification = classifyToolArguments({
+            schema: tool.function.parameters,
+            rawArguments: calls[0].function.arguments,
+            repairJsonWithClass,
+          });
+          toolCounts[classification.category]++;
+          const reasoningMatch = /<think>\s*([\s\S]*?)\s*<\/think>/i.exec(typeof response.content === "string" ? response.content : "");
+          // The gateway returns model reasoning in a separate reasoning_content channel rather than as a <think> block in content.
+          const channelReasoning = provider.provider === "gateway" && typeof response.reasoning_content === "string" && response.reasoning_content.trim() !== "";
+          const reasoningPresent = Boolean(reasoningMatch?.[1]?.trim()) || channelReasoning;
+          if (hybrid && reasoningPresent) toolCounts.hybrid_reasoning_present++;
+          if (hybrid && classification.schemaValid) toolCounts.hybrid_schema_valid++;
         }
-        const calls = Array.isArray(response?.tool_calls) ? response.tool_calls : [];
-        if (calls.length !== 1 || calls[0]?.function?.name !== toolName) {
-          toolCounts.invalid++;
-          continue;
-        }
-        const classification = classifyToolArguments({
-          schema: tool.function.parameters,
-          rawArguments: calls[0].function.arguments,
-          repairJsonWithClass,
-        });
-        toolCounts[classification.category]++;
-        const reasoningMatch = /<think>\s*([\s\S]*?)\s*<\/think>/i.exec(typeof response.content === "string" ? response.content : "");
-        // The gateway returns model reasoning in a separate reasoning_content channel rather than as a <think> block in content.
-        const channelReasoning = provider.provider === "gateway" && typeof response.reasoning_content === "string" && response.reasoning_content.trim() !== "";
-        const reasoningPresent = Boolean(reasoningMatch?.[1]?.trim()) || channelReasoning;
-        if (hybrid && reasoningPresent) toolCounts.hybrid_reasoning_present++;
-        if (hybrid && classification.schemaValid) toolCounts.hybrid_schema_valid++;
       }
+    } finally {
+      gatewayCache?.restore();
+    }
+    if (gatewayCache && (gatewayCache.stats.answered === 0 || gatewayCache.stats.notBypassed > 0)) {
+      throw new Error(`gateway response cache was not bypassed (${gatewayCache.stats.notBypassed} of ${gatewayCache.stats.answered} answered requests); attempts are not independent samples`);
     }
     const totals = { attempts: 200, native_valid: 0, repaired: 0, schema_invalid: 0, invalid: 0 };
     for (const tool of Object.values(counts)) for (const category of categories) totals[category] += tool[category];
@@ -655,6 +688,7 @@ export async function runToolGrammarMatrix(options) {
       modelName: provider.modelName,
       ...(provider.modelDigest !== undefined ? { modelDigest: provider.modelDigest } : {}),
       ...(workers && workers.length > 0 ? { workers } : {}),
+      ...(gatewayCache ? { cacheBypass: true } : {}),
       ...(retryBudget > 0 ? { throttledRetries } : {}),
       ...(interval > 0 ? { requestIntervalMs: interval } : {}),
       contextSize: provider.contextSize,

@@ -13,6 +13,13 @@ import {
   writeEvidence,
 } from "./tool_grammar_matrix.mjs";
 
+// Stand-in for the gateway's HTTP side: the fixture client posts here so the matrix's cache interception sees real header traffic.
+globalThis.__wp1107SeenCacheControl = [];
+globalThis.fetch = async (_url, init) => {
+  globalThis.__wp1107SeenCacheControl.push(new Headers(init?.headers).get("cache-control"));
+  return new Response("{}", { headers: { "x-aihost-cache": globalThis.__wp1107CacheState ?? "BYPASS" } });
+};
+
 const schema = {
   type: "object",
   properties: { path: { type: "string" } },
@@ -46,6 +53,7 @@ export class LocalLlmClient {
   async chatCompletion(messages, offered) {
     const state = globalThis.__wp1107MatrixFixture;
     state.calls++;
+    if (this.provider.provider === "gateway") await globalThis.fetch(this.config.endpoint + "/chat/completions", { method: "POST", headers: { "content-type": "application/json" } });
     if (state.failVllm && this.provider.provider === "vllm") return { content: "", tool_calls: [] };
     if (state.throttle > 0) { state.throttle--; throw new Error('Inference error (HTTP 429): {"error":{"message":"request rate limit exceeded"}}'); }
     const name = offered[0].function.name;
@@ -568,7 +576,7 @@ test("tool grammar matrix evidence is immutable and has a detached SHA-256 sidec
 
 function gatewayEndpoint(modelName, result = endpointResult(50)) {
   const { imageDigest: _image, modelDigest: _model, ...rest } = identifiedEndpoint("gateway", result);
-  return { ...rest, serverKind: "gateway", serverVersion: "limits-2026-11", modelName, workers: ["worker-a"], serverFlags: [], compatibilityMode: "gateway-openai-chat" };
+  return { ...rest, serverKind: "gateway", serverVersion: "limits-2026-11", modelName, cacheBypass: true, workers: ["worker-a"], serverFlags: [], compatibilityMode: "gateway-openai-chat" };
 }
 
 test("gateway-mode evidence accepts routed models without image or model digests, and nothing else", () => {
@@ -743,4 +751,41 @@ test("a gateway reasoning channel (reasoning_content) counts as hybrid reasoning
     delete globalThis.__wp1107MatrixFixture;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("gateway runs send Cache-Control: no-cache, refuse a cached reply, and the evidence must record the bypass", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gw-cache-test-"));
+  const tools = [
+    ["read_file", { path: { type: "string" } }, ["path"]],
+    ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
+    ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
+    ["run_command", { command: { type: "string" } }, ["command"]],
+  ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const fixture = createCandidateFixture(root, "b".repeat(40), tools);
+  const gateway = {
+    provider: "gateway", serverKind: "gateway", endpointUrl: "http://127.0.0.1:8000/gw/v1", modelName: "engineering/b0",
+    serverVersion: "limits-2026-11", contextSize: 32768, sampling: { temperature: 0 }, toolChoice: "auto", serverFlags: [],
+    compatibilityMode: "gateway-openai-chat", advertised: { via: "aihost_gateway", limitsVersion: "limits-2026-11" },
+  };
+  const savedFetch = globalThis.fetch;
+  try {
+    globalThis.__wp1107MatrixFixture = { providers: { [gateway.endpointUrl]: gateway }, calls: 0 };
+    globalThis.__wp1107SeenCacheControl.length = 0;
+    const evidence = await runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [gateway] });
+    assert.equal(evidence.endpoints[0].cacheBypass, true);
+    assert.equal(globalThis.__wp1107SeenCacheControl.length, 200);
+    assert.ok(globalThis.__wp1107SeenCacheControl.every((value) => value === "no-cache"));
+    assert.equal(globalThis.fetch, savedFetch, "the fetch interception must be undone");
+
+    globalThis.__wp1107CacheState = "HIT";
+    globalThis.__wp1107MatrixFixture = { providers: { [gateway.endpointUrl]: gateway }, calls: 0 };
+    await assert.rejects(runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [gateway] }), /cache was not bypassed/i);
+    assert.equal(globalThis.fetch, savedFetch, "the fetch interception must be undone after a refusal");
+  } finally {
+    delete globalThis.__wp1107CacheState;
+    delete globalThis.__wp1107MatrixFixture;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  const { cacheBypass: _omitted, ...withoutBypass } = gatewayEndpoint("engineering/b0");
+  assert.throws(() => validateMatrixEvidence(evidenceWith([withoutBypass])), /cache was bypassed/i);
 });
