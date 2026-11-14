@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7C91323PE81HSHG4A50960M",
+  "session_id": "6473a60e-9fa2-4bd9-9d0c-35324295cf68",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-14T05:38:53.631822004Z",
+  "branch": "v1/semantic-reviewer-failclosed",
+  "checkpoints_count": 5,
+  "save_step_count": 302,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "f86aa24b3f57",
+  "checkpoint_transcript_start": 20072,
+  "transcript_lines_at_start": 20072,
+  "compact_transcript_start": 1992,
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 14390,
+    "cache_read_tokens": 2389926,
+    "output_tokens": 9744,
+    "api_call_count": 12,
+    "subagent_tokens": {
+      "input_tokens": 164,
+      "cache_creation_tokens": 295254,
+      "cache_read_tokens": 7790250,
+      "output_tokens": 55081,
+      "api_call_count": 82
+    }
+  },
+  "redaction": {
+    "replacements": 147,
+    "layers": {
+      "betterleaks": 34,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 14,
+      "credentialed_uri": 15,
+      "entropy": 99,
+      "key_context": 0,
+      "provider_token": 27,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-14T05:06:42.123161881Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "ea59cd16e5e4",
+      "timestamp": "2026-11-14T05:06:42.123161881Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-14T05:33:45.057046711Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "fc162be638bb",
+      "timestamp": "2026-11-14T05:33:45.057046711Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 314
+  }
+}
