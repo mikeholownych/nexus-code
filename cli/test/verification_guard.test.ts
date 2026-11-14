@@ -324,9 +324,7 @@ describe("verification config guard", () => {
     assert.equal(d("edit_file", { old_content: "});", new_content: "});//" }), "deny");
     assert.equal(d("edit_file", { old_content: "", new_content: "x" }), "deny");
     assert.equal(d("edit_file", { old_content: "});\n", new_content: "});\ntest('b', () => { return; });\n" }), "allow");
-    assert.equal(d("patch_file", { patch: "--- a/tests/t.test.ts\n+++ b/tests/t.test.ts\n@@ -3,0 +4,1 @@\n+test('b', () => {});\n" }), "allow");
-    assert.equal(d("patch_file", { patch: "--- a/tests/t.test.ts\n+++ b/tests/t.test.ts\n@@ -2,1 +2,0 @@\n---x\n" }), "deny");
-    assert.equal(d("patch_file", { patch: "--- a/tests/t.test.ts\n+++ b/tests/t.test.ts\n@@ -2,1 +2,1 @@\n-  assert.equal(1, 1);\n+  // gone\n" }), "deny");
+    assert.equal(d("patch_file", { patch: "@@ -3,1 +3,2 @@\n });\n+test('b', () => {});\n" }), "deny");
   });
 
   test("mode block gives the tester no exemption", async () => {
@@ -391,26 +389,69 @@ describe("verification config guard", () => {
     assert.deepEqual(seen, [authority]);
   });
 
-  test("tester patch_file: only one pure-addition hunk at end of file is exempt", () => {
+  test("patch_file on an existing test always asks, even for the tester; headless is denied", () => {
     write("tests/p.test.ts", "test('a', () => {\n  assert.ok(1);\n});\n");
     const sm = new SecurityManager(repo);
-    const d = (patch: string) => sm.verificationEditDecision("patch_file", { path: "tests/p.test.ts", patch }, { role: "tester", operator: true })?.action;
-    const head = "--- a/tests/p.test.ts\n+++ b/tests/p.test.ts\n";
-    assert.equal(d(`${head}@@ -3,1 +3,2 @@\n });\n+test('b', () => {});\n`), "allow");
-    assert.equal(d(`${head}@@ -1,1 +1,2 @@\n test('a', () => {\n+  return;\n`), "ask");
-    assert.equal(d(`${head}@@ -1,1 +1,2 @@\n test('a', () => {\n+  assert.ok(2);\n`), "ask");
-    assert.equal(d(`${head}@@ -3,1 +3,2 @@\n });\n+test('b', () => {});\n@@ -9,1 +10,2 @@\n x\n+y\n`), "ask");
-    assert.equal(d(`${head}@@ -3,1 +3,2 @@\n });\n+if (false) { x(); }\n`), "ask");
+    const patch = "--- a/tests/p.test.ts\n+++ b/tests/p.test.ts\n@@ -3,1 +3,2 @@\n });\n+test('b', () => {});\n";
+    assert.equal(sm.verificationEditDecision("patch_file", { path: "tests/p.test.ts", patch }, { role: "tester", operator: true })?.action, "ask");
+    assert.equal(sm.verificationEditDecision("patch_file", { path: "tests/p.test.ts", patch }, { role: "tester", operator: false })?.action, "deny");
   });
 
-  test("more neutering constructs are refused for the tester", () => {
+  test("early exits of other languages are refused for the tester", () => {
     const sm = new SecurityManager(repo);
     const old = fs.readFileSync(path.join(repo, "tests/old.test.ts"), "utf8");
-    for (const extra of ["/* ", "if (false) {}", "if (true) return;", "throw new Error('x');"]) {
+    for (const extra of ["if (false) {}", "if (true) return;", "throw new Error('x');", "os.Exit(0)", "System.exit(0);", "std::process::exit(0);", "exit(0);", "raise SystemExit(0)", "pytest.exit('x')", "func TestMain(m *testing.M) {}", "fit('x', () => {});", "xdescribe('x', () => {});", "/* start of a comment"]) {
       assert.equal(sm.verificationEditDecision("write_file", { path: "tests/old.test.ts", content: `${old}${extra}\n` }, { role: "tester", operator: true })?.action, "ask", extra);
     }
   });
 
+  test("ordinary appended tests are not mistaken for neutering", () => {
+    const sm = new SecurityManager(repo);
+    const old = fs.readFileSync(path.join(repo, "tests/old.test.ts"), "utf8");
+    for (const extra of ["it('should throw on bad input', () => { assert.throws(() => f()); });", "scaler.fit(X);", "/** Checks the parser.\n * @see parse\n */\ntest('c', () => {});", "test('d', () => { const exitCode = 1; assert.equal(exitCode, 1); });"]) {
+      assert.equal(sm.verificationEditDecision("write_file", { path: "tests/old.test.ts", content: `${old}${extra}\n` }, { role: "tester", operator: true })?.action, "allow", extra);
+    }
+  });
+
+  test("pyproject.toml and setup.cfg are gated only when test, coverage, tox or script sections change", () => {
+    write("pyproject.toml", '[project]\nname = "x"\nversion = "1.0"\ndependencies = ["a==1"]\n\n[tool.pytest.ini_options]\naddopts = "-q"\n');
+    write("setup.cfg", "[metadata]\nversion = 1\n\n[tool:pytest]\naddopts = -q\n");
+    write(".coveragerc", "[run]\nbranch = True\n");
+    const sm = new SecurityManager(repo);
+    const w = (p: string, content: string) => sm.verificationEditDecision("write_file", { path: p, content }, { operator: true })?.action ?? null;
+    assert.equal(w("pyproject.toml", '[project]\nname = "x"\nversion = "2.0"\ndependencies = ["a==2"]\n\n[tool.pytest.ini_options]\naddopts = "-q"\n'), null);
+    assert.equal(w("pyproject.toml", '[project]\nname = "x"\nversion = "1.0"\ndependencies = ["a==1"]\n\n[tool.pytest.ini_options]\naddopts = "-q --co"\n'), "ask");
+    assert.equal(w("pyproject.toml", '[project]\nname = "x"\nversion = "1.0"\ndependencies = ["a==1"]\n\n[tool.coverage.run]\nomit = ["*"]\n[tool.pytest.ini_options]\naddopts = "-q"\n'), "ask");
+    assert.equal(w("setup.cfg", "[metadata]\nversion = 2\n\n[tool:pytest]\naddopts = -q\n"), null);
+    assert.equal(w("setup.cfg", "[metadata]\nversion = 1\n\n[tool:pytest]\naddopts = -x\n"), "ask");
+    assert.equal(w(".coveragerc", "[run]\nbranch = False\n"), "ask");
+    assert.equal(w("sub/pyproject.toml", '[project]\nname = "y"\n'), null);
+    assert.equal(w("sub/pyproject.toml", '[tool.pytest.ini_options]\naddopts = ""\n'), "ask");
+    const edit = sm.verificationEditDecision("edit_file", { path: "pyproject.toml", old_content: 'version = "1.0"', new_content: 'version = "1.1"' }, { operator: true });
+    assert.equal(edit, null);
+  });
+
+  test("a delete target that is itself a heavy directory is not walked; record mode ignores the unscannable case", () => {
+    for (const dir of ["node_modules", ".venv", "venv", "vendor", ".next", "coverage", "dist"]) {
+      write(`${dir}/Makefile`, "x\n");
+      assert.equal(new SecurityManager(repo).verificationEditDecision("delete_file", { path: dir }, { operator: true }), null, dir);
+    }
+    fs.mkdirSync(path.join(repo, "bulk"));
+    for (let i = 0; i < 5001; i++) fs.writeFileSync(path.join(repo, "bulk", `f${i}.txt`), "");
+    write(".nexus-security.json", JSON.stringify({ verificationPaths: { mode: "record" } }));
+    assert.equal(new SecurityManager(repo).verificationEditDecision("delete_file", { path: "bulk" }, { operator: true }), null);
+  });
+
+  test("the policy file can be read, and an operator-approved edit to it passes", async () => {
+    write(".nexus-security.json", JSON.stringify({ verificationPaths: { mode: "approve" } }));
+    const sm = new SecurityManager(repo);
+    assert.equal(sm.isPathProtected(".nexus-security.json").protected, false);
+    assert.equal(sm.verificationEditDecision("write_file", { path: ".nexus-security.json", content: "{}" }, { operator: true, approved: { path: ".nexus-security.json" } })?.label, "operator-approved");
+    const agent = makeAgent({ mode: "auto" });
+    const receipt = await call(agent, "write_file", { path: ".nexus-security.json", content: '{"verificationPaths":{"mode":"record"}}' }, yes);
+    assert.ok(passedGuard(receipt));
+    assert.equal(attempts(agent)[0].decision, "operator-approved");
+  });
   test("a directory too large to scan asks instead of passing; mode off skips the walk", () => {
     fs.mkdirSync(path.join(repo, "bulk"));
     for (let i = 0; i < 5001; i++) fs.writeFileSync(path.join(repo, "bulk", `f${i}.txt`), "");

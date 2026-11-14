@@ -72,8 +72,6 @@ const DEFAULT_PROTECTED_PATHS = [
   ".git",
   // The operator's list of trusted workspaces: the agent must not trust a workspace for itself.
   "trusted_workspaces.json",
-  // The policy that switches verification protection off is not the agent's to change.
-  ".nexus-security.json",
   ".env*",
   "id_rsa*",
   "id_ed25519*",
@@ -84,7 +82,7 @@ const SCRIPT_NAMES = ["test", "verify", "ci", "check", "lint"];
 const DEFAULT_VERIFICATION_PATHS: Array<[VerificationClass, string[]]> = [
   ["ci", [".github/workflows/**", "**/.gitlab-ci.yml", ".circleci/**", "**/Jenkinsfile", "**/azure-pipelines.yml", "**/.husky/**", "**/.pre-commit-config.yaml"]],
   ["build", ["**/Makefile", "**/GNUmakefile", "**/justfile", "**/tox.ini", "**/noxfile.py", "**/Taskfile.yml"]],
-  ["test_config", ["**/jest.config.*", "**/vitest.config.*", "**/pytest.ini", "**/conftest.py", "**/.mocharc*", "**/playwright.config.*", "**/pyproject.toml", "**/setup.cfg", "**/.coveragerc"]],
+  ["test_config", ["**/pyproject.toml", "**/setup.cfg", "**/jest.config.*", "**/vitest.config.*", "**/pytest.ini", "**/conftest.py", "**/.mocharc*", "**/playwright.config.*", "**/.coveragerc"]],
   ["verifier_script", SCRIPT_NAMES.flatMap((n) => [`**/scripts/**/${n}*`, `**/scripts/${n}*/**`])],
   ["package_scripts", ["**/package.json"]],
   ["policy", [".nexus-security.json"]],
@@ -94,10 +92,11 @@ export const DEFAULT_VERIFICATION_PATH_GLOBS: readonly string[] = DEFAULT_VERIFI
 const PACKAGE_VERIFICATION_KEYS = ["scripts", "jest", "vitest", "mocha", "ava", "nyc", "c8", "workspaces"];
 const VERIFICATION_MODES: readonly VerificationMode[] = ["off", "record", "approve", "block"];
 const RUNNABLE_TEST_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs", ".go", ".java", ".rb"]);
-const HEAVY_DIRECTORIES = new Set(["node_modules", ".git", "target", "dist", "build"]);
+const HEAVY_DIRECTORIES = new Set(["node_modules", ".git", "target", "dist", "build", ".venv", "venv", "vendor", ".next", "coverage"]);
 const NON_TEST_DIRECTORIES = new Set(["fixtures", "__fixtures__", "__snapshots__", "testdata"]);
 /** Constructs that switch a test off or end its run early; a heuristic over appended text, not a proof. */
-const NEUTERING_TEXT = /\.(?:skip|only|todo)\b|\b(?:xit|xtest|xdescribe|fit|fdescribe)\s*\(|process\.exit|\bsys\.exit|\bos\._exit|\bt\.Skip|pytest\.(?:skip|mark\.(?:skip|xfail))|unittest\.skip|@Disabled|#\[ignore\]|^\s*return\s*;?\s*$|\/\*|if\s*\(\s*(?:false|0)\s*\)|if\s*\(\s*true\s*\)\s*return|\bthrow\b/m;
+const NEUTERING_TEXT = /\.(?:skip|only|todo)\b|(?:^|[;{}])\s*(?:fit|fdescribe|xit|xtest|xdescribe)\s*\(|process\.exit|\bsys\.exit|\bos\._exit|\bos\.Exit|System\.exit|process::exit|\bexit\s*\(|SystemExit|pytest\.exit|\bTestMain\b|\bt\.Skip|pytest\.(?:skip|mark\.(?:skip|xfail))|unittest\.skip|@Disabled|#\[ignore\]|^\s*return\s*;?\s*$|if\s*\(\s*(?:false|0)\s*\)|if\s*\(\s*true\s*\)\s*return|^throw\b/m;
+const neutersTests = (text: string): boolean => NEUTERING_TEXT.test(text) || (text.match(/\/\*/g)?.length ?? 0) > (text.match(/\*\//g)?.length ?? 0);
 
 function globToRegExp(glob: string): RegExp {
   let out = "";
@@ -117,6 +116,23 @@ function globToRegExp(glob: string): RegExp {
     else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   }
   return new RegExp(`^${out}$`, "i");
+}
+
+const CONDITIONAL_CONFIG_FILES = new Set(["package.json", "pyproject.toml", "setup.cfg"]);
+const isConditionalConfig = (rel: string): boolean => CONDITIONAL_CONFIG_FILES.has(path.posix.basename(rel).toLowerCase());
+const VERIFICATION_SECTION = /^(?:tool\.(?:pytest|coverage|tox|poe|taskipy|pdm\.scripts|poetry\.scripts|hatch\.envs)(?:\..*)?|tool:pytest|pytest|coverage:.*|tox:.*|testenv.*)$/i;
+
+/** The body of each section of a TOML or INI file that decides how tests run, by section name. */
+function verificationSections(text: string): Record<string, string[]> {
+  const found: Record<string, string[]> = {};
+  let current: string[] | null = null;
+  for (const line of text.split("\n")) {
+    const header = line.match(/^\s*\[+\s*([^\]]+?)\s*\]+\s*$/);
+    if (header) {
+      current = VERIFICATION_SECTION.test(header[1]) ? (found[header[1]] ??= []) : null;
+    } else if (current && line.trim()) current.push(line.trim());
+  }
+  return found;
 }
 
 function parseVerificationPolicy(raw: unknown): VerificationPathsPolicy {
@@ -601,7 +617,7 @@ export class SecurityManager {
           for (const root of roots) {
             const rel = path.relative(root, child).replace(/\\/g, "/");
             const found = rel && !rel.startsWith("..") ? this.classifyVerificationPath(rel) : null;
-            if (found && found.class !== "package_scripts") return { rel, found };
+            if (found && !isConditionalConfig(rel)) return { rel, found };
           }
         }
       }
@@ -610,19 +626,23 @@ export class SecurityManager {
     return walk(dirAbs);
   }
 
-  private touchesPackageVerification(toolName: string, args: Record<string, any>, abs: string, exists: boolean): boolean {
+  /** Whether an edit to package.json, pyproject.toml or setup.cfg changes what tests run (the keys or sections that decide it); other edits are free. */
+  private touchesConditionalConfig(toolName: string, args: Record<string, any>, abs: string, exists: boolean): boolean {
     try {
-      const before: Record<string, unknown> = exists ? JSON.parse(fs.readFileSync(abs, "utf-8")) : {};
+      const beforeText = exists ? fs.readFileSync(abs, "utf-8") : "";
       let afterText: string;
       if (toolName === "write_file") afterText = String(args.content ?? "");
       else if (toolName === "edit_file" && exists) {
         const from = String(args.old_content ?? "");
         const to = String(args.new_content ?? "");
-        const current = fs.readFileSync(abs, "utf-8");
-        afterText = args.replace_all ? current.split(from).join(to) : current.replace(from, () => to);
+        afterText = args.replace_all ? beforeText.split(from).join(to) : beforeText.replace(from, () => to);
       } else return true;
-      const after = JSON.parse(afterText);
-      return PACKAGE_VERIFICATION_KEYS.some((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
+      if (path.basename(abs).toLowerCase() === "package.json") {
+        const before = exists ? JSON.parse(beforeText) : {};
+        const after = JSON.parse(afterText);
+        return PACKAGE_VERIFICATION_KEYS.some((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
+      }
+      return JSON.stringify(verificationSections(beforeText)) !== JSON.stringify(verificationSections(afterText));
     } catch {
       return true;
     }
@@ -635,7 +655,7 @@ export class SecurityManager {
       const appended = (from: string, to: string): boolean => {
         if (!to.startsWith(from)) return false;
         const extra = to.slice(from.length);
-        return (from.endsWith("\n") || extra.startsWith("\n")) && !NEUTERING_TEXT.test(extra);
+        return (from.endsWith("\n") || extra.startsWith("\n")) && !neutersTests(extra);
       };
       if (toolName === "write_file") return appended(current, String(args.content ?? ""));
       if (toolName === "edit_file") {
@@ -644,20 +664,6 @@ export class SecurityManager {
         if (!from || args.replace_all) return false;
         const atEnd = current === from || (current.endsWith(from) && current[current.length - from.length - 1] === "\n");
         return atEnd && appended(from, to);
-      }
-      if (toolName === "patch_file") {
-        // One hunk of context lines followed by added lines, the context being the end of the file as it is now.
-        const hunks = String(args.patch ?? "").split("\n").filter((l, i, all) => l.startsWith("@@") || all.slice(0, i).some((x) => x.startsWith("@@")));
-        if (hunks.filter((l) => l.startsWith("@@")).length !== 1) return false;
-        const body = hunks.slice(1).filter((l) => l !== "" && !l.startsWith("\\"));
-        const context = body.filter((l) => l.startsWith(" ")).map((l) => l.slice(1));
-        const added = body.filter((l) => l.startsWith("+")).map((l) => l.slice(1));
-        if (added.length === 0 || body.length !== context.length + added.length) return false;
-        if (body.findIndex((l) => l.startsWith("+")) < context.length) return false;
-        if (!current.endsWith("\n")) return false;
-        const tail = current.split("\n").slice(0, -1).slice(-context.length || undefined);
-        if (context.length && tail.join("\n") !== context.join("\n")) return false;
-        return appended(current, `${current}${added.join("\n")}\n`);
       }
     } catch {}
     return false;
@@ -680,17 +686,19 @@ export class SecurityManager {
       const found = this.classifyVerificationPath(rel);
       if (found && (!hit || found.class === "policy")) hit = { rel, found };
     }
-    if (!hit && directory && toolName === "delete_file" && configured.mode !== "off") {
+    if (!hit && directory && toolName === "delete_file" && configured.mode !== "off" && !HEAVY_DIRECTORIES.has(path.basename(abs))) {
       const inside = this.classifiedFileUnder(abs);
-      if (inside === "unknown") hit = { rel: rels[0] ?? target, found: { class: "verifier_script", rule: "directory too large to scan", source: "default" } };
-      else if (inside) hit = { rel: rels[0] ?? target, found: inside.found };
+      const at = rels[0] ?? target;
+      if (inside === "unknown") {
+        if (configured.mode !== "record") hit = { rel: at, found: { class: "verifier_script", rule: "directory too large to scan", source: "default" } };
+      } else if (inside) hit = { rel: at, found: inside.found };
     }
     if (!hit) return null;
     const { rel, found } = hit;
     if (!exists && found.class === "test_file") return null;
     const mode: VerificationMode = found.class === "policy" && configured.mode !== "block" ? "approve" : configured.mode;
     if (mode === "off") return null;
-    if (found.class === "package_scripts" && !this.touchesPackageVerification(toolName, args, abs, exists)) return null;
+    if (isConditionalConfig(rel) && !this.touchesConditionalConfig(toolName, args, abs, exists)) return null;
     const base = { ...found, path: rel };
     if (mode === "approve" && ctx.role === "tester" && found.class === "test_file" && !directory && this.appendsToExistingTest(toolName, args, abs)) {
       return { ...base, action: "allow", label: "role-allowed" };
@@ -734,7 +742,7 @@ export class SecurityManager {
       if (!exists) return;
       for (const rel of rels) {
         const found = this.classifyVerificationPath(rel);
-        if (found && found.class !== "package_scripts" && !seen.has(rel)) {
+        if (found && !isConditionalConfig(rel) && !seen.has(rel)) {
           seen.add(rel);
           this.recordVerificationAttempt(rel, found.class, "run_command", "auto-recorded", role);
         }
