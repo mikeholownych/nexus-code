@@ -1106,7 +1106,8 @@ export class McpServer {
         };
       }
 
-      const execResult = await this.bridge.executeTool(toolName, args);
+      // MCP clients have no operator to decide: an edit to verification configuration (tests, CI, build files) is refused.
+      const execResult = await this.bridge.executeTool(toolName, args, { operator: false });
 
       if (execResult.success) {
         return {

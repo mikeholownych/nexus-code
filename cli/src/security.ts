@@ -34,8 +34,8 @@ export interface VerificationEditContext {
   fullAccess?: boolean;
   /** An operator is present to decide. */
   operator?: boolean;
-  /** The operator approved this call. */
-  approved?: boolean;
+  /** The operator approved this call, for this path only. */
+  approved?: { path: string };
 }
 
 export type VerificationEditDecision = (VerificationClassification & {
@@ -80,25 +80,26 @@ const DEFAULT_PROTECTED_PATHS = [
 ];
 
 const SCRIPT_NAMES = ["test", "verify", "ci", "check", "lint"];
-/** [class, globs, case-sensitive]; a glob matches a workspace-relative path, `**\/` meaning any depth (zero or more directories). */
-const DEFAULT_VERIFICATION_PATHS: Array<[VerificationClass, string[], boolean]> = [
-  ["ci", [".github/workflows/**", "**/.gitlab-ci.yml", ".circleci/**", "**/Jenkinsfile", "**/azure-pipelines.yml"], false],
-  ["build", ["**/Makefile", "**/GNUmakefile", "**/justfile", "**/tox.ini", "**/noxfile.py", "**/Taskfile.yml"], false],
-  ["test_config", ["**/jest.config.*", "**/vitest.config.*", "**/pytest.ini", "**/conftest.py", "**/.mocharc*", "**/playwright.config.*"], false],
-  ["verifier_script", SCRIPT_NAMES.flatMap((n) => [`**/scripts/**/${n}*`, `**/scripts/${n}*/**`]), true],
-  ["package_scripts", ["**/package.json"], false],
-  ["policy", [".nexus-security.json"], false],
+/** [class, globs]; a glob matches a workspace-relative path, case-insensitively, `**\/` meaning any depth (zero or more directories). */
+const DEFAULT_VERIFICATION_PATHS: Array<[VerificationClass, string[]]> = [
+  ["ci", [".github/workflows/**", "**/.gitlab-ci.yml", ".circleci/**", "**/Jenkinsfile", "**/azure-pipelines.yml", "**/.husky/**", "**/.pre-commit-config.yaml"]],
+  ["build", ["**/Makefile", "**/GNUmakefile", "**/justfile", "**/tox.ini", "**/noxfile.py", "**/Taskfile.yml"]],
+  ["test_config", ["**/jest.config.*", "**/vitest.config.*", "**/pytest.ini", "**/conftest.py", "**/.mocharc*", "**/playwright.config.*", "**/pyproject.toml", "**/setup.cfg", "**/.coveragerc"]],
+  ["verifier_script", SCRIPT_NAMES.flatMap((n) => [`**/scripts/**/${n}*`, `**/scripts/${n}*/**`])],
+  ["package_scripts", ["**/package.json"]],
+  ["policy", [".nexus-security.json"]],
 ];
 export const DEFAULT_VERIFICATION_PATH_GLOBS: readonly string[] = DEFAULT_VERIFICATION_PATHS.flatMap(([, globs]) => globs);
 
 const PACKAGE_VERIFICATION_KEYS = ["scripts", "jest", "vitest", "mocha", "ava", "nyc", "c8", "workspaces"];
 const VERIFICATION_MODES: readonly VerificationMode[] = ["off", "record", "approve", "block"];
 const RUNNABLE_TEST_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs", ".go", ".java", ".rb"]);
+const HEAVY_DIRECTORIES = new Set(["node_modules", ".git", "target", "dist", "build"]);
 const NON_TEST_DIRECTORIES = new Set(["fixtures", "__fixtures__", "__snapshots__", "testdata"]);
 /** Constructs that switch a test off or end its run early; a heuristic over appended text, not a proof. */
-const NEUTERING_TEXT = /\.(?:skip|only|todo)\b|\b(?:xit|xtest|xdescribe|fit|fdescribe)\s*\(|process\.exit|\bsys\.exit|\bos\._exit|\bt\.Skip|pytest\.(?:skip|mark\.(?:skip|xfail))|unittest\.skip|@Disabled|#\[ignore\]|^\s*return\s*;?\s*$/m;
+const NEUTERING_TEXT = /\.(?:skip|only|todo)\b|\b(?:xit|xtest|xdescribe|fit|fdescribe)\s*\(|process\.exit|\bsys\.exit|\bos\._exit|\bt\.Skip|pytest\.(?:skip|mark\.(?:skip|xfail))|unittest\.skip|@Disabled|#\[ignore\]|^\s*return\s*;?\s*$|\/\*|if\s*\(\s*(?:false|0)\s*\)|if\s*\(\s*true\s*\)\s*return|\bthrow\b/m;
 
-function globToRegExp(glob: string, caseSensitive = false): RegExp {
+function globToRegExp(glob: string): RegExp {
   let out = "";
   for (let i = 0; i < glob.length; i++) {
     const ch = glob[i];
@@ -115,7 +116,7 @@ function globToRegExp(glob: string, caseSensitive = false): RegExp {
     } else if (ch === "?") out += "[^/]";
     else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   }
-  return new RegExp(`^${out}$`, caseSensitive ? "" : "i");
+  return new RegExp(`^${out}$`, "i");
 }
 
 function parseVerificationPolicy(raw: unknown): VerificationPathsPolicy {
@@ -210,7 +211,7 @@ export function splitSubcommands(cmd: string): string[][] {
 }
 
 export function verificationDeniedMessage(decision: NonNullable<VerificationEditDecision>): string {
-  return `${VERIFICATION_CONFIG_PROTECTED}: '${decision.path}' is verification configuration (${decision.class}, rule '${decision.rule}'). An edit needs an operator decision; none was given. Report it to the operator instead of changing how the work is verified.`;
+  return `${VERIFICATION_CONFIG_PROTECTED}: '${decision.path}' is verification configuration (${decision.class}, rule '${decision.rule}'). An edit needs an operator decision; none was given. Report it to the operator instead of changing how the work is verified. A headless project that must create or change such files needs fullAccess (--yes) or verificationPaths.mode \"record\" in .nexus-security.json.`;
 }
 
 export class SecurityManager {
@@ -537,8 +538,8 @@ export class SecurityManager {
     if (segments.includes("node_modules") || segments.includes(".git")) return null;
     const policy = this.policy.verificationPaths ?? parseVerificationPolicy(undefined);
     if ((policy.allow ?? []).some((g) => globToRegExp(g).test(clean))) return null;
-    for (const [cls, globs, caseSensitive] of DEFAULT_VERIFICATION_PATHS) {
-      const rule = globs.find((g) => globToRegExp(g, caseSensitive).test(clean));
+    for (const [cls, globs] of DEFAULT_VERIFICATION_PATHS) {
+      const rule = globs.find((g) => globToRegExp(g).test(clean));
       if (rule) return { class: cls, rule, source: "default" };
     }
     const extra = (policy.extra ?? []).find((g) => globToRegExp(g).test(clean));
@@ -565,8 +566,10 @@ export class SecurityManager {
         exists = true;
         directory = fs.statSync(abs).isDirectory();
         absolutes.push(fs.realpathSync(abs));
-      } else if (fs.existsSync(path.dirname(abs))) {
-        absolutes.push(path.join(fs.realpathSync(path.dirname(abs)), path.basename(abs)));
+      } else {
+        let ancestor = path.dirname(abs);
+        while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
+        absolutes.push(path.join(fs.realpathSync(ancestor), path.relative(ancestor, abs)));
       }
     } catch {}
     const rels: string[] = [];
@@ -579,19 +582,19 @@ export class SecurityManager {
     return { rels, abs, exists, directory };
   }
 
-  /** The first verification file under a directory (bounded walk), so deleting the directory is treated as deleting that file. */
-  private classifiedFileUnder(dirAbs: string): { rel: string; found: VerificationClassification } | null {
+  /** The first verification file under a directory (bounded walk, heavy directories skipped); "unknown" when the bound is hit, so the caller fails closed. */
+  private classifiedFileUnder(dirAbs: string): { rel: string; found: VerificationClassification } | "unknown" | null {
     const roots = [this.workspace];
     try { roots.push(fs.realpathSync(this.workspace)); } catch {}
     let visited = 0;
-    const walk = (dir: string): { rel: string; found: VerificationClassification } | null => {
+    const walk = (dir: string): { rel: string; found: VerificationClassification } | "unknown" | null => {
       let entries: fs.Dirent[];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return "unknown"; }
       for (const entry of entries) {
-        if (++visited > 5000) return null;
+        if (++visited > 5000) return "unknown";
         const child = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          if (entry.name === "node_modules" || entry.name === ".git") continue;
+          if (HEAVY_DIRECTORIES.has(entry.name)) continue;
           const nested = walk(child);
           if (nested) return nested;
         } else {
@@ -643,12 +646,18 @@ export class SecurityManager {
         return atEnd && appended(from, to);
       }
       if (toolName === "patch_file") {
-        const patch = String(args.patch ?? "");
-        const lines = patch.split("\n");
-        const firstHunk = lines.findIndex((l) => l.startsWith("@@"));
-        const body = firstHunk === -1 ? lines : lines.slice(firstHunk + 1);
-        if (body.some((l) => l.startsWith("-"))) return false;
-        return !NEUTERING_TEXT.test(body.filter((l) => l.startsWith("+")).map((l) => l.slice(1)).join("\n"));
+        // One hunk of context lines followed by added lines, the context being the end of the file as it is now.
+        const hunks = String(args.patch ?? "").split("\n").filter((l, i, all) => l.startsWith("@@") || all.slice(0, i).some((x) => x.startsWith("@@")));
+        if (hunks.filter((l) => l.startsWith("@@")).length !== 1) return false;
+        const body = hunks.slice(1).filter((l) => l !== "" && !l.startsWith("\\"));
+        const context = body.filter((l) => l.startsWith(" ")).map((l) => l.slice(1));
+        const added = body.filter((l) => l.startsWith("+")).map((l) => l.slice(1));
+        if (added.length === 0 || body.length !== context.length + added.length) return false;
+        if (body.findIndex((l) => l.startsWith("+")) < context.length) return false;
+        if (!current.endsWith("\n")) return false;
+        const tail = current.split("\n").slice(0, -1).slice(-context.length || undefined);
+        if (context.length && tail.join("\n") !== context.join("\n")) return false;
+        return appended(current, `${current}${added.join("\n")}\n`);
       }
     } catch {}
     return false;
@@ -671,9 +680,10 @@ export class SecurityManager {
       const found = this.classifyVerificationPath(rel);
       if (found && (!hit || found.class === "policy")) hit = { rel, found };
     }
-    if (!hit && directory && toolName === "delete_file") {
+    if (!hit && directory && toolName === "delete_file" && configured.mode !== "off") {
       const inside = this.classifiedFileUnder(abs);
-      if (inside) hit = { rel: rels[0] ?? target, found: inside.found };
+      if (inside === "unknown") hit = { rel: rels[0] ?? target, found: { class: "verifier_script", rule: "directory too large to scan", source: "default" } };
+      else if (inside) hit = { rel: rels[0] ?? target, found: inside.found };
     }
     if (!hit) return null;
     const { rel, found } = hit;
@@ -687,7 +697,7 @@ export class SecurityManager {
     }
     if (mode === "record") return { ...base, action: "allow", label: "auto-recorded" };
     if (mode === "block") return { ...base, action: "deny" };
-    if (ctx.approved) return { ...base, action: "allow", label: "operator-approved" };
+    if (ctx.approved?.path === rel) return { ...base, action: "allow", label: "operator-approved" };
     if (ctx.fullAccess && found.class !== "policy") return { ...base, action: "allow", label: "auto-recorded" };
     return { ...base, action: ctx.operator ? "ask" : "deny" };
   }
@@ -700,7 +710,12 @@ export class SecurityManager {
       this.recordVerificationAttempt(decision.path, decision.class, toolName, decision.label!, ctx.role);
       return { allowed: true };
     }
-    this.recordVerificationAttempt(decision.path, decision.class, toolName, "blocked", ctx.role);
+    return this.refuseVerificationEdit(decision, toolName, ctx.role);
+  }
+
+  /** Records a refused edit as blocked and gives the refusal; the one path for a denial by policy and for a declined prompt. */
+  public refuseVerificationEdit(decision: NonNullable<VerificationEditDecision>, toolName: string, role?: string): { allowed: false; error: string } {
+    this.recordVerificationAttempt(decision.path, decision.class, toolName, "blocked", role);
     return { allowed: false, error: verificationDeniedMessage(decision) };
   }
 

@@ -54,7 +54,7 @@ import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, fin
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
-import { SecurityManager, VERIFICATION_CONFIG_PROTECTED, verificationDeniedMessage, type VerificationEditContext } from "./security.js";
+import { SecurityManager, VERIFICATION_CONFIG_PROTECTED, type VerificationEditContext } from "./security.js";
 import { calculateContextBudget, countTokens, isContextAdmissible, isContextPressureHigh, estimateNextRequestTokens, TokenBudget } from "./tokens.js";
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
@@ -2300,6 +2300,12 @@ export class AutonomousAgent {
 
   private persistedVerificationAttempts = 0;
 
+  /** A rebuilt bridge brings a fresh security manager; the attempts recorded so far move to it so the saved history is never cut back. */
+  private carryVerificationAttempts(next: RustCoreBridge): RustCoreBridge {
+    next.getSecurityManager().restoreVerificationAttempts(this.bridge.getSecurityManager().getVerificationAttempts());
+    return next;
+  }
+
   /** Saves the verification-config attempts recorded since the last save, so a resumed session and its export still show them. */
   private syncVerificationAttempts(): void {
     const count = this.bridge.getSecurityManager().getVerificationAttempts().length;
@@ -2586,7 +2592,7 @@ export class AutonomousAgent {
         : [this.primaryWorkspacePathIdentity, this.workspacePathIdentity]
     );
     this.config.workspace = newWorkspace;
-    this.bridge = new RustCoreBridge(
+    this.bridge = this.carryVerificationAttempts(new RustCoreBridge(
       this.config.workspace,
       this.config.shell,
       this.config.coreBinaryPath,
@@ -2594,7 +2600,7 @@ export class AutonomousAgent {
       readOnly,
       this.bridgeSandboxSetting(),
       Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
-    );
+    ));
     this.applyReadOnlyAuthority(readOnly);
     // During an internally managed isolation switch, retain the manager bound
     // to the selected original workspace; the active checkout is only a
@@ -2615,7 +2621,7 @@ export class AutonomousAgent {
     const readOnly = this.isReadOnly();
     this.bridge.shutdown();
     this.config.shell = newShell;
-    this.bridge = new RustCoreBridge(
+    this.bridge = this.carryVerificationAttempts(new RustCoreBridge(
       this.config.workspace,
       this.config.shell,
       this.config.coreBinaryPath,
@@ -2623,7 +2629,7 @@ export class AutonomousAgent {
       readOnly,
       this.bridgeSandboxSetting(),
       Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
-    );
+    ));
     this.applyReadOnlyAuthority(readOnly);
     this.setupSpineHandlers();
     this.resetConversation();
@@ -2637,7 +2643,7 @@ export class AutonomousAgent {
   private rebuildBridgeForIsolation(): void {
     const readOnly = this.isReadOnly();
     this.bridge.shutdown();
-    this.bridge = new RustCoreBridge(
+    this.bridge = this.carryVerificationAttempts(new RustCoreBridge(
       this.config.workspace,
       this.config.shell,
       this.config.coreBinaryPath,
@@ -2645,7 +2651,7 @@ export class AutonomousAgent {
       readOnly,
       this.bridgeSandboxSetting(),
       Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
-    );
+    ));
     this.bridge.setVerifierTimeoutSecs(this.config.verifierTimeoutSecs);
     this.applyReadOnlyAuthority(readOnly);
     this.setupSpineHandlers();
@@ -5336,9 +5342,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     const verificationAuthority: VerificationEditContext = { role: this.role, fullAccess: policyContext.fullAccess, operator: Boolean(onConfirm) };
     const verificationEdit = verificationSecurity.verificationEditDecision(toolName, args, verificationAuthority);
     if (verificationEdit?.action === "deny") {
-      verificationSecurity.recordVerificationAttempt(verificationEdit.path, verificationEdit.class, toolName, "blocked", this.role);
+      const cancelMsg = verificationSecurity.refuseVerificationEdit(verificationEdit, toolName, this.role).error;
       this.syncVerificationAttempts();
-      const cancelMsg = verificationDeniedMessage(verificationEdit);
       if (this.flightRecorder) {
         this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, VERIFICATION_CONFIG_PROTECTED);
       }
@@ -5438,9 +5443,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (verificationEdit?.action === "ask") console.log(`⚠️ ${toolName} changes verification configuration: ${verificationEdit.path} (${verificationEdit.class}).`);
       const approved = await onConfirm(toolName, args);
       if (verificationEdit?.action === "ask") {
-        if (approved) verificationAuthority.approved = true;
+        if (approved) verificationAuthority.approved = { path: verificationEdit.path };
         else {
-          verificationSecurity.recordVerificationAttempt(verificationEdit.path, verificationEdit.class, toolName, "blocked", this.role);
+          verificationSecurity.refuseVerificationEdit(verificationEdit, toolName, this.role);
           this.syncVerificationAttempts();
         }
       }

@@ -541,7 +541,7 @@ export class ExecutionSpine {
       } else if (context.defaultHandler) {
         result = await context.defaultHandler(toolName, effectiveArgs, context);
       } else if (context.bridge && typeof context.bridge.executeTool === "function") {
-        result = await context.bridge.executeTool(toolName, effectiveArgs);
+        result = await context.bridge.executeTool(toolName, effectiveArgs, context.metadata?.verificationAuthority);
       } else {
         result = {
           success: false,
