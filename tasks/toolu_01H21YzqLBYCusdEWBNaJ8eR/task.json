@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01H21YzqLBYCusdEWBNaJ8eR",
+  "agent_id": "abfff915f195d64be",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement SI-7 kill-mid-tool-call test",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 100804,
+    "cache_read_tokens": 2462776,
+    "output_tokens": 15628,
+    "api_call_count": 28
+  },
+  "started_at": "2026-11-14T21:34:05.794001613Z",
+  "completed_at": "2026-11-14T21:39:30.234749032Z"
+}
