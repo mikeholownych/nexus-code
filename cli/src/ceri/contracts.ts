@@ -15,6 +15,7 @@ export const CAPABILITY_DOMAINS = [
   "independent_review",
   "authorization_enforcement",
   "workspace_isolation",
+  "semantic_integrity",
 ] as const;
 export type CapabilityDomain = (typeof CAPABILITY_DOMAINS)[number];
 
