@@ -65,7 +65,7 @@ import { openRepo, currentEntry, NotARepositoryError } from "./worktrunk/repo.js
 import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
-import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
+import { runTestSuiteWithExecutor, discoverTypecheck, runTypecheck, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
 import { isInlineProgramVerifier, snapshotVerifierDefinitionWithReason, judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
@@ -74,6 +74,7 @@ import { credentialOriginOf, InferenceError, type TruncatedCall, TokenCountError
 import {
   TurnResult,
   VerificationEvidence,
+  TypecheckEvidence,
   InterruptionRecord,
   InferenceFailure,
   CapacityRecord,
@@ -4633,17 +4634,50 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 : new Set(this.config.trustedDeliverableFiles ?? []),
               baselineTests ?? undefined,
             ));
+            // A passing verifier is not acceptance while the project's type-check fails under its own configuration.
+            let typecheck: TypecheckEvidence | undefined;
+            let typecheckBlock: string | undefined;
+            if (testRes.success) {
+              const check = discoverTypecheck(this.config.workspace);
+              if (!check) {
+                typecheck = { status: "NOT_APPLICABLE", scope: "no tsconfig.json or Cargo.toml found", candidateId, at: new Date().toISOString() };
+              } else if (!(await this.ensureVerifierApproved(check.command, onConfirm))) {
+                typecheckBlock = `Verification Oracle: type-check execution was not approved by operator (${check.command}).`;
+              } else {
+                this.activity("verifying", { tool: check.command });
+                const tc = await runTypecheck(check, (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }));
+                const excerpt = redactSecrets(foldVoluminousOutput(tc.output || "", 30, 2000));
+                typecheck = {
+                  status: tc.status,
+                  tool: check.tool,
+                  ...(tc.version ? { toolVersion: tc.version } : {}),
+                  command: check.command,
+                  configPath: check.configPath,
+                  configSha256: check.configSha256,
+                  exitCode: tc.exitCode,
+                  scope: `under ${check.configPath}`,
+                  ...(tc.status === "PASSED" ? {} : { excerpt }),
+                  candidateId,
+                  at: new Date().toISOString(),
+                };
+                if (tc.status === "FAILED" || tc.status === "TIMED_OUT") {
+                  typecheckBlock = `Verification Oracle: tests passed, but the ${check.tool} type-check ${tc.status === "FAILED" ? "failed" : `timed out after ${deadlineSecs}s`} under ${check.configPath} (sha256 ${check.configSha256.slice(0, 12)}), so the changes are NOT verified.\nCommand: ${check.command}\n${excerpt}\nFix the type errors, then call task_completed again.`;
+                }
+              }
+            }
+            const testsAndTypesPass = testRes.success && !typecheckBlock;
             // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
             // pass-after on tests the change did not write); the operator's configured verifier is their own check.
             const independence: Independence | undefined = unboundDetail
               ? { independent: false, detail: unboundDetail }
-              : source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
+              : source === "discovered" && testsAndTypesPass && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
             const evidence: VerificationEvidence = {
-              status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
+              status: testsAndTypesPass ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
               command: verifierCommand,
               source,
-              exitSuccess: testRes.success,
+              exitSuccess: testsAndTypesPass,
               hasExecutedTests: hasExecuted,
+              ...(typecheck ? { typecheck } : {}),
               isDeliverableBound,
               ...(unboundDetail ? { definitionBound: false } : {}),
               ...(independence ? { independent: independence.independent, independenceDetail: independence.detail } : {}),
@@ -4654,8 +4688,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             };
             this.verificationEvidence = evidence;
             this.verificationEvidenceRawOutput = testRes.rawOutput || "";
-            this.turnVerifierRuns.push({ command: verifierCommand, phase: "completion", passed: testRes.success });
-            if (configured) this.turnConfiguredVerifier = testRes.success ? "PASSED" : "FAILED";
+            this.turnVerifierRuns.push({ command: verifierCommand, phase: "completion", passed: testsAndTypesPass });
+            if (configured) this.turnConfiguredVerifier = testsAndTypesPass ? "PASSED" : "FAILED";
             if (this.objective && candidateId) {
               recordAttempt(this.objective, {
                 command: verifierCommand,
@@ -4668,7 +4702,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 isDeliverableBound,
                 ...(independence ? { independent: independence.independent } : {}),
                 filtered: isFilteredVerifierCommand(verifierCommand),
-                ...(evidence.status === "PASSED" ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || "") }),
+                ...(evidence.status === "PASSED" ? {} : { failedCheck: failedCheckFrom(typecheckBlock ? typecheck?.excerpt || "" : testRes.rawOutput || "") }),
               });
             }
             if (testRes.timedOut) {
@@ -4696,6 +4730,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 }),
               };
             }
+            if (typecheckBlock) return { success: false, output: "", error: typecheckBlock };
             if (!testRes.success) {
               const hints = formatDiagnosticHints(testRes.diagnostics);
               const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;

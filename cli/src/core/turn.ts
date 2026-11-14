@@ -207,6 +207,25 @@ export interface VerificationEvidence {
   deadlineSecs?: number;
   outputSha256?: string;
   candidateId?: string;
+  /** Type-check run beside the verifier. A scoped fact about the named configuration, never about the code in general. */
+  typecheck?: TypecheckEvidence;
+  at: string;
+}
+
+export interface TypecheckEvidence {
+  /** ENVIRONMENT: the toolchain was not runnable here (not a candidate failure). */
+  status: "PASSED" | "FAILED" | "TIMED_OUT" | "ENVIRONMENT" | "NOT_APPLICABLE";
+  tool?: string;
+  toolVersion?: string;
+  command?: string;
+  configPath?: string;
+  configSha256?: string;
+  exitCode?: number | null;
+  /** What the result holds for: "under <configPath>", never universal. */
+  scope?: string;
+  /** Redacted, capped. */
+  excerpt?: string;
+  candidateId?: string;
   at: string;
 }
 

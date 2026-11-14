@@ -143,6 +143,77 @@ export function discoverVerifier(workspace: string, filterPattern?: string): Dis
   return null;
 }
 
+export interface DiscoveredTypecheck {
+  tool: "tsc" | "cargo";
+  /** Prints the tool version, then runs the check; one execution so one approval covers both. */
+  command: string;
+  /** Workspace-relative configuration file the check ran under. */
+  configPath: string;
+  configSha256: string;
+}
+
+/** A type-check is selected only when its configuration file exists; otherwise none applies. */
+export function discoverTypecheck(workspace: string): DiscoveredTypecheck | null {
+  const root = path.resolve(workspace);
+  const hash = (rel: string): string | null => {
+    try {
+      return createHash("sha256").update(fs.readFileSync(path.join(root, rel))).digest("hex");
+    } catch {
+      return null;
+    }
+  };
+  const tsconfig = hash("tsconfig.json");
+  if (tsconfig) {
+    const tsc = fs.existsSync(path.join(root, "node_modules/.bin/tsc")) ? "./node_modules/.bin/tsc" : "tsc";
+    return { tool: "tsc", command: `${tsc} --version && ${tsc} --noEmit -p tsconfig.json`, configPath: "tsconfig.json", configSha256: tsconfig };
+  }
+  for (const rel of ["Cargo.toml", "core/Cargo.toml"]) {
+    const sha = hash(rel);
+    if (sha) {
+      const manifest = rel === "Cargo.toml" ? "" : ` --manifest-path ${rel}`;
+      return { tool: "cargo", command: `cargo --version && cargo check${manifest}`, configPath: rel, configSha256: sha };
+    }
+  }
+  return null;
+}
+
+export interface TypecheckRun {
+  status: "PASSED" | "FAILED" | "TIMED_OUT" | "ENVIRONMENT";
+  exitCode: number | null;
+  version?: string;
+  output: string;
+}
+
+/** Exit 126/127 means the toolchain is not runnable here: an environment condition, not a candidate failure. */
+export function isToolMissingExit(exitCode: number | null): boolean {
+  return exitCode === 126 || exitCode === 127;
+}
+
+export async function runTypecheck(check: DiscoveredTypecheck, execute: TestCommandExecutor): Promise<TypecheckRun> {
+  let exitCode: number | null = null;
+  let timedOut = false;
+  let output = "";
+  try {
+    const result = await execute(check.command);
+    timedOut = result.timedOut === true;
+    output = [result.output, result.error].filter(Boolean).join("\n");
+    try {
+      const execution = JSON.parse(result.output);
+      if (execution && typeof execution === "object" && "exit_code" in execution) {
+        timedOut = execution.timed_out === true;
+        exitCode = typeof execution.exit_code === "number" ? execution.exit_code : null;
+        output = [execution.stdout, execution.stderr, result.error].filter(Boolean).join("\n");
+      }
+    } catch {}
+  } catch (error: any) {
+    return { status: "ENVIRONMENT", exitCode: null, output: String(error?.message ?? error) };
+  }
+  const version = output.match(/^(?:Version |tsc |cargo )?(\d+\.\d+\.\d+\S*)/m)?.[0]?.trim();
+  if (timedOut) return { status: "TIMED_OUT", exitCode, version, output };
+  if (isToolMissingExit(exitCode) || exitCode === null) return { status: "ENVIRONMENT", exitCode, version, output };
+  return { status: exitCode === 0 ? "PASSED" : "FAILED", exitCode, version, output };
+}
+
 export interface VerifierDescription {
   command: string;
   evidence: string;
