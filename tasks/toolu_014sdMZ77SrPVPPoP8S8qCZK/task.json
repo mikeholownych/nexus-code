@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014sdMZ77SrPVPPoP8S8qCZK",
+  "agent_id": "a7929ac6701dba5a9",
+  "subagent_type": "reviewer",
+  "task_description": "Review clippy PR behaviour",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 17148,
+    "cache_read_tokens": 63974,
+    "output_tokens": 2380,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-14T00:14:23.675187435Z",
+  "completed_at": "2026-11-14T00:14:48.63139111Z"
+}

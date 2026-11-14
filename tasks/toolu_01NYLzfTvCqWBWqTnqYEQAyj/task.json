@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NYLzfTvCqWBWqTnqYEQAyj",
+  "agent_id": "a24a44540df4e0634",
+  "subagent_type": "reviewer",
+  "task_description": "Delta code+security review",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 38272,
+    "cache_read_tokens": 269966,
+    "output_tokens": 9406,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-14T00:14:06.203687541Z",
+  "completed_at": "2026-11-14T00:15:30.475086329Z"
+}

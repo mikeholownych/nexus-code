@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7BPMBGYAW08T84DWM32982Y",
+  "strategy": "manual-commit",
+  "branch": "v1/v114-content-tool-recovery",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 12828,
+    "cache_read_tokens": 3070676,
+    "output_tokens": 6787,
+    "api_call_count": 9,
+    "subagent_tokens": {
+      "input_tokens": 24,
+      "cache_creation_tokens": 54569,
+      "cache_read_tokens": 288572,
+      "output_tokens": 9072,
+      "api_call_count": 12
+    }
+  },
+  "redaction": {
+    "replacements": 144,
+    "layers": {
+      "betterleaks": 34,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 11,
+      "credentialed_uri": 15,
+      "entropy": 99,
+      "key_context": 0,
+      "provider_token": 27,
+      "shell_stdin": 0
+    }
+  }
+}
