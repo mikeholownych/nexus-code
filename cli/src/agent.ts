@@ -137,6 +137,8 @@ import {
   blockedRequirements,
   createLedger,
   failedCheckFrom,
+  attemptEvidence,
+  describeAttemptEvidence,
   gatingRequirements,
   isContinuationPrompt,
   isNewObjective,
@@ -4535,7 +4537,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             }
             const prior = this.objective && current ? priorAttempt(this.objective, verifierCommand, current) : undefined;
             if (prior && (prior.status === "FAILED" || prior.status === "TIMED_OUT") && this.objective && current) {
-              recordAttempt(this.objective, { command: verifierCommand, ...current, status: "SKIPPED_UNCHANGED_INPUTS", ...(prior.failedCheck ? { failedCheck: prior.failedCheck } : {}) });
+              recordAttempt(this.objective, { command: verifierCommand, ...current, status: "SKIPPED_UNCHANGED_INPUTS", ...(prior.failedCheck ? { failedCheck: prior.failedCheck } : {}), ...(prior.classification ? { classification: prior.classification } : {}), ...(prior.exitCode !== undefined ? { exitCode: prior.exitCode } : {}), ...(prior.failingTests ? { failingTests: prior.failingTests } : {}) });
               if (!this.verificationEvidence || this.verificationEvidence.status === "PASSED") {
                 this.verificationEvidence = { status: prior.status, command: verifierCommand, source, exitSuccess: false, candidateId, at: prior.at };
               }
@@ -4546,6 +4548,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                   `Verification Oracle: ${verifierCommand} already ${prior.status === "TIMED_OUT" ? "timed out" : "failed"} on these exact workspace inputs ` +
                   `(attempt #${prior.n} at ${prior.at}; candidate ${current.inputs.slice(0, 12)}). No workspace file, mutating command or dependency/environment marker has changed since, so it was not run again.\n` +
                   (prior.failedCheck ? `Failed check: ${prior.failedCheck}\n` : "") +
+                  (describeAttemptEvidence(prior) ? `Evidence: ${describeAttemptEvidence(prior)}\n` : "") +
                   `Make a change that addresses the failure, then call task_completed again. If the failure is outside this task's scope, ` +
                   `do not claim completion: mark the affected requirement blocked with update_requirements (giving the failed check as the reason) ` +
                   `and end with a final message stating what remains and the next action.`,
@@ -4634,7 +4637,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 isDeliverableBound,
                 ...(independence ? { independent: independence.independent } : {}),
                 filtered: isFilteredVerifierCommand(verifierCommand),
-                ...(evidence.status === "PASSED" ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || "") }),
+                ...(evidence.status === "PASSED" ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || ""), ...attemptEvidence(testRes.rawOutput || "", testRes.exitCode) }),
               });
             }
             if (testRes.timedOut) {
@@ -4664,7 +4667,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             }
             if (!testRes.success) {
               const hints = formatDiagnosticHints(testRes.diagnostics);
-              const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
+              const evidenceLine = describeAttemptEvidence(attemptEvidence(testRes.rawOutput || "", testRes.exitCode));
+              const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${evidenceLine ? `Evidence: ${evidenceLine}\n` : ""}${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
               return {
                 success: false,
                 output: "",
@@ -5581,7 +5585,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             ...(judged ? { independent: judged !== "needs-copy" && judged.independent } : {}),
             filtered,
             status: parsed.passed === true && receipt.success && hasExecuted ? "PASSED" : "FAILED",
-            ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${rawOutput}\n${receipt.error ?? ""}`) }),
+            ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${rawOutput}\n${receipt.error ?? ""}`), ...attemptEvidence(`${rawOutput}\n${receipt.error ?? ""}`, typeof parsed.exitCode === "number" ? parsed.exitCode : undefined) }),
           });
         }
       } catch {}
