@@ -31,9 +31,10 @@ export const DIFF_PREVIEW_CHARS = 6000;
  * What became of operator steering sent while work was running. `queued`: held for the next step boundary.
  * `applied`: given to the agent (at a step boundary, or as a follow-up turn). `deferred`: the turn was finishing; it
  * starts a follow-up turn. `cancelled`: the turn ended first; `text` is returned to the operator. `rejected`: nothing
- * it could steer (a command is running); `text` is returned. `duplicate`: this id was already received.
+ * it could steer (a command is running); `text` is returned. `duplicate`: this id was already received. `held`: the
+ * steering negates a requirement and waits for the operator's decision; the outcome follows as `applied` or `cancelled`.
  */
-export type SteerStatus = "queued" | "applied" | "deferred" | "cancelled" | "rejected" | "duplicate";
+export type SteerStatus = "held" | "queued" | "applied" | "deferred" | "cancelled" | "rejected" | "duplicate";
 
 /** One entry of a resumed conversation: a message, a tool the agent called, or the last turn's outcome. */
 export interface HistoryEntry {
@@ -323,7 +324,16 @@ export function stripEscapes(text: string): string {
   return text.replace(TERMINAL_ESCAPE, "");
 }
 
-export function toolSubject(args: Record<string, any>): string {
+/** Operator-supplied text as shown to an operator or written to a record: escapes and control characters gone, secrets redacted, one line, capped. */
+export function safeOperatorText(text: string, max = 300): string {
+  return redactSecrets(stripEscapes(String(text)).replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")).replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+export function toolSubject(args: Record<string, any>, tool?: string): string {
+  if (tool === "steering_conflict" && Array.isArray(args.negates)) {
+    const ids = args.negates.map((n: any) => safeOperatorText(String(n?.id ?? ""), 12)).join(", ");
+    return safeOperatorText(`steering ${args.steering} negates ${ids}: ${args.text}`, 200);
+  }
   const subject = args.path ?? args.file_path ?? args.command ?? args.url ?? args.query ?? args.name ?? "";
   return redactSecrets(stripEscapes(String(subject))).replace(/\s+/g, " ").trim().slice(0, 200);
 }
