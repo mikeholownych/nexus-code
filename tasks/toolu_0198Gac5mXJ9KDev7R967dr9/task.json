@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0198Gac5mXJ9KDev7R967dr9",
+  "agent_id": "a5158d0fb055954bc",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement TI-1 request-shape snapshots",
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 78018,
+    "cache_read_tokens": 1322994,
+    "output_tokens": 16833,
+    "api_call_count": 18
+  },
+  "started_at": "2026-11-14T23:48:25.334539609Z",
+  "completed_at": "2026-11-14T23:53:39.324725685Z"
+}
