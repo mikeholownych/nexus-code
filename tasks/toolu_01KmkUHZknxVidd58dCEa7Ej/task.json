@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01KmkUHZknxVidd58dCEa7Ej",
+  "agent_id": "aafcd667b326b1812",
+  "subagent_type": "general-purpose",
+  "task_description": "Local Code/Security/Slop review of SI-1",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 68346,
+    "cache_read_tokens": 348230,
+    "output_tokens": 3404,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-14T17:49:36.561207012Z",
+  "completed_at": "2026-11-14T17:50:13.386197174Z"
+}
