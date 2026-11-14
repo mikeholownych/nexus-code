@@ -54,7 +54,7 @@ import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, fin
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
-import { SecurityManager, VERIFICATION_CONFIG_PROTECTED } from "./security.js";
+import { SecurityManager, VERIFICATION_CONFIG_PROTECTED, verificationDeniedMessage, type VerificationEditContext } from "./security.js";
 import { calculateContextBudget, countTokens, isContextAdmissible, isContextPressureHigh, estimateNextRequestTokens, TokenBudget } from "./tokens.js";
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
@@ -5333,12 +5333,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
     };
     const verificationSecurity = this.bridge.getSecurityManager();
-    verificationSecurity.setVerificationAuthority({ role: this.role, fullAccess: policyContext.fullAccess, operator: Boolean(onConfirm) });
-    const verificationEdit = verificationSecurity.verificationEditDecision(toolName, args);
+    const verificationAuthority: VerificationEditContext = { role: this.role, fullAccess: policyContext.fullAccess, operator: Boolean(onConfirm) };
+    const verificationEdit = verificationSecurity.verificationEditDecision(toolName, args, verificationAuthority);
     if (verificationEdit?.action === "deny") {
-      verificationSecurity.recordVerificationAttempt(verificationEdit.path, verificationEdit.class, toolName, "blocked");
+      verificationSecurity.recordVerificationAttempt(verificationEdit.path, verificationEdit.class, toolName, "blocked", this.role);
       this.syncVerificationAttempts();
-      const cancelMsg = `${VERIFICATION_CONFIG_PROTECTED}: '${verificationEdit.path}' is verification configuration (${verificationEdit.class}, rule '${verificationEdit.rule}'). An edit needs an operator decision; none was given. Report it to the operator instead of changing how the work is verified.`;
+      const cancelMsg = verificationDeniedMessage(verificationEdit);
       if (this.flightRecorder) {
         this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, VERIFICATION_CONFIG_PROTECTED);
       }
@@ -5438,9 +5438,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       if (verificationEdit?.action === "ask") console.log(`⚠️ ${toolName} changes verification configuration: ${verificationEdit.path} (${verificationEdit.class}).`);
       const approved = await onConfirm(toolName, args);
       if (verificationEdit?.action === "ask") {
-        if (approved) verificationSecurity.grantVerificationEdit(verificationEdit.path);
+        if (approved) verificationAuthority.approved = true;
         else {
-          verificationSecurity.recordVerificationAttempt(verificationEdit.path, verificationEdit.class, toolName, "blocked");
+          verificationSecurity.recordVerificationAttempt(verificationEdit.path, verificationEdit.class, toolName, "blocked", this.role);
           this.syncVerificationAttempts();
         }
       }
@@ -5493,7 +5493,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       dryRun: this.config.dryRun,
       readOnly: this.isReadOnly(),
       bridge: this.bridge,
-      metadata: { actor, stepIndex: currentStep },
+      metadata: { actor, stepIndex: currentStep, verificationAuthority },
       defaultHandler: async (tName, tArgs) => {
         if (this.mcpManager.isMcpTool(tName)) {
           return await this.mcpManager.executeMcpTool(tName, tArgs);
@@ -5504,7 +5504,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         return await this.pluginManager.executeToolPipeline(
           tName,
           tArgs,
-          async (pipeArgs) => this.bridge.executeTool(tName, pipeArgs)
+          async (pipeArgs) => this.bridge.executeTool(tName, pipeArgs, verificationAuthority)
         );
       },
     };
@@ -5557,20 +5557,23 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     const workspaceAvailableBeforeBytes = toolName === "run_command" && process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1"
       ? this.workspaceAvailableBytes()
       : null;
-    const receipt = await this.spine.execute(
-      {
-        invocationId: call.id,
-        taskId: effectiveTaskId,
-        actor,
-        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
-        toolName,
-        args,
-        stepIndex: currentStep,
-      },
-      context
-    );
-
-    this.syncVerificationAttempts();
+    let receipt: ExecutionReceipt;
+    try {
+      receipt = await this.spine.execute(
+        {
+          invocationId: call.id,
+          taskId: effectiveTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          toolName,
+          args,
+          stepIndex: currentStep,
+        },
+        context
+      );
+    } finally {
+      this.syncVerificationAttempts();
+    }
 
     if (toolName === "run_command" && actor === "agent" && process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1") {
       try {

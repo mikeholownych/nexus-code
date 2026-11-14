@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isTestPath } from "./tester.js";
+import { FILE_EDIT_TOOLS } from "./file_diff.js";
 
 export type VerificationMode = "off" | "record" | "approve" | "block";
 export type VerificationClass = "ci" | "build" | "test_config" | "verifier_script" | "test_file" | "package_scripts" | "policy";
@@ -27,10 +28,14 @@ export interface VerificationConfigAttempt {
   timestamp: string;
 }
 
+/** Who is editing and what has been decided for this one call; nothing is kept between calls. Absent means headless and unapproved. */
 export interface VerificationEditContext {
   role?: string;
   fullAccess?: boolean;
+  /** An operator is present to decide. */
   operator?: boolean;
+  /** The operator approved this call. */
+  approved?: boolean;
 }
 
 export type VerificationEditDecision = (VerificationClassification & {
@@ -67,37 +72,50 @@ const DEFAULT_PROTECTED_PATHS = [
   ".git",
   // The operator's list of trusted workspaces: the agent must not trust a workspace for itself.
   "trusted_workspaces.json",
+  // The policy that switches verification protection off is not the agent's to change.
+  ".nexus-security.json",
   ".env*",
   "id_rsa*",
   "id_ed25519*",
 ];
 
-const DEFAULT_VERIFICATION_PATHS: Array<[VerificationClass, string[]]> = [
-  ["ci", [".github/workflows/**", ".gitlab-ci.yml", ".circleci/**", "Jenkinsfile", "azure-pipelines.yml"]],
-  ["build", ["Makefile", "justfile", "tox.ini", "noxfile.py", "Taskfile.yml"]],
-  ["test_config", ["jest.config.*", "vitest.config.*", "pytest.ini", "conftest.py", ".mocharc*", "playwright.config.*"]],
-  ["verifier_script", ["scripts/test*", "scripts/verify*", "scripts/ci*", "scripts/check*", "scripts/lint*"]],
-  ["policy", [".nexus-security.json"]],
+const SCRIPT_NAMES = ["test", "verify", "ci", "check", "lint"];
+/** [class, globs, case-sensitive]; a glob matches a workspace-relative path, `**\/` meaning any depth (zero or more directories). */
+const DEFAULT_VERIFICATION_PATHS: Array<[VerificationClass, string[], boolean]> = [
+  ["ci", [".github/workflows/**", "**/.gitlab-ci.yml", ".circleci/**", "**/Jenkinsfile", "**/azure-pipelines.yml"], false],
+  ["build", ["**/Makefile", "**/GNUmakefile", "**/justfile", "**/tox.ini", "**/noxfile.py", "**/Taskfile.yml"], false],
+  ["test_config", ["**/jest.config.*", "**/vitest.config.*", "**/pytest.ini", "**/conftest.py", "**/.mocharc*", "**/playwright.config.*"], false],
+  ["verifier_script", SCRIPT_NAMES.flatMap((n) => [`**/scripts/**/${n}*`, `**/scripts/${n}*/**`]), true],
+  ["package_scripts", ["**/package.json"], false],
+  ["policy", [".nexus-security.json"], false],
 ];
 export const DEFAULT_VERIFICATION_PATH_GLOBS: readonly string[] = DEFAULT_VERIFICATION_PATHS.flatMap(([, globs]) => globs);
 
-const PACKAGE_VERIFICATION_KEYS = ["scripts", "jest", "vitest", "mocha"];
+const PACKAGE_VERIFICATION_KEYS = ["scripts", "jest", "vitest", "mocha", "ava", "nyc", "c8", "workspaces"];
 const VERIFICATION_MODES: readonly VerificationMode[] = ["off", "record", "approve", "block"];
-const FILE_WRITE_TOOLS = ["write_file", "edit_file", "patch_file", "delete_file"];
+const RUNNABLE_TEST_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs", ".go", ".java", ".rb"]);
+const NON_TEST_DIRECTORIES = new Set(["fixtures", "__fixtures__", "__snapshots__", "testdata"]);
+/** Constructs that switch a test off or end its run early; a heuristic over appended text, not a proof. */
+const NEUTERING_TEXT = /\.(?:skip|only|todo)\b|\b(?:xit|xtest|xdescribe|fit|fdescribe)\s*\(|process\.exit|\bsys\.exit|\bos\._exit|\bt\.Skip|pytest\.(?:skip|mark\.(?:skip|xfail))|unittest\.skip|@Disabled|#\[ignore\]|^\s*return\s*;?\s*$/m;
 
-function globToRegExp(glob: string): RegExp {
+function globToRegExp(glob: string, caseSensitive = false): RegExp {
   let out = "";
   for (let i = 0; i < glob.length; i++) {
     const ch = glob[i];
     if (ch === "*") {
       if (glob[i + 1] === "*") {
-        out += ".*";
-        i++;
+        if (glob[i + 2] === "/") {
+          out += "(?:.*/)?";
+          i += 2;
+        } else {
+          out += ".*";
+          i++;
+        }
       } else out += "[^/]*";
     } else if (ch === "?") out += "[^/]";
     else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   }
-  return new RegExp(`^${out}$`, "i");
+  return new RegExp(`^${out}$`, caseSensitive ? "" : "i");
 }
 
 function parseVerificationPolicy(raw: unknown): VerificationPathsPolicy {
@@ -191,7 +209,7 @@ export function splitSubcommands(cmd: string): string[][] {
   return subcommands;
 }
 
-function verificationDeniedMessage(decision: NonNullable<VerificationEditDecision>): string {
+export function verificationDeniedMessage(decision: NonNullable<VerificationEditDecision>): string {
   return `${VERIFICATION_CONFIG_PROTECTED}: '${decision.path}' is verification configuration (${decision.class}, rule '${decision.rule}'). An edit needs an operator decision; none was given. Report it to the operator instead of changing how the work is verified.`;
 }
 
@@ -497,17 +515,7 @@ export class SecurityManager {
     return { protected: false };
   }
 
-  private verificationAuthority: VerificationEditContext = {};
-  private verificationGrants = new Set<string>();
   private verificationAttempts: VerificationConfigAttempt[] = [];
-
-  public setVerificationAuthority(ctx: VerificationEditContext): void {
-    this.verificationAuthority = ctx;
-  }
-
-  public grantVerificationEdit(rel: string): void {
-    this.verificationGrants.add(rel);
-  }
 
   public getVerificationAttempts(): VerificationConfigAttempt[] {
     return this.verificationAttempts.map((a) => ({ ...a }));
@@ -517,36 +525,45 @@ export class SecurityManager {
     this.verificationAttempts = Array.isArray(attempts) ? attempts.map((a) => ({ ...a })) : [];
   }
 
-  public recordVerificationAttempt(rel: string, cls: VerificationClass, tool: string, decision: VerificationDecisionLabel): void {
-    this.verificationAttempts.push({ path: rel, class: cls, tool, decision, role: this.verificationAuthority.role ?? null, timestamp: new Date().toISOString() });
+  public recordVerificationAttempt(rel: string, cls: VerificationClass, tool: string, decision: VerificationDecisionLabel, role?: string): void {
+    this.verificationAttempts.push({ path: rel, class: cls, tool, decision, role: role ?? null, timestamp: new Date().toISOString() });
   }
 
-  /** Workspace-relative path of a verification-config rule match for `rel`, by default list, operator extras, or the test-file rule. */
+  /** The verification-config rule `rel` (workspace-relative) falls under: the default list, operator `extra`, or a runnable test file. `allow` exempts. */
   public classifyVerificationPath(rel: string): VerificationClassification | null {
-    const clean = rel.replace(/\\/g, "/").replace(/^\.\//, "");
-    if (!clean || clean.startsWith("../") || path.isAbsolute(clean)) return null;
+    const clean = path.posix.normalize(rel.replace(/\\/g, "/"));
+    if (!clean || clean === "." || clean.startsWith("../") || path.isAbsolute(clean)) return null;
+    const segments = clean.split("/");
+    if (segments.includes("node_modules") || segments.includes(".git")) return null;
     const policy = this.policy.verificationPaths ?? parseVerificationPolicy(undefined);
     if ((policy.allow ?? []).some((g) => globToRegExp(g).test(clean))) return null;
-    for (const [cls, globs] of DEFAULT_VERIFICATION_PATHS) {
-      const rule = globs.find((g) => globToRegExp(g).test(clean));
+    for (const [cls, globs, caseSensitive] of DEFAULT_VERIFICATION_PATHS) {
+      const rule = globs.find((g) => globToRegExp(g, caseSensitive).test(clean));
       if (rule) return { class: cls, rule, source: "default" };
     }
     const extra = (policy.extra ?? []).find((g) => globToRegExp(g).test(clean));
     if (extra) return { class: "test_config", rule: extra, source: "policy" };
-    if (clean === "package.json") return { class: "package_scripts", rule: "package.json", source: "default" };
-    if (isTestPath(clean)) return { class: "test_file", rule: "test path", source: "test_path" };
+    if (this.isRunnableTestFile(clean)) return { class: "test_file", rule: "test path", source: "test_path" };
     return null;
   }
 
-  private verificationCandidates(targetPath: string): { rels: string[]; exists: boolean } {
+  private isRunnableTestFile(rel: string): boolean {
+    if (!isTestPath(rel)) return false;
+    if (rel.split("/").slice(0, -1).some((seg) => NON_TEST_DIRECTORIES.has(seg.toLowerCase()))) return false;
+    return RUNNABLE_TEST_EXTENSIONS.has(path.posix.extname(rel).toLowerCase());
+  }
+
+  private verificationCandidates(targetPath: string): { rels: string[]; abs: string; exists: boolean; directory: boolean } {
     const abs = path.isAbsolute(targetPath) ? path.resolve(targetPath) : path.resolve(this.workspace, targetPath);
     const roots = [this.workspace];
     try { roots.push(fs.realpathSync(this.workspace)); } catch {}
     const absolutes = [abs];
     let exists = false;
+    let directory = false;
     try {
       if (fs.existsSync(abs)) {
         exists = true;
+        directory = fs.statSync(abs).isDirectory();
         absolutes.push(fs.realpathSync(abs));
       } else if (fs.existsSync(path.dirname(abs))) {
         absolutes.push(path.join(fs.realpathSync(path.dirname(abs)), path.basename(abs)));
@@ -559,23 +576,48 @@ export class SecurityManager {
         if (rel && !rel.startsWith("..") && !path.isAbsolute(rel) && !rels.includes(rel)) rels.push(rel);
       }
     }
-    return { rels, exists };
+    return { rels, abs, exists, directory };
   }
 
-  private touchesPackageVerification(toolName: string, args: Record<string, any>, abs: string): boolean {
-    if (toolName === "delete_file") return true;
-    let before: Record<string, unknown>;
-    let afterText: string | null = null;
+  /** The first verification file under a directory (bounded walk), so deleting the directory is treated as deleting that file. */
+  private classifiedFileUnder(dirAbs: string): { rel: string; found: VerificationClassification } | null {
+    const roots = [this.workspace];
+    try { roots.push(fs.realpathSync(this.workspace)); } catch {}
+    let visited = 0;
+    const walk = (dir: string): { rel: string; found: VerificationClassification } | null => {
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+      for (const entry of entries) {
+        if (++visited > 5000) return null;
+        const child = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === "node_modules" || entry.name === ".git") continue;
+          const nested = walk(child);
+          if (nested) return nested;
+        } else {
+          for (const root of roots) {
+            const rel = path.relative(root, child).replace(/\\/g, "/");
+            const found = rel && !rel.startsWith("..") ? this.classifyVerificationPath(rel) : null;
+            if (found && found.class !== "package_scripts") return { rel, found };
+          }
+        }
+      }
+      return null;
+    };
+    return walk(dirAbs);
+  }
+
+  private touchesPackageVerification(toolName: string, args: Record<string, any>, abs: string, exists: boolean): boolean {
     try {
-      before = JSON.parse(fs.readFileSync(abs, "utf-8"));
-      const current = fs.readFileSync(abs, "utf-8");
+      const before: Record<string, unknown> = exists ? JSON.parse(fs.readFileSync(abs, "utf-8")) : {};
+      let afterText: string;
       if (toolName === "write_file") afterText = String(args.content ?? "");
-      else if (toolName === "edit_file") {
+      else if (toolName === "edit_file" && exists) {
         const from = String(args.old_content ?? "");
         const to = String(args.new_content ?? "");
+        const current = fs.readFileSync(abs, "utf-8");
         afterText = args.replace_all ? current.split(from).join(to) : current.replace(from, () => to);
-      }
-      if (afterText === null) return true;
+      } else return true;
       const after = JSON.parse(afterText);
       return PACKAGE_VERIFICATION_KEYS.some((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
     } catch {
@@ -583,64 +625,91 @@ export class SecurityManager {
     }
   }
 
-  private preservesExistingTest(toolName: string, args: Record<string, any>, abs: string): boolean {
+  /** Whether a tester's edit only adds to an existing test: the old text survives untouched and the addition cannot switch tests off. */
+  private appendsToExistingTest(toolName: string, args: Record<string, any>, abs: string): boolean {
     try {
-      if (toolName === "write_file") return String(args.content ?? "").startsWith(fs.readFileSync(abs, "utf-8"));
+      const current = fs.readFileSync(abs, "utf-8");
+      const appended = (from: string, to: string): boolean => {
+        if (!to.startsWith(from)) return false;
+        const extra = to.slice(from.length);
+        return (from.endsWith("\n") || extra.startsWith("\n")) && !NEUTERING_TEXT.test(extra);
+      };
+      if (toolName === "write_file") return appended(current, String(args.content ?? ""));
       if (toolName === "edit_file") {
         const from = String(args.old_content ?? "");
         const to = String(args.new_content ?? "");
-        return from.length > 0 && !args.replace_all && (to.startsWith(from) || to.endsWith(from));
+        if (!from || args.replace_all) return false;
+        const atEnd = current === from || (current.endsWith(from) && current[current.length - from.length - 1] === "\n");
+        return atEnd && appended(from, to);
       }
-      if (toolName === "patch_file") return !/^-(?!--)/m.test(String(args.patch ?? ""));
+      if (toolName === "patch_file") {
+        const patch = String(args.patch ?? "");
+        const lines = patch.split("\n");
+        const firstHunk = lines.findIndex((l) => l.startsWith("@@"));
+        const body = firstHunk === -1 ? lines : lines.slice(firstHunk + 1);
+        if (body.some((l) => l.startsWith("-"))) return false;
+        return !NEUTERING_TEXT.test(body.filter((l) => l.startsWith("+")).map((l) => l.slice(1)).join("\n"));
+      }
     } catch {}
     return false;
   }
 
-  /** What an agent file edit needs: nothing (null), an operator decision, or a refusal. Creating a file that does not exist is never gated. */
-  public verificationEditDecision(toolName: string, args: Record<string, any>, ctx: VerificationEditContext = this.verificationAuthority): VerificationEditDecision {
-    if (!FILE_WRITE_TOOLS.includes(toolName)) return null;
+  /**
+   * What an agent file edit needs: nothing (null), an operator decision, or a refusal. Only new runnable test files
+   * are free to create; a new config, CI, verifier or policy file is gated like an edit. `ctx` is the call's own
+   * authority; absent, the call is headless and unapproved.
+   */
+  public verificationEditDecision(toolName: string, args: Record<string, any>, ctx: VerificationEditContext = {}): VerificationEditDecision {
+    if (!FILE_EDIT_TOOLS.has(toolName)) return null;
     const target = String(args.path || args.target_file || args.file_path || "");
     if (!target) return null;
     const configured = this.policy.verificationPaths ?? parseVerificationPolicy(undefined);
-    const { rels, exists } = this.verificationCandidates(target);
-    if (!exists) return null;
-    const abs = path.isAbsolute(target) ? path.resolve(target) : path.resolve(this.workspace, target);
+    const { rels, abs, exists, directory } = this.verificationCandidates(target);
+    if (!exists && toolName !== "write_file") return null;
     let hit: { rel: string; found: VerificationClassification } | null = null;
     for (const rel of rels) {
       const found = this.classifyVerificationPath(rel);
       if (found && (!hit || found.class === "policy")) hit = { rel, found };
     }
+    if (!hit && directory && toolName === "delete_file") {
+      const inside = this.classifiedFileUnder(abs);
+      if (inside) hit = { rel: rels[0] ?? target, found: inside.found };
+    }
     if (!hit) return null;
     const { rel, found } = hit;
+    if (!exists && found.class === "test_file") return null;
     const mode: VerificationMode = found.class === "policy" && configured.mode !== "block" ? "approve" : configured.mode;
     if (mode === "off") return null;
-    if (found.class === "package_scripts" && !this.touchesPackageVerification(toolName, args, abs)) return null;
+    if (found.class === "package_scripts" && !this.touchesPackageVerification(toolName, args, abs, exists)) return null;
     const base = { ...found, path: rel };
-    if (ctx.role === "tester" && found.class === "test_file" && this.preservesExistingTest(toolName, args, abs)) return { ...base, action: "allow", label: "role-allowed" };
+    if (mode === "approve" && ctx.role === "tester" && found.class === "test_file" && !directory && this.appendsToExistingTest(toolName, args, abs)) {
+      return { ...base, action: "allow", label: "role-allowed" };
+    }
     if (mode === "record") return { ...base, action: "allow", label: "auto-recorded" };
     if (mode === "block") return { ...base, action: "deny" };
+    if (ctx.approved) return { ...base, action: "allow", label: "operator-approved" };
     if (ctx.fullAccess && found.class !== "policy") return { ...base, action: "allow", label: "auto-recorded" };
     return { ...base, action: ctx.operator ? "ask" : "deny" };
   }
 
   /** The gate in front of a file edit: records the attempt and says whether it may run. */
-  public authorizeVerificationEdit(toolName: string, args: Record<string, any>): { allowed: true } | { allowed: false; error: string } {
-    const decision = this.verificationEditDecision(toolName, args);
+  public authorizeVerificationEdit(toolName: string, args: Record<string, any>, ctx: VerificationEditContext = {}): { allowed: true } | { allowed: false; error: string } {
+    const decision = this.verificationEditDecision(toolName, args, ctx);
     if (!decision) return { allowed: true };
     if (decision.action === "allow") {
-      this.recordVerificationAttempt(decision.path, decision.class, toolName, decision.label!);
+      this.recordVerificationAttempt(decision.path, decision.class, toolName, decision.label!, ctx.role);
       return { allowed: true };
     }
-    if (decision.action === "ask" && this.verificationGrants.delete(decision.path)) {
-      this.recordVerificationAttempt(decision.path, decision.class, toolName, "operator-approved");
-      return { allowed: true };
-    }
-    this.recordVerificationAttempt(decision.path, decision.class, toolName, "blocked");
+    this.recordVerificationAttempt(decision.path, decision.class, toolName, "blocked", ctx.role);
     return { allowed: false, error: verificationDeniedMessage(decision) };
   }
 
-  /** Best-effort: shell commands that appear to write a verification-config file are recorded, never blocked. */
-  public recordVerificationCommand(command: string): void {
+  /**
+   * Best-effort and record-only: a shell command that appears to write a verification-config file (sed -i, tee,
+   * redirection, mv, cp, rm...) is noted, never blocked. SI-2 therefore does not stop a shell-capable agent from
+   * changing how work is verified; it makes edits through the file tools a decision and the rest visible.
+   */
+  public recordVerificationCommand(command: string, role?: string): void {
     const mode = this.policy.verificationPaths?.mode ?? "approve";
     if (mode === "off") return;
     const seen = new Set<string>();
@@ -652,7 +721,7 @@ export class SecurityManager {
         const found = this.classifyVerificationPath(rel);
         if (found && found.class !== "package_scripts" && !seen.has(rel)) {
           seen.add(rel);
-          this.recordVerificationAttempt(rel, found.class, "run_command", "auto-recorded");
+          this.recordVerificationAttempt(rel, found.class, "run_command", "auto-recorded", role);
         }
       }
     };

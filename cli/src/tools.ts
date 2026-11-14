@@ -8,7 +8,8 @@ import * as tls from "node:tls";
 import * as dns from "node:dns";
 import { URL, fileURLToPath } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
-import { SecurityManager, VERIFICATION_CONFIG_PROTECTED } from "./security.js";
+import { SecurityManager, VERIFICATION_CONFIG_PROTECTED, type VerificationEditContext } from "./security.js";
+import { FILE_EDIT_TOOLS } from "./file_diff.js";
 import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from "./core/egress.js";
 import { htmlToReadableText } from "./core/html_text.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
@@ -1126,8 +1127,14 @@ export class RustCoreBridge {
   /**
    * Execute tool using high-performance persistent JSON-RPC daemon, with automatic spawnSync fallback
    */
-  async executeTool(toolName: string, args: Record<string, any>): Promise<ExecutionResult> {
+  async executeTool(toolName: string, args: Record<string, any>, authority?: VerificationEditContext): Promise<ExecutionResult> {
     // 1. Security policy verification
+    if (FILE_EDIT_TOOLS.has(toolName)) {
+      // `authority` is this call's own: a caller that passes none (MCP, slash commands) is headless and unapproved,
+      // so an edit to verification configuration is refused rather than silently allowed.
+      const gate = this.securityManager.authorizeVerificationEdit(toolName, args, authority);
+      if (!gate.allowed) return { success: false, output: "", error: gate.error, denialReason: VERIFICATION_CONFIG_PROTECTED };
+    }
     if (toolName === "run_command") {
       const cmd = (args.command || "").trim();
       const check = this.securityManager.isCommandBlocked(cmd);
@@ -1168,14 +1175,7 @@ export class RustCoreBridge {
       }
     }
 
-    if (["write_file", "edit_file", "patch_file", "delete_file"].includes(toolName)) {
-      const gate = this.securityManager.authorizeVerificationEdit(toolName, args);
-      if (!gate.allowed) {
-        return { success: false, output: "", error: gate.error, denialReason: VERIFICATION_CONFIG_PROTECTED };
-      }
-    }
-
-    if (toolName === "run_command") this.securityManager.recordVerificationCommand(String(args.command || ""));
+    if (toolName === "run_command") this.securityManager.recordVerificationCommand(String(args.command || ""), authority?.role);
 
     if (toolName === "batch_read" && Array.isArray(args.paths)) {
       for (const p of args.paths) {
@@ -1645,8 +1645,8 @@ export function registerBridgeCapabilities(
         "run_tests",
       ].includes(cap.modelToolName)
     ) {
-      registry.setHandler(cap.modelToolName, async (args) =>
-        bridge.executeTool(cap.modelToolName, args)
+      registry.setHandler(cap.modelToolName, async (args, context) =>
+        bridge.executeTool(cap.modelToolName, args, context?.metadata?.verificationAuthority)
       );
     }
   }

@@ -113,7 +113,7 @@ describe("verification config guard", () => {
     }
     assert.deepEqual(attempts(agent), []);
     const sm = new SecurityManager(repo);
-    for (const p of ["src/app.ts", "README.md", "docs/guide.md", "src/scripts/build.ts", "lib/Makefile", "src/Makefile.ts"]) assert.equal(sm.classifyVerificationPath(p), null, p);
+    for (const p of ["src/app.ts", "README.md", "docs/guide.md", "src/scripts/build.ts", "src/Makefile.ts"]) assert.equal(sm.classifyVerificationPath(p), null, p);
   });
 
   test("package.json: a dependency bump passes, a scripts edit is gated", async () => {
@@ -218,13 +218,140 @@ describe("verification config guard", () => {
     assert.match(exported.markdown, /blocked `write_file` Makefile/);
   });
 
-  test("creating a file that does not exist is never gated", async () => {
+  test("creating a new test file is free; creating new config, CI, verifier or policy files is gated", async () => {
     const agent = makeAgent({ mode: "auto" });
-    for (const p of ["justfile", "jest.config.js", "tests/fresh.test.ts", ".github/workflows/new.yml"]) {
-      const receipt = await call(agent, "write_file", { path: p, content: "x\n" });
-      assert.ok(passedGuard(receipt), p);
-    }
+    assert.ok(passedGuard(await call(agent, "write_file", { path: "tests/fresh.test.ts", content: "x\n" })));
     assert.deepEqual(attempts(agent), []);
+    for (const p of [".nexus-security.json", "conftest.py", "jest.config.js", "justfile", "pytest.ini", ".github/workflows/new.yml", "scripts/test_all.sh", "cli/Makefile"]) {
+      const receipt = await call(agent, "write_file", { path: p, content: "{}\n" });
+      assert.equal(receipt.denialReason, "VERIFICATION_CONFIG_PROTECTED", p);
+      assert.equal(fs.existsSync(path.join(repo, p)), false, p);
+    }
+    const asked: string[] = [];
+    const approved = await call(agent, "write_file", { path: "justfile", content: "x\n" }, async (t) => { asked.push(t); return true; });
+    assert.deepEqual(asked, ["write_file"]);
+    assert.ok(passedGuard(approved));
+    const full = makeAgent({ mode: "auto", fullAccess: true });
+    assert.ok(passedGuard(await call(full, "write_file", { path: "conftest.py", content: "x\n" })));
+    assert.equal(attempts(full)[0].decision, "auto-recorded");
+  });
+
+  test("a new package.json is gated only when it declares verification keys", async () => {
+    const agent = makeAgent({ mode: "auto" });
+    assert.ok(passedGuard(await call(agent, "write_file", { path: "pkg/package.json", content: '{"name":"p"}' })));
+    const gated = await call(agent, "write_file", { path: "pkg2/package.json", content: '{"scripts":{"test":"true"}}' });
+    assert.equal(gated.denialReason, "VERIFICATION_CONFIG_PROTECTED");
+  });
+
+  test("nested monorepo paths are classified at any depth; scripts rule is case-sensitive", async () => {
+    write("cli/package.json", JSON.stringify({ scripts: { test: "node --test" } }));
+    write("sub/vitest.config.ts", "export default {};\n");
+    write("scripts/ci/run.sh", "true\n");
+    write("packages/a/Makefile", "x:\n");
+    const sm = new SecurityManager(repo);
+    for (const p of ["cli/package.json", "sub/vitest.config.ts", "scripts/ci/run.sh", "packages/a/Makefile", "a/b/conftest.py", "scripts/build/verify-all.sh", "scripts/lint.sh"]) assert.ok(sm.classifyVerificationPath(p), p);
+    assert.equal(sm.classifyVerificationPath("SCRIPTS/Test.sh"), null);
+    assert.equal(sm.classifyVerificationPath("scripts/build.sh"), null);
+    assert.equal(sm.classifyVerificationPath("node_modules/x/package.json"), null);
+    const agent = makeAgent({ mode: "auto" });
+    const receipt = await call(agent, "edit_file", { path: "cli/package.json", old_content: '"node --test"', new_content: '"true"' });
+    assert.equal(receipt.denialReason, "VERIFICATION_CONFIG_PROTECTED");
+    assert.equal((await call(agent, "write_file", { path: "scripts/ci/run.sh", content: "x\n" })).denialReason, "VERIFICATION_CONFIG_PROTECTED");
+  });
+
+  test("dot-dot and absolute spellings resolve to the same file; paths outside the workspace are not classified", async () => {
+    const agent = makeAgent({ mode: "auto" });
+    for (const p of ["src/../Makefile", path.join(repo, "Makefile"), "./Makefile"]) {
+      assert.equal((await call(agent, "write_file", { path: p, content: "x" })).denialReason, "VERIFICATION_CONFIG_PROTECTED", p);
+    }
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-out-"));
+    fs.writeFileSync(path.join(outside, "Makefile"), "x");
+    try {
+      assert.equal(new SecurityManager(repo).verificationEditDecision("write_file", { path: path.join(outside, "Makefile"), content: "y" }), null);
+      assert.equal(new SecurityManager(repo).verificationEditDecision("write_file", { path: "../" + path.basename(outside) + "/Makefile", content: "y" }), null);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("deleting a directory that holds verification files is gated", () => {
+    write("scripts/test_all.sh", "true\n");
+    write(".circleci/config.yml", "x\n");
+    write("empty/readme.md", "x\n");
+    const sm = new SecurityManager(repo);
+    for (const dir of ["tests", ".github", ".circleci", "scripts", ".github/workflows"]) {
+      const d = sm.verificationEditDecision("delete_file", { path: dir }, { operator: false });
+      assert.equal(d?.action, "deny", dir);
+    }
+    assert.equal(sm.verificationEditDecision("delete_file", { path: "empty" }, { operator: false }), null);
+    assert.equal(sm.verificationEditDecision("delete_file", { path: "tests" }, { role: "tester", operator: true })?.action, "ask");
+  });
+
+  test("fixtures, snapshots and data files under test directories are not existing-test files", () => {
+    write("tests/fixtures/a.json", "{}");
+    write("tests/__snapshots__/a.snap", "x");
+    write("tests/data.txt", "x");
+    write("tests/__fixtures__/h.ts", "x");
+    write("tests/helpers.ts", "x");
+    const sm = new SecurityManager(repo);
+    for (const p of ["tests/fixtures/a.json", "tests/__snapshots__/a.snap", "tests/data.txt", "tests/__fixtures__/h.ts"]) {
+      assert.equal(sm.verificationEditDecision("write_file", { path: p, content: "y" }, { operator: false }), null, p);
+    }
+    assert.equal(sm.verificationEditDecision("write_file", { path: "tests/helpers.ts", content: "y" }, { operator: false })?.action, "deny");
+  });
+
+  test("a role-less agent (TDD RED phase) can still create a new test file headless", async () => {
+    const agent = makeAgent({ mode: "auto" });
+    assert.ok(passedGuard(await call(agent, "write_file", { path: "test/repro.test.ts", content: "x\n" })));
+    assert.deepEqual(attempts(agent), []);
+  });
+
+  test("tester exemption cannot be used to neuter existing tests", () => {
+    write("tests/t.test.ts", "test('a', () => {\n  assert.equal(1, 1);\n});\n");
+    const sm = new SecurityManager(repo);
+    const ctx = { role: "tester", operator: false };
+    const old = fs.readFileSync(path.join(repo, "tests/t.test.ts"), "utf8");
+    const d = (tool: string, args: Record<string, unknown>) => sm.verificationEditDecision(tool, { path: "tests/t.test.ts", ...args }, ctx)?.action;
+    assert.equal(d("write_file", { content: `${old}test('b', () => {});\n` }), "allow");
+    assert.equal(d("write_file", { content: `${old}process.exit(0);\n` }), "deny");
+    assert.equal(d("write_file", { content: `${old}describe.skip('x', () => {});\n` }), "deny");
+    assert.equal(d("write_file", { content: `${old}test.only('x', () => {});\n` }), "deny");
+    assert.equal(d("write_file", { content: `${old.trimEnd()}//\ntest('b', () => {});\n` }), "deny");
+    assert.equal(d("edit_file", { old_content: "});\n", new_content: "});\ntest('b', () => {});\n" }), "allow");
+    assert.equal(d("edit_file", { old_content: "assert.equal(", new_content: "assert.equal(1,1);//" }), "deny");
+    assert.equal(d("edit_file", { old_content: "});", new_content: "});//" }), "deny");
+    assert.equal(d("edit_file", { old_content: "", new_content: "x" }), "deny");
+    assert.equal(d("edit_file", { old_content: "});\n", new_content: "});\ntest('b', () => { return; });\n" }), "allow");
+    assert.equal(d("patch_file", { patch: "--- a/tests/t.test.ts\n+++ b/tests/t.test.ts\n@@ -3,0 +4,1 @@\n+test('b', () => {});\n" }), "allow");
+    assert.equal(d("patch_file", { patch: "--- a/tests/t.test.ts\n+++ b/tests/t.test.ts\n@@ -2,1 +2,0 @@\n---x\n" }), "deny");
+    assert.equal(d("patch_file", { patch: "--- a/tests/t.test.ts\n+++ b/tests/t.test.ts\n@@ -2,1 +2,1 @@\n-  assert.equal(1, 1);\n+  // gone\n" }), "deny");
+  });
+
+  test("mode block gives the tester no exemption", async () => {
+    write(".nexus-security.json", JSON.stringify({ verificationPaths: { mode: "block" } }));
+    const agent = makeAgent({ mode: "auto", role: "tester" });
+    const old = fs.readFileSync(path.join(repo, "tests/old.test.ts"), "utf8");
+    const receipt = await call(agent, "write_file", { path: "tests/old.test.ts", content: `${old}test('b', () => {});\n` });
+    assert.equal(receipt.denialReason, "VERIFICATION_CONFIG_PROTECTED");
+    assert.ok(passedGuard(await call(agent, "write_file", { path: "tests/new2.test.ts", content: "x\n" })));
+  });
+
+  test("an operator approval covers one call only and does not leak to the next", async () => {
+    const agent = makeAgent({ mode: "auto" });
+    await call(agent, "write_file", { path: "Makefile", content: "a\n" }, yes);
+    const second = await call(agent, "write_file", { path: "Makefile", content: "b\n" });
+    assert.equal(second.denialReason, "VERIFICATION_CONFIG_PROTECTED");
+    assert.deepEqual(attempts(agent).map((a: any) => a.decision), ["operator-approved", "blocked"]);
+  });
+
+  test("the tool layer takes its authority from the call, not from shared state", async () => {
+    const bridge = new RustCoreBridge(repo);
+    const denied = await bridge.executeTool("write_file", { path: "Makefile", content: "t\n" }, { fullAccess: true, operator: false, role: "implementer" });
+    assert.notEqual(denied.denialReason, "VERIFICATION_CONFIG_PROTECTED");
+    const again = await bridge.executeTool("write_file", { path: "Makefile", content: "t\n" });
+    assert.equal(again.denialReason, "VERIFICATION_CONFIG_PROTECTED");
+    const approved = await bridge.executeTool("write_file", { path: "Makefile", content: "t\n" }, { operator: true, approved: true });
+    assert.notEqual(approved.denialReason, "VERIFICATION_CONFIG_PROTECTED");
   });
 
   test("a symlink to a classified file is classified", async () => {
