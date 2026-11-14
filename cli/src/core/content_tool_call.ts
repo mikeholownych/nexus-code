@@ -1,3 +1,4 @@
+import { extractSoleFencedCall } from "../parser.js";
 import type { ChatMessage, ToolDefinition } from "../types.js";
 
 /** Sent with the model's own text reply when it wrote a call as text, before asking again. */
@@ -14,24 +15,44 @@ export const CONTENT_CALL_NOTE = "Your last reply wrote a tool call as plain tex
 export function isContentCallReply(message: ChatMessage, tools: readonly ToolDefinition[], requestMessages: readonly ChatMessage[] = []): boolean {
   if (tools.length === 0 || (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) || typeof message.content !== "string") return false;
   const body = soleJsonBody(message.content);
-  if (body === undefined || echoedFromRequest(body, requestMessages)) return false;
+  if (body === undefined) return false;
   let value: unknown;
   try { value = JSON.parse(body); } catch { return false; }
-  if (!isRecord(value)) return false;
+  if (!isRecord(value) || echoedFromRequest(body, value, requestMessages)) return false;
   return (namedCall(value, tools) ?? (tools.length === 1 ? acceptedBy(tools[0]!, value) : undefined)) !== undefined;
 }
 
-function echoedFromRequest(body: string, requestMessages: readonly ChatMessage[]): boolean {
-  const compact = (text: string): string => text.replace(/\s+/g, "");
-  const needle = compact(body);
-  return requestMessages.some((message) => typeof message.content === "string" && compact(message.content).includes(needle));
+/** Text as a model would quote it back: JSON escapes undone, `N | ` line-number prefixes and all whitespace dropped. */
+function quotable(text: string): string {
+  return text.replace(/\\(["\\/])/g, "$1").replace(/\\[nrt]/g, "").replace(/^[ \t]*\d+[ \t]*\|[ \t]?/gm, "").replace(/\s+/g, "");
+}
+
+function leafStrings(value: unknown, into: string[] = []): string[] {
+  if (typeof value === "string") into.push(value);
+  else if (Array.isArray(value)) for (const item of value) leafStrings(item, into);
+  else if (isRecord(value)) for (const item of Object.values(value)) leafStrings(item, into);
+  return into;
+}
+
+/**
+ * Whether the request already held this JSON, so the model is quoting what it read rather than asking for a call: the
+ * same JSON in any non-assistant turn, or, for a tool result, every string value of it (key order and layout vary).
+ */
+function echoedFromRequest(body: string, value: unknown, requestMessages: readonly ChatMessage[]): boolean {
+  const needle = quotable(body);
+  const strings = leafStrings(value).map(quotable).filter(Boolean);
+  return requestMessages.some((message) => {
+    if (message.role === "assistant" || typeof message.content !== "string") return false;
+    const held = quotable(message.content);
+    return held.includes(needle) || (message.role === "tool" && strings.length > 0 && strings.every((text) => held.includes(text)));
+  });
 }
 
 function soleJsonBody(content: string): string | undefined {
   let text = content.replace(/<(think|thought|reasoning)>[\s\S]*?<\/\1>/gi, "").trim();
   text = text.replace(/(?:\s*<\/(?:invoke|function|tool_call|parameter)>)+$/i, "").trim();
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text);
-  if (fenced) text = fenced[1]!.includes("```") ? "" : fenced[1]!.trim();
+  const fenced = extractSoleFencedCall(text);
+  if (fenced) text = fenced.content;
   return text.startsWith("{") && text.endsWith("}") ? text : undefined;
 }
 

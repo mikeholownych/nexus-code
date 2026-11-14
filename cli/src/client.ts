@@ -266,6 +266,18 @@ function chatUsage(u: any): UsageReport | undefined {
   return r;
 }
 
+/** The sum of what several requests of one logical call reported; a field none of them reported stays absent. */
+function sumUsage(reports: ReadonlyArray<UsageReport | undefined>): UsageReport | undefined {
+  const total: UsageReport = {};
+  for (const report of reports) {
+    if (!report) continue;
+    for (const key of ["inputTokens", "outputTokens", "cachedInputTokens", "reasoningTokens", "costUsd"] as const) {
+      if (report[key] !== undefined) total[key] = (total[key] ?? 0) + report[key]!;
+    }
+  }
+  return Object.keys(total).length > 0 ? total : undefined;
+}
+
 /** What the provider reported about the request in progress (for its receipt). */
 interface PendingRequest { usage?: UsageReport; providerRequestId?: string; effectiveModel?: string; endpoint?: string; executions?: number }
 
@@ -671,6 +683,8 @@ export class LocalLlmClient {
   private readonly diagnosticHandler?: (level: "error" | "warn", message: string) => void;
   /** Usage the provider reported for the most recent completed request on this client (provider connections only). */
   private lastUsageReport?: UsageReport;
+  /** Replies already asked about, so a credential-reload re-entry never asks twice for one reply. */
+  private readonly askedAgain = new WeakSet<ChatMessage>();
   private pending?: PendingRequest;
   /** Ledger reservations taken by the request in progress (released when its receipt is recorded). */
   private reservations: string[] = [];
@@ -1706,25 +1720,45 @@ export class LocalLlmClient {
    * 1. with the reply and a note that text is not a call, `tool_choice` unchanged: a model that was only quoting JSON
    *    just answers, one that meant a call makes it natively;
    * 2. only if it wrote the call as text again after that note, with `tool_choice: required`.
-   * The retry turns exist only in these requests, never in the returned history. A failed retry propagates like any
-   * other request failure; with no native call the original reply stands.
+   * The retry turns exist only in these requests, never in the returned history. The original reply stands whenever a
+   * retry fails (an operator abort still propagates) or yields no native call; a prose answer to the note replaces it.
+   * Token usage and cost of every request are summed into the last-usage report.
    */
-  private async askAgainForNativeCall(response: ChatMessage, messages: ChatMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<ChatMessage> {
-    if (this.conn.protocol !== "openai-chat" || this.conn.streamOnly || !isContentCallReply(response, tools, messages)) return response;
+  private async askAgainForNativeCall(response: ChatMessage, messages: ChatMessage[], tools: ToolDefinition[], signal?: AbortSignal, onToken?: StreamTokenCallback): Promise<ChatMessage> {
+    if (this.conn.protocol !== "openai-chat" || this.conn.streamOnly || this.askedAgain.has(response) || !isContentCallReply(response, tools, messages)) return response;
+    this.askedAgain.add(response);
     const corrected: ChatMessage[] = [...messages, { role: "assistant", content: response.content }, { role: "user", content: CONTENT_CALL_NOTE }];
-    const ask = (toolChoice: "auto" | "required"): Promise<ChatMessage> => {
+    const usages = [this.lastUsageReport];
+    const ask = async (toolChoice: "auto" | "required"): Promise<ChatMessage | undefined> => {
       const requestId = randomUUID();
-      return this.withReceipt(requestId, "tool-call-retry", () =>
-        this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(corrected, tools, requestId, signal, toolChoice))),
-      );
+      try {
+        return await this.withReceipt(requestId, "tool-call-retry", () =>
+          this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(corrected, tools, requestId, signal, toolChoice))),
+        );
+      } catch (err) {
+        if (signal?.aborted || (err instanceof InferenceError && err.kind === "aborted")) throw err;
+        this.emitDiagnostic("error", pc.dim(`[nexus] Asking ${this.conn.label} again for a native tool call failed (${err instanceof Error ? err.message : String(err)}); keeping its first reply.`));
+        return undefined;
+      } finally {
+        usages.push(this.lastUsageReport);
+      }
+    };
+    const finish = (message: ChatMessage): ChatMessage => {
+      this.lastUsageReport = sumUsage(usages);
+      return message;
     };
     this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} answered a tool request with the call as text; telling it so and asking again.`));
     const noted = await ask("auto");
-    if (noted.tool_calls?.length) return { ...noted, toolCallSource: "feedback" };
-    if (!isContentCallReply(noted, tools, messages)) return typeof noted.content === "string" && noted.content.trim() ? noted : response;
+    if (!noted) return finish(response);
+    if (noted.tool_calls?.length) return finish({ ...noted, toolCallSource: "feedback" });
+    if (!isContentCallReply(noted, tools, messages)) {
+      if (typeof noted.content !== "string" || !noted.content.trim()) return finish(response);
+      onToken?.(`\n\n${noted.content}`);
+      return finish(noted);
+    }
     this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} wrote the call as text again; asking once more with tool_choice=required.`));
     const forced = await ask("required");
-    return forced.tool_calls?.length ? { ...forced, toolCallSource: "required" } : response;
+    return finish(forced?.tool_calls?.length ? { ...forced, toolCallSource: "required" } : response);
   }
 
   private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal, toolChoice: "auto" | "required" = "auto"): Promise<ChatMessage> {
@@ -1817,7 +1851,7 @@ export class LocalLlmClient {
 
         if (res.status === 401 && this.reloadAuthToken(url)) {
           watchdog.done();
-          return this.chatCompletion(messages, tools, requestId, signal);
+          return this.chatCompletionOnce(messages, tools, requestId, signal, toolChoice);
         }
 
         if (!res.ok) {
@@ -1884,7 +1918,7 @@ export class LocalLlmClient {
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
       ),
     );
-    return this.askAgainForNativeCall(response, messages, tools, signal);
+    return this.askAgainForNativeCall(response, messages, tools, signal, onToken);
   }
 
   /**
