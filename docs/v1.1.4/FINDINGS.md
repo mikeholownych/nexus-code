@@ -2,6 +2,19 @@
 
 Every row ends as FIXED (commit and test), WITHDRAWN (evidence) or DEFERRED (owner decision). Updated per closed item. Source of truth for the v1.1.4 release acceptance.
 
+## Owner decision for the stable v1.1.4 release, 2026-11-14
+
+Asked at the release review, the owner decided (verbatim choices: "Accept all four (Recommended)" and "No veto, withdrawal stands (Recommended)"):
+
+1. **Accepted as documented limitations of v1.1.4** (each stays listed in `docs/releases/v1.1.4.md` under "Known limitations"; none is silently dropped):
+   - **A4a** (WP-1316 supported domain, section D);
+   - **the D-04 review lows** (every "D-04 review ... OPEN, accepted" row in section J);
+   - **auto-repeat of a held key is detected by timing only** (section K, PR #469 review low);
+   - **the example-call edge case** (introduced and documented with the content tool-call re-ask, PR #487): a user who asks the model to print an example call can still end in a forced native call, which goes through the normal approval path, so auto and full-access modes would run it.
+2. **I-6 is WITHDRAWN on its premise and the owner does not veto it** (section I): the only live inference is the gateway (DEC-16); `toolGrammarDefault` stays `false`.
+
+Context for this decision: G1.1-4 was measured MET on the rc.2 build on 2026-11-14 (WP-1107 row, `docs/evidence/v1.1.4/wp-1107-provider-matrix.rc.2.json`); external qualification is still pending, so the release is framed as "ledger closed, qualification pending", not as frontier-grade. This block records the decision; it is not part of the tagged release tree (the stable commit is version-only on `v1.1.4-rc.3`).
+
 ## A. Entire automated review (trail 145 = PR #402, trail 140 = PR #400), exported 2026-11-04
 
 | Trail | Sev | Finding | Location | WP | Summary | Status |
