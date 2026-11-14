@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01V6px43ujER2upTtEMMbTTq",
+  "agent_id": "a1c560dfbded5fea0",
+  "subagent_type": "general-purpose",
+  "task_description": "Delta review at PR 487 head",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 53919,
+    "cache_read_tokens": 144316,
+    "output_tokens": 2772,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-14T05:50:33.435623553Z",
+  "completed_at": "2026-11-14T05:51:03.353687838Z"
+}
