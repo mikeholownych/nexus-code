@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NaquotN1MgoprTm2VrrFbB",
+  "agent_id": "ae5efad0b09364f82",
+  "subagent_type": "general-purpose",
+  "task_description": "Local Code/Security/Slop review of DV-2",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 75295,
+    "cache_read_tokens": 868669,
+    "output_tokens": 11323,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-14T22:26:10.134168037Z",
+  "completed_at": "2026-11-14T22:27:55.013434074Z"
+}
