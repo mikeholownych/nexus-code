@@ -1,0 +1,68 @@
+{
+  "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "stream",
+    "stream_options",
+    "temperature",
+    "tool_choice",
+    "tools"
+  ],
+  "stream": true,
+  "tool_choice": "auto",
+  "tools": [
+    "batch_read",
+    "delete_file",
+    "edit_file",
+    "enable_tools",
+    "file_info",
+    "file_tree",
+    "find_files",
+    "git_diff",
+    "git_log",
+    "git_status",
+    "list_dir",
+    "outline_file",
+    "patch_file",
+    "read_archive",
+    "read_file",
+    "read_findings",
+    "read_objective",
+    "run_command",
+    "run_tests",
+    "search_code",
+    "search_symbols",
+    "spawn_subagent",
+    "task_completed",
+    "update_plan",
+    "update_requirements",
+    "write_file"
+  ],
+  "messages": [
+    {
+      "role": "system",
+      "kind": "system-prompt",
+      "keys": [
+        "content",
+        "role"
+      ]
+    },
+    {
+      "role": "system",
+      "kind": "pinned-ledger",
+      "keys": [
+        "content",
+        "role"
+      ]
+    },
+    {
+      "role": "user",
+      "kind": "user",
+      "keys": [
+        "content",
+        "role"
+      ]
+    }
+  ]
+}
