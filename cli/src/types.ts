@@ -25,6 +25,8 @@ export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content?: string | null | any[];
   tool_calls?: ToolCall[];
+  /** Set when the server answered with the call as reply text and the client asked again: `tool_calls` are the server's native call from the correction retry ("feedback") or the `tool_choice: required` retry ("required"). Never sent to a provider. */
+  toolCallSource?: "feedback" | "required";
   tool_call_id?: string;
   name?: string;
   /**

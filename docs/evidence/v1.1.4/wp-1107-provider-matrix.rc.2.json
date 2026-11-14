@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "candidate": {
+    "archiveSha256": "d6644e6b9fba68d001c78448fd8fd2791ce3febb4d21937756cf3ab6be85e57b",
+    "sourceCommit": "5ae5ee36210f58bf54bad6d0e27e77929c94d7cd",
+    "sourceTree": "1698ffbd399fd14efef5dff6803faadc94eed1fe"
+  },
+  "endpoints": [
+    {
+      "provider": "gateway",
+      "serverKind": "gateway",
+      "serverVersion": "84ddc710d57e76ca",
+      "modelName": "engineering/deep",
+      "workers": [
+        "b0-live-llama-deep-worker2"
+      ],
+      "cacheBypass": true,
+      "feedbackRetries": 45,
+      "throttledRetries": 0,
+      "requestIntervalMs": 1200,
+      "contextSize": 65536,
+      "sampling": {
+        "temperature": 0,
+        "max_tokens": 8192
+      },
+      "toolChoice": "auto",
+      "promptFixtureSha256": "563812f616d8e0f10c944c856dbe645ce7886d69623b4846d861aa4c3d2bc229",
+      "serverFlags": [],
+      "compatibilityMode": "gateway-openai-chat",
+      "attempts": 200,
+      "tools": {
+        "read_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "write_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "edit_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "run_command": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        }
+      },
+      "totals": {
+        "attempts": 200,
+        "native_valid": 200,
+        "repaired": 0,
+        "schema_invalid": 0,
+        "invalid": 0
+      },
+      "passed": true
+    },
+    {
+      "provider": "gateway",
+      "serverKind": "gateway",
+      "serverVersion": "a3c2fcbc2f2b977c",
+      "modelName": "engineering/lead-reasoning",
+      "workers": [
+        "b0-live-llama-worker1"
+      ],
+      "cacheBypass": true,
+      "forcedRetries": 5,
+      "throttledRetries": 0,
+      "requestIntervalMs": 1200,
+      "contextSize": 65536,
+      "sampling": {
+        "temperature": 0,
+        "max_tokens": 8192
+      },
+      "toolChoice": "auto",
+      "promptFixtureSha256": "563812f616d8e0f10c944c856dbe645ce7886d69623b4846d861aa4c3d2bc229",
+      "serverFlags": [],
+      "compatibilityMode": "gateway-openai-chat",
+      "attempts": 200,
+      "tools": {
+        "read_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "write_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "edit_file": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        },
+        "run_command": {
+          "attempts": 50,
+          "native_valid": 50,
+          "repaired": 0,
+          "schema_invalid": 0,
+          "invalid": 0,
+          "hybrid_attempts": 5,
+          "hybrid_reasoning_present": 5,
+          "hybrid_schema_valid": 5
+        }
+      },
+      "totals": {
+        "attempts": 200,
+        "native_valid": 200,
+        "repaired": 0,
+        "schema_invalid": 0,
+        "invalid": 0
+      },
+      "passed": true
+    }
+  ],
+  "passed": true
+}

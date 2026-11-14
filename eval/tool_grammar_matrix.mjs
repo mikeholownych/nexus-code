@@ -168,7 +168,7 @@ function validateEndpoint(endpoint) {
   if (!Array.isArray(endpoint.serverFlags) || endpoint.serverFlags.some((flag) => typeof flag !== "string")) throw new TypeError("server flags identity must be a string array");
   if (endpoint.serverFlags.some((flag) => /api[-_]?key|token|secret|password|credential|authorization|bearer/i.test(flag))) throw new TypeError("server flags must omit credentials and authentication options");
   if (typeof endpoint.compatibilityMode !== "string" || !endpoint.compatibilityMode.trim()) throw new TypeError("compatibility mode identity is required");
-  for (const field of ["throttledRetries", "requestIntervalMs"]) {
+  for (const field of ["throttledRetries", "requestIntervalMs", "feedbackRetries", "forcedRetries"]) {
     if (endpoint[field] !== undefined) assertCount(endpoint[field], field);
   }
   if (endpoint.serverKind === "gateway" && endpoint.cacheBypass !== true) throw new TypeError("gateway evidence must record that the response cache was bypassed");
@@ -623,6 +623,8 @@ export async function runToolGrammarMatrix(options) {
     const retryBudget = provider.rateLimitRetries ?? 0;
     const interval = provider.requestIntervalMs ?? 0;
     let throttledRetries = 0;
+    let feedbackRetries = 0;
+    let forcedRetries = 0;
     let lastStarted = 0;
     const complete = async (messages, offered) => {
       for (let retry = 0; ; retry++) {
@@ -657,6 +659,9 @@ export async function runToolGrammarMatrix(options) {
             toolCounts.invalid++;
             continue;
           }
+          // A reply that was the call as text is never executed; the candidate client tells the model and asks again, then forces tool_choice=required. Count the native calls each retry produced.
+          if (response.toolCallSource === "feedback") feedbackRetries++;
+          if (response.toolCallSource === "required") forcedRetries++;
           const classification = classifyToolArguments({
             schema: tool.function.parameters,
             rawArguments: calls[0].function.arguments,
@@ -689,6 +694,8 @@ export async function runToolGrammarMatrix(options) {
       ...(provider.modelDigest !== undefined ? { modelDigest: provider.modelDigest } : {}),
       ...(workers && workers.length > 0 ? { workers } : {}),
       ...(gatewayCache ? { cacheBypass: true } : {}),
+      ...(feedbackRetries > 0 ? { feedbackRetries } : {}),
+      ...(forcedRetries > 0 ? { forcedRetries } : {}),
       ...(retryBudget > 0 ? { throttledRetries } : {}),
       ...(interval > 0 ? { requestIntervalMs: interval } : {}),
       contextSize: provider.contextSize,

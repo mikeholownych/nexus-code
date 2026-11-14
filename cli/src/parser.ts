@@ -493,7 +493,7 @@ function extractReasoning(message: ChatMessage, rawContent: string): { thoughtTe
   return { thoughtText, reasoningText };
 }
 
-function extractSoleFencedCall(text: string): { raw: string; content: string } | null {
+export function extractSoleFencedCall(text: string): { raw: string; content: string } | null {
   const trimmed = text.trim();
   const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
   if (!match) return null;

@@ -8,7 +8,7 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [v1.1.4] - Unreleased
 
-Candidate notes: [`docs/releases/v1.1.4-rc.1.md`](docs/releases/v1.1.4-rc.1.md) (ledger closed except the listed items; qualification pending).
+Release notes: [`docs/releases/v1.1.4.md`](docs/releases/v1.1.4.md). Candidate notes: [`rc.3`](docs/releases/v1.1.4-rc.3.md), [`rc.2`](docs/releases/v1.1.4-rc.2.md), [`rc.1`](docs/releases/v1.1.4-rc.1.md) (ledger closed except the listed items; external qualification pending).
 
 ### Fixed
 

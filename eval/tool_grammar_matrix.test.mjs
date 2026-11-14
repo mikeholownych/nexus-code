@@ -69,6 +69,7 @@ export class LocalLlmClient {
       content: hybrid && !channel ? "<think>check arguments</think>" : "",
       ...(hybrid && channel ? { reasoning_content: "check arguments" } : {}),
       tool_calls: [{ function: { name, arguments: JSON.stringify(args) } }],
+      ...(this.provider.retryKind ? { toolCallSource: this.provider.retryKind } : {}),
     };
   }
 }
@@ -790,4 +791,39 @@ test("gateway runs send Cache-Control: no-cache, refuse a cached reply, and the 
   }
   const { cacheBypass: _omitted, ...withoutBypass } = gatewayEndpoint("engineering/b0");
   assert.throws(() => validateMatrixEvidence(evidenceWith([withoutBypass])), /cache was bypassed/i);
+});
+
+test("native calls the candidate client got by telling the model and re-asking (then forcing tool_choice) are counted in the evidence and validated", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gw-recovered-test-"));
+  const tools = [
+    ["read_file", { path: { type: "string" } }, ["path"]],
+    ["write_file", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]],
+    ["edit_file", { path: { type: "string" }, old_content: { type: "string" }, new_content: { type: "string" } }, ["path", "old_content", "new_content"]],
+    ["run_command", { command: { type: "string" } }, ["command"]],
+  ].map(([name, properties, required]) => ({ type: "function", function: { name, parameters: { type: "object", properties, required } } }));
+  const fixture = createCandidateFixture(root, "b".repeat(40), tools);
+  const gateway = {
+    provider: "gateway", serverKind: "gateway", endpointUrl: "http://127.0.0.1:8000/gw/v1", modelName: "engineering/deep",
+    serverVersion: "limits-2026-11", contextSize: 32768, sampling: { temperature: 0 }, toolChoice: "auto", serverFlags: [],
+    compatibilityMode: "gateway-openai-chat", advertised: { via: "aihost_gateway", limitsVersion: "limits-2026-11" }, retryKind: "feedback",
+  };
+  try {
+    globalThis.__wp1107MatrixFixture = { providers: { [gateway.endpointUrl]: gateway }, calls: 0 };
+    const evidence = await runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [gateway] });
+    assert.equal(evidence.endpoints[0].feedbackRetries, 200);
+    assert.equal("forcedRetries" in evidence.endpoints[0], false);
+    assert.equal(evidence.passed, true);
+    const forced = { ...gateway, retryKind: "required" };
+    globalThis.__wp1107MatrixFixture = { providers: { [forced.endpointUrl]: forced }, calls: 0 };
+    const second = await runToolGrammarMatrix({ ...candidateOptions(fixture), providers: [forced] });
+    assert.equal(second.endpoints[0].forcedRetries, 200);
+    assert.equal("feedbackRetries" in second.endpoints[0], false);
+  } finally {
+    delete globalThis.__wp1107MatrixFixture;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  for (const field of ["feedbackRetries", "forcedRetries"]) {
+    for (const bad of [-1, 1.5, "3"]) assert.throws(() => validateMatrixEvidence(evidenceWith([{ ...gatewayEndpoint("engineering/b0"), [field]: bad }])), /Retries|count/i);
+    assert.equal(validateMatrixEvidence(evidenceWith([{ ...gatewayEndpoint("engineering/b0"), [field]: 3 }])).valid, true);
+  }
 });
